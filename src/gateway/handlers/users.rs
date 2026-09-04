@@ -395,6 +395,11 @@ pub async fn handle_update(
                         goals: freeze.goals,
                         loops: freeze.loops,
                         crons: freeze.crons,
+                        // Forwarded as an `Option`, never folded into a count:
+                        // `None` here says the heartbeat leg did not run, and
+                        // a measured zero and an unmeasured leg are different
+                        // answers to the operator.
+                        heartbeats: freeze.heartbeats,
                     },
                 ),
                 // The write above flipped one column; everything the
@@ -405,7 +410,7 @@ pub async fn handle_update(
                     aleph_protocol::users::ReactivationEffects {
                         devices: "remain revoked — issue a new bootstrap ticket (`pair --user`) per device".to_string(),
                         channel_senders: "remain withdrawn — re-approve via channel.pairing.approve".to_string(),
-                        background_work: "goals/loops/crons remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle)".to_string(),
+                        background_work: "goals/loops/crons/heartbeat tasks remain paused — resume per owner session (goal update status=active / loop resume / cron_manage toggle / heartbeat_toggle)".to_string(),
                     }
                 }),
             };
@@ -652,12 +657,19 @@ async fn revoke_channel_bindings(
 
 /// What the deactivation freeze actually froze — the counts the `users.update`
 /// receipt reports (round-4 ledger item ⑧: the receipt used to say only
-/// `status: "deactivated"` while three subsystems changed state underneath).
+/// `status: "deactivated"` while several subsystems changed state underneath).
 #[derive(Debug, Default, Clone, Copy)]
 struct FreezeReport {
     goals: usize,
     loops: usize,
     crons: usize,
+    /// `None` means the heartbeat leg was **not measured** — see
+    /// [`freeze_owned_heartbeats`]. It is deliberately not a `usize`: the
+    /// other three legs already demonstrate the cost, since a subsystem this
+    /// function cannot reach contributes a `0` that reads as "they owned
+    /// none". This one says nothing instead, and the receipt and the CLI each
+    /// give it its own sentence.
+    heartbeats: Option<usize>,
 }
 
 /// Deactivation freeze (spec §10): pause every goal and loop OWNED BY
@@ -681,10 +693,30 @@ struct FreezeReport {
 /// the usual way: an invariant asserted about one door while a second door
 /// stood open beside it.)
 ///
-/// One-way freeze for all three: reactivating the user does NOT auto-resume
-/// its goals, loops or crons (spec is silent on auto-resume) — each owner
-/// session resumes its own via `goal(action='update', status='active')` /
-/// `loop(action='resume')` / `cron_manage(action='toggle')`.
+/// Heartbeat was the FOURTH leg and it arrived a round late, by exactly the
+/// same argument the cron paragraph above makes and for a subsystem gated on
+/// exactly the same terms: `heartbeat.*` is admin-gated, `users.create`
+/// accepts `role: "admin"`, so a second admin owns heartbeat tasks and those
+/// tasks kept firing — and kept delivering through `delivery_config` — after
+/// this function returned. It was not even excluded on purpose; there simply
+/// was no `heartbeat::global()` for a free function to call, so nothing in
+/// the receipt or in this doc ever mentioned the subsystem. The old wording
+/// here ("the three background legs") and the old `FrozenBackgroundWork` doc
+/// said the same thing in two places, which is why the miss survived: an
+/// inventory that names three of four reads as coverage.
+///
+/// One-way freeze for all four: reactivating the user does NOT auto-resume
+/// its goals, loops, crons or heartbeat tasks (spec is silent on auto-resume)
+/// — each owner session resumes its own via
+/// `goal(action='update', status='active')` / `loop(action='resume')` /
+/// `cron_manage(action='toggle')` / `heartbeat_toggle`.
+///
+/// **Deliberately deferred, recorded rather than hidden:** cron's fire-time
+/// backstop (`CronService::disable_walled_owner_job`, driven by the
+/// executor's `walled_owner_reason` check) has NO heartbeat counterpart after
+/// this change. The twin is not closed — a heartbeat task re-enabled by a
+/// second admin after its owner was walled will still fire, exactly as a cron
+/// job would have before round-5 ④.
 async fn freeze_owned_background_work(user_id: &str) -> FreezeReport {
     let mut report = FreezeReport::default();
     if let Some(store) = crate::goal::global() {
@@ -740,7 +772,67 @@ async fn freeze_owned_background_work(user_id: &str) -> FreezeReport {
             }
         }
     }
+    report.heartbeats = freeze_owned_heartbeats(crate::tasks::heartbeat::global(), user_id).await;
     report
+}
+
+/// The heartbeat leg of [`freeze_owned_background_work`].
+///
+/// The service is taken as a PARAMETER rather than read from the global here,
+/// because the interesting arm is the one where it is absent: a process-global
+/// is install-once, so a test that installs a heartbeat service can never
+/// afterwards observe the declined path in the same binary. Passing it in is
+/// what makes "the service was not running" a testable outcome instead of a
+/// branch nothing can reach twice.
+///
+/// Every non-answer returns `None`, never `Some(0)` (criterion #8: a
+/// fail-closed answer is only allowed to say "I do not know"):
+///
+/// - no service — `[heartbeat] enabled = false`, a data directory that would
+///   not resolve, or a store that would not open. Boot records WHICH of those
+///   it was on the capability slot, and `aleph doctor`'s
+///   `core/capability-wiring` check quotes that sentence verbatim; this
+///   function only knows that the leg did not run.
+/// - the sweep itself failed — the tasks may or may not have been disabled,
+///   and reporting the count it did not get would be worse than reporting
+///   nothing.
+///
+/// `Some(0)` therefore means one thing only: the sweep ran and this principal
+/// owned no enabled heartbeat task.
+async fn freeze_owned_heartbeats(
+    service: Option<crate::tasks::heartbeat::SharedHeartbeatService>,
+    user_id: &str,
+) -> Option<usize> {
+    let Some(service) = service else {
+        tracing::warn!(
+            user_id = %user_id,
+            "users.update: deactivation did NOT reach the heartbeat leg — no \
+             heartbeat service in this process, so any heartbeat task this \
+             principal owns is still armed"
+        );
+        return None;
+    };
+    let swept = service.lock().await.pause_all_owned_by(user_id).await;
+    match swept {
+        Ok(count) => {
+            if count > 0 {
+                tracing::warn!(
+                    user_id = %user_id,
+                    count,
+                    "users.update: deactivation disabled owned heartbeat tasks"
+                );
+            }
+            Some(count)
+        }
+        Err(e) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error = %e,
+                "users.update: failed to disable owned heartbeat tasks during deactivation"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1180,6 +1272,147 @@ mod tests {
         );
     }
 
+    /// Build a heartbeat service holding one enabled task per `(id, owner)`
+    /// pair. `None` as the owner seeds a legacy, pre-P1 row.
+    async fn heartbeat_service_with(
+        tasks: &[(&str, Option<&str>)],
+    ) -> crate::tasks::heartbeat::SharedHeartbeatService {
+        use crate::tasks::heartbeat::config::{
+            HeartbeatConfig, HeartbeatTask, ProbeConfig, TriggerCondition,
+        };
+        let store = crate::tasks::heartbeat::store::HeartbeatStore::open_in_memory().unwrap();
+        let service =
+            crate::tasks::heartbeat::HeartbeatService::new(store, HeartbeatConfig::default());
+        let clock = crate::tasks::shared::clock::testing::FakeClock::new(1_000_000);
+        for (id, owner) in tasks {
+            let mut task = HeartbeatTask::new(
+                (*id).to_string(),
+                "main".to_string(),
+                60_000,
+                ProbeConfig {
+                    tool_name: "test.probe".to_string(),
+                    tool_params: None,
+                    trigger_condition: TriggerCondition::Always,
+                },
+            );
+            task.id = (*id).to_string();
+            task.owner_user_id = owner.map(std::string::ToString::to_string);
+            service.add_task(task, &clock).await.unwrap();
+        }
+        Arc::new(tokio::sync::Mutex::new(service))
+    }
+
+    /// The fourth leg, end to end: deactivating a SECOND ADMIN who owns an
+    /// enabled heartbeat task must disable that task — asserted by reading the
+    /// store back, not by trusting the count — and the receipt must report it.
+    ///
+    /// A second admin is the population that makes this reachable at all:
+    /// `heartbeat.*` is admin-gated, `users.create` accepts `role: "admin"`,
+    /// and the owner guard in this file pins only `OWNER_USER_ID`.
+    #[tokio::test]
+    async fn deactivating_a_second_admin_disables_their_heartbeat_tasks() {
+        // Install-once, so the whole binary shares whichever service gets here
+        // first; the ids below are unique to this test so the assertions stay
+        // correct either way (mirrors `deactivate_pauses_owned_goals_and_loops`).
+        if crate::tasks::heartbeat::global().is_none() {
+            crate::tasks::heartbeat::init_global(heartbeat_service_with(&[]).await);
+        }
+        let heartbeat = crate::tasks::heartbeat::global().expect("heartbeat service installed");
+        {
+            use crate::tasks::heartbeat::config::{HeartbeatTask, ProbeConfig, TriggerCondition};
+            let clock = crate::tasks::shared::clock::testing::FakeClock::new(1_000_000);
+            let svc = heartbeat.lock().await;
+            for (id, owner) in [
+                ("hb-admin2-p0t9", Some("u-admin2-p0t9")),
+                ("hb-other-p0t9", Some("u-other-p0t9")),
+                ("hb-legacy-p0t9", None),
+            ] {
+                let mut task = HeartbeatTask::new(
+                    id.to_string(),
+                    "main".to_string(),
+                    60_000,
+                    ProbeConfig {
+                        tool_name: "test.probe".to_string(),
+                        tool_params: None,
+                        trigger_condition: TriggerCondition::Always,
+                    },
+                );
+                task.id = id.to_string();
+                task.owner_user_id = owner.map(str::to_string);
+                svc.add_task(task, &clock).await.unwrap();
+            }
+        }
+
+        let store = seeded_store();
+        store
+            .create_user("u-admin2-p0t9", "Second Admin", UserRole::Admin)
+            .unwrap();
+        let resp = handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-admin2-p0t9", "status": "deactivated"}),
+            ),
+            store,
+            test_kick_sink(),
+        )
+        .await;
+
+        let svc = heartbeat.lock().await;
+        assert_eq!(
+            svc.get_task("hb-admin2-p0t9").await.map(|t| t.enabled),
+            Some(false),
+            "the deactivated admin's heartbeat task must be DISABLED in the store"
+        );
+        assert_eq!(
+            svc.get_task("hb-other-p0t9").await.map(|t| t.enabled),
+            Some(true),
+            "another principal's heartbeat task must be untouched"
+        );
+        assert_eq!(
+            svc.get_task("hb-legacy-p0t9").await.map(|t| t.enabled),
+            Some(true),
+            "a legacy task with no owner belongs to nobody and must survive"
+        );
+        drop(svc);
+
+        assert_eq!(
+            response_json(&resp)["frozen_background_work"]["heartbeats"],
+            json!(1),
+            "the receipt must count the heartbeat task it froze"
+        );
+    }
+
+    /// The declined path (criterion #8): with no heartbeat service in the
+    /// process, the leg reports "I do not know", never a zero. A zero here
+    /// would read to an operator as "they owned no heartbeat tasks" while
+    /// every one of them stayed armed.
+    #[tokio::test]
+    async fn a_missing_heartbeat_service_reports_unmeasured_not_zero() {
+        assert_eq!(
+            freeze_owned_heartbeats(None, "u-alice").await,
+            None,
+            "an absent heartbeat service must not answer with a count"
+        );
+    }
+
+    /// The measured-zero path, so the test above cannot pass by the leg never
+    /// producing a number at all: a live service with nothing owned by this
+    /// principal answers `Some(0)`, which is a different fact from `None`.
+    #[tokio::test]
+    async fn a_live_heartbeat_service_that_froze_nothing_reports_a_measured_zero() {
+        let svc = heartbeat_service_with(&[("hb-x", Some("u-bob"))]).await;
+        assert_eq!(
+            freeze_owned_heartbeats(Some(svc.clone()), "u-alice").await,
+            Some(0),
+            "a service that ran and found nothing owned must say so with a zero"
+        );
+        assert_eq!(
+            freeze_owned_heartbeats(Some(svc), "u-bob").await,
+            Some(1),
+            "and the same call must count what it did freeze"
+        );
+    }
+
     /// Seed one live connection bound to `device_id` at `role`, and return
     /// the kick sink whose map holds it (so the caller can read it back).
     async fn kick_with_live_connection(
@@ -1465,6 +1698,14 @@ mod tests {
         let v = response_json(&resp);
         assert_eq!(v["revoked_devices"], json!(2));
         let frozen = &v["frozen_background_work"];
+        // `heartbeats` is deliberately NOT in this list. The other three legs
+        // are always measured because their globals are `Option`s the freeze
+        // simply skips; the heartbeat leg reports whether it RAN, so whether
+        // the key is present here depends on whether some other test in this
+        // binary has already installed the install-once global. Asserting on
+        // it would be asserting on test order. Its two states are covered by
+        // name in `a_missing_heartbeat_service_reports_unmeasured_not_zero`
+        // and `deactivating_a_second_admin_disables_their_heartbeat_tasks`.
         for key in ["goals", "loops", "crons"] {
             assert!(
                 frozen.get(key).is_some(),

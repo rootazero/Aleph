@@ -158,31 +158,75 @@ pub async fn update(
 /// measurement is worse than silence: it is the client asserting an outcome it
 /// did not observe.
 fn print_update_effects(result: &UserUpdateResult) {
+    for line in update_effect_lines(result) {
+        println!("{line}");
+    }
+}
+
+/// The lines [`print_update_effects`] prints, as values.
+///
+/// Split out from the printing so the rendering can be asserted on. A receipt
+/// field with no renderer is the defect this whole surface exists to avoid,
+/// and "the CLI prints the heartbeat count" is not something a test can check
+/// while the only way to observe it is stdout — the field could be added, the
+/// server could measure it, and the line could simply never be written.
+///
+/// An empty `String` renders as a blank separator line.
+fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
+    let mut lines = Vec::new();
+
     if let Some(devices) = result.revoked_devices {
         // Zero is a measurement and it matters: it means this principal held
         // no device credential, so "revoked" is not what closed anything.
-        match devices {
-            0 => println!("No devices were bound to them; nothing to revoke."),
-            1 => println!("1 device revoked and its live connections closed."),
-            n => println!("{n} devices revoked and their live connections closed."),
-        }
+        lines.push(match devices {
+            0 => "No devices were bound to them; nothing to revoke.".to_string(),
+            1 => "1 device revoked and its live connections closed.".to_string(),
+            n => format!("{n} devices revoked and their live connections closed."),
+        });
     }
 
     if !result.revoked_channel_senders.is_empty() {
-        println!("Channel sender approvals withdrawn:");
+        lines.push("Channel sender approvals withdrawn:".to_string());
         for s in &result.revoked_channel_senders {
-            println!("  {} / {}", s.channel, s.sender_id);
+            lines.push(format!("  {} / {}", s.channel, s.sender_id));
         }
     }
 
     if let Some(frozen) = result.frozen_background_work {
-        if frozen.is_empty() {
-            println!("They owned no running goals, loops or crons.");
-        } else {
-            println!(
-                "Background work frozen: {} goal(s), {} loop(s), {} cron(s).",
-                frozen.goals, frozen.loops, frozen.crons
-            );
+        // Two sentences, because there are two facts and folding them loses
+        // one: what the freeze DID, and — separately — whether the heartbeat
+        // leg ran at all. An unmeasured leg is not a leg that found nothing.
+        match frozen.heartbeats {
+            Some(heartbeats) => {
+                if frozen.is_empty() {
+                    lines.push(
+                        "They owned no running goals, loops, crons or heartbeat tasks.".to_string(),
+                    );
+                } else {
+                    lines.push(format!(
+                        "Background work frozen: {} goal(s), {} loop(s), {} cron(s), \
+                         {heartbeats} heartbeat task(s).",
+                        frozen.goals, frozen.loops, frozen.crons
+                    ));
+                }
+            }
+            None => {
+                // Only three legs were measured, so only three may be named.
+                if frozen.goals == 0 && frozen.loops == 0 && frozen.crons == 0 {
+                    lines.push("They owned no running goals, loops or crons.".to_string());
+                } else {
+                    lines.push(format!(
+                        "Background work frozen: {} goal(s), {} loop(s), {} cron(s).",
+                        frozen.goals, frozen.loops, frozen.crons
+                    ));
+                }
+                lines.push(
+                    "Heartbeat tasks were NOT checked: no heartbeat service is running on \
+                     that server, so any heartbeat task they own is still armed. Run \
+                     `aleph doctor` — `core/capability-wiring` names the cause."
+                        .to_string(),
+                );
+            }
         }
     }
 
@@ -190,12 +234,14 @@ fn print_update_effects(result: &UserUpdateResult) {
         // The half a bare `status: active` hides. Reactivation flips one
         // column; naming what stayed down is the whole reason the server
         // measures it.
-        println!();
-        println!("Reactivated — but this did NOT restore:");
-        println!("  devices:         {}", effects.devices);
-        println!("  channel senders: {}", effects.channel_senders);
-        println!("  background work: {}", effects.background_work);
+        lines.push(String::new());
+        lines.push("Reactivated — but this did NOT restore:".to_string());
+        lines.push(format!("  devices:         {}", effects.devices));
+        lines.push(format!("  channel senders: {}", effects.channel_senders));
+        lines.push(format!("  background work: {}", effects.background_work));
     }
+
+    lines
 }
 
 #[cfg(test)]
@@ -246,6 +292,133 @@ mod tests {
         assert!(
             err.is_err(),
             "an all-None update must fail before it opens a connection"
+        );
+    }
+
+    fn deactivation_receipt(
+        frozen: aleph_protocol::users::FrozenBackgroundWork,
+    ) -> UserUpdateResult {
+        UserUpdateResult {
+            user: aleph_protocol::users::UserView {
+                user_id: "u-alice".to_string(),
+                display_name: "Alice".to_string(),
+                role: "member".to_string(),
+                status: "deactivated".to_string(),
+            },
+            revoked_channel_senders: Vec::new(),
+            revoked_devices: Some(0),
+            frozen_background_work: Some(frozen),
+            reactivation_effects: None,
+        }
+    }
+
+    /// The heartbeat leg has a renderer. A count the server measures and the
+    /// only client never prints is a count that does not exist — and this is
+    /// the sole reason the field was added, so the line is asserted by its
+    /// content, not by the field being present somewhere in the struct.
+    #[test]
+    fn the_receipt_prints_the_frozen_heartbeat_count() {
+        let lines = update_effect_lines(&deactivation_receipt(
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(3),
+            },
+        ));
+        let frozen_line = lines
+            .iter()
+            .find(|l| l.starts_with("Background work frozen:"))
+            .unwrap_or_else(|| {
+                panic!("three frozen heartbeat tasks must not render as silence: {lines:?}")
+            });
+        assert!(
+            frozen_line.contains("3 heartbeat task(s)"),
+            "the frozen line must name the heartbeat count: {frozen_line}"
+        );
+    }
+
+    /// The quiet branch must not claim more than the freeze measured: with the
+    /// heartbeat leg measured, "nothing was frozen" has to cover four legs.
+    #[test]
+    fn the_quiet_line_names_the_heartbeat_leg_once_it_is_measured() {
+        let lines = update_effect_lines(&deactivation_receipt(
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(0),
+            },
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "They owned no running goals, loops, crons or heartbeat tasks."),
+            "a measured zero on all four legs must say all four: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("NOT checked")),
+            "a measured leg must not also print the unmeasured caveat: {lines:?}"
+        );
+    }
+
+    /// The declined path (criterion #8): an unmeasured heartbeat leg gets its
+    /// own sentence and must never be folded into the three-leg summary, which
+    /// would read to an operator as "they owned none".
+    #[test]
+    fn an_unmeasured_heartbeat_leg_gets_its_own_sentence_not_a_zero() {
+        let lines = update_effect_lines(&deactivation_receipt(
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 1,
+                loops: 0,
+                crons: 0,
+                heartbeats: None,
+            },
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("Heartbeat tasks were NOT checked:")
+                    && l.contains("still armed")),
+            "an unmeasured leg must say so, and say what is still running: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("heartbeat task(s)")),
+            "an unmeasured leg must not print a count of any kind: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "Background work frozen: 1 goal(s), 0 loop(s), 0 cron(s)."),
+            "the three legs that DID run are still reported: {lines:?}"
+        );
+    }
+
+    /// Reactivation names every leg the deactivation froze. Naming three of
+    /// four is the shape the heartbeat leg was added to close, and this string
+    /// is server-authored — the client only forwards it, so the assertion is
+    /// that the client prints whatever the server said, verbatim.
+    #[test]
+    fn reactivation_guidance_is_printed_verbatim() {
+        let mut receipt = deactivation_receipt(aleph_protocol::users::FrozenBackgroundWork {
+            goals: 0,
+            loops: 0,
+            crons: 0,
+            heartbeats: Some(0),
+        });
+        receipt.frozen_background_work = None;
+        receipt.revoked_devices = None;
+        receipt.reactivation_effects = Some(aleph_protocol::users::ReactivationEffects {
+            devices: "d".to_string(),
+            channel_senders: "c".to_string(),
+            background_work: "goals/loops/crons/heartbeat tasks remain paused".to_string(),
+        });
+        let lines = update_effect_lines(&receipt);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "  background work: goals/loops/crons/heartbeat tasks remain paused"),
+            "the server's recovery guidance must reach the operator unedited: {lines:?}"
         );
     }
 }

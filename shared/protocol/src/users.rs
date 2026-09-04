@@ -96,20 +96,48 @@ pub struct RevokedChannelSender {
     pub sender_id: String,
 }
 
-/// The three background legs a deactivation freezes.
+/// The four background legs a deactivation freezes.
+///
+/// Heartbeat was the fourth and it arrived a round late. Until then this doc
+/// read "the three background legs a deactivation freezes" — a complete
+/// inventory, in the voice of the thing that would know — while a deactivated
+/// second admin's heartbeat tasks kept firing and kept delivering. A receipt
+/// that names three of four legs is worse than one that names none: the
+/// operator reads it as coverage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrozenBackgroundWork {
     pub goals: usize,
     pub loops: usize,
     pub crons: usize,
+    /// `None` means this leg was **not measured**: the heartbeat service is
+    /// not running in this process (`[heartbeat] enabled = false`, or its
+    /// store failed to open), so any heartbeat task the principal owns is
+    /// still armed and the deactivation did not reach it.
+    ///
+    /// A fail-closed answer is only allowed to say "I do not know". Folding it
+    /// into `0` would make it read as "they owned none" — the same shape that
+    /// let this whole struct under-report for a round.
+    ///
+    /// Absent on the wire rather than `null`, matching `revoked_devices`: a
+    /// measured zero and an absent measurement are different answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heartbeats: Option<usize>,
 }
 
 impl FrozenBackgroundWork {
-    /// Whether anything was actually frozen — so a receipt can stay quiet
-    /// rather than printing three zeros.
+    /// Whether every leg that was **measured** came back zero — so a receipt
+    /// can stay quiet rather than printing four zeros.
+    ///
+    /// An unmeasured heartbeat leg (`heartbeats: None`) does NOT make this
+    /// false. It is not a freeze that found nothing, it is a freeze that never
+    /// ran, and the renderer gives it its own sentence rather than letting it
+    /// ride inside this one.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.goals == 0 && self.loops == 0 && self.crons == 0
+        self.goals == 0
+            && self.loops == 0
+            && self.crons == 0
+            && matches!(self.heartbeats, None | Some(0))
     }
 }
 
@@ -246,11 +274,71 @@ mod tests {
                 goals: 1,
                 loops: 0,
                 crons: 3,
+                heartbeats: Some(2),
             }),
             reactivation_effects: None,
         };
         let wire = serde_json::to_value(&original).unwrap();
         let back: UserUpdateResult = serde_json::from_value(wire).unwrap();
         assert_eq!(back, original);
+    }
+
+    /// The heartbeat leg is a fourth count on the same receipt, not a separate
+    /// block — a client that renders three of four numbers is the #17 defect
+    /// this field exists to close.
+    #[test]
+    fn a_measured_heartbeat_leg_is_a_number_on_the_wire() {
+        let wire = serde_json::to_value(FrozenBackgroundWork {
+            goals: 0,
+            loops: 0,
+            crons: 0,
+            heartbeats: Some(1),
+        })
+        .unwrap();
+        assert_eq!(wire["heartbeats"], 1);
+    }
+
+    /// The fail-closed half (criterion #8): a heartbeat leg that could not run
+    /// says nothing at all, so no reader can mistake it for "they owned none".
+    /// `null` would be a third spelling of the same doubt; absence is the one
+    /// `revoked_devices` already established.
+    #[test]
+    fn an_unmeasured_heartbeat_leg_is_absent_not_zero_and_not_null() {
+        let wire = serde_json::to_value(FrozenBackgroundWork::default()).unwrap();
+        assert!(
+            wire.get("heartbeats").is_none(),
+            "an unmeasured leg must not serialize at all, got {wire}"
+        );
+        let back: FrozenBackgroundWork = serde_json::from_value(wire).unwrap();
+        assert_eq!(back.heartbeats, None);
+    }
+
+    /// `is_empty` decides whether the receipt stays quiet. A frozen heartbeat
+    /// task must break that silence even when the other three legs are zero —
+    /// otherwise the field exists and nothing ever renders it.
+    #[test]
+    fn a_receipt_with_only_heartbeats_frozen_is_not_empty() {
+        assert!(
+            !FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(3),
+            }
+            .is_empty(),
+            "3 disabled heartbeat tasks must not render as 'they owned nothing'"
+        );
+        assert!(FrozenBackgroundWork {
+            goals: 0,
+            loops: 0,
+            crons: 0,
+            heartbeats: Some(0),
+        }
+        .is_empty());
+        assert!(
+            FrozenBackgroundWork::default().is_empty(),
+            "an unmeasured leg is not a freeze; it gets its own sentence, so it \
+             must not force the 'work was frozen' branch"
+        );
     }
 }

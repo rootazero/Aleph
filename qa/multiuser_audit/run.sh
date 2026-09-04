@@ -11,7 +11,10 @@
 #      admin gate, out of SQLite.
 #   2. `users.update` tells the operator what the write DID. The receipt was
 #      measured server-side and discarded by the only client, which printed a
-#      hard-coded sentence in its place.
+#      hard-coded sentence in its place. This also covers the one background
+#      leg the freeze CANNOT measure here: the patcher turns the heartbeat
+#      service off, so the receipt has to say the leg did not run rather than
+#      report a zero — a boot-time decline arm, on the wire, out of the CLI.
 #   3. Revoking a device credential leaves an authority-change record naming
 #      whose credential it was — a producer the `AuthorityChange` doc listed and
 #      never had.
@@ -229,6 +232,18 @@ else
 fi
 expect "receipt reports the frozen legs"   "no running goals, loops or crons" "$OUT"
 refute "no hard-coded plural claim survives" "Their devices are revoked and" "$OUT"
+# The heartbeat leg, and specifically its DECLINED arm — the one thing here no
+# unit test can claim, because it starts in `aleph-server start`'s
+# `[heartbeat] enabled = false` branch (this fixture's patcher sets exactly
+# that, alongside cron), travels as an absent field on the wire, and has to
+# come out of the CLI as a sentence. Before this leg existed the receipt named
+# three of four subsystems and read as a complete inventory.
+expect "an unrun heartbeat leg says so" "Heartbeat tasks were NOT checked" "$OUT"
+expect "and says what is still running" "still armed" "$OUT"
+# A leg that did not run must never render as a measured zero, in either
+# spelling: neither a count nor an inventory that silently includes it.
+refute "no fabricated heartbeat count"  "heartbeat task(s)" "$OUT"
+refute "no four-leg claim from a three-leg freeze" "loops, crons or heartbeat" "$OUT"
 
 # --------------------------------------------------------------------------
 say "4. revoking the credential names whose it was"

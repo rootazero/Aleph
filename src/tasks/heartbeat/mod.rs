@@ -13,6 +13,7 @@ pub mod wake;
 
 use tokio::sync::Mutex;
 
+use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::sync_primitives::Arc;
 
 use crate::tasks::heartbeat::config::{HeartbeatConfig, HeartbeatTask, HeartbeatTaskView};
@@ -24,6 +25,67 @@ pub use crate::tasks::shared::error::TaskError;
 
 /// Shared handle to the `HeartbeatService`.
 pub type SharedHeartbeatService = Arc<Mutex<HeartbeatService>>;
+
+/// Process-global heartbeat service, installed once at daemon boot.
+///
+/// The fourth of four. `goal::global()`, `looping::global()` and
+/// `tasks::cron::global()` already existed for one reason —
+/// `users.update`'s deactivation freeze is a free function with no injected
+/// dependencies, and it has to reach every subsystem that runs work on a
+/// principal's behalf. Heartbeat was the one it could not reach, and unlike
+/// cron the exclusion was never even argued: the service is injected as an
+/// `Option<SharedHeartbeatService>` at `start/mod.rs`, so the freeze had no
+/// name to call. `heartbeat.*` is gated on exactly cron's terms, and
+/// `users.create` accepts `role: "admin"` — a second admin is fully
+/// deactivatable and their heartbeats kept firing, and kept delivering
+/// through `delivery_config`, after the receipt said the freeze was done.
+///
+/// `ConsumerDecides`, NOT the cron twin's `IndistinguishableDefault`, and the
+/// derivation is written down because copying the twin is the reflex.
+/// `GLOBAL_CRON` earns that variant honestly: `FreezeReport::crons` is a
+/// `usize` that stays `0` when the handle is absent, so the receipt says
+/// "this principal owned no cron jobs" and no reader can tell. The heartbeat
+/// leg is an `Option<usize>` on both `FreezeReport` and the wire
+/// (`aleph_protocol::users::FrozenBackgroundWork::heartbeats`) precisely so
+/// absence CANNOT read as a measured zero — the one consumer, this module's
+/// caller in `gateway::handlers::users::freeze_owned_heartbeats`, decides
+/// that `None` means "not measured" and both the receipt and the CLI say so
+/// in their own sentence. Absence is still a real defect (the principal's
+/// tasks stay armed), which is why the handle is on the roster at all; it is
+/// simply no longer an INDISTINGUISHABLE one.
+///
+/// `None` until boot, so tests and early boot read as "no heartbeat
+/// subsystem" and the freeze reports the leg unmeasured rather than failing.
+static GLOBAL_HEARTBEAT: CapabilitySlot<SharedHeartbeatService> =
+    CapabilitySlot::new("heartbeat/service", MissingSemantics::ConsumerDecides);
+
+/// The handle above, type-erased for the roster — see
+/// [`crate::spend::global_ledger_slot`] for why this shape.
+pub(crate) const fn global_heartbeat_slot() -> &'static dyn SlotStatus {
+    &GLOBAL_HEARTBEAT
+}
+
+/// Install the global service at boot. Idempotent: a second call is ignored.
+pub fn init_global(service: SharedHeartbeatService) {
+    let _ = GLOBAL_HEARTBEAT.install(service);
+}
+
+/// Record that boot reached this slot and had nothing to install.
+///
+/// Boot has three such arms — `[heartbeat] enabled = false`, the data
+/// directory failing to resolve, and `HeartbeatStore::open` failing — and
+/// they need different sentences: the first is a setting an operator chose,
+/// the other two are faults they have to fix. `because` is quoted verbatim
+/// to an operator by the `core/capability-wiring` diagnostic.
+pub fn decline_global(because: &'static str) {
+    GLOBAL_HEARTBEAT.decline(because);
+}
+
+/// Read the global service, if initialized.
+#[must_use]
+pub fn global() -> Option<SharedHeartbeatService> {
+    GLOBAL_HEARTBEAT.get().cloned()
+}
 
 /// Top-level heartbeat service facade.
 ///
@@ -181,6 +243,34 @@ impl HeartbeatService {
         Ok(enabled)
     }
 
+    /// Disable every enabled task owned by `user_id`, returning how many were
+    /// disabled. The heartbeat leg of `users.update`'s deactivation freeze —
+    /// the deactivation counterpart of `CronService::pause_all_owned_by`,
+    /// `GoalStore::pause_all_owned_by` and `LoopRegistry::pause_all_owned_by`.
+    ///
+    /// One-way, like its three siblings: reactivating the user does not
+    /// re-enable these. The owner re-enables their own from a live session
+    /// (`heartbeat_toggle`), and the reactivation receipt says so.
+    ///
+    /// The sweep itself — including which rows it refuses to touch — lives in
+    /// [`ops::pause_all_owned_by`]. This wrapper owns only persistence and
+    /// the change frames, so a no-op sweep writes nothing and emits nothing.
+    pub async fn pause_all_owned_by(&self, user_id: &str) -> Result<usize, TaskError> {
+        let paused = {
+            let mut store = self.state.store.lock().await;
+            let paused = ops::pause_all_owned_by(&mut store, user_id);
+            if paused.is_empty() {
+                return Ok(0);
+            }
+            store.persist().map_err(TaskError::internal)?;
+            paused
+        };
+        for id in &paused {
+            self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
+        }
+        Ok(paused.len())
+    }
+
     /// Request a graceful shutdown of the timer loop.
     pub fn request_shutdown(&self) {
         self.state.request_shutdown();
@@ -295,5 +385,57 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, first);
         assert_eq!(tasks[0].name, "first");
+    }
+
+    /// The `MissingSemantics` variant is the operator-facing severity of this
+    /// handle going missing, and this one is deliberately NOT the cron twin's
+    /// `IndistinguishableDefault` — see the static's doc for the derivation.
+    /// Reclassifying it must land somewhere red rather than quietly changing
+    /// what `aleph doctor` says.
+    #[test]
+    fn the_accessor_exposes_this_handle_to_the_roster() {
+        let slot = global_heartbeat_slot();
+        assert_eq!(slot.id(), "heartbeat/service");
+        assert_eq!(
+            slot.missing(),
+            MissingSemantics::ConsumerDecides,
+            "absence of this handle is DISTINGUISHABLE — the freeze's heartbeat \
+             leg is an Option and reports 'not measured' — so the twin's \
+             IndistinguishableDefault would overstate what a reader cannot tell"
+        );
+    }
+
+    /// The freeze sweep through the service: persistence and the count, on top
+    /// of `ops::pause_all_owned_by`'s row selection.
+    #[tokio::test]
+    async fn the_service_freeze_disables_the_owners_tasks_and_counts_them() {
+        let service = make_service();
+        let clock = FakeClock::new(1_000_000);
+
+        let mut mine = make_task("mine");
+        mine.id = "hb-mine".to_string();
+        mine.owner_user_id = Some("u-alice".to_string());
+        service.add_task(mine, &clock).await.unwrap();
+
+        let mut theirs = make_task("theirs");
+        theirs.id = "hb-theirs".to_string();
+        theirs.owner_user_id = Some("u-bob".to_string());
+        service.add_task(theirs, &clock).await.unwrap();
+
+        assert_eq!(service.pause_all_owned_by("u-alice").await.unwrap(), 1);
+        assert_eq!(
+            service.get_task("hb-mine").await.map(|t| t.enabled),
+            Some(false),
+            "the count is not the claim — the stored row is"
+        );
+        assert_eq!(
+            service.get_task("hb-theirs").await.map(|t| t.enabled),
+            Some(true)
+        );
+        assert_eq!(
+            service.pause_all_owned_by("u-alice").await.unwrap(),
+            0,
+            "idempotent: the second sweep changed nothing and says so"
+        );
     }
 }

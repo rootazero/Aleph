@@ -65,8 +65,9 @@ pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 
 /// Process-global cron service, installed once at daemon boot.
 ///
-/// The third of three: `goal::global()` and `looping::global()` already exist
-/// for exactly this reason — `users.update`'s deactivation freeze is a free
+/// The third of four: `goal::global()`, `looping::global()` and — since the
+/// heartbeat leg landed — `tasks::heartbeat::global()` exist for exactly this
+/// reason — `users.update`'s deactivation freeze is a free
 /// function with no injected dependencies, and it has to reach every
 /// subsystem that runs work on a principal's behalf. Cron was the one it could
 /// not reach, and the exclusion was written down as a product fact ("`cron.*`

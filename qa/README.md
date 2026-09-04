@@ -220,6 +220,12 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # 127.0.0.1 creates no device row, silently and successfully.
                                  # Node, not Python, and it shares `teamchat_rooms`'
                                  # `patch_config.mjs` rather than keeping a patcher of its own.
+                                 # Round-10 added the freeze's fourth leg to the same stage, and
+                                 # specifically its DECLINED arm: the patcher sets
+                                 # `[heartbeat] enabled = false`, so this run proves the receipt
+                                 # says the heartbeat leg did not RUN instead of reporting a zero —
+                                 # a boot-time `decline(because)`, an absent wire field, and a CLI
+                                 # sentence, none of which a unit test reaches together.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation

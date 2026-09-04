@@ -1154,10 +1154,31 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                                 .with_event_bus(event_bus.clone());
                             let shared: SharedHeartbeatService =
                                 Arc::new(tokio::sync::Mutex::new(svc));
+                            // Same shape as `cron::init_global`: the
+                            // deactivation freeze in `users.update` is a free
+                            // function with no injected dependencies and has
+                            // to reach every subsystem that runs work on a
+                            // principal's behalf. Injecting this handle into
+                            // the timer loop alone left the freeze with no
+                            // name to call.
+                            alephcore::tasks::heartbeat::init_global(shared.clone());
                             register_heartbeat_handlers(&mut server, &shared, args.daemon);
                             Some(shared)
                         }
                         Err(e) => {
+                            alephcore::tasks::heartbeat::decline_global(
+                                "`[heartbeat] enabled = true` but the heartbeat \
+                                 store would not open — the accompanying \
+                                 \"Failed to initialize heartbeat service\" \
+                                 message names the cause. No heartbeat task \
+                                 runs this boot, and `users.update` reports its \
+                                 heartbeat leg unmeasured.",
+                            );
+                            // NOT gated on `!args.daemon`, matching the cron
+                            // arm: the decline above promises an accompanying
+                            // message names the cause, and in daemon mode the
+                            // `eprintln!` below does not run.
+                            tracing::warn!(error = %e, "Failed to open the heartbeat store; heartbeat disabled");
                             if !args.daemon {
                                 eprintln!(
                                     "Warning: Failed to initialize heartbeat service: {e}. Heartbeat disabled."
@@ -1168,6 +1189,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     }
                 }
                 Err(e) => {
+                    // A third sentence, not a reuse of the one above: a store
+                    // that will not open and a data directory that will not
+                    // resolve are different faults with different fixes, and
+                    // `because` is quoted verbatim to an operator.
+                    alephcore::tasks::heartbeat::decline_global(
+                        "`[heartbeat] enabled = true` but the data directory \
+                         would not resolve, so the heartbeat store was never \
+                         opened. No heartbeat task runs this boot, and \
+                         `users.update` reports its heartbeat leg unmeasured.",
+                    );
                     if !args.daemon {
                         eprintln!(
                             "Warning: Failed to resolve data directory: {e}. Heartbeat disabled."
@@ -1178,6 +1209,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         } else {
+            // A different sentence from the two `Err` arms above on purpose:
+            // this one is a setting an operator chose, those are faults they
+            // need to fix. One `because` covering all three would be
+            // actionable for none.
+            alephcore::tasks::heartbeat::decline_global(
+                "`[heartbeat] enabled = false`: no heartbeat scheduler runs in \
+                 this process, so the deactivation freeze in `users.update` \
+                 cannot measure its heartbeat leg and says so rather than \
+                 reporting a zero.",
+            );
             if !args.daemon {
                 println!("Heartbeat service: disabled");
                 println!();
@@ -1978,14 +2019,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .providers
             .contains_key("chatgpt");
         if has_chatgpt {
-            use alephcore::gateway::codex_token_refresher::{set_global, CodexTokenRefresher};
+            use alephcore::gateway::codex_token_refresher::CodexTokenRefresher;
             let refresher = Arc::new(CodexTokenRefresher::new(
                 oauth_state.clone(),
                 app_config_for_oauth.clone(),
                 oauth_vault.clone(),
                 registry,
             ));
-            set_global(refresher.clone());
+            // Written fully qualified, like the `decline_global` in this gate's
+            // `else` arm two lines below and like every other conditional
+            // capability install in this file. `set_global` is a name TWO
+            // modules own (`codex_token_refresher` and
+            // `gateway::security::shared_token`), and
+            // `census::no_conditional_capability_install_is_silent` groups
+            // install sites by the path written here — an unqualified call
+            // makes those two indistinguishable to it.
+            alephcore::gateway::codex_token_refresher::set_global(refresher.clone());
             refresher.spawn_background();
             if !args.daemon {
                 println!("OAuth: Codex token auto-refresh enabled");
