@@ -24,6 +24,7 @@ pub mod channels;
 pub mod commands;
 pub mod cron;
 pub mod desktop_bridge;
+pub mod devices;
 pub mod dreaming;
 pub mod events;
 pub mod extension_usage;

@@ -95,6 +95,7 @@
     "gateway_devices_desc": "Devices authorized with a pairing code. Revoking one ends its sessions immediately. Rotating the shared token below revokes them all.",
     "gateway_devices_empty": "No paired devices.",
     "gateway_devices_last_seen": "Last seen",
+    "gateway_devices_load_failed": "Failed to load paired devices: ",
     "gateway_devices_never_seen": "Never connected",
     "gateway_devices_online": "Online now",
     "gateway_devices_revoke": "Revoke",

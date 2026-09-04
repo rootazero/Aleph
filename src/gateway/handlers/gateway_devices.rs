@@ -22,6 +22,7 @@
 //! so does `users.update`'s deactivation path (revokes every device owned by a
 //! newly-deactivated user) — one pipeline, never a second copy.
 
+use aleph_protocol::devices::{PairedDeviceList, PairedDeviceRow};
 use serde_json::json;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -126,11 +127,16 @@ pub(crate) async fn revoke_device_and_kick(
 
 /// `gateway.devices.list` — list paired remote Panel devices.
 ///
-/// Response: `{ "devices": [{ device_id, device_name, created_at,
-/// last_seen_at, connected }] }`. `connected` is a live join against the
-/// presence roster (mirrors openclaw's `device.pair.list` `connected` flag) —
-/// without it "Last seen 3 minutes ago" is the only signal an operator has, and
-/// revoking is now a session-killing action that deserves to say so up front.
+/// Response: [`PairedDeviceList`], which this handler **constructs** — the
+/// field list is not restated here, because a hand-kept copy of a wire shape
+/// is the half that goes stale silently.
+///
+/// `connected` is a live join against the presence roster (mirrors openclaw's
+/// `device.pair.list` `connected` flag) — without it "Last seen 3 minutes ago"
+/// is the only signal an operator has, and revoking is now a session-killing
+/// action that deserves to say so up front. It is required on the wire for the
+/// reason [`PairedDeviceRow::connected`] gives: a defaulted absence would read
+/// as a claim of "offline".
 /// Also opportunistically prunes expired bootstrap tickets / device tokens (no
 /// dedicated daemon task).
 pub async fn handle_devices_list(
@@ -160,31 +166,42 @@ pub async fn handle_devices_list(
         .filter_map(|e| e.device_id)
         .collect();
 
-    let list: Vec<_> = devices
+    // Built FROM the shared contract type, not hand-assembled next to it:
+    // parsing a literal can only ever prove the server sends a superset, which
+    // is how `created_at` — emitted since this list shipped, rendered by no
+    // client in any language — stayed invisible until the key set was pinned.
+    // A rename is now a compile error on both sides instead of a thinner list.
+    let list: Vec<PairedDeviceRow> = devices
         .into_iter()
-        .map(|d| {
-            json!({
-                "connected": online.contains(&d.device_id),
-                "device_id": d.device_id,
-                "device_name": d.device_name,
-                "created_at": d.created_at,
-                "last_seen_at": d.last_seen_at,
-                // Which principal this device speaks as. SECURITY.md calls
-                // this list "the inventory", and until 2026-08-13 it was an
-                // inventory with no owners: five members' phones showed as
-                // five rows named "iPhone", so revoking the right one was
-                // guesswork and verifying that a deactivation actually cut
-                // someone's devices was impossible from any surface.
-                // `display_name` resolves through the same directory
-                // projection the channel-pairing list and the room bubbles
-                // use, so an operator reads a name rather than a `u-` id.
-                "user_id": d.user_id,
-                "display_name": d.user_id.as_deref().and_then(crate::scope::directory::display_name),
-            })
+        .map(|d| PairedDeviceRow {
+            connected: online.contains(&d.device_id),
+            device_id: d.device_id,
+            device_name: d.device_name,
+            last_seen_at: d.last_seen_at,
+            // Which principal this device speaks as. SECURITY.md calls this
+            // list "the inventory", and until 2026-08-13 it was an inventory
+            // with no owners: five members' phones showed as five rows named
+            // "iPhone", so revoking the right one was guesswork and verifying
+            // that a deactivation actually cut someone's devices was
+            // impossible from any surface. `display_name` resolves through the
+            // same directory projection the channel-pairing list and the room
+            // bubbles use, so an operator reads a name rather than a `u-` id.
+            display_name: d
+                .user_id
+                .as_deref()
+                .and_then(crate::scope::directory::display_name),
+            user_id: d.user_id,
         })
         .collect();
 
-    JsonRpcResponse::success(request.id, json!({ "devices": list }))
+    match serde_json::to_value(PairedDeviceList::new(list)) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            crate::gateway::protocol::INTERNAL_ERROR,
+            format!("failed to encode devices: {e}"),
+        ),
+    }
 }
 
 /// `gateway.devices.revoke` — revoke one paired Panel device by id.
@@ -355,5 +372,46 @@ mod tests {
             .validate_device_token(&paired.device_token)
             .unwrap()
             .is_none());
+    }
+
+    /// The inventory is the surface an operator revokes a credential from, so
+    /// what it sends is a contract. Nothing pinned the key set before this
+    /// test, which is why `created_at` — sent since the list shipped, rendered
+    /// by no client in any language — was invisible.
+    #[tokio::test]
+    async fn a_listed_row_carries_exactly_the_declared_wire_keys() {
+        let ctx = ctx();
+        let ticket = ctx
+            .device_token_mgr
+            .create_bootstrap_ticket(None, None)
+            .unwrap();
+        ctx.device_token_mgr
+            .exchange_bootstrap_ticket(&ticket, Some("panel-1".to_string()), None, None)
+            .unwrap();
+
+        let req = JsonRpcRequest::with_id("gateway.devices.list", None, json!(1));
+        let resp = handle_devices_list(req, ctx).await;
+        let result = resp.result.unwrap();
+        let arr = result.get("devices").and_then(|v| v.as_array()).unwrap();
+        let mut keys: Vec<&str> = arr[0]
+            .as_object()
+            .expect("a device row is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "connected",
+                "device_id",
+                "device_name",
+                "display_name",
+                "last_seen_at",
+                "user_id",
+            ],
+            "the emitted row must be exactly `PairedDeviceRow`; an extra key \
+             here is a field with no renderer, a missing one is a blank column"
+        );
     }
 }

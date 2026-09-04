@@ -190,6 +190,26 @@ async function main() {
         `FAIL device bound to ${JSON.stringify(mine[0].user_id)}, expected ${JSON.stringify(userId)}`,
       );
     }
+    // This driver is the third reader of the inventory, so it checks the wire
+    // rather than only the two fields it happens to need: the row is built from
+    // `aleph_protocol::devices::PairedDeviceRow`, and a key that appears or
+    // disappears here is a contract change no Rust test on either side sees on
+    // a live server. `connected` is required for the reason the type states —
+    // absent, a client would render an unknown as a claim of "offline".
+    const expected = [
+      "connected",
+      "device_id",
+      "device_name",
+      "display_name",
+      "last_seen_at",
+      "user_id",
+    ];
+    const got = Object.keys(mine[0]).sort();
+    if (got.join(",") !== expected.join(",")) {
+      return fail(
+        `FAIL device row keys ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`,
+      );
+    }
     console.log(`OK device ${deviceId} paired and bound to ${userId}`);
     return 0;
   });

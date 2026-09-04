@@ -20,6 +20,7 @@
 //! Reachable only by an authorized (operator) connection — the login wall gates
 //! everything before this renders.
 
+use aleph_protocol::devices::{PairedDeviceList, PairedDeviceRow};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::json;
@@ -28,20 +29,17 @@ use crate::components::ui::ConfirmButton;
 use crate::context::{local_device_id, DashboardState};
 use crate::i18n::{t, t_string, use_i18n};
 
-/// One paired remote Panel device, as returned by `gateway.devices.list`.
-#[derive(Clone)]
-struct PairedDevice {
-    device_id: String,
-    device_name: String,
-    last_seen_at: Option<i64>,
-    connected: bool,
-    /// Which principal this device speaks as — a resolved display name when
-    /// the directory has one, otherwise the raw `u-` id.
-    ///
-    /// The list is where an operator revokes a device, so it is also where
-    /// they have to be able to tell whose it is. Without this column five
-    /// members' phones render as five rows named "iPhone".
-    owner: Option<String>,
+/// Decode a `gateway.devices.list` reply into the rows this page renders.
+///
+/// `PairedDevice` used to be declared here and filled by a `filter_map` of
+/// `d.get("…")?` walks: a row whose key moved was dropped without a word, and
+/// `connected` came through `unwrap_or(false)`, so a server that did not say
+/// rendered as a server that said "offline". The shape now comes from
+/// [`aleph_protocol::devices::PairedDeviceRow`], which the handler *builds its
+/// response from* — a rename is a compile error on both sides, and a row this
+/// client cannot parse becomes a reported error instead of a missing row.
+fn decode_devices(v: &serde_json::Value) -> Result<Vec<PairedDeviceRow>, serde_json::Error> {
+    serde_json::from_value::<PairedDeviceList>(v.clone()).map(|l| l.devices)
 }
 
 /// Render a URL into an inline SVG QR code, or `None` for an empty / unencodable
@@ -152,7 +150,7 @@ pub fn GatewayTokenSection() -> impl IntoView {
     dir.ensure_loaded(state);
 
     // Paired-device inventory state.
-    let devices = RwSignal::new(Vec::<PairedDevice>::new());
+    let devices = RwSignal::new(Vec::<PairedDeviceRow>::new());
     let devices_error = RwSignal::new(Option::<String>::None);
     let devices_reload = RwSignal::new(0u32);
     // Which row (if any) is armed for confirmation. Only ever set for the
@@ -189,38 +187,29 @@ pub fn GatewayTokenSection() -> impl IntoView {
         }
         spawn_local(async move {
             match state.rpc_call("gateway.devices.list", json!({})).await {
-                Ok(v) => {
-                    let list = v
-                        .get("devices")
-                        .and_then(|d| d.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    let parsed = list
-                        .into_iter()
-                        .filter_map(|d| {
-                            Some(PairedDevice {
-                                device_id: d.get("device_id")?.as_str()?.to_string(),
-                                device_name: d
-                                    .get("device_name")
-                                    .and_then(|x| x.as_str())
-                                    .unwrap_or("Unknown")
-                                    .to_string(),
-                                last_seen_at: d.get("last_seen_at").and_then(|x| x.as_i64()),
-                                connected: d
-                                    .get("connected")
-                                    .and_then(serde_json::Value::as_bool)
-                                    .unwrap_or(false),
-                                owner: d
-                                    .get("display_name")
-                                    .and_then(|x| x.as_str())
-                                    .or_else(|| d.get("user_id").and_then(|x| x.as_str()))
-                                    .map(str::to_string),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    devices.set(parsed);
-                    devices_error.set(None);
-                }
+                Ok(v) => match decode_devices(&v) {
+                    Ok(parsed) => {
+                        devices.set(parsed);
+                        devices_error.set(None);
+                    }
+                    // A response this client cannot parse is a server it cannot
+                    // describe. Saying so beats the previous `filter_map`,
+                    // which dropped the unreadable rows and let the shortened
+                    // list speak for the server — on the one surface an
+                    // operator revokes credentials from.
+                    Err(e) => devices_error.set(Some(
+                        crate::components::admin_refusal::settings_load_error(
+                            i18n,
+                            &e.to_string(),
+                            |e| {
+                                format!(
+                                    "{}{e}",
+                                    t_string!(i18n, common.gateway_devices_load_failed)
+                                )
+                            },
+                        ),
+                    )),
+                },
                 Err(e) => devices_error.set(Some(
                     crate::components::admin_refusal::settings_write_error(i18n, &e, |e| {
                         e.to_string()
@@ -472,6 +461,11 @@ pub fn GatewayTokenSection() -> impl IntoView {
                                         .map(|t| format!("{} {t}", t_string!(i18n, common.gateway_devices_last_seen)))
                                         .unwrap_or_else(|| t_string!(i18n, common.gateway_devices_never_seen).to_string())
                                 };
+                                // Whose device this is. The name-then-id
+                                // fallback belongs to the two fields it reads,
+                                // so it is derived by the shared row rather
+                                // than respelled here.
+                                let owner = d.owner_label().map(str::to_string);
                                 view! {
                                     <div class="mb-2 p-2 rounded bg-surface-sunken border border-border">
                                         <div class="flex items-center gap-2">
@@ -489,10 +483,9 @@ pub fn GatewayTokenSection() -> impl IntoView {
                                                         <span class="w-1.5 h-1.5 rounded-full bg-success shrink-0"></span>
                                                     })}
                                                     {status}
-                                                    // Whose device this is. The row carries a
-                                                    // Revoke button, so it has to say who it
-                                                    // would be revoking.
-                                                    {d.owner.map(|o| view! {
+                                                    // The row carries a Revoke button, so it has
+                                                    // to say who it would be revoking.
+                                                    {owner.map(|o| view! {
                                                         <span class="truncate">"· "{o}</span>
                                                     })}
                                                 </div>
@@ -599,7 +592,8 @@ pub fn GatewayTokenSection() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_pairing_urls, is_loopback_origin};
+    use super::{choose_pairing_urls, decode_devices, is_loopback_origin};
+    use serde_json::json;
 
     #[test]
     fn server_urls_win_over_the_page_origin() {
@@ -662,5 +656,52 @@ mod tests {
     #[test]
     fn nothing_reachable_yields_nothing() {
         assert!(choose_pairing_urls(vec![], None, "t").is_empty());
+    }
+
+    /// A newer server that adds a field must not blank the inventory an
+    /// operator revokes from — the failure mode the old `filter_map` had, one
+    /// row at a time and without a word.
+    #[test]
+    fn an_unexpected_extra_key_still_decodes() {
+        let rows = decode_devices(&json!({
+            "devices": [{
+                "device_id": "panel-1",
+                "device_name": "iPhone",
+                "connected": true,
+                "some_future_column": 7,
+            }],
+        }))
+        .expect("an extra server-side field must not blank the list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].device_id, "panel-1");
+        assert!(rows[0].connected);
+    }
+
+    /// `connected` is the one field whose absence must not be answered. The
+    /// old walk ran it through `unwrap_or(false)`, so a server that did not
+    /// say rendered as a server that said "offline" — a claim, not an unknown.
+    #[test]
+    fn a_row_that_does_not_say_connected_fails_instead_of_reading_as_offline() {
+        let err = decode_devices(&json!({
+            "devices": [{ "device_id": "panel-1", "device_name": "iPhone" }],
+        }))
+        .expect_err("a missing `connected` must be reported, never defaulted");
+        assert!(err.to_string().contains("connected"), "{err}");
+    }
+
+    /// The owner column is what makes revoking the right phone possible; it
+    /// falls back to the raw principal id rather than going blank.
+    #[test]
+    fn the_owner_column_falls_back_to_the_principal_id() {
+        let rows = decode_devices(&json!({
+            "devices": [{
+                "device_id": "panel-1",
+                "device_name": "iPhone",
+                "connected": false,
+                "user_id": "u-bob",
+            }],
+        }))
+        .unwrap();
+        assert_eq!(rows[0].owner_label(), Some("u-bob"));
     }
 }

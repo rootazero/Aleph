@@ -95,6 +95,7 @@
     "gateway_devices_desc": "通过配对码授权的设备。撤销某台会立即中断它的会话；轮换下方共享 token 则一次撤销全部。",
     "gateway_devices_empty": "暂无已配对设备。",
     "gateway_devices_last_seen": "最后活跃",
+    "gateway_devices_load_failed": "加载已配对设备失败：",
     "gateway_devices_never_seen": "从未连接",
     "gateway_devices_online": "在线",
     "gateway_devices_revoke": "撤销",
