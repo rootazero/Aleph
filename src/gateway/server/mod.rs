@@ -749,6 +749,18 @@ impl GatewayServer {
         self.team_store = Some(store);
     }
 
+    /// The event-plane ownership cache (P1 data isolation, spec §5.4 —
+    /// `event_visibility::EventVisibilityIndex`). Always constructed (see the
+    /// field doc); exposed so a handler that REWRITES a cached session's
+    /// `(owner_user_id, scope_id)` pair — today only
+    /// `handlers::projects_channel::handle_bind`'s rescope — can invalidate
+    /// the cache after its write commits, instead of the cache silently
+    /// serving the pre-rewrite pair until FIFO eviction.
+    #[must_use]
+    pub const fn event_visibility(&self) -> &Arc<crate::gateway::event_visibility::EventVisibilityIndex> {
+        &self.event_visibility
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()

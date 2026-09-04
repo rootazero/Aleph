@@ -119,6 +119,11 @@ pub(in crate::commands::start) fn register_projects_handlers(
     // same `Arc` `register_session_handlers` gets — a second store here would
     // rescope rows nothing else reads.
     session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
+    // The event-plane ownership cache `handle_bind` invalidates for every
+    // session row `rescope_existing_transcript` moves, so the rest of the
+    // room's roster stops being denied their own conversation's live frames
+    // right after the bind — see `event_visibility::EventVisibilityIndex::forget_session`.
+    event_visibility: &Arc<alephcore::gateway::event_visibility::EventVisibilityIndex>,
     daemon: bool,
 ) {
     use alephcore::gateway::handlers::projects as projects_handlers;
@@ -234,7 +239,8 @@ pub(in crate::commands::start) fn register_projects_handlers(
         projects_channel_handlers::handle_bind,
         project_store,
         session_store,
-        event_bus
+        event_bus,
+        event_visibility
     );
     register_handler!(
         server,

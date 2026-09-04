@@ -43,6 +43,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 use super::parse_params;
 use super::projects::{gate_project, project_error_response};
 use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::event_visibility::EventVisibilityIndex;
 use crate::gateway::events::ChangeKind;
 use crate::gateway::session_store::types::SessionFilter;
 use crate::gateway::session_store::SessionStore;
@@ -138,6 +139,13 @@ fn row(b: ChannelBinding) -> ChannelBindingRow {
 async fn rescope_existing_transcript(
     sessions: &dyn SessionStore,
     bound: &ChannelBinding,
+    // Invalidated per moved key, right after that key's write commits (see
+    // the loop below) — never before it, and never batched to the end of the
+    // scan. A concurrent `session_admits` landing in the gap between a
+    // premature forget and the write actually committing would re-cache the
+    // PRE-bind pair with nothing left to invalidate it again, so the order
+    // is load-bearing, not a convenience.
+    event_visibility: &EventVisibilityIndex,
 ) -> RescopeOutcome {
     // `bound` rather than the raw `ChannelBindParams`: `bind_conversation`
     // already normalized `channel_id` / `peer_id` through
@@ -232,7 +240,16 @@ async fn rescope_existing_transcript(
     let mut moved_by = Vec::new();
     for key in &keys {
         match sessions.rescope_attribution(key, &bound.project_id).await {
-            Ok(true) => moved_by.push(key.agent_id().to_string()),
+            // The write has committed at this point — `rescope_attribution`
+            // returning is the commit — so invalidating THIS key's cached
+            // `(owner_user_id, scope_id)` pair here can only ever throw away
+            // a stale value, never a fresh one. Per key, not once after the
+            // loop: `keys` can name more than one agent's row for the same
+            // conversation, and every one of them just changed scope.
+            Ok(true) => {
+                event_visibility.forget_session(&key.to_key_string()).await;
+                moved_by.push(key.agent_id().to_string());
+            }
             // The row was listed a moment ago and is gone now — a concurrent
             // delete. Not an error, and not something moved.
             Ok(false) => {}
@@ -319,6 +336,7 @@ pub async fn handle_bind(
     store: Arc<ProjectStore>,
     sessions: Arc<dyn SessionStore>,
     event_bus: Arc<GatewayEventBus>,
+    event_visibility: Arc<EventVisibilityIndex>,
 ) -> JsonRpcResponse {
     let params: ChannelBindParams = match parse_params(&request) {
         Ok(p) => p,
@@ -364,7 +382,8 @@ pub async fn handle_bind(
     // The STORED binding, not `params`: its `channel_id` / `peer_id` are
     // already normalized the way a live `SessionKey` normalizes, which is what
     // the scan below compares against.
-    let rescoped = rescope_existing_transcript(sessions.as_ref(), &bound).await;
+    let rescoped =
+        rescope_existing_transcript(sessions.as_ref(), &bound, event_visibility.as_ref()).await;
 
     if let Some(log) = crate::security::audit::global() {
         log.log(crate::security::audit::AuditEntry::authority_change(
@@ -593,6 +612,35 @@ mod tests {
         Arc::new(GatewayEventBus::new())
     }
 
+    fn visibility() -> Arc<EventVisibilityIndex> {
+        Arc::new(EventVisibilityIndex::new())
+    }
+
+    /// `event_admits`'s entry point for a plain `BySessionKey` frame — no
+    /// `OrAdmin` shortcut, so this is the honest probe for whether a caller's
+    /// cached `(owner_user_id, scope_id)` verdict for `key` is stale.
+    /// `stream.session_updated` is one of the topics
+    /// `session_identity_of` classifies this way from the frame's own
+    /// `session_key` field.
+    async fn admits(
+        index: &EventVisibilityIndex,
+        key: &SessionKey,
+        caller: &str,
+        caller_is_admin: bool,
+        store: &Arc<dyn SessionStore>,
+    ) -> bool {
+        index
+            .event_admits(
+                "stream.session_updated",
+                Some(&json!({ "session_key": key.to_key_string() })),
+                Some(caller),
+                caller_is_admin,
+                store,
+                None,
+            )
+            .await
+    }
+
     fn rpc(method: &str, params: Value) -> JsonRpcRequest {
         JsonRpcRequest::with_id(method, Some(params), json!(1))
     }
@@ -693,6 +741,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -737,6 +786,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -868,6 +918,7 @@ mod tests {
                     store.clone(),
                     sessions,
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -911,6 +962,7 @@ mod tests {
                     store.clone(),
                     sessions,
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -977,6 +1029,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1027,6 +1080,7 @@ mod tests {
                     store.clone(),
                     sessions,
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1066,6 +1120,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1121,6 +1176,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1192,6 +1248,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1245,6 +1302,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1318,6 +1376,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1406,6 +1465,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1568,6 +1628,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1631,6 +1692,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;

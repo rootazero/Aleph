@@ -2062,12 +2062,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    // Taken before the mutable borrow below: `handle_bind` needs it to
+    // invalidate the ownership cache for every session row it rescopes.
+    let event_visibility = server.event_visibility().clone();
     register_projects_handlers(
         &mut server,
         &project_store,
         &auth_bundle.security_store,
         &event_bus,
         &session_store,
+        &event_visibility,
         args.daemon,
     );
 
