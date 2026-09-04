@@ -269,21 +269,37 @@ pub(crate) fn flush_session(session: &PtySession, now: i64) -> FlushOutcome {
     }
 
     let foreground = session.foreground_fact();
-    // The live cwd, in a fixed order of authority, so no reader has to guess
-    // which source won (判据 §12).
-    //
-    // 1. OSC 7 — the shell TELLING us where it is. Stream B adds
-    //    `Screen::cwd()`; until it lands there is nothing to read here, and
-    //    this comment is the marker Task M attaches it to. It goes FIRST when
-    //    it arrives.
-    // 2. the foreground process's own cwd, from the probe.
-    // 3. the spawn directory, which never changes.
-    let cwd = foreground
-        .as_ref()
-        .and_then(|f| f.cwd.clone())
-        .unwrap_or_else(|| session.cwd.clone());
 
     let changed = session.with_screen(|screen| {
+        // The live cwd, in a fixed order of authority, so no reader has to
+        // guess which source won (判据 §12).
+        //
+        // 1. OSC 7 — the shell TELLING us where it is (`Screen::cwd()`).
+        // 2. the foreground process's own cwd, from the probe.
+        // 3. the spawn directory, which never changes.
+        //
+        // Sourced INSIDE this closure rather than above it so the screen lock
+        // is taken exactly once for the whole sample: a second `with_screen`
+        // just to ask for the cwd would be another acquisition on the PTY
+        // reader thread's hot path, and it could answer about a different
+        // screen than the one the sampler then reads.
+        //
+        // An empty OSC 7 path counts as absent, so the next source answers.
+        // Nothing produces one today — `parse_osc7_cwd` rejects an empty
+        // decoded path and no reset clears the field — but the WIRE already
+        // spells a clear as `Some("")` (`screen::perform::published_clear`),
+        // whose rule is "empty OR absent means none". Writing that rule here
+        // too keeps ONE rule with one spelling instead of two that drift
+        // (判据 §1): the day a clear does reach this field, the answer has to
+        // be the next source and never an empty string handed to the sampler
+        // as if it were a directory.
+        let cwd = screen
+            .cwd()
+            .filter(|c| !c.is_empty())
+            .map(str::to_owned)
+            .or_else(|| foreground.as_ref().and_then(|f| f.cwd.clone()))
+            .unwrap_or_else(|| session.cwd.clone());
+
         agents.sample(crate::gateway::runtime::SampleInput {
             session_id: &session.id,
             shell: &session.shell,

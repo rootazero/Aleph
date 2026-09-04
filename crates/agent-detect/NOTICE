@@ -45,5 +45,9 @@ counter, which Aleph does not have. That file's header lists them by name.
 The rest of the Aleph project is MIT-licensed. This crate is not. That split is
 the reason this crate exists as a crate, so it is a boundary and not a note:
 herdr-derived code goes in here, and nowhere else. `src/gateway/pty/foreground.rs`
-in the main crate cites three of herdr's numbers (500 ms, 3 s, 6) in comments
-and reproduces none of its code — see that file's header.
+in the main crate cites some of herdr's constants in comments and reproduces
+none of its code. WHICH constants, and with what line numbers, is stated in
+that file's header and deliberately not repeated here: this paragraph used to
+carry its own list and it went stale (it counted a 3 s recheck that is Aleph's
+own value, herdr's analogue being 5 s) while the header was the copy anyone
+would have checked.

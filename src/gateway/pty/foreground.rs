@@ -3,11 +3,21 @@
 // for herdr-derived code (phase-1 spec), and no herdr-derived code lives
 // outside it.
 //
-// What IS taken from herdr 0.8.2 (https://github.com/herdrdev/herdr) is three
+// What IS taken from herdr 0.8.2 (https://github.com/herdrdev/herdr) are two
 // NUMBERS and the shape of an idea, cited where each is used:
-//   * 500 ms / 3 s, upstream's busy and idle ends of the probe interval it
-//     computes in `src/pane.rs:776-789`;
-//   * 6, upstream's `AGENT_MISS_CONFIRMATION_ATTEMPTS`.
+//   * 500 ms, the fast end of the acquisition interval upstream picks in
+//     `should_probe_foreground_job` (`src/pane.rs:491-497`, choosing between
+//     `PROCESS_ACQUISITION_FAST_RECHECK` = 500 ms and
+//     `PROCESS_ACQUISITION_SLOW_RECHECK` = 2 s, `src/pane.rs:297-298`);
+//   * 6, upstream's `AGENT_MISS_CONFIRMATION_ATTEMPTS` (`src/pane.rs:291`).
+// Aleph's 3 s silent recheck is NOT upstream's number and never was: the
+// analogous constant there is `PROCESS_RECHECK_IDENTIFIED` = 5 s
+// (`src/pane.rs:292`). An earlier version of this header cited
+// `src/pane.rs:776-789` for a "500 ms / 3 s" pair, and neither half survives
+// reading upstream — those lines are the CALL SITE, which computes no
+// interval at all, and 3 s appears nowhere in herdr. A citation is a claim
+// about someone else's file, so it is exactly the kind that rots unnoticed
+// (判据 §1); re-read before trusting it.
 // Upstream's probe machinery itself is not reproduced here. It reaches the
 // process table through its own `crate::platform` FFI layer, which R1 puts
 // out of reach; `should_probe_foreground_job` is a state machine folding in
@@ -67,10 +77,13 @@
 
 /// Minimum gap between two probes of a session that is producing frames.
 ///
-/// herdr's own floor for the same job (`src/pane.rs:776-789` computes a probe
-/// interval from the pane's activity; 500 ms is its busy end). At the 16 ms
-/// flush cadence this caps a busy session at ~2 probes per second instead of
-/// ~62.
+/// herdr's own floor for the same job: `should_probe_foreground_job`
+/// (`src/pane.rs:491-497`) picks between `PROCESS_ACQUISITION_FAST_RECHECK`
+/// (500 ms, while a pane is freshly acquiring) and
+/// `PROCESS_ACQUISITION_SLOW_RECHECK` (2 s), and 500 ms is that fast end.
+/// Aleph takes the number, not the adaptive choice — it has no acquisition
+/// window to switch on. At the 16 ms flush cadence this caps a busy session
+/// at ~2 probes per second instead of ~62.
 pub const PROBE_MIN_INTERVAL_MS: i64 = 500;
 
 /// Maximum gap between two probes of a session whose agent is already
@@ -80,6 +93,11 @@ pub const PROBE_MIN_INTERVAL_MS: i64 = 500;
 /// most: an agent that exits leaves the shell in the foreground and paints
 /// nothing, so a frame-gated probe would never look again and the panel would
 /// show a finished agent forever.
+///
+/// 3 s is Aleph's own choice, not a borrowed number: herdr's analogue is
+/// `PROCESS_RECHECK_IDENTIFIED` = 5 s (`src/pane.rs:292`). Said here because
+/// the licence header used to attribute 3 s upstream, and an unattributed
+/// number is easier to "correct" back than a contradicted one.
 pub const PROBE_RECHECK_MS: i64 = 3_000;
 
 /// How many consecutive probes must fail to see the program before it is

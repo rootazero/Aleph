@@ -1515,3 +1515,187 @@ fn probe_count_is_bounded_at_fifteen_sessions() {
             .collect::<Vec<_>>()
     );
 }
+
+/// THE GLUE (task M, spec §4.1): the live cwd has THREE sources and they
+/// are ranked, so no reader downstream has to guess which one answered.
+///
+/// 1. `OSC 7` — the shell TELLING us where it is (`Screen::cwd()`, stream B).
+/// 2. the foreground process's own cwd, read by the probe (stream A).
+/// 3. the spawn directory, which never moves.
+///
+/// Neither stream could write this on its own: A had only sources 2 and 3
+/// and left the marker comment in `flush_session` for source 1 to be
+/// attached to; B produced source 1 with no consumer. A merge that brought
+/// both halves in and left the order unwritten is the exact shape of 判据 §7
+/// — two ends complete and no wire between them, invisible to dead-code
+/// analysis because both ends have their own tests.
+///
+/// Both phases drive the REAL `flush_session`, so what is asserted is the
+/// order production uses and not a re-implementation of it here.
+///
+/// Phase 1 pins source 1 over the other two: the child reports an `OSC 7`
+/// path that is neither its own working directory nor its spawn directory,
+/// so an entry showing anything else means the OSC 7 read is not wired in.
+///
+/// Phase 2 removes source 1 and pins 2 over 3: the child `cd`s away from
+/// its spawn directory, and the expectation is DERIVED from the probe's own
+/// answer (`session.foreground_fact()`) rather than written as a literal —
+/// on a platform whose process table cannot report a cwd the probe answers
+/// `None` and the spawn directory is then the correct answer, which is a
+/// different assertion rather than a skipped one (判据 §2).
+///
+/// `PtySession::spawn` is used directly, not `pty::manager().spawn()`, so
+/// this test owns its sessions and needs no serial key — the same reason
+/// the other flush-wire tests in this file carry none.
+#[tokio::test(flavor = "multi_thread")]
+async fn cwd_prefers_osc7_then_foreground_then_spawn() {
+    // Not created on disk: `OSC 7` is a REPORT, and the terminal's job is to
+    // relay what the shell said, not to adjudicate it. A path that exists
+    // would let a future implementation "validate" it and still pass.
+    let osc_dir = "/tmp/aleph-tr2-osc7-reported";
+    let spawn_dir = std::env::temp_dir().to_string_lossy().into_owned();
+    let canonical = |p: &str| {
+        std::fs::canonicalize(p)
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| p.to_owned())
+    };
+
+    // ---- Phase 1: OSC 7 outranks the probe and the spawn directory. ----
+    let id = "t-runtime-cwd-osc7";
+    agents().remove(id);
+    let opts = SpawnOptions {
+        command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
+        args: if cfg!(windows) {
+            vec![
+                "/C".into(),
+                // `prompt` is cmd.exe's only way to emit a raw ESC.
+                format!("prompt $E]7;file://{osc_dir}$E\\$_ & ping -n 30 127.0.0.1 >nul"),
+            ]
+        } else {
+            vec![
+                "-c".into(),
+                format!("printf '\\033]7;file://{osc_dir}\\007'; sleep 30"),
+            ]
+        },
+        cwd: Some(spawn_dir.clone()),
+        rows: 6,
+        cols: 40,
+        ..Default::default()
+    };
+    let session = PtySession::spawn(id.into(), &opts, None).expect("spawn");
+
+    // Drive until the screen has actually parsed the OSC 7, not merely until
+    // the first frame: the sequence can arrive on a later read than the one
+    // that produced the first frame, and asserting on frame 1 would be a
+    // race dressed up as a failure.
+    let mut saw_osc = false;
+    for _ in 0..150 {
+        let now = chrono::Utc::now().timestamp_millis();
+        let _ = crate::gateway::pty::manager::flush_session(&session, now);
+        if session.with_screen(|s| s.cwd().map(str::to_owned)) == Some(osc_dir.to_owned()) {
+            // One more pass so the sampler sees the parsed value.
+            let now = chrono::Utc::now().timestamp_millis();
+            let _ = crate::gateway::pty::manager::flush_session(&session, now);
+            saw_osc = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let entry = agents().snapshot().into_iter().find(|e| e.session_id == id);
+    session.kill();
+    agents().remove(id);
+    assert!(saw_osc, "the child's OSC 7 never reached the screen in 3s");
+    let entry = entry.expect("a flushed session must be in the table");
+    assert_eq!(
+        entry.cwd,
+        osc_dir,
+        "OSC 7 is the shell telling us where it is and must outrank both the \
+         probe (which would have said {}) and the spawn directory ({spawn_dir})",
+        canonical(&spawn_dir)
+    );
+
+    // ---- Phase 2: with no OSC 7, the probe outranks the spawn directory. ----
+    //
+    // The child moves to a genuinely DIFFERENT directory rather than sitting
+    // in the one it was spawned in. A child that never moves already produces
+    // two distinct strings on macOS — `/var/folders/…` when you ask the
+    // environment, `/private/var/…` when you ask the kernel — so an assertion
+    // that leans on that is discriminating by accident, and on a platform that
+    // spells the two the same it would pass no matter which source answered
+    // (判据 §2).
+    //
+    // It prints, too, because probe rule 2 needs a frame since the last probe:
+    // rule 1's free first look can land before the shell has run its `cd`, and
+    // with no further output nothing would ever look again.
+    let id2 = "t-runtime-cwd-foreground";
+    let moved_to = if cfg!(windows) { "C:\\Windows" } else { "/" };
+    agents().remove(id2);
+    let opts2 = SpawnOptions {
+        command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
+        args: if cfg!(windows) {
+            vec![
+                "/C".into(),
+                "cd /d C:\\Windows & echo MOVED & ping -n 30 127.0.0.1 >nul".into(),
+            ]
+        } else {
+            vec!["-c".into(), "cd /; printf 'MOVED'; sleep 30".into()]
+        },
+        cwd: Some(spawn_dir.clone()),
+        rows: 6,
+        cols: 40,
+        ..Default::default()
+    };
+    let session2 = PtySession::spawn(id2.into(), &opts2, None).expect("spawn");
+
+    // Drive until the probe has SEEN the move. The flush that observes it is
+    // the one that re-samples (a moved cwd is a changed `ForegroundFact`), so
+    // by the time this loop breaks the table has already been told.
+    let mut moved_seen = false;
+    for _ in 0..200 {
+        let now = chrono::Utc::now().timestamp_millis();
+        let _ = crate::gateway::pty::manager::flush_session(&session2, now);
+        if session2
+            .foreground_fact()
+            .and_then(|f| f.cwd)
+            .is_some_and(|c| canonical(&c) == canonical(moved_to))
+        {
+            moved_seen = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let probe_cwd = session2.foreground_fact().and_then(|f| f.cwd);
+    let entry2 = agents()
+        .snapshot()
+        .into_iter()
+        .find(|e| e.session_id == id2);
+    let no_osc7 = session2.with_screen(|s| s.cwd().is_none());
+    session2.kill();
+    agents().remove(id2);
+    let entry2 = entry2.expect("a flushed session must be in the table");
+    assert!(
+        no_osc7,
+        "phase 2 must have no OSC 7, or it is phase 1 again"
+    );
+    match probe_cwd {
+        Some(live) => {
+            assert_eq!(
+                entry2.cwd, live,
+                "the probe's live cwd must outrank the spawn directory \
+                 ({spawn_dir}) — that is the whole point of probing"
+            );
+            assert!(
+                moved_seen,
+                "the probe answered {live} but never saw the child move to \
+                 {moved_to} in 4s; without the move this phase separates the \
+                 two sources only by their spelling of one directory, which is \
+                 not a discrimination it can rely on (判据 §2)"
+            );
+        }
+        None => assert_eq!(
+            entry2.cwd, spawn_dir,
+            "with no OSC 7 and no probe answer, the spawn directory is the \
+             last resort and must still be reported"
+        ),
+    }
+}
