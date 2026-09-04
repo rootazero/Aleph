@@ -105,7 +105,12 @@ pub async fn handle_cluster_deregister(
         Err(resp) => return resp,
     };
 
-    match deregister_node(&ctx.node_registry, &ctx.security_store, &params.node) {
+    match deregister_node(
+        &ctx.node_registry,
+        &ctx.security_store,
+        &params.node,
+        ctx.event_bus.as_deref(),
+    ) {
         Ok(outcome) => {
             // Partial-state signal: the online session was evicted but the
             // long-lived device record was not. The node can re-enroll on its

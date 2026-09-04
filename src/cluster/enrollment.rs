@@ -397,6 +397,7 @@ pub fn deregister_node(
     registry: &crate::cluster::NodeRegistry,
     store: &SecurityStore,
     query: &str,
+    event_bus: Option<&crate::gateway::event_bus::GatewayEventBus>,
 ) -> Result<DeregisterOutcome, DeregisterError> {
     use crate::cluster::ResolveError;
     let node_id = match registry.resolve_id(query) {
@@ -409,11 +410,38 @@ pub fn deregister_node(
         }
     };
 
-    let evicted = registry.forget(&node_id);
+    let evicted_session = registry.forget(&node_id);
+    let evicted = evicted_session.is_some();
     let device_removed = store.revoke_device(&node_id).unwrap_or_else(|e| {
         warn!(node_id = %node_id, error = %e, "failed to revoke node device on deregister");
         false
     });
+
+    // Fire the operator-initiated `node.disconnected` event from the same
+    // single source the WebSocket drop arm uses (handler.rs:~2027). Without
+    // this, an explicit `cluster.deregister` (RPC or `node_manage` tool)
+    // evicts a live session but emits no event — the operator's Panel keeps
+    // showing the node online until a hard refresh, after which it vanishes
+    // entirely, so the transition is unobservable. `forget` returning the
+    // evicted session (the audit's sw-cluster-3 ask) avoids a second lookup.
+    if let (Some(session), Some(bus)) = (evicted_session, event_bus) {
+        use crate::gateway::event_bus::TopicEvent;
+        if let Err(e) = bus.publish_json(&TopicEvent::new(
+            "node.disconnected",
+            serde_json::json!({
+                "node_id": session.node_id,
+                "name": session.device_name,
+                "conn_id": session.conn_id,
+            }),
+        )) {
+            tracing::warn!(
+                error = %e,
+                node_id = %session.node_id,
+                "failed to publish node.disconnected event on operator deregister"
+            );
+        }
+    }
+
     Ok(DeregisterOutcome {
         node_id,
         evicted,
@@ -638,7 +666,7 @@ mod tests {
         let (node_id, _) = enroll_node_device(&s, "cold-box").unwrap();
 
         // Never connected → nothing to evict, but the revoke still lands.
-        let out = deregister_node(&reg, &s, "Cold Box").expect("offline deregister");
+        let out = deregister_node(&reg, &s, "Cold Box", None).expect("offline deregister");
         assert_eq!(
             out,
             DeregisterOutcome {
@@ -654,10 +682,61 @@ mod tests {
             NodeAdmission::Deregistered { node_id }
         );
         assert_eq!(
-            deregister_node(&reg, &s, "cold-box"),
+            deregister_node(&reg, &s, "cold-box", None),
             Err(DeregisterError::NotFound),
             "a revoked node is no longer addressable"
         );
+    }
+
+    #[test]
+    fn deregister_publishes_node_disconnected_on_live_eviction() {
+        // Regression for sw-cluster-3: operator-initiated `deregister_node`
+        // (RPC or `node_manage` tool) previously dropped a live session
+        // without emitting the `node.disconnected` lifecycle event, so the
+        // operator's Panel kept showing the node online until a hard refresh
+        // (after which it vanished entirely). The publish now fires from the
+        // shared single source.
+        use crate::cluster::{CommandDescriptor, NodeSession, ReverseRpcChannel};
+        use crate::gateway::event_bus::GatewayEventBus;
+        use tokio::sync::mpsc;
+
+        let s = store();
+        let reg = crate::cluster::NodeRegistry::new();
+        let (node_id, _minted) = enroll_node_device(&s, "live-box").unwrap();
+
+        // Bring the node online so the deregister is an *eviction* (not just
+        // a device revocation).
+        let (tx, _rx) = mpsc::channel::<String>(8);
+        reg.register(NodeSession {
+            node_id: node_id.clone(),
+            conn_id: "conn-live-box".to_string(),
+            device_name: "live-box".to_string(),
+            channel: ReverseRpcChannel::new(tx),
+            declared_commands: vec![CommandDescriptor {
+                name: "bash".to_string(),
+                schema: serde_json::json!({"type": "object"}),
+            }],
+            tags: vec![],
+            version: None,
+            connected_at: std::time::SystemTime::now(),
+        });
+
+        let bus = GatewayEventBus::new();
+        let mut rx = bus.subscribe();
+        let out = deregister_node(&reg, &s, "live-box", Some(&bus))
+            .expect("online deregister must succeed");
+        assert!(out.evicted, "live session must be evicted");
+        assert!(out.device_removed, "device record must be revoked");
+
+        // One publish, with the right id + name + conn_id. `subscribe()`
+        // yields the JSON-serialized `TopicEvent`; we parse and check.
+        let frame = rx.try_recv().expect("one event must have been published");
+        let event: serde_json::Value = serde_json::from_str(&frame)
+            .expect("frame must be valid JSON");
+        assert_eq!(event["topic"], serde_json::json!("node.disconnected"));
+        assert_eq!(event["data"]["node_id"], serde_json::json!(node_id));
+        assert_eq!(event["data"]["name"], serde_json::json!("live-box"));
+        assert_eq!(event["data"]["conn_id"], serde_json::json!("conn-live-box"));
     }
 
     #[test]
