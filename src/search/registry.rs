@@ -208,7 +208,7 @@ impl SearchRegistry {
     /// missing credentials are skipped with a warning rather than aborting
     /// the load. Returns `None` when the config is `None`, search is
     /// disabled, or no usable backend was constructed — caller should
-    /// then leave `BuiltinToolConfig.search_registry = None`, and
+    /// then leave `BuiltinToolConfig.search_handle = None`, and
     /// [`SearchRegistry::for_tool`] will synthesize a one-backend registry
     /// from a bare `TAVILY_API_KEY` (via [`SearchRegistry::from_env_only`])
     /// when the `search` tool is built.

@@ -1012,15 +1012,19 @@ pub fn create_tool_boxed(
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
         "search" => {
-            // The "registry, else bare key, else empty" decision lives in
-            // `SearchRegistry::for_tool` — it used to be written out here and
-            // again in `builder/constructor/mod.rs`, under a comment saying
-            // the two must mirror each other.
-            let registry = crate::search::SearchRegistry::for_tool(
-                config.and_then(|cfg| cfg.search_registry.as_ref()),
-                config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
-            );
-            Some(Box::new(SearchTool::with_registry(registry)))
+            // A live handle wins: the tool then reads every `[search]`
+            // hot-apply off the swap cell. Without one the "bare key, else
+            // empty" decision lives in `SearchRegistry::for_tool` — it used
+            // to be written out here and again in `builder/constructor/mod.rs`,
+            // under a comment saying the two must mirror each other.
+            let tool = match config.and_then(|cfg| cfg.search_handle.as_ref()) {
+                Some(handle) => SearchTool::with_registry_cell(handle.registry_cell()),
+                None => SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
+                    None,
+                    config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
+                )),
+            };
+            Some(Box::new(tool))
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
         "google_meet" => Some(Box::new(

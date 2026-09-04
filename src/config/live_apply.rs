@@ -127,6 +127,18 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
             // this function's return value (see `reload_impact::classify`'s
             // doc on the bare "policies" path).
             "policies.spend" => crate::spend::update_policy(cfg.policies.spend.clone()),
+            // `[search]`'s handle is a boot-installed `SearchHandle`: an
+            // `ArcSwap` over the whole `SearchRegistry` plus the vault handle
+            // the rebuild needs, because `SearchBackendConfig::api_key` is
+            // `skip_serializing` and a patched `Config` provably carries no
+            // keys. The `search` tool reads a fresh snapshot off the cell on
+            // every call, so the store inside `apply_config` is what "live"
+            // means. A rebuild that cannot resolve its secrets keeps the old
+            // registry serving and returns `false` — the verdict downgrades
+            // to `Restart` rather than claiming a swap that did not happen,
+            // the same honesty rule as `route`'s arm above. A missing handle
+            // (CLI process, tests, or a boot without the agent stack) is the
+            // other `false`.
             // `[policies.terminal]`'s handle is the process-global PTY
             // manager singleton (`crate::gateway::pty::manager()`) — always
             // present, unlike `route`/`spend`'s boot-installed `ArcSwap`s,
@@ -142,6 +154,10 @@ pub fn apply_live_sections(cfg: &Config, top_sections: &[&str]) -> Vec<&'static 
                 }
                 true
             }
+            "search" => match crate::search::handle::try_global_search_handle() {
+                Some(handle) => handle.apply_config(cfg),
+                None => false,
+            },
             // Unreachable while the guard test below passes: a new entry in
             // LIVE_SECTIONS/LIVE_SUBSECTIONS without an arm here fails at
             // compile-review time via that test, not silently at runtime.
@@ -206,6 +222,7 @@ mod tests {
             "behavior",
             "policies.spend",
             "policies.terminal",
+            "search",
         ];
         for target in LIVE_SECTIONS.iter().chain(LIVE_SUBSECTIONS.iter()) {
             assert!(
@@ -269,6 +286,102 @@ mod tests {
         // tests, early boot) nothing received the change, so claiming Live
         // would be a lie the user only discovers by the change not happening.
         assert_eq!(classify_verified("route.mode", &[]), ReloadImpact::Restart);
+    }
+
+    #[test]
+    fn search_without_a_registered_handle_downgrades_to_restart() {
+        // Same shape as `route` above: in a CLI process, a test, or a daemon
+        // whose boot never built the agent stack, no `SearchHandle` is
+        // installed and nothing received the `[search]` change. The swap-side
+        // failure (a rebuild that cannot resolve its secrets keeps the old
+        // registry and reports `false`) is pinned on the handle itself —
+        // `search::handle::tests::a_rebuild_that_cannot_resolve_its_secrets_keeps_the_old_registry`
+        // — and reaches this verdict through exactly the empty `live_applied`
+        // list asserted here.
+        assert_eq!(classify_verified("search", &[]), ReloadImpact::Restart);
+        assert_eq!(
+            classify_verified("search.backends.searxng.base_url", &[]),
+            ReloadImpact::Restart
+        );
+        assert_eq!(
+            classify_verified("search.max_results", &["search"]),
+            ReloadImpact::Live
+        );
+    }
+
+    /// The arm itself, exercised end to end through `apply_live_sections`:
+    /// with the process-global handle installed, a patched `[search]` lands
+    /// and the very next snapshot the tool would read carries the change.
+    ///
+    /// ⚠️ Installs the process-global handle, which no test may un-install.
+    /// That is safe only because nothing in this binary asserts the handle's
+    /// ABSENCE through `apply_live_sections` — the no-handle half is pinned
+    /// against `classify_verified` directly, exactly like
+    /// `route_without_a_registered_chain_downgrades_to_restart` (see its doc).
+    /// Serialised so no second writer can race the install or the swap.
+    #[test]
+    #[serial_test::serial(search_live_handle)]
+    fn the_search_arm_lands_through_apply_live_sections() {
+        use crate::config::types::{SearchBackendConfig, SearchConfigInternal};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = std::sync::Arc::new(
+            crate::gateway::security::SecurityStore::in_memory().expect("store"),
+        );
+        let vault = std::sync::Arc::new(crate::gateway::security::SharedTokenManager::new(
+            store,
+            dir.path().join("t.vault"),
+        ));
+        vault.generate_token().expect("token");
+        let handle = std::sync::Arc::new(crate::search::SearchHandle::new(
+            std::sync::Arc::new(crate::search::SearchRegistry::new("none")),
+            vault,
+        ));
+        // Idempotent by contract; only this test installs this slot.
+        let _ = crate::search::install_global_search_handle(handle.clone());
+
+        let mut cfg = Config::default();
+        cfg.search = Some(SearchConfigInternal {
+            enabled: true,
+            default_provider: "ddg".to_string(),
+            fallback_providers: None,
+            max_results: 9,
+            timeout_seconds: 10,
+            backends: std::collections::HashMap::from([(
+                "ddg".to_string(),
+                SearchBackendConfig {
+                    provider_type: "duckduckgo".to_string(),
+                    api_key: None,
+                    base_url: None,
+                    engine_id: None,
+                    engines: None,
+                    min_request_interval_ms: None,
+                    verified: false,
+                },
+            )]),
+            ..Default::default()
+        });
+
+        let applied = apply_live_sections(&cfg, &["search"]);
+        assert_eq!(applied, vec!["search"]);
+        assert_eq!(
+            classify_verified("search.max_results", &applied),
+            ReloadImpact::Live
+        );
+        let observed = crate::search::handle::try_global_search_handle()
+            .expect("installed above")
+            .snapshot()
+            .default_options()
+            .max_results;
+        // Another test could not have swapped a DIFFERENT value in — this
+        // slot's only writer is this binary's `[search]` apply path, and the
+        // serial key keeps the other handle-touching test out — but a
+        // whole-config rollback test shares this binary, so assert membership
+        // of the just-applied generation rather than pointer identity.
+        assert_eq!(
+            observed, 9,
+            "the tool's next read must see the new defaults"
+        );
     }
 
     #[test]
@@ -575,8 +688,8 @@ mod tests {
 
         assert!(
             checked >= 3,
-            "expected a write site for each of the three live sections \
-             ({LIVE_SECTIONS:?}); found {checked} — the scan stopped matching"
+            "expected a write site for every live section ({LIVE_SECTIONS:?}); \
+             found {checked} — the scan stopped matching"
         );
         assert!(
             missing.is_empty(),

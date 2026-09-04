@@ -45,10 +45,16 @@ impl BuiltinToolRegistry {
     /// - Tool policy is enforced layered (Guardrails + Sandbox + `ApprovalGate`).
     ///   See docs/reference/SANDBOX.md.
     pub async fn with_config(mut config: BuiltinToolConfig) -> crate::error::Result<Self> {
-        let search_tool = SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
-            config.search_registry.as_ref(),
-            config.tavily_api_key.as_deref(),
-        ));
+        // A live handle wins: the tool then reads every `[search]` hot-apply
+        // off the swap cell. Without one (CLI, tests) the registry is resolved
+        // once, from the bare key if there is one — `SearchRegistry::for_tool`.
+        let search_tool = match config.search_handle.as_ref() {
+            Some(handle) => SearchTool::with_registry_cell(handle.registry_cell()),
+            None => SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
+                None,
+                config.tavily_api_key.as_deref(),
+            )),
+        };
         let web_fetch_tool = if let Some(ref cfg) = config.config {
             let cfg_guard = cfg.read().await;
             let tool = WebFetchTool::with_policy(&cfg_guard.policies.web_fetch)

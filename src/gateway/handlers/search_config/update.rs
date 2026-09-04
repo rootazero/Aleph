@@ -202,6 +202,20 @@ pub async fn handle_update(
         crate::pii::PiiEngine::reload(cfg.privacy.clone());
     }
 
+    // `[search]` is a declared-live section, so persisting it is only half
+    // the write: the running `SearchRegistry` the `search` tool reads was
+    // captured at boot and would otherwise keep serving the old backends
+    // under a `{"success": true}`. Run the declaration table's executor and
+    // report the verdict VERIFIED — a process with no live handle (or a
+    // rebuild that could not resolve its secrets) downgrades to `restart`
+    // instead of claiming a swap that did not happen. See
+    // `execution_config::handle_update` for the precedent.
+    let impact = {
+        let cfg = config.read().await;
+        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"]);
+        crate::config::classify_verified("search", &landed)
+    };
+
     // Broadcast config change event
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("search".to_string()),
@@ -210,5 +224,8 @@ pub async fn handle_update(
     });
     let _ = event_bus.publish_gateway_event(&event);
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!({ "success": true, "reload_impact": impact }),
+    )
 }

@@ -1441,6 +1441,7 @@
       "provider_required": "提供商名称不能为空",
       "providers_section": "搜索提供商",
       "row_needs_key": "需要 API 密钥",
+      "restart_required_hint": "已保存到 config.toml，但本次改动未能热应用到运行中的搜索服务，需重启 aleph-server 后生效。",
       "saved_successfully": "保存成功",
       "select_to_configure": "选择搜索提供商以配置",
       "self_hosted": "自托管",

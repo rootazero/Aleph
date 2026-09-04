@@ -3,7 +3,10 @@
 //! Provides RPC methods for managing search settings.
 
 mod delete;
-mod dto;
+// `pub(crate)` so `search::handle`'s live rebuild resolves backend keys by
+// the one definition of the vault-key format (`dto::vault_key`) rather than
+// a second spelling of "search:<name>".
+pub(crate) mod dto;
 mod get;
 mod test;
 mod update;

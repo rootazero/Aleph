@@ -14,8 +14,14 @@ use crate::memory::EmbeddingProvider;
 pub struct BuiltinToolConfig {
     /// Tavily API key for search tool
     pub tavily_api_key: Option<String>,
-    /// Search registry for multi-provider search (`SearXNG`, Tavily, Brave, etc.)
-    pub search_registry: Option<Arc<crate::search::SearchRegistry>>,
+    /// Live search handle for multi-provider search (`SearXNG`, Tavily,
+    /// Brave, etc.). The `search` tool reads the registry through this
+    /// handle's swap cell on every call, so a `[search]` config write
+    /// hot-applied by `config::live_apply` reaches the very next search.
+    /// `None` (CLI, tests) builds the tool over a static registry resolved
+    /// from `tavily_api_key` — and a `[search]` change there honestly needs
+    /// a restart, which the write surface reports via `classify_verified`.
+    pub search_handle: Option<Arc<crate::search::SearchHandle>>,
     /// Generation provider registry for image/video/audio generation
     pub generation_registry: Option<Arc<RwLock<GenerationProviderRegistry>>>,
     /// Shared config handle for `ConfigReadTool`

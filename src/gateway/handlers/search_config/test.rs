@@ -141,6 +141,16 @@ pub async fn handle_test(
                 if let Err(e) = cfg.save_incremental(&["search"]) {
                     tracing::error!(error = %e, "Failed to save config after search test");
                 }
+                // `[search]` is a declared-live section, so every write
+                // surface that persists it runs the declaration table's
+                // executor — the write-surface census in `config::live_apply`
+                // requires the call BY NAME. `verified` itself has no runtime
+                // consumer, so this rebuild is behavior-neutral; it exists so
+                // this handler cannot drift into "persists a live section
+                // without poking the runtime" the day a consumed field lands
+                // here. Absent handle → no-op, honestly unreported (this
+                // response's payload is the probe result, not a save verdict).
+                crate::config::live_apply::apply_live_sections(&cfg, &["search"]);
             }
         }
     }

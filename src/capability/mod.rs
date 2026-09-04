@@ -283,7 +283,7 @@ impl<T: Send + Sync + 'static> SlotStatus for MutableCapabilitySlot<T> {
 /// ID when a new slot is not listed. The list is a data structure; the rule
 /// is the guard.
 ///
-/// 45 entries, not 46: `providers::route_handle::GLOBAL` is the census's one
+/// 46 entries, not 47: `providers::route_handle::GLOBAL` is the census's one
 /// first-caller-wins member and by ruling stays a raw `OnceLock` rather than
 /// migrating onto [`CapabilitySlot`] — see this module's `census` submodule
 /// doc ("Why form 2 is a rule and not an exemption") and
@@ -331,6 +331,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::mcp::sampling_bridge::sampling_llm_slot(),
     crate::spend::global_ledger_slot(),
     crate::spend::global_policy_slot(),
+    crate::search::handle::global_search_handle_slot(),
     crate::gateway::security::shared_token::global_shared_token_manager_slot(),
     crate::gateway::channel_policy::channel_config_snapshot_slot(),
     crate::gateway::shutdown_forensics::boot_instant_slot(),

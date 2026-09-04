@@ -2,6 +2,7 @@
 //!
 //! Implements `AlephTool` trait for AI agent integration.
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -308,12 +309,16 @@ fn render_all(
 
 /// Web search tool over the provider registry.
 ///
-/// There is exactly one way in: whatever boot could construct, resolved by
-/// [`SearchRegistry::for_tool`]. An empty registry is a legitimate state — the
-/// tool still exists and says what is missing when called.
+/// The registry is read through an [`ArcSwap`] cell on every call rather
+/// than captured at construction: `[search]` is a declared-live config
+/// section, and the cell is how a hot-applied rebuild
+/// ([`crate::search::SearchHandle`]) reaches the very next search without a
+/// restart. A tool built from a bare registry wraps it in a cell nobody
+/// swaps — the pre-live-apply behaviour, kept for construction sites with
+/// no handle (tests, one-shot callers).
 #[derive(Clone)]
 pub struct SearchTool {
-    registry: Arc<SearchRegistry>,
+    registry: Arc<ArcSwap<SearchRegistry>>,
 }
 
 impl SearchTool {
@@ -345,13 +350,25 @@ impl SearchTool {
          or more asks them all at once and merges the answers, which spends one \
          call's quota per backend — breadth for a research question, waste for a lookup.";
 
-    /// Create with a `SearchRegistry`, the only way in.
+    /// Create with a `SearchRegistry`, wrapped in a cell nobody swaps.
     ///
     /// Build the argument with [`SearchRegistry::for_tool`] rather than
     /// deciding here what an install with nothing configured should get: that
     /// decision has two callers, and it used to be written out at both.
+    ///
+    /// Construction sites that CAN have a live handle (the daemon's tool
+    /// registry) must use [`Self::with_registry_cell`] instead — a tool built
+    /// here never observes a `[search]` hot-apply.
     pub fn with_registry(registry: Arc<SearchRegistry>) -> Self {
-        info!("SearchTool initialized with the provider registry");
+        Self::with_registry_cell(Arc::new(ArcSwap::new(registry)))
+    }
+
+    /// Create over the live swap cell a [`crate::search::SearchHandle`]
+    /// publishes to. Every call reads the current generation, so a
+    /// `[search]` config write hot-applied by `config::live_apply` is what
+    /// the very next search runs on.
+    pub fn with_registry_cell(registry: Arc<ArcSwap<SearchRegistry>>) -> Self {
+        info!("SearchTool initialized over the provider registry cell");
         Self { registry }
     }
 
@@ -375,15 +392,20 @@ impl SearchTool {
         };
         notify_tool_start(Self::NAME, &args_summary);
 
+        // One coherent registry generation for this whole call: a hot-apply
+        // landing mid-call must not mix the old chain's defaults with the new
+        // chain's providers.
+        let registry = self.registry.load_full();
+
         // Start from the operator's `[search]` defaults (max_results /
         // timeout_seconds); whatever the model named still wins.
-        let options = args.to_options(&self.registry.default_options());
+        let options = args.to_options(&registry.default_options());
 
         if queries.len() == 1 {
             // The single-query path, byte for byte what it was before
             // `queries` existed: one chain walk, one answer, no merge.
             let query = queries[0].clone();
-            return match self.registry.search(&query, &options).await {
+            return match registry.search(&query, &options).await {
                 Ok(answer) => {
                     // Attribute per result only for a merged answer: with one
                     // backend the name is the same on every row and
@@ -418,7 +440,7 @@ impl SearchTool {
             };
         }
 
-        match self.registry.search_multi(&queries, &options).await {
+        match registry.search_multi(&queries, &options).await {
             Ok(answer) => {
                 // Per-row provider attribution when the queries were answered
                 // by different backends; per-row query attribution always —
