@@ -247,6 +247,27 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # the one-line `delegate` / `plan` commands — the tree is a LIVE
                                  # projection, attach the browser BEFORE triggering.
 
+./qa/terminal/run.sh identify    # §6.11/§6.12 the embedded terminal's agent panel. A session
+                                 # spawned as `sh` with `claude` TYPED INTO IT afterwards reaches
+                                 # the wire as program+agent+state — the shape phase 1 could not
+                                 # produce, because it read the spawn label. A control session
+                                 # that ran no agent is the falsifying arm, and a fourth check
+                                 # ("the probe answered") keeps that arm from being green because
+                                 # nothing ever looked.
+./qa/terminal/run.sh wait        # terminal{wait} blocks on the table's watch and answers
+                                 # `reached`; a state the session never enters answers `timeout`
+                                 # with the CURRENT entry. Both arms carry a DURATION check — a
+                                 # wait that never waited answers `timeout` too.
+./qa/terminal/run.sh quiet       # ~90 s. 30 s of silence publishes `quiet_since` and does NOT
+                                 # move `state` (spec R2-3). Checks the row is not-quiet first,
+                                 # that the mark lands on the clock rather than instantly, and
+                                 # that a later frame CLEARS it — a sticky flag reads the same.
+./qa/terminal/run.sh cwd         # OSC 7 › foreground probe › spawn dir, over three directories
+                                 # that actually differ. A second session emits no OSC 7, so its
+                                 # answer can only be the probe's — without it "OSC 7 won" and
+                                 # "the probe said nothing" are the same green.
+./qa/terminal/run.sh all         # the four above, one server each
+
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
 ./qa/channels/run.sh errors      # Lark throttle / refusal, via mock_lark.py's /__inject queue
@@ -855,3 +876,26 @@ refuses to boot with `invalid type: sequence, expected a map`.
 - **`picker_nav`** — 改 `interfaces/webchat/` 的键盘导航/渐隐前跑：键盘 walk · 条件渐隐 · 手机端加 provider，
   三档宽度各带效果断言。
 - **`canvas`** — 改 `src/canvas/` 或 Panel canvas 视图前跑：九项清单每条带效果断言。
+- **`terminal`** — 改 `src/gateway/pty/foreground.rs`、`src/gateway/runtime/`、`crates/agent-detect/`
+  或 `src/builtin_tools/terminal.rs` 前跑 `{identify,wait,quiet,cwd}`。
+  - `identify` — **本轮存在的理由**。第 1 期的面板在生产上从未识别过一个 agent：采样器拿到的是
+    `PtySession::shell`（**spawn 时刻**的标签），而 Panel 的终端只发 `{rows, cols}`，所以标签恒为
+    `zsh`，`identify_agent` 答 `None`，检测引擎在读第一条规则**之前**就早返回 `Unknown`——21 份
+    manifest 与它们的单测全绿，因为**每一条都自己把 agent 名字递进去**（判据 §2：问的不是"规则对不对"，
+    是"它什么时候会红"）。这里 spawn 的是 `sh`，agent 是**事后敲进去的**，唯一能把它变成
+    `agent: "claude"` 的只有前台探测。负向臂是同一台服务器上一个没跑 agent 的 shell；
+    第四条断言「**探测确实答了**」把那条臂从「什么都没看」里救出来——`program: null` 会让另外
+    三条同样为真（判据 §8）。
+  - `wait` — `reached` 与 `timeout` 两臂**各带一个耗时断言**：一个从不等待的 `wait` 同样会答
+    `timeout`，光看 outcome 的绿和瞎的绿长得一样（M4 变异实测：outcome 那条仍绿，耗时那条红）。
+  - `quiet` — 三次观测两次翻转：先证明它**当时不是 quiet**，再证明标记落在 **30 s 的钟上**而非立刻，
+    最后证明**一帧能把它清掉**。少了任何一条，一个永不复位的黏滞标志都读起来一样。
+  - `cwd` — 三层来源用**三个真的不同的目录**；第二个会话不发 OSC 7，所以它的答案只可能来自探测。
+    只有一个会话时，「OSC 7 赢了」和「探测什么都没说」是同一个绿。**故意不证**的：spawn 目录那一层
+    （要让探测**失败**才能到达，从 wire 上安排不出来）、`program: null`、Panel 的渲染、以及另外 20 份 manifest。
+  - 装置的画面**不是手抄的**：`derive_chrome.py` 按 rule id 从 `claude.toml` 里取出字面量、拼成行、
+    再用 manifest 自己的正则回验；它**故意不判定哪条规则胜出**（那要在 Python 里重写一遍 region 与优先级
+    ——第二套引擎，判据 §1），胜者由运行时的 `terminal{explain}` 用**发货的引擎**报出规则 id 来断言。
+  - ⚠️ 它的**生成配置那一次 boot 带了 `--port`**，别的装置没有：那一次 boot 绑的是**内置默认端口**，
+    机器上只要有别的 server 占着，进程在写出 config 之前就退出了，症状是 `no config generated at …`
+    ——读起来像路径或权限问题，原因在日志下一行。
