@@ -295,98 +295,90 @@ impl A2AMessageHandler for AgentLoopBridge {
             // `cleanup_task` call and leak the broadcast channel entry —
             // see A2A-R4-06. `catch_unwind` converts a panic into a `Result`
             // arm so the cleanup runs in both branches.
-            AssertUnwindSafe(
-                async move {
-                    let panic_result = async {
-                        match execution_adapter.execute(request, agent, emitter).await {
-                            Ok(()) => {
-                                let response_msg = A2AMessage::text(
-                                    A2ARole::Agent,
-                                    "Task completed successfully",
-                                );
-                                if let Err(e) = task_manager
-                                    .update_status(
-                                        &task_id_owned,
-                                        TaskState::Completed,
-                                        Some(response_msg.clone()),
-                                    )
-                                    .await
-                                {
-                                    error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
-                                    return Err(());
-                                }
-
-                                let completed_event = TaskStatusUpdateEvent {
-                                    task_id: task_id_owned.clone(),
-                                    context_id: context_id_owned,
-                                    status: TaskStatus {
-                                        state: TaskState::Completed,
-                                        message: Some(response_msg),
-                                        timestamp: Utc::now(),
-                                    },
-                                    is_final: true,
-                                    metadata: None,
-                                };
-                                let _ = streaming
-                                    .broadcast_status(&task_id_owned, completed_event)
-                                    .await;
-                                info!(task_id = %task_id_owned, "A2A bridge: streaming task completed");
-                                Ok(())
+            async move {
+                let body = async {
+                    match execution_adapter.execute(request, agent, emitter).await {
+                        Ok(()) => {
+                            let response_msg = A2AMessage::text(
+                                A2ARole::Agent,
+                                "Task completed successfully",
+                            );
+                            if let Err(e) = task_manager
+                                .update_status(
+                                    &task_id_owned,
+                                    TaskState::Completed,
+                                    Some(response_msg.clone()),
+                                )
+                                .await
+                            {
+                                error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
+                                return;
                             }
-                            Err(e) => {
-                                let error_msg =
-                                    A2AMessage::text(A2ARole::Agent, format!("Execution failed: {e}"));
-                                if let Err(update_err) = task_manager
-                                    .update_status(
-                                        &task_id_owned,
-                                        TaskState::Failed,
-                                        Some(error_msg.clone()),
-                                    )
-                                    .await
-                                {
-                                    error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
-                                    return Err(());
-                                }
 
-                                let failed_event = TaskStatusUpdateEvent {
-                                    task_id: task_id_owned.clone(),
-                                    context_id: context_id_owned,
-                                    status: TaskStatus {
-                                        state: TaskState::Failed,
-                                        message: Some(error_msg),
-                                        timestamp: Utc::now(),
-                                    },
-                                    is_final: true,
-                                    metadata: None,
-                                };
-                                let _ = streaming
-                                    .broadcast_status(&task_id_owned, failed_event)
-                                    .await;
-                                error!(task_id = %task_id_owned, error = %e, "A2A bridge: streaming task failed");
-                                Ok(())
+                            let completed_event = TaskStatusUpdateEvent {
+                                task_id: task_id_owned.clone(),
+                                context_id: context_id_owned,
+                                status: TaskStatus {
+                                    state: TaskState::Completed,
+                                    message: Some(response_msg),
+                                    timestamp: Utc::now(),
+                                },
+                                is_final: true,
+                                metadata: None,
+                            };
+                            let _ = streaming
+                                .broadcast_status(&task_id_owned, completed_event)
+                                .await;
+                            info!(task_id = %task_id_owned, "A2A bridge: streaming task completed");
+                        }
+                        Err(e) => {
+                            let error_msg = A2AMessage::text(
+                                A2ARole::Agent,
+                                format!("Execution failed: {e}"),
+                            );
+                            if let Err(update_err) = task_manager
+                                .update_status(
+                                    &task_id_owned,
+                                    TaskState::Failed,
+                                    Some(error_msg.clone()),
+                                )
+                                .await
+                            {
+                                error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
+                                return;
                             }
+
+                            let failed_event = TaskStatusUpdateEvent {
+                                task_id: task_id_owned.clone(),
+                                context_id: context_id_owned,
+                                status: TaskStatus {
+                                    state: TaskState::Failed,
+                                    message: Some(error_msg),
+                                    timestamp: Utc::now(),
+                                },
+                                is_final: true,
+                                metadata: None,
+                            };
+                            let _ = streaming
+                                .broadcast_status(&task_id_owned, failed_event)
+                                .await;
+                            error!(task_id = %task_id_owned, error = %e, "A2A bridge: streaming task failed");
                         }
                     }
-                    .await;
-                    // Cleanup runs in BOTH the success and the inner-Err
-                    // (update_status failed) branches. The catch_unwind below
-                    // adds a third branch for the panic case.
-                    let _ = streaming.cleanup_task(&task_id_owned).await;
-                    panic_result
-                }
-                .catch_unwind()
-                .await
-                .map_err(|panic_payload| {
-                    // The panic would otherwise be swallowed by tokio's
-                    // runtime-level handler, leaking the broadcast channel.
-                    // Log it and fall through to cleanup.
+                };
+                // `catch_unwind` returns a `Result<(), Box<dyn Any + Send>>`.
+                // Log the panic (the only thing left to do — cleanup_task is
+                // already awaited unconditionally below).
+                if let Err(panic_payload) = AssertUnwindSafe(body).catch_unwind().await {
                     error!(
                         task_id = %task_id_owned,
                         ?panic_payload,
                         "panic in A2A streaming bridge; cleanup will still run"
                     );
-                }),
-            ),
+                }
+                // Cleanup runs in BOTH the success and the panic branches.
+                let _ = streaming.cleanup_task(&task_id_owned).await;
+            },
         ));
 
         Ok(stream)
