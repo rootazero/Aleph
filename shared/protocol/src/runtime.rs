@@ -43,6 +43,16 @@ pub struct RuntimeAgentEntry {
     /// `None` = the bundled manifest does not recognise this program.
     /// Never a guess.
     pub agent: Option<String>,
+    /// The FOREGROUND program's name, as probed from the process table —
+    /// `claude`, `vim`, or the shell itself once an agent exits.
+    ///
+    /// `None` means the probe could not answer (no permission, an
+    /// unsupported platform, the session already gone). It is never a guess
+    /// and never the spawn label: `label` already answers "what was this
+    /// session started as", and folding the two would make "we could not
+    /// look" indistinguishable from "the shell is what is running".
+    #[serde(default)]
+    pub program: Option<String>,
     pub state: RuntimeAgentState,
     /// Unix epoch MILLISECONDS, from the sampler's flush-tick clock — not the
     /// client's. Advances only when something observable changed (state,
@@ -50,6 +60,16 @@ pub struct RuntimeAgentEntry {
     /// it as "how long has it been like this", not as "when was this last
     /// looked at".
     pub updated_at: i64,
+    /// Unix epoch MILLISECONDS of the moment this session went quiet, once it
+    /// has produced no frame for the sampler's quiet threshold.
+    ///
+    /// This is a FACT about output, not a state. Silence is not idle: an
+    /// agent thinking for five minutes emits nothing, and any code that let
+    /// time alone turn `Working` into `Idle` would be manufacturing evidence
+    /// (spec R2-3). `state` is unaffected by this field — a reader that wants
+    /// "stuck?" renders the age, it does not re-derive the state.
+    #[serde(default)]
+    pub quiet_since: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,8 +91,10 @@ mod tests {
                 label: "claude".into(),
                 cwd: "/tmp".into(),
                 agent: Some("claude".into()),
+                program: Some("claude".into()),
                 state: RuntimeAgentState::Blocked,
                 updated_at: 42,
+                quiet_since: Some(41),
             }],
         };
         let wire = serde_json::to_value(&resp).unwrap();
@@ -89,9 +111,15 @@ mod tests {
             label: "zsh".into(),
             cwd: "/tmp".into(),
             agent: None,
+            program: None,
             state: RuntimeAgentState::Unknown,
             updated_at: 0,
+            quiet_since: None,
         };
-        assert!(serde_json::to_value(&e).unwrap()["agent"].is_null());
+        let wire = serde_json::to_value(&e).unwrap();
+        assert!(wire["agent"].is_null());
+        // Same rule for the probe: "we could not look" must reach the client
+        // as null, not as the shell label standing in for a program.
+        assert!(wire["program"].is_null());
     }
 }

@@ -290,8 +290,10 @@ mod tests {
             label: "claude".to_string(),
             cwd: String::new(),
             agent: None,
+            program: None,
             state,
             updated_at: 0,
+            quiet_since: None,
         }
     }
 

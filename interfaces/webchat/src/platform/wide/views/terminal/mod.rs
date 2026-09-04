@@ -15,7 +15,10 @@ pub mod keymap;
 pub mod render;
 pub mod session;
 
-use aleph_protocol::pty::{PtyAttachResponse, PtyScreenFrame, PtySpawnResponse, PTY_SCREEN_TOPIC};
+use aleph_protocol::pty::{
+    PtyAttachResponse, PtyListResponse, PtyScreenFrame, PtySpawnResponse, PTY_LIST_METHOD,
+    PTY_SCREEN_TOPIC,
+};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::closure::Closure;
@@ -133,19 +136,20 @@ pub fn TerminalView() -> impl IntoView {
             // A live session already on the server IS this view's session.
             // A refresh, a second tab and a reconnect all arrive here.
             let existing: Option<String> =
-                match state.rpc_call("pty.list", serde_json::json!({})).await {
-                    Ok(v) => v
-                        .get("sessions")
-                        .and_then(|s| s.as_array())
-                        .and_then(|arr| {
-                            arr.iter()
-                                .find(|s| {
-                                    s.get("closed").and_then(serde_json::Value::as_bool)
-                                        == Some(false)
-                                })
-                                .and_then(|s| s.get("session_id"))
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_string)
+                match state.rpc_call(PTY_LIST_METHOD, serde_json::json!({})).await {
+                    // Decoded through the shared type rather than walked key
+                    // by key: the server builds the response from the same
+                    // struct, so a rename lands as a compile error on one
+                    // side and a decode failure on the other, instead of a
+                    // chain of `and_then`s that quietly yields `None` and
+                    // spawns a second shell next to the live one.
+                    Ok(v) => serde_json::from_value::<PtyListResponse>(v)
+                        .ok()
+                        .and_then(|list| {
+                            list.sessions
+                                .into_iter()
+                                .find(|s| !s.closed)
+                                .map(|s| s.session_id)
                         }),
                     // A failed list is not evidence that there are no sessions.
                     // Falling through to spawn is still right: a gateway broken

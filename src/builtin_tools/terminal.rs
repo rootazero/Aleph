@@ -96,7 +96,17 @@ use crate::tools::AlephTool;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalAction {
-    /// List the caller's own PTY sessions (id, shell, closed).
+    /// List the caller's own PTY sessions: `session_id`, `shell`, `cwd`
+    /// (where the shell was SPAWNED — empty when it inherited the
+    /// server's, and not updated by a later `cd`), `created_at` (epoch
+    /// seconds) and `closed`.
+    ///
+    /// This enumeration is the same key set
+    /// `aleph_protocol::pty::PtySessionInfo` defines and
+    /// `pty_list_response_round_trips_and_pins_its_key_set` pins — say all
+    /// five or none, because a short list here reads to the model as "those
+    /// are the fields", and a field it is told does not exist is a field it
+    /// will not ask for.
     List,
     /// Read one session's current visible screen (no scrollback). Requires
     /// `session_id`.
@@ -212,20 +222,15 @@ impl AlephTool for TerminalTool {
 /// against each [`pty::SessionInfo::created_by`] directly (no
 /// `owner_of` round trip needed — `list()` already carries the field).
 fn list_sessions(actor: Option<&str>) -> std::result::Result<serde_json::Value, String> {
-    let sessions: Vec<serde_json::Value> = pty::manager()
-        .list()
-        .into_iter()
-        .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor))
-        .map(|s| {
-            serde_json::json!({
-                "session_id": s.session_id,
-                "shell": s.shell,
-                "created_at": s.created_at,
-                "closed": s.closed,
-            })
-        })
-        .collect();
-    Ok(serde_json::json!({ "sessions": sessions }))
+    let body = aleph_protocol::pty::PtyListResponse {
+        sessions: pty::manager()
+            .list()
+            .iter()
+            .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor))
+            .map(aleph_protocol::pty::PtySessionInfo::from)
+            .collect(),
+    };
+    serde_json::to_value(&body).map_err(|e| format!("encode failed: {e}"))
 }
 
 /// `status` — the same table `runtime.agents.list` serves, filtered with

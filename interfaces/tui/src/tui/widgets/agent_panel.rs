@@ -159,8 +159,10 @@ mod tests {
             label: label.to_string(),
             cwd: String::new(),
             agent: agent.map(str::to_string),
+            program: None,
             state,
             updated_at,
+            quiet_since: None,
         }
     }
 

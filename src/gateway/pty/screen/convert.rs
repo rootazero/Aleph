@@ -46,6 +46,20 @@ pub fn patch(p: &ScreenPatch) -> PtyScreenPatch {
         cursor: p.cursor,
         alt_screen: p.alt_screen,
         title: p.title.clone(),
+        // The three below are reserved wire fields with no producer yet: the
+        // server screen does not track these modes, so `None` here is the
+        // literal truth ("unchanged / not known"), not a placeholder standing
+        // in for a value we have. Each is wired by Stream B task B3, which
+        // adds the `ScreenPatch` fields these will read.
+        //
+        // wired by Stream B, guarded by
+        // `cursor_visibility_rides_the_patch_only_when_it_changes`
+        cursor_visible: None,
+        // wired by Stream B, guarded by `bracketed_paste_mode_rides_the_patch`
+        bracketed_paste: None,
+        // wired by Stream B, guarded by
+        // `osc7_file_uri_with_empty_or_localhost_host_sets_cwd_and_percent_decodes`
+        cwd: None,
         bell: p.bell,
     }
 }

@@ -235,8 +235,17 @@ impl RuntimeAgents {
                     label,
                     cwd: cwd.to_owned(),
                     agent: agent_name,
+                    // wired by Stream A (task A2), guarded by
+                    // `a_real_agent_started_after_spawn_is_identified` — the
+                    // foreground probe that produces it does not exist yet,
+                    // and `None` is what "could not look" means on this wire.
+                    program: None,
                     state,
                     updated_at: if changed { now } else { previous_updated_at },
+                    // wired by Stream A (task A2), guarded by
+                    // `a_quiet_working_agent_reports_quiet_since_without_becoming_idle`
+                    // — nothing tracks frame arrival per session yet.
+                    quiet_since: None,
                 },
                 pending_idle_since,
             },

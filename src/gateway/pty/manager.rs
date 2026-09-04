@@ -51,11 +51,21 @@ const OWNER_RETENTION: usize = 1024;
 /// bounded frame per tick. This coalescing *is* the backpressure design.
 const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// Public summary of a session for `pty.list`.
-#[derive(Debug, Clone, Serialize)]
+/// Internal summary of a session, from which the wire row
+/// ([`aleph_protocol::pty::PtySessionInfo`]) is built.
+///
+/// This type is NOT the wire shape and deliberately does not derive
+/// `Serialize`: it carries `created_by`, which no client may see, and a
+/// serialisable server struct is exactly how that stamp would reach the wire
+/// the next time someone reached for `json!({ "sessions": … })`. Convert with
+/// the `From` impl below and let the compiler enforce the difference.
+#[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub session_id: String,
     pub shell: String,
+    /// The directory the child was SPAWNED in, empty when it inherited the
+    /// server's. See [`PtySession::cwd`] for why this is not the live cwd.
+    pub cwd: String,
     pub created_at: i64,
     pub closed: bool,
     /// Who asked for this session — see [`SpawnOptions::created_by`]. `None`
@@ -66,6 +76,22 @@ pub struct SessionInfo {
     /// the four addressed methods and the `pty.screen`/`pty.exit` delivery
     /// filter through [`PtyManager::owner_of`].
     pub created_by: Option<String>,
+}
+
+/// The one place a session becomes a wire row. Every face that answers
+/// "which sessions are there" — the `pty.list` handler and the `terminal`
+/// tool — goes through here, so the key set has a single author and
+/// `created_by` has no way out.
+impl From<&SessionInfo> for aleph_protocol::pty::PtySessionInfo {
+    fn from(s: &SessionInfo) -> Self {
+        Self {
+            session_id: s.session_id.clone(),
+            shell: s.shell.clone(),
+            cwd: s.cwd.clone(),
+            created_at: s.created_at,
+            closed: s.closed,
+        }
+    }
 }
 
 /// Result of a successful `pty.spawn`.
@@ -473,6 +499,7 @@ impl PtyManager {
             .map(|s| SessionInfo {
                 session_id: s.id.clone(),
                 shell: s.shell.clone(),
+                cwd: s.cwd.clone(),
                 created_at: s.created_at,
                 closed: s.is_closed(),
                 created_by: s.created_by.clone(),

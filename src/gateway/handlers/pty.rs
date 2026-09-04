@@ -381,12 +381,20 @@ pub async fn handle_close(request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
     let actor = crate::gateway::visibility::ambient_actor();
-    let sessions: Vec<_> = pty::manager()
-        .list()
-        .into_iter()
-        .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor.as_deref()))
-        .collect();
-    JsonRpcResponse::success(id, json!({ "sessions": sessions }))
+    let body = aleph_protocol::pty::PtyListResponse {
+        sessions: pty::manager()
+            .list()
+            .iter()
+            .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor.as_deref()))
+            .map(aleph_protocol::pty::PtySessionInfo::from)
+            .collect(),
+    };
+    // Same encode-or-report shape as `handle_spawn` and `handle_attach`: a
+    // handler must return a response, not panic (P7).
+    match serde_json::to_value(&body) {
+        Ok(v) => JsonRpcResponse::success(id, v),
+        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
+    }
 }
 
 /// The ownership gate every session-ADDRESSED `pty.*` method passes through.
@@ -599,6 +607,44 @@ mod tests {
         let resp = handle_list(req("pty.list", json!({}))).await;
         let result = resp.result.expect("list always succeeds");
         assert!(result.get("sessions").and_then(|s| s.as_array()).is_some());
+    }
+
+    /// `pty.list` had THREE independently written key sets — this handler's
+    /// `json!`, the `terminal` tool's, and the Panel's hand-walked
+    /// `get("sessions")` chain. Three spellings of one contract is how one of
+    /// them drifts, so the server now builds the response from the shared
+    /// type and this asserts the shape it actually emits (judgment §10:
+    /// parsing a literal the test itself wrote proves serde, not this code).
+    ///
+    /// It does NOT assert `sessions.len() == 1`. The manager is a
+    /// process-global singleton and libtest runs this binary's tests on
+    /// parallel threads, so any sibling's live session is in this list —
+    /// see `spawn_with_a_cwd_outside_every_root_creates_no_session`'s doc
+    /// for the measured flake rate a whole-list assertion produced. Naming
+    /// THIS call's
+    /// own session id is a predicate a sibling's activity cannot break.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn list_response_is_built_from_the_protocol_type() {
+        let (config, _tmp) = isolated_config();
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 6, "cols": 20 })), config).await;
+        let sid = spawn.result.as_ref().expect("spawned")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        let resp = handle_list(req("pty.list", json!({}))).await;
+        let value = resp.result.expect("list always succeeds");
+        let parsed: aleph_protocol::pty::PtyListResponse =
+            serde_json::from_value(value).expect("list response must match the contract");
+        let mine = parsed
+            .sessions
+            .iter()
+            .find(|s| s.session_id == sid)
+            .expect("this call's own session must be listed");
+        assert!(!mine.shell.is_empty(), "the shell label is the tab's name");
+
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
     }
 
     #[tokio::test]

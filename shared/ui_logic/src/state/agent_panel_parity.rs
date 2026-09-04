@@ -48,8 +48,10 @@ fn all_permutations_of_four_entries() -> Vec<Vec<RuntimeAgentEntry>> {
             label: "claude".to_string(),
             cwd: String::new(),
             agent: None,
+            program: None,
             state,
             updated_at: 0,
+            quiet_since: None,
         }
     }
 
