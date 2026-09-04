@@ -1089,7 +1089,19 @@ async fn a_real_agent_started_after_spawn_is_identified() {
         let now = chrono::Utc::now().timestamp_millis();
         let _ = crate::gateway::pty::manager::flush_session(&session, now);
         if let Some(e) = agents().snapshot().into_iter().find(|e| e.session_id == id) {
-            let hit = e.agent.as_deref() == Some("claude");
+            // Wait for everything the assertions below check, not just the
+            // identification. The probe can name the agent a beat before the
+            // fake `claude`'s chrome has been read into the screen, so a loop
+            // that broke on identification alone gave up the rest of its
+            // budget and then asserted on a screen that had only the echoed
+            // command line — green when the machine was idle, red under a
+            // full-suite run (observed 2026-09-04 during the task M merge:
+            // `agent: Some("claude"), program: Some("claude"), state: Idle`).
+            // A break condition weaker than the assertion is the assertion
+            // racing itself.
+            let hit = e.agent.as_deref() == Some("claude")
+                && e.program.as_deref() == Some("claude")
+                && e.state == RuntimeAgentState::Working;
             identified = Some(e);
             if hit {
                 break;
