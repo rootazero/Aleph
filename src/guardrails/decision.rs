@@ -30,10 +30,11 @@ pub enum GuardrailDecision {
     /// control flow does NOT branch on it today: the output call-site turns
     /// every `Block` into a terminal `HarnessError`, the input call-site ends
     /// the turn, and the tool-call call-site skips the single dispatch. The
-    /// orchestrator classifies harness errors by message, not by this class
-    /// (see `orchestrator/harness_bridge/error.rs`; phase6c TODO switches it to
-    /// structural class-based matching). Set `class` correctly anyway so that
-    /// future classifier works without revisiting every call-site.
+    /// orchestrator classifies harness errors by message text, not by this
+    /// `class` field — a structural class-based matcher was sketched at one
+    /// point under a "phase6c" name but no commit landed it. Set `class`
+    /// correctly anyway so a future classifier switch is a no-op at the
+    /// call-sites.
     Block { reason: String, class: ErrorClass },
     /// Allow but record the warning (no caller-visible mutation).
     Warn { reason: String },
@@ -65,20 +66,25 @@ impl Replacement {
 }
 
 impl GuardrailDecision {
+    // Production callers all `match` on the enum directly (which #[non_exhaustive]
+    // permits). The four accessors below are kept pub(crate) for the unit-test
+    // suite (`tests/` under this module) — they were previously `pub`, but no
+    // production caller anywhere in src/ consults them, so widening the API
+    // surface was dead. (severed-wire audit 2026-09-04, sw-guardrails-2-1.)
     #[must_use]
-    pub const fn is_block(&self) -> bool {
+    pub(crate) const fn is_block(&self) -> bool {
         matches!(self, Self::Block { .. })
     }
     #[must_use]
-    pub const fn is_allow(&self) -> bool {
+    pub(crate) const fn is_allow(&self) -> bool {
         matches!(self, Self::Allow)
     }
     #[must_use]
-    pub const fn is_sanitize(&self) -> bool {
+    pub(crate) const fn is_sanitize(&self) -> bool {
         matches!(self, Self::Sanitize(_))
     }
     #[must_use]
-    pub const fn is_warn(&self) -> bool {
+    pub(crate) const fn is_warn(&self) -> bool {
         matches!(self, Self::Warn { .. })
     }
 }
