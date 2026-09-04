@@ -16,9 +16,8 @@
 //!
 //! `notify_tool_start` / `notify_tool_result` / `notify_tool_streaming_chunk`
 //! are kept as no-op stubs so the ~85 callers in this module still compile,
-//! but the `ToolProgressCallback` + `set_tool_progress_handler` machinery they
-//! would have fed has no live consumer in this tree — it was a leftover of an
-//! earlier "stream progress to UI" design that now flows through the gateway
+//! but no live consumer of any callback machinery exists in this tree — the
+//! earlier "stream progress to UI" design now flows through the gateway
 //! event bus instead. Replace these stubs with direct `event_bus.emit(...)`
 //! calls if a real consumer ever reappears.
 
@@ -31,7 +30,14 @@ pub mod artifact_publish;
 pub mod ask_user;
 pub mod automation_tool;
 pub mod bash_exec;
-// pub mod browser; — deleted; Task 13 recreates with text-first design
+// `src/browser/` lives at the crate root (see `lib.rs`); it is NOT a
+// `builtin_tools` sub-module. Earlier revisions of this file declared
+// `pub mod browser;` here, and the old "deleted; Task 13 recreates with
+// text-first design" note was stale — the module has since been recreated
+// at the crate root and is consumed by `builtin_tools/browser_tools/*`,
+// `gateway/handlers/browser_config.rs`, `tools/probes/browser.rs`,
+// `diagnostics/checks/browser_runtime.rs`, and the executor's tool
+// registry. Re-declaring it here would just be a duplicate declaration.
 pub mod browser_tools;
 pub mod canvas;
 pub mod channel_directory;
@@ -288,10 +294,10 @@ pub use workspace_manage::{WorkspaceManageArgs, WorkspaceManageTool};
 // Tool Progress Notifications (no-op stubs)
 // ============================================================================
 //
-// The original `ToolProgressCallback` + `set_tool_progress_handler` machinery
-// had no live consumer anywhere in the tree — every `notify_tool_*` site was
-// a no-op fire and forget. Tool progress now flows through the gateway event
-// bus (`notify_tool_result` → `GatewayEventEmitter`), which is already wired
+// The original progress-callback machinery had no live consumer anywhere in
+// the tree — every `notify_tool_*` site was a no-op fire and forget. Tool
+// progress now flows through the gateway event bus
+// (`notify_tool_result` → `GatewayEventEmitter`), which is already wired
 // from `executor/builtin_registry/registry/tool_registry_impl.rs`. The stubs
 // below are kept so the ~85 existing `notify_tool_*` callers stay compile-
 // clean without churn; rip them out when the call sites are updated to
