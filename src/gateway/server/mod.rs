@@ -757,7 +757,9 @@ impl GatewayServer {
     /// the cache after its write commits, instead of the cache silently
     /// serving the pre-rewrite pair until FIFO eviction.
     #[must_use]
-    pub const fn event_visibility(&self) -> &Arc<crate::gateway::event_visibility::EventVisibilityIndex> {
+    pub const fn event_visibility(
+        &self,
+    ) -> &Arc<crate::gateway::event_visibility::EventVisibilityIndex> {
         &self.event_visibility
     }
 

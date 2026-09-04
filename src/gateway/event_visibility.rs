@@ -1039,8 +1039,10 @@ impl EventVisibilityIndex {
                 // BEFORE `ensure_session` creates the row, so the very first
                 // frame of a fresh session can arrive while the row does not
                 // exist yet. Caching that absence as an unresolvable key would
-                // deny EVERY later frame for that session key — the cache has no
-                // invalidation and evicts only by FIFO at
+                // deny EVERY later frame for that session key — the only
+                // invalidation hook is `forget_session`, whose sole caller is
+                // the channel-bind rescope, so nothing on this path would ever
+                // drop the key, and the cache otherwise evicts only by FIFO at
                 // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
                 // conversation would stay dead for the process lifetime. It
                 // fails closed, so nothing leaks, but it dies silently, and
@@ -1173,12 +1175,17 @@ impl EventVisibilityIndex {
     /// `owner_user_id`/`scope_id` after creation:
     /// [`SessionStore::rescope_attribution`], called from
     /// `handlers::projects_channel::rescope_existing_transcript` (the
-    /// `projects.channel.bind` verb). `sessions.patch` (`SessionPatch` has no
-    /// owner/scope field), `sessions.delete`, `sessions.compaction.restore`
-    /// and `sessions.set_project_root` cannot touch either column, so none of
-    /// them need to call this. `rescope_existing_transcript` calls it for
-    /// every key that returned `Ok(true)`, after that key's write commits —
-    /// see its doc for why the ordering matters.
+    /// `projects.channel.bind` verb). `rescope_existing_transcript` calls it
+    /// for every key that returned `Ok(true)`, after that key's write commits
+    /// — see its doc for why the ordering matters.
+    ///
+    /// Deliberately NOT paired with a list of the verbs that do not need this:
+    /// such a list only covers the world as of the day it was written, and the
+    /// next verb that learns to rewrite either column would inherit its silent
+    /// blessing. What is pinned today is only half of the pair —
+    /// `session_store::caller_census::SOLE_CALLERS` fails by name if
+    /// `rescope_attribution` grows a second call site; nothing yet asserts that
+    /// such a call site also forgets the key.
     ///
     /// Idempotent: dropping a missing key is a no-op.
     ///
