@@ -1089,15 +1089,24 @@ impl EventVisibilityIndex {
 
     /// Whether `caller` may receive a `team.<id>.*` frame.
     ///
-    /// A team is owned outright — there is no `scope_id` column on `teams` and
-    /// no roster of USERS (a team's members are agents), so the room-vs-personal
-    /// branch `session_admits` needs has nothing to decide here. The one rule
-    /// that must not be re-derived is adoption-by-absence, and that goes through
-    /// [`owner_or_legacy`] — the same single authority `session_visible_to`
-    /// reaches on the RPC path.
+    /// A team row carries BOTH `owner_user_id` and `scope_id` — the column is
+    /// created by `SqliteTeamStore`'s `add_column_if_missing` migration,
+    /// written on create, selected by every team read, and typed on
+    /// [`crate::teams::types::Team`] — so the rule body here is
+    /// [`crate::gateway::visibility::owner_and_scope_visible_to`], which owns
+    /// the room-vs-personal branch. That is the same single authority the RPC
+    /// face reaches through [`crate::teams::scoped::team_visible`], whose doc
+    /// carries the statement of what the branch decides and the round-3 →
+    /// round-5 history of the column; this delivery plane is that predicate's
+    /// second face, so a change to either column has to answer both.
     ///
-    /// Only the team's owner STAMP is cached; the caller is applied to it on
-    /// every call, so this can never hold a stale per-caller verdict.
+    /// The one rule that must not be re-derived is adoption-by-absence, and
+    /// that goes through [`owner_or_legacy`] — the same single authority
+    /// `session_visible_to` reaches on the RPC path.
+    ///
+    /// The team's `(owner, scope)` PAIR is cached, never a verdict; the caller
+    /// is applied to it on every call, so this can never hold a stale
+    /// per-caller verdict.
     ///
     /// The store handle is the ownership-scoped `ScopedTeamStore` (the only one
     /// boot publishes). Its filter is ambient — `scope::ambient_owner()` — and

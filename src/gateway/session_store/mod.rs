@@ -304,11 +304,11 @@ pub trait SessionStore: Send + Sync {
     /// for a project-scoped row, visibility is decided by the roster, so
     /// overwriting the owner would buy nothing and lose the byline.
     ///
-    /// Its only caller will be the channel-binding handler
-    /// (`handlers::projects_channel::handle_bind`, Task 9), which pins it via
-    /// `session_store::caller_census::SOLE_CALLERS` in the same commit that
-    /// creates that file — see this method's introducing commit for why that
-    /// row is not added yet.
+    /// Its only caller is the channel-binding handler
+    /// (`handlers::projects_channel::handle_bind`, via
+    /// `rescope_existing_transcript`), pinned by the `rescope_attribution` row
+    /// in `caller_census::SOLE_CALLERS` below in this file — a second
+    /// production call site fails that test by name.
     ///
     /// `Ok(false)` means there was no such row — a conversation nobody has
     /// spoken in yet, which is the common case for a freshly bound group and
@@ -1418,12 +1418,12 @@ mod caller_census {
     /// would see: comments AND string-literal payloads removed.
     ///
     /// NOT for the reason self-scanning might suggest: `production_prefix`
-    /// runs first and excises everything from THIS file's own `#[cfg(test)]`
-    /// boundary (line 394) onward, so `mod caller_census` — this module,
-    /// including `SOLE_CALLERS` and this very comment — never reaches the
-    /// corpus at all, `code_text` or not. What `code_text` actually guards
-    /// against is a DIFFERENT production file's comment or string literal (a
-    /// log message, a doc example, a stale TODO) containing the text
+    /// runs first and removes EACH `#[cfg(test)]`-attributed item in a file,
+    /// so `mod caller_census` — this module, including `SOLE_CALLERS` and this
+    /// very comment — never reaches the corpus at all, `code_text` or not.
+    /// What `code_text` actually guards against is a DIFFERENT production
+    /// file's comment or string literal (a log message, a doc example, a
+    /// stale TODO) containing the text
     /// `.backfill_attribution(` without being a real call site;
     /// comment-stripping alone would leave a string literal like that intact
     /// and miscount it as a caller.
