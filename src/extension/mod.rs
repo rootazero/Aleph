@@ -232,6 +232,11 @@ pub struct ExtensionManager {
     /// and avoid a write→reload→write feedback loop. Shared with the watcher
     /// callback via `Arc`.
     internal_writes: Arc<InternalWriteTracker>,
+
+    /// Counts how many times `reload()` has executed since construction.
+    /// Exposed via [`Self::reload_count`] — used by integration tests to
+    /// assert at-most-once reload behaviour on adjacent watcher events.
+    reload_count: AtomicU64,
 }
 
 /// Convert a plugin-shipped agent registration into an [`crate::agents::AgentDef`]
@@ -343,6 +348,7 @@ impl ExtensionManager {
             mcp_handle: crate::sync_primitives::RwLock::new(None),
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
+            reload_count: AtomicU64::new(0),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
             plugins_config_path,
@@ -794,6 +800,8 @@ impl ExtensionManager {
 
     /// Force reload all extensions
     pub async fn reload(&self) -> ExtensionResult<LoadSummary> {
+        self.reload_count.fetch_add(1, Ordering::SeqCst);
+
         // Hold load_guard for the entire reload so a concurrent
         // `ensure_loaded` cannot interleave its own `load_all` between the
         // cache reset below and the `load_all` we run at the end. Without
@@ -837,6 +845,13 @@ impl ExtensionManager {
     /// constructed.
     pub fn mark_self_write(&self, path: &Path) {
         self.internal_writes.mark(path);
+    }
+
+    /// Returns the total number of times [`Self::reload`] has executed.
+    /// Used by integration tests to assert at-most-once reload behaviour
+    /// on adjacent watcher events.
+    pub fn reload_count(&self) -> u64 {
+        self.reload_count.load(Ordering::SeqCst)
     }
 
     /// Spawn the hot-reload watcher. Idempotent — second call returns Ok
@@ -956,6 +971,17 @@ impl ExtensionManager {
             .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
 
         *watcher_guard = Some(Arc::new(watcher));
+        Ok(())
+    }
+
+    /// Stop the hot-reload watcher (no-op if not started). Tests use this
+    /// to release watch handles before `TempDir` drops.
+    pub fn stop_watcher(&self) -> ExtensionResult<()> {
+        let mut guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(w) = guard.take() {
+            w.stop()
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+        }
         Ok(())
     }
 
@@ -1719,8 +1745,7 @@ mod tests {
     async fn test_extension_manager_has_service_manager() {
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let service_manager = manager.get_service_manager().await;
-        assert_eq!(service_manager.running_count(), 0);
-        assert_eq!(service_manager.total_count(), 0);
+        assert!(service_manager.list_services().is_empty());
     }
 
     #[tokio::test]
