@@ -548,6 +548,45 @@ impl CronJob {
         }
     }
 
+    /// Stamp this job with the ambient scope of the request creating it.
+    ///
+    /// **The one derivation of "who owns a cron job".** Every production face
+    /// that mints a `CronJob` calls exactly this — `cron.create` (RPC),
+    /// `cron_manage(action='create')` (tool), and `loop_graph`'s two
+    /// governance installers via `stamp_governance_job`. Three of those four
+    /// carried their own inline copy of these four lines and the fourth
+    /// carried none, so every job created from the Panel or the CLI reached
+    /// the store with both columns NULL — and four readers then short-circuit
+    /// on that NULL: the deactivation sweep (`pause_all_owned_by`) counts it
+    /// as not-owned, `walled_owner_reason` skips it as "legacy"
+    /// (byte-indistinguishable from a genuinely pre-P1 job),
+    /// `executor::build_cron_metadata` has no `ScopeAttribution` to rehydrate
+    /// so the run executes unscoped — the UNRESTRICTED arm of every visibility
+    /// predicate — and its spend lands in `@unattributed`.
+    ///
+    /// `config::tests::every_production_cron_job_construction_stamps_the_scope`
+    /// is keyed on this method's NAME, so a fifth construction face that skips
+    /// it fails by name rather than by someone noticing.
+    ///
+    /// # Why not inside `CronService::add_job`
+    ///
+    /// `add_job` is reached from paths where the ambient scope is not the
+    /// creator's. An unguarded stamp there would OVERWRITE an explicit owner
+    /// rather than supply a missing one — a job silently changing hands, which
+    /// is the expensive direction. The stamp belongs at the face that knows it
+    /// is minting a NEW job for the caller in front of it.
+    ///
+    /// `current_scope()` being `None` (single-user install, or an internal
+    /// path with no request around it) leaves both columns `None` — exactly
+    /// the legacy shape `ScopeAttribution::from_persisted` already reads as
+    /// "unscoped". No behaviour change there.
+    pub fn stamp_current_scope(&mut self) {
+        if let Some(attr) = crate::scope::current_scope() {
+            self.owner_user_id = Some(attr.owner_user_id);
+            self.scope_id = Some(attr.scope.render());
+        }
+    }
+
     /// This job's chain successors, or `None` when it chains to nothing.
     ///
     /// Projected from the two persisted fields — never stored separately, so
@@ -734,6 +773,199 @@ pub use crate::tasks::shared::delivery::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One production `fn`, brace-matched out of a source file.
+    struct ProductionFn {
+        file: String,
+        name: String,
+        body: String,
+    }
+
+    /// The identifier of the `fn` this line declares, if it declares one.
+    fn declared_fn_name(line: &str) -> Option<String> {
+        let mut t = line.trim_start();
+        for prefix in [
+            "pub(crate) ",
+            "pub(super) ",
+            "pub(self) ",
+            "pub ",
+            "default ",
+            "const ",
+            "async ",
+            "unsafe ",
+            "extern ",
+        ] {
+            while let Some(rest) = t.strip_prefix(prefix) {
+                t = rest.trim_start();
+            }
+        }
+        let rest = t.strip_prefix("fn ")?;
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// Every `fn` in the crate's PRODUCTION source that could bear on this
+    /// census, with its brace-matched body.
+    ///
+    /// Test items are removed by `production_prefix` (a whole-item walk, not a
+    /// `split("#[cfg(test)]")` cut) and literal payloads are blanked by
+    /// `code_text`, so neither a `{` inside a string nor this test's own needle
+    /// constants can reach the scan.
+    ///
+    /// `needles` prefilters on RAW file text — a superset of what the stripped
+    /// scan can find (raw text still carries comments and test modules), so a
+    /// file dropped here could not have contained a production hit. It exists
+    /// because brace-matching every `fn` in the crate took over a minute.
+    fn production_fns(needles: &[&str]) -> Vec<ProductionFn> {
+        use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let files = rust_sources_under(&root);
+        assert!(
+            files.len() > 100,
+            "the source scan found only {} files under src/ — it is measuring \
+             nothing, so every verdict below would be vacuously green",
+            files.len()
+        );
+
+        let mut out = Vec::new();
+        for (file, text) in &files {
+            if !needles.iter().any(|n| text.contains(n)) {
+                continue;
+            }
+            let code = code_text(&production_prefix(text));
+            let lines: Vec<&str> = code.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                let Some(name) = declared_fn_name(line) else {
+                    continue;
+                };
+                let (mut depth, mut opened, mut end) = (0i32, false, i);
+                for (k, l) in lines.iter().enumerate().skip(i) {
+                    depth += i32::try_from(l.matches('{').count()).unwrap_or(0);
+                    depth -= i32::try_from(l.matches('}').count()).unwrap_or(0);
+                    opened |= l.contains('{');
+                    end = k;
+                    if opened && depth <= 0 {
+                        break;
+                    }
+                }
+                out.push(ProductionFn {
+                    file: file.clone(),
+                    name,
+                    body: lines[i..=end].join("\n"),
+                });
+            }
+        }
+        out
+    }
+
+    /// Every production site that mints a `CronJob` must stamp the ambient
+    /// scope onto it, and this guard is keyed on the ONE derivation's NAME.
+    ///
+    /// The bug it exists to make impossible: `cron.create`'s RPC handler built
+    /// a job and never touched `owner_user_id` / `scope_id`, so every job the
+    /// Panel or the CLI created was ownerless — while three other faces each
+    /// carried their own inline copy of the same four lines. A fifth face that
+    /// forgets fails here, by name.
+    ///
+    /// **What it does NOT prove**: this is a name census, not a dataflow
+    /// proof. A body that stamps a *different* job than the one it constructs
+    /// passes. What it does prove is the shape that actually shipped — a
+    /// creating face where the derivation is not named at all.
+    ///
+    /// The set of helper fns that count as stamping is DERIVED from the same
+    /// method name — any production fn IN THE SAME FILE whose own body names
+    /// it — so there is no hand-kept list of blessed helpers to rot.
+    ///
+    /// The relation is deliberately file-local rather than crate-wide. A
+    /// crate-wide closure over bare fn NAMES was written first and was a false
+    /// green: `stamp_governance_job` made its caller `execute` a stamper, and
+    /// "any body that calls something named `execute(`" is most of the crate,
+    /// so the guard approved a `handle_create` with the stamp deleted. A
+    /// census whose reach grows by one hop per common name is a census that
+    /// eventually approves everything.
+    #[test]
+    fn every_production_cron_job_construction_stamps_the_scope() {
+        const STAMP: &str = "stamp_current_scope";
+        const CONSTRUCT: &str = "CronJob::new(";
+
+        let fns = production_fns(&[CONSTRUCT, STAMP]);
+
+        // Fixed point, per file: a fn stamps if it names the derivation, or
+        // calls a same-file helper that does.
+        let mut stampers: Vec<(&str, &str)> = Vec::new();
+        loop {
+            let before = stampers.len();
+            for f in &fns {
+                let key = (f.file.as_str(), f.name.as_str());
+                if stampers.contains(&key) {
+                    continue;
+                }
+                let stamps = f.body.contains(STAMP)
+                    || stampers.iter().any(|(file, helper)| {
+                        *file == f.file
+                            && *helper != f.name
+                            && f.body.contains(&format!("{helper}("))
+                    });
+                if stamps {
+                    stampers.push(key);
+                }
+            }
+            if stampers.len() == before {
+                break;
+            }
+        }
+        assert!(
+            stampers.iter().any(|(_, name)| *name == STAMP),
+            "the derivation `CronJob::{STAMP}` was not found in production \
+             source at all — it was renamed or deleted, and this census is \
+             now guarding a name nothing has"
+        );
+
+        let sites: Vec<&ProductionFn> = fns.iter().filter(|f| f.body.contains(CONSTRUCT)).collect();
+        // Self-protection (criterion #3): a census that finds nothing to judge
+        // is green for the wrong reason. These four faces are the ones the
+        // round measured; the assertion is that the scan still SEES them, not
+        // an exclusion list — anything else it finds is judged the same way.
+        for known in [
+            "src/gateway/handlers/cron/real.rs",
+            "src/builtin_tools/cron_manage.rs",
+            "src/builtin_tools/loop_graph_manage.rs",
+        ] {
+            assert!(
+                sites.iter().any(|s| s.file == known),
+                "the scan no longer sees the known `{CONSTRUCT}` site in \
+                 {known} — it is measuring less than it did, so its silence \
+                 about the others means nothing"
+            );
+        }
+
+        let offenders: Vec<String> = sites
+            .iter()
+            .filter(|s| {
+                !(s.body.contains(STAMP)
+                    || stampers.iter().any(|(file, helper)| {
+                        *file == s.file
+                            && *helper != s.name
+                            && s.body.contains(&format!("{helper}("))
+                    }))
+            })
+            .map(|s| format!("{}::{}", s.file, s.name))
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "these production sites construct a CronJob without calling \
+             `CronJob::{STAMP}` (directly or through a helper that does): \
+             {offenders:?}. A job created with neither owner_user_id nor \
+             scope_id is invisible to `pause_all_owned_by`, reads as a legacy \
+             job to `walled_owner_reason`, executes unscoped, and charges its \
+             spend to @unattributed."
+        );
+    }
 
     #[test]
     fn test_cron_config_default() {
