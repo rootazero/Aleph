@@ -183,8 +183,19 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
    程序名，(b) `normalized_program_name` 的兜底取 `argv[0]` 的**第一个空白分隔词**——程序名不含空格，
    把整条标题（或粘着环境变量的标题）交给面板是**一个具体的谎**（判据 §17）。
 
+   ⚠️ 渗进来的**不总是**规规矩矩的 `VAR=value`。`exec npx pi` 在本机的逐字读数是
+   `npm exec pi ZSH_AI_PROMPT_EXTEND=Always prefer modern CLI tools like ripgrep, fd, and bat.
+   CLAUDE_CODE_MESSAGING_TOKEN=…`——一个**值里带空格**的导出变量把 `prefer` / `modern` / `like`
+   这样的**裸词**撒进了程序名该在的位置。它们无害只因为一个结构性理由：**argv 排在环境之前**，
+   所以 operand 总是先被读到，而这条链取的是**第一个** operand，不是「扫到一个能识别的为止」。
+   改成扫描的那一刻，操作员 prompt 字符串里随便哪个词都能变成 agent 名。
+
 **这张表只覆盖它列出的那些形状**（判据 §18）：`launcher_spec` 是一份名单，名单只覆盖立法当天的世界
 （判据 §5）。不认识的包装器答 `None` 并把包装器本身报成 program——弱答案，不是错答案。
+
+真机装置：`qa/terminal/run.sh real` 用**PATH 上真的 agent 二进制**跑上面第 3、6 行（本机挑中 `pi`，
+因为它带 shebang——替身伪造不了的那种形状），`qa/terminal/run.sh tui` 用**真的 `aleph-tui`**
+证明 TUI 的 agent 面板显示的值来自活 socket。两者 2026-09-05 全绿。
 
 | 常量 | 值 | 所有者 | 说明 |
 |---|---|---|---|
