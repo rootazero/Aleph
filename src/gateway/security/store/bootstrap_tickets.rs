@@ -5,6 +5,7 @@
 //! long-lived shared Gateway token out of URLs, QR codes, and server logs.
 
 use rusqlite::{params, OptionalExtension, Result as SqliteResult};
+use uuid::Uuid;
 
 use super::{current_timestamp_ms, SecurityStore};
 
@@ -31,6 +32,17 @@ impl std::fmt::Display for BootstrapTicketError {
 
 impl std::error::Error for BootstrapTicketError {}
 
+/// Mint a non-secret ticket handle.
+///
+/// Independent randomness, never a slice of the code: a fixed-length prefix
+/// would be shorter to implement and would hand every listing a piece of the
+/// credential. 64 bits is short enough to retype into `pair --revoke` and wide
+/// enough that the UNIQUE index over the column is never the thing that fails.
+fn new_ticket_id() -> String {
+    let raw = Uuid::new_v4().simple().to_string();
+    format!("bt-{}", raw.get(..16).unwrap_or(raw.as_str()))
+}
+
 /// Row returned after successfully consuming a ticket.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsumedBootstrapTicket {
@@ -42,27 +54,113 @@ pub struct ConsumedBootstrapTicket {
     pub user_id: Option<String>,
 }
 
+/// A bootstrap ticket that is still redeemable: unconsumed, unrevoked and
+/// unexpired. What `gateway.ticket.list` / `pair --list` show an operator.
+///
+/// There is deliberately **no `code` field**. `code` is both the table's
+/// primary key and the credential itself, so a listing keyed on it would
+/// either print the secret or return rows nothing can address; `ticket_id` is
+/// the non-secret handle that closes that fork, and leaving the code out of
+/// this type makes leaking it a compile error rather than a review question
+/// (`security::audit` has the same rule: it never carries ticket codes).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OutstandingBootstrapTicket {
+    /// Non-secret handle. Generated independently of the code — **not** a
+    /// prefix of it, so nothing derived from the credential ever travels.
+    pub ticket_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    /// Principal the ticket is bound to; `None` for an UNBOUND ticket, whose
+    /// redeemer becomes the owner. The two grant very different authority and
+    /// look identical everywhere else, so the listing has to say which.
+    pub user_id: Option<String>,
+}
+
 impl SecurityStore {
-    /// Insert a new bootstrap ticket.
+    /// Insert a new bootstrap ticket, returning its non-secret `ticket_id`.
     ///
     /// # Arguments
     /// * `code` — opaque ticket string (caller should generate a high-entropy value)
     /// * `ttl_ms` — lifetime in milliseconds from now
     /// * `user_id` — user this ticket pairs a device to; `None` for an unbound
     ///   ticket (the exchange then defaults a brand-new device to the owner)
+    ///
+    /// The id is minted here rather than taken from the caller so that every
+    /// producer of a ticket — the RPC, `aleph-server pair`, and any future
+    /// third face — gets an addressable row without having to remember to.
     pub fn create_bootstrap_ticket(
         &self,
         code: &str,
         ttl_ms: i64,
         user_id: Option<&str>,
-    ) -> SqliteResult<()> {
+    ) -> SqliteResult<String> {
+        let ticket_id = new_ticket_id();
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
         conn.execute(
-            "INSERT INTO bootstrap_tickets (code, created_at, expires_at, user_id) VALUES (?1, ?2, ?3, ?4)",
-            params![code, now, now + ttl_ms, user_id],
+            "INSERT INTO bootstrap_tickets (code, created_at, expires_at, user_id, ticket_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![code, now, now + ttl_ms, user_id, ticket_id],
         )?;
-        Ok(())
+        Ok(ticket_id)
+    }
+
+    /// Every bootstrap ticket that could still be redeemed right now.
+    ///
+    /// Consumed, revoked and expired rows are excluded, each for the same
+    /// reason: offering an operator a row they cannot cut (or that is already
+    /// cut) turns an inventory of live credentials into a row dump. Ordered
+    /// oldest-first so the output is stable across calls.
+    ///
+    /// A row with a NULL `ticket_id` fails the whole call rather than being
+    /// filtered out. Every insert since v19 writes one and the migration
+    /// backfilled the rest, so such a row means the migration did not finish —
+    /// and quietly omitting it would hide a still-redeemable credential from
+    /// the one surface that can cancel it, which is the wrong direction to
+    /// fail in.
+    pub fn list_bootstrap_tickets(&self) -> SqliteResult<Vec<OutstandingBootstrapTicket>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = current_timestamp_ms();
+        let mut stmt = conn.prepare(
+            "SELECT ticket_id, created_at, expires_at, user_id FROM bootstrap_tickets
+             WHERE consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?1
+             ORDER BY created_at ASC, ticket_id ASC",
+        )?;
+        let rows = stmt.query_map(params![now], |row| {
+            Ok(OutstandingBootstrapTicket {
+                ticket_id: row.get(0)?,
+                created_at: row.get(1)?,
+                expires_at: row.get(2)?,
+                user_id: row.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Burn one still-redeemable bootstrap ticket, addressed by its non-secret
+    /// id. Returns whether a live credential was actually cut.
+    ///
+    /// `false` covers unknown id, already revoked, already redeemed and
+    /// already expired — none of those cut anything, and reporting them as a
+    /// revocation would be a success no-op the operator acts on.
+    ///
+    /// Reaches the UNBOUND tickets (`user_id IS NULL`) that
+    /// [`Self::revoke_bootstrap_tickets_for_user`] deliberately cannot: they
+    /// belong to no principal, so no deactivation can burn them, and until
+    /// this verb existed nothing could.
+    ///
+    /// `revoked_at` is its own column on purpose — see the v18 migration.
+    pub fn revoke_bootstrap_ticket(&self, ticket_id: &str) -> SqliteResult<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = current_timestamp_ms();
+        let updated = conn.execute(
+            "UPDATE bootstrap_tickets
+             SET revoked_at = ?1
+             WHERE ticket_id = ?2 AND consumed_at IS NULL AND revoked_at IS NULL \
+               AND expires_at > ?1",
+            params![now, ticket_id],
+        )?;
+        Ok(updated > 0)
     }
 
     /// Atomically consume a bootstrap ticket if it exists and has not expired.
@@ -395,5 +493,154 @@ mod tests {
             Err(BootstrapTicketError::Invalid)
         );
         assert!(store.consume_bootstrap_ticket("bt-fresh", None).is_ok());
+    }
+
+    /// The whole point of the non-secret id: a listing has to be addressable
+    /// without printing the credential. Minting must hand back an id that is
+    /// not derived from the code, so no prefix of the code can leak through it.
+    #[test]
+    fn a_minted_ticket_gets_a_non_secret_id_that_is_no_part_of_the_code() {
+        let store = store();
+        let code = "aleph-bt-11112222-3333-4444-5555-666677778888";
+        let ticket_id = store.create_bootstrap_ticket(code, 60_000, None).unwrap();
+
+        assert!(!ticket_id.is_empty(), "every ticket must be addressable");
+        assert!(
+            !code.contains(&ticket_id),
+            "ticket_id {ticket_id} is a substring of the code — that is a credential prefix, \
+             not a non-secret id"
+        );
+        let listed = store.list_bootstrap_tickets().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].ticket_id, ticket_id);
+        assert_eq!(listed[0].expires_at, listed[0].created_at + 60_000);
+    }
+
+    /// Revocation by id is what `gateway.ticket.revoke` / `pair --revoke` do.
+    /// The effect asserted is redeemability, not the row: throw away the
+    /// UPDATE and the consume below still succeeds.
+    #[test]
+    fn revoking_by_id_makes_the_ticket_unredeemable_and_drops_it_from_the_listing() {
+        let store = store();
+        let ticket_id = store
+            .create_bootstrap_ticket("bt-unbound", 60_000, None)
+            .unwrap();
+
+        assert!(store.revoke_bootstrap_ticket(&ticket_id).unwrap());
+        assert_eq!(
+            store.consume_bootstrap_ticket("bt-unbound", Some("dev-1")),
+            Err(BootstrapTicketError::Invalid)
+        );
+        assert!(store.list_bootstrap_tickets().unwrap().is_empty());
+    }
+
+    /// Burned is still not redeemed, on this face too: `revoked_at` is set and
+    /// `consumed_at` stays NULL, so the ledger keeps "cut" and "used" apart.
+    #[test]
+    fn revoking_by_id_stamps_revoked_at_and_leaves_consumed_at_null() {
+        let store = store();
+        let ticket_id = store
+            .create_bootstrap_ticket("bt-one", 60_000, None)
+            .unwrap();
+        store.revoke_bootstrap_ticket(&ticket_id).unwrap();
+
+        let (consumed, revoked) = stamps(&store, "bt-one");
+        assert!(revoked.is_some(), "the burned ticket must carry revoked_at");
+        assert!(
+            consumed.is_none(),
+            "a burned ticket was never redeemed — consumed_at must stay NULL, got {consumed:?}"
+        );
+    }
+
+    /// Only the transition counts. An unknown id, an already-burned ticket and
+    /// an already-redeemed one all report `false`, so the CLI's count is
+    /// "credentials cut", never "rows I looked at".
+    #[test]
+    fn revoking_by_id_reports_false_when_nothing_was_still_redeemable() {
+        let store = store();
+        let live = store
+            .create_bootstrap_ticket("bt-live", 60_000, None)
+            .unwrap();
+        let used = store
+            .create_bootstrap_ticket("bt-used", 60_000, None)
+            .unwrap();
+        store
+            .consume_bootstrap_ticket("bt-used", Some("dev-a"))
+            .unwrap();
+
+        assert!(store.revoke_bootstrap_ticket(&live).unwrap());
+        assert!(
+            !store.revoke_bootstrap_ticket(&live).unwrap(),
+            "a second burn of the same ticket cut no credential"
+        );
+        assert!(
+            !store.revoke_bootstrap_ticket(&used).unwrap(),
+            "a redeemed ticket is not a live credential"
+        );
+        assert!(
+            !store.revoke_bootstrap_ticket("bt-nobody").unwrap(),
+            "an unknown id cuts nothing"
+        );
+    }
+
+    /// Exclusion 1 of 3, asserted on its own: a redeemed ticket is not
+    /// outstanding.
+    #[test]
+    fn listing_omits_consumed_tickets() {
+        let store = store();
+        store
+            .create_bootstrap_ticket("bt-used", 60_000, None)
+            .unwrap();
+        store
+            .consume_bootstrap_ticket("bt-used", Some("dev-a"))
+            .unwrap();
+
+        assert!(store.list_bootstrap_tickets().unwrap().is_empty());
+    }
+
+    /// Exclusion 2 of 3: a burned ticket is not outstanding. Covers both burn
+    /// faces — the per-user deactivation sweep writes the same column.
+    #[test]
+    fn listing_omits_revoked_tickets() {
+        let store = store();
+        store
+            .create_bootstrap_ticket("bt-alice", 60_000, Some("u-alice"))
+            .unwrap();
+        store.revoke_bootstrap_tickets_for_user("u-alice").unwrap();
+
+        assert!(store.list_bootstrap_tickets().unwrap().is_empty());
+    }
+
+    /// Exclusion 3 of 3: an expired ticket cannot be redeemed, so offering it
+    /// for revocation would be an operator-facing lie.
+    #[test]
+    fn listing_omits_expired_tickets() {
+        let store = store();
+        store.create_bootstrap_ticket("bt-old", -1, None).unwrap();
+
+        assert!(store.list_bootstrap_tickets().unwrap().is_empty());
+    }
+
+    /// The binding rides through to the listing: an UNBOUND ticket is the
+    /// higher-authority half (its redeemer becomes the owner) and an operator
+    /// deciding what to cut has to be able to see which one a row is.
+    #[test]
+    fn listing_carries_the_binding_so_an_unbound_ticket_is_visible_as_such() {
+        let store = store();
+        store
+            .create_bootstrap_ticket("bt-unbound", 60_000, None)
+            .unwrap();
+        store
+            .create_bootstrap_ticket("bt-alice", 60_000, Some("u-alice"))
+            .unwrap();
+
+        let listed = store.list_bootstrap_tickets().unwrap();
+        let bindings: Vec<Option<&str>> = listed.iter().map(|t| t.user_id.as_deref()).collect();
+        assert_eq!(bindings.len(), 2);
+        assert!(
+            bindings.contains(&None),
+            "the unbound ticket must be listed"
+        );
+        assert!(bindings.contains(&Some("u-alice")));
     }
 }

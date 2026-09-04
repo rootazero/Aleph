@@ -199,6 +199,8 @@ mod tests {
         ("gateway.metrics.run_concurrency", Class::Open),
         ("gateway.metrics.subagent_concurrency", Class::Admin),
         ("gateway.ticket.create", Class::Admin),
+        ("gateway.ticket.list", Class::Admin),
+        ("gateway.ticket.revoke", Class::Admin),
         ("gateway.token.current", Class::Admin),
         ("gateway.token.rotate", Class::Admin),
         ("general_config.get", Class::Admin),

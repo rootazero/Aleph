@@ -631,6 +631,33 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             });
     }
 
+    // The other two thirds of a bootstrap ticket's lifecycle: enumerate the
+    // outstanding ones and cancel one by its non-secret id. Authorized-only via
+    // the `gateway.` admin prefix, same as `ticket.create`. Neither needs the
+    // bind host — no URL is built — so they take the manager directly rather
+    // than a context with three fields they would never read.
+    {
+        let list_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.ticket.list", move |req| {
+                let mgr = list_mgr.clone();
+                async move {
+                    alephcore::gateway::handlers::gateway_ticket::handle_ticket_list(req, mgr).await
+                }
+            });
+        let revoke_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.ticket.revoke", move |req| {
+                let mgr = revoke_mgr.clone();
+                async move {
+                    alephcore::gateway::handlers::gateway_ticket::handle_ticket_revoke(req, mgr)
+                        .await
+                }
+            });
+    }
+
     // Paired-device management RPCs: list / revoke remote Panel devices paired
     // via the bootstrap-ticket flow. Authorized-only (login wall). Scope-guarded
     // to `device_type = "panel"` so they never touch cluster nodes.
