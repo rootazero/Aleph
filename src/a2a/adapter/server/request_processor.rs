@@ -295,7 +295,30 @@ impl A2ARequestProcessor {
         };
 
         match self.state.task_manager.cancel_task(id).await {
-            Ok(task) => JsonRpcResponse::serialize_ok(request.id, &task),
+            Ok(task) => {
+                // Broadcast a Canceled status update so any SSE subscriber
+                // attached via `tasks/resubscribe` (or the original
+                // `message/stream`) sees the cancellation. Without this the
+                // subscriber sees the stream end silently when the bridge's
+                // spawned task eventually completes. A2A-R4-07.
+                let cancel_event = crate::a2a::domain::events::TaskStatusUpdateEvent {
+                    task_id: task.id.clone(),
+                    context_id: task.context_id.clone(),
+                    status: crate::a2a::domain::task::TaskStatus {
+                        state: crate::a2a::domain::task::TaskState::Canceled,
+                        message: None,
+                        timestamp: chrono::Utc::now(),
+                    },
+                    is_final: true,
+                    metadata: None,
+                };
+                let _ = self
+                    .state
+                    .streaming
+                    .broadcast_status(&task.id, cancel_event)
+                    .await;
+                JsonRpcResponse::serialize_ok(request.id, &task)
+            }
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
     }
