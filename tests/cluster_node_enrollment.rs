@@ -158,7 +158,7 @@ async fn deregister_tears_down_the_nodes_live_socket() {
     assert_eq!(envs.len(), 1);
     assert_eq!(envs[0].version.as_deref(), Some(env!("ALEPH_VERSION")));
 
-    alephcore::cluster::deregister_node(&server.node_registry, &store, "worker-1")
+    alephcore::cluster::deregister_node(&server.node_registry, &store, "worker-1", None)
         .expect("deregister");
 
     // 读半边必须收到 EOF/Close——中心主动关了这条连接。
