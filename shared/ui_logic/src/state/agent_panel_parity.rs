@@ -24,6 +24,17 @@
 //! frontend files for a self-rolled ordering call. The two tests together
 //! are what make "both faces show one order" enforced instead of merely
 //! documented; neither one alone does.
+//!
+//! # Scope: ordering, and where the OTHER cross-face properties live
+//!
+//! This module's subject is the ORDER rows appear in. That scope is why the
+//! duplicated `entry_name` (the `program → agent → label` row-name chain) sat
+//! in both frontends unnoticed: nothing here was ever going to look at it.
+//! The name is now one derivation next door
+//! ([`super::agent_panel::entry_name`], with its fallback test beside it), and
+//! its source-level half is `no_frontend_derives_its_own_agent_row_name` in
+//! alephcore — the same file as the ordering scan. Adding a cross-face
+//! property here means adding BOTH halves, as ordering and the name each have.
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
 

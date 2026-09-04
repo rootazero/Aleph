@@ -31,7 +31,7 @@ use ratatui::{
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
 use shared_ui_logic::state::agent_panel::{
-    quiet_age, sort_entries, state_glyph, QuietAge, QuietUnit,
+    entry_name, quiet_age, sort_entries, state_glyph, QuietAge, QuietUnit,
 };
 
 use crate::tui::app::AgentPanelData;
@@ -63,24 +63,13 @@ fn state_color(state: RuntimeAgentState) -> Color {
     }
 }
 
-/// What to call this row: the FOREGROUND program if the probe could see one,
-/// else the recognised agent, else the spawn label.
-///
-/// In that order because that is falling order of how current the fact is.
-/// `program` is what is running right now; `agent` is what the manifest
-/// recognised, which can outlive the process by a few samples; `label` is what
-/// the session was STARTED as and is the only one of the three that is
-/// guaranteed to exist. `program: None` means the probe could not answer, not
-/// that nothing is running (spec §5), so it falls through rather than
-/// rendering an absence.
-fn entry_name(entry: &RuntimeAgentEntry) -> String {
-    entry
-        .program
-        .as_deref()
-        .or(entry.agent.as_deref())
-        .unwrap_or(&entry.label)
-        .to_string()
-}
+// `entry_name` used to live here too, byte-identical to the Panel's copy, with
+// the Panel's doc claiming "same order and same reasoning as the TUI's" and
+// nothing enforcing it (判据 §1 / §9 — the ordering parity guard scopes itself
+// to sorting). It is now `shared_ui_logic::state::agent_panel::entry_name`,
+// imported above; reading `entry.program` here again is what
+// `no_frontend_derives_its_own_agent_row_name` (alephcore,
+// `src/gateway/runtime/tests.rs`) fails on.
 
 /// The TUI's words for a [`QuietAge`].
 ///

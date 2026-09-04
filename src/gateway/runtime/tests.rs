@@ -984,6 +984,110 @@ pub fn render() {\n\
     );
 }
 
+/// The first link of the row-NAME chain. Any self-rolled derivation of
+/// "what is running here" has to read `program`, whatever else it is
+/// spelled with — `.or(..)`, a `match`, an `if let`, three nested
+/// `unwrap_or`s — so this one token covers spellings a copy of
+/// `entry_name`'s exact body would not.
+///
+/// Deliberately WIDER than "no copy of `entry_name`": if a face ever
+/// genuinely needs the raw `program` for something that is not the row
+/// name (a tooltip separating it from `agent`, say), that is a new
+/// SHARED derivation and this guard is what forces the conversation,
+/// instead of letting a second local answer appear the way the first
+/// one did. Widening it is a deliberate edit with a reason, which is
+/// the whole difference from a copy that arrives by accident.
+///
+/// Same gaps as [`BANNED_ORDERING_TOKENS`]: whitespace between the dot
+/// and the field, a derivation moved into a sibling file, and
+/// `production_prefix`'s mis-detected-`#[cfg(test)]` hole. Named here
+/// rather than re-derived by the next reader.
+const BANNED_NAME_DERIVATION_TOKENS: [&str; 1] = [".program"];
+
+/// The call each frontend must make instead. Asserting only the
+/// absence of `.program` would pass on a face that dropped the call
+/// and rendered `entry.label` directly — the two faces would then name
+/// the same row differently with nothing red (判据 §4: assert the
+/// effect arrived, not that the copy is gone).
+const REQUIRED_NAME_CALL: &str = "entry_name(";
+
+/// R2's other half: the row NAME is derived ONCE, in
+/// `shared_ui_logic::state::agent_panel::entry_name`.
+///
+/// Both frontends held a byte-identical copy of the
+/// `program → agent → label` chain, and the Panel's doc asserted parity
+/// with the TUI's in prose — a claim about another crate's file that
+/// nothing checked (判据 §1 / §9). None of the existing machinery could
+/// have caught it: `agent_panel_parity.rs` scopes itself to ORDERING in
+/// its own header, and the guard above looks for a self-rolled `.sort`,
+/// not for a self-rolled name.
+///
+/// Two halves, and neither alone is the property — see
+/// [`BANNED_NAME_DERIVATION_TOKENS`] and [`REQUIRED_NAME_CALL`] for what
+/// each one buys. The negative half runs over every file the walk finds
+/// (a third frontend inherits it automatically); the positive half runs
+/// over [`KNOWN_FRONTENDS`] only, because those are the two files known
+/// to render rows and an unlisted `agent_panel.rs` may legitimately not.
+///
+/// `scrub` is shared with the ordering guard, so the doc comments above
+/// and the frontends' own comments — which name `program` and
+/// `entry_name` in prose, deliberately — cannot redden this.
+#[test]
+fn no_frontend_derives_its_own_agent_row_name() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let files = agent_panel_frontend_files(root);
+
+    for known in KNOWN_FRONTENDS {
+        let expected = root.join(known);
+        assert!(
+            files.contains(&expected),
+            "expected {} among the derived agent_panel.rs frontend files, \
+                 but it was not found (found: {files:?}); a missing known \
+                 frontend means this walk is not finding what it is supposed \
+                 to guard — a silent pass, not a clean one.",
+            expected.display()
+        );
+    }
+
+    for path in &files {
+        let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!(
+                "{}: {e} — a missing frontend file is not a pass",
+                path.display()
+            )
+        });
+        let code = scrub(&src);
+
+        let hit = BANNED_NAME_DERIVATION_TOKENS
+            .iter()
+            .find(|token| code.contains(**token));
+        assert!(
+            hit.is_none(),
+            "{} derives its own agent-row name (found `{}`); the \
+                 program → agent → label chain belongs to \
+                 shared_ui_logic::state::agent_panel::entry_name, which both \
+                 faces call — a second copy is how the two came to claim \
+                 parity in prose with nothing checking it (判据 §1)",
+            path.display(),
+            hit.unwrap_or(&"")
+        );
+
+        if KNOWN_FRONTENDS
+            .iter()
+            .any(|known| path == &root.join(known))
+        {
+            assert!(
+                code.contains(REQUIRED_NAME_CALL),
+                "{} renders agent rows but never calls `{REQUIRED_NAME_CALL}`; \
+                     dropping the call and naming rows some other way passes \
+                     the ban above while giving the two faces different names \
+                     for the same row",
+                path.display()
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Task A2: the foreground probe reaches identification, and silence is
 // published as a fact rather than folded into the state.

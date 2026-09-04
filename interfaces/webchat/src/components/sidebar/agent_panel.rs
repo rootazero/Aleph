@@ -34,7 +34,7 @@ use leptos_router::hooks::use_navigate;
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState, RUNTIME_AGENTS_CHANGED_TOPIC};
 use shared_ui_logic::state::agent_panel::{
-    quiet_age, sort_entries, state_glyph, AgentPanelState, QuietAge, QuietUnit,
+    entry_name, quiet_age, sort_entries, state_glyph, AgentPanelState, QuietAge, QuietUnit,
 };
 
 use crate::api::runtime_agents::RuntimeAgentsApi;
@@ -436,18 +436,13 @@ fn quiet_text(i18n: I18nCtx, age: QuietAge) -> String {
     }
 }
 
-/// What to call this row: the FOREGROUND program if the probe could see one,
-/// else the recognised agent, else the spawn label. Same order and same
-/// reasoning as the TUI's `entry_name` — falling order of how current the fact
-/// is, ending at the one field that always exists.
-fn entry_name(entry: &RuntimeAgentEntry) -> String {
-    entry
-        .program
-        .as_deref()
-        .or(entry.agent.as_deref())
-        .unwrap_or(&entry.label)
-        .to_string()
-}
+// `entry_name` used to live here as a byte-identical twin of the TUI's, and
+// this doc claimed "same order and same reasoning as the TUI's `entry_name`" —
+// a claim about another crate's file with nothing enforcing it (判据 §1 / §9).
+// Both faces now call `shared_ui_logic::state::agent_panel::entry_name`,
+// imported above, and reading `entry.program` here again is what
+// `no_frontend_derives_its_own_agent_row_name` (alephcore,
+// `src/gateway/runtime/tests.rs`) fails on.
 
 #[cfg(test)]
 mod tests {
@@ -481,30 +476,14 @@ mod tests {
         assert_eq!(entries[0].state, RuntimeAgentState::Blocked);
     }
 
-    /// The Panel names its rows the same way the TUI does, and by the same
-    /// derivation — `entry_name` is the only place either face answers "what
-    /// is running here", so the two cannot drift into different answers.
-    #[test]
-    fn a_row_prefers_the_probed_program_then_the_agent_then_the_label() {
-        let mut e = entry("s", S::Working);
-        e.label = "spawn-label".to_string();
-
-        assert_eq!(entry_name(&e), "spawn-label", "only the label exists");
-
-        e.agent = Some("codex".to_string());
-        assert_eq!(
-            entry_name(&e),
-            "codex",
-            "a recognised agent beats the label"
-        );
-
-        e.program = Some("claude".to_string());
-        assert_eq!(
-            entry_name(&e),
-            "claude",
-            "what is running right now beats what was recognised"
-        );
-    }
+    // The fallback-chain test moved WITH the function it tests, to
+    // `shared_ui_logic::state::agent_panel`'s
+    // `a_row_prefers_the_probed_program_then_the_agent_then_the_label`. A copy
+    // here would have asserted this face's copy of the chain, which is how two
+    // byte-identical copies stayed free to drift while both looked tested. What
+    // remains this face's own business is that its markup CALLS the shared
+    // derivation — the source-scan half in alephcore's
+    // `no_frontend_derives_its_own_agent_row_name`.
 
     /// D3: the agent panel and the terminal were both fully built and there
     /// was no wire between them — the row that tells you an agent is BLOCKED

@@ -57,6 +57,39 @@ pub const fn state_glyph(state: RuntimeAgentState) -> &'static str {
     }
 }
 
+/// What to call this row: the FOREGROUND program if the probe could see one,
+/// else the recognised agent, else the spawn label.
+///
+/// In that order because that is falling order of how current the fact is.
+/// `program` is what is running right now; `agent` is what the manifest
+/// recognised, which can outlive the process by a few samples; `label` is what
+/// the session was STARTED as and is the only one of the three that is
+/// guaranteed to exist. `program: None` means the probe could not answer, not
+/// that nothing is running (spec §5), so it falls through rather than
+/// rendering an absence.
+///
+/// One derivation, not one per frontend. Both faces held a byte-identical copy
+/// of this chain, and the Panel's said "same order and same reasoning as the
+/// TUI's `entry_name`" — a claim about another crate's file with nothing
+/// enforcing it (判据 §1 / §9). The ordering parity machinery could not see the
+/// duplication: it scopes itself to sorting, in its own header. The source-level
+/// half of this fix is `no_frontend_derives_its_own_agent_row_name` in
+/// alephcore (`src/gateway/runtime/tests.rs`), which fails if either frontend's
+/// `agent_panel.rs` reads `program` for itself again instead of calling this.
+///
+/// Words stay per-face (see [`QuietUnit`] for why this crate may name units and
+/// never words); a session's NAME is not a word this crate composes — every
+/// candidate is a value the server sent.
+#[must_use]
+pub fn entry_name(entry: &RuntimeAgentEntry) -> String {
+    entry
+        .program
+        .as_deref()
+        .or(entry.agent.as_deref())
+        .unwrap_or(&entry.label)
+        .to_string()
+}
+
 /// The unit [`quiet_age`] picked: the coarsest one that does not round to zero.
 ///
 /// A unit, not a word. `shared_ui_logic` has no i18n and must not acquire an
@@ -255,6 +288,45 @@ mod tests {
         sort_entries(&mut v);
         assert_eq!(v[0].session_id, "first");
         assert_eq!(v[1].session_id, "second");
+    }
+
+    /// The fallback chain, in falling order of how current the fact is:
+    /// probed program, then recognised agent, then the spawn label. Each step
+    /// is reached only when the one above is absent — `program: None` means the
+    /// probe could not answer, which is not "nothing is running".
+    ///
+    /// Moved here from the Panel's own test module when `entry_name` became one
+    /// derivation instead of two: a per-face copy of this test asserted only
+    /// that face's copy of the chain, which is exactly how the two were free to
+    /// drift while both looked tested. Reddens if the order is permuted, if any
+    /// step is dropped, or if an absent `program` stops falling through.
+    #[test]
+    fn a_row_prefers_the_probed_program_then_the_agent_then_the_label() {
+        let mut entry = e("s", S::Working, 0);
+        entry.label = "spawn-label".to_string();
+
+        assert_eq!(entry_name(&entry), "spawn-label", "only the label exists");
+
+        entry.agent = Some("codex".to_string());
+        assert_eq!(
+            entry_name(&entry),
+            "codex",
+            "a recognised agent beats the label"
+        );
+
+        entry.program = Some("claude".to_string());
+        assert_eq!(
+            entry_name(&entry),
+            "claude",
+            "what is running right now beats what was recognised"
+        );
+
+        entry.program = None;
+        assert_eq!(
+            entry_name(&entry),
+            "codex",
+            "an unanswerable probe falls through; it does not render an absence"
+        );
     }
 
     /// `None` in, `None` out: a session that is still producing output has
