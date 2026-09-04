@@ -286,14 +286,14 @@ const DEFAULT_QUESTION_ID: &str = "answer";
 /// Shipping `value` too would invite a client to send it back and quietly
 /// become a second interpreter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ClarificationOptionView {
+pub(crate) struct ClarificationOptionView {
     /// What the user reads.
-    label: String,
+    pub label: String,
     /// Why they might pick it. **This is the field whose absence made the
     /// Panel and TUI render a bare label while channels rendered
     /// `label — description`.**
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
+    pub description: Option<String>,
 }
 
 /// Wire projection of one [`ClarificationQuestion`].
@@ -305,7 +305,7 @@ pub struct ClarificationQuestionView {
     pub header: Option<String>,
     pub prompt: String,
     #[serde(default)]
-    pub(crate) options: Vec<ClarificationOptionView>,
+    pub options: Vec<ClarificationOptionView>,
     #[serde(default)]
     pub multi_select: bool,
     #[serde(default)]
