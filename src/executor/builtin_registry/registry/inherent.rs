@@ -9,7 +9,6 @@ use std::pin::Pin;
 use serde_json::Value;
 use tracing::{debug, error, info};
 
-use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::error::{AlephError, Result};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::context::GatewayContext;
