@@ -252,8 +252,11 @@ mod tests {
 
     #[test]
     fn firecrawl_provider_rejects_bad_scheme() {
-        let result =
-            FirecrawlProvider::new("fc-k".to_string(), Some("ftp://example.com".to_string()), false);
+        let result = FirecrawlProvider::new(
+            "fc-k".to_string(),
+            Some("ftp://example.com".to_string()),
+            false,
+        );
         assert!(result.is_err());
     }
 

@@ -1770,7 +1770,12 @@ mod default_backend_parity_guards {
 
         let stamp = tokio::time::timeout(
             Duration::from_millis(150),
-            store.stamp_assistant_metadata_in_range(&key, 0, 99, &serde_json::json!({"run_id": "r1"})),
+            store.stamp_assistant_metadata_in_range(
+                &key,
+                0,
+                99,
+                &serde_json::json!({"run_id": "r1"}),
+            ),
         )
         .await;
         assert!(
@@ -1816,7 +1821,12 @@ mod default_backend_parity_guards {
         drop(held);
         tokio::time::timeout(
             Duration::from_secs(5),
-            store.stamp_assistant_metadata_in_range(&key, 0, 99, &serde_json::json!({"run_id": "r1"})),
+            store.stamp_assistant_metadata_in_range(
+                &key,
+                0,
+                99,
+                &serde_json::json!({"run_id": "r1"}),
+            ),
         )
         .await
         .expect("stamp must proceed once the lock is free")

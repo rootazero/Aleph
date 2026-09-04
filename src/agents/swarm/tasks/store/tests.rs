@@ -804,7 +804,10 @@ async fn tolerant_dependent_of_a_failed_dep_is_ready_on_both_read_paths() {
         metadata: meta,
     };
 
-    let upstream = store.create_task(new("upstream", vec![], json!({}))).await.unwrap();
+    let upstream = store
+        .create_task(new("upstream", vec![], json!({})))
+        .await
+        .unwrap();
     let tolerant = store
         .create_task(new(
             "synthesis",
@@ -881,8 +884,14 @@ async fn tolerant_task_with_a_live_dep_left_is_still_blocked() {
         blocked_by: deps,
         metadata: meta,
     };
-    let dead = store.create_task(new("dead", vec![], json!({}))).await.unwrap();
-    let live = store.create_task(new("live", vec![], json!({}))).await.unwrap();
+    let dead = store
+        .create_task(new("dead", vec![], json!({})))
+        .await
+        .unwrap();
+    let live = store
+        .create_task(new("live", vec![], json!({})))
+        .await
+        .unwrap();
     let tolerant = store
         .create_task(new(
             "synthesis",
@@ -953,7 +962,10 @@ async fn get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails() {
         blocked_by: deps,
         metadata: meta,
     };
-    let upstream = store.create_task(new("upstream", vec![], json!({}))).await.unwrap();
+    let upstream = store
+        .create_task(new("upstream", vec![], json!({})))
+        .await
+        .unwrap();
     let tolerant = store
         .create_task(new(
             "synthesis",
@@ -968,7 +980,11 @@ async fn get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails() {
         .unwrap();
 
     assert!(
-        store.get_newly_unblocked(&upstream.id).await.unwrap().is_empty(),
+        store
+            .get_newly_unblocked(&upstream.id)
+            .await
+            .unwrap()
+            .is_empty(),
         "nothing is released while the upstream is still pending"
     );
 

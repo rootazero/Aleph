@@ -298,7 +298,10 @@ mod tests {
     #[test]
     fn the_terminal_route_resolves_to_the_terminal_mode() {
         assert_eq!(PanelMode::from_path("/terminal"), PanelMode::Terminal);
-        assert_eq!(PanelMode::from_path("/terminal/anything"), PanelMode::Terminal);
+        assert_eq!(
+            PanelMode::from_path("/terminal/anything"),
+            PanelMode::Terminal
+        );
     }
 
     /// Every mode must round-trip through its own path, or a nav item leads

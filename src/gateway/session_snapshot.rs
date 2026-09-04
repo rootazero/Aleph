@@ -207,8 +207,7 @@ pub fn last_run_from_markers(markers: &[SessionEventRecord]) -> LastRunState {
     let reduction = match reduce_run(markers) {
         Ok(r) => r,
         Err(contradiction) => {
-            let mut state =
-                LastRunState::from_markers(LastRunState::LOG_INCONSISTENT, None, 0);
+            let mut state = LastRunState::from_markers(LastRunState::LOG_INCONSISTENT, None, 0);
             state.contradictions = vec![contradiction.tag().to_string()];
             return state;
         }
@@ -255,8 +254,8 @@ fn progress_view(progress: &RunProgress) -> RunProgressView {
 #[cfg(test)]
 mod last_run_tests {
     use super::*;
-    use aleph_protocol::LastRunDisposition;
     use crate::session::events::{RunOutcome, SessionEvent, ToolOutput, TurnId};
+    use aleph_protocol::LastRunDisposition;
 
     fn rec(seq: u64, event: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {
@@ -346,7 +345,10 @@ mod last_run_tests {
         );
         assert_eq!(progress.tool_calls_dispatched, 2);
         assert_eq!(progress.tool_calls_answered, 1);
-        assert_eq!(progress.last_activity_ms, reduction.progress.last_activity_at);
+        assert_eq!(
+            progress.last_activity_ms,
+            reduction.progress.last_activity_at
+        );
     }
 
     /// The three words that are not "interrupted", and the one distinction the
@@ -395,10 +397,7 @@ mod last_run_tests {
     /// exactly that, with the tag that names the doctor finding.
     #[test]
     fn a_log_the_reducer_refuses_is_log_inconsistent_never_clean() {
-        let backwards = vec![
-            rec(9, started("run-a")),
-            rec(2, requested("call-1")),
-        ];
+        let backwards = vec![rec(9, started("run-a")), rec(2, requested("call-1"))];
         let view = last_run_from_events(&backwards);
         assert_eq!(view.disposition(), LastRunDisposition::LogInconsistent);
         assert_eq!(

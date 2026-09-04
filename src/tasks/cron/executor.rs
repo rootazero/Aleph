@@ -71,12 +71,8 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
         Box::pin(async move {
             for alert in alerts {
                 let target = alert.target;
-                let payload = failure_alert_payload(
-                    "cron",
-                    &alert.job_name,
-                    &alert.job_id,
-                    &alert.message,
-                );
+                let payload =
+                    failure_alert_payload("cron", &alert.job_name, &alert.job_id, &alert.message);
                 let config = DeliveryConfig {
                     mode: DeliveryMode::Primary,
                     targets: vec![target],

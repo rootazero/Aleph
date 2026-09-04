@@ -973,7 +973,6 @@ mod tests {
         );
     }
 
-
     /// The tolerant-fan-in flag only exists at run time as a metadata stamp:
     /// readiness is derived from the stored row + its edges, and that
     /// derivation never sees the template. An unstamped step must stay

@@ -195,12 +195,18 @@ mod tests {
     #[test]
     fn test_generic_secret_redacts_quoted_multi_word_value() {
         let scrubbed = scrub_pii("password = \"my secret phrase\"");
-        assert!(scrubbed.contains("password = [REDACTED]"), "got: {scrubbed}");
+        assert!(
+            scrubbed.contains("password = [REDACTED]"),
+            "got: {scrubbed}"
+        );
         assert!(!scrubbed.contains("my secret phrase"), "got: {scrubbed}");
 
         let scrubbed = scrub_pii("api_key='another secret value'");
         assert!(scrubbed.contains("api_key=[REDACTED]"), "got: {scrubbed}");
-        assert!(!scrubbed.contains("another secret value"), "got: {scrubbed}");
+        assert!(
+            !scrubbed.contains("another secret value"),
+            "got: {scrubbed}"
+        );
     }
 
     #[test]

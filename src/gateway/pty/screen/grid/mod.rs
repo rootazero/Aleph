@@ -11,7 +11,6 @@
 //! the shared primitives (`idx`, the fields) live here, and each sub-module's
 //! own repair helpers stay where their only callers are.
 
-
 /// A single cell's colour. `Default` means "whatever the client's theme
 /// says", which is why it is a variant rather than a concrete RGB — the
 /// server does not know the client's palette.
@@ -174,7 +173,11 @@ impl Grid {
         } else {
             (bottom - 1).min(last)
         };
-        self.scroll_region = if top < bottom { (top, bottom) } else { (0, last) };
+        self.scroll_region = if top < bottom {
+            (top, bottom)
+        } else {
+            (0, last)
+        };
     }
 
     /// DECOM. Setting or resetting it homes the cursor, as DEC requires:

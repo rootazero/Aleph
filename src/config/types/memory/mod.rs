@@ -77,7 +77,6 @@ pub struct MemoryConfig {
     // FTS scores), so no quantity with honest "similarity in [0,1]" semantics
     // exists for such a gate to act on. Stray keys in existing config.toml
     // files are silently ignored (no `deny_unknown_fields`).
-
     #[serde(default)]
     pub embedding: EmbeddingSettings,
 
@@ -108,7 +107,6 @@ pub struct MemoryConfig {
     // `[memory.compound_ingest] dedup_similarity_threshold` (`ingest.rs`).
     // A top-level twin of that key used to live here with zero readers; do
     // not reintroduce it — two spellings of one knob means one is a lie.
-
     #[serde(default)]
     pub reflection: ReflectionConfig,
 

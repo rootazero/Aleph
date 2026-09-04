@@ -8,8 +8,8 @@
 use crate::api::{
     parse_probe_interval, RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo,
 };
-use crate::context::DashboardState;
 use crate::components::route_labels::{lb_label, mode_label, LB_KEYS, MODE_KEYS};
+use crate::context::DashboardState;
 use crate::i18n::{t, t_string};
 use crate::platform::phone::shell::PhoneShell;
 use leptos::prelude::*;

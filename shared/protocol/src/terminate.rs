@@ -388,11 +388,23 @@ mod tests {
     fn posix_precedence_and_the_c_locale() {
         let z = "zh_CN.UTF-8";
         let e = "en_US.UTF-8";
-        assert_eq!(UiLocale::from_locale_vars(Some(z), Some(e), Some(e)), UiLocale::Zh);
-        assert_eq!(UiLocale::from_locale_vars(None, Some(z), Some(e)), UiLocale::Zh);
-        assert_eq!(UiLocale::from_locale_vars(None, None, Some(z)), UiLocale::Zh);
+        assert_eq!(
+            UiLocale::from_locale_vars(Some(z), Some(e), Some(e)),
+            UiLocale::Zh
+        );
+        assert_eq!(
+            UiLocale::from_locale_vars(None, Some(z), Some(e)),
+            UiLocale::Zh
+        );
+        assert_eq!(
+            UiLocale::from_locale_vars(None, None, Some(z)),
+            UiLocale::Zh
+        );
         // LC_CTYPE is deliberately not consulted: see `from_locale_vars`.
-        assert_eq!(UiLocale::from_locale_vars(None, Some(e), Some(z)), UiLocale::En);
+        assert_eq!(
+            UiLocale::from_locale_vars(None, Some(e), Some(z)),
+            UiLocale::En
+        );
         // Nothing set, and the two locales that mean "no locale".
         assert_eq!(UiLocale::from_locale_vars(None, None, None), UiLocale::En);
         for none_at_all in ["C", "POSIX", "c"] {
@@ -403,8 +415,14 @@ mod tests {
             );
         }
         // An empty value is unset, so the next link in the chain decides.
-        assert_eq!(UiLocale::from_locale_vars(Some(""), None, Some(z)), UiLocale::Zh);
-        assert_eq!(UiLocale::from_locale_vars(Some("  "), Some(""), Some(z)), UiLocale::Zh);
+        assert_eq!(
+            UiLocale::from_locale_vars(Some(""), None, Some(z)),
+            UiLocale::Zh
+        );
+        assert_eq!(
+            UiLocale::from_locale_vars(Some("  "), Some(""), Some(z)),
+            UiLocale::Zh
+        );
         // Region variants and the modern script tag.
         for tag in ["zh", "zh_TW", "zh_HK.Big5", "zh-Hans", "ZH_CN.UTF-8"] {
             assert_eq!(

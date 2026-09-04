@@ -734,8 +734,8 @@ mod tests {
         // One publish, with the right id + name + conn_id. `subscribe()`
         // yields the JSON-serialized `TopicEvent`; we parse and check.
         let frame = rx.try_recv().expect("one event must have been published");
-        let event: serde_json::Value = serde_json::from_str(&frame)
-            .expect("frame must be valid JSON");
+        let event: serde_json::Value =
+            serde_json::from_str(&frame).expect("frame must be valid JSON");
         assert_eq!(event["topic"], serde_json::json!("node.disconnected"));
         assert_eq!(event["data"]["node_id"], serde_json::json!(node_id));
         assert_eq!(event["data"]["name"], serde_json::json!("live-box"));

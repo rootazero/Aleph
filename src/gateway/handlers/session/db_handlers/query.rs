@@ -502,12 +502,12 @@ mod tests {
         clean_derived_title, handle_list_db, resolve_display_title, session_usage_cost,
         CACHE_BLIND_ESTIMATE,
     };
-    use aleph_protocol::SessionListRow;
     use crate::gateway::protocol::JsonRpcRequest;
     use crate::gateway::router::SessionKey;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionPatch};
     use crate::gateway::session_store::SessionStore;
     use crate::sync_primitives::Arc;
+    use aleph_protocol::SessionListRow;
     use serde_json::json;
 
     fn s(v: &str) -> Option<String> {

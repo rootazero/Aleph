@@ -763,4 +763,3 @@ mod tests {
         assert!(deletable("tavily", ""));
     }
 }
-

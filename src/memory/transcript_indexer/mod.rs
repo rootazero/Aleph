@@ -23,7 +23,9 @@ mod tests {
         Arc::new(SqliteMemoryBackend::new(&db_path).unwrap())
     }
 
-    fn indexer_with_config(config: TranscriptIndexerConfig) -> (tempfile::TempDir, TranscriptIndexer) {
+    fn indexer_with_config(
+        config: TranscriptIndexerConfig,
+    ) -> (tempfile::TempDir, TranscriptIndexer) {
         let temp_dir = tempdir().unwrap();
         let db = create_test_db(temp_dir.path());
         (temp_dir, TranscriptIndexer::with_config(db, config))
@@ -145,6 +147,10 @@ mod tests {
             .get_raw_by_path_prefix("aleph://transcript/sess-gate/", "main", 50)
             .await
             .unwrap();
-        assert_eq!(rows.len(), ids.len(), "every returned id must be a stored row");
+        assert_eq!(
+            rows.len(),
+            ids.len(),
+            "every returned id must be a stored row"
+        );
     }
 }

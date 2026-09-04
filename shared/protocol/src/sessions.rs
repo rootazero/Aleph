@@ -186,7 +186,13 @@ mod tests {
     #[test]
     fn unset_knobs_are_absent_not_null() {
         let v = serde_json::to_value(SessionListRow::default()).expect("serialize");
-        for knob in ["exec_tier", "mode", "think_level", "memory_mode", "last_run"] {
+        for knob in [
+            "exec_tier",
+            "mode",
+            "think_level",
+            "memory_mode",
+            "last_run",
+        ] {
             assert!(v.get(knob).is_none(), "{knob} must be absent: {v:?}");
         }
     }

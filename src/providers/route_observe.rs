@@ -797,7 +797,10 @@ mod tests {
             member["tier"], step["tier"],
             "fallback_chain and next_order must not state two tiers for one provider"
         );
-        assert_eq!(member["tier"], "local", "the chain's own catalog says local");
+        assert_eq!(
+            member["tier"], "local",
+            "the chain's own catalog says local"
+        );
         assert_eq!(
             member["models"],
             json!(["qwen3"]),

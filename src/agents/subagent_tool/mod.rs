@@ -280,10 +280,7 @@ impl SubagentTool {
     /// simple engine) leaves the child on the legacy no-verifier path —
     /// matching pre-2026-09 behaviour but explicitly opted-in.
     #[must_use]
-    pub fn with_verifier_chain(
-        mut self,
-        chain: Arc<crate::verification::VerifierChain>,
-    ) -> Self {
+    pub fn with_verifier_chain(mut self, chain: Arc<crate::verification::VerifierChain>) -> Self {
         self.verifier_chain = Some(chain);
         self
     }

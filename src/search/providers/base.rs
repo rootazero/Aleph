@@ -269,7 +269,13 @@ mod tests {
     /// operator read a working refusal as a missing backend (判据 §8).
     #[test]
     fn the_private_upstream_gate_opens_and_closes() {
-        for host in ["127.0.0.1", "10.0.0.5", "localhost", "169.254.169.254", "0177.0.0.1"] {
+        for host in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "localhost",
+            "169.254.169.254",
+            "0177.0.0.1",
+        ] {
             assert!(
                 reject_ssrf_target_host("T", host, false).is_err(),
                 "{host} must be refused by default"

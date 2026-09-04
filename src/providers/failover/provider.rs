@@ -770,9 +770,11 @@ impl FailoverProvider {
         // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
         let mut out: Vec<(FailoverNode, RouteGate, SlotKind)> =
             Vec::with_capacity(fallbacks.len() + 1);
-        if let Some(gate) =
-            RouteGate::retained(classify_candidate(mode, primary_node.tier, allow_escalation))
-        {
+        if let Some(gate) = RouteGate::retained(classify_candidate(
+            mode,
+            primary_node.tier,
+            allow_escalation,
+        )) {
             out.push((primary_node, gate, SlotKind::Primary));
         }
         // Order the fallback pool. The balanced path runs when there is a load

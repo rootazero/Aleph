@@ -310,8 +310,7 @@ mod tests {
     #[test]
     fn parse_strategy_with_stray_brace_in_preamble_extracts_valid_plan() {
         let text = format!("important for the task {{\n{SAMPLE_PLAN_JSON}");
-        let s = parse_strategy(&text)
-            .expect("stray opening brace in preamble must be skipped");
+        let s = parse_strategy(&text).expect("stray opening brace in preamble must be skipped");
         assert_eq!(s.objective, "Ship X");
         assert!(!s.is_empty());
     }
@@ -321,8 +320,8 @@ mod tests {
     #[test]
     fn parse_strategy_with_stray_brace_in_trailing_prose_extracts_valid_plan() {
         let text = format!("{SAMPLE_PLAN_JSON} use }}");
-        let s = parse_strategy(&text)
-            .expect("stray closing brace in trailing prose must be ignored");
+        let s =
+            parse_strategy(&text).expect("stray closing brace in trailing prose must be ignored");
         assert_eq!(s.objective, "Ship X");
         assert!(!s.is_empty());
     }

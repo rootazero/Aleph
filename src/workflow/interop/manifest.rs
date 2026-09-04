@@ -692,7 +692,6 @@ mod tests {
         assert_eq!(manifest, back);
     }
 
-
     #[test]
     fn tolerate_failed_deps_roundtrips_through_def_and_json() {
         let mut def = core_def();

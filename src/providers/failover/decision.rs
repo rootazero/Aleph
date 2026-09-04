@@ -8,9 +8,7 @@ use crate::providers::llm_retry::{
     RetryVerdict,
 };
 
-use super::{
-    DEFAULT_MODEL_COOLDOWN, DEFAULT_TRANSIENT_DELAY, MAX_COOLDOWN, OVERLOAD_RETRY_BUDGET,
-};
+use super::{DEFAULT_MODEL_COOLDOWN, DEFAULT_TRANSIENT_DELAY, MAX_COOLDOWN, OVERLOAD_RETRY_BUDGET};
 
 /// How a provider-level failure should shape the circuit breaker.
 ///

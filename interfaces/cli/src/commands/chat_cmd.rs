@@ -317,7 +317,10 @@ mod tests {
         }));
         assert_eq!(footer, "Total: 7 messages");
         assert_eq!(
-            history_footer(Some(HistoryWindow { count: 1, total: Some(1) })),
+            history_footer(Some(HistoryWindow {
+                count: 1,
+                total: Some(1)
+            })),
             "Total: 1 message"
         );
     }

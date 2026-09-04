@@ -225,7 +225,10 @@ pub(crate) fn partial_fan_in_notes(manifest: &WorkflowManifest) -> Vec<String> {
 
 /// [`partial_fan_in_notes`] against layers the caller already computed, so the
 /// in-file disclosure and the tool message render the identical line text.
-fn partial_fan_in_notes_at(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> Vec<String> {
+fn partial_fan_in_notes_at(
+    manifest: &WorkflowManifest,
+    levels: Option<&[Vec<usize>]>,
+) -> Vec<String> {
     partial_fan_in_steps(manifest, levels)
         .into_iter()
         .map(|i| {

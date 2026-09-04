@@ -630,11 +630,10 @@ mod tests {
             .cloned()
             .collect();
         got.sort();
-        let mut want: Vec<String> =
-            crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS
-                .iter()
-                .map(|k| (*k).to_string())
-                .collect();
+        let mut want: Vec<String> = crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS
+            .iter()
+            .map(|k| (*k).to_string())
+            .collect();
         want.sort();
         assert_eq!(got, want);
     }

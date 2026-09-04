@@ -344,7 +344,8 @@ mod tests {
     #[test]
     fn test_searxng_provider_accepts_https() {
         let provider =
-            SearxngProvider::new("https://searx.example.com".to_string(), None, None, false).unwrap();
+            SearxngProvider::new("https://searx.example.com".to_string(), None, None, false)
+                .unwrap();
         assert_eq!(provider.base_url, "https://searx.example.com");
     }
 
@@ -365,7 +366,8 @@ mod tests {
     /// the provider treats `Some(0)` as "throttle off".
     #[test]
     fn provider_zero_interval_disables_throttle() {
-        let p = SearxngProvider::new("http://localhost:8080".to_string(), None, Some(0), true).unwrap();
+        let p =
+            SearxngProvider::new("http://localhost:8080".to_string(), None, Some(0), true).unwrap();
         assert!(p.min_interval.is_zero());
     }
 

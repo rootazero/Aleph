@@ -2933,7 +2933,9 @@ async fn an_open_primary_that_is_skipped_still_reads_as_a_migration() {
     let fb = ScriptProvider::ok("fallback");
     let health = FailoverHealth::default();
     // As if three strikes had already tripped it on an earlier run.
-    health.open_for_test("primary", Duration::from_secs(300)).await;
+    health
+        .open_for_test("primary", Duration::from_secs(300))
+        .await;
     let fp = build_with_health(
         // rust-doctor-disable-next-line excessive-clone
         primary.clone() as Arc<dyn AiProvider>,
@@ -3071,7 +3073,11 @@ async fn a_denied_escalation_head_does_not_anchor_the_witness() {
     // rust-doctor-disable-next-line unwrap-in-production
     let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
     assert_eq!(resp.text_content(), "ollama");
-    assert_eq!(cloud.call_count(), 0, "the denied pin never reached the wire");
+    assert_eq!(
+        cloud.call_count(),
+        0,
+        "the denied pin never reached the wire"
+    );
 
     let w = crate::providers::route_witness::take(session).expect("witnessed");
     assert_eq!(
@@ -3101,7 +3107,9 @@ async fn a_gated_head_skipped_before_the_prompt_still_reads_as_a_migration() {
     // Would approve if asked — the point is that it is never asked.
     let approver = MockApprover::new(true);
     let health = FailoverHealth::default();
-    health.open_for_test("openai", Duration::from_secs(300)).await;
+    health
+        .open_for_test("openai", Duration::from_secs(300))
+        .await;
     let fp = build_with_health(
         // rust-doctor-disable-next-line excessive-clone
         cloud.clone() as Arc<dyn AiProvider>,
@@ -3152,7 +3160,8 @@ async fn the_anchor_never_names_a_model_the_walk_filtered_out() {
 
     let primary = ScriptProvider::ok("primary");
     let cd = ModelCooldown::default();
-    cd.cool("primary", "model-a", Duration::from_secs(300)).await;
+    cd.cool("primary", "model-a", Duration::from_secs(300))
+        .await;
     let fp = build(
         // rust-doctor-disable-next-line excessive-clone
         primary.clone() as Arc<dyn AiProvider>,
@@ -3225,7 +3234,9 @@ async fn the_preview_flags_a_primary_the_walk_will_skip() {
     let primary = ScriptProvider::ok("primary");
     let fb = ScriptProvider::ok("fb");
     let health = FailoverHealth::default();
-    health.open_for_test("primary", Duration::from_secs(300)).await;
+    health
+        .open_for_test("primary", Duration::from_secs(300))
+        .await;
     let fp = build_with_health(
         // rust-doctor-disable-next-line excessive-clone
         primary.clone(),
@@ -3275,7 +3286,9 @@ async fn previewing_an_open_circuit_does_not_spend_its_probe() {
     let primary = ScriptProvider::ok("primary");
     let fb = ScriptProvider::ok("fb");
     let health = FailoverHealth::default();
-    health.open_for_test("primary", Duration::from_secs(300)).await;
+    health
+        .open_for_test("primary", Duration::from_secs(300))
+        .await;
     health.open_for_test("fb", Duration::ZERO).await;
     let fp = build_with_health(primary, vec![], vec![node("fb", fb)], health);
 

@@ -716,7 +716,6 @@ mod tests {
         }
     }
 
-
     /// A failed dependency reaches the renderer only for a consumer that opted
     /// into tolerant fan-in — and that consumer was started deliberately
     /// WITHOUT one of its inputs. The section must say which input is missing

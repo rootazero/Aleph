@@ -143,7 +143,9 @@ impl HealthCheck for SessionLogCheck {
                 Some(e) => vec![unknown_finding(
                     ID,
                     SUBJECT,
-                    format!("the run markers could not be read ({e}), so no session's log was reduced."),
+                    format!(
+                        "the run markers could not be read ({e}), so no session's log was reduced."
+                    ),
                 )],
                 None => vec![Finding::ok(
                     ID,
@@ -204,7 +206,9 @@ impl HealthCheck for SessionLogCheck {
                      consistent.",
                     list_unreadable
                         .as_deref()
-                        .map_or_else(String::new, |e| format!(", and the marker scan failed ({e})"))
+                        .map_or_else(String::new, |e| format!(
+                            ", and the marker scan failed ({e})"
+                        ))
                 ),
             )];
         }

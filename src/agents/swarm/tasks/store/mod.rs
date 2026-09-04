@@ -233,10 +233,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         deps::get_dependents(self, id).await
     }
 
-    async fn get_newly_unblocked(
-        &self,
-        settled_id: &str,
-    ) -> crate::error::Result<Vec<CoordTask>> {
+    async fn get_newly_unblocked(&self, settled_id: &str) -> crate::error::Result<Vec<CoordTask>> {
         deps::get_newly_unblocked(self, settled_id).await
     }
 

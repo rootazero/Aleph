@@ -75,10 +75,10 @@ fn a_clean_run_leaves_no_halt_line() {
         total_duration_ms: 10,
     });
     assert!(
-        !state.messages[before..]
-            .iter()
-            .any(|m| matches!(m, ChatMessage::System { content } if content.contains("stopped")
-                || content.contains("已停止"))),
+        !state.messages[before..].iter().any(
+            |m| matches!(m, ChatMessage::System { content } if content.contains("stopped")
+                || content.contains("已停止"))
+        ),
         "a clean finish must not be badged",
     );
 }
@@ -2920,7 +2920,10 @@ fn a_live_scratchpad_result_in_the_wire_string_shape_updates_the_plan() {
 
     state.maybe_apply_plan_from_tool("scratchpad", &wire);
 
-    let plan = state.plan.as_ref().expect("the live frame updates the plan");
+    let plan = state
+        .plan
+        .as_ref()
+        .expect("the live frame updates the plan");
     assert_eq!(plan.total(), 2);
     assert_eq!(plan.current_step(), Some("Build"));
 

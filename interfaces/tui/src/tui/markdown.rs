@@ -200,9 +200,7 @@ pub fn markdown_to_lines_incremental(
                 (lines, new_offset)
             }
             _ => match cache {
-                Some(p)
-                    if p.safe_offset <= text.len() && text.is_char_boundary(p.safe_offset) =>
-                {
+                Some(p) if p.safe_offset <= text.len() && text.is_char_boundary(p.safe_offset) => {
                     let off = p.safe_offset;
                     (Rc::clone(&p.lines), off)
                 }

@@ -11,8 +11,7 @@ use crate::tasks::cron::config::CronJob;
 use crate::tasks::shared::clock::Clock;
 
 static ENV_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"\{\{env:(\w+)\}\}")
-        .expect("ENV_RE pattern compiles: hardcoded literal")
+    regex::Regex::new(r"\{\{env:(\w+)\}\}").expect("ENV_RE pattern compiles: hardcoded literal")
 });
 
 /// Render a prompt template with variable substitution.

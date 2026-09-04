@@ -79,7 +79,10 @@ pub struct QueryTreeParams {
     /// walk that also requests 10 000 nodes could produce a response tree
     /// that overflows recursion on different limbs or blows the model's
     /// context.
-    #[serde(default = "default_depth", deserialize_with = "deserialize_clamped_depth")]
+    #[serde(
+        default = "default_depth",
+        deserialize_with = "deserialize_clamped_depth"
+    )]
     pub max_depth: u32,
     /// Maximum number of nodes to return, across the whole subtree.
     ///

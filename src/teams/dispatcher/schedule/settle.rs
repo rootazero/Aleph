@@ -206,8 +206,7 @@ impl TeamDispatcher {
                     .get(crate::workflow::WORKFLOW_NOTIFIED_BY_KEY)
                     .and_then(|v| v.as_str())
                     == Some(crate::workflow::NOTIFIED_BY_CANCEL);
-                if !all_settled
-                    && (!is_cancel_provenance || marker_age >= REOPEN_REARM_GRACE_SECS)
+                if !all_settled && (!is_cancel_provenance || marker_age >= REOPEN_REARM_GRACE_SECS)
                 {
                     let cleared = merge_metadata_patch(
                         &anchor.metadata,

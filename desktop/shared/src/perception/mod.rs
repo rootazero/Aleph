@@ -31,7 +31,10 @@ pub use window_capture::capture_window;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub use screen_record::screen_record;
 
-#[allow(unused_imports, reason = "the imports are referenced by cfg-gated downstream items and by doc examples that re-export them; this keeps them in one place")]
+#[allow(
+    unused_imports,
+    reason = "the imports are referenced by cfg-gated downstream items and by doc examples that re-export them; this keeps them in one place"
+)]
 use crate::error::{DesktopError, Result};
 use crate::OcrResult;
 

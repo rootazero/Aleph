@@ -551,8 +551,12 @@ async fn catalog_unknown_view_is_refused_not_widened() {
 
     let config = Arc::new(RwLock::new(Config::default()));
     let (_vault_scratch, vault) = test_vault();
-    let response = handle_catalog(catalog_request(Some("nonsense")), config.clone(), vault.clone())
-        .await;
+    let response = handle_catalog(
+        catalog_request(Some("nonsense")),
+        config.clone(),
+        vault.clone(),
+    )
+    .await;
     let error = response
         .error
         .as_ref()

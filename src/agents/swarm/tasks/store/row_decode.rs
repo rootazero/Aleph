@@ -130,10 +130,7 @@ pub(super) fn has_dead_deps(conn: &Connection, task_id: &str) -> rusqlite::Resul
 /// verbatim rather than re-partitioned, so the drift-guard in
 /// `tasks/mod.rs::dependency_resolution_rule_is_pinned_across_all_statuses`
 /// still covers every literal in this file.
-pub(super) fn has_live_unresolved_deps(
-    conn: &Connection,
-    task_id: &str,
-) -> rusqlite::Result<bool> {
+pub(super) fn has_live_unresolved_deps(conn: &Connection, task_id: &str) -> rusqlite::Result<bool> {
     conn.query_row(
         r#"
         SELECT EXISTS(

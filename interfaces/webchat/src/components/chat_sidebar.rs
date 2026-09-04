@@ -384,9 +384,9 @@ pub(crate) fn last_run_notice(
             .to_string(),
         ),
         D::Clean | D::NeverRan => match dangling {
-            Some(n) if n > 0 => Some(
-                td_string!(locale, narration.last_run_dangling, count = n as i64).to_string(),
-            ),
+            Some(n) if n > 0 => {
+                Some(td_string!(locale, narration.last_run_dangling, count = n as i64).to_string())
+            }
             _ => None,
         },
     }
@@ -2237,8 +2237,7 @@ mod last_run_face_tests {
             inspected: true,
             ..LastRunState::default()
         };
-        let notice =
-            last_run_notice(&refused, Locale::default()).expect("a refused log is news");
+        let notice = last_run_notice(&refused, Locale::default()).expect("a refused log is news");
         assert!(
             notice.contains("session-log-duplicate-dispatch") && notice.contains("doctor"),
             "{notice}"
@@ -2306,8 +2305,7 @@ mod last_run_face_tests {
             inspected: true,
             ..LastRunState::default()
         };
-        assert!(last_run_notice(&odd, Locale::default())
-            .is_some_and(|n| n.contains("quarantined")));
+        assert!(last_run_notice(&odd, Locale::default()).is_some_and(|n| n.contains("quarantined")));
         let row = SessionEntry {
             key: "agent:main:main:s4".into(),
             last_run: Some(odd),

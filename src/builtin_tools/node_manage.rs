@@ -91,11 +91,11 @@ Returns {action, node_id, ...}. Deregistering is destructive to fleet membership
             }
             "deregister" => {
                 match deregister_node(
-    &self.node_registry,
-    &self.security_store,
-    &args.node,
-    self.events.as_deref(),
-) {
+                    &self.node_registry,
+                    &self.security_store,
+                    &args.node,
+                    self.events.as_deref(),
+                ) {
                     Ok(o) => Ok(json!({
                         "action": "deregister",
                         "node": args.node,
@@ -130,7 +130,11 @@ mod tests {
     fn tool() -> (NodeManageTool, Arc<NodeRegistry>, Arc<SecurityStore>) {
         let reg = Arc::new(NodeRegistry::new());
         let store = Arc::new(SecurityStore::in_memory().expect("in-memory store"));
-        (NodeManageTool::new(reg.clone(), store.clone(), None), reg, store)
+        (
+            NodeManageTool::new(reg.clone(), store.clone(), None),
+            reg,
+            store,
+        )
     }
 
     fn register(reg: &NodeRegistry, id: &str, name: &str) {

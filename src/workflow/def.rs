@@ -800,7 +800,6 @@ mod tests {
         assert!(err.contains("cannot require review"), "got: {err}");
     }
 
-
     // ---- Tolerant fan-in ---------------------------------------------------
 
     #[test]
@@ -829,7 +828,10 @@ mod tests {
         let mut d = def(vec![clarify_step("ask", "Pick env", &[], &[])]);
         d.steps[0].tolerate_failed_deps = true;
         let err = d.validate().unwrap_err().to_string();
-        assert!(err.contains("cannot set tolerate_failed_deps"), "got: {err}");
+        assert!(
+            err.contains("cannot set tolerate_failed_deps"),
+            "got: {err}"
+        );
     }
     // ---- Per-step timeout / retry overrides --------------------------------
 

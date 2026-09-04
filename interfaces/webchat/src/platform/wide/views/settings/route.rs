@@ -10,8 +10,8 @@ use crate::api::{
     parse_probe_interval as parse_interval, RateLimit, RouteConfigApi, RouteConfigUpdate,
     RouteProviderInfo,
 };
-use crate::context::DashboardState;
 use crate::components::route_labels::{lb_label, mode_desc, mode_label, LB_KEYS, MODE_KEYS};
+use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;

@@ -214,7 +214,10 @@ fn declared_as_a_test_module(path: &std::path::Path) -> bool {
     // directory-shaped test module answers "not a test module".
     let (stem, dir) = if path.file_name().is_some_and(|n| n == "mod.rs") {
         let dir = path.parent();
-        match (dir.and_then(std::path::Path::file_name), dir.and_then(std::path::Path::parent)) {
+        match (
+            dir.and_then(std::path::Path::file_name),
+            dir.and_then(std::path::Path::parent),
+        ) {
             (Some(name), Some(up)) => (name.to_owned(), up),
             _ => return false,
         }
@@ -1753,8 +1756,7 @@ pub fn after() {}
                     continue;
                 };
                 let name = name.trim();
-                if name.is_empty()
-                    || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 {
                     continue;
                 }

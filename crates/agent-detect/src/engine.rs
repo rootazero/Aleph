@@ -396,7 +396,10 @@ fn agent_token_in_cmdline(cmdline: &str) -> Option<&str> {
             // agent. Checked before the launcher branch would have been
             // wrong for `bun x claude`, which is why the launcher branch
             // runs first and declines when its subcommand is absent.
-            let script = tokens[cursor + 1..].iter().copied().find(|t| is_operand(t))?;
+            let script = tokens[cursor + 1..]
+                .iter()
+                .copied()
+                .find(|t| is_operand(t))?;
             return identify_agent(script)
                 .map(|_| script)
                 .or_else(|| package_path_agent_token(script));
@@ -438,9 +441,7 @@ fn is_env_assignment(token: &str) -> bool {
     };
     !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// The index of `command`'s operand — the program it was asked to run — or
@@ -483,13 +484,30 @@ fn launcher_operand_index(command: &str, tokens: &[&str], cursor: usize) -> Opti
 /// at all and the shape arrives here already resolved.
 fn launcher_spec(command: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
     const SUDO_VALUE_FLAGS: &[&str] = &[
-        "-u", "-g", "-p", "-C", "-r", "-t", "-U", "-h", "--user", "--group", "--prompt",
-        "--close-from", "--role", "--type", "--host", "--other-user",
+        "-u",
+        "-g",
+        "-p",
+        "-C",
+        "-r",
+        "-t",
+        "-U",
+        "-h",
+        "--user",
+        "--group",
+        "--prompt",
+        "--close-from",
+        "--role",
+        "--type",
+        "--host",
+        "--other-user",
     ];
     let name = normalized_agent_lookup_name(path_basename(command));
     Some(match name.as_str() {
         "sudo" | "doas" => (&[] as &[&str], SUDO_VALUE_FLAGS),
-        "env" => (&[], &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"]),
+        "env" => (
+            &[],
+            &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
+        ),
         "nice" | "ionice" => (&[], &["-n", "-c", "--adjustment", "--class"]),
         "stdbuf" => (&[], &["-i", "-o", "-e", "--input", "--output", "--error"]),
         "nohup" | "setsid" | "command" | "time" | "timeout" | "chrt" => (&[], &[]),
@@ -528,9 +546,7 @@ fn launcher_spec(command: &str) -> Option<(&'static [&'static str], &'static [&'
 fn package_path_agent_token(script: &str) -> Option<&str> {
     const PACKAGE_ROOTS: [&str; 3] = ["node_modules", "site-packages", "dist-packages"];
     let components: Vec<&str> = script.split(['/', '\\']).collect();
-    let root = components
-        .iter()
-        .rposition(|c| PACKAGE_ROOTS.contains(c))?;
+    let root = components.iter().rposition(|c| PACKAGE_ROOTS.contains(c))?;
     components[root + 1..]
         .iter()
         .copied()
@@ -1026,11 +1042,7 @@ mod tests {
             "three layers is the budget and it is spendable"
         );
         assert_eq!(
-            identify_agent_from_process(
-                "sudo",
-                Some("sudo"),
-                Some("sudo nice nohup npx claude"),
-            ),
+            identify_agent_from_process("sudo", Some("sudo"), Some("sudo nice nohup npx claude"),),
             None,
             "a fourth layer is refused rather than followed"
         );
@@ -1045,7 +1057,10 @@ mod tests {
         assert!(is_env_assignment("SHELL=/bin/zsh"));
         assert!(is_env_assignment("X="));
         assert!(!is_env_assignment("=value"), "no name is not an assignment");
-        assert!(!is_env_assignment("2FOO=x"), "a name cannot start with a digit");
+        assert!(
+            !is_env_assignment("2FOO=x"),
+            "a name cannot start with a digit"
+        );
         assert!(
             !is_env_assignment("/opt/a=b/bin/claude"),
             "a path is an operand even when it contains `=`"

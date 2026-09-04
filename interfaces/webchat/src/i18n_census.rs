@@ -699,7 +699,11 @@ fn bound_copy_lines(
                 .collect();
             found.sort_unstable();
             found.dedup();
-            hits.extend(found.into_iter().filter_map(|row| lines.get(row).map(|(n, _)| *n)));
+            hits.extend(
+                found
+                    .into_iter()
+                    .filter_map(|row| lines.get(row).map(|(n, _)| *n)),
+            );
         }
         i = end.max(i + 1);
     }
@@ -1672,4 +1676,3 @@ mod tests {
         assert!(!opens_a_cfg_test_literal("mod tests {"));
     }
 }
-

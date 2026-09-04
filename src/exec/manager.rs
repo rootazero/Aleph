@@ -221,8 +221,7 @@ impl ExecApprovalRecord {
         let now = now_ms_or_warn();
         now > self.expires_at_ms
     }
-
-    }
+}
 
 /// What [`ExecApprovalManager::await_registered`] resolves to: the decision
 /// (`None` = timed out / channel closed) plus any free-text reason the human

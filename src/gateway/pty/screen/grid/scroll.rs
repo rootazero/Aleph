@@ -93,7 +93,11 @@ impl Grid {
         } else {
             region.rotate_right(cols);
         }
-        let vacated = if up { region.len() - cols..region.len() } else { 0..cols };
+        let vacated = if up {
+            region.len() - cols..region.len()
+        } else {
+            0..cols
+        };
         for cell in &mut region[vacated] {
             *cell = Cell::default();
         }

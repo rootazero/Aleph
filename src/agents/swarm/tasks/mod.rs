@@ -599,8 +599,7 @@ pub trait CoordTaskStore: Send + Sync {
     /// task settled: every dependency satisfied, or — for a dependent stamped
     /// [`acceptance::TOLERATE_FAILED_DEPS_METADATA_KEY`] — every remaining one
     /// terminally dead, which a failure of `settled_id` itself can bring about.
-    async fn get_newly_unblocked(&self, settled_id: &str)
-        -> crate::error::Result<Vec<CoordTask>>;
+    async fn get_newly_unblocked(&self, settled_id: &str) -> crate::error::Result<Vec<CoordTask>>;
 
     // --- Task locking ---
 

@@ -1779,9 +1779,7 @@ impl AlephTool for WorkflowTool {
                 // on this team" read like a broken listing, and a caller
                 // cannot tell those apart from an `Err`.
                 let message = if runs.is_empty() {
-                    format!(
-                        "no runs of '{name}' on team '{team_id}' — start one with action='run'"
-                    )
+                    format!("no runs of '{name}' on team '{team_id}' — start one with action='run'")
                 } else {
                     format!(
                         "{} run(s) of workflow '{name}' on team '{team_id}', newest first \
@@ -1928,8 +1926,7 @@ impl AlephTool for WorkflowTool {
                 // one thing the body cannot express. Same predicate, second
                 // face (criterion 9): re-importing a header-stripped copy of
                 // this file widens those steps' dependency sets.
-                let lossy =
-                    crate::workflow::interop::export::partial_fan_in_notes(&manifest);
+                let lossy = crate::workflow::interop::export::partial_fan_in_notes(&manifest);
                 let message = if write_file {
                     // `.mjs` — the extension Claude Code's workflow menu / the
                     // `~/.claude/workflows` loader recognise for a dynamic
@@ -4597,7 +4594,6 @@ mod tests {
         assert!(out.message.contains("1 still running"), "{}", out.message);
     }
 
-
     /// End to end through the tool: a tolerant step keeps running after its
     /// upstream fails, and the two reporting faces must not miscount it.
     /// `status` tallies whatever the store derives (so the tolerant step reads
@@ -4991,7 +4987,10 @@ await agent('fix what scan found', { label: 'fix' })
             err.contains("delete") && err.contains("import"),
             "the refusal names the two ways out: {err}"
         );
-        assert_eq!(on_disk, corrupt, "the unreadable file is left byte-identical");
+        assert_eq!(
+            on_disk, corrupt,
+            "the unreadable file is left byte-identical"
+        );
         saved_fresh.expect("an absent name still saves");
     }
 

@@ -353,10 +353,10 @@ mod tests {
     /// not read as an outcome this client then renders as a sentence.
     #[test]
     fn a_renamed_status_fails_rather_than_reading_as_unknown() {
-        assert!(
-            serde_json::from_value::<ResumeReceipt>(serde_json::json!({ "outcome": "resumed" }))
-                .is_err()
-        );
+        assert!(serde_json::from_value::<ResumeReceipt>(
+            serde_json::json!({ "outcome": "resumed" })
+        )
+        .is_err());
     }
 
     #[test]

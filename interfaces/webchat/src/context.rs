@@ -1156,8 +1156,9 @@ impl DashboardState {
         // converting an infinite spinner into a surfaced, retryable error.
         use futures::future::{select, Either};
         match select(response_rx, TimeoutFuture::new(30_000)).await {
-            Either::Left((res, _)) => res
-                .map_err(|e| RpcFailure::local(format!("Response channel closed: {e}")))?,
+            Either::Left((res, _)) => {
+                res.map_err(|e| RpcFailure::local(format!("Response channel closed: {e}")))?
+            }
             Either::Right(((), _)) => Err(RpcFailure::local("Request timed out")),
         }
     }

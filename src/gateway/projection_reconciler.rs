@@ -177,7 +177,8 @@ impl ProjectionReconciler {
 
         // Round UP so a sub-minute horizon still admits something: the filter
         // is minute-granular and `0` would mean "nothing is recent".
-        let active_minutes = u32::try_from(self.max_age_secs.div_ceil(60).max(1)).unwrap_or(u32::MAX);
+        let active_minutes =
+            u32::try_from(self.max_age_secs.div_ceil(60).max(1)).unwrap_or(u32::MAX);
         match self
             .session_store
             .list_sessions(SessionFilter {

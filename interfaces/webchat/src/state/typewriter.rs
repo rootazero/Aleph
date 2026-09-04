@@ -215,7 +215,11 @@ impl TypewriterClock {
     /// animation frame an O(prefix) copy; the renderer now extends the cache
     /// entry directly and only reads it out when the safe offset actually
     /// advanced (see `TypewriterRenderer`'s two-zone split).
-    pub fn update_stable_prefix<R>(&self, id: &str, f: impl FnOnce(&mut String, &mut usize) -> R) -> R {
+    pub fn update_stable_prefix<R>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut String, &mut usize) -> R,
+    ) -> R {
         self.stable_prefixes.update_untracked(|m| {
             let entry = m.entry(id.to_string()).or_default();
             f(&mut entry.0, &mut entry.1)

@@ -370,9 +370,7 @@ impl SessionManager {
             "CREATE INDEX IF NOT EXISTS idx_messages_source_seq
                ON messages(session_key, source_seq);",
         )
-        .map_err(|e| {
-            SessionManagerError::DatabaseError(format!("source_seq index failed: {e}"))
-        })?;
+        .map_err(|e| SessionManagerError::DatabaseError(format!("source_seq index failed: {e}")))?;
 
         Ok(())
     }

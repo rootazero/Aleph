@@ -123,9 +123,8 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
     // every apply so a single apply can never push the document past the
     // budget. The cost is one JSON serialize per apply, well below the cost
     // of writing the blob to disk.
-    let serialized = serde_json::to_vec(doc).map_err(|e| {
-        CanvasError::Internal(format!("failed to size-check canvas document: {e}"))
-    })?;
+    let serialized = serde_json::to_vec(doc)
+        .map_err(|e| CanvasError::Internal(format!("failed to size-check canvas document: {e}")))?;
     if serialized.len() > MAX_DOCUMENT_BYTES {
         return Err(CanvasError::Invalid(format!(
             "canvas document would be {} bytes after apply, exceeding the {MAX_DOCUMENT_BYTES}-byte document cap",

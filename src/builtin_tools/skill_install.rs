@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::skill::SkillId;
 use crate::error::{AlephError, Result};
-use crate::skill::SkillSystem;
 use crate::skill::installer::SkillInstallError;
+use crate::skill::SkillSystem;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -100,9 +100,7 @@ impl AlephTool for SkillInstallTool {
                     stderr: String::new(),
                 },
                 SkillInstallError::ExecutionFailed {
-                    message,
-                    stderr,
-                    ..
+                    message, stderr, ..
                 } => SkillInstallOutput {
                     success: false,
                     message: format!("Execution failed: {message}"),

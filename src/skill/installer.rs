@@ -580,13 +580,12 @@ mod tests {
     /// existing JSON-RPC consumers do not break.
     #[test]
     fn install_result_from_result_ok() {
-        let r: InstallResult =
-            Ok(InstallSuccess {
-                stdout: "ok".into(),
-                stderr: String::new(),
-                exit_code: 0,
-            })
-            .into();
+        let r: InstallResult = Ok(InstallSuccess {
+            stdout: "ok".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        })
+        .into();
         assert!(r.success);
         assert_eq!(r.stdout, "ok");
         assert_eq!(r.exit_code, Some(0));
