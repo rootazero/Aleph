@@ -120,10 +120,10 @@ use crate::sync_primitives::Arc;
 /// [`aleph_protocol::projects::ProjectRow`]) rather than here, for the reason
 /// `projects.channel.*` already put its shapes there: `aleph-cli` must not
 /// depend on `alephcore`, so `aleph projects list` had no way to name this row
-/// and would have hand-written a third copy of it. The Panel's
-/// `api::projects::ProjectInfo` is already a second one, and a hand-copied
-/// client row is how `aleph providers list` came to render two columns
-/// (`type`, `default`) the server had never sent.
+/// and would have hand-written a copy of it. The Panel's
+/// `api::projects::ProjectInfo` was such a copy until it became a `pub use` of
+/// this same row, and a hand-copied client row is how `aleph providers list`
+/// came to render two columns (`type`, `default`) the server had never sent.
 ///
 /// The alias is deliberately kept: this name is what the seven construction
 /// sites below and `builtin_tools::project_manage` already read, and the
