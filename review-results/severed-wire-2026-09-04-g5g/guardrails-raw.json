@@ -1,0 +1,100 @@
+{
+  "module": "src/guardrails",
+  "files_scanned": [
+    "src/guardrails/mod.rs",
+    "src/guardrails/decision.rs",
+    "src/guardrails/pii_secrets.rs",
+    "src/guardrails/registry.rs",
+    "src/guardrails/traits.rs",
+    "src/guardrails/tests/bench.rs",
+    "src/guardrails/tests/input.rs",
+    "src/guardrails/tests/output.rs",
+    "src/guardrails/tests/registry.rs",
+    "src/harness/agent/guardrails.rs",
+    "src/harness/agent/think.rs",
+    "src/harness/agent/act.rs",
+    "src/bin/aleph-server/commands/start/orchestrator_init.rs"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg; seam-catalog lenses (registration parity, call-vs-handler, config-reader, stub sweep); code-smell pass. Read-only — no edits made during review phase.",
+  "findings": [
+    {
+      "id": "sw-guardrails-1-1",
+      "severity": "medium",
+      "form": 1,
+      "produced": "GuardrailRegistry::disable_all / GuardrailRegistry::enable_all (runtime kill-switch pair documented in master spec §Stage 5)",
+      "produced_location": "src/guardrails/registry.rs:64, :74",
+      "consumer_location": "zero call sites anywhere in src/, tests/, interfaces/, desktop/. The orchestrator's wiring at src/bin/aleph-server/commands/start/orchestrator_init.rs:573 builds the registry and passes it via HarnessDeps.guardrails — no code path ever flips the kill-switch.",
+      "decision": "DECIDE",
+      "rationale": "Two viable resolutions: (a) CONNECT — add a `gateway.guardrails.disable` admin RPC + corresponding Panel UI button so operators can flip the switch from a dashboard (this was the original spec intent). Without a UI hook, the switch is unreachable from any runtime state. (b) CUT — delete both methods, drop the AtomicBool field, simplify the four `evaluate_*` short-circuits. Recommend DECIDE: the spec intent is real, but no commit has landed the RPC. Painless-wire heuristic argues CUT (no production pain observed; the registry defaults to enabled and operators who hit a false-positive block currently have no recovery path besides restart). The decision should weigh: is a runtime kill-switch worth the surface it adds (admin RPC, Panel toggle, audit-log integration)? Or do we keep the build-time [guardrails].enabled switch as the only control?",
+      "fix_commit": null,
+      "residual_risk": "If kept dormant: an operator who hits a false-positive block from PiiSecretsGuardrail has no recovery path; the only options are restart with [guardrails].enabled = false (rebuild) or edit the [secrets_config].custom_leak_patterns list. CUTTING is safe if [guardrails].enabled remains the only control."
+    },
+    {
+      "id": "sw-guardrails-2-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "GuardrailDecision::is_allow / is_block / is_sanitize / is_warn (4 pub const fn accessors)",
+      "produced_location": "src/guardrails/decision.rs:69-83",
+      "consumer_location": "Only used in #[cfg(test)] blocks: src/guardrails/decision.rs:92-126 (own unit tests), src/guardrails/tests/{registry.rs,input.rs,output.rs,bench.rs} (counted 21 test-call sites). Zero production callers — the live code uses match on the enum variants directly (registry.rs:96-122, 257-281, 286-309; harness/agent/think.rs:349-365, 849-855, 1212-1219, 1293-1306).",
+      "decision": "CUT",
+      "rationale": "Pure test-only API. Production callers all `match` on the enum directly (which is what #[non_exhaustive] is meant to allow — destructuring the variant gets the inner data). Demoting all four to pub(crate) would break no production code (tests live in src/guardrails/tests/ which can still access pub(crate) via `mod tests` inside mod.rs). Alternatively, delete and inline the test assertions. Recommend demoting to pub(crate) — it's a five-character change per method and preserves the test ergonomics.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: no production callers; tests still compile."
+    },
+    {
+      "id": "sw-guardrails-3-1",
+      "severity": "low",
+      "form": 2,
+      "produced": "Stale doc-comment TODO referencing `phase6c TODO switches it to structural class-based matching`",
+      "produced_location": "src/guardrails/decision.rs:34 (inside the Block variant's doc comment)",
+      "consumer_location": "N/A — comment-only. rg across .rs/.md returns zero other matches for `phase6c`. The referenced structural-classification refactor is not on any commit.",
+      "decision": "CUT",
+      "rationale": "Pure doc drift. Replace `phase6c TODO switches it to ...` with the current contract: `Set class correctly so any future classifier switch (a structural class-based matcher) is a no-op at the call-site; until then, the orchestrator classifies by message text.` This is a 2-line doc-only edit that prevents future readers from grepping for `phase6c`.",
+      "fix_commit": null,
+      "residual_risk": "None — comment-only."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "subject": "Three trait surfaces (InputGuardrail / OutputGuardrail / ToolCallGuardrail) + PiiSecretsGuardrail impls",
+      "verdict": "live",
+      "evidence": "PiiSecretsGuardrail implements all three traits (src/guardrails/pii_secrets.rs:331, :343, :355). The single ref impl wires the orchestrator's RuntimeSecurityGuard (process_outbound for input, process_inbound for output) and the value-tree walker for tool args. All three trait callsites in harness/agent/ are confirmed live: think.rs:349 (screen_session_input), think.rs:850 (evaluate_output for streaming emit), think.rs:1294 (evaluate_output for terminal emit), think.rs:1212 (redact_session_input for grace turn), act.rs:38 (evaluate_tool_call), act.rs:813 (evaluate_tool_call second path)."
+    },
+    {
+      "subject": "GuardrailRegistry construction at startup",
+      "verdict": "live",
+      "evidence": "src/bin/aleph-server/commands/start/orchestrator_init.rs:518 build_guardrail_registry is called from :433 during orchestrator init and the resulting Arc<GuardrailRegistry> is stored in HarnessDeps.guardrails (src/harness/deps.rs:91). The builder wires one PiiSecretsGuardrail onto input + output + tool_call (orchestrator_init.rs:570-575). Activation gate at :529 correctly triggers when [guardrails].enabled OR when [secrets_config].virtual_keys/custom_leak_patterns is non-empty — the latter is the Panel-driven path documented in the master spec."
+    },
+    {
+      "subject": "evaluate_input / evaluate_output / evaluate_tool_call / screen_session_input / redact_session_input",
+      "verdict": "live",
+      "evidence": "Each method has exactly one or more production callers. The five evaluate_* methods (input/output/tool_call/screen/redact) are invoked from src/harness/agent/{think.rs,act.rs} at 8 distinct call sites. The settle_chain helper at registry.rs:355 is invoked once per chain."
+    },
+    {
+      "subject": "GuardrailDecision variants (Allow / Sanitize / Block / Warn)",
+      "verdict": "all live",
+      "evidence": "All four variants are constructed by map_outbound (pii_secrets.rs:71-141) and matched in the four evaluate_* methods in registry.rs. The #[non_exhaustive] guard at decision.rs:14 ensures future variants surface as compile errors in destructure sites."
+    },
+    {
+      "subject": "GuardrailRegistryBuilder (with_input / with_output / with_tool_call / build)",
+      "verdict": "live",
+      "evidence": "Production caller at orchestrator_init.rs:570-575 (with_input/output/tool_call + build). Tests use it across 10+ sites in src/harness/tests/guardrails.rs."
+    },
+    {
+      "subject": "count helpers (input_count / output_count / tool_call_count)",
+      "verdict": "live (hot-path gate)",
+      "evidence": "src/harness/agent/think.rs:142 reads output_count() to gate the output-guardrail evaluation branch — an empty output vec short-circuits to Allow, so the count is consulted before the await chain. Per registry.rs:255, the gate works as: `if !is_enabled() || output.is_empty() { return Allow }`. Tests use the input/output/tool_call counts to assert builder wiring."
+    },
+    {
+      "subject": "is_enabled accessor",
+      "verdict": "live",
+      "evidence": "Called internally by all four evaluate_* methods (registry.rs:95, :212, :255, :285) as the first short-circuit check."
+    },
+    {
+      "subject": "Stub far-end sweep (form 2)",
+      "verdict": "clean",
+      "evidence": "rg 'TODO|FIXME|unimplemented!|todo!\\(' in src/guardrails/ returns exactly one match (decision.rs:34 doc comment, captured in finding sw-guardrails-3-1). Zero #[allow(dead_code)] / #[allow(unused)] annotations. PiiSecretsGuardrail's map_outbound at pii_secrets.rs:62 correctly threads every GuardResult variant through to a real GuardrailDecision — no Allow-by-default short-circuits."
+    }
+  ],
+  "module_health_summary": "src/guardrails is wiring-clean. All three trait surfaces (Input/Output/ToolCall) are consumed at the documented callsites; the orchestrator wiring builds the registry from [guardrails].enabled and [secrets_config]; PiiSecretsGuardrail is the reference impl with correct behavior on every GuardResult variant. The three findings are: (1) the runtime kill-switch (disable_all/enable_all) has no admin RPC — DECIDE whether to wire it or cut it; (2) four is_* accessors are test-only pub API; (3) one stale doc-comment TODO."
+}
