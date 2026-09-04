@@ -330,7 +330,13 @@ async fn execute_heartbeat_tick(
             let prompt = build_heartbeat_prompt(task, &r, wake_reason);
             let l2_result = ctx
                 .adapter
-                .execute_heartbeat(&task.agent_id, &prompt, ctx.job_timeout_secs)
+                .execute_heartbeat(
+                    &task.agent_id,
+                    &prompt,
+                    ctx.job_timeout_secs,
+                    task.owner_user_id.as_deref(),
+                    task.scope_id.as_deref(),
+                )
                 .await;
 
             match l2_result {
@@ -643,12 +649,7 @@ async fn deliver_alert(
     alert: PendingHeartbeatAlert,
     ctx: &TickContext,
 ) {
-    let payload = failure_alert_payload(
-        "heartbeat",
-        &alert.task_name,
-        task_id,
-        &alert.message,
-    );
+    let payload = failure_alert_payload("heartbeat", &alert.task_name, task_id, &alert.message);
     let config = crate::tasks::shared::delivery::DeliveryConfig {
         mode: crate::tasks::shared::delivery::DeliveryMode::Primary,
         targets: vec![alert.target],
@@ -717,6 +718,8 @@ mod tests {
             _agent_id: &str,
             _prompt: &str,
             _timeout_secs: u64,
+            _owner_user_id: Option<&str>,
+            _scope_id: Option<&str>,
         ) -> Result<HeartbeatL2Result, String> {
             let status = match self.status {
                 "silent" => HeartbeatL2Status::Silent,

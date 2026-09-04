@@ -142,6 +142,36 @@ pub struct HeartbeatTask {
     pub created_at: i64,
     /// Last update timestamp (Unix ms)
     pub updated_at: i64,
+
+    /// P1 data isolation: the user id that created this task, stamped once at
+    /// creation time from `scope::current_scope()` by
+    /// [`Self::stamp_current_scope`]. `#[serde(default)]` → old (pre-P1)
+    /// payloads read `None` — unscoped, legacy owner semantics;
+    /// `skip_serializing_if` → a legacy task round-trips byte-identical
+    /// instead of gaining an `"owner_user_id":null` key. Exactly
+    /// `CronJob::owner_user_id`'s serde shape, because this is the same
+    /// column on the declared twin subsystem.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    /// The rendered scope boundary (`scope::ScopeId::render()`) paired with
+    /// [`Self::owner_user_id`]. `#[serde(default)]` → old payloads read
+    /// `None`; `skip_serializing_if` → they round-trip unchanged.
+    ///
+    /// **Persisted and deliberately NOT read by `stamped_owner_visible`.**
+    /// Background work is owner-only by product ruling (OI-2, human ruling
+    /// 2026-08-07): a heartbeat is not visible to a project's members just
+    /// because it was created inside that project. So this column being
+    /// written and never consulted by the visibility predicate is the
+    /// intended shape, not a severed wire waiting to be connected — it exists
+    /// so a beat's run can be ATTRIBUTED (metadata, spend), which is a
+    /// different question from who may see the task.
+    ///
+    /// It has to be stamped here, at creation, because nothing downstream
+    /// manufactures it: `run_loop::scope_for_session` only CORRECTS an
+    /// attribution a run already carries, so an unstamped task's beat stays
+    /// unscoped all the way to the ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
 }
 
 impl HeartbeatTask {
@@ -171,6 +201,42 @@ impl HeartbeatTask {
             state: HeartbeatState::default(),
             created_at: now,
             updated_at: now,
+            owner_user_id: None,
+            scope_id: None,
+        }
+    }
+
+    /// Stamp this task with the ambient scope of the request creating it.
+    ///
+    /// **The one derivation of "who owns a heartbeat task".** Both production
+    /// faces that mint a `HeartbeatTask` call exactly this —
+    /// `heartbeat.create` (RPC, `gateway::handlers::heartbeat`) and
+    /// `heartbeat_create` (tool, `builtin_tools::heartbeat_manage`). Neither
+    /// used to, so every task ever created reached the store with both
+    /// columns NULL, and the readers that key on them short-circuit: the beat's
+    /// `executor::heartbeat_run_metadata` has no `ScopeAttribution` to
+    /// rehydrate, so each L2 turn executes unscoped — the UNRESTRICTED arm of
+    /// every visibility predicate — and its spend lands in `@unattributed`.
+    ///
+    /// Two tests, one per face, because a single one cannot see a face that
+    /// forgets: cron shipped a full round with exactly one of its two faces
+    /// stamped.
+    ///
+    /// # Why not inside `HeartbeatService::add_task`
+    ///
+    /// Same reason as `CronJob::stamp_current_scope`: `add_task` is reached
+    /// from paths where the ambient scope is not the creator's, and an
+    /// unguarded stamp there would OVERWRITE an explicit owner rather than
+    /// supply a missing one — a task silently changing hands.
+    ///
+    /// `current_scope()` being `None` (single-user install, or an internal
+    /// path with no request around it) leaves both columns `None` — exactly
+    /// the legacy shape `ScopeAttribution::from_persisted` already reads as
+    /// "unscoped". No behaviour change there.
+    pub fn stamp_current_scope(&mut self) {
+        if let Some(attr) = crate::scope::current_scope() {
+            self.owner_user_id = Some(attr.owner_user_id);
+            self.scope_id = Some(attr.scope.render());
         }
     }
 
@@ -321,6 +387,80 @@ mod tests {
         assert_eq!(config.tick_interval_secs, 10);
         assert_eq!(config.max_concurrent, 3);
         assert_eq!(config.job_timeout_secs, 120);
+    }
+
+    fn probe() -> ProbeConfig {
+        ProbeConfig {
+            tool_name: "gmail.unread_count".to_string(),
+            tool_params: None,
+            trigger_condition: TriggerCondition::GreaterThan(0.0),
+        }
+    }
+
+    /// A legacy (pre-attribution) payload carries neither key, reads back as
+    /// `None`/`None`, and re-serializes byte-identically — it must not grow a
+    /// pair of `null` keys on the way through, which is what a bare
+    /// `Option<String>` field without `skip_serializing_if` would do. Same
+    /// serde shape as `CronJob`'s two columns.
+    #[test]
+    fn a_legacy_task_round_trips_without_gaining_attribution_keys() {
+        let task = HeartbeatTask::new("Legacy".to_string(), "main".to_string(), 300_000, probe());
+        let json = serde_json::to_string(&task).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value.get("owner_user_id").is_none(),
+            "an unstamped task must not serialize an owner_user_id key at all"
+        );
+        assert!(
+            value.get("scope_id").is_none(),
+            "an unstamped task must not serialize a scope_id key at all"
+        );
+
+        let back: HeartbeatTask = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.owner_user_id, None);
+        assert_eq!(back.scope_id, None);
+        assert_eq!(
+            serde_json::to_string(&back).unwrap(),
+            json,
+            "a legacy payload must round-trip byte-identically"
+        );
+    }
+
+    /// The stamp is a no-op outside a request scope: an internal path that
+    /// mints a task with no ambient attribution leaves both columns `None` —
+    /// exactly the legacy shape, zero behaviour change.
+    #[test]
+    fn stamping_outside_a_scope_leaves_a_task_legacy() {
+        let mut task = HeartbeatTask::new("Bare".to_string(), "main".to_string(), 60_000, probe());
+        task.stamp_current_scope();
+        assert_eq!(task.owner_user_id, None);
+        assert_eq!(task.scope_id, None);
+    }
+
+    /// Inside a scope the stamp fills both columns coherently, so
+    /// `ScopeAttribution::from_persisted` (which demands the pair) can
+    /// rehydrate it at fire time.
+    #[tokio::test]
+    async fn stamping_inside_a_scope_fills_both_columns_coherently() {
+        let task = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-owner")),
+            async {
+                let mut task =
+                    HeartbeatTask::new("Owned".to_string(), "main".to_string(), 60_000, probe());
+                task.stamp_current_scope();
+                task
+            },
+        )
+        .await;
+        assert_eq!(task.owner_user_id.as_deref(), Some("u-owner"));
+        assert_eq!(
+            crate::scope::ScopeAttribution::from_persisted(
+                task.owner_user_id.as_deref(),
+                task.scope_id.as_deref()
+            ),
+            Some(crate::scope::ScopeAttribution::personal("u-owner")),
+            "the pair must be coherent enough for from_persisted to rehydrate"
+        );
     }
 
     #[test]

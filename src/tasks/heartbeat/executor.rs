@@ -72,11 +72,19 @@ pub fn build_heartbeat_prompt(
 /// `ExecutionAdapter`. Tests can use a mock.
 #[async_trait]
 pub trait HeartbeatExecutionAdapter: Send + Sync {
+    /// Run one L2 turn for a beat.
+    ///
+    /// `owner_user_id` / `scope_id` are the task's two persisted attribution
+    /// columns, in the same order `ScopeAttribution::from_persisted` takes
+    /// them; they travel to [`heartbeat_run_metadata`], which is the only
+    /// thing that reads them. A legacy task passes `None, None`.
     async fn execute_heartbeat(
         &self,
         agent_id: &str,
         prompt: &str,
         timeout_secs: u64,
+        owner_user_id: Option<&str>,
+        scope_id: Option<&str>,
     ) -> Result<HeartbeatL2Result, String>;
 }
 
@@ -87,13 +95,31 @@ pub trait HeartbeatExecutionAdapter: Send + Sync {
 /// `ScopedToolService` then fails CLOSED on confirm-gated tools instead of
 /// parking the beat on the 120 s approval timeout (per gated tool) for an
 /// approval that can never arrive. Same reasoning as a channel-less cron job.
-fn heartbeat_run_metadata(agent_id: &str) -> HashMap<String, String> {
+///
+/// # Attribution
+///
+/// A beat has no completing run to inherit metadata from (this run IS the
+/// first) and `run_loop::scope_for_session` only CORRECTS an attribution a run
+/// already carries — it never manufactures one. So the beat's owner has to be
+/// rehydrated here, from the task's persisted columns, exactly the way
+/// `cron::executor::build_cron_metadata` does it for its twin. `from_persisted`
+/// requires both columns coherent; a legacy task with neither set emits
+/// nothing here → the run stays unscoped and its spend stays
+/// `@unattributed`, byte-identical to the behaviour before this pair existed.
+fn heartbeat_run_metadata(
+    agent_id: &str,
+    owner_user_id: Option<&str>,
+    scope_id: Option<&str>,
+) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
     metadata.insert("heartbeat_agent_id".to_string(), agent_id.to_string());
     metadata.insert(
         crate::gateway::execution_engine::UNATTENDED_KEY.to_string(),
         "true".to_string(),
     );
+    if let Some(attr) = crate::scope::ScopeAttribution::from_persisted(owner_user_id, scope_id) {
+        crate::scope::stamp_metadata(&mut metadata, &attr);
+    }
     metadata
 }
 
@@ -122,6 +148,8 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         agent_id: &str,
         prompt: &str,
         timeout_secs: u64,
+        owner_user_id: Option<&str>,
+        scope_id: Option<&str>,
     ) -> Result<HeartbeatL2Result, String> {
         let start = std::time::Instant::now();
 
@@ -144,7 +172,7 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         let task_id = format!("hb-{run_id}");
         let session_key = SessionKey::task(&resolved_agent_id, "heartbeat", &task_id);
 
-        let metadata = heartbeat_run_metadata(&resolved_agent_id);
+        let metadata = heartbeat_run_metadata(&resolved_agent_id, owner_user_id, scope_id);
 
         // System-initiated: heartbeat has no parent run, so no project
         // context to inherit. Same round-3 follow-up as cron applies if
@@ -278,7 +306,7 @@ mod tests {
     #[test]
     fn a_beat_runs_unattended() {
         use crate::gateway::execution_engine::UNATTENDED_KEY;
-        let metadata = heartbeat_run_metadata("main");
+        let metadata = heartbeat_run_metadata("main", None, None);
         assert_eq!(
             metadata.get(UNATTENDED_KEY).map(String::as_str),
             Some("true")
@@ -286,6 +314,117 @@ mod tests {
         assert_eq!(
             metadata.get("heartbeat_agent_id").map(String::as_str),
             Some("main")
+        );
+    }
+
+    /// A legacy (unstamped) task's beat emits exactly the two keys it emitted
+    /// before attribution existed — no scope keys, and therefore no change to
+    /// which principal it bills. The assertion is on the WHOLE map, not on the
+    /// absence of two names, because "byte-identical" is the claim.
+    #[test]
+    fn a_legacy_beat_emits_byte_identical_metadata() {
+        use crate::gateway::execution_engine::UNATTENDED_KEY;
+        let metadata = heartbeat_run_metadata("main", None, None);
+        let expected: HashMap<String, String> = [
+            ("heartbeat_agent_id".to_string(), "main".to_string()),
+            (UNATTENDED_KEY.to_string(), "true".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(metadata, expected);
+        assert_eq!(
+            crate::spend::principal_from_metadata(&metadata),
+            crate::spend::Principal::Unattributed,
+            "an unowned task must keep billing @unattributed — zero behaviour \
+             change for pre-existing tasks"
+        );
+    }
+
+    /// Fail-closed: an owner with no parseable scope is half an attribution,
+    /// and half must emit nothing (mirrors `from_persisted`'s own contract).
+    #[test]
+    fn an_incoherent_pair_emits_no_scope_metadata() {
+        let metadata = heartbeat_run_metadata("main", Some("u-alice"), None);
+        assert!(!metadata.contains_key(crate::scope::OWNER_META_KEY));
+        assert!(!metadata.contains_key(crate::scope::SCOPE_META_KEY));
+
+        let metadata = heartbeat_run_metadata("main", Some("u-alice"), Some("nonsense-scope"));
+        assert!(!metadata.contains_key(crate::scope::OWNER_META_KEY));
+        assert!(!metadata.contains_key(crate::scope::SCOPE_META_KEY));
+    }
+
+    /// The whole chain, from a creating face to the money: a task created
+    /// through `heartbeat.create` beats with its creator's principal.
+    ///
+    /// The face tests prove the columns are written; this one proves they are
+    /// READ — it starts at the RPC face, goes through the store, through the
+    /// task the timer would hand the adapter, and ends on the `Principal` the
+    /// spend ledger would charge. Before this round it ended on
+    /// `Unattributed`.
+    #[tokio::test]
+    async fn a_task_created_over_a_face_beats_with_its_creators_principal() {
+        use crate::tasks::heartbeat::config::HeartbeatConfig;
+        use crate::tasks::heartbeat::store::HeartbeatStore;
+        use crate::tasks::heartbeat::HeartbeatService;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("heartbeat.db");
+        let service = std::sync::Arc::new(tokio::sync::Mutex::new(HeartbeatService::new(
+            HeartbeatStore::open(&db_path).unwrap(),
+            HeartbeatConfig::default(),
+        )));
+
+        let request = crate::gateway::protocol::JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "heartbeat.create".to_string(),
+            params: Some(json!({
+                "name": "billed-monitor",
+                "interval_ms": 300_000,
+                "probe": { "tool_name": "gmail.unread_count" },
+            })),
+        };
+        let response = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-payer")),
+            crate::gateway::handlers::heartbeat::handle_create(request, service),
+        )
+        .await;
+        assert!(
+            response.error.is_none(),
+            "precondition: create must succeed"
+        );
+
+        // A fresh store off the same file: the beat path reads what was
+        // persisted, not what the handler happened to hold in memory.
+        let reloaded = HeartbeatStore::open(&db_path).unwrap();
+        let task = reloaded
+            .tasks()
+            .iter()
+            .find(|t| t.name == "billed-monitor")
+            .expect("the created task must be on disk");
+
+        let metadata = heartbeat_run_metadata(
+            &task.agent_id,
+            task.owner_user_id.as_deref(),
+            task.scope_id.as_deref(),
+        );
+        assert_eq!(
+            crate::scope::ScopeAttribution::from_persisted(
+                metadata
+                    .get(crate::scope::OWNER_META_KEY)
+                    .map(String::as_str),
+                metadata
+                    .get(crate::scope::SCOPE_META_KEY)
+                    .map(String::as_str),
+            ),
+            Some(crate::scope::ScopeAttribution::personal("u-payer")),
+            "the beat must carry a rehydratable attribution for its creator"
+        );
+        assert_eq!(
+            crate::spend::principal_from_metadata(&metadata),
+            crate::spend::Principal::User("u-payer".to_string()),
+            "the L2 turn a beat fires must be billed to the person who created \
+             the monitor, not to @unattributed"
         );
     }
 
@@ -463,7 +602,7 @@ mod tests {
         );
 
         adapter
-            .execute_heartbeat("ghost", "prompt", 60)
+            .execute_heartbeat("ghost", "prompt", 60, None, None)
             .await
             .expect("fallback to main must succeed");
 
@@ -495,7 +634,7 @@ mod tests {
         );
 
         adapter
-            .execute_heartbeat("main", "prompt", 60)
+            .execute_heartbeat("main", "prompt", 60, None, None)
             .await
             .expect("request for main must hit");
 
@@ -509,6 +648,44 @@ mod tests {
         assert_eq!(
             metadata.get("heartbeat_agent_id").map(String::as_str),
             Some("main")
+        );
+    }
+
+    /// The attribution does not stop at the metadata builder: it has to reach
+    /// the `RunRequest` the execution engine actually receives. Asserted on
+    /// the captured request, not on `heartbeat_run_metadata`'s return value —
+    /// the two extra parameters could be accepted and dropped, and every
+    /// other test here would stay green.
+    #[tokio::test]
+    async fn a_stamped_beat_carries_its_scope_into_the_run_request() {
+        let (_t, registry) = registry_with_main().await;
+        let capture = Arc::new(CaptureAdapter::new());
+        let adapter = DefaultHeartbeatAdapter::new(
+            capture.clone() as Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
+            registry,
+        );
+
+        adapter
+            .execute_heartbeat(
+                "main",
+                "prompt",
+                60,
+                Some("u-owner"),
+                Some("personal:u-owner"),
+            )
+            .await
+            .expect("request for main must hit");
+
+        let (_session, metadata) = capture
+            .captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("adapter captured the request");
+        assert_eq!(
+            crate::spend::principal_from_metadata(&metadata),
+            crate::spend::Principal::User("u-owner".to_string()),
+            "the run the engine receives must be billed to the task's owner"
         );
     }
 }
