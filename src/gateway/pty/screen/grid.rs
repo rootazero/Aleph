@@ -95,6 +95,18 @@ pub struct Grid {
     /// every write that touches it, so a client that missed no frames can be
     /// sent only what changed instead of the whole screen.
     dirty: std::collections::BTreeSet<u16>,
+    /// DECAWM (`CSI ?7 h/l`), on by default as the standard requires. Off,
+    /// the right margin absorbs writes instead of wrapping -- the standard
+    /// trick for painting a full-width status line without scrolling.
+    autowrap: bool,
+    /// The last character [`Self::put`] actually placed, for REP (`CSI Ps b`)
+    /// to repeat. `None` means "no candidate", which is what a control byte
+    /// or an intervening escape leaves behind: REP repeats the last PRINTED
+    /// character, so anything that is not a print invalidates it. The
+    /// invalidation is the dispatcher's job, not this field's -- `put` is
+    /// also how a wrap and a repeat write, and clearing it from inside any
+    /// grid method would erase the candidate REP is about to read.
+    last_printed: Option<char>,
 }
 
 impl Grid {
@@ -115,7 +127,51 @@ impl Grid {
             // with every row here would only cause `take_patch`'s very
             // first call to resend rows nothing ever wrote to.
             dirty: std::collections::BTreeSet::new(),
+            autowrap: true,
+            last_printed: None,
         }
+    }
+
+    /// DECAWM. See [`Self::put`] for what "off" costs the cursor invariant.
+    pub fn set_autowrap(&mut self, on: bool) {
+        self.autowrap = on;
+    }
+
+    /// Takes REP's repeat candidate, leaving none behind.
+    ///
+    /// Taking rather than reading is what makes "the last PRINTED character"
+    /// true without every CSI arm remembering to invalidate: the dispatcher
+    /// takes it once per sequence, and only REP's arm does anything with the
+    /// value. [`Self::put`] sets it again, so a run of REPs keeps working.
+    pub fn take_last_printed(&mut self) -> Option<char> {
+        self.last_printed.take()
+    }
+
+    /// The mode half of a reset: what DECSTR (`CSI ! p`) shares with RIS.
+    /// Cells, cursor, scrollback and title are NOT touched here -- a soft
+    /// reset leaves all four alone, and [`Self::reset`] does the rest.
+    pub fn reset_modes(&mut self) {
+        self.autowrap = true;
+        self.last_printed = None;
+    }
+
+    /// RIS (`ESC c`) on the grid: blank every cell, home the cursor, put the
+    /// modes back.
+    ///
+    /// **Scrollback deliberately survives.** xterm's RIS clears it; Aleph's
+    /// does not, because the one reader that decides anything --
+    /// `Screen::visible_text`, which feeds agent detection -- never looks at
+    /// scrollback, so clearing it would take away what the user scrolled
+    /// back to and give no consumer anything. Recorded here rather than only
+    /// in the test, because this is the file someone changes.
+    pub fn reset(&mut self) {
+        for cell in &mut self.cells {
+            *cell = Cell::default();
+        }
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+        self.reset_modes();
+        self.mark_all_dirty();
     }
 
     /// Takes and clears the dirty set. The next call sees only rows changed
@@ -212,6 +268,13 @@ impl Grid {
             return;
         }
         let w = width as u16;
+        // A glyph wider than the whole screen has nowhere to go. Returning
+        // beats the alternatives: wrapping would loop, and writing it would
+        // index the spacer past the end of the row. Reachable only on a
+        // one-column grid, which `Grid::new`'s `max(1)` permits.
+        if w > self.cols {
+            return;
+        }
         // Widened to `u32` before the compare: `cursor_col` may legitimately
         // sit AT `cols` (the invariant is `cursor_col <= cols` — parking there
         // means "a wrap is owed"), so on a maximally wide grid `cursor_col + w`
@@ -223,8 +286,16 @@ impl Grid {
         // the older accident that the allocation for such a grid aborted the
         // process first.
         if u32::from(self.cursor_col) + u32::from(w) > u32::from(self.cols) {
-            self.newline();
-            self.cursor_col = 0;
+            if self.autowrap {
+                self.newline();
+                self.cursor_col = 0;
+            } else {
+                // DECAWM off: the glyph lands at the right margin, on top of
+                // whatever was there. No newline, so no phantom scroll on the
+                // bottom row -- the failure that offsets every later frame by
+                // one row against what the program believes it painted.
+                self.cursor_col = self.cols - w;
+            }
         }
         let (fg, bg, attrs) = style;
         self.repair_straddled_glyph(w, fg, bg, attrs);
@@ -247,7 +318,18 @@ impl Grid {
         // repair_straddled_glyph above only ever touches cursor_row too, so
         // one insert covers the whole write.
         self.dirty.insert(self.cursor_row);
-        self.cursor_col += w;
+        self.last_printed = Some(c);
+        self.cursor_col = if self.autowrap {
+            self.cursor_col + w
+        } else {
+            // `cursor_col == cols` is this model's ONLY representation of "a
+            // wrap is owed" (see the field's invariant). With DECAWM off no
+            // wrap is ever owed, so that value must never be entered --
+            // parking there would make the next `put` take the branch above
+            // and wrap after all, which is the bug DECAWM was turned off to
+            // avoid.
+            (self.cursor_col + w).min(self.cols - 1)
+        };
     }
 
     /// A write at the cursor can straddle an existing wide glyph on either

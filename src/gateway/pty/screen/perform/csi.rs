@@ -2,7 +2,7 @@
 //! reaches: SGR parameter folding and the alternate-screen swap.
 
 use super::super::grid::{Attrs, Color, Grid};
-use super::Performer;
+use super::{AltBuffer, Performer};
 
 impl Performer<'_> {
     /// SGR. Consumes the parameter list because 38/48 take trailing
@@ -78,7 +78,7 @@ impl Performer<'_> {
     /// escape and its first frame in ONE chunk: those bytes would print
     /// onto the PRIMARY grid before the deferred swap ever ran, and the
     /// swap would then stash that now-polluted primary into `saved`.
-    fn toggle_alt_screen(&mut self, enter: bool) {
+    pub(super) fn toggle_alt_screen(&mut self, enter: bool, buffer: AltBuffer) {
         let swapped = if enter {
             // A nested `?1049h` while already on the alt screen is a
             // no-op: clobbering `saved` here would replace the real
@@ -87,14 +87,30 @@ impl Performer<'_> {
             // No grid becomes current here, so nothing needs marking dirty.
             if self.screen.saved.is_none() {
                 let (rows, cols) = self.screen.grid.dims();
-                let primary = std::mem::replace(&mut self.screen.grid, Grid::new(rows, cols));
+                // One alternate buffer, two entry policies. 47/1047 take back
+                // whatever was parked on the last exit; 1049 always starts
+                // blank, which is the whole of the difference between them.
+                let alt = match buffer {
+                    AltBuffer::Legacy => self
+                        .screen
+                        .retained_alt
+                        .take()
+                        .unwrap_or_else(|| Grid::new(rows, cols)),
+                    AltBuffer::Cleared => Grid::new(rows, cols),
+                };
+                let primary = std::mem::replace(&mut self.screen.grid, alt);
                 self.screen.saved = Some(primary);
                 true
             } else {
                 false
             }
         } else if let Some(primary) = self.screen.saved.take() {
-            self.screen.grid = primary;
+            // Park the alternate buffer rather than drop it: whether it is
+            // ever read again is the NEXT entry's decision, not this exit's.
+            // Dropping here would make 47/1047's promise depend on which
+            // spelling happened to leave.
+            let alt = std::mem::replace(&mut self.screen.grid, primary);
+            self.screen.retained_alt = Some(alt);
             true
         } else {
             false
@@ -118,6 +134,34 @@ impl Performer<'_> {
         }
     }
 
+    /// DEC private modes (`CSI ? Pm h` / `CSI ? Pm l`).
+    ///
+    /// A table of its own rather than arms inside [`Self::csi`], because the
+    /// census that guards `csi` reads FINAL BYTES: every mode here shares
+    /// `h`/`l`, so folding them in would put mode numbers where that census
+    /// expects verbs. Unknown modes fall through -- a mode nothing tracks is
+    /// not an error, it is a mode nothing tracks.
+    fn private_mode(&mut self, mode: u16, enable: bool) {
+        match mode {
+            // DECAWM.
+            7 => self.screen.grid.set_autowrap(enable),
+            // Legacy alternate screen. Distinct from 1049 only in that the
+            // alternate buffer survives the round trip.
+            47 | 1047 => self.toggle_alt_screen(enable, AltBuffer::Legacy),
+            // Save/restore cursor -- DECSC/DECRC's private-mode spelling,
+            // sharing the one slot.
+            1048 => {
+                if enable {
+                    self.save_cursor();
+                } else {
+                    self.restore_cursor();
+                }
+            }
+            1049 => self.toggle_alt_screen(enable, AltBuffer::Cleared),
+            _ => {}
+        }
+    }
+
     /// The CSI table. Lives here rather than in the `vte::Perform` impl so
     /// there is exactly one body naming these final bytes -- the census in
     /// `tests.rs` reads this function's source and compares the verbs it
@@ -130,6 +174,13 @@ impl Performer<'_> {
             let effective: &[u16] = if flat.is_empty() { &[0] } else { &flat };
             self.sgr(effective);
         }
+
+        // REP repeats the last PRINTED character, so every other CSI has to
+        // invalidate the candidate. Taken once here rather than cleared in
+        // each arm: an arm added later cannot forget to do it, and REP's own
+        // arm still sees the value because it reads this binding. `put`
+        // records the character again, so consecutive REPs keep working.
+        let repeatable = self.screen.grid.take_last_printed();
 
         // A parameter of `0` means "use the default" for every arm handled
         // here (never a literal zero), same as an omitted parameter.
@@ -162,14 +213,31 @@ impl Performer<'_> {
                 .screen
                 .grid
                 .erase_in_line(flat.first().copied().unwrap_or(0)),
-            // `\e[?1049h` / `\e[?1049l`: enter/exit the alternate screen.
-            // `?` only ever arrives via `intermediates`, never `params` — a
-            // guard on `action` alone would also swallow the private-mode-less
-            // `h`/`l` sequences (unused here, but real DEC private modes like
-            // `?25` cursor-visibility share these final bytes). Applied
-            // inline, not deferred -- see `Performer::toggle_alt_screen`.
-            'h' | 'l' if inter == b"?" && flat.first() == Some(&1049) => {
-                self.toggle_alt_screen(action == 'h');
+            // REP: repeat the preceding printed character. A missing
+            // candidate writes nothing -- the only honest answer, since the
+            // alternative is repeating whatever byte happened to come last.
+            'b' => {
+                if let Some(c) = repeatable {
+                    let style = self.style();
+                    for _ in 0..p(0, 1) {
+                        self.screen.grid.put(c, style);
+                    }
+                }
+            }
+            // DECSTR (soft terminal reset). The `!` arrives as an
+            // INTERMEDIATE, never as a parameter, and it is the whole of
+            // what separates this from an unrelated `CSI p`.
+            'p' if inter == b"!" => self.soft_reset(),
+            // DEC private modes. `?` only ever arrives via `intermediates`,
+            // never `params` — a guard on `action` alone would also swallow
+            // the private-mode-less `h`/`l` sequences. Every parameter is
+            // applied, not just the first: `\e[?1049;25h` sets both, and
+            // reading only `flat.first()` would drop the rest silently.
+            // Applied inline, not deferred -- see `toggle_alt_screen`.
+            'h' | 'l' if inter == b"?" => {
+                for mode in &flat {
+                    self.private_mode(*mode, action == 'h');
+                }
             }
             _ => {}
         }

@@ -642,6 +642,12 @@
             (b'm', b"\x1b[31ma"),
             (b'h', b"abc\x1b[?1049h"),
             (b'l', b"abc\x1b[?1049h\x1b[?1049l"),
+            // REP: the `b` is the only one in the probe, as the mutation
+            // below requires.
+            (b'b', b"-\x1b[4b"),
+            // DECSTR. `!` is an intermediate, so the census -- which reads
+            // final bytes only -- names `p`, not `!`.
+            (b'p', b"ab\x1b[!p"),
         ];
         // `~` is a legal CSI final byte no arm claims.
         each_probe_reaches_the_grid("CSI", probes, b'~', 3, 8);
@@ -691,7 +697,17 @@
         // One sequence proves both halves: with `7` inert nothing is saved,
         // with `8` inert nothing is restored, and `Z` lands elsewhere either
         // way -- which is also why neither probe proves the other's arm.
-        let probes: &[(u8, &[u8])] = &[(b'7', b"ab\x1b7cd\x1b8Z"), (b'8', b"ab\x1b7cd\x1b8Z")];
+        let probes: &[(u8, &[u8])] = &[
+            (b'7', b"ab\x1b7cd\x1b8Z"),
+            (b'8', b"ab\x1b7cd\x1b8Z"),
+            // RIS, IND, NEL. Each probe contains its own claimed byte
+            // exactly once, which `each_probe_reaches_the_grid` enforces --
+            // `abc` would have put a second `c` in the RIS probe and the
+            // mutation would then have changed two things at once.
+            (b'c', b"ab\x1bcZ"),
+            (b'D', b"ab\x1bDZ"),
+            (b'E', b"ab\x1bEZ"),
+        ];
         // `ESC 9` is a final byte no arm claims.
         each_probe_reaches_the_grid("ESC", probes, b'9', 3, 20);
         assert_claims_match_probes(
@@ -976,6 +992,311 @@
             show(claimed),
             show(&probed)
         );
+    }
+
+    // ----------------------------------------------------------------
+    // 0-A Tier A: stateless sequences (RIS/DECSTR, DECAWM, IND/NEL, REP,
+    // legacy alt screen, OSC title rejoin, explicit DCS no-ops).
+    //
+    // Every one of these is written as "same input, with and without the
+    // sequence, `visible_text()` differs". An assertion on the with-side
+    // alone cannot tell an implemented arm from a lucky coincidence of the
+    // rest of the input; the without-side is what makes the arm the thing
+    // being measured.
+    // ----------------------------------------------------------------
+
+    /// RIS (`ESC c`) is the full reset: blank grid, cursor home, SGR back to
+    /// default, alt screen exited, DECAWM back on, title gone, DECSC slot
+    /// dropped.
+    ///
+    /// **Design call, recorded here and at the code: RIS does NOT clear
+    /// scrollback.** xterm does. Aleph's `visible_text()` — the only reader
+    /// that decides an agent's state — never looks at scrollback, so
+    /// clearing it would buy no consumer anything while throwing away what
+    /// the user scrolled back to. The assertion below pins that choice, and
+    /// the non-vacuity check above it stops the pin from measuring an empty
+    /// ring.
+    #[test]
+    fn ris_clears_grid_title_and_saved_cursor() {
+        let setup: &[u8] = b"one\r\ntwo\r\nthree\r\nfour\x1b]0;t\x07\x1b[31m\x1b7";
+        let mut with = Screen::new(3, 10);
+        with.feed(setup);
+        let mut without = Screen::new(3, 10);
+        without.feed(setup);
+
+        let scrollback_before = with.grid.scrollback_len();
+        assert!(
+            scrollback_before > 0,
+            "the setup must actually evict a row, or the scrollback assertion \
+             below is measuring an empty ring and would pass either way"
+        );
+        assert_eq!(with.title(), Some("t"), "setup must set a title to clear");
+
+        with.feed(b"\x1bcZ");
+        without.feed(b"Z");
+        assert_ne!(
+            with.visible_text(),
+            without.visible_text(),
+            "with RIS the screen is blank and Z lands home; without it Z appends"
+        );
+        assert_eq!(with.grid.row_text(0), "Z");
+        assert_eq!(with.grid.row_text(1), "", "every row is blanked");
+        assert_eq!(with.title(), None, "RIS clears the title");
+        assert_eq!(
+            with.grid.row_cells(0)[0].fg,
+            Color::Default,
+            "RIS resets SGR, so Z is not still red"
+        );
+        assert_eq!(
+            with.grid.scrollback_len(),
+            scrollback_before,
+            "RIS deliberately keeps scrollback -- see this test's doc comment"
+        );
+
+        with.feed(b"ab\x1b8Y");
+        assert_eq!(
+            with.grid.row_text(0),
+            "ZabY",
+            "RIS dropped the DECSC slot, so the DECRC that follows moves nothing"
+        );
+    }
+
+    /// DECSTR (`CSI ! p`) is the soft variant: the modes go back to their
+    /// defaults and the cursor homes, but the cells stay. The `!` is an
+    /// intermediate, not a parameter — without reading it this is an
+    /// unrelated `CSI p`.
+    #[test]
+    fn decstr_resets_modes_but_keeps_the_grid() {
+        let setup: &[u8] = b"\x1b]0;t\x07\x1b[?7lkeep\x1b[31m\x1b7";
+        let mut with = Screen::new(3, 10);
+        with.feed(setup);
+        let mut without = Screen::new(3, 10);
+        without.feed(setup);
+
+        with.feed(b"\x1b[!pZ");
+        without.feed(b"Z");
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(
+            with.grid.row_text(0),
+            "Zeep",
+            "DECSTR homed the cursor but left the cells alone"
+        );
+        assert_eq!(without.grid.row_text(0), "keepZ");
+        assert_eq!(
+            with.title(),
+            Some("t"),
+            "a title is not a mode: the soft reset leaves it"
+        );
+        assert_eq!(
+            with.grid.row_cells(0)[0].fg,
+            Color::Default,
+            "SGR is a mode and does go back to default"
+        );
+    }
+
+    /// DECAWM off (`CSI ?7 l`) makes the right margin absorb writes instead
+    /// of wrapping. The invariant the 0-A survey singles out is asserted
+    /// here too: `cursor_col == cols` is this model's ONLY representation of
+    /// "a wrap is owed", so with wrapping disabled it must never be entered
+    /// — parking there would make the very next `put` wrap after all.
+    #[test]
+    fn decawm_off_overwrites_the_last_column_instead_of_wrapping() {
+        let mut off = Screen::new(3, 5);
+        off.feed(b"\x1b[?7labcdefgh");
+        let mut on = Screen::new(3, 5);
+        on.feed(b"abcdefgh");
+
+        assert_ne!(off.visible_text(), on.visible_text());
+        assert_eq!(off.grid.row_text(0), "abcdh", "the last column absorbs f, g, h");
+        assert_eq!(off.grid.row_text(1), "", "nothing wrapped onto the next row");
+        assert_eq!(on.grid.row_text(0), "abcde", "with DECAWM on it wraps");
+        assert_eq!(on.grid.row_text(1), "fgh");
+
+        let (_, col) = off.grid.cursor();
+        let (_, cols) = off.grid.dims();
+        assert!(
+            col < cols,
+            "DECAWM off must never park the cursor at `cols` -- that value is \
+             the model's 'a wrap is owed' state, and no wrap is ever owed here"
+        );
+
+        off.feed(b"\x1b[?7hij");
+        assert_eq!(off.grid.row_text(1), "j", "re-enabling DECAWM wraps again");
+    }
+
+    /// IND (`ESC D`) moves down keeping the column; NEL (`ESC E`) moves down
+    /// and returns to column zero. Asserting both against each other as well
+    /// as against neither is what stops one arm from standing in for the
+    /// other: a version that implemented IND as NEL passes an IND-only test.
+    #[test]
+    fn ind_moves_down_same_column_nel_moves_down_col_zero() {
+        let mut ind = Screen::new(3, 10);
+        ind.feed(b"abc\x1bDX");
+        let mut nel = Screen::new(3, 10);
+        nel.feed(b"abc\x1bEX");
+        let mut without = Screen::new(3, 10);
+        without.feed(b"abcX");
+
+        assert_ne!(ind.visible_text(), without.visible_text());
+        assert_ne!(nel.visible_text(), without.visible_text());
+        assert_ne!(
+            ind.visible_text(),
+            nel.visible_text(),
+            "IND keeps the column, NEL does not -- implementing one as the \
+             other would pass a test that only checked 'it moved down'"
+        );
+        assert_eq!(ind.grid.row_text(1), "   X");
+        assert_eq!(nel.grid.row_text(1), "X");
+        assert_eq!(without.grid.row_text(0), "abcX");
+    }
+
+    /// REP (`CSI Ps b`) repeats the last PRINTED character. "Printed" is the
+    /// whole difficulty: a control byte or another CSI in between means
+    /// there is no candidate any more, and a version that repeated "the last
+    /// character seen" would emit an escape's final byte instead.
+    #[test]
+    fn rep_repeats_the_last_printed_char_and_a_control_byte_invalidates_it() {
+        let mut with = Screen::new(2, 10);
+        with.feed(b"-\x1b[4b");
+        let mut without = Screen::new(2, 10);
+        without.feed(b"-");
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "-----", "one printed plus four repeats");
+
+        let mut after_control = Screen::new(2, 10);
+        after_control.feed(b"-\x08\x1b[4b");
+        assert_eq!(
+            after_control.grid.row_text(0),
+            "-",
+            "BS is a control byte: it clears the repeat candidate"
+        );
+
+        let mut after_csi = Screen::new(2, 10);
+        after_csi.feed(b"-\x1b[31m\x1b[4b");
+        assert_eq!(
+            after_csi.grid.row_text(0),
+            "-",
+            "an intervening CSI clears it too"
+        );
+
+        let mut twice = Screen::new(2, 10);
+        twice.feed(b"-\x1b[2b\x1b[2b");
+        assert_eq!(
+            twice.grid.row_text(0),
+            "-----",
+            "REP's own writes are prints, so a second REP still has a candidate"
+        );
+    }
+
+    /// Modes 47 and 1047 are the legacy alternate screen. The semantic
+    /// difference that matters is on the buffer, not the switch: 1049 clears
+    /// the alternate buffer every time it enters, 47/1047 do not, so a
+    /// program that leaves and re-enters through the legacy pair expects to
+    /// find its screen still there.
+    #[test]
+    fn legacy_alt_screen_47_and_1047_keep_the_alt_grid_across_exit() {
+        for (enter, exit) in [
+            (&b"\x1b[?47h"[..], &b"\x1b[?47l"[..]),
+            (&b"\x1b[?1047h"[..], &b"\x1b[?1047l"[..]),
+        ] {
+            let mut with = Screen::new(3, 10);
+            with.feed(b"primary");
+            with.feed(enter);
+            assert!(
+                with.alt_screen(),
+                "the legacy modes must enter the alternate screen, not fall \
+                 through to the catch-all"
+            );
+            with.feed(b"alt");
+            with.feed(exit);
+            assert_eq!(
+                with.grid.row_text(0),
+                "primary",
+                "exiting restores the primary buffer"
+            );
+            with.feed(enter);
+            assert_eq!(
+                with.grid.row_text(0),
+                "alt",
+                "the legacy alternate buffer survives the round trip"
+            );
+
+            let mut without = Screen::new(3, 10);
+            without.feed(b"primary");
+            without.feed(b"alt");
+            assert_ne!(with.visible_text(), without.visible_text());
+        }
+
+        let mut modern = Screen::new(3, 10);
+        modern.feed(b"primary\x1b[?1049halt\x1b[?1049l");
+        assert_eq!(modern.grid.row_text(0), "primary");
+        modern.feed(b"\x1b[?1049h");
+        assert_eq!(
+            modern.grid.row_text(0),
+            "",
+            "1049 is the contrast: it clears the alternate buffer on entry"
+        );
+    }
+
+    /// Mode 1048 is DECSC/DECRC under another spelling, and it shares the one
+    /// saved-cursor slot with `ESC 7`/`ESC 8` deliberately: a second slot
+    /// would have no producer, and two slots would let a save through one
+    /// spelling be restored as nothing through the other.
+    #[test]
+    fn mode_1048_saves_and_restores_the_cursor() {
+        let mut with = Screen::new(3, 10);
+        with.feed(b"ab\x1b[?1048hcd\x1b[?1048lZ");
+        let mut without = Screen::new(3, 10);
+        without.feed(b"abcdZ");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "abZd", "the restore put the cursor back at column 2");
+        assert_eq!(without.grid.row_text(0), "abcdZ");
+    }
+
+    /// `vte` splits an OSC payload on every `;`, so reading `params[1]` alone
+    /// truncates a title at its first semicolon. `retain_osc_progress` already
+    /// rejoins `params[1..]` for exactly this reason; the title path had the
+    /// other, wrong shape of the same code sitting beside it.
+    #[test]
+    fn osc_title_with_semicolons_is_rejoined() {
+        let mut s = Screen::new(2, 30);
+        s.feed(b"\x1b]0;a;b;c\x07");
+        assert_eq!(
+            s.title(),
+            Some("a;b;c"),
+            "a truncating reader would report just `a` -- and `a` is a \
+             plausible-looking title, so nothing downstream would notice"
+        );
+
+        let mut two = Screen::new(2, 30);
+        two.feed(b"\x1b]2;dir - cmd; arg\x07");
+        assert_eq!(two.title(), Some("dir - cmd; arg"), "OSC 2 shares the path");
+    }
+
+    /// DCS is swallowed by `vte`'s own state machine: `advance_dcs_passthrough`
+    /// routes payload bytes to `put()` and never to `print()`, so the payload
+    /// cannot reach the grid. The three methods are implemented explicitly
+    /// anyway, because "no branch" and "a branch that deliberately does
+    /// nothing" read identically at the call site and only one of them is a
+    /// decision.
+    ///
+    /// Falsifiable: implement `Perform::put` as `self.print(char::from(byte))`
+    /// — the plausible wrong version — and the DECRQSS payload `1$r0m` paints
+    /// onto row 0 and this test fails on the first assertion.
+    #[test]
+    fn dcs_hook_put_unhook_are_explicit_no_ops() {
+        let mut with = Screen::new(3, 10);
+        with.feed(b"ab\x1bP1$r0m\x1b\\cd");
+        let mut without = Screen::new(3, 10);
+        without.feed(b"abcd");
+
+        assert_eq!(
+            with.visible_text(),
+            without.visible_text(),
+            "a DCS payload must not paint; the bytes after ST must still land"
+        );
+        assert_eq!(with.grid.row_text(0), "abcd");
     }
 
     /// HT is a MOVE, not a write of spaces. The two are identical on a

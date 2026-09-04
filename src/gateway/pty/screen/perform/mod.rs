@@ -17,6 +17,16 @@ pub struct Screen {
     pub grid: Grid,
     /// The saved primary screen while the alternate screen is active.
     saved: Option<Grid>,
+    /// The alternate buffer while the PRIMARY screen is active -- the other
+    /// half of the same one-buffer model as [`Self::saved`].
+    ///
+    /// There is one alternate buffer, not one per mode. 47 and 1047 leave it
+    /// alone on entry, so a program that exits and re-enters through them
+    /// finds its screen still there; 1049 clears it on entry, which is the
+    /// only semantic difference between the two spellings. Parking it here
+    /// on exit rather than dropping it is what makes the legacy pair's
+    /// promise true, and 1049 replacing it on entry is what keeps 1049's.
+    retained_alt: Option<Grid>,
     parser: vte::Parser,
     state: ScreenState,
     /// Title as of the last `take_patch`, so an unchanged title is not
@@ -65,6 +75,7 @@ impl Screen {
         Self {
             grid: Grid::new(rows, cols),
             saved: None,
+            retained_alt: None,
             parser: vte::Parser::new(),
             state: ScreenState::default(),
             last_sent_title: None,
@@ -213,6 +224,83 @@ impl Performer<'_> {
             self.screen.state.attrs,
         )
     }
+
+    /// DECSC's write half, shared by `ESC 7` and private mode 1048.
+    ///
+    /// One slot for both spellings on purpose: they are the same verb, and a
+    /// second slot would let a save made through one be restored as nothing
+    /// through the other -- silently, since "nothing saved" is already a
+    /// legal state that does nothing.
+    fn save_cursor(&mut self) {
+        self.screen.saved_cursor = Some(SavedCursor {
+            pos: self.screen.grid.cursor(),
+            style: self.style(),
+        });
+    }
+
+    /// DECRC's read half. With nothing saved this does nothing; see the
+    /// `ESC 8` arm for why homing instead would be worse.
+    fn restore_cursor(&mut self) {
+        if let Some(saved) = self.screen.saved_cursor {
+            let (row, col) = saved.pos;
+            self.screen.grid.goto(row, col);
+            let (fg, bg, attrs) = saved.style;
+            self.screen.state.fg = fg;
+            self.screen.state.bg = bg;
+            self.screen.state.attrs = attrs;
+        }
+    }
+
+    /// DECSTR (`CSI ! p`) -- the soft reset. Modes and the saved-cursor slot
+    /// go back to their defaults and the cursor homes, but the cells, the
+    /// scrollback and the title stay: none of those three is a mode, and a
+    /// soft reset that erased the screen would be RIS by another name.
+    fn soft_reset(&mut self) {
+        self.screen.state.fg = Color::Default;
+        self.screen.state.bg = Color::Default;
+        self.screen.state.attrs = Attrs::NONE;
+        self.screen.saved_cursor = None;
+        self.exit_alt_screen_for_reset();
+        self.screen.grid.reset_modes();
+        self.screen.grid.goto(0, 0);
+    }
+
+    /// RIS (`ESC c`) -- the full reset. The soft reset plus the erase and the
+    /// title.
+    ///
+    /// **Scrollback is deliberately kept** (the reason is at
+    /// [`Grid::reset`]). The progress level from `OSC 9;4` is deliberately
+    /// NOT cleared either: this round's contract enumerates what RIS drops
+    /// and the level is not on it. That is a real edge -- a crashed agent's
+    /// wrapper running `reset` leaves a stale `working` level behind -- and
+    /// it is reported as a concern rather than fixed here, because widening
+    /// a reset past its specification is how a reset starts erasing things
+    /// its callers still need.
+    fn full_reset(&mut self) {
+        self.soft_reset();
+        self.screen.state.title = None;
+        self.screen.grid.reset();
+    }
+
+    /// Both resets leave the primary screen current. Uses the same swap the
+    /// mode does, so the dirty-marking and the one-buffer bookkeeping have a
+    /// single implementation rather than a second one that drifts.
+    fn exit_alt_screen_for_reset(&mut self) {
+        if self.screen.saved.is_some() {
+            self.toggle_alt_screen(false, AltBuffer::Legacy);
+        }
+    }
+}
+
+/// Which spelling of the alternate screen asked for the swap. The two
+/// differ only on entry, and only about the buffer -- see the
+/// `retained_alt` field on `Screen`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AltBuffer {
+    /// Modes 47 and 1047: keep whatever the alternate buffer already holds.
+    Legacy,
+    /// Mode 1049: start from a blank alternate buffer every time.
+    Cleared,
 }
 
 /// Uniform forwarding. Every body here is exactly one delegation and must
@@ -241,6 +329,25 @@ impl vte::Perform for Performer<'_> {
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
         self.osc(params);
     }
+
+    // DCS: explicitly nothing, three times over.
+    //
+    // `vte` runs the whole DCS state machine itself and routes payload bytes
+    // to `put` -- never to `print` -- so a device-control string cannot reach
+    // the grid whether these exist or not. They exist because "no branch"
+    // and "a branch that deliberately does nothing" read identically at the
+    // call site and only one of them is a decision. The two things
+    // libghostty's DCS handler is for (XTGETTCAP and DECRQSS replies) both
+    // write back to the PTY, and nothing in `screen/` ever writes back, so
+    // there is no consumer here to starve.
+    //
+    // The tempting wrong version is `put` forwarding to `print`; the guard
+    // `dcs_hook_put_unhook_are_explicit_no_ops` fails on exactly that.
+    fn hook(&mut self, _params: &vte::Params, _inter: &[u8], _ignore: bool, _action: char) {}
+
+    fn put(&mut self, _byte: u8) {}
+
+    fn unhook(&mut self) {}
 }
 
 #[cfg(test)]

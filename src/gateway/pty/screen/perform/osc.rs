@@ -9,6 +9,20 @@ use super::Performer;
 /// is bounded before it is stored.
 pub(super) const OSC_PAYLOAD_MAX_CHARS: usize = 256;
 
+/// The `;`-separated tail of an OSC, put back together.
+///
+/// One implementation for both kinds on purpose. This file used to hold the
+/// right shape (in `retain_osc_progress`) and the wrong one (in the title
+/// arm) side by side, each correct-looking on its own -- the same fact with
+/// two expressions, where only one of them was true.
+fn join_payload(parts: &[&[u8]]) -> String {
+    parts
+        .iter()
+        .map(|p| String::from_utf8_lossy(p))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 impl Performer<'_> {
     /// Retain a ConEmu `OSC 9;4` progress payload.
     ///
@@ -26,12 +40,7 @@ impl Performer<'_> {
     /// filter (`herdr src/pane/osc.rs` retains every OSC 9 payload); this
     /// divergence is deliberate, not a porting slip.
     fn retain_osc_progress(&mut self, rest: &[&[u8]]) {
-        let joined = rest
-            .iter()
-            .map(|p| String::from_utf8_lossy(p))
-            .collect::<Vec<_>>()
-            .join(";");
-        let payload: String = joined
+        let payload: String = join_payload(rest)
             .chars()
             .filter(|ch| !ch.is_control())
             .take(OSC_PAYLOAD_MAX_CHARS)
@@ -46,8 +55,14 @@ impl Performer<'_> {
         // OSC 0 = icon + title, OSC 2 = title.
         let Some(kind) = params.first() else { return };
         if matches!(*kind, b"0" | b"2") {
-            if let Some(raw) = params.get(1) {
-                self.screen.state.title = Some(String::from_utf8_lossy(raw).into_owned());
+            // Rejoin, do not read `params[1]`: `vte` splits an OSC payload on
+            // every `;`, so a title that contains one arrives in pieces and
+            // reading the first piece truncates it. The truncation is silent
+            // and the result is a plausible title, which is why it survived
+            // next to `retain_osc_progress` -- the right shape of this exact
+            // code -- for as long as it did.
+            if params.len() > 1 {
+                self.screen.state.title = Some(join_payload(&params[1..]));
             }
             return;
         }
