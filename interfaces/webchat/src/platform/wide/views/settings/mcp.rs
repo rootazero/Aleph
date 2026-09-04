@@ -351,7 +351,15 @@ fn EditMcpServerDialog(
                         // Sort for stable ordering (HashMap iteration is unordered).
                         let mut entries: Vec<(String, String)> = env_map.into_iter().collect();
                         entries.sort_by(|a, b| a.0.cmp(&b.0));
-                        let mut id = next_env_id.get_value();
+                        // `try_`: this is the far side of `McpConfigApi::get`,
+                        // and the dialog is routinely closed while that is in
+                        // flight. `get_value` unwraps, so a disposed owner
+                        // here panics the whole page (`crate::disposed_reads`,
+                        // whose scan was widened to see `get_value` on
+                        // 2026-09-04 and named this line on its first run).
+                        let Some(mut id) = next_env_id.try_get_value() else {
+                            return;
+                        };
                         let rows: Vec<EnvRow> = entries
                             .into_iter()
                             .map(|(k, v)| {

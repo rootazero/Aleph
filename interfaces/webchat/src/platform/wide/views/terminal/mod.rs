@@ -159,8 +159,24 @@ pub fn TerminalView() -> impl IntoView {
     // same breath. Setting the id BEFORE the RPC matters — the frame handler
     // DROPS frames whose session it cannot name, and a dropped frame is not a
     // buffered one.
+    // `try_` on every read, and all three up front so nothing is written
+    // before the bail: this closure runs from two `spawn_local` continuations
+    // on the far side of an `.await` (`pty.spawn`, `pty.list`) and from the
+    // exit event's callback. `StoredValue::get_value` unwraps, so a disposed
+    // owner panics and the whole page goes to the recovery overlay
+    // (`crate::disposed_reads`). The window is ordinary — the user leaves this
+    // view while the RPC is in flight. Same rule and the same `None` arm as
+    // `publish_selection` below: the scope that owns these is gone, so there
+    // is no view left to point at a session.
     let attach_to = move |sid: String| {
-        if session_id.get_value().as_deref() == Some(sid.as_str()) {
+        let (Some(current), Some(family), Some(size)) = (
+            session_id.try_get_value(),
+            font_family.try_get_value(),
+            font_size_px.try_get_value(),
+        ) else {
+            return;
+        };
+        if current.as_deref() == Some(sid.as_str()) {
             return;
         }
         screen.set_value(Some(ClientScreen::new(24, 80, 0, sid.clone())));
@@ -169,8 +185,8 @@ pub fn TerminalView() -> impl IntoView {
             canvas_ref,
             state,
             Some(sid.clone()),
-            font_family.get_value(),
-            font_size_px.get_value(),
+            family,
+            size,
             repaint_tick,
         );
         resync(sid);
@@ -448,14 +464,19 @@ pub fn TerminalView() -> impl IntoView {
             // everything now that the real config is in, rather than
             // leaving the canvas showing the fallback font until whatever
             // next resize or frame happens to trigger a repaint.
-            measure_and_report(
-                canvas_ref,
-                state,
-                session_id.get_value(),
-                font_family.get_value(),
-                font_size_px.get_value(),
-                repaint_tick,
-            );
+            //
+            // `try_` for the same reason `attach_to` above uses it: this is
+            // the far side of `config.get`, and the user may well have left
+            // the terminal view while it was in flight. `None` from any of
+            // them means the owner is gone and there is no canvas to measure.
+            let (Some(sid), Some(family), Some(size)) = (
+                session_id.try_get_value(),
+                font_family.try_get_value(),
+                font_size_px.try_get_value(),
+            ) else {
+                return;
+            };
+            measure_and_report(canvas_ref, state, sid, family, size, repaint_tick);
         });
     });
 
@@ -490,13 +511,12 @@ pub fn TerminalView() -> impl IntoView {
                         screen
                             .with_value(|s| s.as_ref().and_then(|s| s.title().map(str::to_string))),
                     ) {
+                        // The predicate is the model's, and it asks about
+                        // `osc_title` rather than the DERIVED `title` — see
+                        // `TabModel::osc_title_differs` for what comparing the
+                        // derived name against the raw one silently lost.
                         let changed = tabs
-                            .try_with_untracked(|m| {
-                                m.tabs()
-                                    .iter()
-                                    .find(|t| t.session_id == sid)
-                                    .is_some_and(|t| t.title != title)
-                            })
+                            .try_with_untracked(|m| m.osc_title_differs(&sid, &title))
                             .unwrap_or(false);
                         if changed {
                             tabs.update(|m| m.on_title(&sid, &title));

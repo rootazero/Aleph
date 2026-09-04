@@ -139,6 +139,30 @@ impl TabModel {
         true
     }
 
+    /// Whether adopting `title` for `session_id` would record anything new —
+    /// the rate limiter in front of [`Self::on_title`], which runs on every
+    /// applied frame.
+    ///
+    /// It compares against `osc_title`, the field that HOLDS this fact, and
+    /// not against `title`, which is DERIVED. The frame handler used to ask
+    /// `t.title != title`, and a program whose OSC title equals the name the
+    /// tab already derived — `claude` setting its title to `claude`, the
+    /// common case — read as unchanged. `osc_title` then stayed `None`, and
+    /// the next [`Self::reconcile`] that lost `program` re-derived down to the
+    /// shell, discarding a title the program really had set (判据 §1: the
+    /// derived value and the raw fact are two statements, and only one of them
+    /// is what the question is about).
+    ///
+    /// An unknown id answers `false`: [`Self::on_title`] would ignore it, so
+    /// there is nothing to change.
+    #[must_use]
+    pub fn osc_title_differs(&self, session_id: &str, title: &str) -> bool {
+        self.tabs
+            .iter()
+            .find(|t| t.session_id == session_id)
+            .is_some_and(|t| t.osc_title.as_deref() != Some(title))
+    }
+
     /// Adopt an OSC title for one session. Unknown ids are ignored — the
     /// screen topic carries every session's frames, including ones this
     /// model has not listed yet.
@@ -724,5 +748,68 @@ mod tests {
 
         model.reconcile(&[], &[]);
         assert_eq!(model.selected_id(), None);
+    }
+
+    /// The sequence M1 was about, end to end: a program whose OSC title is
+    /// exactly what the tab already derived must still be RECORDED.
+    ///
+    /// `claude` names its own window `claude`, and the tab's derived title is
+    /// already `claude` because the sampler reported `program`. The old change
+    /// guard compared the incoming raw title against that DERIVED title, saw
+    /// no difference, and never called `on_title` — so `osc_title` stayed
+    /// `None`. The loss only shows up one reconcile later, when `program` goes
+    /// quiet (the agent exits, or the probe cannot answer) and the title falls
+    /// all the way back to the shell, discarding a name the program really did
+    /// set for itself.
+    ///
+    /// Reddens if the change predicate goes back to comparing derived against
+    /// raw: the second assertion fails outright, and with `on_title` never
+    /// reached the last one reads `zsh`.
+    #[test]
+    fn a_title_equal_to_the_derived_name_is_still_recorded() {
+        let mut model = TabModel::default();
+        model.reconcile(
+            &[session("a", "zsh", false)],
+            &[agent("a", RuntimeAgentState::Working, Some("claude"))],
+        );
+        assert_eq!(
+            model.tabs()[0].title,
+            "claude",
+            "the probed program names the tab before any OSC title arrives"
+        );
+
+        // The frame handler's gate. It must fire here even though the derived
+        // title and the incoming title are the same string.
+        assert!(
+            model.osc_title_differs("a", "claude"),
+            "an unrecorded OSC title differs from `None`, whatever the derived \
+             title happens to read"
+        );
+        model.on_title("a", "claude");
+
+        // Idempotent once recorded: the same title on the next frame is not a
+        // change, which is what keeps the strip from re-rendering at the frame
+        // rate.
+        assert!(!model.osc_title_differs("a", "claude"));
+
+        // The agent exits, so nothing reports a foreground program any more.
+        // The title the program set for itself must survive that.
+        model.reconcile(&[session("a", "zsh", false)], &[]);
+        assert_eq!(
+            model.tabs()[0].title,
+            "claude",
+            "a recorded OSC title outlives the program that set it; falling \
+             back to the shell here is the loss M1 named"
+        );
+    }
+
+    /// The complement, so the fix is not "always record": an id with no tab
+    /// answers `false`, because `on_title` would ignore it. "I have no row for
+    /// this" must not read as "this is a change" (判据 §8).
+    #[test]
+    fn an_unknown_session_reports_no_title_change() {
+        let mut model = TabModel::default();
+        model.reconcile(&[session("a", "zsh", false)], &[]);
+        assert!(!model.osc_title_differs("nope", "anything"));
     }
 }
