@@ -197,6 +197,64 @@ fn v17_creates_the_spend_ledger_table_from_a_pre_v17_store() {
     assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
 }
 
+/// A store that has been pairing devices since before revocation existed must
+/// gain `revoked_at`, or the deactivation sweep's fourth leg dies with
+/// `no such column` — best-effort, so it would be logged once and otherwise
+/// silent while every burned ticket stayed redeemable.
+#[test]
+fn v18_adds_the_ticket_revocation_column_to_a_pre_v18_store() {
+    let store = SecurityStore::in_memory().unwrap();
+    {
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // The historical shape, inlined on purpose (as v15's fixture is): it
+        // is what the table used to be, so it cannot be sourced from the
+        // constant that describes what it is now.
+        conn.execute_batch(
+            "DROP TABLE bootstrap_tickets;
+             CREATE TABLE bootstrap_tickets (
+                 code                    TEXT PRIMARY KEY,
+                 created_at              INTEGER NOT NULL,
+                 expires_at              INTEGER NOT NULL,
+                 consumed_at             INTEGER,
+                 consumed_by_device_id   TEXT,
+                 user_id                 TEXT
+             );",
+        )
+        .unwrap();
+        assert!(
+            conn.prepare("SELECT revoked_at FROM bootstrap_tickets LIMIT 0")
+                .is_err(),
+            "the fixture must start WITHOUT the column or this test proves nothing"
+        );
+    }
+    store.set_schema_version(17).unwrap();
+
+    store.migrate().unwrap();
+
+    store
+        .create_bootstrap_ticket("bt-legacy", 60_000, Some("u-alice"))
+        .unwrap();
+    assert_eq!(
+        store.revoke_bootstrap_tickets_for_user("u-alice").unwrap(),
+        1,
+        "the v18 arm must have created revoked_at"
+    );
+    assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
+}
+
+/// …and the re-entrant half: `migrate()` re-run over a store that already has
+/// the column must not abort with `duplicate column name`. Without the probe
+/// this test is red and it takes every later arm down with it.
+#[test]
+fn v18_is_idempotent_when_the_ticket_column_is_already_there() {
+    let store = SecurityStore::in_memory().unwrap();
+    store.set_schema_version(17).unwrap();
+    store
+        .migrate()
+        .expect("re-running v18 over an existing column must not be an error");
+    assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
+}
+
 #[test]
 fn test_device_crud() {
     let store = SecurityStore::in_memory().unwrap();

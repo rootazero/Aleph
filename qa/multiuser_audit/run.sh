@@ -231,6 +231,13 @@ else
   expect "receipt reports the measured zero" "No devices were bound to them" "$OUT"
 fi
 expect "receipt reports the frozen legs"   "no running goals, loops or crons" "$OUT"
+# The bootstrap-ticket leg, on the wire and out of the CLI. The ticket minted
+# above was redeemed by the pairing driver, so the honest count here is zero —
+# and zero is exactly what proves the whole path: only a deactivation carries
+# this field, so the sentence appearing at all means the server measured the
+# leg, the field crossed the wire, and the renderer fired. Drop either half and
+# this line disappears.
+expect "receipt reports the ticket leg"    "outstanding bootstrap tickets were left" "$OUT"
 refute "no hard-coded plural claim survives" "Their devices are revoked and" "$OUT"
 # The heartbeat leg, and specifically its DECLINED arm — the one thing here no
 # unit test can claim, because it starts in `aleph-server start`'s

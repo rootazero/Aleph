@@ -185,6 +185,23 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
         });
     }
 
+    if let Some(tickets) = result.revoked_bootstrap_tickets {
+        // Its own line, not folded into the device sentence: a burned ticket
+        // is a pairing that had NOT happened yet, and zero here is the
+        // measurement that says no unredeemed ticket was left behind.
+        lines.push(match tickets {
+            0 => {
+                "No outstanding bootstrap tickets were left for them; nothing to burn.".to_string()
+            }
+            1 => {
+                "1 outstanding bootstrap ticket burned; it can no longer pair a device.".to_string()
+            }
+            n => format!(
+                "{n} outstanding bootstrap tickets burned; they can no longer pair a device."
+            ),
+        });
+    }
+
     if !result.revoked_channel_senders.is_empty() {
         lines.push("Channel sender approvals withdrawn:".to_string());
         for s in &result.revoked_channel_senders {
@@ -307,9 +324,74 @@ mod tests {
             },
             revoked_channel_senders: Vec::new(),
             revoked_devices: Some(0),
+            revoked_bootstrap_tickets: Some(0),
             frozen_background_work: Some(frozen),
             reactivation_effects: None,
         }
+    }
+
+    /// The fourth deactivation count has a renderer. A ticket the server
+    /// burned and the only client never mentions is a cut credential the
+    /// operator cannot verify — and "the ticket you handed out this morning is
+    /// now dead" is exactly the fact they need in order not to re-send it.
+    #[test]
+    fn the_receipt_prints_the_burned_bootstrap_ticket_count() {
+        let mut receipt = deactivation_receipt(aleph_protocol::users::FrozenBackgroundWork {
+            goals: 0,
+            loops: 0,
+            crons: 0,
+            heartbeats: Some(0),
+        });
+        receipt.revoked_bootstrap_tickets = Some(2);
+        let lines = update_effect_lines(&receipt);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("2 outstanding bootstrap tickets burned")),
+            "the burned-ticket count must reach the operator: {lines:?}"
+        );
+    }
+
+    /// Zero is a measurement here too: it says no unredeemed ticket was left
+    /// behind, which is the whole question this leg answers.
+    #[test]
+    fn a_deactivation_that_burned_no_ticket_still_says_so() {
+        let lines = update_effect_lines(&deactivation_receipt(
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(0),
+            },
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l
+                    == "No outstanding bootstrap tickets were left for them; nothing to burn."),
+            "a measured zero must render, not vanish: {lines:?}"
+        );
+    }
+
+    /// A plain rename is not a deactivation: absent means "this write was not
+    /// a deactivation", and printing a ticket sentence for it would assert an
+    /// outcome the server never measured.
+    #[test]
+    fn a_non_deactivating_update_says_nothing_about_bootstrap_tickets() {
+        let mut receipt = deactivation_receipt(aleph_protocol::users::FrozenBackgroundWork {
+            goals: 0,
+            loops: 0,
+            crons: 0,
+            heartbeats: Some(0),
+        });
+        receipt.revoked_devices = None;
+        receipt.revoked_bootstrap_tickets = None;
+        receipt.frozen_background_work = None;
+        let lines = update_effect_lines(&receipt);
+        assert!(
+            !lines.iter().any(|l| l.contains("bootstrap ticket")),
+            "no deactivation, no claim about tickets: {lines:?}"
+        );
     }
 
     /// The heartbeat leg has a renderer. A count the server measures and the

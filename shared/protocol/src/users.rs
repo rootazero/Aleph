@@ -171,6 +171,16 @@ pub struct UserUpdateResult {
     /// Deactivations only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_devices: Option<usize>,
+    /// Outstanding bootstrap tickets burned by the deactivation. Deactivations
+    /// only.
+    ///
+    /// A separate count from `revoked_devices` because it names a different
+    /// credential at a different stage: `revoked_devices` cuts pairings that
+    /// already happened, this cuts the ones that had not happened yet and
+    /// would otherwise have produced a brand-new device row **after** the
+    /// sweep ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_bootstrap_tickets: Option<usize>,
     /// Deactivations only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frozen_background_work: Option<FrozenBackgroundWork>,
@@ -225,6 +235,7 @@ mod tests {
             user: view(),
             revoked_channel_senders: vec![],
             revoked_devices: None,
+            revoked_bootstrap_tickets: None,
             frozen_background_work: None,
             reactivation_effects: None,
         })
@@ -250,6 +261,7 @@ mod tests {
             user: view(),
             revoked_channel_senders: vec![],
             revoked_devices: Some(0),
+            revoked_bootstrap_tickets: Some(0),
             frozen_background_work: Some(FrozenBackgroundWork::default()),
             reactivation_effects: None,
         })
@@ -270,6 +282,7 @@ mod tests {
                 sender_id: "12345".to_string(),
             }],
             revoked_devices: Some(2),
+            revoked_bootstrap_tickets: Some(1),
             frozen_background_work: Some(FrozenBackgroundWork {
                 goals: 1,
                 loops: 0,
@@ -281,6 +294,42 @@ mod tests {
         let wire = serde_json::to_value(&original).unwrap();
         let back: UserUpdateResult = serde_json::from_value(wire).unwrap();
         assert_eq!(back, original);
+    }
+
+    /// A burned bootstrap ticket is a credential the deactivation cut, and it
+    /// is a DIFFERENT credential from a revoked device: the device existed,
+    /// the ticket had not been redeemed yet and would have produced a fresh
+    /// device row after the sweep. Folding it into `revoked_devices` would
+    /// make the two indistinguishable on the wire.
+    #[test]
+    fn burned_bootstrap_tickets_are_their_own_count_on_the_receipt() {
+        let wire = serde_json::to_value(UserUpdateResult {
+            user: view(),
+            revoked_channel_senders: vec![],
+            revoked_devices: Some(1),
+            revoked_bootstrap_tickets: Some(2),
+            frozen_background_work: None,
+            reactivation_effects: None,
+        })
+        .unwrap();
+        assert_eq!(wire["revoked_devices"], 1);
+        assert_eq!(wire["revoked_bootstrap_tickets"], 2);
+    }
+
+    /// A deactivation that found no outstanding ticket must still say so —
+    /// zero is a measurement, absence says "this was not a deactivation".
+    #[test]
+    fn a_deactivation_that_burned_no_ticket_still_reports_zero() {
+        let wire = serde_json::to_value(UserUpdateResult {
+            user: view(),
+            revoked_channel_senders: vec![],
+            revoked_devices: Some(0),
+            revoked_bootstrap_tickets: Some(0),
+            frozen_background_work: None,
+            reactivation_effects: None,
+        })
+        .unwrap();
+        assert_eq!(wire["revoked_bootstrap_tickets"], 0);
     }
 
     /// The heartbeat leg is a fourth count on the same receipt, not a separate

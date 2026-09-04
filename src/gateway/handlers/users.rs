@@ -231,7 +231,10 @@ pub use aleph_protocol::users::UserUpdateParams as UpdateParams;
 /// `status="deactivated"` additionally revokes every live device bound to
 /// this user via [`revoke_device_and_kick`] (best-effort per device — a
 /// revoke failure is logged, not surfaced as a whole-request failure, since
-/// the status write already succeeded).
+/// the status write already succeeded) **and** burns the principal's
+/// outstanding bootstrap tickets via [`burn_outstanding_bootstrap_tickets`],
+/// so a ticket minted before the sweep cannot pair a brand-new device after
+/// it.
 pub async fn handle_update(
     request: JsonRpcRequest,
     store: Arc<SecurityStore>,
@@ -345,6 +348,7 @@ pub async fn handle_update(
 
     let mut revoked_senders: Vec<aleph_protocol::users::RevokedChannelSender> = Vec::new();
     let mut revoked_devices = 0usize;
+    let mut revoked_tickets = 0usize;
     let mut freeze = FreezeReport::default();
     // The pipeline runs on EVERY deactivation write, not only on the
     // transition: each leg is best-effort, so a repeated
@@ -361,6 +365,8 @@ pub async fn handle_update(
             }
         }
         revoked_devices = deactivate_devices(&store, &kick, &params.user_id).await;
+        revoked_tickets =
+            burn_outstanding_bootstrap_tickets(&store, &params.user_id, actor.clone());
         revoked_senders = revoke_channel_bindings(&kick, &params.user_id).await;
         freeze = freeze_owned_background_work(&params.user_id).await;
     }
@@ -390,6 +396,8 @@ pub async fn handle_update(
                 revoked_channel_senders: revoked_senders,
                 revoked_devices: (status == Some(UserStatus::Deactivated))
                     .then_some(revoked_devices),
+                revoked_bootstrap_tickets: (status == Some(UserStatus::Deactivated))
+                    .then_some(revoked_tickets),
                 frozen_background_work: (status == Some(UserStatus::Deactivated)).then_some(
                     aleph_protocol::users::FrozenBackgroundWork {
                         goals: freeze.goals,
@@ -587,6 +595,69 @@ async fn deactivate_devices(
         );
     }
     revoked
+}
+
+/// Burn every outstanding bootstrap ticket minted for `user_id` — the fourth
+/// leg of the deactivation sweep. Returns how many live tickets were cut.
+///
+/// # Why the other three legs are not enough
+///
+/// The three legs above cut credentials that already **exist**. A bootstrap
+/// ticket is a credential that has not been redeemed yet, and
+/// `DeviceTokenManager::exchange_bootstrap_ticket` performs no user-status
+/// check — both status guards sit at MINT time (`gateway_ticket.rs`,
+/// `pair.rs`). So mint → deactivate → redeem is two legal steps that produce a
+/// fresh, non-revoked device row **after** the sweep has run, with a ten-year
+/// token; `connect` then walls every frame it sends to `(None, "guest")`.
+/// That is precisely the "pairs successfully and then refuses everything"
+/// state the mint-time guards exist to prevent, reached by walking around
+/// them, and it made the reactivation receipt's "devices remain revoked —
+/// issue a new bootstrap ticket" a false sentence about a device whose token
+/// worked.
+///
+/// Best-effort, the same shape as the legs beside it: a store failure is
+/// logged and reported as zero rather than failing the whole write, because
+/// the operator's next move after a partial deactivation is to retry the same
+/// call.
+///
+/// One `AuthorityChange` entry, **only when something was actually cut** —
+/// `gateway_devices.rs`'s stated rule for the same reason: a retry against an
+/// already-deactivated principal changes nothing, so there is no decision to
+/// record. The entry names the count and the principal and never the ticket
+/// codes: a bootstrap ticket is a bearer credential and this module exists to
+/// keep bearer credentials out of logs.
+fn burn_outstanding_bootstrap_tickets(
+    store: &Arc<SecurityStore>,
+    user_id: &str,
+    actor: Option<String>,
+) -> usize {
+    let burned = match store.revoke_bootstrap_tickets_for_user(user_id) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!(
+                user_id = %user_id,
+                error = %e,
+                "users.update: failed to burn outstanding bootstrap tickets during deactivation — \
+                 an unredeemed ticket for this principal may still pair a new device"
+            );
+            return 0;
+        }
+    };
+
+    if burned > 0 {
+        tracing::warn!(
+            user_id = %user_id,
+            burned,
+            "users.update: deactivation burned outstanding bootstrap tickets"
+        );
+        if let Some(log) = crate::security::audit::global() {
+            log.log(crate::security::audit::AuditEntry::authority_change(
+                actor,
+                format!("users.update: burned {burned} bootstrap ticket(s) for {user_id}"),
+            ));
+        }
+    }
+    burned
 }
 
 /// Withdraw every approved channel sender bound to `user_id`, returning one
@@ -1761,6 +1832,147 @@ mod tests {
         assert!(
             v.get("revoked_devices").is_none(),
             "a reactivation did not revoke anything — the deactivation fields must not appear"
+        );
+    }
+
+    /// The two-step, end to end: mint a ticket for a live principal,
+    /// deactivate them, then attempt the redemption the ticket holder would
+    /// attempt. The assertion is on the **devices table**, not on the RPC's
+    /// status code — a rejected exchange that still leaves a device row behind
+    /// is the exact failure this leg exists to prevent, and only the store can
+    /// say whether the row appeared.
+    #[tokio::test]
+    async fn a_ticket_minted_before_deactivation_cannot_pair_a_device_after_it() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        let mgr =
+            crate::gateway::security::device_token_manager::DeviceTokenManager::new(store.clone());
+        let ticket = mgr
+            .create_bootstrap_ticket(Some(600_000), Some("u-alice"))
+            .unwrap();
+
+        let resp = handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "status": "deactivated"}),
+            ),
+            store.clone(),
+            test_kick_sink(),
+        )
+        .await;
+        assert_eq!(
+            response_json(&resp)["revoked_bootstrap_tickets"],
+            1,
+            "the deactivation receipt must report the burned ticket"
+        );
+
+        let exchanged = mgr.exchange_bootstrap_ticket(
+            &ticket,
+            Some("dev-late".to_string()),
+            Some("Late Panel".to_string()),
+            None,
+        );
+        assert!(exchanged.is_err(), "a burned ticket must not redeem");
+        assert!(
+            store.get_device("dev-late").unwrap().is_none(),
+            "the exchange must not have created a device row — a row here is a live \
+             credential minted AFTER the deactivation sweep ran"
+        );
+    }
+
+    /// The reactivation receipt's "devices remain revoked — issue a new
+    /// bootstrap ticket" is now true for every device, including the one an
+    /// unredeemed ticket would have produced. Before the fourth leg that
+    /// sentence was a lie about a device whose ten-year token worked.
+    #[tokio::test]
+    async fn reactivation_guidance_holds_because_the_old_ticket_is_dead() {
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        let mgr =
+            crate::gateway::security::device_token_manager::DeviceTokenManager::new(store.clone());
+        let ticket = mgr
+            .create_bootstrap_ticket(Some(600_000), Some("u-alice"))
+            .unwrap();
+
+        for status in ["deactivated", "active"] {
+            handle_update(
+                rpc_request(
+                    "users.update",
+                    json!({"user_id": "u-alice", "status": status}),
+                ),
+                store.clone(),
+                test_kick_sink(),
+            )
+            .await;
+        }
+
+        assert!(
+            mgr.exchange_bootstrap_ticket(&ticket, Some("dev-old".to_string()), None, None)
+                .is_err(),
+            "reactivation must not resurrect the burned ticket"
+        );
+        assert!(
+            store.get_device("dev-old").unwrap().is_none(),
+            "'issue a NEW bootstrap ticket' must be the only path back"
+        );
+    }
+
+    /// A retry of an already-deactivated principal burns nothing and records
+    /// nothing — the audit line rides on the transition, exactly like
+    /// `gateway_devices.rs`'s per-credential rule.
+    #[tokio::test]
+    async fn a_second_deactivation_burns_zero_tickets_and_writes_no_authority_change() {
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let store = seeded_store();
+        store
+            .create_user("u-alice", "Alice", UserRole::Member)
+            .unwrap();
+        let mgr =
+            crate::gateway::security::device_token_manager::DeviceTokenManager::new(store.clone());
+        mgr.create_bootstrap_ticket(Some(600_000), Some("u-alice"))
+            .unwrap();
+
+        handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "status": "deactivated"}),
+            ),
+            store.clone(),
+            test_kick_sink(),
+        )
+        .await;
+
+        // Install the audit handle only for the SECOND write, so anything it
+        // receives came from the retry.
+        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        crate::security::audit::replace_global_for_test(&log);
+        let resp = handle_update(
+            rpc_request(
+                "users.update",
+                json!({"user_id": "u-alice", "status": "deactivated"}),
+            ),
+            store.clone(),
+            test_kick_sink(),
+        )
+        .await;
+        let mut details = Vec::new();
+        while let Ok(entry) = rx.try_recv() {
+            details.push(entry.detail);
+        }
+        crate::security::audit::clear_global_for_test();
+
+        assert_eq!(
+            response_json(&resp)["revoked_bootstrap_tickets"],
+            0,
+            "the retry had nothing left to burn"
+        );
+        assert!(
+            !details.iter().any(|d| d.contains("bootstrap ticket")),
+            "a retry that cut nothing must not write an authority-change row: {details:?}"
         );
     }
 

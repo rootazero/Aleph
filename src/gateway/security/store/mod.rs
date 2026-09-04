@@ -37,7 +37,7 @@ pub use types::*;
 pub use users::{UserRecord, UserRole, UserStatus, OWNER_USER_ID};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 17;
+const SCHEMA_VERSION: i32 = 18;
 
 /// Unified security storage backed by `SQLite`
 pub struct SecurityStore {
@@ -315,6 +315,40 @@ impl SecurityStore {
             conn.execute_batch(SCHEMA_V17)?;
             drop(conn);
             self.set_schema_version(17)?;
+        }
+
+        if version < 18 {
+            info!(
+                from = version,
+                to = 18,
+                "Migrating security schema to v18 (bootstrap ticket revocation)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            // Probe like v15/v16, not v14's bare ALTER. A from-scratch boot
+            // does reach this arm without the column (`SCHEMA_V11` builds the
+            // table and deliberately does not carry it), so the version gate
+            // looks sufficient — but `migrate()` is also re-run over an
+            // already-migrated store whose version was rewound, and there the
+            // unconditional ALTER is a `duplicate column name` that aborts the
+            // whole migration. The probe is what makes this arm re-entrant.
+            //
+            // A DISTINCT column, not `consumed_at`: folding a burned ticket
+            // into the redeemed value would make the two byte-identical in the
+            // ledger, and neither the audit nor a future `ticket.list` could
+            // answer "was this used or was it cut" — criterion #8, a
+            // fail-closed answer squeezed into an existing value.
+            let has_column: bool = conn
+                .prepare("SELECT revoked_at FROM bootstrap_tickets LIMIT 0")
+                .is_ok();
+            if !has_column {
+                conn.execute(
+                    "ALTER TABLE bootstrap_tickets ADD COLUMN revoked_at INTEGER",
+                    [],
+                )?;
+            }
+            drop(conn);
+            self.set_schema_version(18)?;
         }
 
         // After all versioned migrations (runs on every open, idempotent):

@@ -225,7 +225,12 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # `[heartbeat] enabled = false`, so this run proves the receipt
                                  # says the heartbeat leg did not RUN instead of reporting a zero —
                                  # a boot-time `decline(because)`, an absent wire field, and a CLI
-                                 # sentence, none of which a unit test reaches together.
+                                 # sentence, none of which a unit test reaches together. The same
+                                 # stage also pins the deactivation's bootstrap-ticket leg: the
+                                 # count is zero here (the ticket was redeemed by the pairing
+                                 # driver), and zero is the point — only a deactivation carries
+                                 # that field, so the sentence appearing at all proves the server
+                                 # measured it, it crossed the wire, and the CLI rendered it.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation
