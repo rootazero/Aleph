@@ -198,6 +198,22 @@ pub fn owner_admits(created_by: Option<&str>, actor: Option<&str>) -> bool {
     }
 }
 
+/// One session's screen, as the detection engine consumes it — the answer
+/// [`PtyManager::detection_inputs`] gives.
+///
+/// A struct rather than a `(String, String, String)` for the reason
+/// `agent_detect::screen_rules::detection_input` exists: three same-typed
+/// strings in a row is the shape where a swapped pair compiles and lies.
+#[derive(Debug, Clone)]
+pub(crate) struct DetectionInputs {
+    /// The visible grid as plain text, no scrollback.
+    pub text: String,
+    /// The OSC 0/2 window title, or `""` when the program set none.
+    pub title: String,
+    /// The OSC 9;4 progress payload, or `""` when the program reported none.
+    pub osc_progress: String,
+}
+
 /// The global PTY session registry.
 pub struct PtyManager {
     inner: Mutex<Inner>,
@@ -508,6 +524,36 @@ impl PtyManager {
     pub(crate) fn visible_text(&self, session_id: &str) -> Result<String, String> {
         self.with_session(session_id, |s| {
             Ok(s.with_screen(super::screen::Screen::visible_text))
+        })
+    }
+
+    /// The three strings the detection engine is fed for this session, read
+    /// under ONE screen-lock acquisition.
+    ///
+    /// One acquisition for the same reason [`flush_session`] takes one: three
+    /// separate `with_screen` calls could answer about three different
+    /// screens, and an explanation assembled from a title that no longer
+    /// belongs to the text beside it is worse than no explanation.
+    ///
+    /// The `unwrap_or_default()` on the two OSC values is the sampler's own
+    /// conversion, restated deliberately rather than shared: `None` (this
+    /// program never reported one) and `""` (the engine's spelling of "no
+    /// data") mean the same thing to every rule, so the fold is faithful and
+    /// not a fail-open read of an absent answer. `flush_session` cannot hand
+    /// this function its `Screen` — it holds the lock across the whole sample
+    /// and passes the borrow to `RuntimeAgents::sample`, which builds the text
+    /// only when an agent was identified (a cost decision this reader does not
+    /// share, since `terminal{explain}` always needs it).
+    ///
+    /// An unknown session is an error, never three empty strings — a blank
+    /// screen would read as "the terminal is idle".
+    pub(crate) fn detection_inputs(&self, session_id: &str) -> Result<DetectionInputs, String> {
+        self.with_session(session_id, |s| {
+            Ok(s.with_screen(|screen| DetectionInputs {
+                text: screen.visible_text(),
+                title: screen.title().unwrap_or_default().to_owned(),
+                osc_progress: screen.osc_progress().unwrap_or_default().to_owned(),
+            }))
         })
     }
 

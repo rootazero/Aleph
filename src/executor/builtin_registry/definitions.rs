@@ -2505,9 +2505,10 @@ mod tests {
     ///
     /// Against the three questions:
     /// (1) No schema field can carry either fact this DESCRIPTION states.
-    /// `TerminalArgs`'s schema says `action` is one of three strings; it
+    /// `TerminalArgs`'s schema says `action` is one of a fixed set of strings
+    /// (three when this entry was written, five since task D); it
     /// cannot say WHICH sessions `list`/`status` return (this server's
-    /// runtime scopes them by caller identity via `pty::owner_admits`, a
+    /// runtime scopes them by caller identity via `terminal_admits`, a
     /// filter with no argument to attach a description to) or that a
     /// disabled `[policies.terminal]` kill switch makes every action answer
     /// "no sessions" without saying "the feature is off" (there is no
@@ -2521,13 +2522,44 @@ mod tests {
     /// means "none exist" would report the policy-disabled case as a
     /// finding rather than recognising the feature is turned off.
     /// (3) The consumers are shipped and dispatched: `list_sessions`,
-    /// `status`, and `read_session` each apply `pty::owner_admits` /
-    /// `SessionOwner::admits` before returning data (`terminal.rs`), the
+    /// `status`, `read_session` and (since task D) `wait_for_session` /
+    /// `explain_session` each apply `terminal_admits` /
+    /// `owner_record_admits` before returning data (`terminal.rs`), the
     /// `[policies.terminal] enabled = false` kill switch really does call
     /// `PtyManager::close_all()` (`config/types/policies/terminal.rs`), and
     /// the "no write verb" half is pinned by a falsifiable test
     /// (`the_tool_exposes_no_write_verb`).
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_089;
+    ///
+    /// 2026-09-04 (task D, terminal round 2): 113_089 -> 113_416 B, for
+    /// `terminal`'s two new read-only verbs. **Both endpoints are readings,
+    /// not one reading and a subtraction** — the rule the 2026-08-23
+    /// correction above had to be written for. The tree without this round's
+    /// DESCRIPTION edit measures 113_086 B (93_490 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge) and with it 113_416 B
+    /// (93_820 + the same three), each read off this test's own panic message
+    /// with the ceiling temporarily floored. So this round SPENDS 330 B —
+    /// `TerminalTool::DESCRIPTION` grows 317 -> 647 — and the remaining 3 B
+    /// were headroom the previous entry left unspent while claiming to sit
+    /// flush. It sits flush now.
+    ///
+    /// Against the three questions:
+    /// (1) No schema can carry either sentence. `wait`'s arguments say there
+    /// is an `until` and a `timeout_ms`; they cannot say that a timeout
+    /// answers with the CURRENT entry rather than a final verdict — that is a
+    /// relationship between the outcome word and the payload, and no single
+    /// field owns it. `explain`'s schema is one `session_id`; what earns the
+    /// bytes is that its output is the detector's reasoning (which rule, over
+    /// which screen), which is the only way to tell a wrong detection from an
+    /// idle agent — an OUTPUT shape, which no parameter can describe.
+    /// (2) A stronger model cannot guess them, and guessing wrong is the
+    /// expensive direction both times: not knowing `wait` exists means
+    /// polling `status` in a loop and burning turns on a table that already
+    /// publishes when it changes; not knowing `explain` exists means treating
+    /// a stale manifest's `unknown` as ground truth about the agent.
+    /// (3) Both consumers are shipped and dispatched — `wait_for_session` and
+    /// `explain_session` in `builtin_tools::terminal`, reached through
+    /// `TerminalAction::{Wait, Explain}`, each with tests.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_416;
 
     #[test]
     fn catalog_description_bytes_ratchet() {

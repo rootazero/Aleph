@@ -71,6 +71,19 @@ pub const QUIET_AFTER_MS: i64 = 30_000;
 #[derive(Debug, Clone)]
 struct TableEntry {
     entry: RuntimeAgentEntry,
+    /// Which agent [`RuntimeAgents::sample`] identified, as the detection
+    /// engine's own type.
+    ///
+    /// The same fact as `entry.agent`, which is its LABEL — both are written
+    /// in one expression from one `identify_agent` answer, so they cannot
+    /// drift; what this field buys is that a consumer needing to run the
+    /// engine again ([`RuntimeAgents::detected_agent`], for
+    /// `terminal{explain}`) does not have to parse the label back into an
+    /// `Agent`. A round trip through `agent_label` -> `identify_agent` would
+    /// be a SECOND derivation of "which agent is this", and the day one of
+    /// the 23 labels stopped round-tripping, `explain` would quietly explain
+    /// a different agent than `status` reports (判据 §1).
+    agent: Option<agent_detect::Agent>,
     /// Unix millis at which a working -> plain-idle transition was first
     /// observed, while it is being held. `None` = nothing held.
     pending_idle_since: Option<i64>,
@@ -403,6 +416,7 @@ impl RuntimeAgents {
         entries.insert(
             session_id.to_owned(),
             TableEntry {
+                agent,
                 entry: RuntimeAgentEntry {
                     session_id: session_id.to_owned(),
                     label,
@@ -460,6 +474,44 @@ impl RuntimeAgents {
             self.bump();
         }
         flipped
+    }
+
+    /// One session's published entry, or `None` when the table has no row for
+    /// it.
+    ///
+    /// `None` means "nothing has ever been sampled here" — a session that has
+    /// produced no frame, or one whose row was removed at child exit. It is
+    /// NOT "this session is idle" and callers must not fold it into one
+    /// (判据 §8): `terminal{wait}` reads it as "keep waiting" while the
+    /// session is still registered, and as `gone` once it is not.
+    ///
+    /// A per-session lookup rather than filtering [`Self::snapshot`]: a waiter
+    /// re-reads this on every wake-up, and cloning the whole table to answer
+    /// about one row is a cost that grows with everyone else's sessions.
+    #[must_use]
+    pub fn entry(&self, session_id: &str) -> Option<RuntimeAgentEntry> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+            .map(|t| t.entry.clone())
+    }
+
+    /// Which agent [`Self::sample`] identified in this session, as the
+    /// detection engine's own type — the input `agent_detect`'s
+    /// `explain_with_input` takes.
+    ///
+    /// Two absences are folded here on purpose, because the caller
+    /// (`terminal{explain}`) must tell them apart and asks [`Self::entry`]
+    /// first: no row at all, and a row whose foreground program is not an
+    /// agent. Read alone, `None` says only "no agent to explain".
+    #[must_use]
+    pub fn detected_agent(&self, session_id: &str) -> Option<agent_detect::Agent> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+            .and_then(|t| t.agent)
     }
 
     /// Whether this session currently has an identified agent.
@@ -584,7 +636,12 @@ impl RuntimeAgents {
 /// Exhaustive by construction — no `_ =>` arm. A wildcard here would fan a
 /// newly added detection state into whatever the catch-all names, silently
 /// (判据 §2); this way the compiler names the file to edit.
-const fn wire_state(state: AgentState) -> RuntimeAgentState {
+///
+/// `pub(crate)` because `terminal{explain}` publishes a freshly-evaluated
+/// detection state on the same wire the table's states go out on: two
+/// spellings of one four-word vocabulary would be two derivations of the same
+/// fact, and the one that drifts is the one nobody re-reads (判据 §1/§9).
+pub(crate) const fn wire_state(state: AgentState) -> RuntimeAgentState {
     match state {
         AgentState::Idle => RuntimeAgentState::Idle,
         AgentState::Working => RuntimeAgentState::Working,

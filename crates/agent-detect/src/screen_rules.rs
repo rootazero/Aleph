@@ -57,6 +57,31 @@
 //     allow attribute was the tell (判据 §2).
 
 use crate::engine::{Agent, AgentDetection, AgentState};
+use crate::manifest::DetectionInput;
+
+/// The ONE mapping from "the three strings a terminal screen yields" onto the
+/// engine's input fields.
+///
+/// Added for Aleph (no upstream equivalent — upstream passes three positional
+/// arguments and has this hazard in every caller). Two of the three are
+/// same-typed OSC strings sitting next to each other, so a caller that swaps
+/// them compiles and then lies: `osc_title` would be matched against the
+/// progress rules and vice versa, every rule would miss, and the result reads
+/// exactly like "this agent has no chrome on screen". `terminal{explain}`
+/// (`builtin_tools::terminal`) is the second caller and the reason this is a
+/// function instead of a struct literal repeated twice (判据 §6).
+#[must_use]
+pub fn detection_input<'a>(
+    content: &'a str,
+    osc_title: &'a str,
+    osc_progress: &'a str,
+) -> DetectionInput<'a> {
+    DetectionInput {
+        screen: content,
+        osc_title,
+        osc_progress,
+    }
+}
 
 /// The pane-level entry point: run detection and say whether the result is
 /// worth adopting.
@@ -88,14 +113,7 @@ pub fn detection_update_for_publish_with_osc(
         });
     }
 
-    let detection = crate::detect(
-        agent,
-        crate::DetectionInput {
-            screen: content,
-            osc_title,
-            osc_progress,
-        },
-    );
+    let detection = crate::detect(agent, detection_input(content, osc_title, osc_progress));
     (!detection.skip_state_update).then_some(detection)
 }
 

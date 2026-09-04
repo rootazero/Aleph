@@ -23,7 +23,12 @@ pub const RUNTIME_AGENTS_CHANGED_TOPIC: &str = "runtime.agents.changed";
 /// that it is not derived from what it is checking.
 pub const RUNTIME_AGENTS_LIST_METHOD: &str = "runtime.agents.list";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// `JsonSchema` because `terminal{wait}`'s `until` argument takes these
+/// states directly (`builtin_tools::terminal`). A tool-local copy of the four
+/// names would be a second enumeration of the same closed set — the shape that
+/// silently drops a state the day a fifth is added (判据 §1/§5) — and
+/// `canvas.rs` already derives it on wire types in this crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeAgentState {
     Idle,
