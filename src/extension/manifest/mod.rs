@@ -135,11 +135,6 @@ pub fn validate_plugin_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate plugin name format (alias for `validate_plugin_id`)
-pub fn validate_plugin_name(name: &str) -> ExtensionResult<()> {
-    validate_plugin_id(name).map_err(|reason| ExtensionError::invalid_plugin_name(name, reason))
-}
-
 // =============================================================================
 // Manifest File Names
 // =============================================================================
@@ -390,16 +385,6 @@ mod tests {
     use super::*;
     use crate::extension::types::SkillFrontmatter;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_validate_plugin_name() {
-        assert!(validate_plugin_name("my-plugin").is_ok());
-        assert!(validate_plugin_name("plugin123").is_ok());
-        assert!(validate_plugin_name("a").is_ok());
-        assert!(validate_plugin_name("").is_err());
-        assert!(validate_plugin_name("My-Plugin").is_err());
-        assert!(validate_plugin_name("123plugin").is_err());
-    }
 
     #[test]
     fn test_parse_frontmatter() {

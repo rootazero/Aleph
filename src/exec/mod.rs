@@ -26,7 +26,7 @@ pub use analysis::CommandAnalysis;
 pub use bridge::ApprovalBridge;
 pub use decision::{ApprovalRequest, ExecApprovalRequest};
 pub use kernel::SecurityKernel;
-pub use leak_detector::{LeakAction, LeakDetector, ScanResult};
+pub use leak_detector::LeakDetector;
 pub use manager::{ExecApprovalManager, ExecApprovalRecord, PendingApproval};
 pub use masker::SecretMasker;
 pub use parser::analyze_shell_command;

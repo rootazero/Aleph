@@ -232,12 +232,6 @@ pub struct ExtensionManager {
     /// and avoid a write→reload→write feedback loop. Shared with the watcher
     /// callback via `Arc`.
     internal_writes: Arc<InternalWriteTracker>,
-
-    /// Counts how many times `reload()` has executed since construction.
-    /// Exposed via [`Self::reload_count`] — used by integration tests to
-    /// assert at-most-once reload behaviour on adjacent watcher events,
-    /// and available for future runtime observability.
-    reload_count: AtomicU64,
 }
 
 /// Convert a plugin-shipped agent registration into an [`crate::agents::AgentDef`]
@@ -349,7 +343,6 @@ impl ExtensionManager {
             mcp_handle: crate::sync_primitives::RwLock::new(None),
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
-            reload_count: AtomicU64::new(0),
             owner_trust_policy: Arc::new(crate::sync_primitives::RwLock::new(owner_trust_policy)),
             plugins_config,
             plugins_config_path,
@@ -361,21 +354,6 @@ impl ExtensionManager {
     /// Create with default configuration
     pub async fn with_defaults() -> ExtensionResult<Self> {
         Self::new(ExtensionConfig::default()).await
-    }
-
-    /// Builder-style setter for the memory extension registry (Spec 4 Task 11).
-    ///
-    /// For use before the manager is shared behind an `Arc`. If you already have
-    /// `Arc<ExtensionManager>`, use `set_memory_registry` instead.
-    pub fn with_memory_registry(
-        self,
-        registry: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
-    ) -> Self {
-        *self
-            .memory_registry
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = Some(registry);
-        self
     }
 
     /// Inject the memory extension registry after construction (Spec 4 Task 11).
@@ -816,8 +794,6 @@ impl ExtensionManager {
 
     /// Force reload all extensions
     pub async fn reload(&self) -> ExtensionResult<LoadSummary> {
-        self.reload_count.fetch_add(1, Ordering::SeqCst);
-
         // Hold load_guard for the entire reload so a concurrent
         // `ensure_loaded` cannot interleave its own `load_all` between the
         // cache reset below and the `load_all` we run at the end. Without
@@ -861,12 +837,6 @@ impl ExtensionManager {
     /// constructed.
     pub fn mark_self_write(&self, path: &Path) {
         self.internal_writes.mark(path);
-    }
-
-    /// Returns the total number of times [`Self::reload`] has executed.
-    /// Used by integration tests and (in future) runtime observability.
-    pub fn reload_count(&self) -> u64 {
-        self.reload_count.load(Ordering::SeqCst)
     }
 
     /// Spawn the hot-reload watcher. Idempotent — second call returns Ok
@@ -986,17 +956,6 @@ impl ExtensionManager {
             .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
 
         *watcher_guard = Some(Arc::new(watcher));
-        Ok(())
-    }
-
-    /// Stop the hot-reload watcher (no-op if not started). Tests use this
-    /// to release watch handles before `TempDir` drops.
-    pub fn stop_watcher(&self) -> ExtensionResult<()> {
-        let mut guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(w) = guard.take() {
-            w.stop()
-                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
-        }
         Ok(())
     }
 
@@ -1304,11 +1263,6 @@ impl ExtensionManager {
     /// Check if extensions have been loaded
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
-    }
-
-    /// Get a reference to the adapter registry for capability-driven parsing.
-    pub const fn adapter_registry(&self) -> &AdapterRegistry {
-        &self.adapter_registry
     }
 
     /// Hot-reload a single plugin by ID.

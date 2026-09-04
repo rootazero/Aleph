@@ -117,12 +117,6 @@ impl SecretMasker {
         }
         result.into_owned()
     }
-
-    #[allow(dead_code)]
-    pub(crate) fn contains_secrets(&self, text: &str) -> bool {
-        SECRET_PATTERNS.iter().any(|(re, _)| re.is_match(text))
-            || operator_patterns().iter().any(|(re, _)| re.is_match(text))
-    }
 }
 
 /// Mask every string leaf of a JSON value in place; `true` when anything
@@ -256,13 +250,6 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
         assert!(!output.contains("mysupersecret"));
     }
 
-    #[test]
-    fn test_contains_secrets() {
-        let masker = SecretMasker::new();
-        assert!(masker.contains_secrets("sk-abcdefghijklmnopqrstuvwxyz12345678"));
-        assert!(!masker.contains_secrets("This is just normal text"));
-    }
-
     /// The operator's patterns must reach a masker that was constructed
     /// *without* ever being told about them — that is the whole point of
     /// hanging them off the type instead of a constructor argument, and it is
@@ -280,7 +267,6 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
         let output = masker.mask("Value: CUSTOM_SECRET_12345");
         assert!(output.contains("CUSTOM_***"));
         assert!(!output.contains("12345"));
-        assert!(masker.contains_secrets("CUSTOM_SECRET_9"));
 
         // Leave the process as we found it — this static outlives the test.
         let _ = install_operator_patterns(std::iter::empty());
