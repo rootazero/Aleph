@@ -1,488 +1,10 @@
-//! `vte::Perform` implementation — turns the PTY byte stream into grid writes.
+//! Emulator tests. Moved out of the production file so each dispatch face
+//! stays readable on its own; the dispatch-table censuses below name the
+//! file and function they scrape, because after the split a table's source
+//! is no longer "this file".
 
-use super::grid::{Attrs, Color, Grid};
-
-/// The parser plus the state it mutates. `Parser` is retained across `feed`
-/// calls because escape sequences straddle read boundaries: an OSC title can
-/// arrive in two chunks, and a parser rebuilt per read would lose the tail.
-pub struct Screen {
-    pub grid: Grid,
-    /// The saved primary screen while the alternate screen is active.
-    saved: Option<Grid>,
-    parser: vte::Parser,
-    state: ScreenState,
-    /// Title as of the last `take_patch`, so an unchanged title is not
-    /// reshipped on every frame.
-    last_sent_title: Option<String>,
-    /// Alt-screen flag as of the last `take_patch`, same reasoning.
-    last_sent_alt: Option<bool>,
-    /// What `ESC 7` (DECSC) stashed, for `ESC 8` to put back. One slot, not
-    /// one per screen buffer: DECSC/DECRC in a shell prompt are always
-    /// paired inside one buffer, and a second slot would have no producer.
-    saved_cursor: Option<SavedCursor>,
-}
-
-/// DECSC's slot. Position and style are one value because `ESC 7` saves
-/// both — splitting them invites a restore that returns the column and
-/// silently drops the colour.
-#[derive(Clone, Copy)]
-struct SavedCursor {
-    pos: (u16, u16),
-    style: (Color, Color, Attrs),
-}
-
-#[derive(Default)]
-struct ScreenState {
-    fg: Color,
-    bg: Color,
-    attrs: Attrs,
-    title: Option<String>,
-    /// Latest ConEmu `OSC 9;4` progress payload -- everything after `9;`,
-    /// e.g. `"4;3;"` or `"4;0;0"`. That is the exact shape the detection
-    /// manifests' `osc_progress` region regexes are written against
-    /// (`crates/agent-detect/src/manifests/grok.toml` matches `^4;1;-1$`),
-    /// so this field's format is owned by those rules, not chosen here.
-    ///
-    /// A LEVEL, not an edge: a program sets it and leaves it until it sets
-    /// something else, and the manifests are written for exactly that --
-    /// Claude's rules assume `4;3` stays painted while it waits for
-    /// permission, which is why no rule reads `4;3` alone as working.
-    osc_progress: Option<String>,
-    bell: bool,
-}
-
-impl Screen {
-    #[must_use]
-    pub fn new(rows: u16, cols: u16) -> Self {
-        Self {
-            grid: Grid::new(rows, cols),
-            saved: None,
-            parser: vte::Parser::new(),
-            state: ScreenState::default(),
-            last_sent_title: None,
-            last_sent_alt: None,
-            saved_cursor: None,
-        }
-    }
-
-    pub fn feed(&mut self, bytes: &[u8]) {
-        let mut parser = std::mem::take(&mut self.parser);
-        // `&mut *self` reborrows rather than moves, so `self` is usable
-        // again below once `performer`'s borrow ends (its last use is the
-        // `advance` call). Performer holding the whole `Screen`, not a
-        // split grid/state borrow, is what lets `csi_dispatch` swap
-        // `screen.grid` inline the instant `?1049h`/`?1049l` is parsed --
-        // see `Performer::toggle_alt_screen` for why that has to happen
-        // there and not after this function returns.
-        let mut performer = Performer { screen: &mut *self };
-        parser.advance(&mut performer, bytes);
-        self.parser = parser;
-    }
-
-    #[must_use]
-    pub fn title(&self) -> Option<&str> {
-        self.state.title.as_deref()
-    }
-
-    /// The latest ConEmu progress payload, or `None` when the program has
-    /// never reported one.
-    ///
-    /// `None` means "this program has told me nothing", never "there is no
-    /// progress" (判据 §8). The detection engine spells the same absence as
-    /// an empty string, so `unwrap_or_default()` at the call site is the
-    /// faithful conversion, not a shortcut.
-    #[must_use]
-    pub fn osc_progress(&self) -> Option<&str> {
-        self.state.osc_progress.as_deref()
-    }
-
-    /// Reads and clears the bell flag — a bell is an edge, not a level.
-    pub fn take_bell(&mut self) -> bool {
-        std::mem::take(&mut self.state.bell)
-    }
-
-    /// True while the alternate screen buffer (`\e[?1049h`) is active —
-    /// e.g. while `vim`, `htop`, or a pager is running in the shell.
-    #[must_use]
-    pub const fn alt_screen(&self) -> bool {
-        self.saved.is_some()
-    }
-
-    /// Resize the visible grid and, if the alternate screen is active, the
-    /// saved primary underneath it too — so a resize made while inside e.g.
-    /// `vim` is not silently lost, and the primary comes back at the right
-    /// dimensions once the program exits and restores it.
-    pub fn resize(&mut self, rows: u16, cols: u16) {
-        self.grid.resize(rows, cols);
-        if let Some(saved) = &mut self.saved {
-            saved.resize(rows, cols);
-        }
-        // Belt and suspenders: `Grid::resize` already marks everything dirty
-        // when the dimensions actually change, but a resize call is also the
-        // moment a client's viewport genuinely changed, so force a full
-        // repaint even on the (same rows, same cols) no-op path.
-        self.grid.mark_all_dirty();
-    }
-
-    /// Override the scrollback ceiling on the visible grid and, if the
-    /// alternate screen is active, the saved primary underneath it too —
-    /// same reasoning as `resize`: a program running when the config is
-    /// patched should not come back to a primary grid with a stale ceiling
-    /// once it exits and restores.
-    pub fn set_scrollback_limit(&mut self, lines: usize) {
-        self.grid.set_scrollback_limit(lines);
-        if let Some(saved) = &mut self.saved {
-            saved.set_scrollback_limit(lines);
-        }
-    }
-
-    /// The scrollback ceiling currently in effect on the visible grid.
-    #[must_use]
-    pub fn scrollback_limit(&self) -> usize {
-        self.grid.scrollback_limit()
-    }
-
-    /// The diff since the last call, or `None` when nothing changed. `None`
-    /// is what makes a quiet terminal free: the flush task publishes
-    /// nothing.
-    pub fn take_patch(&mut self) -> Option<super::diff::ScreenPatch> {
-        let dirty = self.grid.take_dirty();
-        let title_changed = self.state.title != self.last_sent_title;
-        let alt = self.alt_screen();
-        let alt_changed = Some(alt) != self.last_sent_alt;
-        let bell = self.take_bell();
-
-        let patch = super::diff::ScreenPatch {
-            rows: super::diff::patch_rows(&self.grid, dirty),
-            cursor: Some(self.grid.cursor()),
-            alt_screen: alt_changed.then_some(alt),
-            title: title_changed.then(|| self.state.title.clone()).flatten(),
-            bell,
-        };
-        // Cursor is always present above, so emptiness is decided on the
-        // fields that actually carry news.
-        if patch.rows.is_empty() && !title_changed && !alt_changed && !bell {
-            return None;
-        }
-        self.last_sent_title.clone_from(&self.state.title);
-        self.last_sent_alt = Some(alt);
-        Some(patch)
-    }
-
-    /// Every row, for `pty.attach`. Does not consume the dirty set — an
-    /// attach must not swallow a diff a live client is still waiting for.
-    #[must_use]
-    pub fn full_patch(&self) -> super::diff::ScreenPatch {
-        let (rows, _) = self.grid.dims();
-        super::diff::ScreenPatch {
-            rows: super::diff::patch_rows(&self.grid, 0..rows),
-            cursor: Some(self.grid.cursor()),
-            alt_screen: Some(self.alt_screen()),
-            title: self.state.title.clone(),
-            bell: false,
-        }
-    }
-}
-
-/// Cap on a retained OSC payload, in chars. Same number and same reason as
-/// upstream herdr's `AGENT_OSC_MAX_CHARS` (`src/pane/osc.rs`): the payload is
-/// untrusted child-process output held for the lifetime of the session, so it
-/// is bounded before it is stored.
-const OSC_PAYLOAD_MAX_CHARS: usize = 256;
-
-/// Holds the whole `Screen`, not split `grid`/`state` borrows: `csi_dispatch`
-/// needs to swap `screen.grid` itself (entering/exiting the alternate
-/// screen) at the exact point `?1049h`/`?1049l` is parsed, and a split
-/// borrow of just `grid` can't be replaced wholesale -- see
-/// `Performer::toggle_alt_screen`.
-struct Performer<'a> {
-    screen: &'a mut Screen,
-}
-
-impl Performer<'_> {
-    fn style(&self) -> (Color, Color, Attrs) {
-        (
-            self.screen.state.fg,
-            self.screen.state.bg,
-            self.screen.state.attrs,
-        )
-    }
-
-    /// SGR. Consumes the parameter list because 38/48 take trailing
-    /// arguments, so this cannot be a per-parameter loop.
-    fn sgr(&mut self, params: &[u16]) {
-        let mut i = 0;
-        while i < params.len() {
-            match params[i] {
-                0 => {
-                    self.screen.state.fg = Color::Default;
-                    self.screen.state.bg = Color::Default;
-                    self.screen.state.attrs = Attrs::NONE;
-                }
-                1 => self.screen.state.attrs.insert(Attrs::BOLD),
-                3 => self.screen.state.attrs.insert(Attrs::ITALIC),
-                4 => self.screen.state.attrs.insert(Attrs::UNDERLINE),
-                7 => self.screen.state.attrs.insert(Attrs::REVERSE),
-                22 => self.screen.state.attrs.remove(Attrs::BOLD),
-                23 => self.screen.state.attrs.remove(Attrs::ITALIC),
-                24 => self.screen.state.attrs.remove(Attrs::UNDERLINE),
-                27 => self.screen.state.attrs.remove(Attrs::REVERSE),
-                30..=37 => self.screen.state.fg = Color::Indexed((params[i] - 30) as u8),
-                39 => self.screen.state.fg = Color::Default,
-                40..=47 => self.screen.state.bg = Color::Indexed((params[i] - 40) as u8),
-                49 => self.screen.state.bg = Color::Default,
-                90..=97 => self.screen.state.fg = Color::Indexed((params[i] - 90 + 8) as u8),
-                100..=107 => self.screen.state.bg = Color::Indexed((params[i] - 100 + 8) as u8),
-                38 | 48 => {
-                    let is_fg = params[i] == 38;
-                    // 38;5;N (indexed) or 38;2;R;G;B (truecolour). A malformed
-                    // run is skipped rather than mis-parsed into the next
-                    // parameter, which would recolour unrelated text.
-                    match params.get(i + 1) {
-                        Some(5) => {
-                            if let Some(&n) = params.get(i + 2) {
-                                let c = Color::Indexed(n as u8);
-                                if is_fg {
-                                    self.screen.state.fg = c
-                                } else {
-                                    self.screen.state.bg = c
-                                }
-                            }
-                            i += 2;
-                        }
-                        Some(2) => {
-                            if let (Some(&r), Some(&g), Some(&b)) =
-                                (params.get(i + 2), params.get(i + 3), params.get(i + 4))
-                            {
-                                let c = Color::Rgb(r as u8, g as u8, b as u8);
-                                if is_fg {
-                                    self.screen.state.fg = c
-                                } else {
-                                    self.screen.state.bg = c
-                                }
-                            }
-                            i += 4;
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-    }
-
-    /// Enter (`enter == true`) or exit the alternate screen. Called from
-    /// `csi_dispatch` at the exact point `?1049h`/`?1049l` is parsed -- not
-    /// deferred until `feed` finishes the chunk. Deferring it was the
-    /// original design; it passed the round-trip test because that test
-    /// feeds the escape and the following bytes in separate `feed()` calls,
-    /// but broke the common case of a program (vim, less) writing the enter
-    /// escape and its first frame in ONE chunk: those bytes would print
-    /// onto the PRIMARY grid before the deferred swap ever ran, and the
-    /// swap would then stash that now-polluted primary into `saved`.
-    fn toggle_alt_screen(&mut self, enter: bool) {
-        let swapped = if enter {
-            // A nested `?1049h` while already on the alt screen is a
-            // no-op: clobbering `saved` here would replace the real
-            // primary with the alt screen's own content, losing the
-            // user's shell scrollback for good the next time they exit.
-            // No grid becomes current here, so nothing needs marking dirty.
-            if self.screen.saved.is_none() {
-                let (rows, cols) = self.screen.grid.dims();
-                let primary = std::mem::replace(&mut self.screen.grid, Grid::new(rows, cols));
-                self.screen.saved = Some(primary);
-                true
-            } else {
-                false
-            }
-        } else if let Some(primary) = self.screen.saved.take() {
-            self.screen.grid = primary;
-            true
-        } else {
-            false
-        };
-        if swapped {
-            // Whichever grid just became current is entirely new to an
-            // already-attached client. The fresh alt grid starts with an
-            // EMPTY dirty set by design (`Grid::new`'s doc comment: a
-            // client that just attached gets a full sync from
-            // `full_patch`, which reads every row directly and ignores
-            // the dirty set) -- but a mid-session swap is the opposite
-            // case, a client that is already attached and only ever
-            // reads `take_patch`. And the restored primary's dirty set is
-            // whatever was stashed on it when it was last current, which
-            // is stale. Without this, `take_patch` reports nothing
-            // changed in both directions while the entire visible screen
-            // was just replaced: entering leaves the Panel rendering the
-            // shell screen while vim runs, exiting leaves it rendering
-            // vim's last frame after the user quits.
-            self.screen.grid.mark_all_dirty();
-        }
-    }
-
-    /// Retain a ConEmu `OSC 9;4` progress payload.
-    ///
-    /// `vte` splits an OSC on `;`, so `\e]9;4;3;50\a` arrives as
-    /// `["9", "4", "3", "50"]`; rejoining `params[1..]` reproduces the
-    /// `"4;3;50"` form the manifests match. Rejoining rather than reading
-    /// `params[1]` is also what keeps this correct if `vte` ever stops
-    /// splitting -- a single `"4;3;50"` element rejoins to itself.
-    ///
-    /// Only `9;4` is retained. OSC 9 is a shared namespace: `9;9;<path>` is
-    /// ConEmu's cwd report and a bare `9;<text>` is an iTerm2 notification.
-    /// Storing those here would overwrite a live progress level with a value
-    /// no rule can ever match -- turning "working" into "no evidence" with
-    /// nothing on screen to show for it (判据 §8). Upstream herdr does NOT
-    /// filter (`herdr src/pane/osc.rs` retains every OSC 9 payload); this
-    /// divergence is deliberate, not a porting slip.
-    fn retain_osc_progress(&mut self, rest: &[&[u8]]) {
-        let joined = rest
-            .iter()
-            .map(|p| String::from_utf8_lossy(p))
-            .collect::<Vec<_>>()
-            .join(";");
-        let payload: String = joined
-            .chars()
-            .filter(|ch| !ch.is_control())
-            .take(OSC_PAYLOAD_MAX_CHARS)
-            .collect();
-        if payload == "4" || payload.starts_with("4;") {
-            self.screen.state.osc_progress = Some(payload);
-        }
-    }
-}
-
-impl vte::Perform for Performer<'_> {
-    fn print(&mut self, c: char) {
-        let style = self.style();
-        self.screen.grid.put(c, style);
-    }
-
-    fn execute(&mut self, byte: u8) {
-        match byte {
-            // VT and FF move down a line like LF: what xterm does, and a
-            // program that emits either means "next line", never "nothing".
-            b'\n' | 0x0b | 0x0c => self.screen.grid.newline(),
-            b'\r' => self.screen.grid.carriage_return(),
-            0x08 => self.screen.grid.backspace(),
-            0x09 => self.screen.grid.tab(),
-            0x07 => self.screen.state.bell = true,
-            _ => {}
-        }
-    }
-
-    /// Non-CSI escapes. `vte`'s default for this method is a silent no-op,
-    /// so before it existed every one of them was dropped by construction
-    /// rather than by a decision — which is why `ESC 7`/`ESC 8` went
-    /// missing even though prompt drawing leans on them.
-    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
-        // Intermediates are load-bearing, not decoration: `ESC # 8` is
-        // DECALN (fill the screen with `E`), and matching on the final byte
-        // alone would run a screen-alignment test as a cursor restore.
-        if !intermediates.is_empty() {
-            return;
-        }
-        match byte {
-            // DECSC. Position and style travel together because that is
-            // what the sequence means; saving only the position passes a
-            // position test and then drops colour on every prompt that
-            // brackets its output with 7/8.
-            b'7' => {
-                self.screen.saved_cursor = Some(SavedCursor {
-                    pos: self.screen.grid.cursor(),
-                    style: self.style(),
-                });
-            }
-            // DECRC. With nothing saved this does nothing. DEC's spec homes
-            // the cursor instead; nothing here needs that, and a stray
-            // `ESC 8` that homed the cursor would move a screen the user is
-            // watching, where doing nothing cannot.
-            b'8' => {
-                if let Some(saved) = self.screen.saved_cursor {
-                    let (row, col) = saved.pos;
-                    self.screen.grid.goto(row, col);
-                    let (fg, bg, attrs) = saved.style;
-                    self.screen.state.fg = fg;
-                    self.screen.state.bg = bg;
-                    self.screen.state.attrs = attrs;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn csi_dispatch(&mut self, params: &vte::Params, inter: &[u8], _ignore: bool, action: char) {
-        // Flatten sub-parameters: only SGR's 38/48 use them, and it reads the
-        // colon form (38:2:r:g:b) identically to the semicolon form.
-        let flat: Vec<u16> = params.iter().flat_map(|p| p.iter().copied()).collect();
-        if action == 'm' {
-            let effective: &[u16] = if flat.is_empty() { &[0] } else { &flat };
-            self.sgr(effective);
-        }
-
-        // A parameter of `0` means "use the default" for every arm handled
-        // here (never a literal zero), same as an omitted parameter.
-        let p = |n: usize, default: u16| -> u16 {
-            flat.get(n).copied().filter(|v| *v != 0).unwrap_or(default)
-        };
-        match action {
-            // CUP / HVP: 1-based on the wire, 0-based in the grid.
-            'H' | 'f' => self.screen.grid.goto(p(0, 1) - 1, p(1, 1) - 1),
-            'A' => self.screen.grid.move_cursor(-i32::from(p(0, 1)), 0),
-            'B' => self.screen.grid.move_cursor(i32::from(p(0, 1)), 0),
-            'C' => self.screen.grid.move_cursor(0, i32::from(p(0, 1))),
-            'D' => self.screen.grid.move_cursor(0, -i32::from(p(0, 1))),
-            // CHA / VPA: absolute column and row, 1-based on the wire like
-            // CUP above. A shell's line editor uses these and the five
-            // below on every redraw; `p`'s "0 means default" is right for
-            // all of them, unlike `J`/`K` whose 0 is a real mode value.
-            'G' => self.screen.grid.goto_col(p(0, 1) - 1),
-            'd' => self.screen.grid.goto_row(p(0, 1) - 1),
-            'X' => self.screen.grid.erase_chars(p(0, 1)),
-            'P' => self.screen.grid.delete_chars(p(0, 1)),
-            '@' => self.screen.grid.insert_chars(p(0, 1)),
-            'L' => self.screen.grid.insert_lines(p(0, 1)),
-            'M' => self.screen.grid.delete_lines(p(0, 1)),
-            'J' => self
-                .screen
-                .grid
-                .erase_in_display(flat.first().copied().unwrap_or(0)),
-            'K' => self
-                .screen
-                .grid
-                .erase_in_line(flat.first().copied().unwrap_or(0)),
-            // `\e[?1049h` / `\e[?1049l`: enter/exit the alternate screen.
-            // `?` only ever arrives via `intermediates`, never `params` — a
-            // guard on `action` alone would also swallow the private-mode-less
-            // `h`/`l` sequences (unused here, but real DEC private modes like
-            // `?25` cursor-visibility share these final bytes). Applied
-            // inline, not deferred -- see `Performer::toggle_alt_screen`.
-            'h' | 'l' if inter == b"?" && flat.first() == Some(&1049) => {
-                self.toggle_alt_screen(action == 'h');
-            }
-            _ => {}
-        }
-    }
-
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        // OSC 0 = icon + title, OSC 2 = title.
-        let Some(kind) = params.first() else { return };
-        if matches!(*kind, b"0" | b"2") {
-            if let Some(raw) = params.get(1) {
-                self.screen.state.title = Some(String::from_utf8_lossy(raw).into_owned());
-            }
-            return;
-        }
-        if *kind == b"9" {
-            self.retain_osc_progress(&params[1..]);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
     use super::*;
+    use super::osc::OSC_PAYLOAD_MAX_CHARS;
     use crate::gateway::pty::screen::grid::{Attrs, Cell, Color};
 
     #[test]
@@ -1120,14 +642,26 @@ mod tests {
             (b'm', b"\x1b[31ma"),
             (b'h', b"abc\x1b[?1049h"),
             (b'l', b"abc\x1b[?1049h\x1b[?1049l"),
+            // REP: the `b` is the only one in the probe, as the mutation
+            // below requires.
+            (b'b', b"-\x1b[4b"),
+            // DECSTR. `!` is an intermediate, so the census -- which reads
+            // final bytes only -- names `p`, not `!`.
+            (b'p', b"ab\x1b[!p"),
+            // DECSTBM homes the cursor, which `observable` reads.
+            (b'r', b"ab\x1b[2;3r"),
+            // SU and SD.
+            (b'S', b"a\r\nb\x1b[1S"),
+            (b'T', b"a\r\nb\x1b[1T"),
         ];
         // `~` is a legal CSI final byte no arm claims.
         each_probe_reaches_the_grid("CSI", probes, b'~', 3, 8);
         assert_claims_match_probes(
             "CSI",
-            &claimed_char_literals(&dispatch_body("csi_dispatch")),
+            &claimed_char_literals(&dispatch_body(include_str!("csi.rs"), "csi")),
             probes,
         );
+        assert_forwarding_body_claims_nothing("csi_dispatch");
     }
 
     /// The C0 table is the same shape as the CSI one and had the same
@@ -1152,9 +686,10 @@ mod tests {
         each_probe_reaches_the_grid("C0", probes, 0x06, 3, 20);
         assert_claims_match_probes(
             "C0",
-            &claimed_byte_literals(&dispatch_body("execute")),
+            &claimed_byte_literals(&dispatch_body(include_str!("esc.rs"), "c0")),
             probes,
         );
+        assert_forwarding_body_claims_nothing("execute");
     }
 
     /// The third table, and the one that was not there at all: `vte`'s
@@ -1167,14 +702,27 @@ mod tests {
         // One sequence proves both halves: with `7` inert nothing is saved,
         // with `8` inert nothing is restored, and `Z` lands elsewhere either
         // way -- which is also why neither probe proves the other's arm.
-        let probes: &[(u8, &[u8])] = &[(b'7', b"ab\x1b7cd\x1b8Z"), (b'8', b"ab\x1b7cd\x1b8Z")];
+        let probes: &[(u8, &[u8])] = &[
+            (b'7', b"ab\x1b7cd\x1b8Z"),
+            (b'8', b"ab\x1b7cd\x1b8Z"),
+            // RIS, IND, NEL. Each probe contains its own claimed byte
+            // exactly once, which `each_probe_reaches_the_grid` enforces --
+            // `abc` would have put a second `c` in the RIS probe and the
+            // mutation would then have changed two things at once.
+            (b'c', b"ab\x1bcZ"),
+            (b'D', b"ab\x1bDZ"),
+            (b'E', b"ab\x1bEZ"),
+            // RI.
+            (b'M', b"ab\r\ncd\x1bMZ"),
+        ];
         // `ESC 9` is a final byte no arm claims.
         each_probe_reaches_the_grid("ESC", probes, b'9', 3, 20);
         assert_claims_match_probes(
             "ESC",
-            &claimed_byte_literals(&dispatch_body("esc_dispatch")),
+            &claimed_byte_literals(&dispatch_body(include_str!("esc.rs"), "esc")),
             probes,
         );
+        assert_forwarding_body_claims_nothing("esc_dispatch");
     }
 
     /// The scraper is itself a dispatch table -- one arm per spelling -- so
@@ -1218,21 +766,62 @@ mod tests {
         let _ = claimed_byte_literals("b'\\x1b'");
     }
 
-    /// The body of one `Perform` method, comment lines removed -- comments
+    /// Splitting the dispatch by face gave every table TWO places it could
+    /// be written: the real one in `csi.rs`/`esc.rs`, and the `vte::Perform`
+    /// forwarding body in `mod.rs`. The censuses above read only the first,
+    /// so an arm added to the second would run at parse time and be invisible
+    /// to them -- a second face of one verb with only one of them guarded
+    /// (判据 §9). This pins the forwarding bodies as pure delegation: they
+    /// must name no byte and no character of their own.
+    fn assert_forwarding_body_claims_nothing(method: &str) {
+        let body = dispatch_body(include_str!("mod.rs"), method);
+        let bytes = claimed_byte_literals(&body);
+        let chars = claimed_char_literals(&body);
+        assert!(
+            bytes.is_empty() && chars.is_empty(),
+            "`{method}` in mod.rs must forward and nothing else, but it names \
+             bytes {bytes:?} and chars {chars:?}. Put the arm in the file that \
+             owns that table (csi.rs / esc.rs), or the census guarding it never \
+             sees it."
+        );
+    }
+
+    /// The body of one dispatch function, comment lines removed -- comments
     /// are prose, not dispatch, and the guards' own paragraphs name verbs
     /// their function does not handle. `\r` goes first so the boundary
     /// still matches on a CRLF checkout.
-    fn dispatch_body(method: &str) -> String {
-        let src = include_str!("perform.rs").replace('\r', "");
-        let body = src
+    ///
+    /// Takes the source explicitly because after the dispatch-face split a
+    /// table's source is no longer "this file": the CSI table lives in
+    /// `csi.rs`, the C0 and ESC tables in `esc.rs`, and `mod.rs` holds only
+    /// the forwarding block. Pointing this at the wrong file yields an
+    /// empty claimed set, which `assert_claims_match_probes` reports as a
+    /// mismatch -- there is no arrangement where a misaimed scrape passes
+    /// by seeing nothing.
+    fn dispatch_body(src: &str, method: &str) -> String {
+        let src = src.replace('\r', "");
+        let tail = src
             .split_once(&format!("fn {method}"))
-            .unwrap_or_else(|| panic!("no `fn {method}` in this file"))
-            .1
-            .split("\n    fn ")
-            .next()
-            .expect("split always yields a first piece")
-            .to_string();
-        body.lines()
+            .unwrap_or_else(|| panic!("no `fn {method}` in this source"))
+            .1;
+        // The end of the body is the next item in the impl block, whatever
+        // its visibility. A separator that knew only the bare `fn` spelling
+        // ran straight past `pub(super) fn esc` and folded the ESC table
+        // into the C0 one -- silently WIDENING the claimed set, which the
+        // set comparison reports but a one-sided "is it non-empty" check
+        // never would.
+        let opens_next_item = |l: &str| {
+            let t = l.trim_start();
+            l.starts_with("    ")
+                && (t.starts_with("fn ")
+                    || t.starts_with("pub fn ")
+                    || t.starts_with("pub(super) fn ")
+                    || t.starts_with("pub(crate) fn "))
+        };
+        tail.lines()
+            .enumerate()
+            .take_while(|(i, l)| *i == 0 || !opens_next_item(l))
+            .map(|(_, l)| l)
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n")
@@ -1409,6 +998,1008 @@ mod tests {
              you removed\n  named:  {}\n  probed: {}",
             show(claimed),
             show(&probed)
+        );
+    }
+
+    // ----------------------------------------------------------------
+    // 0-A Tier A: stateless sequences (RIS/DECSTR, DECAWM, IND/NEL, REP,
+    // legacy alt screen, OSC title rejoin, explicit DCS no-ops).
+    //
+    // Every one of these is written as "same input, with and without the
+    // sequence, `visible_text()` differs". An assertion on the with-side
+    // alone cannot tell an implemented arm from a lucky coincidence of the
+    // rest of the input; the without-side is what makes the arm the thing
+    // being measured.
+    // ----------------------------------------------------------------
+
+    /// RIS (`ESC c`) is the full reset: blank grid, cursor home, SGR back to
+    /// default, alt screen exited, DECAWM back on, title gone, DECSC slot
+    /// dropped.
+    ///
+    /// **Design call, recorded here and at the code: RIS does NOT clear
+    /// scrollback.** xterm does. Aleph's `visible_text()` — the only reader
+    /// that decides an agent's state — never looks at scrollback, so
+    /// clearing it would buy no consumer anything while throwing away what
+    /// the user scrolled back to. The assertion below pins that choice, and
+    /// the non-vacuity check above it stops the pin from measuring an empty
+    /// ring.
+    #[test]
+    fn ris_clears_grid_title_and_saved_cursor() {
+        let setup: &[u8] = b"one\r\ntwo\r\nthree\r\nfour\x1b]0;t\x07\x1b[31m\x1b7";
+        let mut with = Screen::new(3, 10);
+        with.feed(setup);
+        let mut without = Screen::new(3, 10);
+        without.feed(setup);
+
+        let scrollback_before = with.grid.scrollback_len();
+        assert!(
+            scrollback_before > 0,
+            "the setup must actually evict a row, or the scrollback assertion \
+             below is measuring an empty ring and would pass either way"
+        );
+        assert_eq!(with.title(), Some("t"), "setup must set a title to clear");
+
+        with.feed(b"\x1bcZ");
+        without.feed(b"Z");
+        assert_ne!(
+            with.visible_text(),
+            without.visible_text(),
+            "with RIS the screen is blank and Z lands home; without it Z appends"
+        );
+        assert_eq!(with.grid.row_text(0), "Z");
+        assert_eq!(with.grid.row_text(1), "", "every row is blanked");
+        assert_eq!(with.title(), None, "RIS clears the title");
+        assert_eq!(
+            with.grid.row_cells(0)[0].fg,
+            Color::Default,
+            "RIS resets SGR, so Z is not still red"
+        );
+        assert_eq!(
+            with.grid.scrollback_len(),
+            scrollback_before,
+            "RIS deliberately keeps scrollback -- see this test's doc comment"
+        );
+
+        with.feed(b"ab\x1b8Y");
+        assert_eq!(
+            with.grid.row_text(0),
+            "ZabY",
+            "RIS dropped the DECSC slot, so the DECRC that follows moves nothing"
+        );
+    }
+
+    /// DECSTR (`CSI ! p`) is the soft variant: the modes go back to their
+    /// defaults and the cursor homes, but the cells stay. The `!` is an
+    /// intermediate, not a parameter — without reading it this is an
+    /// unrelated `CSI p`.
+    #[test]
+    fn decstr_resets_modes_but_keeps_the_grid() {
+        let setup: &[u8] = b"\x1b]0;t\x07\x1b[?7lkeep\x1b[31m\x1b7";
+        let mut with = Screen::new(3, 10);
+        with.feed(setup);
+        let mut without = Screen::new(3, 10);
+        without.feed(setup);
+
+        with.feed(b"\x1b[!pZ");
+        without.feed(b"Z");
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(
+            with.grid.row_text(0),
+            "Zeep",
+            "DECSTR homed the cursor but left the cells alone"
+        );
+        assert_eq!(without.grid.row_text(0), "keepZ");
+        assert_eq!(
+            with.title(),
+            Some("t"),
+            "a title is not a mode: the soft reset leaves it"
+        );
+        assert_eq!(
+            with.grid.row_cells(0)[0].fg,
+            Color::Default,
+            "SGR is a mode and does go back to default"
+        );
+    }
+
+    /// DECAWM off (`CSI ?7 l`) makes the right margin absorb writes instead
+    /// of wrapping. The invariant the 0-A survey singles out is asserted
+    /// here too: `cursor_col == cols` is this model's ONLY representation of
+    /// "a wrap is owed", so with wrapping disabled it must never be entered
+    /// — parking there would make the very next `put` wrap after all.
+    #[test]
+    fn decawm_off_overwrites_the_last_column_instead_of_wrapping() {
+        let mut off = Screen::new(3, 5);
+        off.feed(b"\x1b[?7labcdefgh");
+        let mut on = Screen::new(3, 5);
+        on.feed(b"abcdefgh");
+
+        assert_ne!(off.visible_text(), on.visible_text());
+        assert_eq!(off.grid.row_text(0), "abcdh", "the last column absorbs f, g, h");
+        assert_eq!(off.grid.row_text(1), "", "nothing wrapped onto the next row");
+        assert_eq!(on.grid.row_text(0), "abcde", "with DECAWM on it wraps");
+        assert_eq!(on.grid.row_text(1), "fgh");
+
+        let (_, col) = off.grid.cursor();
+        let (_, cols) = off.grid.dims();
+        assert!(
+            col < cols,
+            "DECAWM off must never park the cursor at `cols` -- that value is \
+             the model's 'a wrap is owed' state, and no wrap is ever owed here"
+        );
+
+        off.feed(b"\x1b[?7hij");
+        assert_eq!(off.grid.row_text(1), "j", "re-enabling DECAWM wraps again");
+    }
+
+    /// IND (`ESC D`) moves down keeping the column; NEL (`ESC E`) moves down
+    /// and returns to column zero. Asserting both against each other as well
+    /// as against neither is what stops one arm from standing in for the
+    /// other: a version that implemented IND as NEL passes an IND-only test.
+    #[test]
+    fn ind_moves_down_same_column_nel_moves_down_col_zero() {
+        let mut ind = Screen::new(3, 10);
+        ind.feed(b"abc\x1bDX");
+        let mut nel = Screen::new(3, 10);
+        nel.feed(b"abc\x1bEX");
+        let mut without = Screen::new(3, 10);
+        without.feed(b"abcX");
+
+        assert_ne!(ind.visible_text(), without.visible_text());
+        assert_ne!(nel.visible_text(), without.visible_text());
+        assert_ne!(
+            ind.visible_text(),
+            nel.visible_text(),
+            "IND keeps the column, NEL does not -- implementing one as the \
+             other would pass a test that only checked 'it moved down'"
+        );
+        assert_eq!(ind.grid.row_text(1), "   X");
+        assert_eq!(nel.grid.row_text(1), "X");
+        assert_eq!(without.grid.row_text(0), "abcX");
+    }
+
+    /// REP (`CSI Ps b`) repeats the last PRINTED character. "Printed" is the
+    /// whole difficulty: a control byte or another CSI in between means
+    /// there is no candidate any more, and a version that repeated "the last
+    /// character seen" would emit an escape's final byte instead.
+    #[test]
+    fn rep_repeats_the_last_printed_char_and_a_control_byte_invalidates_it() {
+        let mut with = Screen::new(2, 10);
+        with.feed(b"-\x1b[4b");
+        let mut without = Screen::new(2, 10);
+        without.feed(b"-");
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "-----", "one printed plus four repeats");
+
+        let mut after_control = Screen::new(2, 10);
+        after_control.feed(b"-\x08\x1b[4b");
+        assert_eq!(
+            after_control.grid.row_text(0),
+            "-",
+            "BS is a control byte: it clears the repeat candidate"
+        );
+
+        let mut after_csi = Screen::new(2, 10);
+        after_csi.feed(b"-\x1b[31m\x1b[4b");
+        assert_eq!(
+            after_csi.grid.row_text(0),
+            "-",
+            "an intervening CSI clears it too"
+        );
+
+        let mut twice = Screen::new(2, 10);
+        twice.feed(b"-\x1b[2b\x1b[2b");
+        assert_eq!(
+            twice.grid.row_text(0),
+            "-----",
+            "REP's own writes are prints, so a second REP still has a candidate"
+        );
+    }
+
+    /// Modes 47 and 1047 are the legacy alternate screen. The semantic
+    /// difference that matters is on the buffer, not the switch: 1049 clears
+    /// the alternate buffer every time it enters, 47/1047 do not, so a
+    /// program that leaves and re-enters through the legacy pair expects to
+    /// find its screen still there.
+    #[test]
+    fn legacy_alt_screen_47_and_1047_keep_the_alt_grid_across_exit() {
+        for (enter, exit) in [
+            (&b"\x1b[?47h"[..], &b"\x1b[?47l"[..]),
+            (&b"\x1b[?1047h"[..], &b"\x1b[?1047l"[..]),
+        ] {
+            let mut with = Screen::new(3, 10);
+            with.feed(b"primary");
+            with.feed(enter);
+            assert!(
+                with.alt_screen(),
+                "the legacy modes must enter the alternate screen, not fall \
+                 through to the catch-all"
+            );
+            with.feed(b"alt");
+            with.feed(exit);
+            assert_eq!(
+                with.grid.row_text(0),
+                "primary",
+                "exiting restores the primary buffer"
+            );
+            with.feed(enter);
+            assert_eq!(
+                with.grid.row_text(0),
+                "alt",
+                "the legacy alternate buffer survives the round trip"
+            );
+
+            let mut without = Screen::new(3, 10);
+            without.feed(b"primary");
+            without.feed(b"alt");
+            assert_ne!(with.visible_text(), without.visible_text());
+        }
+
+        let mut modern = Screen::new(3, 10);
+        modern.feed(b"primary\x1b[?1049halt\x1b[?1049l");
+        assert_eq!(modern.grid.row_text(0), "primary");
+        modern.feed(b"\x1b[?1049h");
+        assert_eq!(
+            modern.grid.row_text(0),
+            "",
+            "1049 is the contrast: it clears the alternate buffer on entry"
+        );
+    }
+
+    /// Mode 1048 is DECSC/DECRC under another spelling, and it shares the one
+    /// saved-cursor slot with `ESC 7`/`ESC 8` deliberately: a second slot
+    /// would have no producer, and two slots would let a save through one
+    /// spelling be restored as nothing through the other.
+    #[test]
+    fn mode_1048_saves_and_restores_the_cursor() {
+        let mut with = Screen::new(3, 10);
+        with.feed(b"ab\x1b[?1048hcd\x1b[?1048lZ");
+        let mut without = Screen::new(3, 10);
+        without.feed(b"abcdZ");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "abZd", "the restore put the cursor back at column 2");
+        assert_eq!(without.grid.row_text(0), "abcdZ");
+    }
+
+    /// `vte` splits an OSC payload on every `;`, so reading `params[1]` alone
+    /// truncates a title at its first semicolon. `retain_osc_progress` already
+    /// rejoins `params[1..]` for exactly this reason; the title path had the
+    /// other, wrong shape of the same code sitting beside it.
+    #[test]
+    fn osc_title_with_semicolons_is_rejoined() {
+        let mut s = Screen::new(2, 30);
+        s.feed(b"\x1b]0;a;b;c\x07");
+        assert_eq!(
+            s.title(),
+            Some("a;b;c"),
+            "a truncating reader would report just `a` -- and `a` is a \
+             plausible-looking title, so nothing downstream would notice"
+        );
+
+        let mut two = Screen::new(2, 30);
+        two.feed(b"\x1b]2;dir - cmd; arg\x07");
+        assert_eq!(two.title(), Some("dir - cmd; arg"), "OSC 2 shares the path");
+    }
+
+    /// DCS is swallowed by `vte`'s own state machine: `advance_dcs_passthrough`
+    /// routes payload bytes to `put()` and never to `print()`, so the payload
+    /// cannot reach the grid. The three methods are implemented explicitly
+    /// anyway, because "no branch" and "a branch that deliberately does
+    /// nothing" read identically at the call site and only one of them is a
+    /// decision.
+    ///
+    /// Falsifiable: implement `Perform::put` as `self.print(char::from(byte))`
+    /// — the plausible wrong version — and the DECRQSS payload `1$r0m` paints
+    /// onto row 0 and this test fails on the first assertion.
+    #[test]
+    fn dcs_hook_put_unhook_are_explicit_no_ops() {
+        let mut with = Screen::new(3, 10);
+        with.feed(b"ab\x1bP1$r0m\x1b\\cd");
+        let mut without = Screen::new(3, 10);
+        without.feed(b"abcd");
+
+        assert_eq!(
+            with.visible_text(),
+            without.visible_text(),
+            "a DCS payload must not paint; the bytes after ST must still land"
+        );
+        assert_eq!(with.grid.row_text(0), "abcd");
+    }
+
+    // ----------------------------------------------------------------
+    // 0-A A2 + B5: scroll regions (DECSTBM / SU / SD / RI) and origin mode.
+    //
+    // A2 and B5 ship together on purpose. DECOM means nothing without a
+    // region, and a region without DECOM is half-right: a program that sets
+    // both and then addresses `CSI 1;1H` lands at the top of the SCREEN
+    // instead of the top of its region, and every row it paints afterwards
+    // is offset against what it believes it drew.
+    // ----------------------------------------------------------------
+
+    /// The shape this whole feature exists for: a program pins a header and
+    /// a footer and scrolls only the middle (`vim`, `less`, `tmux`, anything
+    /// that sends `CSI 2;23r`). Scrolling the pinned rows marches the header
+    /// off the top while it is still plainly on the user's real terminal --
+    /// and it is the status line the detection manifests match on.
+    #[test]
+    fn decstbm_scrolls_only_the_region_and_pins_the_header() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree\r\nfooter";
+        let mut with = Screen::new(5, 10);
+        with.feed(setup);
+        // Region = rows 2..=4 one-based, i.e. the three middle rows.
+        with.feed(b"\x1b[2;4r");
+        with.feed(b"\x1b[4;1H\nnew");
+
+        let mut without = Screen::new(5, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[4;1H\nnew");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "header", "the pinned header does not move");
+        assert_eq!(with.grid.row_text(4), "footer", "nor does the pinned footer");
+        assert_eq!(with.grid.row_text(1), "two", "the region scrolled by one");
+        assert_eq!(with.grid.row_text(2), "three");
+        assert_eq!(with.grid.row_text(3), "new");
+    }
+
+    /// Scrollback is what fell off the TOP OF THE SCREEN. A row leaving the
+    /// top of a region never reached the top of the screen, so filing it
+    /// would let a client scrolling back read rows the user never saw leave
+    /// -- the same reasoning `insert_lines` already carries for rows pushed
+    /// off the bottom.
+    #[test]
+    fn rows_leaving_a_region_top_do_not_enter_scrollback() {
+        let mut region = Screen::new(4, 10);
+        region.feed(b"a\r\nb\r\nc\r\nd");
+        assert_eq!(region.grid.scrollback_len(), 0, "the setup must not scroll on its own");
+        region.feed(b"\x1b[2;4r\x1b[4;1H\n\n\n");
+        assert_eq!(
+            region.grid.scrollback_len(),
+            0,
+            "three scrolls inside a region file nothing"
+        );
+
+        let mut full = Screen::new(4, 10);
+        full.feed(b"a\r\nb\r\nc\r\nd\n\n\n");
+        assert_eq!(
+            full.grid.scrollback_len(),
+            3,
+            "the contrast: a full-height scroll still files every row it evicts \
+             -- without this the assertion above would pass on a screen that \
+             simply never scrolls"
+        );
+    }
+
+    /// RI (`ESC M`) at the top of the region opens a blank row there and
+    /// pushes the region down. Without it, a program scrolling backwards
+    /// gets nothing: the top of the screen keeps stale text forever while
+    /// the program believes it revealed new content.
+    #[test]
+    fn reverse_index_at_region_top_scrolls_down() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree";
+        let mut with = Screen::new(4, 10);
+        with.feed(setup);
+        with.feed(b"\x1b[2;4r\x1b[2;1H\x1bMX");
+
+        let mut without = Screen::new(4, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[2;4r\x1b[2;1HX");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "header", "the row above the region is untouched");
+        assert_eq!(with.grid.row_text(1), "X", "a blank row opened at the region top");
+        assert_eq!(with.grid.row_text(2), "one");
+        assert_eq!(with.grid.row_text(3), "two");
+        assert_eq!(
+            with.grid.scrollback_len(),
+            0,
+            "the row pushed off the region bottom is discarded, not filed -- it \
+             left downwards, and scrollback only ever means 'off the top'"
+        );
+
+        // Away from the region top, RI is a plain move up.
+        let mut inside = Screen::new(4, 10);
+        inside.feed(setup);
+        inside.feed(b"\x1b[2;4r\x1b[3;1H\x1bMY");
+        assert_eq!(inside.grid.row_text(1), "Yne", "no scroll: the cursor just moved up");
+    }
+
+    /// SU/SD scroll the region without moving the cursor, which is what
+    /// separates them from IND/RI.
+    #[test]
+    fn su_and_sd_scroll_within_the_region() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree";
+        let mut without = Screen::new(4, 10);
+        without.feed(setup);
+
+        let mut su = Screen::new(4, 10);
+        su.feed(setup);
+        su.feed(b"\x1b[2;4r\x1b[2S");
+        assert_ne!(su.visible_text(), without.visible_text());
+        assert_eq!(su.grid.row_text(0), "header");
+        assert_eq!(su.grid.row_text(1), "three");
+        assert_eq!(su.grid.row_text(2), "");
+        assert_eq!(su.grid.row_text(3), "");
+
+        let mut sd = Screen::new(4, 10);
+        sd.feed(setup);
+        sd.feed(b"\x1b[2;4r\x1b[1T");
+        assert_ne!(sd.visible_text(), without.visible_text());
+        assert_eq!(sd.grid.row_text(0), "header");
+        assert_eq!(sd.grid.row_text(1), "");
+        assert_eq!(sd.grid.row_text(2), "one");
+        assert_eq!(sd.grid.row_text(3), "two");
+    }
+
+    /// DECOM (`CSI ?6 h`) makes CUP's row 1 mean the region's top row, and
+    /// clamps at the region's bottom rather than the screen's. Both halves
+    /// are asserted: a version that added the offset but clamped to the
+    /// screen still puts text outside the region the program reserved.
+    #[test]
+    fn origin_mode_makes_cup_relative_to_the_region() {
+        let setup: &[u8] = b"\x1b[3;5r";
+        let mut with = Screen::new(6, 10);
+        with.feed(setup);
+        with.feed(b"\x1b[?6h\x1b[1;1HX");
+
+        let mut without = Screen::new(6, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[1;1HX");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(2), "X", "row 1 is the region's top row");
+        assert_eq!(with.grid.row_text(0), "", "and the screen's top is out of reach");
+        assert_eq!(without.grid.row_text(0), "X", "without DECOM, row 1 is the screen's top");
+
+        with.feed(b"\x1b[9;1HY");
+        assert_eq!(with.grid.row_text(4), "Y", "DECOM clamps at the region's bottom");
+        assert_eq!(with.grid.row_text(5), "", "not at the screen's");
+    }
+
+    /// A region is stated in rows, so it cannot outlive a change to how many
+    /// rows there are. RIS resets it for the same reason it resets every
+    /// other mode.
+    #[test]
+    fn resize_and_ris_reset_the_region() {
+        let mut resized = Screen::new(4, 10);
+        resized.feed(b"a\r\nb\r\nc\r\nd\x1b[2;3r");
+        resized.resize(5, 10);
+        resized.feed(b"\x1b[5;1H\nZ");
+        assert_eq!(
+            resized.grid.scrollback_len(),
+            1,
+            "after the resize the region is the whole screen again, so the \
+             scroll evicts a row -- a stale (2,3) region would have scrolled \
+             two rows in the middle and filed nothing"
+        );
+
+        let mut after_ris = Screen::new(4, 10);
+        after_ris.feed(b"\x1b[2;3r\x1bc");
+        after_ris.feed(b"a\r\nb\r\nc\r\nd\r\ne");
+        assert_eq!(after_ris.grid.scrollback_len(), 1, "RIS put the region back");
+        assert_eq!(after_ris.grid.row_text(3), "e");
+
+        let mut still_set = Screen::new(4, 10);
+        still_set.feed(b"\x1b[2;3r");
+        still_set.feed(b"a\r\nb\r\nc\r\nd\r\ne");
+        assert_eq!(
+            still_set.grid.scrollback_len(),
+            0,
+            "the contrast: a region still in force files nothing, which is \
+             what makes the two assertions above measure the reset and not \
+             the grid's height"
+        );
+    }
+
+    /// IL/DL are region-bounded: rows below the region's bottom must not be
+    /// pushed down or pulled up, or the footer a program pinned moves anyway
+    /// through a different verb than the one A2 was written for.
+    #[test]
+    fn insert_and_delete_lines_respect_the_region() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree\r\nfooter";
+
+        let mut il = Screen::new(5, 10);
+        il.feed(setup);
+        il.feed(b"\x1b[2;4r\x1b[2;1H\x1b[1L");
+        assert_eq!(il.grid.row_text(0), "header");
+        assert_eq!(il.grid.row_text(1), "", "a blank row inserted at the region top");
+        assert_eq!(il.grid.row_text(2), "one");
+        assert_eq!(il.grid.row_text(3), "two");
+        assert_eq!(
+            il.grid.row_text(4),
+            "footer",
+            "`three` fell off the region's bottom; the footer below it did not move"
+        );
+
+        let mut dl = Screen::new(5, 10);
+        dl.feed(setup);
+        dl.feed(b"\x1b[2;4r\x1b[2;1H\x1b[1M");
+        assert_eq!(dl.grid.row_text(0), "header");
+        assert_eq!(dl.grid.row_text(1), "two");
+        assert_eq!(dl.grid.row_text(2), "three");
+        assert_eq!(
+            dl.grid.row_text(3),
+            "",
+            "the region's last row is blanked, not filled from below the region"
+        );
+        assert_eq!(dl.grid.row_text(4), "footer");
+
+        let mut without = Screen::new(5, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[2;1H\x1b[1L");
+        assert_ne!(il.visible_text(), without.visible_text());
+    }
+
+    /// The one verb in this task that must NOT read the region.
+    ///
+    /// `CSI J` erases the DISPLAY. DEC defines its three modes against the
+    /// screen, and a scrolling region constrains scrolling, not erasure --
+    /// so "respect the region" is the wrong answer here even though it is
+    /// the right answer four lines up in the same dispatch table. A version
+    /// that clipped ED to the region leaves a header standing that the
+    /// program believes it erased, and stale text a manifest can still match
+    /// is the exact failure this round exists to remove: a wrong label is
+    /// dearer than a missing one.
+    #[test]
+    fn erase_in_display_within_a_region_is_still_screen_absolute() {
+        let mut all = Screen::new(4, 10);
+        all.feed(b"header\r\none\r\ntwo\r\nthree");
+        all.feed(b"\x1b[2;4r\x1b[2J");
+        assert_eq!(
+            all.visible_text(),
+            "\n\n\n",
+            "`CSI 2 J` clears every row, including the two outside the region"
+        );
+
+        let mut partial = Screen::new(4, 10);
+        partial.feed(b"header\r\none\r\ntwo\r\nthree");
+        partial.feed(b"\x1b[2;4r\x1b[3;10H\x1b[1J");
+        assert_eq!(
+            partial.grid.row_text(0),
+            "",
+            "erase-to-cursor reaches above the region's top row"
+        );
+        assert_eq!(partial.grid.row_text(1), "");
+        assert_eq!(partial.grid.row_text(2), "");
+        assert_eq!(partial.grid.row_text(3), "three", "and stops at the cursor");
+    }
+
+    // ----------------------------------------------------------------
+    // 0-A C9 / C5 / B1: the three observable bits the client cannot derive.
+    //
+    // All three are server-side facts by construction: the mode is set by a
+    // sequence only the emulator sees, so a client that is not told cannot
+    // work them out. Each rides `take_patch` under the same "Some only when
+    // changed" rule `alt_screen` and `title` already follow, and each is
+    // carried WHOLE by `full_patch` so a client attaching late gets the
+    // current value rather than the last change it happened to miss.
+    // ----------------------------------------------------------------
+
+    /// DECTCEM (`CSI ?25 h/l`). A patch that repeated the level every frame
+    /// would ship it 62 times a second per session for no news; a patch that
+    /// never shipped it would leave the Panel drawing a cursor the program
+    /// asked to hide. `Some` exactly on the change is the only shape that is
+    /// neither.
+    #[test]
+    fn cursor_visibility_rides_the_patch_only_when_it_changes() {
+        let mut s = Screen::new(3, 10);
+        let first = s
+            .take_patch()
+            .expect("a fresh screen announces its initial mode bits");
+        assert_eq!(
+            first.cursor_visible,
+            Some(true),
+            "the default is visible, and a client has to be told what it is \
+             rather than assuming"
+        );
+
+        s.feed(b"\x1b[?25l");
+        assert_eq!(
+            s.take_patch().expect("hiding the cursor is news").cursor_visible,
+            Some(false)
+        );
+        assert!(!s.cursor_visible());
+
+        s.feed(b"\x1b[?25l");
+        assert!(
+            s.take_patch().is_none(),
+            "the same mode set twice is not news"
+        );
+
+        s.feed(b"x");
+        assert_eq!(
+            s.take_patch().expect("printing is news").cursor_visible,
+            None,
+            "unchanged means ABSENT, not `Some(false)` on every frame"
+        );
+
+        s.feed(b"\x1b[?25h");
+        assert_eq!(s.take_patch().expect("showing again").cursor_visible, Some(true));
+        assert!(s.cursor_visible());
+    }
+
+    /// Mode 2004. The Panel needs this to decide whether a paste is wrapped
+    /// in `ESC[200~ … ESC[201~`, and it is observable only here — the
+    /// sequence never reaches the client.
+    #[test]
+    fn bracketed_paste_mode_rides_the_patch() {
+        let mut s = Screen::new(3, 10);
+        assert_eq!(
+            s.take_patch().expect("first patch").bracketed_paste,
+            Some(false),
+            "off by default -- and a client with no value must assume the \
+             weakest thing, which is what makes the default worth publishing"
+        );
+        assert!(!s.bracketed_paste());
+
+        s.feed(b"\x1b[?2004h");
+        assert_eq!(
+            s.take_patch().expect("enabling is news").bracketed_paste,
+            Some(true)
+        );
+        assert!(s.bracketed_paste());
+
+        s.feed(b"y");
+        assert_eq!(
+            s.take_patch().expect("printing is news").bracketed_paste,
+            None,
+            "unchanged means absent"
+        );
+
+        s.feed(b"\x1b[?2004l");
+        assert_eq!(
+            s.take_patch().expect("disabling is news").bracketed_paste,
+            Some(false)
+        );
+    }
+
+    /// OSC 7 is the cheap half of live cwd: it lands entirely inside
+    /// `screen/` and touches no platform API, so it does not carry the R1
+    /// decision that PID probing does. It is a SUPPLEMENT to the spawn
+    /// directory, not a replacement — only shells with integration
+    /// configured emit it.
+    #[test]
+    fn osc7_file_uri_with_empty_or_localhost_host_sets_cwd_and_percent_decodes() {
+        let mut empty_host = Screen::new(3, 10);
+        empty_host.feed(b"\x1b]7;file:///home/me/src\x1b\\");
+        assert_eq!(empty_host.cwd(), Some("/home/me/src"));
+
+        let mut local = Screen::new(3, 10);
+        local.feed(b"\x1b]7;file://localhost/home/me\x07");
+        assert_eq!(
+            local.cwd(),
+            Some("/home/me"),
+            "`localhost` names this machine as surely as an empty host does"
+        );
+
+        let mut encoded = Screen::new(3, 10);
+        encoded.feed("\x1b]7;file:///home/me/a%20b/%E4%B8%AD\x07".as_bytes());
+        assert_eq!(
+            encoded.cwd(),
+            Some("/home/me/a b/\u{4e2d}"),
+            "one non-ASCII character arrives as THREE escapes, so decoding has \
+             to accumulate bytes and convert once -- decoding escape by escape \
+             yields mojibake for every non-ASCII path"
+        );
+
+        let mut with_semicolon = Screen::new(3, 10);
+        with_semicolon.feed(b"\x1b]7;file:///tmp/a;b\x07");
+        assert_eq!(
+            with_semicolon.cwd(),
+            Some("/tmp/a;b"),
+            "`vte` splits the payload on `;`, so this path arrives in pieces \
+             and has to be rejoined -- the same trap the title arm had"
+        );
+
+        let mut patched = Screen::new(3, 10);
+        let _ = patched.take_patch();
+        patched.feed(b"\x1b]7;file:///tmp\x07");
+        assert_eq!(
+            patched.take_patch().expect("a new cwd is news").cwd.as_deref(),
+            Some("/tmp")
+        );
+        patched.feed(b"z");
+        assert_eq!(
+            patched.take_patch().expect("printing is news").cwd,
+            None,
+            "unchanged means absent, same rule as the two bits above"
+        );
+    }
+
+    /// A `file://` URI naming another machine describes another machine's
+    /// filesystem. Dropping it leaves the previous answer standing, which is
+    /// the only honest outcome: a rejected value has the standing to say "I
+    /// don't know", never to supply one (判据 §8).
+    #[test]
+    fn osc7_with_a_foreign_host_is_dropped() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"\x1b]7;file:///home/me\x07");
+        assert_eq!(
+            s.cwd(),
+            Some("/home/me"),
+            "the setup must land, or the assertion below cannot tell 'dropped' \
+             from 'this never worked at all'"
+        );
+
+        s.feed(b"\x1b]7;file://build-box/srv/other\x07");
+        assert_eq!(
+            s.cwd(),
+            Some("/home/me"),
+            "a foreign host leaves the last known-good value rather than \
+             overwriting it with a path that is not this session's"
+        );
+
+        let mut never = Screen::new(3, 10);
+        never.feed(b"\x1b]7;file://build-box/srv/other\x07");
+        assert_eq!(
+            never.cwd(),
+            None,
+            "with nothing known before, it stays unknown -- 'unknown' must not \
+             be filled in with the remote path"
+        );
+
+        let mut bare_path = Screen::new(3, 10);
+        bare_path.feed(b"\x1b]7;/home/me\x07");
+        assert_eq!(
+            bare_path.cwd(),
+            None,
+            "OSC 7 is defined as a file:// URI; a bare path is not one, and \
+             guessing that it meant one is how a scheme nobody checked becomes \
+             a path somebody trusts"
+        );
+    }
+
+    /// A client attaching after the changes have already been shipped to a
+    /// live client gets them from `full_patch`, not from the diff stream it
+    /// was not there for.
+    ///
+    /// This is exactly the pair of calls `PtySession::attach_snapshot` makes
+    /// (`convert::patch(&screen.full_patch())`), so the whole snapshot path
+    /// for these three fields lives inside `screen/` and needs no wiring
+    /// elsewhere. The wire half is asserted below for that reason: a
+    /// `full_patch` that carried the values into a `convert::patch` that
+    /// dropped them would pass the first three assertions.
+    #[test]
+    fn attach_snapshot_carries_the_current_mode_bits() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"\x1b[?25l\x1b[?2004h\x1b]7;file:///srv\x07");
+
+        let _ = s.take_patch();
+        assert!(
+            s.take_patch().is_none(),
+            "the diff stream must be drained, or this test proves nothing \
+             about a LATE attach"
+        );
+
+        let snapshot = s.full_patch();
+        assert_eq!(snapshot.cursor_visible, Some(false));
+        assert_eq!(snapshot.bracketed_paste, Some(true));
+        assert_eq!(snapshot.cwd.as_deref(), Some("/srv"));
+
+        let wire = crate::gateway::pty::screen::convert::patch(&snapshot);
+        assert_eq!(wire.cursor_visible, Some(false));
+        assert_eq!(wire.bracketed_paste, Some(true));
+        assert_eq!(wire.cwd.as_deref(), Some("/srv"));
+    }
+
+    // ----------------------------------------------------------------
+    // Review fix round 1: what a reset must also drop, 1049's cursor, the
+    // parked alternate buffer's dimensions, and making a CLEAR reach the
+    // wire.
+    // ----------------------------------------------------------------
+
+    /// A reset exists to stop a dead program's last frame being read as
+    /// current, so it has to reach the evidence that is NOT on the grid. The
+    /// `OSC 9;4` level is the one channel the erase does not touch, and the
+    /// detection manifests read it as "work in progress" -- left standing, it
+    /// keeps the runtime table publishing `Working` for a process that is
+    /// gone.
+    #[test]
+    fn ris_clears_the_progress_level_and_the_two_mode_bits() {
+        let setup: &[u8] = b"\x1b]9;4;3;50\x07\x1b[?25l\x1b[?2004h";
+        let mut with = Screen::new(3, 10);
+        with.feed(setup);
+        assert_eq!(
+            with.osc_progress(),
+            Some("4;3;50"),
+            "the setup must land, or every assertion below measures nothing"
+        );
+        assert!(!with.cursor_visible());
+        assert!(with.bracketed_paste());
+
+        let mut without = Screen::new(3, 10);
+        without.feed(setup);
+
+        with.feed(b"\x1bc");
+
+        assert_eq!(
+            with.osc_progress(),
+            None,
+            "a stale `working` level is the same false evidence the cleared \
+             grid removes"
+        );
+        assert!(with.cursor_visible(), "the cursor comes back");
+        assert!(!with.bracketed_paste(), "and paste bracketing goes off");
+
+        assert_eq!(without.osc_progress(), Some("4;3;50"), "without RIS it stands");
+        assert!(!without.cursor_visible());
+        assert!(without.bracketed_paste());
+    }
+
+    /// DECSTR restores the same two mode bits -- they are modes, which is
+    /// exactly what a soft reset is for -- but leaves the progress level and
+    /// the grid alone.
+    #[test]
+    fn decstr_restores_the_two_mode_bits_but_keeps_the_progress_level() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"keep\x1b]9;4;3;50\x07\x1b[?25l\x1b[?2004h");
+        s.feed(b"\x1b[!p");
+
+        assert!(s.cursor_visible(), "DECTCEM is a mode, so the soft reset restores it");
+        assert!(!s.bracketed_paste(), "so is bracketed paste");
+        assert_eq!(
+            s.osc_progress(),
+            Some("4;3;50"),
+            "the progress level is not a mode and not on DECSTR's list"
+        );
+        assert_eq!(s.grid.row_text(0), "keep", "and the cells stay");
+    }
+
+    /// xterm defines 1049 as 1047 + 1048, so entering saves the cursor and
+    /// exiting restores it.
+    ///
+    /// **The assertion is on the COLOUR, and that is the finding.** The whole
+    /// primary `Grid` is parked across the swap and its cursor row/column
+    /// travel with it, so a test that asserted only the position would be
+    /// green with or without the save/restore -- a guard with no case in
+    /// which it goes red (判据 §2). What 1048 actually adds here is the SGR
+    /// state, which lives on `ScreenState` and does NOT travel with the grid:
+    /// without it, a program that changes colour on the alternate screen
+    /// leaves the shell painting its next prompt in that colour.
+    #[test]
+    fn mode_1049_saves_and_restores_the_cursor_and_style() {
+        let mut with = Screen::new(3, 10);
+        with.feed(b"\x1b[31mab\x1b[?1049h\x1b[32mALT\x1b[?1049lZ");
+
+        assert_eq!(with.grid.row_text(0), "abZ", "the primary comes back and Z appends");
+        assert_eq!(
+            with.grid.row_cells(0)[2].fg,
+            Color::Indexed(1),
+            "the style saved on entry came back on exit -- without the \
+             restore, Z is painted in the colour the alternate screen left"
+        );
+
+        let mut without = Screen::new(3, 10);
+        without.feed(b"\x1b[31mab\x1b[32mZ");
+        assert_ne!(
+            with.grid.row_cells(0)[2].fg,
+            without.grid.row_cells(0)[2].fg,
+            "the without-case keeps the second colour, which is exactly what \
+             an unrestored exit looks like"
+        );
+
+        // A nested enter must not clobber the slot, and an exit with nothing
+        // parked must not move a cursor no program asked to move.
+        let mut nested = Screen::new(3, 10);
+        nested.feed(b"\x1b[31mab\x1b[?1049h\x1b[32mX\x1b[?1049h\x1b[?1049lZ");
+        assert_eq!(
+            nested.grid.row_cells(0)[2].fg,
+            Color::Indexed(1),
+            "the second `?1049h` did not swap, so it must not have re-saved \
+             the alternate screen's own style over the primary's"
+        );
+
+        let mut stray_exit = Screen::new(3, 10);
+        stray_exit.feed(b"abc\x1b[?1049lZ");
+        assert_eq!(
+            stray_exit.grid.row_text(0),
+            "abcZ",
+            "an exit with nothing parked swaps nothing and restores nothing"
+        );
+    }
+
+    /// The parked ALTERNATE buffer is the mirror of the parked primary, and
+    /// it has to follow a resize for the same reason: it comes back through
+    /// `?47`/`?1047` as the current grid, and a grid at the old size makes
+    /// `attach_snapshot` report the old dimensions while `take_patch` emits
+    /// row indices past the new height.
+    #[test]
+    fn a_parked_alternate_buffer_follows_resize_and_the_scrollback_limit() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"primary\x1b[?47halt\x1b[?47l");
+        assert!(!s.alt_screen(), "the setup leaves the alternate buffer parked");
+
+        s.resize(6, 20);
+        s.set_scrollback_limit(7);
+
+        s.feed(b"\x1b[?47h");
+        assert!(s.alt_screen(), "and re-entering takes the parked buffer back");
+        assert_eq!(
+            s.grid.dims(),
+            (6, 20),
+            "a parked buffer that missed the resize comes back at the old size"
+        );
+        assert_eq!(
+            s.full_patch().rows.len(),
+            6,
+            "which is what a re-attaching client would be told, so the \
+             snapshot is asserted rather than only the field"
+        );
+        assert_eq!(s.scrollback_limit(), 7, "the ceiling followed it too");
+    }
+
+    /// RIS clears the title on the server, and that clear has to be
+    /// DISTINGUISHABLE from "nothing to say about the title" on a wire where
+    /// an absent field already means unchanged.
+    ///
+    /// The JSON assertion is the one that matters: `Option<String>` with
+    /// `skip_serializing_if` means a `None` occupies no bytes at all, so a
+    /// clear sent as `None` is a frame that reports success and changes
+    /// nothing -- the Panel tab keeps the pre-RIS title for the life of the
+    /// session (判据 §11).
+    #[test]
+    fn a_title_cleared_by_ris_reaches_the_wire_as_an_empty_string() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"\x1b]0;before\x07");
+        assert_eq!(
+            s.take_patch().expect("a new title is news").title.as_deref(),
+            Some("before"),
+            "the setup must land, or the clear below has nothing to clear"
+        );
+
+        s.feed(b"\x1bc");
+        let after = s.take_patch().expect("RIS is news");
+        assert_eq!(s.title(), None, "the server really did drop the title");
+        assert_eq!(
+            after.title.as_deref(),
+            Some(""),
+            "and the patch says so with a value, not with an absence"
+        );
+
+        let wire = crate::gateway::pty::screen::convert::patch(&after);
+        let json = serde_json::to_value(&wire).expect("the patch is serialisable");
+        assert_eq!(
+            json.get("title").and_then(serde_json::Value::as_str),
+            Some(""),
+            "the cleared title must OCCUPY a wire field; sent as `None` it is \
+             skipped entirely and the client cannot tell it from a frame that \
+             says nothing about the title"
+        );
+    }
+
+    /// `cwd` shares the rule through `published_clear` rather than repeating
+    /// it, and this drives that helper directly on purpose: **no sequence
+    /// clears `cwd` today** (a rejected `OSC 7` deliberately leaves the last
+    /// known-good value standing), so an end-to-end version would assert a
+    /// transition nothing can produce and would pass no matter what the
+    /// helper did. Sharing the rule is what stops the twin recurring; this
+    /// pins the rule itself, for both fields, in one place.
+    #[test]
+    fn a_cleared_value_reaches_the_wire_as_an_empty_string() {
+        assert_eq!(
+            published_clear(true, &None),
+            Some(String::new()),
+            "a clear travels as a value"
+        );
+        assert_eq!(
+            published_clear(true, &Some("/tmp".to_string())),
+            Some("/tmp".to_string()),
+            "an ordinary change travels as itself"
+        );
+        assert_eq!(
+            published_clear(false, &Some("/tmp".to_string())),
+            None,
+            "and `None` keeps its one meaning: nothing changed"
+        );
+
+        // The `cwd` field is wired to it, which the helper test alone cannot
+        // show. A change still rides the patch; only the CLEAR is unreachable.
+        let mut s = Screen::new(3, 10);
+        let _ = s.take_patch();
+        s.feed(b"\x1b]7;file:///tmp\x07");
+        assert_eq!(
+            s.take_patch().expect("a new cwd is news").cwd.as_deref(),
+            Some("/tmp")
         );
     }
 
@@ -1669,4 +2260,3 @@ mod tests {
              into every patch. Fed {FED} bytes, title kept {len}"
         );
     }
-}
