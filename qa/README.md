@@ -241,6 +241,10 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # claim. It pins two fail-closed renderings the receipt cannot:
                                  # an unrecorded spend prints a sentence and never `0.00`, and the
                                  # declined heartbeat leg prints "NOT counted" and never a number.
+                                 # Its cost warning is asserted family by family (background work,
+                                 # devices, bootstrap tickets, channel senders), because a preview
+                                 # that names two of the four effects the receipt below reports is
+                                 # read by the operator as coverage.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation

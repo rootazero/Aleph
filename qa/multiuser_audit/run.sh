@@ -260,8 +260,13 @@ refute "and never a dollar figure"          "0.00"                          "$OU
 expect "an unmeasured heartbeat leg says so" "Heartbeat tasks were NOT counted" "$OUT"
 refute "and never a fabricated count"        "heartbeat task(s)"                "$OUT"
 # Admin-only, no carve-out, no Panel face (OI-63): the verb reached the server
-# and came back rendered, which is the half a unit test cannot claim.
-expect "and warns what deactivation would cost" "That is not undone by reactivating" "$OUT"
+# and came back rendered, which is the half a unit test cannot claim. The cost
+# statement is asserted family by family because a two-of-four list reads as
+# coverage — the operator would decide without learning the channel binding
+# and the outstanding pairing ticket die too.
+expect "and warns what deactivation would cost" "None of that is undone by reactivating" "$OUT"
+expect "  naming the burned tickets"            "outstanding bootstrap tickets"          "$OUT"
+expect "  and the withdrawn channel senders"    "channel sender approvals"               "$OUT"
 
 OUT="$(al users update "$ALICE" --status deactivated)"
 # The claim this round fixes: the CLI used to print one hard-coded sentence and

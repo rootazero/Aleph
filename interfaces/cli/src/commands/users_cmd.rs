@@ -215,9 +215,18 @@ fn detail_lines(detail: &UserDetail) -> Vec<String> {
     }
 
     lines.push(String::new());
+    // All four families the deactivation receipt reports, in the receipt's own
+    // words. A cost statement that named two of them would be read as
+    // coverage — the operator would decide from it without ever learning that
+    // the principal's Telegram binding dies too (criterion #1, the born-weak
+    // form). `the_cost_warning_names_every_family_the_receipt_reports` pins
+    // this line against `UserUpdateResult`'s field list, so a fifth effect
+    // added to the pipeline lands here as a failing build rather than as
+    // silent under-coverage.
     lines.push(
-        "Deactivating them freezes the background work they own and revokes those \
-         devices. That is not undone by reactivating."
+        "Deactivating them freezes the background work they own, revokes those devices \
+         and closes their live connections, burns any outstanding bootstrap tickets, and \
+         withdraws their channel sender approvals. None of that is undone by reactivating."
             .to_string(),
     );
     lines
@@ -650,6 +659,66 @@ mod tests {
         assert!(
             text.contains("1 goal(s), 2 loop(s), 3 cron(s), 4 heartbeat task(s)"),
             "every background leg must be named: {text}"
+        );
+    }
+
+    /// The preview's cost statement must name every family the receipt
+    /// reports. A two-of-four list is worse than none: the operator reads it
+    /// as coverage and deactivates without ever learning that the principal's
+    /// channel bindings and outstanding pairing tickets die too — the exact
+    /// shape `FrozenBackgroundWork`'s own doc warns about, and criterion #1's
+    /// fourth form (born a weakened version of the receipt).
+    ///
+    /// The destructuring below is the guard against a FIFTH family: it names
+    /// every field of [`UserUpdateResult`] with no `..`, so adding an effect
+    /// to the deactivation pipeline fails this test's build and forces the
+    /// author to decide whether the warning must grow a clause. The
+    /// assertions then check that each family the receipt already carries is
+    /// actually spoken, in the words `update_effect_lines` uses for it.
+    #[test]
+    fn the_cost_warning_names_every_family_the_receipt_reports() {
+        let UserUpdateResult {
+            user: _,
+            revoked_channel_senders: _,
+            revoked_devices: _,
+            revoked_bootstrap_tickets: _,
+            frozen_background_work: _,
+            reactivation_effects: _,
+        } = deactivation_receipt(aleph_protocol::users::FrozenBackgroundWork {
+            goals: 0,
+            loops: 0,
+            crons: 0,
+            heartbeats: Some(0),
+        });
+
+        let lines = detail_lines(&dossier(
+            None,
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(0),
+            },
+        ));
+        let warning = lines
+            .iter()
+            .find(|l| l.starts_with("Deactivating them"))
+            .unwrap_or_else(|| panic!("no cost warning was rendered at all: {lines:?}"));
+        for family in [
+            "background work",
+            "devices",
+            "bootstrap tickets",
+            "channel sender approvals",
+        ] {
+            assert!(
+                warning.contains(family),
+                "the cost statement must name {family}, or the operator reads a \
+                 two-of-four list as coverage: {warning}"
+            );
+        }
+        assert!(
+            warning.contains("None of that is undone by reactivating"),
+            "the irreversibility must cover the whole list, not the last clause: {warning}"
         );
     }
 

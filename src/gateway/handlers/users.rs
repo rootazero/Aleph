@@ -163,10 +163,10 @@ pub struct UserDetailContext {
 ///
 /// The one place a principal's devices, spend and frozen background work were
 /// ever joined was [`handle_update`]'s deactivation receipt — i.e. AFTER the
-/// irreversible status write, which that code's own comment concedes ("the
-/// deactivation effects with no other surface"). Criterion #15: the join
-/// existed only as the receipt of a one-way door. This is the same join, read
-/// **before** the door.
+/// irreversible status write. Criterion #15: the join existed only as the
+/// receipt of a one-way door. This is the same join, read **before** the
+/// door — and a deliberately wider one, because the receipt counts only what
+/// the sweep changed while this counts what the principal owns.
 ///
 /// # Authorization
 ///
@@ -547,11 +547,19 @@ pub async fn handle_update(
     match store.get_user(&params.user_id) {
         Ok(Some(user)) => {
             // The revoked/frozen counts are named in the response because
-            // they are the deactivation effects with no other surface, all
-            // four of them: devices show up only as closed connections,
-            // frozen background work as runs that stopped happening, a
-            // withdrawn channel approval as traffic that stopped arriving,
-            // and a burned bootstrap ticket as nothing whatsoever —
+            // they are what this write CHANGED, and nothing else reports
+            // that. Two of the four legs now have a read-only surface beside
+            // them — `handle_get` reports the principal's live panel devices
+            // and `count_owned_background_work` their background work — but
+            // it answers a deliberately different question: the preview
+            // counts what is OWNED (every goal/loop/cron/heartbeat task,
+            // `enabled` or not), these counts are of what the sweep actually
+            // stopped (`enabled && owned`). Neither surface asserts they are
+            // equal, and the preview cannot stand in for this receipt; the
+            // filter split is stated on `count_owned_background_work`.
+            // The other two legs still have no surface at all: a withdrawn
+            // channel approval shows up only as traffic that stopped
+            // arriving, and a burned bootstrap ticket as nothing whatsoever —
             // `gateway.ticket.list` enumerates only still-redeemable rows, so
             // a burned one just stops being listed, indistinguishable there
             // from one that was redeemed or expired. That last leg has the
