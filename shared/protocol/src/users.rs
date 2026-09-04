@@ -35,6 +35,80 @@ pub struct UserView {
     pub status: String,
 }
 
+/// The wire spelling of a principal a roster may currently name.
+///
+/// One spelling, not two: `alephcore`'s `UserStatus::as_str` returns THIS
+/// constant, so a rename is a compile error on both sides rather than a
+/// silently non-matching comparison here. A string compared against a literal
+/// typed in the reader is the shape that lets a status filter quietly stop
+/// filtering.
+pub const ACTIVE_STATUS: &str = "active";
+
+impl UserView {
+    /// Whether this principal is one a roster may currently name.
+    ///
+    /// This is a **narrowing** predicate, not the authorization one: the
+    /// server still asks `projects::authz::is_active_principal` — which reads
+    /// the store rather than a projection of it — before any grant lands. A
+    /// view can be stale; the store cannot.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.status == ACTIVE_STATUS
+    }
+}
+
+/// What a display name resolved to.
+///
+/// Three answers, deliberately, because a caller that collapses them is the
+/// defect: `Ambiguous` folded into "take the first" seats the wrong person,
+/// and `None` folded into "pass the name through as an id" turns "I do not
+/// know" into an id and seats a row nobody owns (criterion #8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolution {
+    /// Exactly one active principal bears this name.
+    One(UserView),
+    /// More than one does. Every candidate, so the caller can re-ask by id.
+    Ambiguous(Vec<UserView>),
+    /// Nobody a roster may name does — including the case where the only
+    /// bearers are deactivated. A deactivated principal reads as absent on
+    /// purpose: telling a caller "they exist but are switched off" is an
+    /// existence oracle over the principal directory.
+    None,
+}
+
+/// Fold a name to the form two spellings of the same person share.
+fn folded(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Resolve a display name to the one active principal that bears it.
+///
+/// Case- and surrounding-whitespace-insensitive, because the name reaches
+/// here through a model relaying what a human said, and `"bob"` for `"Bob"`
+/// is not a different person. Two principals whose names differ only in case
+/// are `Ambiguous`, not a winner and a loser: picking one would make the
+/// answer depend on which of them was created first.
+///
+/// The empty name resolves to `None` rather than to whoever happens to have a
+/// blank display name — an absent argument must not address anybody.
+#[must_use]
+pub fn resolve(name: &str, users: &[UserView]) -> Resolution {
+    let needle = folded(name);
+    if needle.is_empty() {
+        return Resolution::None;
+    }
+    let mut hits: Vec<UserView> = users
+        .iter()
+        .filter(|u| u.is_active() && folded(&u.display_name) == needle)
+        .cloned()
+        .collect();
+    match hits.len() {
+        0 => Resolution::None,
+        1 => Resolution::One(hits.remove(0)),
+        _ => Resolution::Ambiguous(hits),
+    }
+}
+
 /// Parameters for `users.create`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserCreateParams {
@@ -192,6 +266,92 @@ pub struct UserUpdateResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn named(id: &str, name: &str, status: &str) -> UserView {
+        UserView {
+            user_id: id.to_string(),
+            display_name: name.to_string(),
+            role: "member".to_string(),
+            status: status.to_string(),
+        }
+    }
+
+    /// The happy path the roster verbs exist for: one bearer, one answer.
+    #[test]
+    fn one_active_bearer_of_a_name_resolves_to_that_principal() {
+        let dir = [
+            named("u-bob", "Bob", "active"),
+            named("u-ada", "Ada", "active"),
+        ];
+        assert_eq!(
+            resolve("Bob", &dir),
+            Resolution::One(named("u-bob", "Bob", "active"))
+        );
+        assert_eq!(
+            resolve("  bob ", &dir),
+            Resolution::One(named("u-bob", "Bob", "active")),
+            "a relayed name arrives with the human's spacing and casing"
+        );
+    }
+
+    /// Two bearers is not "the first one". Returning `One` here would seat the
+    /// wrong person on a room, and the caller could not tell it had happened.
+    #[test]
+    fn two_active_bearers_are_ambiguous_and_name_every_candidate() {
+        let dir = [
+            named("u-bob1", "Bob", "active"),
+            named("u-bob2", "bob", "active"),
+        ];
+        let Resolution::Ambiguous(candidates) = resolve("Bob", &dir) else {
+            panic!("two bearers must not resolve to one");
+        };
+        let ids: Vec<&str> = candidates.iter().map(|c| c.user_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["u-bob1", "u-bob2"],
+            "every candidate, so the caller can re-ask by id"
+        );
+    }
+
+    /// A deactivated bearer is not a bearer. The lone-deactivated case must be
+    /// indistinguishable from "nobody by that name" — otherwise the refusal is
+    /// an existence oracle over the principal directory.
+    #[test]
+    fn a_deactivated_bearer_is_never_the_answer() {
+        let both = [
+            named("u-gone", "Bob", "deactivated"),
+            named("u-live", "Bob", "active"),
+        ];
+        assert_eq!(
+            resolve("Bob", &both),
+            Resolution::One(named("u-live", "Bob", "active")),
+            "the homonym who is switched off must not make this ambiguous"
+        );
+        assert_eq!(
+            resolve("Bob", &[named("u-gone", "Bob", "deactivated")]),
+            Resolution::None,
+            "a lone deactivated bearer reads exactly like nobody"
+        );
+    }
+
+    /// An absent argument must not address anybody — including a principal
+    /// whose display name is itself blank.
+    #[test]
+    fn the_empty_name_addresses_nobody() {
+        let dir = [named("u-blank", "   ", "active")];
+        assert_eq!(resolve("", &dir), Resolution::None);
+        assert_eq!(resolve("   ", &dir), Resolution::None);
+    }
+
+    /// `is_active` is compared against the shared constant, not a literal
+    /// re-typed here — the server's `UserStatus::as_str` returns that same
+    /// constant, so the two halves cannot drift into never matching.
+    #[test]
+    fn active_is_one_spelling_shared_with_the_server() {
+        assert_eq!(ACTIVE_STATUS, "active");
+        assert!(named("u-x", "X", ACTIVE_STATUS).is_active());
+        assert!(!named("u-x", "X", "deactivated").is_active());
+    }
 
     fn view() -> UserView {
         UserView {

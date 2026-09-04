@@ -63,7 +63,7 @@ fn encoded<T: serde::Serialize>(id: Option<Value>, value: &T) -> JsonRpcResponse
 }
 
 /// The one place a stored record becomes the wire shape.
-fn user_view(u: UserRecord) -> UserView {
+pub(crate) fn user_view(u: UserRecord) -> UserView {
     UserView {
         user_id: u.user_id,
         display_name: u.display_name,
