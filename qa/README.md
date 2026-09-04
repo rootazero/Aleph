@@ -298,7 +298,16 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
                                  # that platform's SHELL_MARKER_JS arm is still unrun
 
-./qa/spend_budget/run.sh         # NEEDS A REAL python3, and therefore does not run on a
+./qa/spend_budget/run.sh         # §5.22 round-7's per-principal dollar ceiling. Eleven assertions,
+                                 # each reading an EFFECT (a ledger row on disk, a wire error code,
+                                 # a CLI table, a survived restart) rather than counting an RPC's
+                                 # "it returned 200"; two of them read `spend_ledger` with
+                                 # `sqlite3` directly rather than through `spend.query`, which is
+                                 # what makes them evidence about the LEDGER and not about the
+                                 # handler that reads it back. This is the fixture the root
+                                 # CLAUDE.md `src/spend/` row routes to.
+                                 #
+                                 # NEEDS A REAL python3, and therefore does not run on a
                                  # Windows host, where the only `python3` on PATH is the
                                  # WindowsApps stub (it prints nothing and exits 0 — a
                                  # heredoc leg silently does nothing). Its sibling
@@ -878,3 +887,9 @@ refuses to boot with `invalid type: sequence, expected a map`.
 - **`picker_nav`** — 改 `interfaces/webchat/` 的键盘导航/渐隐前跑：键盘 walk · 条件渐隐 · 手机端加 provider，
   三档宽度各带效果断言。
 - **`canvas`** — 改 `src/canvas/` 或 Panel canvas 视图前跑：九项清单每条带效果断言。
+- **`rooms_channel_bind`** — 把一个通道群会话绑到项目房间（`Real-machine QA for binding a channel
+  group conversation to a project room.`，见其 `run.sh:2`）。改 `projects.channel.*` handler、绑定的
+  CLI 面、Panel 的项目通道段或 `rescope_attribution` 前跑。它挡的那一类假绿写在自己的 header 里：
+  这条链上的每一件事——handler、CLI、Panel 段、arm 2 的名册闸、`rescope_attribution`——此前**全部**
+  只有编译期与单测证据，没有任何一件对活网关说过话。路由入口在 [GATEWAY.md](../docs/reference/GATEWAY.md)，
+  不在根 `CLAUDE.md` 的路由表里。
