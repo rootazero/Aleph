@@ -26,6 +26,11 @@ struct JinaResponse {
     /// failure on Jina's quota / auth error JSON.
     #[serde(default)]
     data: Option<Vec<JinaResult>>,
+    /// Jina's envelope carries an HTTP-shaped status code (`429`, `401`, ...)
+    /// even on a 200 OK transport response. Structured, unlike `message`, so
+    /// it is the field the error classification reads.
+    #[serde(default)]
+    code: Option<u16>,
     #[serde(default)]
     message: Option<String>,
 }
@@ -91,9 +96,20 @@ impl SearchProvider for JinaProvider {
             // field. Treating these as `Ok(vec![])` would silently waste
             // LLM iterations exactly like the SearXNG dead-engine case.
             if let Some(msg) = jina_response.message {
-                return Err(AlephError::provider(format!(
-                    "Jina returned 0 results — {msg}"
-                )));
+                // The envelope's `code` is structured data, so the kind can
+                // come from it rather than from sniffing the free-text
+                // message: a quota error reads as quota, not as a generic
+                // transient failure that "retry later" undersells (a free
+                // tier's lever is the plan, not the clock).
+                return Err(match jina_response.code {
+                    Some(429) => {
+                        AlephError::rate_limit(format!("Jina returned 0 results — {msg}"))
+                    }
+                    Some(401 | 403) => {
+                        AlephError::authentication(NAME, format!("Jina returned 0 results — {msg}"))
+                    }
+                    _ => AlephError::provider(format!("Jina returned 0 results — {msg}")),
+                });
             }
             return Ok(Vec::new());
         }
@@ -139,6 +155,9 @@ impl crate::search::ProviderFactory for JinaFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
+        // No operator-supplied upstream URL on this provider — its endpoint is
+        // hardcoded, so there is nothing for the SSRF switch to admit.
+        _allow_private_network: bool,
     ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
     {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
@@ -206,6 +225,7 @@ mod tests {
         }"#;
         let parsed: JinaResponse = serde_json::from_str(body).expect("parses");
         assert!(parsed.data.is_none());
+        assert_eq!(parsed.code, Some(429));
         assert_eq!(
             parsed.message.as_deref(),
             Some("Rate limit exceeded for your free tier")

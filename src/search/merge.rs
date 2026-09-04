@@ -110,18 +110,41 @@ pub(crate) fn merge_by_rank(
     per_backend: Vec<Vec<SearchResult>>,
     max_results: usize,
 ) -> (Vec<SearchResult>, usize) {
-    let deepest = per_backend.iter().map(Vec::len).max().unwrap_or(0);
+    let (indexed, duplicates) = merge_by_rank_indexed(per_backend, max_results);
+    (
+        indexed.into_iter().map(|(_, result)| result).collect(),
+        duplicates,
+    )
+}
+
+/// [`merge_by_rank`], keeping each merged result's source index.
+///
+/// The one merge implementation, indexed: multi-query search needs to know
+/// *which query* a surviving row came from, and re-deriving that afterwards
+/// from the url would be a second, drift-prone statement of the identity
+/// rule above. [`merge_by_rank`] is the same merge with the index dropped,
+/// so the two can never disagree about what merged where.
+///
+/// Empty source lists are legal and keep the indices of the remaining
+/// sources aligned with the caller's own numbering — a query that failed or
+/// found nothing contributes an empty list rather than shifting everyone
+/// else's attribution.
+pub(crate) fn merge_by_rank_indexed(
+    per_source: Vec<Vec<SearchResult>>,
+    max_results: usize,
+) -> (Vec<(usize, SearchResult)>, usize) {
+    let deepest = per_source.iter().map(Vec::len).max().unwrap_or(0);
     let mut seen: HashSet<String> = HashSet::new();
-    let mut merged: Vec<SearchResult> = Vec::new();
+    let mut merged: Vec<(usize, SearchResult)> = Vec::new();
     let mut duplicates = 0usize;
 
     for rank in 0..deepest {
-        for backend in &per_backend {
-            let Some(result) = backend.get(rank) else {
+        for (source, results) in per_source.iter().enumerate() {
+            let Some(result) = results.get(rank) else {
                 continue;
             };
             if seen.insert(identity(&result.url)) {
-                merged.push(result.clone());
+                merged.push((source, result.clone()));
             } else {
                 duplicates += 1;
             }
@@ -254,5 +277,36 @@ mod tests {
         let (merged, dupes) = merge_by_rank(vec![vec![], a, vec![]], 10);
         assert_eq!(dupes, 0);
         assert_eq!(merged.len(), 1);
+    }
+
+    /// The indexed variant is the same merge with provenance attached: a
+    /// surviving row names the list it came from, an empty list consumes its
+    /// index without shifting anyone else's, and a repeat is attributed to
+    /// the first list that reported it.
+    #[test]
+    fn the_indexed_merge_keeps_each_rows_source() {
+        let a = vec![r("https://shared.test/x", "a"), r("https://a1.test", "a")];
+        let b: Vec<SearchResult> = vec![];
+        let c = vec![r("https://www.shared.test/x?utm_source=c", "c"), r("https://c1.test", "c")];
+        let (merged, dupes) = merge_by_rank_indexed(vec![a, b, c], 10);
+        assert_eq!(dupes, 1, "the decorated repeat of the shared page");
+        let rows: Vec<(usize, &str)> = merged
+            .iter()
+            .map(|(source, r)| (*source, r.url.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (0, "https://shared.test/x"),
+                (0, "https://a1.test"),
+                (2, "https://c1.test"),
+            ],
+            "rank-interleaved, empty list skipped, repeat kept by first reporter"
+        );
+        assert_eq!(
+            merged[0].1.provider.as_deref(),
+            Some("a"),
+            "the surviving row is the first source's own copy"
+        );
     }
 }

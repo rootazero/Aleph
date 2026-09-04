@@ -126,7 +126,11 @@ pub async fn handle_test(
         verified: false,
     };
 
-    let test_result = probe(&backend).await;
+    // Probe under the same policy the boot path constructs with, so "test
+    // connection" can never bless a base_url the server would refuse on
+    // restart — or refuse one it would accept.
+    let allow_private_network = config.read().await.ssrf.allow_private_network;
+    let test_result = probe(&backend, allow_private_network).await;
 
     // Persist verified=true on success
     if test_result.success {
@@ -157,9 +161,9 @@ pub async fn handle_test(
 /// `JsonRpcRequest`, a `Config` or a vault — see the census below, which runs
 /// every preset through it and never reaches the network because every one of
 /// them stops at a missing credential first.
-async fn probe(backend: &SearchBackendConfig) -> SearchTestResult {
+async fn probe(backend: &SearchBackendConfig, allow_private_network: bool) -> SearchTestResult {
     let factories = ProviderFactoryRegistry::with_defaults();
-    let provider = match factories.build("search.test", backend) {
+    let provider = match factories.build("search.test", backend, allow_private_network) {
         Ok(Some(p)) => p,
         Ok(None) => {
             // Two different refusals arrive here as the same `None`: a
@@ -221,7 +225,7 @@ mod tests {
             if !(preset.needs_api_key || preset.needs_base_url || preset.needs_engine_id) {
                 continue; // would go to the network; see doc comment
             }
-            let result = probe(&blank(preset.name)).await;
+            let result = probe(&blank(preset.name), false).await;
             assert!(
                 !result.success,
                 "{}: a blank config must not pass",
@@ -278,7 +282,7 @@ mod tests {
     /// the true answer, and it must still be reported rather than swallowed.
     #[tokio::test]
     async fn a_genuinely_unknown_provider_type_still_says_so() {
-        let result = probe(&blank("brrrrave")).await;
+        let result = probe(&blank("brrrrave"), false).await;
         assert!(!result.success);
         assert!(
             result.message.contains("Unknown provider type"),

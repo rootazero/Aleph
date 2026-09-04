@@ -15,6 +15,14 @@ production, and it is the one branch that would take a phase off this machine:
 `min_request_interval_ms = 0` because the provider otherwise spaces requests
 2s apart — tuned for a real instance's upstream engines, and pure latency
 against a mock that has none.
+
+`[ssrf] allow_private_network = true` because every mock binds 127.0.0.1, and
+the construction-time SSRF check on a provider's `base_url` refuses
+loopback/private targets unless the operator opts in. This is the operator
+switch, set the way a real self-hosted LAN deployment sets it — the fixture
+proves the wiring works under the configuration that makes it legal, not by
+disabling the check. Any pre-existing `[ssrf]` table is dropped first, same
+reason as `[search]`: a duplicated header is a config error at load.
 """
 import argparse
 import re
@@ -45,20 +53,28 @@ args = p.parse_args()
 
 src = open(args.path, encoding="utf-8").read()
 
-# Drop every `[search]` / `[search.*]` table, header through last line before
-# the next top-level header.
+# Drop every `[search]` / `[search.*]` / `[ssrf]` / `[ssrf.*]` table, header
+# through last line before the next top-level header.
 out, dropping = [], False
 for line in src.splitlines(keepends=True):
     header = re.match(r"\s*\[+([^\]]+)\]", line)
     if header:
         name = header.group(1)
-        dropping = name == "search" or name.startswith("search.")
+        dropping = (
+            name == "search"
+            or name.startswith("search.")
+            or name == "ssrf"
+            or name.startswith("ssrf.")
+        )
     if not dropping:
         out.append(line)
 src = "".join(out).rstrip() + "\n"
 
 fallbacks = ", ".join(f'"{f}"' for f in args.fallback)
 block = [
+    "",
+    "[ssrf]",
+    "allow_private_network = true",
     "",
     "[search]",
     "enabled = true",

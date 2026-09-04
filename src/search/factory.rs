@@ -44,10 +44,20 @@ pub trait ProviderFactory: Send + Sync {
     ///   The registry treats this identically to `Ok(None)` for now
     ///   (warn + skip) but the distinct return shape lets future code
     ///   raise such errors to operators if desired.
+    ///
+    /// `allow_private_network` is the operator's explicit `[ssrf]` switch,
+    /// threaded from the boot config by [`crate::search::SearchRegistry`].
+    /// Only providers with a construction-time SSRF check on their
+    /// `base_url` consume it (SearXNG, Firecrawl); the rest take no upstream
+    /// URL and must ignore it. It exists as a parameter — rather than being
+    /// read from global config inside a constructor — so the security
+    /// posture of a built registry is decided by its caller and visible in
+    /// the call, never by ambient state.
     fn build(
         &self,
         name: &str,
         backend: &SearchBackendConfig,
+        allow_private_network: bool,
     ) -> Result<Option<Arc<dyn SearchProvider>>>;
 }
 
@@ -112,10 +122,14 @@ impl ProviderFactoryRegistry {
     /// - `Ok(None)` when no factory is registered for the `provider_type`
     ///   (a typo or unknown provider — logged at WARN by caller)
     /// - `Err(_)` on hard construction failures
+    ///
+    /// `allow_private_network` is forwarded to the factory untouched — see
+    /// [`ProviderFactory::build`] for the contract.
     pub fn build(
         &self,
         name: &str,
         backend: &SearchBackendConfig,
+        allow_private_network: bool,
     ) -> Result<Option<Arc<dyn SearchProvider>>> {
         let Some(factory) = self.factories.get(backend.provider_type.as_str()) else {
             log::warn!(
@@ -124,7 +138,7 @@ impl ProviderFactoryRegistry {
             );
             return Ok(None);
         };
-        factory.build(name, backend)
+        factory.build(name, backend, allow_private_network)
     }
 }
 
@@ -179,14 +193,14 @@ mod tests {
     #[test]
     fn unknown_provider_type_yields_none_without_error() {
         let reg = ProviderFactoryRegistry::with_defaults();
-        let built = reg.build("typo", &backend("brrrrave")).unwrap();
+        let built = reg.build("typo", &backend("brrrrave"), false).unwrap();
         assert!(built.is_none());
     }
 
     #[test]
     fn tavily_without_api_key_skipped() {
         let reg = ProviderFactoryRegistry::with_defaults();
-        let built = reg.build("primary", &backend("tavily")).unwrap();
+        let built = reg.build("primary", &backend("tavily"), false).unwrap();
         assert!(built.is_none(), "tavily should be skipped without api_key");
     }
 
@@ -196,7 +210,7 @@ mod tests {
     #[test]
     fn duckduckgo_constructs_without_credentials() {
         let reg = ProviderFactoryRegistry::with_defaults();
-        let built = reg.build("ddg", &backend("duckduckgo")).unwrap();
+        let built = reg.build("ddg", &backend("duckduckgo"), false).unwrap();
         assert!(built.is_some(), "duckduckgo should construct without keys");
     }
 }

@@ -377,9 +377,17 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Without this, the user can configure `[search.backends.searxng]` all
         // they want but `SearchTool` falls back to TAVILY_API_KEY env and
         // reports "No search provider configured" at runtime.
-        let search_registry =
-            alephcore::search::SearchRegistry::from_config(app_config.search.as_ref())
-                .map(Arc::new);
+        //
+        // The operator's `[ssrf] allow_private_network` switch is threaded
+        // into provider construction: it is what admits a self-hosted SearXNG
+        // on the LAN (loopback / RFC1918 base_url). Cloud metadata endpoints
+        // stay refused under every policy — the switch is not a waiver for
+        // those, only for internal services.
+        let search_registry = alephcore::search::SearchRegistry::from_config(
+            app_config.search.as_ref(),
+            app_config.ssrf.allow_private_network,
+        )
+        .map(Arc::new);
 
         // Create agent registry before tool config so agent management tools can use it
         let agent_registry = Arc::new(AgentRegistry::new());

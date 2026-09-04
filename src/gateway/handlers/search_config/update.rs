@@ -35,12 +35,17 @@ pub async fn handle_update(
         }
     };
 
-    // Validate max_results
-    if dto.max_results == 0 || dto.max_results > 100 {
+    // Validate max_results against the same ceiling the request side clamps
+    // to (`SearchOptions::validated_max_results`), so a value the Panel can
+    // save is a value a search will actually honour.
+    if dto.max_results == 0 || dto.max_results > crate::search::MAX_SEARCH_RESULTS as u64 {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            "max_results must be between 1 and 100".to_string(),
+            format!(
+                "max_results must be between 1 and {}",
+                crate::search::MAX_SEARCH_RESULTS
+            ),
         );
     }
 

@@ -19,8 +19,8 @@
 //!
 //! Both are enforced structurally rather than by convention: [`send`] is the
 //! only public way to dispatch, [`check_status`] is private to this module,
-//! and `error_funnel_census.rs` asserts that no provider mints an
-//! `AlephError` from a `reqwest` value on its own.
+//! and `error_funnel_census.rs` asserts at the source level that no provider
+//! dispatches a request or maps a status code on its own.
 
 use crate::error::{AlephError, Result};
 use crate::search::SearchResult;
@@ -79,10 +79,15 @@ pub(crate) async fn send(
 
 /// Check HTTP response status and map to typed errors.
 ///
-/// Returns the response unchanged on success. Maps 401/403 to
-/// `AlephError::AuthenticationError`, 429 to `AlephError::RateLimitError`,
-/// everything else to `AlephError::ProviderError` — the labels
-/// `classify_search_error` turns into the `kind=` an operator greps for.
+/// Returns the response unchanged on success. The status → variant mapping
+/// is the one place the chain's error kinds (`SearchErrorKind`) are decided:
+/// 401/403 → `AlephError::AuthenticationError` (auth), 429 →
+/// `AlephError::RateLimitError` (quota), any other 4xx →
+/// `AlephError::RequestRejected` (the backend refused the request as
+/// shaped), 5xx and anything else → `AlephError::ProviderError`
+/// (transient). Each variant names a different lever — fix the key, wait
+/// out the window, reshape the request, retry later — which is the entire
+/// reason to tell them apart.
 ///
 /// Private on purpose: reachable only through [`send`], which is what makes
 /// "every provider redacts" a property of the module rather than of nine
@@ -107,6 +112,12 @@ async fn check_status(
         Err(AlephError::authentication(provider_name, msg))
     } else if status == StatusCode::TOO_MANY_REQUESTS {
         Err(AlephError::rate_limit(format!("{msg} (rate limited)")))
+    } else if status.is_client_error() {
+        // The backend understood the request and refused it: resending the
+        // identical bytes fails identically, so this is not the transient
+        // bucket. The body excerpt above usually carries the vendor's
+        // complaint about the offending parameter.
+        Err(AlephError::request_rejected(msg))
     } else {
         Err(AlephError::provider(msg))
     }
@@ -134,13 +145,19 @@ async fn body_excerpt(response: Response, secret: Option<&str>) -> String {
 /// Takes the secret for the same reason [`send`] does: serde's error text
 /// quotes the input it choked on, and for a backend that echoes its
 /// credential back in an error envelope that input contains the key.
+///
+/// A failure here is `AlephError::InvalidResponse`, not `ProviderError`:
+/// the backend answered 200 but broke its contract, which is a different
+/// fact from "the backend errored" and earns a different lever (the backend
+/// changed, or served a challenge page — retrying the identical request
+/// changes nothing).
 pub(crate) async fn parse_json<T: serde::de::DeserializeOwned>(
     response: Response,
     provider_name: &str,
     secret: Option<&str>,
 ) -> Result<T> {
     response.json::<T>().await.map_err(|e| {
-        AlephError::provider(redact(
+        AlephError::invalid_response(redact(
             format!("Failed to parse {provider_name} response: {e}"),
             secret,
         ))
@@ -199,51 +216,199 @@ pub(crate) fn retain_usable(provider_name: &str, results: Vec<SearchResult>) -> 
     kept
 }
 
+/// The verdict of the construction-time SSRF check on an operator-configured
+/// upstream host.
+///
+/// Three states, not two, because "allowed" splits into "unremarkable" and
+/// "allowed only because the operator opted into private networks" — the
+/// second must be logged, or the switch silently turns a refusal into a
+/// registration and the only record of why lives in a TOML file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostVerdict {
+    /// The host is not on any blocklist — registered without comment.
+    Allow,
+    /// Blocked by the default policy, allowed only under `[ssrf]
+    /// allow_private_network = true`. The caller must log at WARN.
+    AllowUnderPrivateNetworkOptIn,
+    /// Refused. Carries the operator-facing reason.
+    Reject(&'static str),
+}
+
+/// Classify an operator-configured upstream host against the SSRF blocklist,
+/// honouring the operator's `[ssrf] allow_private_network` switch.
+///
+/// Two floors hold under EVERY policy, including an explicit opt-in:
+///
+/// * **Cloud metadata endpoints** (`169.254.169.254`, `fd00:ec2::254`, their
+///   IPv6 transition forms, and the `metadata.google.internal` /
+///   `metadata.internal` hostnames). A metadata service answers ANY path with
+///   instance credentials, and `search_config.update` is a model-reachable
+///   RPC — if an injected model can point a provider's `base_url` there, every
+///   subsequent search query (session context included) is exfiltrated. The
+///   operator's switch is about reaching LAN services, not about waiving this.
+/// * **Legacy IP-literal encodings** (hex/octal/decimal/short-form IPv4).
+///   They are never a legitimate way to write a base URL, and classifying
+///   their decoded target cheaply is exactly where historical SSRF bypasses
+///   lived — refusing the encoding wholesale costs no real deployment.
+///
+/// Everything else the default policy blocks (loopback, RFC1918, link-local,
+/// `localhost`-family hostnames, `.local`/`.internal` suffixes) becomes
+/// [`HostVerdict::AllowUnderPrivateNetworkOptIn`] when the switch is on: a
+/// self-hosted SearXNG on the LAN — the most common SearXNG deployment — is
+/// precisely what the switch exists for.
+pub(crate) fn classify_ssrf_target_host(host: &str, allow_private_network: bool) -> HostVerdict {
+    use std::net::IpAddr;
+    if let Ok(addr) = host.parse::<IpAddr>() {
+        if crate::security::ssrf::ip::is_cloud_metadata(addr) {
+            return HostVerdict::Reject("points at a cloud instance-metadata endpoint");
+        }
+        if crate::security::ssrf::ip::is_blocked_ip(addr) {
+            return if allow_private_network {
+                HostVerdict::AllowUnderPrivateNetworkOptIn
+            } else {
+                HostVerdict::Reject("points at a blocked IP")
+            };
+        }
+        return HostVerdict::Allow;
+    }
+    if crate::security::ssrf::hostname::is_cloud_metadata_hostname(host) {
+        return HostVerdict::Reject("names a cloud instance-metadata endpoint");
+    }
+    // Checked before the blocklist so a legacy literal never benefits from the
+    // opt-in: we cannot see its decoded target, so it cannot earn the pass.
+    if crate::security::ssrf::hostname::is_legacy_ip_literal(host) {
+        return HostVerdict::Reject("is a legacy IP literal encoding");
+    }
+    if crate::security::ssrf::hostname::is_blocked_hostname(host) {
+        return if allow_private_network {
+            HostVerdict::AllowUnderPrivateNetworkOptIn
+        } else {
+            HostVerdict::Reject("is on the SSRF blocklist")
+        };
+    }
+    HostVerdict::Allow
+}
+
 /// Reject an operator-configured upstream host that would turn the search
 /// registry into an SSRF vector. Called from each provider's `new()` with the
 /// URL the operator pasted into config. The check is intentionally narrower
 /// than the runtime SSRF guard: a provider's `base_url` is set once at boot
 /// (not per-request), so the cost of false positives is high — we only block
-/// the unambiguous cases (loopback / private IPs / link-local / cloud
-/// metadata / `localhost`-family hostnames) and let hostnames through. A
-/// hostname that later resolves to a blocked address is caught by the
-/// outbound guard at request time.
+/// the unambiguous cases and let hostnames through. A hostname that later
+/// resolves to a blocked address is caught by the outbound guard at request
+/// time.
+///
+/// `allow_private_network` is the operator's explicit `[ssrf]` switch
+/// ([`crate::security::ssrf::SsrfPolicy::allow_private_network`]): when false
+/// (the default) every blocked host is refused; when true, loopback / private
+/// / link-local targets are accepted **with a WARN log**, while cloud
+/// metadata endpoints and legacy IP literals stay refused under every policy
+/// — see [`classify_ssrf_target_host`] for why those two classes never
+/// benefit from the opt-in.
 pub(crate) fn reject_ssrf_target_host(
     provider_name: &str,
     host: &str,
+    allow_private_network: bool,
 ) -> Result<()> {
-    use std::net::IpAddr;
-    if let Ok(addr) = host.parse::<IpAddr>() {
-        if crate::security::ssrf::ip::is_blocked_ip(addr) {
-            return Err(AlephError::invalid_config(format!(
-                "{provider_name} base URL points at a blocked IP ({host}); \
-                 refusing to register an SSRF-targeting upstream"
-            )));
+    match classify_ssrf_target_host(host, allow_private_network) {
+        HostVerdict::Allow => Ok(()),
+        HostVerdict::AllowUnderPrivateNetworkOptIn => {
+            log::warn!(
+                target: "search",
+                "provider={provider_name} kind=ssrf-opt-in host={host} \
+                 accepted under [ssrf] allow_private_network=true; this base URL \
+                 reaches a private/loopback target that the default policy refuses"
+            );
+            Ok(())
         }
-    } else {
-        if crate::security::ssrf::hostname::is_blocked_hostname(host) {
-            return Err(AlephError::invalid_config(format!(
-                "{provider_name} base URL hostname {host:?} is on the SSRF \
-                 blocklist; refusing to register an SSRF-targeting upstream"
-            )));
-        }
-        // Legacy IP-literal encodings (hex/octal/decimal/short-form IPv4)
-        // bypass naive `IpAddr::parse` and would otherwise slip through this
-        // check to reach reqwest's resolver, which still parses them.
-        if crate::security::ssrf::hostname::is_legacy_ip_literal(host) {
-            return Err(AlephError::invalid_config(format!(
-                "{provider_name} base URL hostname {host:?} is a legacy IP \
-                 literal encoding; refusing to register an SSRF-targeting \
-                 upstream"
-            )));
-        }
+        HostVerdict::Reject(reason) => Err(AlephError::invalid_config(format!(
+            "{provider_name} base URL host {host:?} {reason}; refusing to register an \
+             SSRF-targeting upstream. A self-hosted instance on a private network requires \
+             the operator to set [ssrf] allow_private_network = true (cloud metadata \
+             endpoints and legacy IP literals stay blocked regardless)"
+        ))),
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::error::SearchErrorKind;
+    use wiremock::matchers::any;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The default policy refuses every blocked class; the operator's
+    /// `[ssrf] allow_private_network` switch re-admits loopback / private /
+    /// `localhost`-family targets as warn-worthy, and cloud metadata plus
+    /// legacy IP literals stay refused under BOTH policies. The verdict (not
+    /// the log line) is what the constructor acts on, so these quadrants pin
+    /// the whole behaviour of the switch.
+    #[test]
+    fn construction_check_quadrants_of_the_private_network_switch() {
+        use super::HostVerdict;
+        // Default policy: refuse the blocked classes.
+        for host in ["127.0.0.1", "10.0.0.5", "192.168.1.8", "localhost", "box.local"] {
+            assert!(
+                matches!(
+                    super::classify_ssrf_target_host(host, false),
+                    HostVerdict::Reject(_)
+                ),
+                "{host} must be refused by the default policy"
+            );
+        }
+        // Opt-in: the same hosts become warn-worthy allows.
+        for host in ["127.0.0.1", "10.0.0.5", "192.168.1.8", "localhost", "box.local"] {
+            assert_eq!(
+                super::classify_ssrf_target_host(host, true),
+                HostVerdict::AllowUnderPrivateNetworkOptIn,
+                "{host} must be allowed-with-warn under the operator switch"
+            );
+        }
+        // The floors that never move: cloud metadata (both address families,
+        // both spellings of the name) and legacy IP literal encodings.
+        for host in [
+            "169.254.169.254",
+            "fd00:ec2::254",
+            "metadata.google.internal",
+            "metadata.internal",
+            "0x7f000001",
+            "2130706433",
+            "127.1",
+        ] {
+            for allow_private in [false, true] {
+                assert!(
+                    matches!(
+                        super::classify_ssrf_target_host(host, allow_private),
+                        HostVerdict::Reject(_)
+                    ),
+                    "{host} must stay refused even with allow_private_network={allow_private}"
+                );
+            }
+        }
+        // Public targets pass quietly under both policies.
+        for host in ["93.184.216.34", "searx.example.com"] {
+            for allow_private in [false, true] {
+                assert_eq!(
+                    super::classify_ssrf_target_host(host, allow_private),
+                    HostVerdict::Allow,
+                    "{host} is public and must pass without a warn"
+                );
+            }
+        }
+    }
+
+    /// The refusal text must name the lever: an operator whose LAN SearXNG is
+    /// refused reads which switch to flip, and is told the floors that no
+    /// switch lifts. Vague refusals get worked around; specific ones get
+    /// configured.
+    #[test]
+    fn the_refusal_names_the_switch_and_the_floors() {
+        let err = super::reject_ssrf_target_host("SearXNG", "127.0.0.1", false)
+            .expect_err("loopback is refused by default");
+        let text = err.to_string();
+        assert!(text.contains("allow_private_network"), "{text}");
+        assert!(text.contains("metadata"), "{text}");
+    }
 
     #[test]
     fn redaction_replaces_every_occurrence_and_leaves_empty_secrets_alone() {
@@ -274,5 +439,96 @@ mod tests {
     fn a_result_without_a_title_is_kept() {
         let kept = retain_usable("test", vec![SearchResult::new("", "https://x.test", "")]);
         assert_eq!(kept.len(), 1);
+    }
+
+    /// Run [`send`] against a mock server answering with `status`, and return
+    /// the error it produced. The funnel is the one place a status becomes an
+    /// `AlephError` variant, so the variant — and through it the
+    /// [`SearchErrorKind`] — is what these tests pin.
+    async fn send_against(status: u16) -> AlephError {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(status).set_body_string("{\"error\":\"vendor detail\"}"),
+            )
+            .mount(&server)
+            .await;
+        let client = build_client().expect("client");
+        send(client.get(server.uri()), "mock", None)
+            .await
+            .expect_err("a non-2xx status must come back as an error")
+    }
+
+    /// The status → variant mapping is the chain's error-kind contract: each
+    /// status class names a different lever (fix the key, wait out the quota
+    /// window, reshape the request, retry later), so a regression here is a
+    /// wrong instruction to every reader of the failure report.
+    #[tokio::test]
+    async fn status_codes_map_to_the_kind_whose_lever_fits() {
+        let cases: &[(u16, SearchErrorKind)] = &[
+            (401, SearchErrorKind::Auth),
+            (403, SearchErrorKind::Auth),
+            (429, SearchErrorKind::Quota),
+            (400, SearchErrorKind::RequestRejected),
+            (404, SearchErrorKind::RequestRejected),
+            (422, SearchErrorKind::RequestRejected),
+            (500, SearchErrorKind::Transient),
+            (503, SearchErrorKind::Transient),
+        ];
+        for (status, expected) in cases {
+            let err = send_against(*status).await;
+            assert_eq!(
+                SearchErrorKind::of(&err),
+                *expected,
+                "status {status} produced the wrong kind: {err}",
+            );
+        }
+    }
+
+    /// The vendor's complaint about the request survives into the error —
+    /// the excerpt is what makes a 400 actionable — and a credential in the
+    /// echoed body does not.
+    #[tokio::test]
+    async fn the_error_keeps_the_vendor_detail_and_redacts_the_secret() {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string("bad parameter days=99, key was sk-secret-123"),
+            )
+            .mount(&server)
+            .await;
+        let client = build_client().expect("client");
+        let err = send(client.get(server.uri()), "mock", Some("sk-secret-123"))
+            .await
+            .expect_err("400 is an error");
+        let text = err.to_string();
+        assert!(text.contains("bad parameter days=99"), "{text}");
+        assert!(!text.contains("sk-secret-123"), "{text}");
+        assert!(text.contains("***REDACTED***"), "{text}");
+    }
+
+    /// A 200 with a body that does not parse is `InvalidResponse`, not a
+    /// generic provider error: the backend answered but broke its contract,
+    /// and retrying the identical request changes nothing.
+    #[tokio::test]
+    async fn an_unparseable_success_body_is_an_invalid_response() {
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>challenge</html>"))
+            .mount(&server)
+            .await;
+        let client = build_client().expect("client");
+        let response = send(client.get(server.uri()), "mock", None)
+            .await
+            .expect("200 passes the status check");
+        let err = parse_json::<serde_json::Value>(response, "mock", None)
+            .await
+            .expect_err("HTML is not JSON");
+        assert_eq!(SearchErrorKind::of(&err), SearchErrorKind::InvalidResponse);
+        assert!(
+            matches!(err, AlephError::InvalidResponse { .. }),
+            "the variant carries the kind: {err}",
+        );
     }
 }

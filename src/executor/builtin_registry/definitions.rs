@@ -2472,7 +2472,43 @@ mod tests {
     /// exactly the failure mode this constant's own rule warns about.
     /// A future round that adds bytes MUST re-run the ratchet and copy the
     /// printed total, not compute it from prior deltas.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_772;
+    ///
+    /// 2026-09-05: 112_772 -> 112_960 B (+188), again all `search`, for the
+    /// `queries` parameter (a multi-query form: several questions asked in one
+    /// call, fanned out concurrently, one merged answer). The ratchet printed
+    /// 112_960 (93_364 catalog + 16_613 registry-only + 1_039 injected +
+    /// 1_944 bridge); the schema-side ledger names `search` as the only tool
+    /// that moved (2_050 -> 2_411, see REGISTRY_SCHEMA_CEILING_BYTES), and no
+    /// other description changed this round.
+    ///
+    /// The three questions:
+    ///
+    /// (1) No schema can carry it. The schema declares `queries` is an array
+    /// of strings; what earns the bytes is the *relationship* the prose
+    /// states: `queries` is for asking several distinct questions at once
+    /// (concurrent fan-out, one merged answer), `query` stays the
+    /// single-question path with zero byte growth, and mixing both in one
+    /// call is an error. Which parameter a second question belongs in is a
+    /// fact about this tool's contract, not inferable from the field types.
+    ///
+    /// (2) A stronger model cannot infer it. That fan-out over a `queries`
+    /// list is the sanctioned way to ask N questions — rather than N
+    /// sequential `search` calls that each pay chain ordering, health
+    /// demotion and result merging separately — is a property of this
+    /// implementation, aligned with the pi-web-access reference shape.
+    ///
+    /// (3) No other tool says it. `search` owns the web-search surface; the
+    /// guard in `builtin_tools::search` that pins prose and schema to the
+    /// same parameter names covers the new parameter too, so the two cannot
+    /// drift.
+    ///
+    /// Why it is not trimmed back: the bytes ARE the parameter's
+    /// documentation. Deleting them would ship a `queries` array the model
+    /// cannot distinguish from `query` — it would guess, and the failure
+    /// mode of guessing is N sequential calls where one fanned-out call was
+    /// available. The single-query path pays nothing (its bytes are
+    /// unchanged); only the multi-query capability costs.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_960;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
@@ -2869,7 +2905,19 @@ mod tests {
     /// believing it had constrained one.
     ///
     /// Set flush against the measurement, as the rule above requires.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_302;
+    /// 2026-09-05: 104_302 -> 104_663 B (+361), all of it `search`
+    /// (2_050 -> 2_411): the `queries: Vec<String>` optional parameter and
+    /// its doc lines (multi-query fan-out; mutually exclusive with `query`).
+    /// Not read off a diff — the guard's own per-tool ledger names `search`
+    /// as the only row that moved. Against the three questions: (1) the
+    /// parameter's existence, shape and exclusivity with `query` are runtime
+    /// facts the schema is the only carrier of; (2) unguessable — nothing
+    /// else on the tool face says several questions can ride one call;
+    /// (3) `search` owns the web-search surface, and its prose/schema
+    /// pinning guard covers the new field. The single-query path's schema
+    /// bytes are unchanged; trimming the new doc lines would ship an array
+    /// parameter the model cannot tell from `query`.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_663;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -2940,7 +2988,7 @@ mod tests {
         ("recall_events", 553),
         ("remember", 1907),
         ("scratchpad", 4014),
-        ("search", 2050),
+        ("search", 2411),
         ("self_config", 3553),
         ("self_manage", 328),
         ("session_list", 931),

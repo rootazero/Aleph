@@ -515,10 +515,11 @@ impl Config {
                     ));
                 }
 
-                if search_config.max_results > 100 {
+                if search_config.max_results > crate::search::MAX_SEARCH_RESULTS {
                     warn!(
                         max_results = search_config.max_results,
-                        "Search max_results is very high (>100), this may impact performance"
+                        ceiling = crate::search::MAX_SEARCH_RESULTS,
+                        "Search max_results exceeds MAX_SEARCH_RESULTS, this may impact performance"
                     );
                 }
 

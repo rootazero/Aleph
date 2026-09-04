@@ -11,12 +11,12 @@
 ///
 /// Mapping table (kept in sync with the helpers below):
 ///
-/// | field        | Brave         | Bing         | Google CSE   | `SearXNG`      | Tavily   | `DuckDuckGo` | Firecrawl |
-/// |--------------|---------------|--------------|--------------|--------------|----------|------------|-----------|
-/// | language     | `search_lang`   | setLang      | `lr=lang_XX`   | language     | —        | —          | lang      |
-/// | region       | country       | cc           | gl           | —            | —        | kl         | country   |
-/// | `recency`      | freshness     | freshness    | dateRestrict | `time_range`   | days     | df         | tbs       |
-/// | `safe_search`  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         | —         |
+/// | field        | Brave         | Bing         | Google CSE   | `SearXNG`      | Tavily   | `DuckDuckGo` | Firecrawl | Exa | Jina |
+/// |--------------|---------------|--------------|--------------|----------------|----------|--------------|-----------|-----|------|
+/// | language     | `search_lang`   | setLang      | `lr=lang_XX`   | language     | —        | —          | lang      | —   | —    |
+/// | region       | country       | cc           | gl           | —            | —        | kl         | country   | —   | —    |
+/// | `recency`      | freshness     | freshness    | dateRestrict | `time_range`   | days     | df         | tbs       | —   | —    |
+/// | `safe_search`  | safesearch    | safeSearch   | safe         | safesearch   | —        | kp         | —         | —   | —    |
 ///
 /// Providers that have no native concept for a field omit it entirely
 /// (the helper returns `None` or the call site simply doesn't push it).
@@ -135,6 +135,17 @@ pub struct SearchOptions {
     pub snippet_budget_chars: Option<usize>,
 }
 
+/// The single upper bound for `max_results`, wherever it is validated.
+///
+/// Three places enforce or warn on the same ceiling —
+/// [`SearchOptions::validated_max_results`] (the request-side clamp), the
+/// `search_config.update` gateway handler (the Panel's edit boundary), and
+/// `config::validate`'s load-time advisory. The value is 100 because that is
+/// what the user-facing configuration boundary has always allowed; the
+/// request-side clamp used to silently cap at 50, so a Panel-saved
+/// `max_results = 80` was accepted, persisted, and quietly served as 50.
+pub const MAX_SEARCH_RESULTS: usize = 100;
+
 const fn default_safe_search() -> bool {
     true
 }
@@ -181,10 +192,10 @@ impl SearchOptions {
         self.timeout_seconds.max(1)
     }
 
-    /// Returns validated `max_results`, capped at 50 and at least 1
+    /// Returns validated `max_results`, clamped to `1..=MAX_SEARCH_RESULTS`
     #[must_use]
     pub fn validated_max_results(&self) -> usize {
-        self.max_results.clamp(1, 50)
+        self.max_results.clamp(1, MAX_SEARCH_RESULTS)
     }
 
     // ─── Per-provider parameter mappers ────────────────────────────────
@@ -410,7 +421,13 @@ mod tests {
             max_results: 100,
             ..Default::default()
         };
-        assert_eq!(options.validated_max_results(), 50);
+        assert_eq!(options.validated_max_results(), 100);
+
+        let options = SearchOptions {
+            max_results: 500,
+            ..Default::default()
+        };
+        assert_eq!(options.validated_max_results(), MAX_SEARCH_RESULTS);
 
         let options = SearchOptions {
             max_results: 10,
