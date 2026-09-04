@@ -23,11 +23,20 @@ pub const RUNTIME_AGENTS_CHANGED_TOPIC: &str = "runtime.agents.changed";
 /// that it is not derived from what it is checking.
 pub const RUNTIME_AGENTS_LIST_METHOD: &str = "runtime.agents.list";
 
-/// `JsonSchema` because `terminal{wait}`'s `until` argument takes these
-/// states directly (`builtin_tools::terminal`). A tool-local copy of the four
-/// names would be a second enumeration of the same closed set — the shape that
-/// silently drops a state the day a fifth is added (判据 §1/§5) — and
-/// `canvas.rs` already derives it on wire types in this crate.
+// MAINTAINERS — this note is a `//` and must stay one. The `JsonSchema` derive
+// below means the doc comment on this type ships to the MODEL: `terminal{wait}`
+// takes these states as its `until` argument, so whatever is written as `///`
+// here is paid for on every turn that loads that tool, from a crate nobody
+// editing the tool reads. The guard is
+// `builtin_tools::terminal::tests::the_shipped_schema_addresses_the_model_and_not_the_maintainer`.
+//
+// Why the derive is here at all: a tool-local copy of the four names would be a
+// second enumeration of the same closed set — the shape that silently drops a
+// state the day a fifth is added (判据 §1/§5) — and `canvas.rs` already derives
+// it on wire types in this crate.
+/// What an agent in a terminal session is doing right now: `working`,
+/// `blocked` (it is waiting on a human), `idle`, or `unknown` when detection
+/// cannot say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeAgentState {

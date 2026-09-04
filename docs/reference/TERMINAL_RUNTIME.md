@@ -97,14 +97,26 @@ Aleph 的内嵌终端是**给人用的**：Panel 里开一个 PTY，人在里面
 
 | 常量 | 值 | 所有者 | 归属 |
 |---|---|---|---|
-| `PROBE_MIN_INTERVAL_MS` | 500 | `src/gateway/pty/foreground.rs` | **herdr 的数字**（`PROCESS_ACQUISITION_FAST_RECHECK`，herdr `src/pane.rs:297-298`，在 `should_probe_foreground_job` `src/pane.rs:491-497` 里被选中） |
-| `PROBE_RECHECK_MS` | 3 000 | 同上 | **Aleph 自己的裁定**。herdr 的同类是 `PROCESS_RECHECK_IDENTIFIED` = 5 s（herdr `src/pane.rs:292`） |
-| `PROBE_MISSES_TO_FORGET` | 6 | 同上 | **herdr 的数字**（`AGENT_MISS_CONFIRMATION_ATTEMPTS`，herdr `src/pane.rs:291`） |
+| `PROBE_MIN_INTERVAL_MS` | 500 | `src/gateway/pty/foreground.rs` | **herdr 的数字**（`PROCESS_ACQUISITION_FAST_RECHECK`）。**逐行出处只在那个文件的许可头里写一次**——上游行号是对别人文件的断言，本文再抄一份就是同一事实的第二份表述（判据 §1），而两份里只有一份记着读的是哪个版本 |
+| `PROBE_RECHECK_MS` | 3 000 | 同上 | **Aleph 自己的裁定**。herdr 干这活的同类是 `PROCESS_RECHECK_IDENTIFIED` = 5 s。⚠️ herdr 里**确实有** 3 s（`AGENT_STARTUP_GRACE_WINDOW`），只是另一件事——细节同样只在那个许可头里 |
+| `PROBE_MISSES_TO_FORGET` | 6 | 同上 | **herdr 的数字**（`AGENT_MISS_CONFIRMATION_ATTEMPTS`） |
 
-三条闸（`PtySession::maybe_probe_foreground`）：① 本 tick 有帧**且**距上次探测 ≥ `PROBE_MIN_INTERVAL_MS`；
-② 已识别到 agent 且距上次 ≥ `PROBE_RECHECK_MS`（**没有这条，最要紧的那个情形永远够不到闸**：agent 退出后
-shell 回到前台且什么都不画，只看帧的闸再也不会回头看，面板会永远显示一个已经跑完的 agent）；
-③ 从不在屏幕锁内探测。
+**三条闸，全部住在 `foreground::probe_due`**（纯函数；`PtySession::maybe_probe_foreground` 只负责在问它之前
+先把这一 tick 的帧记进 `ForegroundState::note_frame`，见下）：
+
+① **从没探过就探**（`last_probe_at == None`）——第一次识别全靠它，少了它下面两条都够不到；
+② **距上次探测以来有过帧**，**且**距上次探测 ≥ `PROBE_MIN_INTERVAL_MS`；
+③ 已识别到 agent 且距上次 ≥ `PROBE_RECHECK_MS`，**有没有帧都探**（**没有这条，最要紧的那个情形永远够不到闸**：
+agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不会回头看，面板会永远显示一个已经跑完的 agent）。
+
+⚠️ ② 的主语是「**自上次探测以来**」，不是「本 tick」，这个差别就是这条规则本身。本文上一版写的正是「本 tick 有帧」
+——那是本轮**修掉**的缺陷：一个启动后画一次就安静下来的程序，那一帧整个落在上次探测的 500 ms 阴影里被丢掉，
+此后再没有帧，而 ③ 因为什么都还没识别出来也帮不上忙，「未识别」于是成了一个**吸收态**
+（`a_real_agent_started_after_spawn_is_identified` 第一次真跑就抓到）。粘住那一帧的是
+`ForegroundState::note_frame`，它在闸说「不」的时候照样记。
+
+（「从不在屏幕锁内探测」不是闸的一条，是锁纪律——见下方**锁纪律**段。上一版把它数进「三条闸」，于是三条里
+一条不是闸、真正的第一条闸反而漏了：判据 §6，数错的方向永远是少一个。）
 
 **滞后是不对称的**：命中立刻生效，连续 `PROBE_MISSES_TO_FORGET` 次探不到才把 `program` 退回 shell 标签。
 探不到说的是「**我没能看**」，不是「那里什么都没跑」（判据 §8）。

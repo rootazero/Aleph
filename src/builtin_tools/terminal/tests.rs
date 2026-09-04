@@ -94,6 +94,83 @@ fn the_description_says_it_is_read_only() {
         .contains("read-only"));
 }
 
+/// Every `description` string the model actually receives, in schema order,
+/// from the SHIPPED definition rather than from `schema_for!` — the schema
+/// passes through `AlephTool::definition`, and a guard reading the macro
+/// directly would assert about the producer instead of the wire (判据 §4).
+///
+/// Walks the whole `$defs` graph, not just this file's two types: `until`'s
+/// item type is `aleph_protocol::runtime::RuntimeAgentState`, whose own doc
+/// comment ships here too, from another crate, which is precisely how a
+/// per-file reading of R9 misses it.
+fn shipped_descriptions(schema: &serde_json::Value) -> Vec<String> {
+    fn walk(node: &serde_json::Value, out: &mut Vec<String>) {
+        match node {
+            serde_json::Value::Object(map) => {
+                for (key, value) in map {
+                    if key == "description" {
+                        if let Some(text) = value.as_str() {
+                            out.push(text.to_string());
+                        }
+                    }
+                    walk(value, out);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|i| walk(i, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(schema, &mut out);
+    assert!(
+        !out.is_empty(),
+        "no descriptions found at all — a walk that finds nothing must not \
+         read as 'nothing to complain about' (判据 §8); schema was {}",
+        serde_json::to_string_pretty(schema).unwrap_or_default()
+    );
+    out
+}
+
+/// R9: the schema this tool ships carries nothing addressed to whoever
+/// maintains it.
+///
+/// `TerminalAction` and `TerminalArgs` derive `JsonSchema`, so every `///`
+/// line on them — and on every type they reference — becomes a `description`
+/// the model pays for on each turn that loads this tool. Three notes were
+/// riding along, each a note ABOUT THE CODE rather than a runtime fact the
+/// model cannot know:
+///
+/// * `List`'s second paragraph, a rule about saying all five field names,
+///   naming the test that pins them;
+/// * `TerminalAction`'s own doc, pointing at a Rust constant by path;
+/// * `RuntimeAgentState`'s type doc in `shared/protocol`, which is entirely
+///   an argument for why that enum derives `JsonSchema` at all — it reaches
+///   the model through `until`, from a crate nobody editing this tool reads.
+///
+/// # The predicate, and what it does NOT catch (判据 §5)
+///
+/// Rust path syntax (`::`). All three instances used it, it cannot occur in
+/// a sentence written for a model, and it needs no list of banned names to
+/// keep current — a test-name ban would go quietly vacuous the day that test
+/// is renamed (判据 §2).
+///
+/// It does not catch maintainer prose with no symbol path in it ("say all
+/// five or none, because…" on its own would pass). That half stays a reading
+/// job. What this closes is the shape all three actual instances had.
+#[test]
+fn the_shipped_schema_addresses_the_model_and_not_the_maintainer() {
+    let def = TerminalTool.definition();
+    for description in shipped_descriptions(&def.parameters) {
+        assert!(
+            !description.contains("::"),
+            "a Rust path in a schema description means this sentence is \
+             addressed to whoever maintains the code, not to the model that \
+             receives it on every turn (R9). Move it to a `//` comment above \
+             the item. Offending description:\n{description}"
+        );
+    }
+}
+
 /// No `TurnContext` at all reads as operator (cron/A2A/internal
 /// convention) — a caller with a scoped, non-operator role is refused.
 ///

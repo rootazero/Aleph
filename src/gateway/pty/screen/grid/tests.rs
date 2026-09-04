@@ -218,3 +218,44 @@
             "content is untouched by a same-size resize"
         );
     }
+
+    /// The `w > self.cols` early return in `put`, which had no test.
+    ///
+    /// It is the only thing between a one-column grid and an out-of-bounds
+    /// index in the PTY reader thread, and one column is reachable from the
+    /// wire: `handlers::pty::check_dimensions` bounds only the UPPER end
+    /// (`> MAX_TERMINAL_DIMENSION`), so a client may ask for `cols: 1`, and
+    /// `cols: 0` — the wire's "unset" — arrives here as 1 through
+    /// `Grid::new`'s `max(1)`. Both are covered below, because they are two
+    /// ways to reach the same grid and only one of them looks deliberate.
+    ///
+    /// Reddens by PANIC, not by assertion, if the early return is deleted:
+    /// the wrap arm then moves the cursor to column 0 of the next row and the
+    /// `w == 2` spacer write indexes column 1 of a one-column row.
+    #[test]
+    fn a_wide_glyph_on_a_one_column_grid_is_dropped_rather_than_indexed() {
+        for cols in [1_u16, 0] {
+            let mut g = Grid::new(2, cols);
+            g.put('中', PLAIN);
+            assert_eq!(
+                g.row_text(0),
+                "",
+                "a glyph that cannot fit must not be written (cols={cols})"
+            );
+            assert_eq!(
+                g.row_text(1),
+                "",
+                "and it must not have wrapped onto the next row (cols={cols})"
+            );
+            assert_eq!(
+                g.cursor(),
+                (0, 0),
+                "a dropped glyph advances nothing (cols={cols})"
+            );
+
+            // The grid is still usable afterwards: dropping the glyph is a
+            // no-op, not a poisoned state.
+            g.put('a', PLAIN);
+            assert_eq!(g.row_text(0), "a", "cols={cols}");
+        }
+    }

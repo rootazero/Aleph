@@ -4,20 +4,30 @@
 // outside it.
 //
 // What IS taken from herdr 0.8.2 (https://github.com/herdrdev/herdr) are two
-// NUMBERS and the shape of an idea, cited where each is used:
+// NUMBERS and the shape of an idea. Every upstream line number below was read
+// at herdr 0.8.2 on 2026-09-04; a citation is a claim about someone else's
+// file, which is exactly the kind that rots unnoticed (判据 §1), so re-read
+// before trusting one:
 //   * 500 ms, the fast end of the acquisition interval upstream picks in
-//     `should_probe_foreground_job` (`src/pane.rs:491-497`, choosing between
-//     `PROCESS_ACQUISITION_FAST_RECHECK` = 500 ms and
-//     `PROCESS_ACQUISITION_SLOW_RECHECK` = 2 s, `src/pane.rs:297-298`);
+//     `should_probe_foreground_job` (`src/pane.rs:478`; the fast/slow choice
+//     is `src/pane.rs:491-495`), between `PROCESS_ACQUISITION_FAST_RECHECK` =
+//     500 ms and `PROCESS_ACQUISITION_SLOW_RECHECK` = 2 s
+//     (`src/pane.rs:297-298`). THIS is the one full statement of that
+//     citation — `PROBE_MIN_INTERVAL_MS`'s doc below points here rather than
+//     repeating it, because the previous version said it twice and only this
+//     copy carried the version the numbers were read at;
 //   * 6, upstream's `AGENT_MISS_CONFIRMATION_ATTEMPTS` (`src/pane.rs:291`).
-// Aleph's 3 s silent recheck is NOT upstream's number and never was: the
-// analogous constant there is `PROCESS_RECHECK_IDENTIFIED` = 5 s
-// (`src/pane.rs:292`). An earlier version of this header cited
-// `src/pane.rs:776-789` for a "500 ms / 3 s" pair, and neither half survives
-// reading upstream — those lines are the CALL SITE, which computes no
-// interval at all, and 3 s appears nowhere in herdr. A citation is a claim
-// about someone else's file, so it is exactly the kind that rots unnoticed
-// (判据 §1); re-read before trusting it.
+// Aleph's 3 s silent recheck is NOT upstream's number: the constant doing that
+// job there is `PROCESS_RECHECK_IDENTIFIED` = 5 s (`src/pane.rs:292`). An
+// earlier version of this header cited `src/pane.rs:776-789` for a
+// "500 ms / 3 s" pair; those lines are the CALL SITE and compute no interval
+// at all. That version also said 3 s "appears nowhere in herdr", which is
+// FALSE and was corrected by re-reading upstream: `AGENT_STARTUP_GRACE_WINDOW`
+// = 3 s (`src/pane/agent_detection.rs:12-13`) is one of nine `from_secs(3)`
+// sites under herdr's `src/`. It is a different job — a grace window after an
+// agent starts, not a recheck interval — which is the whole point: an absolute
+// negative is the easiest claim to falsify and the most load-bearing when
+// someone later reaches for it to "correct" this number back.
 // Upstream's probe machinery itself is not reproduced here. It reaches the
 // process table through its own `crate::platform` FFI layer, which R1 puts
 // out of reach; `should_probe_foreground_job` is a state machine folding in
@@ -77,10 +87,14 @@
 
 /// Minimum gap between two probes of a session that is producing frames.
 ///
-/// herdr's own floor for the same job: `should_probe_foreground_job`
-/// (`src/pane.rs:491-497`) picks between `PROCESS_ACQUISITION_FAST_RECHECK`
-/// (500 ms, while a pane is freshly acquiring) and
-/// `PROCESS_ACQUISITION_SLOW_RECHECK` (2 s), and 500 ms is that fast end.
+/// Borrowed from herdr, which uses 500 ms as the FAST end of an adaptive
+/// acquisition interval. The citation — upstream version, symbol and line
+/// numbers — is stated once, in this file's licence header, and deliberately
+/// not repeated here: it was written out in full in both places, and only the
+/// header's copy said which release the lines were read at, so the two were
+/// one edit away from disagreeing about a fact neither of them owns
+/// (判据 §1).
+///
 /// Aleph takes the number, not the adaptive choice — it has no acquisition
 /// window to switch on. At the 16 ms flush cadence this caps a busy session
 /// at ~2 probes per second instead of ~62.

@@ -105,22 +105,35 @@ use crate::error::Result;
 use crate::gateway::pty;
 use crate::tools::AlephTool;
 
-/// `terminal`'s five read-only actions. No write verb — see the tool's own
-/// [`TerminalTool::DESCRIPTION`] for why.
+// This doc comment ships to the model as the schema description of
+// `TerminalArgs::action`. The reason there is no write verb is in
+// [`TerminalTool::DESCRIPTION`] (the tool cannot type into a terminal; a human
+// does that) — a symbol path is a maintainer's cross-reference, so it stays on
+// this side of the `///` line; the guard
+// `the_shipped_schema_addresses_the_model_and_not_the_maintainer` fails if one
+// crosses back.
+/// `terminal`'s five read-only actions. There is no write verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalAction {
+    // MAINTAINERS — deliberately a `//`, not a `///`. This enum derives
+    // `JsonSchema`, so every doc line below becomes that variant's
+    // `description` and ships to the model on every turn that loads this
+    // tool: an instruction addressed to whoever edits this file next is bytes
+    // the model pays for and cannot act on (R9's first ruler — a fact the
+    // model cannot know, or teaching a strong model how to think; a note
+    // about a test is neither).
+    //
+    // The rule this comment carries, unchanged: the field list in `List`'s
+    // doc is the same key set `aleph_protocol::pty::PtySessionInfo` defines
+    // and `pty_list_response_round_trips_and_pins_its_key_set` pins. Say all
+    // five or none — a short list reads to the model as "those are the
+    // fields", and a field it is told does not exist is a field it will not
+    // ask for.
     /// List the caller's own PTY sessions: `session_id`, `shell`, `cwd`
     /// (where the shell was SPAWNED — empty when it inherited the
     /// server's, and not updated by a later `cd`), `created_at` (epoch
     /// seconds) and `closed`.
-    ///
-    /// This enumeration is the same key set
-    /// `aleph_protocol::pty::PtySessionInfo` defines and
-    /// `pty_list_response_round_trips_and_pins_its_key_set` pins — say all
-    /// five or none, because a short list here reads to the model as "those
-    /// are the fields", and a field it is told does not exist is a field it
-    /// will not ask for.
     List,
     /// Read one session's current visible screen (no scrollback). Requires
     /// `session_id`.

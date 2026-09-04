@@ -265,15 +265,12 @@ impl PtySession {
         self.closed.load(Ordering::SeqCst)
     }
 
-    /// The pid of the program this session spawned. See the field's doc.
-    ///
-    /// `None` is "the platform would not say", never "there is no child" —
-    /// the only consumer, the non-Unix foreground heuristic, treats it that
-    /// way and gives up rather than guessing (判据 §8).
-    #[must_use]
-    pub fn shell_pid(&self) -> Option<u32> {
-        self.shell_pid
-    }
+    // A `pub fn shell_pid(&self) -> Option<u32>` accessor lived here with zero
+    // callers crate-wide (R10 / YAGNI — CUT 2026-09-04). Its doc named "the
+    // only consumer, the non-Unix foreground heuristic", and that consumer
+    // reads the FIELD directly in `maybe_probe_foreground` below — so the
+    // accessor was both dead and describing someone else's call site (判据 §1).
+    // Re-add it when a reader outside this type exists, not before.
 
     /// Probe the terminal's foreground process, if this tick is due. Returns
     /// whether the believed foreground process CHANGED.
