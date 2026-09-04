@@ -67,7 +67,11 @@ struct FirecrawlWebResult {
 }
 
 impl FirecrawlProvider {
-    pub fn new(api_key: impl Into<String>, base_url: Option<String>) -> Result<Self> {
+    pub fn new(
+        api_key: impl Into<String>,
+        base_url: Option<String>,
+        allow_private_upstream: bool,
+    ) -> Result<Self> {
         let api_key: String = api_key.into();
         if api_key.is_empty() {
             return Err(AlephError::invalid_config("Firecrawl API key is required"));
@@ -84,13 +88,19 @@ impl FirecrawlProvider {
             ));
         }
 
-        // Refuse IP-literal / blocked-hostname upstreams — see the matching
-        // guard in `SearxngProvider::new` for the rationale. The default
-        // (`api.firecrawl.dev`) is a public hostname so this rejects only
-        // operator overrides pointing at internal infrastructure.
+        // Refuse IP-literal / blocked-hostname upstreams unless the operator
+        // opted this backend in — see the matching guard in
+        // `SearxngProvider::new`. The default (`api.firecrawl.dev`) is a
+        // public hostname, so this rejects only operator overrides pointing
+        // at internal infrastructure, and the opt-in is how a self-hosted
+        // Firecrawl says so.
         if let Ok(parsed) = url::Url::parse(&trimmed) {
             if let Some(host) = parsed.host_str() {
-                crate::search::providers::base::reject_ssrf_target_host("Firecrawl", host)?;
+                crate::search::providers::base::reject_ssrf_target_host(
+                    "Firecrawl",
+                    host,
+                    allow_private_upstream,
+                )?;
             }
         }
 
@@ -195,7 +205,11 @@ impl crate::search::ProviderFactory for FirecrawlFactory {
             log::warn!("search backend '{name}' ({NAME}) skipped: no api_key in vault");
             return Ok(None);
         };
-        match FirecrawlProvider::new(key.to_string(), backend.base_url.clone()) {
+        match FirecrawlProvider::new(
+            key.to_string(),
+            backend.base_url.clone(),
+            backend.allow_private_upstream,
+        ) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
                 log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
@@ -211,7 +225,7 @@ mod tests {
 
     #[test]
     fn firecrawl_provider_creation_defaults_to_cloud() {
-        let provider = FirecrawlProvider::new("fc-test-key".to_string(), None).unwrap();
+        let provider = FirecrawlProvider::new("fc-test-key".to_string(), None, false).unwrap();
         assert_eq!(provider.name(), "firecrawl");
         assert!(provider.is_available());
         assert_eq!(provider.base_url, "https://api.firecrawl.dev");
@@ -219,15 +233,18 @@ mod tests {
 
     #[test]
     fn firecrawl_provider_rejects_empty_key() {
-        let result = FirecrawlProvider::new("".to_string(), None);
+        let result = FirecrawlProvider::new("".to_string(), None, false);
         assert!(result.is_err());
     }
 
     #[test]
     fn firecrawl_provider_custom_base_url_is_trimmed() {
+        // `localhost:3002` is Firecrawl's own documented self-hosted port,
+        // so this is the opted-in shape.
         let provider = FirecrawlProvider::new(
             "fc-k".to_string(),
             Some("http://localhost:3002/".to_string()),
+            true,
         )
         .unwrap();
         assert_eq!(provider.base_url, "http://localhost:3002");
@@ -236,7 +253,7 @@ mod tests {
     #[test]
     fn firecrawl_provider_rejects_bad_scheme() {
         let result =
-            FirecrawlProvider::new("fc-k".to_string(), Some("ftp://example.com".to_string()));
+            FirecrawlProvider::new("fc-k".to_string(), Some("ftp://example.com".to_string()), false);
         assert!(result.is_err());
     }
 
@@ -287,7 +304,7 @@ mod tests {
     #[ignore]
     async fn firecrawl_search_real_api() {
         let api_key = std::env::var("FIRECRAWL_API_KEY").expect("FIRECRAWL_API_KEY not set");
-        let provider = FirecrawlProvider::new(api_key, None).unwrap();
+        let provider = FirecrawlProvider::new(api_key, None, false).unwrap();
         let options = SearchOptions::default();
 
         let results = provider

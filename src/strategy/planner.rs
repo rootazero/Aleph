@@ -122,18 +122,65 @@ fn build_planner_prompt(objective: &str, ctx: &PlannerContext) -> String {
 /// (mirrors `skill_distill::parse_distill_response`). The `goal_id` field is
 /// `#[serde(default)]` on `Strategy`, so the planner JSON need not supply it.
 ///
-/// Robust to stray braces in prose: scans for the first `{`, then walks forward
-/// tracking brace depth while honoring JSON string literals and escape
-/// sequences. This survives preamble like `important for the task {` and
-/// trailing prose like `} use }` that the old `find('{')..rfind('}')` slice
-/// would silently turn into non-JSON (and then swallow via `.ok()`).
+/// Robust to stray braces in prose: EVERY `{` is tried as a start, in order,
+/// and the first one that both balances and deserializes wins. Walking
+/// forward from a candidate honours JSON string literals and escape
+/// sequences, so a brace inside a string is content, not structure.
+///
+/// Trying every `{` rather than only the first is the whole fix. Committing
+/// to the first one answers trailing prose (`} use }`) but NOT a preamble —
+/// `important for the task {` opens a depth that the real object's `}` only
+/// returns to 1, so the scan runs off the end and the function returns
+/// `None`. The doc comment claimed that shape survived and it did not
+/// (判据 §1); `parse_strategy_with_stray_brace_in_preamble_extracts_valid_plan`
+/// has been red ever since it was written.
 fn parse_strategy(text: &str) -> Option<Strategy> {
     let bytes = text.as_bytes();
-    let start = bytes.iter().position(|&b| b == b'{')?;
+    let mut last_error = None;
+    let mut candidates = 0usize;
+    for start in 0..bytes.len() {
+        if bytes[start] != b'{' {
+            continue;
+        }
+        // Bounded so prose full of braces cannot turn one response into a
+        // quadratic scan. A model that opens 32 braces before the plan is
+        // not producing a plan.
+        candidates += 1;
+        if candidates > MAX_JSON_START_CANDIDATES {
+            break;
+        }
+        let Some(end) = balanced_object_end(bytes, start) else {
+            continue;
+        };
+        // `{` and `}` are ASCII, so both indices are char boundaries.
+        match serde_json::from_str::<Strategy>(&text[start..=end]) {
+            Ok(s) => return Some(s),
+            Err(e) => last_error = Some(e),
+        }
+    }
+    // One log line for the whole response, not one per candidate: a preamble
+    // brace would otherwise report a "failure" that the next candidate went
+    // on to parse successfully.
+    if let Some(e) = last_error {
+        tracing::debug!(
+            error = ?e,
+            response_preview = %&text[..text.len().min(200)],
+            "strategy planner: JSON parse failed"
+        );
+    }
+    None
+}
+
+/// How many `{` positions are tried as an object start before giving up.
+const MAX_JSON_START_CANDIDATES: usize = 32;
+
+/// The index of the `}` that closes the object opening at `start`, or `None`
+/// when it never closes. String-literal aware: a brace inside `"…"` is
+/// content, and `\\` escapes the character after it.
+fn balanced_object_end(bytes: &[u8], start: usize) -> Option<usize> {
     let mut depth: i32 = 0;
     let mut in_string = false;
     let mut escape = false;
-    let mut end: Option<usize> = None;
     for (i, &b) in bytes.iter().enumerate().skip(start) {
         if escape {
             escape = false;
@@ -146,25 +193,13 @@ fn parse_strategy(text: &str) -> Option<Strategy> {
             b'}' if !in_string => {
                 depth -= 1;
                 if depth == 0 {
-                    end = Some(i);
-                    break;
+                    return Some(i);
                 }
             }
             _ => {}
         }
     }
-    let end = end?;
-    match serde_json::from_str::<Strategy>(&text[start..=end]) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            tracing::debug!(
-                error = ?e,
-                response_preview = %&text[..text.len().min(200)],
-                "strategy planner: JSON parse failed"
-            );
-            None
-        }
-    }
+    None
 }
 
 #[cfg(test)]

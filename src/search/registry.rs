@@ -1227,6 +1227,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {
@@ -1262,6 +1263,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {
@@ -1303,6 +1305,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         backends.insert(
@@ -1315,6 +1318,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {
@@ -1348,6 +1352,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {
@@ -1357,6 +1362,13 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
+            // EXPLICIT, and it must stay explicit: this test's whole subject is
+            // the `false` case. `c647b5b95` replaced this line with
+            // `..Default::default()`, whose `web_fetch_fallback` is `true` —
+            // so the test configured the opposite of what it asserts and has
+            // been red ever since. A test that takes its subject from a
+            // `Default` is not testing the subject (判据 §1).
+            web_fetch_fallback: false,
             ..Default::default()
         };
         let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");

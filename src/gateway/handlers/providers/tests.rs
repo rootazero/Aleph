@@ -533,19 +533,41 @@ async fn catalog_entries_carry_modalities_default_model() {
     }
 }
 
+/// An unknown `view` is REFUSED, not widened.
+///
+/// This test used to be `catalog_unknown_view_treats_as_all` and asserted the
+/// opposite. `handlers.rs::handle_catalog` deliberately changed to fail
+/// closed — widening silently to `All` returns rows the caller did not ask
+/// for — and the test kept asserting the old contract, so it has been red
+/// ever since. The rename is part of the fix: a test whose NAME states the
+/// contract it no longer checks is the more expensive half of the drift
+/// (判据 §1).
 #[tokio::test]
-async fn catalog_unknown_view_treats_as_all() {
-    // Row-set assertion → pin the process-global [moa] slot so the fall-
-    // through view is exactly the preset catalog, no synthetic moa row.
+async fn catalog_unknown_view_is_refused_not_widened() {
+    // Row-set assertion → pin the process-global [moa] slot so a passing
+    // `view` is exactly the preset catalog, no synthetic moa row.
     let _guard = crate::providers::moa::config_handle::moa_config_test_lock();
     crate::providers::moa::store_moa_config(None);
 
     let config = Arc::new(RwLock::new(Config::default()));
     let (_vault_scratch, vault) = test_vault();
-    let response = handle_catalog(catalog_request(Some("nonsense")), config, vault).await;
+    let response = handle_catalog(catalog_request(Some("nonsense")), config.clone(), vault.clone())
+        .await;
+    let error = response
+        .error
+        .as_ref()
+        .expect("an unknown view must be an error, not an empty or full row set");
+    assert_eq!(error.code, crate::gateway::protocol::INVALID_PARAMS);
+
+    // The other half of the gate (判据 §14): a KNOWN view still returns the
+    // catalog, so "refuses the unknown" is not "refuses everything".
+    let response = handle_catalog(catalog_request(Some("all")), config, vault).await;
     let items = items_array(&response);
-    // Unknown view → fall through to "all", returning every preset.
-    assert!(items.len() >= 20);
+    assert!(
+        items.len() >= 20,
+        "a known view still returns the preset catalog, got {}",
+        items.len()
+    );
 }
 
 // ============================================================================

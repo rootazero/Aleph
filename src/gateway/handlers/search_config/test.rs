@@ -104,13 +104,26 @@ pub async fn handle_test(
         params.api_key = resolve_api_key(&params.name, &vault);
     }
 
-    // Determine provider type from config or fallback to name
-    let provider_type = {
+    // Determine provider type — and whether this backend is allowed to point
+    // at private infrastructure — from the stored config, or fall back to the
+    // name. ONE read for both, because they are two facts about the same
+    // backend and a second read could see a different one.
+    //
+    // `allow_private_upstream` has to be here or the probe contradicts the
+    // registry: an operator who opted a self-hosted SearXNG in would get a
+    // "Test connection" button that fails with an SSRF refusal while search
+    // through that same backend works (判据 §9). It comes from the STORED
+    // backend, like `provider_type`, so ticking the box and probing before
+    // saving still refuses — the same rule the provider type already follows.
+    let (provider_type, allow_private_upstream) = {
         let cfg = config.read().await;
         cfg.search
             .as_ref()
             .and_then(|s| s.backends.get(&params.name))
-            .map_or_else(|| params.name.clone(), |b| b.provider_type.clone())
+            .map_or_else(
+                || (params.name.clone(), false),
+                |b| (b.provider_type.clone(), b.allow_private_upstream),
+            )
     };
 
     let backend = SearchBackendConfig {
@@ -124,6 +137,7 @@ pub async fn handle_test(
         // reads as a hang, and one request cannot burst anything.
         min_request_interval_ms: Some(0),
         verified: false,
+        allow_private_upstream,
     };
 
     let test_result = probe(&backend).await;
@@ -201,6 +215,7 @@ mod tests {
             engines: None,
             min_request_interval_ms: Some(0),
             verified: false,
+            allow_private_upstream: false,
         }
     }
 
