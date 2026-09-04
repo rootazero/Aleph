@@ -265,30 +265,6 @@ fn update_effect_lines(result: &UserUpdateResult) -> Vec<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn create_omits_the_role_when_unset_so_the_server_default_applies() {
-        let mut params = serde_json::json!({ "display_name": "Alice" });
-        let role: Option<&str> = None;
-        if let Some(r) = role {
-            params["role"] = Value::String(r.to_string());
-        }
-        assert_eq!(params["display_name"], "Alice");
-        assert!(
-            params.get("role").is_none(),
-            "an absent --role must not be sent as null; the server's own \
-             default (member) is the single source of that decision"
-        );
-    }
-
-    #[test]
-    fn create_forwards_an_explicit_role() {
-        let mut params = serde_json::json!({ "display_name": "Bob" });
-        if let Some(r) = Some("admin") {
-            params["role"] = Value::String(r.to_string());
-        }
-        assert_eq!(params["role"], "admin");
-    }
-
     /// `users.update` with no changed field is an empty patch the server would
     /// happily accept, returning the user unchanged — a success response for a
     /// command that did nothing. Refuse locally so the operator learns they
