@@ -616,6 +616,13 @@ mod tests {
     /// type and this asserts the shape it actually emits (judgment §10:
     /// parsing a literal the test itself wrote proves serde, not this code).
     ///
+    /// The key-set assertion is an EQUALITY against an independently written
+    /// five-name list, and it runs on the raw JSON before any decode. A
+    /// containment check, or a check made after `from_value`, would both be
+    /// blind to the one thing worth guarding here: serde silently discards
+    /// unknown keys, so a sixth key would reach every operator's client
+    /// while the typed assertions stayed green.
+    ///
     /// It does NOT assert `sessions.len() == 1`. The manager is a
     /// process-global singleton and libtest runs this binary's tests on
     /// parallel threads, so any sibling's live session is in this list —
@@ -635,6 +642,36 @@ mod tests {
 
         let resp = handle_list(req("pty.list", json!({}))).await;
         let value = resp.result.expect("list always succeeds");
+
+        // The key set of the row the handler ACTUALLY EMITTED, asserted
+        // before any typed decode. Equality, not containment: serde drops
+        // unknown keys, so a `from_value` round trip would let a sixth key
+        // — `created_by`, the ownership stamp — ride the wire to every
+        // operator while every assertion below stayed green. Dropping
+        // `Serialize` from `SessionInfo` blocks the whole-struct one-liner
+        // but NOT a hand-written per-field `json!`, so this is the assertion
+        // that actually closes the leak.
+        let raw_row = value["sessions"]
+            .as_array()
+            .expect("sessions is an array")
+            .iter()
+            .find(|s| s["session_id"] == json!(sid))
+            .expect("this call's own session must be listed")
+            .clone();
+        let emitted: std::collections::BTreeSet<&str> = raw_row
+            .as_object()
+            .expect("a session row is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            emitted,
+            ["closed", "created_at", "cwd", "session_id", "shell"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            "pty.list emitted a row whose key set is not the contract's"
+        );
+
         let parsed: aleph_protocol::pty::PtyListResponse =
             serde_json::from_value(value).expect("list response must match the contract");
         let mine = parsed

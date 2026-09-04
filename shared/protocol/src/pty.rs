@@ -181,10 +181,22 @@ pub struct PtySpawnResponse {
 /// Deliberately WITHOUT `created_by`. The server's own `SessionInfo` carries
 /// that stamp because `pty.list`'s filter and the four addressed methods are
 /// built on it, but no client reads it, and shipping it would tell every
-/// operator which of their peers owns which shell. Because the server
-/// constructs its response from this type rather than serialising its own
-/// struct, re-adding that leak is a compile-time impossibility rather than
-/// something a parse-only test would miss.
+/// operator which of their peers owns which shell.
+///
+/// Two things keep it off the wire, and it is worth being exact about which
+/// one does what, because the compiler covers less than it looks like:
+///
+/// - Dropping `Serialize` from `SessionInfo` makes the WHOLE-STRUCT
+///   one-liner — `json!({ "sessions": manager().list() })` — fail to
+///   compile. That is the shape this leak actually took, and the shape the
+///   next person reaching for it would reach for.
+/// - It does NOT stop a hand-written per-field `json!`. `created_by` is
+///   still a `pub` field, so spelling it out compiles today. The assertion
+///   that closes that path is a key-set EQUALITY on the row the handler
+///   really emits, in `handlers::pty`'s
+///   `list_response_is_built_from_the_protocol_type` — equality because
+///   serde discards unknown keys, so a containment check would watch a
+///   sixth key ship and stay green.
 ///
 /// `cwd` is the directory the child was SPAWNED in (empty when the spawn
 /// inherited the server's), not the shell's live cwd — a shell that has since

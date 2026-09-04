@@ -20,7 +20,63 @@
 //! filters on `session_id` itself rather than trusting the caller to
 //! pre-filter (see that method's doc for why).
 
-use aleph_protocol::pty::{PtyAttachResponse, PtyScreenFrame, PtyScreenPatch, PtyStyleRun};
+use aleph_protocol::pty::{
+    PtyAttachResponse, PtyListResponse, PtyScreenFrame, PtyScreenPatch, PtyStyleRun,
+};
+
+/// What the view should do after asking the server which sessions exist.
+///
+/// Three outcomes, not two, because "there is nothing to adopt" and "I could
+/// not read the answer" are different facts and only the first one licenses a
+/// spawn. Folding them together is how a client ends up running a second
+/// shell beside a live one whose screen is still on the server, with nothing
+/// on the page pointing at it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachDecision {
+    /// A live session was named; adopt it.
+    Attach(String),
+    /// The list was READ and held nothing live. The only confirmed absence,
+    /// and the only decision that may create a shell.
+    Spawn,
+    /// The server answered with something this client cannot read. Show it;
+    /// do not act on it.
+    Fail(String),
+}
+
+/// Decide what to do with the result of a `pty.list` call.
+///
+/// Pure, and separated from the view for exactly that reason: the interesting
+/// behaviour here is a three-way classification that a Leptos effect cannot
+/// be asked about in a unit test.
+///
+/// The two failure arms deliberately differ, and the difference is the whole
+/// point rather than an inconsistency:
+///
+/// - A **transport error** means the call never landed. Spawning is still
+///   right, because the spawn travels the same broken transport and reports
+///   its own failure loudly — the user sees an error either way, and nothing
+///   is silently duplicated. Failing here instead would turn every transient
+///   cold-load hiccup into a dead terminal pane.
+/// - A **decode failure** is the opposite situation: the call SUCCEEDED. A
+///   spawn issued after it will also succeed, so reading this as "no
+///   sessions" produces a working-looking second shell and orphans the first
+///   — the silent outcome, which is the expensive one.
+#[must_use]
+pub fn resolve_attach_target(list_result: Result<serde_json::Value, String>) -> AttachDecision {
+    let Ok(value) = list_result else {
+        return AttachDecision::Spawn;
+    };
+    match serde_json::from_value::<PtyListResponse>(value) {
+        Ok(list) => list
+            .sessions
+            .into_iter()
+            .find(|s| !s.closed)
+            .map_or(AttachDecision::Spawn, |s| {
+                AttachDecision::Attach(s.session_id)
+            }),
+        Err(e) => AttachDecision::Fail(format!("pty.list decode failed: {e}")),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyOutcome {
@@ -746,5 +802,78 @@ mod tests {
             other => panic!("must not panic or wrap, got {other:?}"),
         }
         assert_eq!(s.seq(), u64::MAX, "seq must not move for a discarded frame");
+    }
+
+    /// The finding this function exists for. A payload the client cannot
+    /// decode is the server saying something unreadable — it is NOT the
+    /// server saying "you have no sessions". Reading it as the latter makes
+    /// the view spawn a SECOND shell beside the live one, with the first
+    /// one's screen still on the server and nothing on the page pointing at
+    /// it (判据 §8: an `Err` may only say "I do not know").
+    #[test]
+    fn a_malformed_list_payload_is_a_failure_not_an_empty_list() {
+        let decision = resolve_attach_target(Ok(serde_json::json!({ "sessions": "not an array" })));
+        match decision {
+            AttachDecision::Fail(msg) => assert!(
+                !msg.is_empty(),
+                "the message is what names the remedy; an empty one is a blank error card"
+            ),
+            other => panic!("a payload we cannot read must not become a spawn, got {other:?}"),
+        }
+    }
+
+    /// A row missing a key the client requires is the same situation as a
+    /// wholly malformed body, and must not degrade into a duplicate shell
+    /// either. Kept distinct from the case above because this is the shape a
+    /// genuine version skew produces, and it is the one that looks most like
+    /// a legitimately empty list.
+    #[test]
+    fn a_row_the_client_cannot_decode_is_a_failure_not_an_empty_list() {
+        let decision = resolve_attach_target(Ok(serde_json::json!({
+            "sessions": [{ "shell": "zsh", "closed": false }]
+        })));
+        assert!(
+            matches!(decision, AttachDecision::Fail(_)),
+            "a row without session_id is unreadable, not an absence"
+        );
+    }
+
+    #[test]
+    fn a_list_holding_a_live_session_attaches_to_it() {
+        let decision = resolve_attach_target(Ok(serde_json::json!({
+            "sessions": [
+                { "session_id": "dead", "shell": "zsh", "cwd": "", "created_at": 1, "closed": true },
+                { "session_id": "live", "shell": "zsh", "cwd": "", "created_at": 2, "closed": false },
+            ]
+        })));
+        assert_eq!(decision, AttachDecision::Attach("live".to_string()));
+    }
+
+    /// A decoded list with nothing live is the one case that is genuinely an
+    /// answer: the server was understood and it said there is nothing to
+    /// adopt. Only here may the view spawn.
+    #[test]
+    fn a_decoded_list_with_no_live_session_is_the_only_confirmed_spawn() {
+        let decision = resolve_attach_target(Ok(serde_json::json!({
+            "sessions": [
+                { "session_id": "dead", "shell": "zsh", "cwd": "", "created_at": 1, "closed": true },
+            ]
+        })));
+        assert_eq!(decision, AttachDecision::Spawn);
+
+        let empty = resolve_attach_target(Ok(serde_json::json!({ "sessions": [] })));
+        assert_eq!(empty, AttachDecision::Spawn);
+    }
+
+    /// Pins the deliberate asymmetry between the two arms so that a later
+    /// reader does not "unify" them. A transport error means the call never
+    /// landed, and the spawn that follows travels the same broken transport
+    /// and reports its own failure loudly — nothing is silently duplicated.
+    /// A decode failure is the opposite: the call SUCCEEDED, so the spawn
+    /// after it succeeds too and the duplicate is silent.
+    #[test]
+    fn a_transport_error_still_spawns_because_the_spawn_will_fail_too() {
+        let decision = resolve_attach_target(Err("connection reset".to_string()));
+        assert_eq!(decision, AttachDecision::Spawn);
     }
 }

@@ -16,8 +16,7 @@ pub mod render;
 pub mod session;
 
 use aleph_protocol::pty::{
-    PtyAttachResponse, PtyListResponse, PtyScreenFrame, PtySpawnResponse, PTY_LIST_METHOD,
-    PTY_SCREEN_TOPIC,
+    PtyAttachResponse, PtyScreenFrame, PtySpawnResponse, PTY_LIST_METHOD, PTY_SCREEN_TOPIC,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -135,28 +134,27 @@ pub fn TerminalView() -> impl IntoView {
 
             // A live session already on the server IS this view's session.
             // A refresh, a second tab and a reconnect all arrive here.
-            let existing: Option<String> =
-                match state.rpc_call(PTY_LIST_METHOD, serde_json::json!({})).await {
-                    // Decoded through the shared type rather than walked key
-                    // by key: the server builds the response from the same
-                    // struct, so a rename lands as a compile error on one
-                    // side and a decode failure on the other, instead of a
-                    // chain of `and_then`s that quietly yields `None` and
-                    // spawns a second shell next to the live one.
-                    Ok(v) => serde_json::from_value::<PtyListResponse>(v)
-                        .ok()
-                        .and_then(|list| {
-                            list.sessions
-                                .into_iter()
-                                .find(|s| !s.closed)
-                                .map(|s| s.session_id)
-                        }),
-                    // A failed list is not evidence that there are no sessions.
-                    // Falling through to spawn is still right: a gateway broken
-                    // enough to fail `pty.list` fails `pty.spawn` too and says so.
-                    // What must not happen is showing the failure as an answer.
-                    Err(_) => None,
-                };
+            //
+            // The three-way classification lives in `resolve_attach_target`
+            // (pure, unit-tested there) because "nothing to adopt" and "I
+            // could not read the answer" are different facts and only the
+            // first may create a shell. See that function's doc for why the
+            // transport-error arm and the decode arm deliberately differ.
+            let existing: Option<String> = match session::resolve_attach_target(
+                state.rpc_call(PTY_LIST_METHOD, serde_json::json!({})).await,
+            ) {
+                session::AttachDecision::Attach(sid) => Some(sid),
+                session::AttachDecision::Spawn => None,
+                // Read, not readable: the call succeeded, so a spawn would
+                // succeed too and quietly leave a second shell beside a live
+                // one whose screen is still on the server. Stop and say so.
+                session::AttachDecision::Fail(msg) => {
+                    error.set(Some(admin_refusal::settings_load_error(i18n, &msg, |e| {
+                        e.to_string()
+                    })));
+                    return;
+                }
+            };
 
             if let Some(sid) = existing {
                 // Dimensions and seq arrive with the attach response and
