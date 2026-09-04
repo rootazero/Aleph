@@ -2608,6 +2608,8 @@
     "name": "名称",
     "no_users_to_add": "没有可添加的用户",
     "owner": "所有者",
+    "owner_only": "只有本房间的所有者或组织管理员可以更改这里。此视图无法判断你是否为组织管理员——由服务端裁定。",
+    "owner_unrecorded": "本房间没有记录所有者——服务端会解析出一个，但此视图无法说出是谁。",
     "remove": "移除",
     "remove_member": "移除成员",
     "sidebar_create": "创建",

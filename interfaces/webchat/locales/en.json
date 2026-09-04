@@ -2608,6 +2608,8 @@
     "name": "Name",
     "no_users_to_add": "No users to add",
     "owner": "Owner",
+    "owner_only": "Only this room's owner or an org admin may change this. This view cannot tell whether you are an org admin — the server decides.",
+    "owner_unrecorded": "No owner is recorded on this room — the server resolves one, but this view cannot say who.",
     "remove": "Remove",
     "remove_member": "Remove member",
     "sidebar_create": "Create",

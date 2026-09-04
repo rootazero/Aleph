@@ -1,9 +1,34 @@
 //! Project room settings tab (P2 Task 8, spec §6.4) — roster, workspace
-//! binding, rename, archive. Owner-only controls; a non-owner sees a
-//! read-only view (mirrors the server's own `require_owner` gate — every
-//! mutating RPC here is refused server-side for a plain member regardless of
-//! what this component renders, but hiding the controls avoids a round trip
-//! that can only ever come back `PERMISSION_DENIED`).
+//! binding, rename, archive.
+//!
+//! ## What `is_owner` may and may not do here
+//!
+//! The `is_owner` threaded through these sections is a CLIENT-side
+//! approximation — `my_user_id == project.owner_user_id` — and it is strictly
+//! NARROWER than the rule the server enforces. `projects::authz::is_owner`
+//! also admits an org admin, and resolves a NULL `owner_user_id` through
+//! `gateway::visibility::owner_or_legacy`. Neither widening is available on
+//! this side: no `OWNER_USER_ID` is exported from `shared/protocol` at all,
+//! and re-deriving the legacy rule here would be a third spelling of
+//! something `visibility.rs` forbids duplicating by name.
+//!
+//! So this predicate may only ever *soften* a control, never remove one. A
+//! section that is simply absent reads as "this room cannot be archived"
+//! rather than "you may not archive it" — and an org admin, whom the server
+//! would have accepted, never learns the feature exists. Every ownership-gated
+//! control therefore renders, is `disabled` when this client cannot prove
+//! ownership, and carries the reason as its tooltip; the enabled path still
+//! calls and still reports whatever came back through
+//! `admin_refusal::settings_write_error` (a rename can be refused for reasons
+//! this predicate knows nothing about — ownership transferred while the tab
+//! was open, or `require_directory_choice` declining a chat-tier device). The
+//! sibling `channel_bindings` module states the same rule for its own,
+//! admin-gated, pair of verbs.
+//!
+//! The honest predicate is a server-derived `manageable: bool` on the project
+//! row, computed by the same derivation that enforces it. Until that exists, a
+//! non-owner gets a read-only view of controls that are there — not a room
+//! that appears to have no settings.
 //!
 //! 工作区浏览 / 记忆浏览 are still P3 placeholders rendered by `ProjectRoomPage`
 //! (the parent); 看板 is live in `project_page::kanban`. This file is the 设置
@@ -46,6 +71,9 @@ pub fn SettingsTab(project: ProjectInfo, refresh: Callback<()>) -> impl IntoView
 
     // `Memo` (not a raw closure): needs to be `Copy` to pass to four child
     // components, and a closure capturing `owner: Option<String>` isn't.
+    //
+    // Narrower than the server's rule — see the module doc. It may disable a
+    // control; it may not decide whether one exists.
     let is_owner: Memo<bool> = {
         let owner = project.owner_user_id.clone();
         Memo::new(move |_| dir.my_user_id.get().is_some() && dir.my_user_id.get() == owner)
@@ -156,6 +184,12 @@ fn RosterSection(
 ) -> impl IntoView {
     let i18n = use_i18n();
     let owner_id = project.owner_user_id.clone();
+    // A row with no stamped owner badges nobody, and an absent badge reads as a
+    // fact about the roster ("this room has no owner") rather than as this
+    // view's inability to answer. The server resolves such a row through
+    // `visibility::owner_or_legacy`; that constant never crosses the wire, so
+    // the only honest thing this side can do is say it does not know.
+    let owner_unrecorded = owner_id.is_none();
     let members = StoredValue::new(project.member_ids.clone());
     let project_id = StoredValue::new(project.id.clone());
     let picking = RwSignal::new(false);
@@ -226,6 +260,12 @@ fn RosterSection(
                 </div>
             </Show>
 
+            <Show when=move || owner_unrecorded>
+                <p class="mb-2 text-xs text-text-tertiary">
+                    {t!(i18n, project_room.owner_unrecorded)}
+                </p>
+            </Show>
+
             <ul class="space-y-1">
                 {project.member_ids.into_iter().map(|uid| {
                     let is_the_owner = owner_id.as_deref() == Some(uid.as_str());
@@ -279,6 +319,17 @@ fn WorkspaceSection(
     let has_current = current.is_some();
     let browser_open = RwSignal::new(false);
 
+    // What a control this client left off must say. Empty for an owner so the
+    // tooltip does not follow a control that works; `Copy` (it captures only
+    // `Memo` + `I18nContext`) so both buttons can carry the same closure.
+    let owner_only_hint = move || {
+        if is_owner.get() {
+            String::new()
+        } else {
+            t_string!(i18n, project_room.owner_only).to_string()
+        }
+    };
+
     let on_pick = Callback::new(move |path: String| {
         let id = id.get_value();
         spawn_local(async move {
@@ -301,44 +352,49 @@ fn WorkspaceSection(
                         })
                 }}
             </p>
-            <Show when=move || is_owner.get()>
-                <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2">
+                <button
+                    type="button"
+                    class="px-3 py-1.5 rounded-md text-sm bg-primary/15 text-primary hover:bg-primary/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled=move || !is_owner.get()
+                    title=owner_only_hint
+                    on:click=move |_| browser_open.set(true)
+                >
+                    {move || {
+                        if has_current {
+                            t_string!(i18n, project_room.change_folder).to_string()
+                        } else {
+                            t_string!(i18n, project_room.bind_folder).to_string()
+                        }
+                    }}
+                </button>
+                <Show when=move || has_current>
                     <button
                         type="button"
-                        class="px-3 py-1.5 rounded-md text-sm bg-primary/15 text-primary hover:bg-primary/25"
-                        on:click=move |_| browser_open.set(true)
+                        class="px-3 py-1.5 rounded-md text-sm text-text-tertiary hover:text-danger disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled=move || !is_owner.get()
+                        title=owner_only_hint
+                        on:click=move |_| {
+                            let id = id.get_value();
+                            spawn_local(async move {
+                                let result = ProjectsApi::bind_workspace(&dash, &id, None).await.map(|_| ());
+                                on_done.run(result);
+                            });
+                        }
                     >
-                        {move || {
-                            if has_current {
-                                t_string!(i18n, project_room.change_folder).to_string()
-                            } else {
-                                t_string!(i18n, project_room.bind_folder).to_string()
-                            }
-                        }}
+                        {t!(i18n, project_room.unbind)}
                     </button>
-                    <Show when=move || has_current>
-                        <button
-                            type="button"
-                            class="px-3 py-1.5 rounded-md text-sm text-text-tertiary hover:text-danger"
-                            on:click=move |_| {
-                                let id = id.get_value();
-                                spawn_local(async move {
-                                    let result = ProjectsApi::bind_workspace(&dash, &id, None).await.map(|_| ());
-                                    on_done.run(result);
-                                });
-                            }
-                        >
-                            {t!(i18n, project_room.unbind)}
-                        </button>
-                    </Show>
-                </div>
-                <DirectoryBrowser
-                    open=browser_open
-                    on_pick=on_pick
-                    title=t_string!(i18n, project_room.browser_title).to_string()
-                    confirm_label=t_string!(i18n, project_room.browser_confirm).to_string()
-                />
-            </Show>
+                </Show>
+            </div>
+            // Mounted unconditionally with the controls: it is a modal that
+            // renders nothing until `browser_open` is set, and the only thing
+            // that sets it is the disabled-when-not-owner button above.
+            <DirectoryBrowser
+                open=browser_open
+                on_pick=on_pick
+                title=t_string!(i18n, project_room.browser_title).to_string()
+                confirm_label=t_string!(i18n, project_room.browser_confirm).to_string()
+            />
         </section>
     }
 }
@@ -353,49 +409,291 @@ fn ArchiveSection(
     let i18n = use_i18n();
     let id = StoredValue::new(project.id.clone());
     let confirming = RwSignal::new(false);
+    // See `WorkspaceSection` for why this exists and why it is empty for an
+    // owner.
+    let owner_only_hint = move || {
+        if is_owner.get() {
+            String::new()
+        } else {
+            t_string!(i18n, project_room.owner_only).to_string()
+        }
+    };
+    view! {
+        <section class="border-t border-border-subtle pt-6">
+            <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">{t!(i18n, project_room.danger_zone)}</h3>
+            <Show
+                when=move || confirming.get()
+                fallback=move || view! {
+                    <button
+                        type="button"
+                        class="px-3 py-1.5 rounded-md text-sm text-danger hover:bg-danger/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled=move || !is_owner.get()
+                        title=owner_only_hint
+                        on:click=move |_| confirming.set(true)
+                    >
+                        {t!(i18n, project_room.archive)}
+                    </button>
+                }
+            >
+                <div class="flex items-center gap-2">
+                    <span class="text-sm text-text-secondary">
+                        {t!(i18n, project_room.archive_confirm)}
+                    </span>
+                    // Gated a second time on purpose: `is_owner` is reactive
+                    // and a refresh can flip it while this confirmation is
+                    // open (ownership handed over in another tab), which would
+                    // otherwise leave a live Confirm behind a trigger that has
+                    // already gone dead.
+                    <button
+                        type="button"
+                        class="px-3 py-1.5 rounded-md text-sm bg-danger text-white hover:bg-danger/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled=move || !is_owner.get()
+                        title=owner_only_hint
+                        on:click=move |_| {
+                            let id = id.get_value();
+                            spawn_local(async move {
+                                let result = ProjectsApi::archive(&dash, &id).await.map(|_| ());
+                                on_done.run(result);
+                            });
+                        }
+                    >
+                        {t!(i18n, common.confirm)}
+                    </button>
+                    // Cancel only closes the confirmation. It is nobody's
+                    // permission, so it is not gated.
+                    <button
+                        type="button"
+                        class="px-3 py-1.5 rounded-md text-sm text-text-tertiary"
+                        on:click=move |_| confirming.set(false)
+                    >
+                        {t!(i18n, common.cancel)}
+                    </button>
+                </div>
+            </Show>
+        </section>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    const EN: &str = include_str!("../../../locales/en.json");
+    const ZH: &str = include_str!("../../../locales/zh.json");
+
+    /// Only the production code of this file.
+    ///
+    /// The RED fixtures below are copies of shapes this file has shipped, so an
+    /// unscoped scan would count them as production sites and every predicate
+    /// here would report the defect it exists to forbid.
+    ///
+    /// Through the crate's single answer rather than a local
+    /// `split("#[cfg(test)]")` — that cut stops at the first *attribute*, not
+    /// at the test module, and `i18n_census`'s own guard
+    /// (`no_guard_in_this_crate_hand_rolls_the_cfg_test_cut`) refuses a second
+    /// hand-rolled one. Whole-line comments are dropped with it, which is why
+    /// the module-doc assertion below reads the raw source instead.
+    fn production_source(src: &str) -> String {
+        crate::i18n_census::production_lines(src)
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The body of one `#[component]` in this file.
+    ///
+    /// Panics rather than returning an empty body when the header is gone: a
+    /// renamed component must fail loudly, not certify every predicate below by
+    /// leaving them nothing to look at.
+    fn body_of(src: &str, header: &str) -> String {
+        let src = production_source(src);
+        let Some((_, after)) = src.split_once(header) else {
+            panic!("{header} is no longer in this file");
+        };
+        after
+            .split("\n#[component]")
+            .next()
+            .unwrap_or(after)
+            .to_string()
+    }
+
+    /// A permission gate that makes the section VANISH — the defect.
+    ///
+    /// `<Show when=..>` with no `fallback` renders nothing at all, so an
+    /// affected person reads "this room cannot be archived" where the truth is
+    /// "you may not archive it", and an org admin — whom the server's
+    /// `authz::is_owner` admits and this client's narrower `is_owner` does not
+    /// — never learns the feature exists.
+    fn hides_behind_ownership(body: &str) -> bool {
+        body.contains("<Show when=move || is_owner.get()>")
+    }
+
+    /// Controls this client leaves off because it cannot prove ownership.
+    fn disabled_controls(body: &str) -> usize {
+        body.matches("disabled=move || !is_owner.get()").count()
+    }
+
+    /// ...each of which must say why it is off.
+    fn explained_controls(body: &str) -> usize {
+        body.matches("title=owner_only_hint").count()
+    }
+
+    fn room_copy(src: &str, key: &str) -> String {
+        let all: serde_json::Value = serde_json::from_str(src).expect("locale file is JSON");
+        all["project_room"][key]
+            .as_str()
+            .unwrap_or_else(|| panic!("locale file is missing project_room.{key}"))
+            .to_string()
+    }
+
+    #[test]
+    fn the_workspace_controls_render_disabled_rather_than_vanishing() {
+        let body = body_of(include_str!("settings.rs"), "fn WorkspaceSection(");
+        assert!(
+            !hides_behind_ownership(&body),
+            "the workspace controls are hidden from a non-owner again — a missing \
+             control reads as a missing capability"
+        );
+        let buttons = body.matches("<button").count();
+        assert!(buttons > 0, "the workspace section has no controls left");
+        assert_eq!(
+            disabled_controls(&body),
+            buttons,
+            "a workspace control is rendered without the ownership `disabled` \
+             binding — it looks available to someone the server will refuse"
+        );
+    }
+
+    #[test]
+    fn the_archive_section_and_its_danger_heading_always_render() {
+        let body = body_of(include_str!("settings.rs"), "fn ArchiveSection(");
+        assert!(
+            !hides_behind_ownership(&body),
+            "the whole archive section (including its danger-zone heading) is \
+             hidden from a non-owner again"
+        );
+        assert!(
+            body.contains("project_room.danger_zone"),
+            "the danger-zone heading left this section"
+        );
+        // Two of the three buttons mutate (open the confirmation, confirm it);
+        // Cancel only closes the confirmation and is nobody's permission.
+        assert_eq!(
+            disabled_controls(&body),
+            2,
+            "the archive trigger and its confirmation must both carry the \
+             ownership `disabled` binding"
+        );
+    }
+
+    #[test]
+    fn every_control_this_client_leaves_off_says_why() {
+        let src = production_source(include_str!("settings.rs"));
+        let disabled = disabled_controls(&src);
+        assert!(disabled > 0, "no control is gated by ownership any more");
+        assert_eq!(
+            disabled,
+            explained_controls(&src),
+            "a control is disabled with no `title=owner_only_hint` — the client \
+             is pretending the capability does not exist instead of reporting \
+             what the server would say"
+        );
+    }
+
+    #[test]
+    fn the_roster_says_so_when_no_owner_is_recorded() {
+        let body = body_of(include_str!("settings.rs"), "fn RosterSection(");
+        assert!(
+            body.contains("owner_id.is_none()") && body.contains("project_room.owner_unrecorded"),
+            "a NULL-owner room badges nobody and says nothing — absence of the \
+             badge reads as a fact about the roster rather than as this view's \
+             inability to resolve the server's `owner_or_legacy`"
+        );
+    }
+
+    #[test]
+    fn the_module_doc_no_longer_promises_to_hide_the_controls() {
+        // Raw, not `production_source`: that drops whole-line comments, and the
+        // module doc is nothing but those. Cutting at the first `use` keeps the
+        // test module (and its own prose) out without going near `#[cfg(test)]`.
+        let src = include_str!("settings.rs");
+        let doc = src.split("\nuse ").next().unwrap_or(src);
+        for stale in [
+            "hiding the controls",
+            "mirrors the server's own `require_owner`",
+        ] {
+            assert!(
+                !doc.contains(stale),
+                "the module doc still claims {stale:?} — the comment is the \
+                 expensive half of criterion #1, and this file no longer does that"
+            );
+        }
+    }
+
+    #[test]
+    fn both_new_sentences_exist_in_both_languages_and_say_different_things() {
+        for (lang, src) in [("en", EN), ("zh", ZH)] {
+            let mut seen = BTreeSet::new();
+            for key in ["owner_only", "owner_unrecorded"] {
+                let text = room_copy(src, key);
+                assert!(
+                    !text.trim().is_empty(),
+                    "{lang}: project_room.{key} is empty"
+                );
+                assert!(
+                    seen.insert(text.clone()),
+                    "{lang}: project_room.{key} reuses the other sentence — \
+                     'you may not' and 'nobody is recorded' are two answers"
+                );
+            }
+        }
+    }
+
+    /// RED proof — the shape this file shipped: the section exists only for an
+    /// owner, so nothing is disabled because nothing is rendered.
+    #[test]
+    fn the_gate_check_rejects_the_fallback_less_show_this_file_shipped() {
+        // Brace-balanced on purpose: `i18n_census::end_of_gated_item` counts
+        // braces line by line and does not carry a string literal across
+        // lines, so a fixture that closes more than it opens would end the
+        // enclosing `mod tests` early and hand the rest of it to the scanners
+        // above as production code.
+        let before = "
+fn ArchiveSection(
     view! {
         <Show when=move || is_owner.get()>
-            <section class="border-t border-border-subtle pt-6">
-                <h3 class="text-xs font-medium text-text-tertiary uppercase tracking-wider mb-2">{t!(i18n, project_room.danger_zone)}</h3>
-                <Show
-                    when=move || confirming.get()
-                    fallback=move || view! {
-                        <button
-                            type="button"
-                            class="px-3 py-1.5 rounded-md text-sm text-danger hover:bg-danger/10"
-                            on:click=move |_| confirming.set(true)
-                        >
-                            {t!(i18n, project_room.archive)}
-                        </button>
-                    }
-                >
-                    <div class="flex items-center gap-2">
-                        <span class="text-sm text-text-secondary">
-                            {t!(i18n, project_room.archive_confirm)}
-                        </span>
-                        <button
-                            type="button"
-                            class="px-3 py-1.5 rounded-md text-sm bg-danger text-white hover:bg-danger/90"
-                            on:click=move |_| {
-                                let id = id.get_value();
-                                spawn_local(async move {
-                                    let result = ProjectsApi::archive(&dash, &id).await.map(|_| ());
-                                    on_done.run(result);
-                                });
-                            }
-                        >
-                            {t!(i18n, common.confirm)}
-                        </button>
-                        <button
-                            type="button"
-                            class="px-3 py-1.5 rounded-md text-sm text-text-tertiary"
-                            on:click=move |_| confirming.set(false)
-                        >
-                            {t!(i18n, common.cancel)}
-                        </button>
-                    </div>
-                </Show>
+            <section class=\"border-t border-border-subtle pt-6\">
+                <h3>danger zone</h3>
+                <button on:click=move |_| confirming.set(true)>archive</button>
             </section>
         </Show>
+    }
+";
+        let body = body_of(before, "fn ArchiveSection(");
+        assert!(hides_behind_ownership(&body));
+        assert_eq!(disabled_controls(&body), 0);
+    }
+
+    /// RED proof for the other half: dropping the `<Show>` alone is not the
+    /// fix. A control that renders enabled for someone the server will refuse
+    /// is a different lie, and the mutation "delete the `disabled` binding"
+    /// must land here.
+    #[test]
+    fn the_disabled_check_rejects_a_control_that_only_stopped_hiding() {
+        // Brace-balanced, for the reason given on the fixture above.
+        let before = "
+fn WorkspaceSection(
+    view! {
+        <section>
+            <div class=\"flex items-center gap-2\">
+                <button on:click=move |_| browser_open.set(true)>bind</button>
+            </div>
+        </section>
+    }
+";
+        let body = body_of(before, "fn WorkspaceSection(");
+        assert!(!hides_behind_ownership(&body));
+        assert_ne!(disabled_controls(&body), body.matches("<button").count());
     }
 }
