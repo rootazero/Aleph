@@ -15,20 +15,29 @@
 //! So this predicate may only ever *soften* a control, never remove one. A
 //! section that is simply absent reads as "this room cannot be archived"
 //! rather than "you may not archive it" — and an org admin, whom the server
-//! would have accepted, never learns the feature exists. Every ownership-gated
-//! control therefore renders, is `disabled` when this client cannot prove
-//! ownership, and carries the reason as its tooltip; the enabled path still
-//! calls and still reports whatever came back through
-//! `admin_refusal::settings_write_error` (a rename can be refused for reasons
-//! this predicate knows nothing about — ownership transferred while the tab
-//! was open, or `require_directory_choice` declining a chat-tier device). The
-//! sibling `channel_bindings` module states the same rule for its own,
-//! admin-gated, pair of verbs.
+//! would have accepted, never learns the feature exists. In `WorkspaceSection`
+//! and `ArchiveSection` every ownership-gated control therefore renders, is
+//! `disabled` when this client cannot prove ownership, and carries the reason
+//! as its tooltip; the enabled path still calls and still reports whatever
+//! came back through `admin_refusal::settings_write_error` (a rename can be
+//! refused for reasons this predicate knows nothing about — ownership
+//! transferred while the tab was open, or `require_directory_choice` declining
+//! a chat-tier device). The sibling `channel_bindings` module states the same
+//! rule for its own, admin-gated, pair of verbs.
 //!
-//! The honest predicate is a server-derived `manageable: bool` on the project
-//! row, computed by the same derivation that enforces it. Until that exists, a
-//! non-owner gets a read-only view of controls that are there — not a room
-//! that appears to have no settings.
+//! **Two sites are not yet converted** and still vanish for a non-owner, for
+//! the same reason and with the same defect: `RosterSection`'s add-member `+`
+//! button and its per-row Remove. They go with the server-derived
+//! `manageable: bool` task named below — this is the honest state of the
+//! sweep, not a claim that it is finished, and
+//! `tests::the_roster_is_the_named_exception` keeps this paragraph and that
+//! code in step in both directions.
+//!
+//! The honest predicate is that server-derived `manageable: bool` on the
+//! project row, computed by the same derivation that enforces it. Until it
+//! exists, a non-owner gets a read-only view of the workspace and archive
+//! controls — not a room that appears to have no settings — and, at those two
+//! roster sites, still no view at all.
 //!
 //! 工作区浏览 / 记忆浏览 are still P3 placeholders rendered by `ProjectRoomPage`
 //! (the parent); 看板 is live in `project_page::kanban`. This file is the 设置
@@ -529,14 +538,52 @@ mod tests {
         body.contains("<Show when=move || is_owner.get()>")
     }
 
+    const DISABLED: &str = "disabled=move || !is_owner.get()";
+    const HINT: &str = "title=owner_only_hint";
+
     /// Controls this client leaves off because it cannot prove ownership.
     fn disabled_controls(body: &str) -> usize {
-        body.matches("disabled=move || !is_owner.get()").count()
+        body.matches(DISABLED).count()
     }
 
-    /// ...each of which must say why it is off.
-    fn explained_controls(body: &str) -> usize {
-        body.matches("title=owner_only_hint").count()
+    /// Every ownership gate that is not paired with the tooltip explaining it,
+    /// and every such tooltip that gates nothing.
+    ///
+    /// Deliberately not two counts: a control that gains `title=owner_only_hint`
+    /// without `disabled`, plus another that gains `disabled` without the
+    /// tooltip, keep the totals equal while both controls lie (criterion #2 —
+    /// N categories fanned into one value). So this pairs them line by line.
+    fn unpaired_ownership_gates(body: &str) -> Vec<String> {
+        /// The two attributes sit on adjacent lines today; allow a little slack
+        /// for a formatter, not enough for a different control.
+        const WINDOW: usize = 2;
+        let lines: Vec<&str> = body.lines().collect();
+        let near = |i: usize, needle: &str| {
+            let lo = i.saturating_sub(WINDOW);
+            let hi = (i + WINDOW + 1).min(lines.len());
+            lines[lo..hi].iter().any(|line| line.contains(needle))
+        };
+        let mut unpaired = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains(DISABLED) && !near(i, HINT) {
+                unpaired.push(format!("line {i}: `disabled` with no `{HINT}`"));
+            }
+            if line.contains(HINT) && !near(i, DISABLED) {
+                unpaired.push(format!("line {i}: `{HINT}` gating nothing"));
+            }
+        }
+        unpaired
+    }
+
+    /// Buttons whose block does not close the confirmation — i.e. the ones that
+    /// mutate. Cancel only closes it and is nobody's permission, so it is
+    /// deliberately not gated; deriving the expectation this way keeps a THIRD
+    /// mutating control from arriving under a hard-coded count (criterion #5).
+    fn mutating_buttons(body: &str) -> usize {
+        body.split("<button")
+            .skip(1)
+            .filter(|block| !block.contains("confirming.set(false)"))
+            .count()
     }
 
     fn room_copy(src: &str, key: &str) -> String {
@@ -577,27 +624,36 @@ mod tests {
             body.contains("project_room.danger_zone"),
             "the danger-zone heading left this section"
         );
-        // Two of the three buttons mutate (open the confirmation, confirm it);
-        // Cancel only closes the confirmation and is nobody's permission.
+        // Open-the-confirmation and confirm-it mutate; Cancel only closes the
+        // confirmation and is nobody's permission.
+        let mutating = mutating_buttons(&body);
+        assert!(
+            mutating > 0,
+            "the archive section has no mutating control left"
+        );
         assert_eq!(
             disabled_controls(&body),
-            2,
-            "the archive trigger and its confirmation must both carry the \
-             ownership `disabled` binding"
+            mutating,
+            "a mutating archive control is rendered without the ownership \
+             `disabled` binding — it looks available to someone the server \
+             will refuse"
         );
     }
 
     #[test]
     fn every_control_this_client_leaves_off_says_why() {
         let src = production_source(include_str!("settings.rs"));
-        let disabled = disabled_controls(&src);
-        assert!(disabled > 0, "no control is gated by ownership any more");
-        assert_eq!(
-            disabled,
-            explained_controls(&src),
-            "a control is disabled with no `title=owner_only_hint` — the client \
-             is pretending the capability does not exist instead of reporting \
-             what the server would say"
+        assert!(
+            disabled_controls(&src) > 0,
+            "no control is gated by ownership any more"
+        );
+        let unpaired = unpaired_ownership_gates(&src);
+        assert!(
+            unpaired.is_empty(),
+            "a control is disabled with no `title=owner_only_hint`, or explains \
+             itself while gating nothing — the client is pretending the \
+             capability does not exist instead of reporting what the server \
+             would say: {unpaired:?}"
         );
     }
 
@@ -629,6 +685,31 @@ mod tests {
                  expensive half of criterion #1, and this file no longer does that"
             );
         }
+    }
+
+    /// The module doc claims every ownership-gated control renders. Two do
+    /// not. This pins the exception in BOTH directions so the claim and the
+    /// code cannot drift apart: convert the roster and this test demands the
+    /// paragraph go, delete the paragraph and it demands the roster be
+    /// converted. A new fallback-less gate in Workspace/Archive is still
+    /// caught by the two assertions above.
+    #[test]
+    fn the_roster_is_the_named_exception() {
+        let src = include_str!("settings.rs");
+        let doc = src.split("\nuse ").next().unwrap_or(src);
+        assert!(
+            hides_behind_ownership(&body_of(src, "fn RosterSection(")),
+            "RosterSection no longer hides its controls — drop the exception \
+             paragraph from the module doc in this same edit, or the doc keeps \
+             naming a defect that is gone"
+        );
+        assert!(
+            doc.contains("RosterSection"),
+            "the module doc says every ownership-gated control renders and no \
+             longer names the two roster sites that still vanish — a swept \
+             invariant that is not swept is criterion #1 at its most expensive, \
+             because it will be cited as evidence the sweep is done"
+        );
     }
 
     #[test]
