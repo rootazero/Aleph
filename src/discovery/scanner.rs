@@ -565,7 +565,7 @@ mod tests {
 
         // Should find my-skill and project-skill
         assert!(!skills.is_empty());
-        assert!(skills.iter().any(|s| s.name == "my-skill"));
+        assert!(skills.iter().any(|s| s.path.ends_with("my-skill")));
     }
 
     #[test]
@@ -599,9 +599,12 @@ mod tests {
 
         let skills = scanner.discover_component("skills").unwrap();
         assert!(
-            skills.iter().any(|s| s.name == "proj-aleph-skill"),
+            skills.iter().any(|s| s.path.ends_with("proj-aleph-skill")),
             "project .aleph/skills must be discovered, got {:?}",
-            skills.iter().map(|s| &s.name).collect::<Vec<_>>()
+            skills
+                .iter()
+                .map(|s| s.path.file_name().unwrap_or(s.path.as_os_str()))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -673,10 +676,13 @@ mod tests {
         };
 
         let cmds = scanner.discover_component("commands").unwrap();
-        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
-        assert!(names.contains(&"visible.md"), "got {names:?}");
+        let names: Vec<String> = cmds
+            .iter()
+            .map(|c| c.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|n| n == "visible.md"), "got {names:?}");
         assert!(
-            !names.contains(&".hidden.md"),
+            !names.iter().any(|n| n == ".hidden.md"),
             "hidden file leaked: {names:?}"
         );
     }
@@ -705,7 +711,7 @@ mod tests {
 
         let plugins = scanner.discover_plugins_with_extra(&[]).unwrap();
         assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].name, "my-plugin");
+        assert!(plugins[0].path.ends_with("my-plugin"));
     }
 
     #[test]
@@ -738,9 +744,12 @@ mod tests {
 
         let plugins = scanner.discover_plugins_with_extra(&[]).unwrap();
         assert_eq!(plugins.len(), 2);
-        let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"diagnostics"));
-        assert!(names.contains(&"llm-task"));
+        let names: Vec<String> = plugins
+            .iter()
+            .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|n| n == "diagnostics"));
+        assert!(names.iter().any(|n| n == "llm-task"));
     }
 
     #[test]
@@ -782,9 +791,12 @@ mod tests {
         let plugins = scanner
             .discover_plugins_with_extra(&[project.join(".aleph/plugins")])
             .unwrap();
-        let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"global-plugin"), "got {names:?}");
-        assert!(names.contains(&"proj-plugin"), "got {names:?}");
+        let names: Vec<String> = plugins
+            .iter()
+            .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|n| n == "global-plugin"), "got {names:?}");
+        assert!(names.iter().any(|n| n == "proj-plugin"), "got {names:?}");
 
         // A non-existent extra parent is a silent no-op (still just global +
         // the present project one).
