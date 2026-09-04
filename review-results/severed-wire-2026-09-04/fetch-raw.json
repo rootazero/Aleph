@@ -1,0 +1,114 @@
+{
+  "module": "src/fetch",
+  "files_scanned": [
+    "src/fetch/mod.rs",
+    "src/fetch/factory.rs",
+    "src/fetch/provider.rs",
+    "src/fetch/registry.rs",
+    "src/fetch/providers/mod.rs",
+    "src/fetch/providers/crawl4ai.rs",
+    "src/fetch/providers/firecrawl.rs"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg; seam-catalog lenses (registration parity, call-vs-handler, config-reader, stub sweep); code-smell pass",
+  "findings": [
+    {
+      "id": "sw-fetch-2-1",
+      "severity": "medium",
+      "form": 2,
+      "produced": "WebFetchTool::fetch_providers / with_fetch_providers() / FetchProvider::fetch()",
+      "produced_location": "src/builtin_tools/web_fetch/mod.rs:39 (field), :101 (builder), :151-189 (call site)",
+      "consumer_location": "src/builtin_tools/web_fetch/mod.rs:151-189 — field is read but the block deliberately logs and falls through to the built-in safe_fetch (the SSRF-DNS-pin gap, BT-D-R4-22). The only live caller of FetchProvider::fetch() is src/gateway/handlers/fetch_config.rs:413,447 (handle_test, hardcoded https://example.com). Constructor wires them in: src/executor/builtin_registry/builder/constructor/mod.rs:73.",
+      "decision": "DECIDE",
+      "rationale": "The producer (FetchProvider trait + Crawl4aiFetchProvider + FirecrawlFetchProvider + FetchRegistry + factory + FirecrawlFetchProvider's /v2/scrape plumbing) is fully implemented and tested, the constructor (executor/builtin_registry/builder/constructor/mod.rs:72-73) wires the registry's `select()` into `WebFetchTool::with_fetch_providers(...)`, but `WebFetchTool::call_impl` (web_fetch/mod.rs:151-189) deliberately SKIPS the configured providers and falls through to the built-in safe_fetch because the DNS pin cannot be threaded into a provider's own reqwest client. So the wire is intact at construction time but the runtime consumer is a no-op log line. Per the painless-wire heuristic: zero observed production pain because the built-in reqwest path covers the agent-facing fetch, and the only genuine consumer is the connection-test RPC. The comment in src/fetch/provider.rs:14-26 explicitly documents this as 'BT-D-R4-22 ... until DNS pin plumbing lands.' Two viable paths: (a) keep dormant scaffolding awaiting the planned DNS-pin fix, or (b) CUT the field + builder + registry.select() + factory + 3 impls and keep only Crawl4aiFetchProvider / FirecrawlFetchProvider for the connection-test RPC. The CUT path requires relocating the two providers into `gateway/handlers/fetch_config.rs` (their only real caller) and would shrink the public surface by ~5 files. Recommend DECIDE — this is a product/scheduling call, not an audit-tactical cut.",
+      "fix_commit": null,
+      "residual_risk": "If kept dormant: operators who set `[fetch].backends.crawl4ai` expect providers to be consulted; the silent skip will surprise them until DNS-pin plumbing lands."
+    },
+    {
+      "id": "sw-fetch-1-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "FetchProviderFactory / FetchProviderFactoryRegistry / Crawl4aiFetchFactory / FirecrawlFetchFactory",
+      "produced_location": "src/fetch/factory.rs:13-17 (trait), :21 (Crawl4aiFetchFactory), :53 (FirecrawlFetchFactory), :97-110 (FetchProviderFactoryRegistry). All `pub`.",
+      "consumer_location": "src/fetch/registry.rs:31, :54 (FetchProviderFactoryRegistry::with_defaults() then factories.get(...).build(...)). No external callers anywhere in src/, tests/, interfaces/, desktop/, bindings/, crates/.",
+      "decision": "CUT-or-defer",
+      "rationale": "Strictly speaking these have a live internal consumer (FetchRegistry::from_config), so they are not Form-1 dead code — the trait indirection is load-bearing because FirecrawlFetchFactory returns None when [search].firecrawl isn't configured and Crawl4aiFetchFactory performs the token-precedence lookup. BUT: they are `pub` (factory.rs declares `pub trait`, `pub struct` x3) yet no crate outside src/fetch/ ever imports, constructs, or implements them. The pub surface is wider than necessary; the trait is functionally a single-call dispatch table used once at registry construction. If the wider audit concludes sw-fetch-2-1 with CUT, these four symbols become dead and should be deleted. If sw-fetch-2-1 is KEPT, recommend demoting to `pub(crate)` (or inlining the two factories into FetchRegistry::from_config) so external crates cannot depend on an abstraction that exists only to serve one internal call site.",
+      "fix_commit": null,
+      "residual_risk": "If any future consumer (e.g. a third fetch backend: 'jina', 'tavily') is planned, the factory abstraction earns its keep; otherwise the trait is over-engineered for two impls."
+    },
+    {
+      "id": "sw-fetch-1-2",
+      "severity": "low",
+      "form": 1,
+      "produced": "FetchProvider::is_available() trait method",
+      "produced_location": "src/fetch/provider.rs:35 (trait def); src/fetch/providers/crawl4ai.rs:48 (impl); src/fetch/providers/firecrawl.rs:149 (impl)",
+      "consumer_location": "none — the only `.is_available()` calls are the trait's own dummy test (src/fetch/provider.rs:61). FetchRegistry::select() does not consult it; WebFetchTool does not consult it. Contrast src/search/registry.rs:515 and :677 which DO consult SearchProvider::is_available() in selection paths.",
+      "decision": "CUT-or-defer",
+      "rationale": "Both concrete providers implement is_available() — Crawl4aiFetchProvider::is_available synchronously probes the backend's health endpoint, FirecrawlFetchProvider::is_available returns base_url/api_key non-empty — but neither registry nor consumer ever calls it. This is a real asymmetry vs the sibling search category (src/search/registry.rs:515, :677 filter on is_available). Either the fetch registry should call it in select() (treating the trait method as a per-provider readiness gate), or the trait should be reduced to fetch+name. Decide based on whether the planned DNS-pin plumbing will land and whether a per-provider readiness gate would help that path; otherwise CUT.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: dead method on a public trait is dead_code-lint clean because the impls use it (LintCPS: impl method satisfies the trait method)."
+    },
+    {
+      "id": "sw-fetch-3-1",
+      "severity": "trivial",
+      "form": 3,
+      "produced": "doc comment referencing `firecrawl_scrape_response_ignores_success_field` in the audit notes",
+      "produced_location": "src/fetch/providers/firecrawl.rs:28",
+      "consumer_location": "none — no file or document named `firecrawl_scrape_response_ignores_success_field` exists anywhere in the repo (rg across .rs/.md returns only the comment that names it). The fix (bubbling success=false) is real and tested (tests at firecrawl.rs:175-185), so the *behaviour* is not severed; only the *pointer* to the audit notes is orphaned.",
+      "decision": "CUT",
+      "rationale": "Stale cross-reference. The comment claims an external audit-note file documents the bug; no such file exists. Replace with a self-contained rationale, e.g. `// Firecrawl v2 returns HTTP 200 with success=false for quota/auth/blocked-page outcomes; surfacing the upstream error verbatim (see map_scrape below and the success_false_surfaces_upstream_error test).` This is a pure documentation hygiene fix.",
+      "fix_commit": null,
+      "residual_risk": "None — comment-only edit."
+    },
+    {
+      "id": "sw-fetch-3-2",
+      "severity": "trivial",
+      "form": 3,
+      "produced": "Task-number annotations in module doc comment",
+      "produced_location": "src/fetch/mod.rs:4-6 — annotates `FetchRegistry` as Task 5, `factory` as Task 4, `providers/` as Task 6",
+      "consumer_location": "docs/superpowers/plans/2026-06-28-fetch-provider-category.md:385, :501, :627 — the plan says Task 4 = Crawl4aiFetchProvider, Task 5 = FirecrawlFetchProvider, Task 6 = Factory + registry. The mod.rs annotation is rotated by one.",
+      "decision": "CUT",
+      "rationale": "Pure doc drift — the task numbering in the module-level doc comment is rotated one slot relative to the actual plan. Either the tasks were renumbered mid-flight and mod.rs was not updated, or someone copy-pasted the wrong column. Replace the parenthetical task labels with the actual subsection names (e.g. `FetchProviderFactoryRegistry + Crawl4aiFetchFactory + FirecrawlFetchFactory`) and drop the brittle Task-N tags.",
+      "fix_commit": null,
+      "residual_risk": "None — comment-only edit."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "subject": "FetchProvider trait (production code path)",
+      "verdict": "live",
+      "evidence": "Consumed by gateway/handlers/fetch_config.rs:372 (test import only) and by builtin_tools/web_fetch/mod.rs as the trait-object type Vec<Arc<dyn FetchProvider>> (lines 39, 103, 662, 708). Both concrete impls implement fetch/name. Real (non-test) producer of `fetch()` calls is gateway/handlers/fetch_config.rs:413,447 — the connection-test RPC. See sw-fetch-2-1 for the dormant-scaffolding discussion."
+    },
+    {
+      "subject": "FetchRegistry::from_config / select",
+      "verdict": "live",
+      "evidence": "src/executor/builtin_registry/builder/constructor/mod.rs:72-73 is the only external call site. Registry contract is enforced (top-level enabled gate at registry.rs:23-31, default-first ordering with auto-fallback tail at registry.rs:78-93)."
+    },
+    {
+      "subject": "FetchBuildCtx",
+      "verdict": "live",
+      "evidence": "src/executor/builtin_registry/builder/constructor/mod.rs:68 is the only external caller; the closure-based `resolve_secret` indirection is the load-bearing piece that lets the constructor stay config-source-agnostic."
+    },
+    {
+      "subject": "Crawl4aiFetchProvider / FirecrawlFetchProvider concrete impls",
+      "verdict": "live (narrowly)",
+      "evidence": "Direct callers are limited to gateway/handlers/fetch_config.rs:412,447 (connection-test RPC) and the internal factory at src/fetch/factory.rs:38,86. The firecrawl.rs file also borrows `crate::search::providers::base::{build_client, send}` for reqwest/error funnel consistency (line 5) — that borrow is a real cross-module wire."
+    },
+    {
+      "subject": "FirecrawlScrapeResponse / ScrapeData / ScrapeRequest / map_scrape",
+      "verdict": "live (file-private)",
+      "evidence": "All confined to src/fetch/providers/firecrawl.rs (pub(crate) surface); used by both the provider impl at firecrawl.rs:96-144 and three unit tests at firecrawl.rs:155-186. Not over-exposed."
+    },
+    {
+      "subject": "FetchConfigInternal / FetchBackendConfig config fields",
+      "verdict": "live",
+      "evidence": "FetchConfigInternal.enabled: read at registry.rs:23, executor/constructor/mod.rs:60. FetchBackendConfig.{provider_type, api_key, base_url, timeout_seconds, enabled}: read in registry.rs (driving factory selection), providers/crawl4ai.rs:18-29 (token/url plumbing), providers/firecrawl.rs (token check), factory.rs (token precedence). FetchBackendConfig.verified: read by interfaces/webchat/src/platform/wide/views/settings/search/fetch_section.rs:403-412, written by src/gateway/handlers/fetch_config.rs:283,475 — UI surface, not a fetch-path gate (consistent with its search-side siblings)."
+    },
+    {
+      "subject": "factory/strategy-V auto-Firecrawl (registry.rs:48-72)",
+      "verdict": "load-bearing, no drift",
+      "evidence": "The synthetic FetchBackendConfig for firecrawl fires when [fetch].backends does not name firecrawl but [search].backends does. This is the deliberate shared-config resolution documented in factory.rs:69-84 and exercised in registry.rs tests at :188-235."
+    }
+  ],
+  "verification": "Static only per instructions — cargo check/test intentionally NOT run. All evidence is rg/grep across src/, tests/, interfaces/, desktop/, crates/, bindings/, build.rs, shared/, docs/.",
+  "notes": "Module is small (5 producers + 7 impls + 6 concrete provider functions). The dominant finding is structural: the fetch-provider category is implemented as a full trait/factory/registry pipeline that mirrors the search category, but only the connection-test RPC (gateway/handlers/fetch_config.rs::handle_test) actually exercises the provider's `fetch()` method in production — the agent-facing web_fetch path deliberately bypasses it. This is well-documented (BT-D-R4-22 across web_fetch/mod.rs:152,181,649,691; provider.rs:14-26; firecrawl.rs:97-110) and is awaiting DNS-pin plumbing to close. sw-fetch-2-1 is the highest-signal finding: it scopes roughly half the module (`FetchProvider` +2 impls + factory + registry + WebFetchTool::fetch_providers + the constructor wiring) as dormant scaffolding pending one engineering fix. sw-fetch-1-1 and sw-fetch-1-2 are subtler code smells (over-public factory surface; dead trait method) that are independently CUT-eligible and become strongly CUT-eligible if sw-fetch-2-1 is CUT. sw-fetch-3-1 and sw-fetch-3-2 are pure doc/comment hygiene."
+}

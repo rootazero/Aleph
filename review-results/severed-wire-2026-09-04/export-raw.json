@@ -1,0 +1,88 @@
+{
+  "module": "src/export",
+  "files_scanned": [
+    "src/export/mod.rs",
+    "src/export/collect.rs",
+    "src/export/document.rs",
+    "src/export/markdown.rs",
+    "src/export/page.rs",
+    "src/export/session_html.rs",
+    "src/export/export.css (skipped per instructions)"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg; intra-module excluded; searched src/, tests/, src/bin/, desktop/, shared/, interfaces/, crates/ for crate::export:: and bare-symbol matches",
+  "findings": [
+    {
+      "id": "sw-export-1-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "pub const MAX_INLINE_ARTIFACT_BYTES: u64",
+      "produced_location": "src/export/mod.rs:48",
+      "consumer_location": "none (only intra-module: src/export/collect.rs:11,32,93,99,148,152 and src/export/page.rs:16,92,256,257,267,268)",
+      "decision": "DECIDE",
+      "rationale": "Documented as the per-artifact byte-budget policy surface ('Largest single artifact that may be inlined as a `data:` URI.') yet zero external crate-level readers. Both call sites that *enforce* the budget (collect.rs, page.rs) consume it via `super::`. The two real callers (artifact_publish.rs and gateway/handlers/artifacts.rs) hand bytes to collect_artifacts and rely on it to apply the ceiling, so the public visibility currently advertises policy the codebase doesn't actually consult. Either downgrade to `pub(crate)` (and remove the misleading 'the caller may re-check' implication in the mod.rs docstring) or document an external budget-decision use case the team intends to keep. Same finding applies to the sibling constant.",
+      "fix_commit": null,
+      "residual_risk": "Future caller that assumes 'the public constant is canonical' may diverge by hardcoding 4 * 1024 * 1024 and miss a budget bump."
+    },
+    {
+      "id": "sw-export-1-2",
+      "severity": "low",
+      "form": 1,
+      "produced": "pub const MAX_INLINE_TOTAL_BYTES: u64",
+      "produced_location": "src/export/mod.rs:51",
+      "consumer_location": "none (only intra-module: src/export/collect.rs:11,33,148 and src/export/page.rs:16,93,268)",
+      "decision": "DECIDE",
+      "rationale": "Whole-document inline ceiling; same situation as sw-export-1-1 — declared public, no external reader. The mod.rs comment ('The renderer therefore enforces both a per-artifact and a whole-document ceiling') suggests these were *intended* to be queryable so callers could plan, but no caller queries them.",
+      "fix_commit": null,
+      "residual_risk": "Same as 1-1."
+    },
+    {
+      "id": "sw-export-2-1",
+      "severity": "low",
+      "form": 4,
+      "produced": "human_size() byte-formatting helper",
+      "produced_location": "src/export/page.rs:159 (pub(super) fn human_size) — and a character-identical copy at src/builtin_tools/artifact_publish.rs:293 (private fn human_size)",
+      "consumer_location": "src/export/page.rs:86 (in-tree), src/builtin_tools/artifact_publish.rs:244,295 (in its own file). A third, *more capable* implementation (B/KB/MB/GB) lives at src/media/processor.rs:440 with consumer at src/media/processor.rs:430 — same name, different unit set",
+      "decision": "DECIDE",
+      "rationale": "Three independent human_size() implementations in the same crate, two byte-identical and one a strict superset. The export/page.rs copy is `pub(super)` (export-only); the artifact_publish.rs copy carries a docstring explicitly defending the duplication ('Kept local (rather than reaching into export's private helper) because this one string is all it is for'). That justification holds *only* because page::human_size is `pub(super)` — promoting it to `pub(crate)` (or lifting a single canonical implementation into shared/util) would let both call sites dedupe without a behavior change, and would also subsume the media::processor variant. Trivial code smell today; cross-crate drift is the failure mode if the format ever changes (e.g. someone adds GB support to export/page.rs but not artifact_publish.rs).",
+      "fix_commit": null,
+      "residual_risk": "Three places to keep in sync; one already drifts (media goes to GB, the other two cap at MB)."
+    },
+    {
+      "id": "sw-export-3-1",
+      "severity": "trivial",
+      "form": 5,
+      "produced": "unwrap() on s[i..].chars().next()",
+      "produced_location": "src/export/markdown.rs:130 (inside percent_decode_scheme, reachable from render_markdown -> sanitize_link_event -> sanitize_link_url)",
+      "consumer_location": "n/a — single occurrence in production code",
+      "decision": "CONNECT",
+      "rationale": "The unwrap sits behind an `s.is_char_boundary(i)` guard and is followed by `i += ch.len_utf8()`, so `s[i..]` is non-empty and `chars().next()` cannot return None. The surrounding doc comment ('Shouldn't happen because we only ever advance by 1 byte (ASCII pass-through) or 3 bytes (consumed %xx)') explicitly defends the panic as unreachable. Functionally inert as a panic source; lint-cleanest replacement is `let ch = s[i..].chars().next().expect(\"is_char_boundary guarantees non-empty\");` to keep the same proof-of-safety shape but silence clippy::unwrap_used. Not severed-wire — the operation is real — but flagged under the no-op-success / clean-hygiene sweep because clippy with `#![deny(clippy::unwrap_used)]` would refuse to build.",
+      "fix_commit": null,
+      "residual_risk": "If the surrounding invariants ever change (e.g. someone starts advancing by 2 bytes) this becomes a real panic in the export sanitizer path."
+    },
+    {
+      "id": "sw-export-4-1",
+      "severity": "trivial",
+      "form": 4,
+      "produced": "role_slug() — class-attribute slugifier with `.take(24)` truncation",
+      "produced_location": "src/export/session_html.rs:70 (pub(super) fn)",
+      "consumer_location": "src/export/session_html.rs:53 (single in-tree call site)",
+      "decision": "CONNECT",
+      "rationale": "Function is single-purpose and single-consumer within the module; `.take(24)` is documented defensively but not exercised by the test (`role_slug_cannot_inject_into_the_class_attribute` covers quote-breakout and the `*** -> other` empty-slug branch but no test passes a 25+ char role to assert the truncation). Not a severed wire — the function is consumed — but flagged as a name/path drift in the sense that the *behavior contract* ('max 24 chars in the generated CSS class') is documented in the source yet not pinned by a test, so a future refactor could quietly drop the cap.",
+      "fix_commit": null,
+      "residual_risk": "Unbounded role strings could emit arbitrarily large `class=` attributes if the cap is removed."
+    }
+  ],
+  "reviewed_no_change": [
+    "All three pub re-exports (collect_artifacts, render_document_html, render_session_html) consumed: artifact_publish.rs uses2/3; gateway/handlers/artifacts.rs uses 2/3; each is the documented primary call site.",
+    "All three structs (ExportDocument, ExportMessage, ExportArtifact) are constructed and consumed outside the module — no DTO passthrough that is also write-only. ExportArtifact field reads are intra-module only by design (DTO contract: callers hand a Vec<ExportArtifact> to the renderers and never inspect fields).",
+    "All public fields of every struct are read by at least one internal call site; no dead fields.",
+    "Every `pub(super)` helper (wrap_document, render_page_head, render_artifacts, render_transcript, render_markdown, escape_text, escape_attr, sanitize_link_url, summary_line, role_slug, human_size, is_image) is called by at least one sibling module in src/export/.",
+    "CSS class catalogue in export.css is fully covered by Rust-emitted class attributes (page-head, page-meta, transcript, msg, msg-head, role, ts, msg-body, prose, empty, doc, artifacts, grid, art, art--image, art--file, art--omitted, icon, label, size, note). The single role-specific class `.msg--user` is rendered whenever role_slug('user') == 'user', i.e. always when the role is exactly 'user' (which is the only role the team currently differentiates; other roles fall through to .msg defaults, by design). No drift between the two sides of the seam.",
+    "All format!() placeholders ({csp}, {title}, {css}, {body}, {name}, {data}, {label}, {size}, {mime}, {meta}) in page.rs and session_html.rs are bound — no orphan placeholders.",
+    "mod.rs crate-level docstring references ([`render_document_html`], [`render_session_html`], [`page`], [`markdown`]) all resolve to existing items; cross-crate reference to `interfaces/webchat/src/components/markdown.rs` (markdown.rs:12) resolves to an existing file; reference to `crate::builtin_tools::pdf_generate::browser_engine::markdown_to_html` (markdown.rs:6) resolves to an existing function.",
+    "collect_artifacts is genuinely async (calls store.read().await) — no Form-5 inert-success; render_*_html are pure string builders with real output.",
+    "artifact_publish.rs:resolve_figures correctly delegates budget enforcement to collect_artifacts rather than duplicating it — no drift in the budget rule between producer (collect.rs) and second consumer (artifact_publish.rs)."
+  ],
+  "verification": "Static only per instructions — cargo check/test intentionally NOT run. Cross-crate consumers confirmed absent via rg over desktop/, shared/, interfaces/, crates/, src/bin/ for any of: crate::export::, aleph::export::, alephcore::export::, or the bare symbol names.",
+  "notes": "Module is small, well-internalized, and tests are exhaustive (collect.rs: 3 tests, document.rs: 7, page.rs: 12, session_html.rs: 8, markdown.rs: 8). The most actionable items are the two `pub const` budget constants — either they should be `pub(crate)` to match their actual audience, or they should earn their `pub` by being read somewhere external (e.g. artifact_publish.rs could short-circuit oversized figures before opening store.read()). The human_size duplication is a known, explicitly-justified cost of keeping page.rs internal; promoting one to `pub(crate)` would let artifact_publish.rs shed its copy without a behavior change."
+}
