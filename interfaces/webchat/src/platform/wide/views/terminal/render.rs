@@ -268,17 +268,42 @@ pub fn paint(ctx: &CanvasRenderingContext2d, screen: &ClientScreen, m: CellMetri
         }
     }
 
-    // Cursor as a block overlay.
-    let (cr, cc) = screen.cursor();
-    ctx.set_fill_style_str(theme.fg);
-    ctx.set_global_alpha(0.6);
-    ctx.fill_rect(
-        f64::from(cc) * m.width,
-        f64::from(cr) * m.height,
+    // Cursor as a block overlay -- when there is one to draw.
+    if let Some((x, y, w, h)) = cursor_rect(screen, &m) {
+        ctx.set_fill_style_str(theme.fg);
+        ctx.set_global_alpha(0.6);
+        ctx.fill_rect(x, y, w, h);
+        ctx.set_global_alpha(1.0);
+    }
+}
+
+/// Where the block cursor goes, or `None` when the program has hidden it
+/// (`CSI ?25 l`).
+///
+/// A pure function rather than an `if` inside [`paint`] so the rule is
+/// testable without a canvas: a `CanvasRenderingContext2d` cannot be
+/// constructed off the browser, so an assertion about "the cursor was not
+/// painted" has nowhere else to live. It also means deleting the rule means
+/// deleting this call, not quietly inverting a boolean inside a function
+/// nothing can observe.
+///
+/// Full-screen programs hide the cursor while redrawing (`vim`, `less`, and
+/// every TUI agent), so a client that ignores `?25` paints a stray block in
+/// the middle of their output — and one that treats "not yet told" as hidden
+/// paints no cursor at all at a shell prompt, which reads as a frozen
+/// terminal. `ClientScreen::cursor_visible` starts `true` for that reason.
+#[must_use]
+pub fn cursor_rect(screen: &ClientScreen, m: &CellMetrics) -> Option<(f64, f64, f64, f64)> {
+    if !screen.cursor_visible() {
+        return None;
+    }
+    let (row, col) = screen.cursor();
+    Some((
+        f64::from(col) * m.width,
+        f64::from(row) * m.height,
         m.width,
         m.height,
-    );
-    ctx.set_global_alpha(1.0);
+    ))
 }
 
 #[cfg(test)]

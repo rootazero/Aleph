@@ -11,14 +11,29 @@
 use aleph_protocol::runtime::{RuntimeAgentsListResponse, RUNTIME_AGENTS_LIST_METHOD};
 use serde_json::Value;
 
-use crate::context::DashboardState;
+use crate::context::{DashboardState, RpcFailure};
 
 pub struct RuntimeAgentsApi;
 
 impl RuntimeAgentsApi {
-    pub async fn list(state: &DashboardState) -> Result<RuntimeAgentsListResponse, String> {
-        let result = state.rpc_call(RUNTIME_AGENTS_LIST_METHOD, Value::Null).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse runtime agents list: {e}"))
+    /// Keeps the JSON-RPC error **code** (`rpc_call_with_code`, not
+    /// `rpc_call`). The panel splits "the operator gate refused" from
+    /// "the call did not come back" on that code and on nothing else —
+    /// classifying by words in the message is what P8 forbids, and the
+    /// projection to `String` throws away the only field that can answer
+    /// the question honestly.
+    ///
+    /// A decode failure is minted here with `code: None`, the same shape
+    /// `RpcFailure` uses for every locally-produced failure: this client
+    /// deciding it cannot read a response is not a server verdict, and must
+    /// never be able to impersonate one.
+    pub async fn list(state: &DashboardState) -> Result<RuntimeAgentsListResponse, RpcFailure> {
+        let result = state
+            .rpc_call_with_code(RUNTIME_AGENTS_LIST_METHOD, Value::Null)
+            .await?;
+        serde_json::from_value(result).map_err(|e| RpcFailure {
+            code: None,
+            message: format!("Failed to parse runtime agents list: {e}"),
+        })
     }
 }

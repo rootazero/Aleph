@@ -30,7 +30,9 @@ use ratatui::{
 };
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
-use shared_ui_logic::state::agent_panel::sort_entries;
+use shared_ui_logic::state::agent_panel::{
+    quiet_age, sort_entries, state_glyph, QuietAge, QuietUnit,
+};
 
 use crate::tui::app::AgentPanelData;
 use crate::tui::theme::DEFAULT_THEME;
@@ -46,18 +48,12 @@ use crate::tui::theme::DEFAULT_THEME;
 /// column "is not obliged to use it at all"; this one does not.
 pub const AGENT_PANEL_WIDTH: u16 = 28;
 
-/// One glyph set. herdr keeps two (Dots / Symbols in `ui/status.rs`); R8-1
-/// picks one for this port. `Unknown` gets `?`, never `Idle`'s glyph — an
-/// unrecognised state must never be misread as "nothing is happening here"
-/// (判据 §8).
-fn state_glyph(state: RuntimeAgentState) -> &'static str {
-    match state {
-        RuntimeAgentState::Blocked => "\u{25cf}", // ●
-        RuntimeAgentState::Working => "\u{25d0}", // ◐
-        RuntimeAgentState::Idle => "\u{25cb}",    // ○
-        RuntimeAgentState::Unknown => "?",
-    }
-}
+// The glyph table used to live here, with a byte-identical twin in the
+// Panel's `components/sidebar/agent_panel.rs` and no test spanning the two
+// (判据 §1). It is now `shared_ui_logic::state::agent_panel::state_glyph`,
+// imported above. Colour stays here: ratatui `Color`s mean nothing to the
+// Panel, which paints Tailwind classes, so `state_color` is genuinely this
+// surface's own and not half of a shared pair.
 
 fn state_color(state: RuntimeAgentState) -> Color {
     match state {
@@ -67,15 +63,67 @@ fn state_color(state: RuntimeAgentState) -> Color {
     }
 }
 
-/// One row's spans: glyph (colored by state) and the label.
-fn entry_line(entry: &RuntimeAgentEntry) -> Line<'static> {
-    Line::from(vec![
+/// What to call this row: the FOREGROUND program if the probe could see one,
+/// else the recognised agent, else the spawn label.
+///
+/// In that order because that is falling order of how current the fact is.
+/// `program` is what is running right now; `agent` is what the manifest
+/// recognised, which can outlive the process by a few samples; `label` is what
+/// the session was STARTED as and is the only one of the three that is
+/// guaranteed to exist. `program: None` means the probe could not answer, not
+/// that nothing is running (spec §5), so it falls through rather than
+/// rendering an absence.
+fn entry_name(entry: &RuntimeAgentEntry) -> String {
+    entry
+        .program
+        .as_deref()
+        .or(entry.agent.as_deref())
+        .unwrap_or(&entry.label)
+        .to_string()
+}
+
+/// The TUI's words for a [`QuietAge`].
+///
+/// English lives HERE, not in `shared_ui_logic`: that crate has no i18n and
+/// composing words in it shipped an untranslated string onto the Panel, which
+/// does (I2). This surface is English throughout — the status bar, "loading…",
+/// "no agents running" — so there is nothing for it to resolve against and a
+/// literal is the honest answer here, unlike on the Panel.
+fn quiet_text(age: QuietAge) -> String {
+    let suffix = match age.unit {
+        QuietUnit::Seconds => "s",
+        QuietUnit::Minutes => "m",
+        QuietUnit::Hours => "h",
+        QuietUnit::Days => "d",
+    };
+    format!("quiet {}{suffix}", age.value)
+}
+
+/// One row's spans: glyph (coloured by state), the name, and the quiet age if
+/// there is one.
+///
+/// `now` is passed in rather than read from the clock here so the row stays a
+/// pure function of its inputs — a widget that reads `SystemTime::now()` can
+/// only be tested against whatever the test machine's clock says.
+///
+/// The quiet age is dim and trailing: it qualifies the state, it does not
+/// replace it. A `Working` agent that has been silent for five minutes still
+/// reads `Working` — nothing here turns time into a state (spec R2-3).
+fn entry_line(entry: &RuntimeAgentEntry, now: i64) -> Line<'static> {
+    let mut spans = vec![
         Span::styled(
             format!("{} ", state_glyph(entry.state)),
             Style::default().fg(state_color(entry.state)),
         ),
-        Span::raw(entry.label.clone()),
-    ])
+        Span::raw(entry_name(entry)),
+    ];
+    if let Some(age) = quiet_age(entry.quiet_since, now) {
+        spans.push(Span::styled(
+            format!(" {}", quiet_text(age)),
+            Style::default().fg(DEFAULT_THEME.muted),
+        ));
+    }
+    Line::from(spans)
 }
 
 /// Render the agent panel into `area`.
@@ -85,7 +133,7 @@ fn entry_line(entry: &RuntimeAgentEntry) -> Line<'static> {
 /// `Refused`/`Unavailable` each show their own message rather than
 /// collapsing into "no agents" — that collapse would delete the fix R8-6
 /// made one layer up (a refusal is not an absence).
-pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData) {
+pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData, now: i64) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -117,7 +165,7 @@ pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData) {
             // clone. This widget never sorts its own input.
             let mut sorted = entries.clone();
             sort_entries(&mut sorted);
-            sorted.iter().map(entry_line).collect()
+            sorted.iter().map(|e| entry_line(e, now)).collect()
         }
         AgentPanelData::Refused(message) => vec![Line::from(Span::styled(
             format!("access denied: {message}"),
@@ -186,6 +234,10 @@ mod tests {
     /// and returns its rows. Any other width is an instrument that
     /// disagrees with the artefact (判据 §18) — a wider backend can make an
     /// assertion true that would be false in the product.
+    /// A fixed "now" for every render below. Reading the real clock here
+    /// would make the quiet-age assertions depend on the test machine.
+    const NOW: i64 = 1_000_000_000;
+
     fn render(data: &AgentPanelData) -> Vec<String> {
         render_at(AGENT_PANEL_WIDTH, 6, data)
     }
@@ -195,9 +247,96 @@ mod tests {
     fn render_at(width: u16, height: u16, data: &AgentPanelData) -> Vec<String> {
         let backend = TestBackend::new(width, height);
         let mut term = Terminal::new(backend).unwrap();
-        term.draw(|f| render_agent_panel(f, f.area(), data))
+        term.draw(|f| render_agent_panel(f, f.area(), data, NOW))
             .unwrap();
         rows(term.backend().buffer())
+    }
+
+    /// C3: the row names the FOREGROUND program and shows how long the session
+    /// has been silent. Both facts were published by the sampler and rendered
+    /// nowhere (`program` and `quiet_since` had zero readers on either face).
+    ///
+    /// Reddens if `entry_name` keeps preferring the spawn label over the live
+    /// program, or if the quiet age is dropped from the line.
+    #[test]
+    fn a_row_names_the_foreground_program_and_its_quiet_age() {
+        let mut e = entry("s", "zsh", Some("claude"), S::Working, 0);
+        e.program = Some("claude".to_string());
+        e.quiet_since = Some(NOW - 180_000);
+
+        let dump = render(&AgentPanelData::Ready(vec![e])).join("\n");
+        assert!(
+            dump.contains("claude"),
+            "the live program names the row: {dump:?}"
+        );
+        assert!(
+            !dump.contains("zsh"),
+            "the spawn label is superseded by what is actually running: {dump:?}"
+        );
+        assert!(
+            dump.contains("quiet 3m"),
+            "the quiet age must render: {dump:?}"
+        );
+    }
+
+    /// Every unit gets its own suffix, and none of them is empty. A `QuietAge`
+    /// whose unit fell through to the same letter as another would render two
+    /// different durations identically — "quiet 3m" for three minutes and for
+    /// three months is a wrong label, which costs more than a missing one
+    /// (判据 §17).
+    #[test]
+    fn every_quiet_unit_has_its_own_suffix() {
+        let rendered: Vec<String> = [
+            QuietUnit::Seconds,
+            QuietUnit::Minutes,
+            QuietUnit::Hours,
+            QuietUnit::Days,
+        ]
+        .into_iter()
+        .map(|unit| quiet_text(QuietAge { value: 3, unit }))
+        .collect();
+
+        let mut distinct = rendered.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(
+            distinct.len(),
+            4,
+            "units must not share a suffix: {rendered:?}"
+        );
+        assert!(rendered.iter().all(|r| r.contains('3')), "{rendered:?}");
+        assert_eq!(
+            quiet_text(QuietAge {
+                value: 3,
+                unit: QuietUnit::Minutes
+            }),
+            "quiet 3m"
+        );
+    }
+
+    /// The fallback chain, in falling order of how current the fact is:
+    /// probed program, then recognised agent, then the spawn label. Each step
+    /// is reached only when the one above is absent — `program: None` means
+    /// the probe could not answer, which is not "nothing is running".
+    ///
+    /// An active session (no `quiet_since`) must carry NO age at all: a
+    /// "quiet 0s" on every healthy row would make the label meaningless.
+    #[test]
+    fn a_row_falls_back_to_the_agent_then_the_label_and_omits_a_zero_age() {
+        // Probe silent, manifest recognised it.
+        let recognised = entry("a", "spawn-label", Some("codex"), S::Working, 0);
+        let dump = render(&AgentPanelData::Ready(vec![recognised])).join("\n");
+        assert!(dump.contains("codex"), "{dump:?}");
+        assert!(!dump.contains("spawn-label"), "{dump:?}");
+
+        // Neither: only the spawn label is left, and it always exists.
+        let bare = entry("b", "spawn-label", None, S::Unknown, 0);
+        let dump = render(&AgentPanelData::Ready(vec![bare])).join("\n");
+        assert!(dump.contains("spawn-label"), "{dump:?}");
+        assert!(
+            !dump.contains("quiet"),
+            "an active session must carry no quiet age: {dump:?}"
+        );
     }
 
     /// The brief's Step-1 test (R8-11: one test per state, amended into
@@ -221,11 +360,11 @@ mod tests {
         assert!(blocked_at < idle_at, "blocked must sort before idle");
 
         assert!(
-            !dump.contains("\u{25cb} unknown-one"),
+            !dump.contains(&format!("{} unknown-one", state_glyph(S::Idle))),
             "unknown must not use the idle glyph"
         );
         assert!(
-            dump.contains("? unknown-one"),
+            dump.contains(&format!("{} unknown-one", state_glyph(S::Unknown))),
             "unknown must render its own glyph"
         );
     }
@@ -316,5 +455,4 @@ mod tests {
             );
         }
     }
-
 }
