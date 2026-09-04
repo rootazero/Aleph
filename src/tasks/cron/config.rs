@@ -498,9 +498,10 @@ pub struct CronJob {
     #[serde(default)]
     pub state: JobStateV2,
 
-    /// P1 data isolation: the user id that created this job, stamped once at
-    /// `cron_manage(action='create')` time from `scope::current_scope()`
-    /// inside the creating (admin-gated) run. `#[serde(default)]` → old
+    /// P1 data isolation: the user id that created this job, stamped by
+    /// [`CronJob::stamp_current_scope`] — the one derivation every creating
+    /// face (`cron.create` RPC, `cron_manage`, loop_graph's two installers)
+    /// shares. `#[serde(default)]` → old
     /// (pre-P1) payloads read `None` — unscoped, legacy owner semantics;
     /// `skip_serializing_if` → a legacy job round-trips byte-identical
     /// instead of gaining an `"owner_user_id":null` key, matching
@@ -874,7 +875,13 @@ mod tests {
     /// **What it does NOT prove**: this is a name census, not a dataflow
     /// proof. A body that stamps a *different* job than the one it constructs
     /// passes. What it does prove is the shape that actually shipped — a
-    /// creating face where the derivation is not named at all.
+    /// creating face where the derivation is not named at all. It is also a
+    /// LEXICAL census, so three spellings of a construction are invisible to
+    /// it: an import alias (`use CronJob as Job; Job::new(...)`), a struct
+    /// literal (`CronJob { .. }` — every field is `pub`), and a site with no
+    /// enclosing `fn` (a module-level `Lazy`/`OnceLock` initializer, since
+    /// `production_fns` only collects brace-matched fn bodies). "Fails by
+    /// name" is a guarantee about `CronJob::new(` written that way.
     ///
     /// The set of helper fns that count as stamping is DERIVED from the same
     /// method name — any production fn IN THE SAME FILE whose own body names
