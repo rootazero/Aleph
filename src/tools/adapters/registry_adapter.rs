@@ -97,8 +97,13 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     // Read-only PTY session view (herdr runtime port, phase 1). Unlike
     // `file_ops`/`doctor`/`note_schema` above, it has NO write arm at all to
     // resolve per-argument — two exhaustive `match`es on `TerminalAction`
-    // make a fourth, mutating variant a compile error — so listing it here
-    // outright, rather than in a `*_claim` function, is safe. Verified
+    // make a mutating variant a compile error (deliberately not "a fourth
+    // variant": the count grew to five in round 2 and an ordinal in a comment
+    // is a fact that rots) — so listing it here outright, rather than in a
+    // `*_claim` function, is safe. One of the five, `wait`, BLOCKS for up to
+    // 150 s; it is still a read (it observes the agent table's change watch
+    // and returns a row, touching nothing), and none of the three consumers
+    // below changes answer for a read that takes time. Verified
     // against this list's three actual consumers: `Shared` concurrency
     // (each action only reads through `PtyManager`'s own lock and returns
     // owned data, holding no state across the call), the one-shot

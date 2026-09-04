@@ -51,11 +51,21 @@ const OWNER_RETENTION: usize = 1024;
 /// bounded frame per tick. This coalescing *is* the backpressure design.
 const FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// Public summary of a session for `pty.list`.
-#[derive(Debug, Clone, Serialize)]
+/// Internal summary of a session, from which the wire row
+/// ([`aleph_protocol::pty::PtySessionInfo`]) is built.
+///
+/// This type is NOT the wire shape and deliberately does not derive
+/// `Serialize`: it carries `created_by`, which no client may see, and a
+/// serialisable server struct is exactly how that stamp would reach the wire
+/// the next time someone reached for `json!({ "sessions": … })`. Convert with
+/// the `From` impl below and let the compiler enforce the difference.
+#[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub session_id: String,
     pub shell: String,
+    /// The directory the child was SPAWNED in, empty when it inherited the
+    /// server's. See [`PtySession::cwd`] for why this is not the live cwd.
+    pub cwd: String,
     pub created_at: i64,
     pub closed: bool,
     /// Who asked for this session — see [`SpawnOptions::created_by`]. `None`
@@ -66,6 +76,22 @@ pub struct SessionInfo {
     /// the four addressed methods and the `pty.screen`/`pty.exit` delivery
     /// filter through [`PtyManager::owner_of`].
     pub created_by: Option<String>,
+}
+
+/// The one place a session becomes a wire row. Every face that answers
+/// "which sessions are there" — the `pty.list` handler and the `terminal`
+/// tool — goes through here, so the key set has a single author and
+/// `created_by` has no way out.
+impl From<&SessionInfo> for aleph_protocol::pty::PtySessionInfo {
+    fn from(s: &SessionInfo) -> Self {
+        Self {
+            session_id: s.session_id.clone(),
+            shell: s.shell.clone(),
+            cwd: s.cwd.clone(),
+            created_at: s.created_at,
+            closed: s.closed,
+        }
+    }
 }
 
 /// Result of a successful `pty.spawn`.
@@ -172,6 +198,22 @@ pub fn owner_admits(created_by: Option<&str>, actor: Option<&str>) -> bool {
     }
 }
 
+/// One session's screen, as the detection engine consumes it — the answer
+/// [`PtyManager::detection_inputs`] gives.
+///
+/// A struct rather than a `(String, String, String)` for the reason
+/// `agent_detect::screen_rules::detection_input` exists: three same-typed
+/// strings in a row is the shape where a swapped pair compiles and lies.
+#[derive(Debug, Clone)]
+pub(crate) struct DetectionInputs {
+    /// The visible grid as plain text, no scrollback.
+    pub text: String,
+    /// The OSC 0/2 window title, or `""` when the program set none.
+    pub title: String,
+    /// The OSC 9;4 progress payload, or `""` when the program reported none.
+    pub osc_progress: String,
+}
+
 /// The global PTY session registry.
 pub struct PtyManager {
     inner: Mutex<Inner>,
@@ -181,47 +223,135 @@ pub struct PtyManager {
     max_sessions: AtomicUsize,
 }
 
-/// One flush iteration for one session: take the diff frame, then sample the
-/// agent state off the same screen.
+/// One flush iteration for one session: take the diff frame, probe the
+/// foreground process if the gate allows, then sample the agent state off the
+/// same screen.
 ///
 /// Extracted from [`PtyManager::start_flush_loop`]'s loop body rather than
 /// written inline so the wire between the PTY and `gateway::runtime` has a
-/// caller a test can drive. Sampling sits inside the `Some(frame)` arm on
-/// purpose: a frame exists exactly when the screen changed, which is the
-/// sampling cadence the spec asked for — the sampler starts no clock of its
-/// own (判据 §12).
+/// caller a test can drive. The sampler still starts no clock of its own
+/// (判据 §12) — it runs on the flush tick, and only when that tick found
+/// something new.
 ///
-/// The frame is taken first (one screen lock, released), then
-/// [`PtySession::with_screen`] takes it again for the length of one sample.
-/// The sample therefore sees a screen at least as new as the frame, never
-/// older, and the grid is never cloned.
+/// Two things count as new, and the second one had to be added after the
+/// end-to-end guard caught its absence:
+/// - the screen produced a frame, the ordinary case; or
+/// - the foreground PROGRAM changed with the screen standing still, which is
+///   what an agent that starts, paints once and goes quiet looks like. Without
+///   this arm the probe identified it and the table never heard.
+///
+/// The probe itself runs unconditionally, above both. Gated on frames it could
+/// never fire rule 3 of [`crate::gateway::pty::foreground::probe_due`] — the
+/// recheck for a session that has gone silent — and that rule is the only
+/// thing that can notice an agent EXITING. It would also have made
+/// `frame_produced` true at the only call site, a predicate that cannot vary
+/// (判据 §2).
+///
+/// The frame is taken first (one screen lock, released), the probe runs
+/// holding no screen lock at all, then [`PtySession::with_screen`] takes it
+/// again for the length of one sample. The sample therefore sees a screen at
+/// least as new as the frame, never older, and the grid is never cloned.
 ///
 /// `now` is unix millis, taken ONCE per tick by the caller and shared with
-/// [`crate::gateway::runtime::RuntimeAgents::release_expired`] — every entry
+/// [`crate::gateway::runtime::RuntimeAgents::release_expired`] and
+/// [`crate::gateway::runtime::RuntimeAgents::mark_quiet`] — every entry
 /// touched in one pass carries the same instant, and the sampler never reads
 /// a clock of its own (判据 §12).
 ///
-/// The second element of the return is [`RuntimeAgents::sample`]'s own
+/// The second element of the return is `RuntimeAgents::sample`'s own
 /// `changed` bool (task 6): whether anything OBSERVABLE — state, agent,
-/// label, or cwd — differs from the entry's last sample. `start_flush_loop`
-/// keys `runtime.agents.changed` on it, so it is surfaced here rather than
-/// discarded, exactly like the frame it travels with.
-pub(crate) fn flush_session(
-    session: &PtySession,
-    now: i64,
-) -> Option<(aleph_protocol::pty::PtyScreenFrame, bool)> {
-    let frame = session.feed_and_take_frame()?;
+/// program, label, cwd, or a quiet mark clearing — differs from the entry's
+/// last sample. `start_flush_loop` keys `runtime.agents.changed` on it, so it
+/// is surfaced here rather than discarded, exactly like the frame it travels
+/// with.
+pub(crate) fn flush_session(session: &PtySession, now: i64) -> FlushOutcome {
+    let agents = crate::gateway::runtime::agents();
+    let frame = session.feed_and_take_frame();
+    let program_changed =
+        session.maybe_probe_foreground(now, frame.is_some(), agents.agent_known(&session.id));
+    // A frame is the usual reason to re-sample; a changed foreground program
+    // is the other one, and leaving it out is how an agent that paints once
+    // and goes quiet gets identified by the probe and then never published
+    // (measured on the first real run of
+    // `a_real_agent_started_after_spawn_is_identified`: the probe saw
+    // `/bin/sh …/claude` while the table still said `program: "sh",
+    // agent: None`, 521 ms stale). The screen lock is taken for that case too,
+    // but only when the program actually moved.
+    if frame.is_none() && !program_changed {
+        return FlushOutcome {
+            frame: None,
+            agent_changed: false,
+        };
+    }
+
+    let foreground = session.foreground_fact();
+
     let changed = session.with_screen(|screen| {
-        crate::gateway::runtime::agents().sample(
-            &session.id,
-            &session.shell,
-            &session.cwd,
+        // The live cwd, in a fixed order of authority, so no reader has to
+        // guess which source won (判据 §12).
+        //
+        // 1. OSC 7 — the shell TELLING us where it is (`Screen::cwd()`).
+        // 2. the foreground process's own cwd, from the probe.
+        // 3. the spawn directory, which never changes.
+        //
+        // Sourced INSIDE this closure rather than above it so the screen lock
+        // is taken exactly once for the whole sample: a second `with_screen`
+        // just to ask for the cwd would be another acquisition on the PTY
+        // reader thread's hot path, and it could answer about a different
+        // screen than the one the sampler then reads.
+        //
+        // An empty OSC 7 path counts as absent, so the next source answers.
+        // Nothing produces one today — `parse_osc7_cwd` rejects an empty
+        // decoded path and no reset clears the field — but the WIRE already
+        // spells a clear as `Some("")` (`screen::perform::published_clear`),
+        // whose rule is "empty OR absent means none". Writing that rule here
+        // too keeps ONE rule with one spelling instead of two that drift
+        // (判据 §1): the day a clear does reach this field, the answer has to
+        // be the next source and never an empty string handed to the sampler
+        // as if it were a directory.
+        let cwd = screen
+            .cwd()
+            .filter(|c| !c.is_empty())
+            .map(str::to_owned)
+            .or_else(|| foreground.as_ref().and_then(|f| f.cwd.clone()))
+            .unwrap_or_else(|| session.cwd.clone());
+
+        agents.sample(crate::gateway::runtime::SampleInput {
+            session_id: &session.id,
+            shell: &session.shell,
+            program: foreground.as_ref().map(|f| f.name.as_str()),
+            argv0: foreground.as_ref().and_then(|f| f.argv0.as_deref()),
+            cmdline: foreground.as_ref().and_then(|f| f.cmdline.as_deref()),
+            cwd: &cwd,
             screen,
-            session.is_closed(),
+            process_exited: session.is_closed(),
+            // Genuinely varies: the other reason to be here is a
+            // foreground-program change with the screen standing still, and
+            // only a real frame may end a quiet mark.
+            frame_produced: frame.is_some(),
             now,
-        )
+        })
     });
-    Some((frame, changed))
+    FlushOutcome {
+        frame,
+        agent_changed: changed,
+    }
+}
+
+/// What one [`flush_session`] pass produced.
+///
+/// Two independent facts, which is why this is a struct and not the old
+/// `Option<(frame, bool)>`: a tick can produce a screen frame, an agent-table
+/// change, both, or neither, and the pair `(None, true)` — the foreground
+/// program moved while the screen stood still — is exactly the case the old
+/// shape could not express.
+pub(crate) struct FlushOutcome {
+    /// The screen diff to publish on `pty.screen`, when the screen changed.
+    pub frame: Option<aleph_protocol::pty::PtyScreenFrame>,
+    /// Whether the agent table changed — `RuntimeAgents::sample`'s own
+    /// `changed`. `start_flush_loop` folds this across sessions and publishes
+    /// at most one `runtime.agents.changed` per tick.
+    pub agent_changed: bool,
 }
 
 /// Publish `runtime.agents.changed` on `bus` iff `changed`. Payload is
@@ -397,6 +527,36 @@ impl PtyManager {
         })
     }
 
+    /// The three strings the detection engine is fed for this session, read
+    /// under ONE screen-lock acquisition.
+    ///
+    /// One acquisition for the same reason [`flush_session`] takes one: three
+    /// separate `with_screen` calls could answer about three different
+    /// screens, and an explanation assembled from a title that no longer
+    /// belongs to the text beside it is worse than no explanation.
+    ///
+    /// The `unwrap_or_default()` on the two OSC values is the sampler's own
+    /// conversion, restated deliberately rather than shared: `None` (this
+    /// program never reported one) and `""` (the engine's spelling of "no
+    /// data") mean the same thing to every rule, so the fold is faithful and
+    /// not a fail-open read of an absent answer. `flush_session` cannot hand
+    /// this function its `Screen` — it holds the lock across the whole sample
+    /// and passes the borrow to `RuntimeAgents::sample`, which builds the text
+    /// only when an agent was identified (a cost decision this reader does not
+    /// share, since `terminal{explain}` always needs it).
+    ///
+    /// An unknown session is an error, never three empty strings — a blank
+    /// screen would read as "the terminal is idle".
+    pub(crate) fn detection_inputs(&self, session_id: &str) -> Result<DetectionInputs, String> {
+        self.with_session(session_id, |s| {
+            Ok(s.with_screen(|screen| DetectionInputs {
+                text: screen.visible_text(),
+                title: screen.title().unwrap_or_default().to_owned(),
+                osc_progress: screen.osc_progress().unwrap_or_default().to_owned(),
+            }))
+        })
+    }
+
     /// Terminate and remove a session.
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         let session = {
@@ -473,6 +633,7 @@ impl PtyManager {
             .map(|s| SessionInfo {
                 session_id: s.id.clone(),
                 shell: s.shell.clone(),
+                cwd: s.cwd.clone(),
                 created_at: s.created_at,
                 closed: s.is_closed(),
                 created_by: s.created_by.clone(),
@@ -602,10 +763,11 @@ impl PtyManager {
                 // ignore, and then they ignore the real ones too (R6-4).
                 let mut any_agent_changed = false;
                 for session in sessions {
-                    let Some((frame, changed)) = flush_session(&session, now) else {
+                    let outcome = flush_session(&session, now);
+                    any_agent_changed |= outcome.agent_changed;
+                    let Some(frame) = outcome.frame else {
                         continue;
                     };
-                    any_agent_changed |= changed;
                     let Ok(data) = serde_json::to_value(&frame) else {
                         continue;
                     };
@@ -621,6 +783,11 @@ impl PtyManager {
                 any_agent_changed |= !crate::gateway::runtime::agents()
                     .release_expired(now)
                     .is_empty();
+                // Same argument, second fact: a session that went quiet
+                // produces no frame, so the loop above cannot reach it either.
+                // This publishes the SILENCE and never touches `state` — time
+                // alone must not turn Working into Idle (spec R2-3).
+                any_agent_changed |= !crate::gateway::runtime::agents().mark_quiet(now).is_empty();
                 publish_agents_changed_if(any_agent_changed, &bus);
             }
         });

@@ -46,6 +46,15 @@ pub fn patch(p: &ScreenPatch) -> PtyScreenPatch {
         cursor: p.cursor,
         alt_screen: p.alt_screen,
         title: p.title.clone(),
+        // Straight through, `None` and all: `None` here is the server
+        // screen's own "unchanged since the last patch", so translating it
+        // to anything else would invent news. `attach_snapshot` reaches the
+        // wire through this same function applied to `Screen::full_patch`,
+        // which fills all three with their CURRENT values -- so a client
+        // attaching late is served by this line, not by a separate path.
+        cursor_visible: p.cursor_visible,
+        bracketed_paste: p.bracketed_paste,
+        cwd: p.cwd.clone(),
         bell: p.bell,
     }
 }

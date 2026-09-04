@@ -78,13 +78,86 @@ pub fn production_prefix(src: &str) -> String {
 /// `#[cfg(test)] mod x;` (`src/memory/ripple/tests.rs` and 119 others,
 /// measured 2026-08-25) carries no `#[cfg(test)]` of its own, so this
 /// function returns the empty string for it — the file is entirely test
-/// code and this walk cannot tell. Answering that needs module-graph
-/// resolution, which lives with the caller, not here. A caller that must
-/// not be blind to those files should scan them whole rather than ask for
-/// their "test portion".
+/// code and this walk cannot tell, because it is handed text and text alone.
+///
+/// [`test_text`] is that answer: it takes the PATH as well, resolves the one
+/// module-graph question this cannot, and falls back to this function. A
+/// census that walks a directory should call it rather than this — the
+/// difference is invisible until the day someone moves a test module out of
+/// its parent file, at which point the guard silently stops charging it.
 #[must_use]
 pub fn cfg_test_portion(src: &str) -> String {
     partition_on_cfg_test(src, Removed::Dropped).1
+}
+
+/// The test half of a source file, with the one question
+/// [`cfg_test_portion`] cannot answer resolved: is this file test code
+/// BECAUSE ITS PARENT SAYS SO?
+///
+/// `path` is the file's path (relative to `CARGO_MANIFEST_DIR` or absolute).
+/// When the parent module declares it as `#[cfg(test)] mod <stem>;`, the
+/// whole file is test code and is returned verbatim; otherwise this is
+/// exactly `cfg_test_portion`.
+///
+/// # Why a path and not a name rule
+///
+/// "A file called `tests.rs` is tests" is a list that rots — it says nothing
+/// about `foo_tests.rs`, it is wrong about a production module someone named
+/// `tests`, and it cannot see a whole-file test module under any other name.
+/// The declaration in the parent is the actual fact, it is one `read_to_string`
+/// away, and it is what `rustc` itself uses. The lookup asks
+/// `cfg_test_portion` of the parent, so a `mod tests;` that is NOT under
+/// `#[cfg(test)]` (a production submodule that happens to be so named) is
+/// correctly not matched.
+///
+/// # Why this exists
+///
+/// A directory-walking census reads as exhaustive — it walks every `.rs` file
+/// under `src/` — while silently returning nothing for 120+ files that are
+/// entirely tests. `gateway::handlers::pty`'s
+/// `every_test_that_reaches_the_global_pty_manager_is_tagged` was blind to
+/// `src/gateway/runtime/tests.rs` for exactly this reason: the file spawns
+/// through the process-global `PtyManager`, the census exists to force the
+/// serial key onto tests that do that, and the file was not in its corpus at
+/// all. The tag happened to be there. (判据 §3: a guard's green only covers
+/// the shapes it recognises.)
+#[must_use]
+pub fn test_text(path: &std::path::Path, src: &str) -> String {
+    if declared_as_a_test_module(path) {
+        return src.to_owned();
+    }
+    cfg_test_portion(src)
+}
+
+/// Whether `path`'s parent module declares it with `#[cfg(test)] mod <stem>;`.
+///
+/// Both spellings of a parent are tried — `dir/mod.rs` for `dir/child.rs`,
+/// and `dir.rs` for `dir/child.rs` (the 2018-edition form this repo uses for
+/// `src/gateway/runtime/`, whose parent is `src/gateway/runtime/mod.rs`, and
+/// for `src/builtin_tools/terminal/`, whose parent is
+/// `src/builtin_tools/terminal.rs`). A parent that cannot be read answers
+/// `false`: the file is then scanned as an ordinary one, which is the
+/// pre-existing behaviour rather than a new claim.
+fn declared_as_a_test_module(path: &std::path::Path) -> bool {
+    let absolute;
+    let path = if path.is_absolute() {
+        path
+    } else {
+        absolute = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        &absolute
+    };
+    let (Some(stem), Some(dir)) = (path.file_stem(), path.parent()) else {
+        return false;
+    };
+    let declaration = format!("mod {};", stem.to_string_lossy());
+    [dir.join("mod.rs"), dir.with_extension("rs")]
+        .iter()
+        .filter_map(|parent| std::fs::read_to_string(parent).ok())
+        .any(|text| {
+            cfg_test_portion(&text)
+                .lines()
+                .any(|line| line.trim() == declaration)
+        })
 }
 
 /// What the production half does with a line that belongs to the test half.
@@ -780,6 +853,52 @@ pub(crate) fn scan_test_bodies(code: &str, reaches: &dyn Fn(&str) -> bool) -> Te
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`test_text`] against both shapes, on real files in this repo rather
+    /// than on a fixture — the claim it makes is about how THIS tree is laid
+    /// out, and a synthetic parent/child pair would prove only that the
+    /// function reads what the test wrote.
+    ///
+    /// The first assertion is the precondition, and it is the whole reason
+    /// this function exists: `cfg_test_portion` answers "" for a file that is
+    /// entirely tests, so a census asking it for that file's test code is
+    /// handed nothing and skips the file in silence. If that ever stops being
+    /// true, this test says so instead of quietly becoming a tautology.
+    #[test]
+    fn test_text_sees_a_whole_file_test_module_that_cfg_test_portion_cannot() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        // Declared by its parent as `#[cfg(test)] mod tests;`.
+        let whole = root.join("src/gateway/runtime/tests.rs");
+        let src = std::fs::read_to_string(&whole).expect("src/gateway/runtime/tests.rs");
+        assert!(
+            cfg_test_portion(&src).is_empty(),
+            "precondition: a whole-file test module carries no `#[cfg(test)]` of its own, so \
+             the text-only function can only answer with the empty string"
+        );
+        assert_eq!(
+            test_text(&whole, &src),
+            src,
+            "a file its parent declares under `#[cfg(test)]` is test code end to end"
+        );
+
+        // An ordinary file with an inline `#[cfg(test)] mod tests { .. }`:
+        // unchanged, or this function would be a second answer rather than a
+        // wider one.
+        let inline = root.join("src/utils/source_scan.rs");
+        let src = std::fs::read_to_string(&inline).expect("this file");
+        let portion = cfg_test_portion(&src);
+        assert!(
+            !portion.is_empty(),
+            "precondition: this file has inline tests"
+        );
+        assert_eq!(test_text(&inline, &src), portion);
+        assert_ne!(
+            test_text(&inline, &src),
+            src,
+            "and a file with production code in it must not be swallowed whole"
+        );
+    }
 
     /// [`scan_test_bodies`] is the shared half of two census guards
     /// (`gateway::handlers::pty`'s global `PtyManager`,

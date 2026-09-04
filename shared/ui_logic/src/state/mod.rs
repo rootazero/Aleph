@@ -13,7 +13,8 @@ pub mod composer_queue;
 pub mod team_chat;
 
 pub use agent_panel::{
-    attention_rank, sort_entries, AgentPanelState, MAX_SPLIT_RATIO, MIN_SPLIT_RATIO,
+    attention_rank, quiet_age, sort_entries, state_glyph, AgentPanelState, QuietAge, QuietUnit,
+    MAX_SPLIT_RATIO, MIN_SPLIT_RATIO,
 };
 pub use chat_scroll::{scroll_action, ListCursor, ScrollAction};
 pub use composer_dials::{session_dials_for_send, SendDials, SessionKnobs};

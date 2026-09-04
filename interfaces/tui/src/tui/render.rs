@@ -42,7 +42,15 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
         let cols = Layout::horizontal([Constraint::Length(AGENT_PANEL_WIDTH), Constraint::Min(0)])
             .split(full_area);
         let agent_area = cols.first().copied().unwrap_or_default();
-        render_agent_panel(frame, agent_area, &state.runtime_agents);
+        // The clock is read HERE, at the one place that draws, rather than
+        // inside the widget: the widget stays a pure function of its inputs
+        // and its tests stay independent of the machine they run on.
+        render_agent_panel(
+            frame,
+            agent_area,
+            &state.runtime_agents,
+            chrono::Utc::now().timestamp_millis(),
+        );
         cols.get(1).copied().unwrap_or(full_area)
     } else {
         full_area

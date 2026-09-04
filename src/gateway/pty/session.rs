@@ -122,6 +122,18 @@ pub struct PtySession {
     /// Monotonic per-session frame counter. Advances only when a frame is
     /// actually published, so a client's gap detection means what it says.
     seq: crate::sync_primitives::Mutex<u64>,
+    /// The pid of the process this session spawned — the shell, normally.
+    ///
+    /// `None` when `portable-pty` would not say (it returns `Option`).
+    /// Captured at spawn because the reader thread takes ownership of the
+    /// `Child` immediately afterwards and is the only other holder of this
+    /// fact; asking it later would need a channel for something that never
+    /// changes.
+    shell_pid: Option<u32>,
+    /// The foreground-process probe's bookkeeping. Its own lock, held for
+    /// microseconds and NEVER around the `sysinfo` refresh — see
+    /// [`super::foreground`]'s Locks section.
+    foreground: crate::sync_primitives::Mutex<super::foreground::ForegroundState>,
 }
 
 impl PtySession {
@@ -173,6 +185,8 @@ impl PtySession {
         drop(slave);
 
         let killer = child.clone_killer();
+        // Read BEFORE `spawn_reader` moves the child onto the reader thread.
+        let shell_pid = child.process_id();
         let reader = master
             .try_clone_reader()
             .map_err(|e| format!("clone_reader failed: {e}"))?;
@@ -199,6 +213,8 @@ impl PtySession {
             closed: AtomicBool::new(false),
             screen: crate::sync_primitives::Mutex::new(screen),
             seq: crate::sync_primitives::Mutex::new(0),
+            shell_pid,
+            foreground: crate::sync_primitives::Mutex::default(),
         });
 
         spawn_reader(session.clone(), reader, child, bus);
@@ -247,6 +263,118 @@ impl PtySession {
     /// Whether the child has exited or the session was closed.
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
+    }
+
+    // A `pub fn shell_pid(&self) -> Option<u32>` accessor lived here with zero
+    // callers crate-wide (R10 / YAGNI — CUT 2026-09-04). Its doc named "the
+    // only consumer, the non-Unix foreground heuristic", and that consumer
+    // reads the FIELD directly in `maybe_probe_foreground` below — so the
+    // accessor was both dead and describing someone else's call site (判据 §1).
+    // Re-add it when a reader outside this type exists, not before.
+
+    /// Probe the terminal's foreground process, if this tick is due. Returns
+    /// whether the believed foreground process CHANGED.
+    ///
+    /// `frame_produced` and `agent_known` are the gate's two inputs; see
+    /// [`super::foreground::probe_due`] for the three rules. Calling this on
+    /// every tick — not only on ticks that produced a frame — is what makes
+    /// the recheck rule reachable, and the recheck rule is the only thing
+    /// that can notice an agent EXITING.
+    ///
+    /// The return value is what lets `flush_session` re-sample a session whose
+    /// screen did not change but whose foreground program did; without it, a
+    /// program that starts, paints once and goes quiet is identified here and
+    /// never published.
+    ///
+    /// # Locks
+    ///
+    /// Three acquisitions, none overlapping, and the screen lock is not among
+    /// them:
+    /// 1. the foreground lock, to ask the gate;
+    /// 2. the master lock, inside [`Self::terminal_leader`], for one
+    ///    `tcgetpgrp` ioctl and nothing else;
+    /// 3. the foreground lock again, to fold the outcome in.
+    ///
+    /// **Every process-table read happens between 2 and 3, holding nothing** —
+    /// both the descendant walk (a full refresh) and the single-pid read. An
+    /// earlier version composed the walk into the locked step, so on Windows
+    /// every probe scanned the whole process table while `PtySession::resize`
+    /// waited behind the same lock. `terminal_leader` exists to make that
+    /// impossible to reintroduce by accident, and
+    /// `foreground::tests::no_process_table_read_happens_under_the_master_lock`
+    /// pins it.
+    pub fn maybe_probe_foreground(
+        &self,
+        now: i64,
+        frame_produced: bool,
+        agent_known: bool,
+    ) -> bool {
+        let due = {
+            let mut state = self.foreground.lock().unwrap_or_else(|e| e.into_inner());
+            // Remember the frame even when the gate is about to say no: a
+            // frame that lands inside the rate limit's shadow still means the
+            // screen changed, and dropping it is how a program that paints
+            // once and goes quiet stays unidentified forever (see
+            // `foreground::probe_due`).
+            state.note_frame(frame_produced);
+            super::foreground::probe_due(
+                state.last_probe_at(),
+                now,
+                state.frame_since_probe(),
+                agent_known,
+            )
+        };
+        if !due {
+            return false;
+        }
+        // The master lock is taken and released inside `terminal_leader`.
+        // Everything below this line reads the process table and holds
+        // nothing.
+        let leader = self.terminal_leader().or_else(|| {
+            self.shell_pid
+                .and_then(super::foreground::deepest_newest_descendant)
+        });
+        let observed = leader.and_then(super::foreground::fact_for_pid);
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .observe(now, observed)
+    }
+
+    /// The pgid the terminal itself reports, under the master lock.
+    ///
+    /// The whole body is the lock plus one ioctl, and it is a separate
+    /// function so that "what may run under the master lock" is a question
+    /// with a one-line answer rather than a promise in a comment. Anything
+    /// that reads the process table goes in the caller, after this returns.
+    fn terminal_leader(&self) -> Option<u32> {
+        let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
+        super::foreground::leader_from_terminal(&**master)
+    }
+
+    /// How many probes this session has performed — the cost guard's
+    /// instrument. See [`super::foreground::ForegroundState::probes`].
+    #[must_use]
+    pub fn probe_count(&self) -> u64 {
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .probes()
+    }
+
+    /// The foreground process this session is currently believed to be
+    /// running, after the miss hysteresis.
+    ///
+    /// `None` means the probe has not answered — never that the shell is what
+    /// is running. Those are different facts and the wire keeps them apart
+    /// (`RuntimeAgentEntry::program`'s doc).
+    #[must_use]
+    pub fn foreground_fact(&self) -> Option<super::foreground::ForegroundFact> {
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current()
+            .cloned()
     }
 
     /// The diff since the last call, already in wire form, with a fresh `seq`.

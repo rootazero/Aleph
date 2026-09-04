@@ -1,11 +1,16 @@
 //! `TerminalTool` — read-only view of the terminal sessions the caller owns
 //! on this server (herdr runtime port, phase 1, Task 11).
 //!
-//! Three actions, no write verb: `list` (which PTY sessions exist),
-//! `status` (each session's detected agent state, the same table
+//! Five actions, no write verb: `list` (which PTY sessions exist), `status`
+//! (each session's detected agent state, the same table
 //! `runtime.agents.list` serves), `read` (one session's current visible
-//! screen, no scrollback). A human types into a terminal; the model only
-//! looks.
+//! screen, no scrollback), `wait` (block until one session's state enters a
+//! requested set) and `explain` (which manifest rule decided a state, over
+//! which inputs). A human types into a terminal; the model only looks.
+//!
+//! `wait` is a read that takes time, not a write: it observes the agent
+//! table's change watch (`gateway::runtime::RuntimeAgents::subscribe`) and
+//! returns a row. It never polls the screen and never touches the session.
 //!
 //! # Same disclosure as `pty.*` / `runtime.*`, so it is gated the same way
 //!
@@ -70,17 +75,26 @@
 //!
 //! # Ownership filtering
 //!
-//! Every action is scoped to the caller's own sessions, using the SAME
-//! predicate the two existing faces use — [`pty::PtyManager::owner_of`] +
-//! [`pty::SessionOwner::admits`] (`list`/`status`) and [`pty::owner_admits`]
-//! (`list`, matching `handle_list`'s own predicate on
-//! [`pty::SessionInfo::created_by`] directly) — copied, not re-derived, so
-//! three lenses on the same sessions cannot silently disagree about which
-//! rows a caller may see (判据 §9). A session the caller does not own is
-//! reported as "no such session" for `read`, byte for byte the same wording
-//! `require_owned` uses in `gateway::handlers::pty` — a distinct "not yours"
-//! would turn `read` into an oracle for enumerating other operators'
-//! session ids.
+//! Every action is scoped to the caller's own sessions through ONE predicate
+//! in this file — [`terminal_admits`], reached directly by `list` (against
+//! [`pty::SessionInfo::created_by`], as `handle_list` does) and through
+//! [`owner_record_admits`] + [`pty::PtyManager::owner_of`] by every action
+//! addressed BY session id (`read` / `wait` / `explain`). One body, so five
+//! lenses on the same sessions cannot silently disagree about which rows a
+//! caller may see (判据 §9).
+//!
+//! For a caller that HAS an identity that predicate is [`pty::owner_admits`]
+//! exactly — the same answer the other two faces give. For a caller with
+//! none it is deliberately NARROWER than `owner_admits`, which answers
+//! "unrestricted": here an unresolved actor admits only sessions nobody owns.
+//! [`terminal_admits`]'s own doc carries the why; the short version is that
+//! this tool, unlike the `pty.*` RPC face, is reachable from a run that
+//! genuinely has no caller (cron, A2A, internal wiring).
+//!
+//! A session the caller does not own is reported as "no such session", byte
+//! for byte the same wording `require_owned` uses in `gateway::handlers::pty`
+//! and for every addressed action alike — a distinct "not yours" would turn
+//! any of them into an oracle for enumerating other operators' session ids.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -91,12 +105,35 @@ use crate::error::Result;
 use crate::gateway::pty;
 use crate::tools::AlephTool;
 
-/// `terminal`'s three read-only actions. No write verb — see the tool's own
-/// [`TerminalTool::DESCRIPTION`] for why.
+// This doc comment ships to the model as the schema description of
+// `TerminalArgs::action`. The reason there is no write verb is in
+// [`TerminalTool::DESCRIPTION`] (the tool cannot type into a terminal; a human
+// does that) — a symbol path is a maintainer's cross-reference, so it stays on
+// this side of the `///` line; the guard
+// `the_shipped_schema_addresses_the_model_and_not_the_maintainer` fails if one
+// crosses back.
+/// `terminal`'s five read-only actions. There is no write verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalAction {
-    /// List the caller's own PTY sessions (id, shell, closed).
+    // MAINTAINERS — deliberately a `//`, not a `///`. This enum derives
+    // `JsonSchema`, so every doc line below becomes that variant's
+    // `description` and ships to the model on every turn that loads this
+    // tool: an instruction addressed to whoever edits this file next is bytes
+    // the model pays for and cannot act on (R9's first ruler — a fact the
+    // model cannot know, or teaching a strong model how to think; a note
+    // about a test is neither).
+    //
+    // The rule this comment carries, unchanged: the field list in `List`'s
+    // doc is the same key set `aleph_protocol::pty::PtySessionInfo` defines
+    // and `pty_list_response_round_trips_and_pins_its_key_set` pins. Say all
+    // five or none — a short list reads to the model as "those are the
+    // fields", and a field it is told does not exist is a field it will not
+    // ask for.
+    /// List the caller's own PTY sessions: `session_id`, `shell`, `cwd`
+    /// (where the shell was SPAWNED — empty when it inherited the
+    /// server's, and not updated by a later `cd`), `created_at` (epoch
+    /// seconds) and `closed`.
     List,
     /// Read one session's current visible screen (no scrollback). Requires
     /// `session_id`.
@@ -104,22 +141,43 @@ pub enum TerminalAction {
     /// Report each of the caller's sessions' detected agent state — the
     /// same table `runtime.agents.list` serves.
     Status,
+    /// Block until one session's agent state enters `until`, then return it.
+    /// Requires `session_id`. Answers `timeout` with the current entry at
+    /// `timeout_ms`, and `gone` if the session ends first.
+    Wait,
+    /// Explain one session's detected state: which manifest rule matched, at
+    /// which manifest version, over which screen inputs. Requires
+    /// `session_id`.
+    Explain,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct TerminalArgs {
     /// What to do.
     pub action: TerminalAction,
-    /// Required for `read`: the PTY session id (from `list`'s output).
-    /// Ignored for `list` / `status`.
+    /// Required for `read` / `wait` / `explain`: the PTY session id (from
+    /// `list`'s output). Ignored for `list` / `status`.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// `wait` only: the states that end the wait. Defaults to
+    /// `["blocked", "idle"]` — the two that mean "it wants you now".
+    #[serde(default)]
+    pub until: Option<Vec<aleph_protocol::runtime::RuntimeAgentState>>,
+    /// `wait` only: how long to block, in milliseconds. Defaults to 60000 and
+    /// is CLAMPED to 150000, never refused — a blocking call has to return
+    /// inside this harness's foreground tool budget.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
-/// Output envelope shared by all three actions — same shape as
-/// `MoaManageOutput`: a flat `success`/`message`/`data` triple rather than a
-/// per-action type, since the three actions have nothing in common to
-/// factor beyond "did it work" and "here is the payload".
+/// Output envelope shared by every action — same shape as `MoaManageOutput`:
+/// a flat `success`/`message`/`data` triple rather than a per-action type,
+/// since the actions have nothing in common to factor beyond "did it work"
+/// and "here is the payload".
+///
+/// No count in that sentence on purpose: this doc said "all three" while the
+/// enum had five, which is a list that rots (判据 §1/§16). The set is
+/// [`TerminalAction`]; read it there.
 #[derive(Debug, Clone, Serialize)]
 pub struct TerminalOutput {
     pub success: bool,
@@ -145,7 +203,11 @@ impl AlephTool for TerminalTool {
     const DESCRIPTION: &'static str = "Read-only view of the terminal sessions you own on this \
         server; empty when the embedded terminal is disabled in policy. Lists sessions, reads \
         the current visible screen, and reports each agent's detected state (working / blocked \
-        / idle / unknown). It cannot type into a terminal or run commands — a human does that.";
+        / idle / unknown). It cannot type into a terminal or run commands — a human does that. \
+        `wait` blocks until one session reaches a state instead of polling `status`, and \
+        answers `timeout` with the current entry rather than a guess. `explain` says WHY a \
+        state was reported — which manifest rule matched, over which screen text and terminal \
+        title — which is the only way to tell a wrong detection from an idle agent.";
 
     type Args = TerminalArgs;
     type Output = TerminalOutput;
@@ -155,6 +217,8 @@ impl AlephTool for TerminalTool {
             TerminalAction::List => "list",
             TerminalAction::Read => "read",
             TerminalAction::Status => "status",
+            TerminalAction::Wait => "wait",
+            TerminalAction::Explain => "explain",
         };
         notify_tool_start(Self::NAME, action_label);
 
@@ -184,6 +248,21 @@ impl AlephTool for TerminalTool {
             TerminalAction::List => list_sessions(actor.as_deref()),
             TerminalAction::Status => status(actor.as_deref()),
             TerminalAction::Read => read_session(args.session_id.as_deref(), actor.as_deref()),
+            // The only `.await` of the five: `wait` is the one action that
+            // blocks, and it blocks on the agent table's change watch, never
+            // on a screen poll.
+            TerminalAction::Wait => {
+                wait_for_session(
+                    args.session_id.as_deref(),
+                    args.until.as_deref(),
+                    args.timeout_ms,
+                    actor.as_deref(),
+                )
+                .await
+            }
+            TerminalAction::Explain => {
+                explain_session(args.session_id.as_deref(), actor.as_deref())
+            }
         };
 
         match result {
@@ -207,35 +286,84 @@ impl AlephTool for TerminalTool {
     }
 }
 
-/// `list` — the caller's own sessions, filtered exactly as
-/// `handle_list` in `gateway::handlers::pty` does: `pty::owner_admits`
-/// against each [`pty::SessionInfo::created_by`] directly (no
-/// `owner_of` round trip needed — `list()` already carries the field).
-fn list_sessions(actor: Option<&str>) -> std::result::Result<serde_json::Value, String> {
-    let sessions: Vec<serde_json::Value> = pty::manager()
-        .list()
-        .into_iter()
-        .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor))
-        .map(|s| {
-            serde_json::json!({
-                "session_id": s.session_id,
-                "shell": s.shell,
-                "created_at": s.created_at,
-                "closed": s.closed,
-            })
-        })
-        .collect();
-    Ok(serde_json::json!({ "sessions": sessions }))
+/// `terminal`'s ownership predicate: [`pty::owner_admits`] for a caller that
+/// HAS an identity, narrowed to `created_by == None` for one that does not.
+///
+/// The narrowing (D7) is the one place this tool deliberately departs from the
+/// predicate the other two `pty.*` faces share, so it is spelled once and used
+/// by EVERY action rather than once per action (判据 §9 — and deliberately
+/// without a number: the previous wording said "all four" while five actions
+/// reached it, and a reader who counts four consumers of the ownership
+/// predicate does not go looking for the fifth). `owner_admits`'s
+/// unrestricted `actor: None` arm is right for the faces it was written for —
+/// an RPC handler reached only through a `connect`-authenticated dispatch,
+/// where `None` means "this deployment resolves no users", and where `pty.*`
+/// is separately operator-gated on both faces. It is NOT right here: this tool
+/// is also reachable from an agent run whose ambient actor is simply absent
+/// (cron, A2A, an internal dispatch), and there "I could not tell who is
+/// asking" must not be read as "everyone" (判据 §8).
+///
+/// In production that makes the actor-less arm show NOTHING, and this is the
+/// intended shape rather than an oversight: `handlers::pty::handle_spawn` is
+/// the only production spawn site and it stamps `visibility::ambient_actor()`,
+/// which resolves through `CALLER_USER` for every gateway dispatch, loopback
+/// included (it resolves to `OWNER_USER_ID`) — so no production session has
+/// `created_by == None` to admit. The alternative is one unauthenticated code
+/// path seeing every operator's live terminal.
+fn terminal_admits(created_by: Option<&str>, actor: Option<&str>) -> bool {
+    match actor {
+        // Deliberately NOT `owner_admits`' unrestricted arm — see the doc
+        // above. Falsified on 2026-09-04 by restoring `None => true`:
+        // `an_actorless_caller_sees_only_unowned_sessions` goes red on its
+        // first assertion (see the task-D report for the output).
+        None => created_by.is_none(),
+        Some(_) => pty::owner_admits(created_by, actor),
+    }
 }
 
-/// `status` — the same table `runtime.agents.list` serves, filtered with
-/// the identical predicate `handle_list` in `gateway::handlers::runtime`
-/// uses: `pty::manager().owner_of(&entry.session_id).admits(actor)`.
+/// [`terminal_admits`] against a [`pty::SessionOwner`] stamp — the shape the
+/// `owner_of` lookup answers with, used by every action that starts from a
+/// session id instead of from a listed row.
+///
+/// `Unknown` (no record at all: never existed, or aged past `OWNER_RETENTION`)
+/// is refused for EVERY caller, an actor-less one included.
+/// `SessionOwner::admits` answers `actor.is_none()` there for the same reason
+/// its `Known` arm is unrestricted, and the same reasoning that narrows one
+/// narrows the other: a caller who cannot be identified must not be handed a
+/// session whose owner cannot be identified either. Every live session has a
+/// record, so this refuses only ids that are gone or were never there — which
+/// is what `read` answers `no_such_session` for one line later anyway.
+fn owner_record_admits(owner: &pty::SessionOwner, actor: Option<&str>) -> bool {
+    match owner {
+        pty::SessionOwner::Known(created_by) => terminal_admits(created_by.as_deref(), actor),
+        pty::SessionOwner::Unknown => false,
+    }
+}
+
+/// `list` — the caller's own sessions, filtered as `handle_list` in
+/// `gateway::handlers::pty` does — [`terminal_admits`] against each
+/// [`pty::SessionInfo::created_by`] directly (no `owner_of` round trip needed
+/// — `list()` already carries the field), narrowed for an actor-less caller.
+fn list_sessions(actor: Option<&str>) -> std::result::Result<serde_json::Value, String> {
+    let body = aleph_protocol::pty::PtyListResponse {
+        sessions: pty::manager()
+            .list()
+            .iter()
+            .filter(|s| terminal_admits(s.created_by.as_deref(), actor))
+            .map(aleph_protocol::pty::PtySessionInfo::from)
+            .collect(),
+    };
+    serde_json::to_value(&body).map_err(|e| format!("encode failed: {e}"))
+}
+
+/// `status` — the same table `runtime.agents.list` serves, filtered with the
+/// same `owner_of` lookup `handle_list` in `gateway::handlers::runtime` uses,
+/// through [`owner_record_admits`] rather than `SessionOwner::admits`.
 fn status(actor: Option<&str>) -> std::result::Result<serde_json::Value, String> {
     let agents: Vec<_> = crate::gateway::runtime::agents()
         .snapshot()
         .into_iter()
-        .filter(|entry| pty::manager().owner_of(&entry.session_id).admits(actor))
+        .filter(|entry| owner_record_admits(&pty::manager().owner_of(&entry.session_id), actor))
         .collect();
     let body = aleph_protocol::runtime::RuntimeAgentsListResponse { agents };
     serde_json::to_value(&body).map_err(|e| format!("encode failed: {e}"))
@@ -252,217 +380,405 @@ fn read_session(
     session_id: Option<&str>,
     actor: Option<&str>,
 ) -> std::result::Result<serde_json::Value, String> {
-    let session_id = session_id
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "read requires `session_id`".to_string())?;
-    if !pty::manager().owner_of(session_id).admits(actor) {
-        return Err(pty::no_such_session(session_id));
-    }
+    let session_id = owned_session_id(session_id, actor, "read")?;
     let text = pty::manager().visible_text(session_id)?;
     Ok(serde_json::json!({ "session_id": session_id, "text": text }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The shared front half of every action that takes a `session_id`: the
+/// argument is present and non-blank, and the caller may have that session.
+///
+/// One body for `read` / `wait` / `explain` so a third addressed action cannot
+/// arrive with the ownership check spelled slightly differently — the failure
+/// this tool's module doc already describes for the other two faces (判据 §9).
+/// The refusal is [`pty::no_such_session`] verbatim: an unowned session and a
+/// nonexistent one must be byte-identical on every addressed action, or the
+/// one that is not becomes an id-enumeration oracle for all of them.
+fn owned_session_id<'a>(
+    session_id: Option<&'a str>,
+    actor: Option<&str>,
+    action: &str,
+) -> std::result::Result<&'a str, String> {
+    let session_id = session_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("{action} requires `session_id`"))?;
+    if !owner_record_admits(&pty::manager().owner_of(session_id), actor) {
+        return Err(pty::no_such_session(session_id));
+    }
+    Ok(session_id)
+}
 
-    /// Pull the accepted action strings out of a tool schema, whichever of
-    /// the two shapes schemars emitted.
-    ///
-    /// schemars 1.2 renders a fieldless enum as a flat `enum` array ONLY when
-    /// no variant carries a doc comment; the moment one does — and all three
-    /// of `TerminalAction`'s do, because the model reads them — it emits
-    /// `oneOf` of `{const, description}` instead, to have somewhere to put
-    /// the per-variant text. Both shapes mean the same thing to a provider,
-    /// and which one ships is decided by something as innocent as deleting a
-    /// `///` line, so the guard reads both rather than pinning the accident.
-    ///
-    /// Panics rather than returning an empty list when it recognises neither:
-    /// "I cannot find the actions" must not be answerable as "there are no
-    /// write verbs" (判据 §8).
-    fn declared_actions(schema: &serde_json::Value) -> Vec<String> {
-        let action = &schema["$defs"]["TerminalAction"];
-        if let Some(flat) = action["enum"].as_array() {
-            return flat
-                .iter()
-                .map(|v| v.as_str().expect("enum member is a string").to_string())
-                .collect();
+/// `wait`'s window when the caller names none.
+///
+/// Same 60 s `bash_exec`'s `process_action: "wait"` defaults to, and for the
+/// same reason: a blocking call spends the foreground tool budget, so the
+/// default is modest and an impatient caller can simply ask again.
+const WAIT_DEFAULT_TIMEOUT_MS: u64 = 60_000;
+
+/// The hard ceiling on `wait`'s window, in milliseconds.
+///
+/// Derived from the same constraint as `bash_exec`'s `WAIT_MAX_TIMEOUT_SECS`
+/// (170 s): a blocking tool call has to return INSIDE this harness's 180 s
+/// foreground budget, or the budget wrapper kills the call and the caller
+/// learns nothing — not even the timeout it asked for.
+/// `the_wait_ceiling_stays_under_the_foreground_tool_budget` pins this against
+/// that constant rather than against a second copy of the number, so
+/// shrinking the budget reddens here.
+///
+/// A request over the ceiling is CLAMPED, never refused: a caller that asks
+/// for ten minutes wants to wait as long as it can, and answering "no" to that
+/// buys nothing but a retry.
+const WAIT_MAX_TIMEOUT_MS: u64 = 150_000;
+
+/// `until`'s default: the two states that mean the agent wants a human now.
+///
+/// `working` and `unknown` are deliberately absent — waiting for them is
+/// legal but is never what "tell me when it needs me" means, and a default
+/// that included them would return instantly on almost every call.
+const WAIT_DEFAULT_UNTIL: [aleph_protocol::runtime::RuntimeAgentState; 2] = [
+    aleph_protocol::runtime::RuntimeAgentState::Blocked,
+    aleph_protocol::runtime::RuntimeAgentState::Idle,
+];
+
+/// How much of the screen `explain` shows back. Display only — the ENGINE is
+/// fed the whole visible text, exactly as the sampler feeds it.
+const EXPLAIN_SCREEN_TAIL_LINES: usize = 12;
+
+/// `wait`'s payload. `agent` is the protocol's own entry type, so the shape a
+/// waiter gets back is the shape `status` and `runtime.agents.list` hand out
+/// (判据 §10) — a caller does not have to learn a second spelling of the same
+/// row to read the answer to its own question.
+#[derive(Debug, Clone, Serialize)]
+struct TerminalWaitOutput {
+    session_id: String,
+    /// `reached` | `timeout` | `gone`.
+    outcome: &'static str,
+    /// The entry as of the moment the wait ended. `None` only when the table
+    /// has no row: always absent for `gone`, and possible for `timeout` on a
+    /// session that has never produced a frame.
+    agent: Option<aleph_protocol::runtime::RuntimeAgentEntry>,
+}
+
+/// How a wait ended. Three variants and no fourth: "it ended and I am not
+/// telling you why" is not an outcome a caller can act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WaitOutcome {
+    /// The state entered `until`; carries the entry that says so.
+    Reached(aleph_protocol::runtime::RuntimeAgentEntry),
+    /// The window elapsed. Carries the CURRENT entry — not the last one seen
+    /// before the wait started, and never dressed up as a final state
+    /// (spec §5's error table).
+    Timeout(Option<aleph_protocol::runtime::RuntimeAgentEntry>),
+    /// The session's row is gone and the PTY registry has no such session
+    /// either: the terminal ended while we were waiting.
+    Gone,
+}
+
+impl WaitOutcome {
+    /// The wire word and the entry, split out so the label and the payload
+    /// cannot disagree about which arm produced them.
+    fn into_parts(
+        self,
+    ) -> (
+        &'static str,
+        Option<aleph_protocol::runtime::RuntimeAgentEntry>,
+    ) {
+        match self {
+            Self::Reached(entry) => ("reached", Some(entry)),
+            Self::Timeout(entry) => ("timeout", entry),
+            Self::Gone => ("gone", None),
         }
-        if let Some(variants) = action["oneOf"].as_array() {
-            return variants
-                .iter()
-                .map(|v| {
-                    v["const"]
-                        .as_str()
-                        .expect("oneOf member carries a const")
-                        .to_string()
-                })
-                .collect();
-        }
-        panic!(
-            "neither $defs.TerminalAction.enum nor .oneOf found; schema was {}",
-            serde_json::to_string_pretty(schema).unwrap_or_default()
-        );
-    }
-
-    /// 本期没有写入动词。多一个就是多一个授权面。
-    ///
-    /// Read out of `$defs`, not `properties.action`: schemars 1.2 emits a
-    /// NAMED type as a `$ref`, so `properties.action` carries no action
-    /// vocabulary at all and a guard reading it asserts against `Null`.
-    /// That is the shape every sibling tool with an enum-typed argument
-    /// already ships, and `schema_strictify` rewrites those refs explicitly.
-    ///
-    /// Not to be "fixed" by forcing `#[schemars(inline)]` to match
-    /// `moa_manage`'s flat schema: that tool hand-writes `impl JsonSchema`
-    /// because `#[serde(tag = "action")]` puts a `oneOf` at the ROOT, which
-    /// grammar-constrained endpoints cannot compile — they answer with EMPTY
-    /// arguments. `TerminalArgs` is a plain struct; its root is already a
-    /// flat object, so that hazard is not this tool's to carry, and inlining
-    /// would make `terminal` the one tool shipping a shape its nine siblings
-    /// do not.
-    #[test]
-    fn the_tool_exposes_no_write_verb() {
-        let def = TerminalTool.definition();
-        let actions = declared_actions(&def.parameters);
-        assert_eq!(actions, ["list", "read", "status"]);
-    }
-
-    /// DESCRIPTION 必须自己说清只读——这句话归这个工具所有，
-    /// 不进 system prompt（R9 第二把尺）。不写，模型会反复试着发命令。
-    #[test]
-    fn the_description_says_it_is_read_only() {
-        assert!(TerminalTool::DESCRIPTION
-            .to_lowercase()
-            .contains("read-only"));
-    }
-
-    /// No `TurnContext` at all reads as operator (cron/A2A/internal
-    /// convention) — a caller with a scoped, non-operator role is refused.
-    ///
-    /// Reaches the process-global `PtyManager` via `list_sessions`, so it
-    /// carries the same `pty_global_manager` parallel key every other test
-    /// in the crate that touches the singleton does — see the module doc on
-    /// `gateway::handlers::pty::every_test_that_reaches_the_global_pty_manager_is_tagged`,
-    /// which cannot see this reacher itself (it lives behind a function
-    /// call from the production half of this file, not inside a
-    /// `#[cfg(test)]` block the census scans — task-11 review F7).
-    #[tokio::test]
-    #[serial_test::parallel(pty_global_manager)]
-    async fn no_turn_context_is_treated_as_operator() {
-        let out = TerminalTool
-            .call(TerminalArgs {
-                action: TerminalAction::List,
-                session_id: None,
-            })
-            .await
-            .unwrap();
-        assert!(out.success, "{}", out.message);
-    }
-
-    #[tokio::test]
-    async fn non_operator_caller_is_refused() {
-        use crate::routing::session_key::SessionKey;
-        use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
-
-        let ctx = TurnContext {
-            session_key: SessionKey::Ephemeral {
-                agent_id: "main".to_string(),
-                ephemeral_id: "terminal-guest-test".to_string(),
-            },
-            run_id: String::new(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: Some("guest".to_string()),
-            channel_tool_permissions: None,
-            unattended: false,
-            plan_gate: None,
-            side_question: false,
-        };
-        let out = TURN_CONTEXT
-            .scope(ctx, async {
-                TerminalTool
-                    .call(TerminalArgs {
-                        action: TerminalAction::List,
-                        session_id: None,
-                    })
-                    .await
-            })
-            .await
-            .unwrap();
-        assert!(!out.success);
-        assert!(out.message.contains("operator"), "{}", out.message);
-        // A refusal that still carried session data would be a gate that
-        // reports "no" and means "yes" (task-11 review F10) — discarding
-        // the `data: None` in the two arms of `TerminalTool::call` and
-        // keeping only the label check would leave this test green.
-        assert!(out.data.is_none(), "a refusal must not carry session data");
-    }
-
-    #[tokio::test]
-    async fn read_without_session_id_is_refused_not_panicking() {
-        let out = TerminalTool
-            .call(TerminalArgs {
-                action: TerminalAction::Read,
-                session_id: None,
-            })
-            .await
-            .unwrap();
-        assert!(!out.success);
-        assert!(out.message.contains("session_id"), "{}", out.message);
-    }
-
-    /// Reaches the global `PtyManager` via `read_session`'s
-    /// `owner_of`/`visible_text` calls — same F7 rationale as
-    /// `no_turn_context_is_treated_as_operator` above.
-    #[tokio::test]
-    #[serial_test::parallel(pty_global_manager)]
-    async fn read_of_unknown_session_is_no_such_session() {
-        let out = TerminalTool
-            .call(TerminalArgs {
-                action: TerminalAction::Read,
-                session_id: Some("does-not-exist".to_string()),
-            })
-            .await
-            .unwrap();
-        assert!(!out.success);
-        assert!(out.message.contains("no such session"), "{}", out.message);
-        // Same reasoning as `non_operator_caller_is_refused` (F10): the
-        // refusal's payload, not just its label, must be asserted.
-        assert!(out.data.is_none(), "a refusal must not carry session data");
-    }
-
-    /// A session that EXISTS but belongs to someone else must look
-    /// identical to one that does not exist at all — the assertion whose
-    /// absence let `read_session`'s ownership check (`terminal.rs:241`) be
-    /// deleted without reddening anything, since every existing test used an
-    /// id that never existed either way (task-11 review F8).
-    #[test]
-    #[serial_test::parallel(pty_global_manager)]
-    fn read_of_someone_elses_session_is_refused_like_unknown() {
-        use crate::gateway::pty::SpawnOptions;
-
-        let id = pty::manager()
-            .spawn(&SpawnOptions {
-                created_by: Some("u-owner".to_string()),
-                ..Default::default()
-            })
-            .expect("spawn")
-            .session_id;
-
-        let result = read_session(Some(&id), Some("u-someone-else"));
-
-        // Close BEFORE asserting: this spawns on the process-global manager,
-        // so a failing assert would leak a live PTY for the rest of the test
-        // binary and every later test sharing that singleton would inherit it.
-        let _ = pty::manager().close(&id);
-
-        assert_eq!(
-            result,
-            Err(pty::no_such_session(&id)),
-            "an unowned session and a nonexistent one must produce byte-identical \
-             refusals, or `read` becomes an id-enumeration oracle"
-        );
     }
 }
+
+/// The window a `timeout_ms` request actually buys.
+fn wait_window(requested: Option<u64>) -> std::time::Duration {
+    std::time::Duration::from_millis(
+        requested
+            .unwrap_or(WAIT_DEFAULT_TIMEOUT_MS)
+            .min(WAIT_MAX_TIMEOUT_MS),
+    )
+}
+
+/// Whether the PTY registry still holds this session.
+///
+/// Consulted only when the agent table has NO row, to tell the two absences
+/// apart: a session that has produced no frame yet (keep waiting) from one
+/// that ended (`gone`). Folding them would make `wait` answer `gone` for a
+/// live shell that simply has not painted — a wrong label, which reads as a
+/// fact and costs more than a missing one (判据 §17).
+fn session_is_registered(session_id: &str) -> bool {
+    pty::manager()
+        .list()
+        .iter()
+        .any(|s| s.session_id == session_id)
+}
+
+/// The one classification of "is this wait over yet", applied on every wake-up
+/// AND once more when the window closes. `None` = keep waiting.
+fn wait_verdict(
+    table: &crate::gateway::runtime::RuntimeAgents,
+    session_id: &str,
+    until: &[aleph_protocol::runtime::RuntimeAgentState],
+) -> Option<WaitOutcome> {
+    match table.entry(session_id) {
+        Some(entry) if until.contains(&entry.state) => Some(WaitOutcome::Reached(entry)),
+        Some(_) => None,
+        None if session_is_registered(session_id) => None,
+        None => Some(WaitOutcome::Gone),
+    }
+}
+
+/// Block until `session_id`'s state enters `until`, the session ends, or
+/// `window` elapses.
+///
+/// **This does not poll the screen.** It rides
+/// [`crate::gateway::runtime::RuntimeAgents::subscribe`], the watch channel
+/// the table bumps on every observable change, and re-reads the row on each
+/// wake-up. A poll loop here would be a second clock over a table that already
+/// publishes when it moves (判据 §12), and it would burn CPU for the entire
+/// window on a session that is doing nothing — which is the normal case.
+///
+/// The subscription is taken BEFORE the first read on purpose: `watch` marks
+/// the current value seen at `subscribe()`, so a change landing between the
+/// read and the sleep bumps the generation and wakes us immediately instead of
+/// being missed until the next one.
+///
+/// `table` is a parameter rather than the process-global so a test can drive an
+/// isolated instance. `session_is_registered` still consults the global PTY
+/// registry, which is why tests that exercise the `gone` arm carry the
+/// `pty_global_manager` key.
+async fn wait_for_state(
+    table: &crate::gateway::runtime::RuntimeAgents,
+    session_id: &str,
+    until: &[aleph_protocol::runtime::RuntimeAgentState],
+    window: std::time::Duration,
+) -> WaitOutcome {
+    let mut changes = table.subscribe();
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        if let Some(outcome) = wait_verdict(table, session_id, until) {
+            return outcome;
+        }
+        match tokio::time::timeout_at(deadline, changes.changed()).await {
+            Ok(Ok(())) => {}
+            // Deadline, or a sender that went away (structurally unreachable
+            // while this borrow of the table lives, since the table owns the
+            // sender). Re-run the same verdict once: a change that landed in
+            // the same instant as the deadline must not be reported as a
+            // timeout when the state it was waiting for had already arrived.
+            Ok(Err(_)) | Err(_) => {
+                return wait_verdict(table, session_id, until)
+                    .unwrap_or_else(|| WaitOutcome::Timeout(table.entry(session_id)));
+            }
+        }
+    }
+}
+
+/// `wait` — the tool face: ownership gate, defaults, clamp, then
+/// [`wait_for_state`] against the process-global table.
+async fn wait_for_session(
+    session_id: Option<&str>,
+    until: Option<&[aleph_protocol::runtime::RuntimeAgentState]>,
+    timeout_ms: Option<u64>,
+    actor: Option<&str>,
+) -> std::result::Result<serde_json::Value, String> {
+    let session_id = owned_session_id(session_id, actor, "wait")?;
+    let until = match until {
+        // An explicit empty list is refused rather than defaulted: it can only
+        // produce `timeout`, so honouring it literally spends the caller's
+        // whole foreground budget to report nothing. Say which words are
+        // accepted instead of guessing which one was meant.
+        // Falsified on 2026-09-04 by replacing this arm with
+        // `&WAIT_DEFAULT_UNTIL`: `wait_refuses_an_empty_until_instead_of_stalling`
+        // goes red (see the task-D report). Its first version could not —
+        // the ownership gate refused the id before this arm ran.
+        Some([]) => {
+            return Err("wait requires at least one state in `until` \
+                 (blocked / idle / working / unknown); omit it for [blocked, idle]"
+                .to_string())
+        }
+        Some(states) => states,
+        None => &WAIT_DEFAULT_UNTIL,
+    };
+    let (outcome, agent) = wait_for_state(
+        crate::gateway::runtime::agents(),
+        session_id,
+        until,
+        wait_window(timeout_ms),
+    )
+    .await
+    .into_parts();
+    let body = TerminalWaitOutput {
+        session_id: session_id.to_owned(),
+        outcome,
+        agent,
+    };
+    serde_json::to_value(&body).map_err(|e| format!("encode failed: {e}"))
+}
+
+/// `explain`'s payload — which rule decided a state, over which inputs.
+#[derive(Debug, Clone, Serialize)]
+struct TerminalExplainOutput {
+    session_id: String,
+    /// The agent the sampler identified, `None` when it identified none.
+    agent: Option<String>,
+    /// The state a FRESH evaluation of the current screen reports.
+    ///
+    /// This can differ from the `state` `status` publishes for the same
+    /// session, and the difference is information rather than a bug: the
+    /// table applies a working -> idle hold and keeps the previous state when
+    /// a rule says the screen is mid-repaint, while this is the raw reading of
+    /// the screen as it is right now. Same four words in both places
+    /// (`runtime::wire_state`), so they are at least comparable.
+    state: aleph_protocol::runtime::RuntimeAgentState,
+    matched_rule: Option<TerminalExplainRule>,
+    /// Where the manifest came from — `bundled` is the only source this phase
+    /// ships.
+    source: Option<&'static str>,
+    /// The manifest revision that produced the answer. `None` = this agent has
+    /// no screen manifest, or its manifest declares no version — never "the
+    /// manifest is missing".
+    manifest_version: Option<String>,
+    /// Why there is no rule, when there is none. Absent when a rule matched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    inputs: TerminalExplainInputs,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TerminalExplainRule {
+    id: String,
+    priority: i32,
+    region: String,
+    state: aleph_protocol::runtime::RuntimeAgentState,
+}
+
+/// What the engine was actually shown. Without this an explanation is
+/// unfalsifiable: "no rule matched" and "the screen this reached was empty"
+/// are the same sentence to a reader who cannot see the input.
+#[derive(Debug, Clone, Serialize)]
+struct TerminalExplainInputs {
+    title: String,
+    osc_progress: String,
+    /// The LAST [`EXPLAIN_SCREEN_TAIL_LINES`] lines of the visible screen.
+    /// Display only — the engine is fed the whole visible text.
+    screen_tail: String,
+}
+
+/// `explain` — the tool face.
+fn explain_session(
+    session_id: Option<&str>,
+    actor: Option<&str>,
+) -> std::result::Result<serde_json::Value, String> {
+    let session_id = owned_session_id(session_id, actor, "explain")?;
+    // Reads the live screen through the same accessor `flush_session` samples
+    // from, under one lock acquisition.
+    let screen = pty::manager().detection_inputs(session_id)?;
+    let agents = crate::gateway::runtime::agents();
+    let body = explain_detection(
+        session_id,
+        agents.detected_agent(session_id),
+        agents.entry(session_id).as_ref(),
+        &screen,
+    );
+    serde_json::to_value(&body).map_err(|e| format!("encode failed: {e}"))
+}
+
+/// Run the detection engine over one session's current screen and say what it
+/// decided — pure, so the mapping can be tested without a live PTY.
+///
+/// `sampled` is the table's row, consulted ONLY to say why there is nothing to
+/// explain: no row at all and a row whose foreground program is not an agent
+/// are different absences, and answering both with the same sentence is how a
+/// "we never looked" is read as "we looked and found nothing" (判据 §8).
+fn explain_detection(
+    session_id: &str,
+    agent: Option<agent_detect::Agent>,
+    sampled: Option<&aleph_protocol::runtime::RuntimeAgentEntry>,
+    screen: &crate::gateway::pty::manager::DetectionInputs,
+) -> TerminalExplainOutput {
+    let inputs = TerminalExplainInputs {
+        title: screen.title.clone(),
+        osc_progress: screen.osc_progress.clone(),
+        screen_tail: screen_tail(&screen.text),
+    };
+
+    let Some(agent) = agent else {
+        return TerminalExplainOutput {
+            session_id: session_id.to_owned(),
+            agent: None,
+            // The engine's own permanent answer for `agent: None`: with no
+            // agent there is nothing to match a screen against, so the state
+            // is Unknown regardless of what is on it. "I do not know" is not
+            // "it is idle".
+            state: aleph_protocol::runtime::RuntimeAgentState::Unknown,
+            matched_rule: None,
+            source: None,
+            manifest_version: None,
+            reason: Some(match sampled {
+                None => "this session has no row in the agent table yet — nothing has been \
+                         sampled, which is not the same as nothing running"
+                    .to_string(),
+                Some(entry) => format!(
+                    "the foreground program ({}) is not an agent the bundled manifests know",
+                    entry.program.as_deref().unwrap_or("not probed")
+                ),
+            }),
+            inputs,
+        };
+    };
+
+    // The SAME constructor the sampler's detection call goes through, so the
+    // two OSC strings cannot be mapped onto different fields on the two paths.
+    let explained = agent_detect::manifest::explain_with_input(
+        agent,
+        agent_detect::screen_rules::detection_input(
+            &screen.text,
+            &screen.title,
+            &screen.osc_progress,
+        ),
+    );
+    TerminalExplainOutput {
+        session_id: session_id.to_owned(),
+        agent: explained.agent.clone(),
+        state: crate::gateway::runtime::wire_state(explained.state),
+        matched_rule: explained
+            .matched_rule
+            .as_ref()
+            .map(|r| TerminalExplainRule {
+                id: r.id.clone(),
+                priority: r.priority,
+                region: r.region.clone(),
+                state: crate::gateway::runtime::wire_state(r.state),
+            }),
+        source: explained
+            .source
+            .as_ref()
+            .map(agent_detect::ManifestSource::kind),
+        manifest_version: explained.manifest_version.clone(),
+        // A warning outranks a fallback: it says the manifest itself could not
+        // be honoured, which is a bigger fact than which fallback ran. Neither
+        // is invented here — both are the engine's own words.
+        reason: explained
+            .warning
+            .clone()
+            .or_else(|| explained.fallback_reason.clone()),
+        inputs,
+    }
+}
+
+/// The last [`EXPLAIN_SCREEN_TAIL_LINES`] lines of `text`.
+///
+/// Line-based rather than a byte count so no slice can land inside a
+/// multi-byte character, and because the bottom of the screen is where every
+/// agent paints its prompt and its spinner — a head-anchored excerpt would
+/// show scrollback padding on exactly the sessions worth explaining.
+fn screen_tail(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(EXPLAIN_SCREEN_TAIL_LINES)..].join("\n")
+}
+
+#[cfg(test)]
+mod tests;
