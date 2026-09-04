@@ -294,12 +294,18 @@ impl PtySession {
     /// Three acquisitions, none overlapping, and the screen lock is not among
     /// them:
     /// 1. the foreground lock, to ask the gate;
-    /// 2. the master lock, for the one `tcgetpgrp` call;
+    /// 2. the master lock, inside [`Self::terminal_leader`], for one
+    ///    `tcgetpgrp` ioctl and nothing else;
     /// 3. the foreground lock again, to fold the outcome in.
     ///
-    /// The process-table refresh happens BETWEEN 2 and 3, holding nothing.
-    /// That ordering is the reason the probe is two functions rather than one
-    /// (see [`super::foreground`]'s Locks section).
+    /// **Every process-table read happens between 2 and 3, holding nothing** —
+    /// both the descendant walk (a full refresh) and the single-pid read. An
+    /// earlier version composed the walk into the locked step, so on Windows
+    /// every probe scanned the whole process table while `PtySession::resize`
+    /// waited behind the same lock. `terminal_leader` exists to make that
+    /// impossible to reintroduce by accident, and
+    /// `foreground::tests::no_process_table_read_happens_under_the_master_lock`
+    /// pins it.
     pub fn maybe_probe_foreground(
         &self,
         now: i64,
@@ -324,15 +330,39 @@ impl PtySession {
         if !due {
             return false;
         }
-        let leader = {
-            let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
-            super::foreground::foreground_leader(&**master, self.shell_pid)
-        };
+        // The master lock is taken and released inside `terminal_leader`.
+        // Everything below this line reads the process table and holds
+        // nothing.
+        let leader = self.terminal_leader().or_else(|| {
+            self.shell_pid
+                .and_then(super::foreground::deepest_newest_descendant)
+        });
         let observed = leader.and_then(super::foreground::fact_for_pid);
         self.foreground
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .observe(now, observed)
+    }
+
+    /// The pgid the terminal itself reports, under the master lock.
+    ///
+    /// The whole body is the lock plus one ioctl, and it is a separate
+    /// function so that "what may run under the master lock" is a question
+    /// with a one-line answer rather than a promise in a comment. Anything
+    /// that reads the process table goes in the caller, after this returns.
+    fn terminal_leader(&self) -> Option<u32> {
+        let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
+        super::foreground::leader_from_terminal(&**master)
+    }
+
+    /// How many probes this session has performed — the cost guard's
+    /// instrument. See [`super::foreground::ForegroundState::probes`].
+    #[must_use]
+    pub fn probe_count(&self) -> u64 {
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .probes()
     }
 
     /// The foreground process this session is currently believed to be

@@ -76,12 +76,18 @@ struct TableEntry {
     pending_idle_since: Option<i64>,
     /// Unix millis of the last frame this session produced.
     ///
-    /// Every [`RuntimeAgents::sample`] call IS a frame — `flush_session`
-    /// returns early when the screen did not change, so the sampler is never
-    /// reached otherwise. That is why there is no `frame_produced` argument:
-    /// a parameter that is `true` at every production call site is a predicate
-    /// that cannot vary (判据 §2), and the case it would describe is covered
-    /// by [`RuntimeAgents::mark_quiet`], which runs on the tick instead.
+    /// Advanced ONLY by a sample that carries
+    /// [`SampleInput::frame_produced`]. A sample is not evidence of a frame:
+    /// `flush_session` also re-samples when the foreground program changed
+    /// with the screen standing still, and a `cwd` move counts as a program
+    /// change — so treating every sample as a frame restarted the quiet clock
+    /// for an identified agent that `chdir`s while thinking silently, and
+    /// republished it as not-quiet for another 30 s. That is a fact on the
+    /// wire with no producer behind it.
+    ///
+    /// (This doc previously asserted the opposite, and that assertion was the
+    /// whole argument for leaving `frame_produced` out of [`SampleInput`]. The
+    /// predicate does vary at the only production call site.)
     last_frame_at: i64,
 }
 
@@ -112,6 +118,15 @@ pub struct SampleInput<'a> {
     pub screen: &'a Screen,
     /// The session's `is_closed()`.
     pub process_exited: bool,
+    /// Whether the screen produced a frame on this tick.
+    ///
+    /// NOT constant-true, which an earlier version of this struct assumed
+    /// while leaving the field out: `flush_session` also re-samples when the
+    /// foreground program changed with the screen standing still. It is the
+    /// only evidence [`RuntimeAgents::mark_quiet`] accepts, so a sample
+    /// without it must leave the quiet bookkeeping exactly as it found it —
+    /// otherwise a silent agent that `chdir`s is republished as not-quiet.
+    pub frame_produced: bool,
     /// Unix millis, taken once per tick by the caller.
     pub now: i64,
 }
@@ -226,10 +241,12 @@ impl RuntimeAgents {
     ///
     /// # The rest of the inputs
     ///
-    /// `cwd` is the session's LIVE directory, sourced by the caller. Reaching
-    /// this function IS the evidence of a frame, so it also ends any quiet
-    /// mark — see [`TableEntry::last_frame_at`] for why there is no
-    /// `frame_produced` argument. `process_exited` is the session's
+    /// `cwd` is the session's LIVE directory, sourced by the caller.
+    /// `frame_produced` says whether the screen actually changed — reaching
+    /// this function is NOT evidence of that, because `flush_session` also
+    /// re-samples on a foreground-program change, and only a real frame may
+    /// end a quiet mark ([`TableEntry::last_frame_at`]).
+    /// `process_exited` is the session's
     /// `is_closed()`: a session killed but not yet reaped by its reader thread
     /// is still in the registry for up to one flush tick, and reporting it as
     /// still Working for that tick would be a stale answer rather than a
@@ -247,6 +264,7 @@ impl RuntimeAgents {
             cwd,
             screen,
             process_exited,
+            frame_produced,
             now,
         } = input;
 
@@ -308,6 +326,17 @@ impl RuntimeAgents {
         let previous_state = previous.map_or(RuntimeAgentState::Unknown, |t| t.entry.state);
         let previous_updated_at = previous.map_or(now, |t| t.entry.updated_at);
         let previously_quiet = previous.is_some_and(|t| t.entry.quiet_since.is_some());
+        // The quiet bookkeeping moves ONLY on a real frame. A sample without
+        // one (a foreground-program change while the screen stood still) must
+        // carry both values through untouched, or a silent agent that
+        // `chdir`s is republished as not-quiet for another QUIET_AFTER_MS.
+        // A brand-new row with no frame has never been seen to paint, so its
+        // clock starts now rather than at an instant nobody observed.
+        let (last_frame_at, quiet_since) = if frame_produced {
+            (now, None)
+        } else {
+            previous.map_or((now, None), |t| (t.last_frame_at, t.entry.quiet_since))
+        };
         // A brand-new row has no previous agent to differ from, so its first
         // observation is not an agent CHANGE.
         let agent_changed = previous.is_some_and(|t| t.entry.agent != agent_name);
@@ -359,18 +388,17 @@ impl RuntimeAgents {
         };
 
         // `quiet_since` enters this predicate as a FLIP, never as a value:
-        // reaching `sample` means a frame arrived, so the new value is always
-        // `None` and the only question is whether it used to be `Some`.
-        // Comparing the values would say the same thing here but would start
-        // lying the day something writes a quiet mark from a second place —
-        // and an age that grows on its own is not news (R6-4).
+        // the only transition a sample can make is Some -> None, and only a
+        // real frame makes it. A sample that carried no frame leaves the mark
+        // where it was, so this term is false and the row is judged on its
+        // other fields alone. An age that grows on its own is not news (R6-4).
         let changed = previous.is_none_or(|t| {
             t.entry.state != state
                 || t.entry.agent != agent_name
                 || t.entry.program != program_name
                 || t.entry.label != label
                 || t.entry.cwd != cwd
-        }) || previously_quiet;
+        }) || (previously_quiet && quiet_since.is_none());
 
         entries.insert(
             session_id.to_owned(),
@@ -383,12 +411,10 @@ impl RuntimeAgents {
                     program: program_name,
                     state,
                     updated_at: if changed { now } else { previous_updated_at },
-                    // A frame just arrived, so this session is by definition
-                    // not quiet. `mark_quiet` is what puts the mark back.
-                    quiet_since: None,
+                    quiet_since,
                 },
                 pending_idle_since,
-                last_frame_at: now,
+                last_frame_at,
             },
         );
         drop(entries);

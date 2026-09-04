@@ -1,19 +1,20 @@
-// The gating constants and the miss hysteresis are ported from herdr 0.8.2
-// (https://github.com/herdrdev/herdr), Copyright the herdr authors, licensed
-// under the Apache License, Version 2.0 — see `crates/agent-detect/NOTICE`,
-// which covers the rest of the herdr port. Specifically:
+// This file is Aleph's own code and carries the crate's MIT licence. It is
+// NOT a port: `crates/agent-detect` is the machine-readable Apache-2.0 zone
+// for herdr-derived code (phase-1 spec), and no herdr-derived code lives
+// outside it.
 //
-//   herdr src/pane.rs:455-700  `should_probe_foreground_job` and friends
-//                              -> [`probe_due`] (three rules, not the state
-//                                 machine — see that function's doc)
-//   herdr src/pane/agent_detection.rs  `AGENT_MISS_CONFIRMATION_ATTEMPTS`
-//                              -> [`PROBE_MISSES_TO_FORGET`]
-//   herdr src/platform/mod.rs:6-19     `ForegroundProcess`
-//                              -> [`ForegroundFact`]
-//
-// The rest of this file (the `portable-pty` + `sysinfo` probe itself) is
-// Aleph's own: upstream reaches the process table through its own
-// `crate::platform` FFI layer, which R1 puts out of reach here.
+// What IS taken from herdr 0.8.2 (https://github.com/herdrdev/herdr) is three
+// NUMBERS and the shape of an idea, cited where each is used:
+//   * 500 ms / 3 s, upstream's busy and idle ends of the probe interval it
+//     computes in `src/pane.rs:776-789`;
+//   * 6, upstream's `AGENT_MISS_CONFIRMATION_ATTEMPTS`.
+// Upstream's probe machinery itself is not reproduced here. It reaches the
+// process table through its own `crate::platform` FFI layer, which R1 puts
+// out of reach; `should_probe_foreground_job` is a state machine folding in
+// pane visibility, a content-sequence counter and an adaptive interval, none
+// of which Aleph has producers for. The three-rule gate below, the sticky
+// frame bit, the fact struct and the `portable-pty` + `sysinfo` probe are
+// written for this codebase.
 
 //! Which program is in the foreground of a PTY, probed behind a rate gate.
 //!
@@ -35,27 +36,34 @@
 //!
 //! # Locks
 //!
-//! The pgid read needs the session's master lock; the `sysinfo` refresh needs
-//! no lock at all and must not be made to wait on one — least of all the
-//! screen lock, which the PTY reader thread takes for every output chunk.
+//! ONE rule: **nothing that reads the process table may run under a lock.**
+//! Not the master lock, whose other holder is `PtySession::resize`, and least
+//! of all the screen lock, which the PTY reader thread takes for every output
+//! chunk.
 //!
-//! That is why the probe is TWO functions, [`foreground_leader`] and
-//! [`fact_for_pid`], rather than the one `probe(master, shell_pid)` the task
-//! brief named: a single function receiving `&dyn MasterPty` runs entirely
-//! inside whatever lock its caller holds to produce that reference, so it
-//! cannot both take the master lock for the pgid and release it before the
-//! process table read. Splitting is the only way to honour the rule; a
-//! one-line composition kept beside them would have had no production caller
-//! (R10). `PtySession::maybe_probe_foreground` is the single caller that runs
-//! them in order, and the guards drive it rather than a private twin.
+//! That is why a probe is THREE functions and not one — the brief's single
+//! `probe(master, shell_pid)` cannot obey the rule, because a function
+//! receiving `&dyn MasterPty` runs entirely inside whatever lock its caller
+//! took to produce that reference:
+//!
+//! 1. [`leader_from_terminal`] — the only one that touches the master, one
+//!    `tcgetpgrp` ioctl, under the lock;
+//! 2. [`deepest_newest_descendant`] — the fallback when the terminal will not
+//!    say, a FULL process-table refresh, outside every lock;
+//! 3. [`fact_for_pid`] — one pid's facts, outside every lock.
+//!
+//! Splitting 1 from 2 is not cosmetic: they were briefly composed into one
+//! `foreground_leader(master, shell_pid)`, which forced the caller to hold the
+//! master lock across the full refresh — on Windows, on every probe — while
+//! two doc comments asserted the opposite. `PtySession::maybe_probe_foreground`
+//! is the single caller that runs all three in order, and
+//! `no_process_table_read_happens_under_the_master_lock` pins the boundary.
 //!
 //! # Time
 //!
 //! Every timestamp here is unix epoch **milliseconds**, the same unit
 //! `gateway::runtime` uses, so a fact and the tick that gated it are
 //! comparable without a conversion (判据 §12).
-
-use crate::sync_primitives::{AtomicU64, Ordering};
 
 /// Minimum gap between two probes of a session that is producing frames.
 ///
@@ -173,48 +181,54 @@ pub fn probe_due(
     (frame_since_probe && age >= PROBE_MIN_INTERVAL_MS) || (agent_known && age >= PROBE_RECHECK_MS)
 }
 
-/// The pid of the process group the kernel says owns this terminal.
+/// The pid of the process group the kernel says owns this terminal, asked of
+/// the terminal itself.
 ///
 /// Unix: `tcgetpgrp` through [`portable_pty::MasterPty::process_group_leader`]
-/// — the authoritative answer. Only when the kernel declines (no foreground
-/// group: the session is on its way out, or a shell that never enabled job
-/// control) does it fall through to the heuristic below, so the expensive
-/// path is the exception rather than the rule.
+/// — the authoritative answer, and a single cheap ioctl.
 ///
-/// Non-Unix: `portable-pty`'s trait does not have that method at all (it is
-/// `#[cfg(unix)]` upstream), so the heuristic IS the answer there.
+/// `None` means "the terminal would not say": no foreground group (the session
+/// is on its way out, or a shell that never enabled job control), or a platform
+/// where `portable-pty` has no such method at all. It is never "nothing is
+/// running there" (判据 §8) — the caller answers that with
+/// [`deepest_newest_descendant`].
 ///
-/// Either way this needs the master lock only for the `tcgetpgrp` call, and
-/// the caller releases it before anything reads the process table.
+/// # This is the ONLY thing that may run under the master lock
+///
+/// It is a separate function from the fallback for exactly that reason. An
+/// earlier version had a `foreground_leader(master, shell_pid)` that composed
+/// the two, so the caller had to hold the master lock across the composition —
+/// and the fallback is a FULL `ProcessesToUpdate::All` refresh plus up to 64
+/// passes over the table, which on Windows ran under the lock on every single
+/// probe while `PtySession::resize` waited behind it. Two doc comments
+/// asserted the opposite at the time. Splitting the function is what makes the
+/// rule checkable rather than aspirational; `no_process_table_read_happens_under_the_master_lock`
+/// pins it.
 #[must_use]
-pub fn foreground_leader(
-    master: &dyn portable_pty::MasterPty,
-    shell_pid: Option<u32>,
-) -> Option<u32> {
-    leader_from_terminal(master).or_else(|| shell_pid.and_then(deepest_newest_descendant))
+pub fn leader_from_terminal(master: &dyn portable_pty::MasterPty) -> Option<u32> {
+    leader_from_terminal_impl(master)
 }
 
 #[cfg(unix)]
-fn leader_from_terminal(master: &dyn portable_pty::MasterPty) -> Option<u32> {
+fn leader_from_terminal_impl(master: &dyn portable_pty::MasterPty) -> Option<u32> {
     u32::try_from(master.process_group_leader()?).ok()
 }
 
 /// Windows has no `tcgetpgrp` and `portable-pty` exposes no equivalent, so
 /// there is nothing to ask. `None` is "I could not look", which is exactly
-/// what sends [`foreground_leader`] to the descendant heuristic (判据 §8).
+/// what sends the caller to the descendant heuristic (判据 §8).
 #[cfg(not(unix))]
-fn leader_from_terminal(_master: &dyn portable_pty::MasterPty) -> Option<u32> {
+fn leader_from_terminal_impl(_master: &dyn portable_pty::MasterPty) -> Option<u32> {
     None
 }
 
 /// Read one pid's facts out of the process table.
 ///
-/// Bumps [`probe_count`]. Takes no lock and must be called holding none — a
-/// `sysinfo` refresh is a syscall-heavy operation and the screen lock is on
-/// the PTY reader thread's hot path.
+/// Takes no lock and must be called holding none — a `sysinfo` refresh is a
+/// syscall-heavy operation and the screen lock is on the PTY reader thread's
+/// hot path.
 #[must_use]
 pub fn fact_for_pid(pid: u32) -> Option<ForegroundFact> {
-    PROBE_COUNT.fetch_add(1, Ordering::Relaxed);
     let observed_at = chrono::Utc::now().timestamp_millis();
     crate::utils::process_alive::with_process_specifics(pid, process_facts_refresh(), |p| {
         let cmd = p.cmd();
@@ -249,7 +263,7 @@ fn process_facts_refresh() -> sysinfo::ProcessRefreshKind {
 /// has none, because a shell sitting at its prompt IS the foreground program.
 ///
 /// This is the answer on platforms with no `tcgetpgrp`, and the fallback on
-/// the ones that have it (see [`foreground_leader`]). It is deliberately NOT
+/// the ones that have it (see [`leader_from_terminal`]). It is deliberately NOT
 /// `#[cfg(not(unix))]`: a branch that compiles on no machine any developer or
 /// CI job runs is a branch nobody can falsify, and its only proof would have
 /// been "it type-checks on Windows". Compiled and tested everywhere, it is
@@ -257,12 +271,14 @@ fn process_facts_refresh() -> sysinfo::ProcessRefreshKind {
 /// `the_descendant_walk_finds_a_child_this_test_started`.
 ///
 /// The cost is a FULL process-table refresh — a descendant walk needs every
-/// process's parent — which is why it is second choice and why the rate gate
-/// exists. It counts toward [`probe_count`] like any other refresh.
-fn deepest_newest_descendant(shell_pid: u32) -> Option<u32> {
+/// process's parent — which is why it is second choice, why the rate gate
+/// exists, and why it takes a bare `u32` and no terminal handle: a function
+/// that cannot be handed the master cannot be called while the master lock is
+/// held by accident.
+#[must_use]
+pub fn deepest_newest_descendant(shell_pid: u32) -> Option<u32> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-    PROBE_COUNT.fetch_add(1, Ordering::Relaxed);
     let mut sys = System::new();
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
 
@@ -291,27 +307,6 @@ fn deepest_newest_descendant(shell_pid: u32) -> Option<u32> {
     best.map(|(_, _, pid)| pid).or(Some(shell_pid))
 }
 
-/// Process-wide count of process-table refreshes performed by this module.
-///
-/// The cost guard's instrument (herdr's counting-architecture-test shape).
-/// It counts REFRESHES, not probe decisions: `probe_due` is pure and free,
-/// and the number that matters is how often the kernel was actually asked.
-static PROBE_COUNT: AtomicU64 = AtomicU64::new(0);
-
-/// How many process-table refreshes this process has performed. See
-/// [`PROBE_COUNT`].
-#[must_use]
-pub fn probe_count() -> u64 {
-    PROBE_COUNT.load(Ordering::Relaxed)
-}
-
-/// Zero the refresh counter. Tests read a DELTA around their own work; this
-/// is the cheaper spelling of that when the test holds the counter's serial
-/// key.
-pub fn reset_probe_count() {
-    PROBE_COUNT.store(0, Ordering::Relaxed);
-}
-
 /// A session's probe bookkeeping: when it last looked, what it last saw, and
 /// how many times in a row it has failed to see anything.
 ///
@@ -336,6 +331,24 @@ pub struct ForegroundState {
     /// shadow, which is where a program that paints once and goes quiet does
     /// all of its painting.
     frame_since_probe: bool,
+    /// How many probes this session has performed — the cost guard's
+    /// instrument (herdr's counting-architecture-test shape).
+    ///
+    /// PER SESSION, not a `static`. The first version was a process-global
+    /// `AtomicU64`, which made the bound guard read whatever every other test
+    /// in the same binary happened to be probing at the time: measured 60
+    /// against a ceiling of 60, with five untagged tests driving
+    /// `flush_session` concurrently, one of them polling for three seconds.
+    /// That is the same defect already fixed once for
+    /// `RuntimeAgents::visible_text_builds` and not carried to its twin.
+    /// Counted here, the number is a function of this session's own ticks
+    /// and nothing else.
+    ///
+    /// It counts PROBES, not process-table refreshes, because a probe is what
+    /// the gate decides and what the ceiling arithmetic is written in. One
+    /// probe is one refresh on Unix (the pgid read is an ioctl) and at most
+    /// two on platforms that fall back to the descendant walk.
+    probes: u64,
 }
 
 impl ForegroundState {
@@ -366,6 +379,7 @@ impl ForegroundState {
     pub fn observe(&mut self, now: i64, observed: Option<ForegroundFact>) -> bool {
         self.last_probe_at = Some(now);
         self.frame_since_probe = false;
+        self.probes = self.probes.saturating_add(1);
         let before = self.fact.take();
         match observed {
             Some(fact) => {
@@ -396,6 +410,12 @@ impl ForegroundState {
     #[must_use]
     pub const fn last_probe_at(&self) -> Option<i64> {
         self.last_probe_at
+    }
+
+    /// How many probes this session has performed. See the field's doc.
+    #[must_use]
+    pub const fn probes(&self) -> u64 {
+        self.probes
     }
 }
 
@@ -613,23 +633,119 @@ mod tests {
     /// The counter is the cost guard's instrument, so it has to be able to
     /// MOVE. An instrument stuck at zero makes every bound assertion pass
     /// vacuously (判据 §18).
+    ///
+    /// No serial key, and that is the fix rather than an omission: the counter
+    /// lives on the `ForegroundState` this test owns, so no other test in the
+    /// binary can move it. The process-global version needed a key, did not
+    /// have one on five of its drivers, and read 60 against a ceiling of 60.
     #[test]
-    #[serial_test::serial(foreground_probe_count)]
     fn probe_count_can_reach_one() {
-        reset_probe_count();
+        let mut state = ForegroundState::default();
+        assert_eq!(state.probes(), 0, "nothing probed yet");
+
         let me = std::process::id();
         let observed = fact_for_pid(me);
+        state.observe(0, observed.clone());
+        assert_eq!(state.probes(), 1, "one probe must count as exactly one");
+        state.observe(1, None);
         assert_eq!(
-            probe_count(),
-            1,
-            "one process-table read must count as exactly one"
+            state.probes(),
+            2,
+            "a MISS is a probe too -- it cost the same process-table read"
         );
+
         let observed = observed.expect("this test's own process must be in the process table");
         assert_eq!(observed.pid, me);
         assert!(
             !observed.name.is_empty(),
             "a fact with no name identifies nothing"
         );
+    }
+
+    /// I1: nothing that reads the process table may run under the master lock.
+    ///
+    /// A behavioural test cannot see this — the lock is held for microseconds
+    /// and the walk still returns the right answer — so the guard is
+    /// structural, and it is written against the two facts that make the rule
+    /// hold rather than against a promise in a comment:
+    ///
+    /// 1. `PtySession::maybe_probe_foreground` never takes the master lock
+    ///    itself. The only `self.master.lock()` on the probe path is inside
+    ///    `terminal_leader`.
+    /// 2. `terminal_leader`'s whole body is that lock plus
+    ///    `leader_from_terminal`. No walk, no single-pid read, no `sysinfo`.
+    ///
+    /// Falsify by moving `deepest_newest_descendant` back into
+    /// `terminal_leader` (the shape this replaced) — assertion 2 goes red — or
+    /// by inlining the lock into `maybe_probe_foreground` — assertion 1 does.
+    #[test]
+    fn no_process_table_read_happens_under_the_master_lock() {
+        use crate::utils::source_scan::code_text;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("gateway")
+            .join("pty")
+            .join("session.rs");
+        let src = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let code = code_text(&src);
+
+        let body_of = |name: &str| -> String {
+            let at = code.find(name).unwrap_or_else(|| {
+                panic!(
+                    "{name} not found in session.rs -- if it was renamed, re-point this \
+                     guard; if it was deleted, the master-lock boundary is gone"
+                )
+            });
+            let open = code[at..].find('{').expect("no body") + at;
+            let mut depth = 0usize;
+            for (i, ch) in code[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return code[open..=open + i].to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            panic!("{name}'s body is not brace-balanced");
+        };
+
+        let probe = body_of("fn maybe_probe_foreground");
+        assert!(
+            !probe.contains("master.lock()"),
+            "maybe_probe_foreground must reach the master ONLY through \
+             terminal_leader, so the lock's scope stays one ioctl wide. Body:\n{probe}"
+        );
+        assert!(
+            probe.contains("terminal_leader()"),
+            "maybe_probe_foreground must still call terminal_leader -- without it \
+             this guard passes vacuously. Body:\n{probe}"
+        );
+
+        let locked = body_of("fn terminal_leader");
+        assert!(
+            locked.contains("master.lock()") && locked.contains("leader_from_terminal"),
+            "terminal_leader must be the lock plus the ioctl. Body:\n{locked}"
+        );
+        for forbidden in [
+            "deepest_newest_descendant",
+            "fact_for_pid",
+            "sysinfo",
+            "refresh_processes",
+        ] {
+            assert!(
+                !locked.contains(forbidden),
+                "`{forbidden}` reads the process table and must not run under the \
+                 master lock -- `PtySession::resize` is the other holder, and on a \
+                 platform that falls back to the descendant walk this would scan \
+                 every process on the machine on every probe. Body:\n{locked}"
+            );
+        }
     }
 
     /// The Windows answer, exercised where it can actually run.
@@ -649,7 +765,6 @@ mod tests {
     /// is a guard whose corpus was bigger than its subject.
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial(foreground_probe_count)]
     async fn the_descendant_walk_finds_a_child_this_test_started() {
         // `sleep 30; true` keeps the shell alive as a real parent instead of
         // letting it `exec` the sleep and vanish, so there are two levels to
@@ -701,7 +816,6 @@ mod tests {
     /// function production does not call proves the function, not the wire).
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial(foreground_probe_count)]
     async fn a_real_child_is_reported_as_the_foreground_program() {
         let opts = super::super::SpawnOptions {
             command: Some("sleep".to_string()),

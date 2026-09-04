@@ -37,11 +37,13 @@ Still not ported from that block: the runtime-specific argv walkers
 (`cmd /c`, PowerShell `-File`, Cursor's bundled-node layout, the Qwen/bun
 special cases) — each exists for a shape Aleph has no producer for.
 
-The gating constants and miss hysteresis of `src/gateway/pty/foreground.rs`
-in the main crate are also from herdr; that file carries its own header.
 src/screen_rules.rs keeps only `detection_update_for_publish_with_osc` of the
 ten public items in herdr src/pane/agent_detection.rs; the rest were cut
 because they are driven by upstream's poll interval and content-sequence
 counter, which Aleph does not have. That file's header lists them by name.
 
-The rest of the Aleph project is MIT-licensed. This crate is not.
+The rest of the Aleph project is MIT-licensed. This crate is not. That split is
+the reason this crate exists as a crate, so it is a boundary and not a note:
+herdr-derived code goes in here, and nowhere else. `src/gateway/pty/foreground.rs`
+in the main crate cites three of herdr's numbers (500 ms, 3 s, 6) in comments
+and reproduces none of its code — see that file's header.

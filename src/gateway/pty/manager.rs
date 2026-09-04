@@ -293,6 +293,10 @@ pub(crate) fn flush_session(session: &PtySession, now: i64) -> FlushOutcome {
             cwd: &cwd,
             screen,
             process_exited: session.is_closed(),
+            // Genuinely varies: the other reason to be here is a
+            // foreground-program change with the screen standing still, and
+            // only a real frame may end a quiet mark.
+            frame_produced: frame.is_some(),
             now,
         })
     });

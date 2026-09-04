@@ -34,6 +34,7 @@ fn sample_shell(
         cwd,
         screen,
         process_exited,
+        frame_produced: true,
         now,
     })
 }
@@ -1006,6 +1007,7 @@ fn sample_program(
         cwd: "",
         screen,
         process_exited: false,
+        frame_produced: true,
         now,
     })
 }
@@ -1352,6 +1354,84 @@ fn identify_runs_before_the_screen_text_is_built() {
     );
 }
 
+/// A sample that carries a probe result but NO frame — the shape
+/// `flush_session` produces when the foreground program moved while the screen
+/// stood still.
+fn sample_program_without_a_frame(
+    agents: &RuntimeAgents,
+    session_id: &str,
+    program: &str,
+    cwd: &str,
+    screen: &Screen,
+    now: i64,
+) -> bool {
+    agents.sample(SampleInput {
+        session_id,
+        shell: "zsh",
+        program: Some(program),
+        argv0: None,
+        cmdline: None,
+        cwd,
+        screen,
+        process_exited: false,
+        frame_produced: false,
+        now,
+    })
+}
+
+/// I3: a sample is not evidence of a frame, and only a frame may end silence.
+///
+/// `flush_session` re-samples when the probe's believed process changed, and
+/// `ForegroundState::observe` counts a moved `cwd` as a change. So an
+/// identified agent that is thinking silently and `chdir`s gets re-sampled
+/// with no frame — and the first version cleared `quiet_since` and restarted
+/// the quiet clock for it, publishing "not quiet" with nothing behind it.
+///
+/// Falsify by writing `last_frame_at: now` / `quiet_since: None`
+/// unconditionally again (the shape this replaced): both assertions below go
+/// red, and nothing else in the file does.
+#[test]
+fn a_program_change_without_a_frame_does_not_clear_quiet_since() {
+    let agents = RuntimeAgents::default();
+    let working = screen(CLAUDE_WORKING_LINE.as_bytes());
+
+    // A real frame at t=1_000, then silence long enough to be marked.
+    sample_program(&agents, "s1", "claude", &working, 1_000);
+    assert_eq!(agents.mark_quiet(1_000 + QUIET_AFTER_MS).len(), 1);
+    assert_eq!(agents.snapshot()[0].quiet_since, Some(1_000));
+
+    // The agent `chdir`s while still thinking. The probe notices; the screen
+    // does not change; no frame is produced.
+    let after = 1_000 + QUIET_AFTER_MS + 5_000;
+    let changed =
+        sample_program_without_a_frame(&agents, "s1", "claude", "/elsewhere", &working, after);
+
+    let row = agents.snapshot().remove(0);
+    assert_eq!(
+        row.quiet_since,
+        Some(1_000),
+        "the session is still silent, so its quiet mark must survive a sample \
+         that carried no frame -- clearing it publishes a fact with no producer"
+    );
+    assert_eq!(
+        row.cwd, "/elsewhere",
+        "the cwd move itself must still reach the wire, or this test is \
+         asserting that nothing happened"
+    );
+    assert!(
+        changed,
+        "and the move IS an observable change, so a waiter must still be woken"
+    );
+
+    // The quiet clock did not restart either: it is still measured from the
+    // last real frame, so this session stays quiet rather than needing another
+    // full QUIET_AFTER_MS.
+    assert!(
+        agents.mark_quiet(after + 1).is_empty(),
+        "already marked; staying quiet is not news"
+    );
+}
+
 /// The cost guard (herdr's counting-architecture-test shape, spec §4.1).
 ///
 /// Fifteen sessions driven for a hundred 16 ms ticks each. The gate's own
@@ -1360,56 +1440,78 @@ fn identify_runs_before_the_screen_text_is_built() {
 /// literal would have to be edited every time a constant moves, and the
 /// version that does not get edited is the one that stops constraining
 /// anything (判据 §1).
+///
+/// ⚠️ The counters are the fifteen `ForegroundState`s this test owns, and that
+/// is the whole reason it can assert anything. The first version read a
+/// process-global `static` and measured 60 against a ceiling of 60 — zero
+/// slack, while five untagged tests in the same binary drove `flush_session`
+/// concurrently and one of them polled for three seconds. A guard whose
+/// instrument other tests can move is not measuring this code (判据 §18).
+/// With the counter per session there is no shared state left to serialise,
+/// so this test carries no serial key.
 #[test]
-#[serial_test::serial(foreground_probe_count)]
 fn probe_count_is_bounded_at_fifteen_sessions() {
     use crate::gateway::pty::foreground::{
-        fact_for_pid, probe_count, probe_due, reset_probe_count, PROBE_MIN_INTERVAL_MS,
+        fact_for_pid, probe_due, ForegroundState, PROBE_MIN_INTERVAL_MS,
     };
 
     const SESSIONS: i64 = 15;
     const TICKS: i64 = 100;
     const TICK_MS: i64 = 16; // manager::FLUSH_INTERVAL
 
-    reset_probe_count();
     let me = std::process::id();
-    let mut last: Vec<Option<i64>> = vec![None; SESSIONS as usize];
+    let mut states: Vec<ForegroundState> =
+        (0..SESSIONS).map(|_| ForegroundState::default()).collect();
 
     for tick in 0..TICKS {
         let now = tick * TICK_MS;
-        for slot in last.iter_mut() {
+        for state in &mut states {
             // Every session produces a frame on every tick: the worst case
             // the rate gate exists to bound.
-            if probe_due(*slot, now, true, false) {
-                *slot = Some(now);
-                // A REAL refresh, so the counter measures what production
-                // pays and not a tally this test kept itself.
-                let _ = fact_for_pid(me);
+            state.note_frame(true);
+            if probe_due(state.last_probe_at(), now, state.frame_since_probe(), false) {
+                // A REAL process-table read, so what is counted is what
+                // production pays and not a tally this test kept itself.
+                state.observe(now, fact_for_pid(me));
             }
         }
     }
 
-    // One free first look, then one per PROBE_MIN_INTERVAL_MS of elapsed time.
+    // One free first look, then at most one per PROBE_MIN_INTERVAL_MS of
+    // elapsed time.
     let span = (TICKS - 1) * TICK_MS;
     let per_session = 1 + span / PROBE_MIN_INTERVAL_MS;
     let ceiling = u64::try_from(SESSIONS * per_session).expect("small");
 
-    let measured = probe_count();
+    let measured: u64 = states
+        .iter()
+        .map(crate::gateway::pty::foreground::ForegroundState::probes)
+        .sum();
     assert!(
         measured <= ceiling,
-        "{measured} process-table refreshes for {SESSIONS} sessions over \
-         {TICKS} ticks exceeds the gate's own ceiling of {ceiling}. \
-         Un-gated this would be {}",
+        "{measured} probes for {SESSIONS} sessions over {TICKS} ticks exceeds \
+         the gate's own ceiling of {ceiling}. Un-gated this would be {}",
         SESSIONS * TICKS
     );
     assert!(
         measured >= u64::try_from(SESSIONS).expect("small"),
-        "only {measured} refreshes -- the gate cannot be so tight that the \
+        "only {measured} probes -- the gate cannot be so tight that the \
          first look never happens, or every session is unidentifiable \
          forever (判据 §2: a gate that never opens)"
     );
     assert!(
         measured < u64::try_from(SESSIONS * TICKS).expect("small"),
         "the gate must actually reduce something"
+    );
+    // Every session must be probed the SAME number of times: they were driven
+    // identically, so a spread means one of them stopped being looked at.
+    let first = states[0].probes();
+    assert!(
+        states.iter().all(|s| s.probes() == first),
+        "identically driven sessions must cost identically; got {:?}",
+        states
+            .iter()
+            .map(crate::gateway::pty::foreground::ForegroundState::probes)
+            .collect::<Vec<_>>()
     );
 }
