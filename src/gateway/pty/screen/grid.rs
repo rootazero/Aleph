@@ -95,6 +95,15 @@ pub struct Grid {
     /// every write that touches it, so a client that missed no frames can be
     /// sent only what changed instead of the whole screen.
     dirty: std::collections::BTreeSet<u16>,
+    /// The scrolling region (DECSTBM), 0-based and INCLUSIVE at both ends,
+    /// defaulting to the whole screen. Every verb that shifts rows reads it;
+    /// `erase_in_display` deliberately does not (see its doc comment).
+    scroll_region: (u16, u16),
+    /// DECOM (`CSI ?6 h/l`). On, a row addressed by CUP or VPA is measured
+    /// from the region's top and clamped at its bottom. Off before a region
+    /// exists this means nothing, which is why it ships with DECSTBM rather
+    /// than after it.
+    origin_mode: bool,
     /// DECAWM (`CSI ?7 h/l`), on by default as the standard requires. Off,
     /// the right margin absorbs writes instead of wrapping -- the standard
     /// trick for painting a full-width status line without scrolling.
@@ -127,8 +136,54 @@ impl Grid {
             // with every row here would only cause `take_patch`'s very
             // first call to resend rows nothing ever wrote to.
             dirty: std::collections::BTreeSet::new(),
+            scroll_region: (0, rows - 1),
+            origin_mode: false,
             autowrap: true,
             last_printed: None,
+        }
+    }
+
+    /// DECSTBM. The arguments arrive 1-based and inclusive; `0` (or an
+    /// omitted parameter) means the screen's own edge.
+    ///
+    /// An impossible region -- a top not strictly above the bottom -- resets
+    /// to the full screen rather than being nudged into one the program did
+    /// not ask for. DEC specifies the reset, and a silently-repaired region
+    /// would pin rows the program expects to scroll, which is the failure
+    /// this whole feature exists to remove, arriving through the fix.
+    pub fn set_scroll_region(&mut self, top: u16, bottom: u16) {
+        let last = self.rows - 1;
+        let top = top.max(1) - 1;
+        let bottom = if bottom == 0 {
+            last
+        } else {
+            (bottom - 1).min(last)
+        };
+        self.scroll_region = if top < bottom { (top, bottom) } else { (0, last) };
+    }
+
+    /// DECOM. Setting or resetting it homes the cursor, as DEC requires:
+    /// without that the cursor can be left outside the region it has just
+    /// started addressing relative to.
+    pub fn set_origin_mode(&mut self, on: bool) {
+        self.origin_mode = on;
+        self.cursor_row = if on { self.scroll_region.0 } else { 0 };
+        self.cursor_col = 0;
+    }
+
+    /// A row from CUP/HVP/VPA, resolved through DECOM.
+    ///
+    /// Separate from the absolute [`Self::set_cursor`] on purpose: DECRC
+    /// restores a position that was ALREADY absolute when it was saved, and
+    /// putting it through this offset would add the region's top a second
+    /// time -- a cursor that drifts one region deeper on every save/restore
+    /// pair, which prompt drawing performs constantly.
+    fn resolve_row(&self, row: u16) -> u16 {
+        let (top, bottom) = self.scroll_region;
+        if self.origin_mode {
+            top.saturating_add(row).min(bottom)
+        } else {
+            row.min(self.rows - 1)
         }
     }
 
@@ -152,6 +207,8 @@ impl Grid {
     /// reset leaves all four alone, and [`Self::reset`] does the rest.
     pub fn reset_modes(&mut self) {
         self.autowrap = true;
+        self.origin_mode = false;
+        self.scroll_region = (0, self.rows - 1);
         self.last_printed = None;
     }
 
@@ -366,9 +423,18 @@ impl Grid {
         }
     }
 
-    /// Absolute cursor move, clamped to the grid. Callers pass 0-based
-    /// coordinates; the 1-based CSI convention is converted by the caller.
+    /// CUP / HVP. Callers pass 0-based coordinates; the 1-based CSI
+    /// convention is converted by the caller. The row goes through DECOM
+    /// (see [`Self::resolve_row`]); the column does not, because DECOM has
+    /// no left/right margins to be relative to.
     pub fn goto(&mut self, row: u16, col: u16) {
+        self.cursor_row = self.resolve_row(row);
+        self.cursor_col = col.min(self.cols - 1);
+    }
+
+    /// Absolute cursor move, ignoring DECOM. For restores of a position that
+    /// was absolute when it was captured -- DECRC and private mode 1048.
+    pub fn set_cursor(&mut self, row: u16, col: u16) {
         self.cursor_row = row.min(self.rows - 1);
         self.cursor_col = col.min(self.cols - 1);
     }
@@ -423,9 +489,10 @@ impl Grid {
         self.cursor_col = self.cursor_col.saturating_sub(1);
     }
 
-    /// CSI d (VPA): absolute row, column unchanged — CHA's twin.
+    /// CSI d (VPA): row only, column unchanged — CHA's twin. DECOM-relative
+    /// for the same reason CUP's row is.
     pub fn goto_row(&mut self, row: u16) {
-        self.cursor_row = row.min(self.rows - 1);
+        self.cursor_row = self.resolve_row(row);
     }
 
     /// CSI X (ECH): blank `n` cells from the cursor. Unlike DCH this moves
@@ -514,34 +581,64 @@ impl Grid {
     /// screen, and an in-screen insert never reached the top — filing them
     /// would let a client scrolling back read rows the user never saw leave.
     pub fn insert_lines(&mut self, n: u16) {
-        let (rows, cols) = (self.rows as usize, self.cols as usize);
-        let top = self.cursor_row as usize;
-        let n = (n as usize).min(rows - top);
-        let region = &mut self.cells[top * cols..rows * cols];
-        region.copy_within(..(rows - top - n) * cols, n * cols);
+        let Some((first, last)) = self.editable_rows_below_cursor() else {
+            return;
+        };
+        let cols = self.cols as usize;
+        let height = last - first + 1;
+        let n = (n as usize).min(height);
+        let region = &mut self.cells[first * cols..(last + 1) * cols];
+        region.copy_within(..(height - n) * cols, n * cols);
         for cell in &mut region[..n * cols] {
             *cell = Cell::default();
         }
-        self.dirty.extend(self.cursor_row..self.rows);
+        self.dirty.extend(self.cursor_row..=self.scroll_region.1);
     }
 
     /// CSI M (DL): delete `n` rows at the cursor row, pulling the rows below
     /// it up and blanking the bottom. Same discard reasoning as
     /// [`Self::insert_lines`] — a deleted row is not history either.
     pub fn delete_lines(&mut self, n: u16) {
-        let (rows, cols) = (self.rows as usize, self.cols as usize);
-        let top = self.cursor_row as usize;
-        let n = (n as usize).min(rows - top);
-        let region = &mut self.cells[top * cols..rows * cols];
+        let Some((first, last)) = self.editable_rows_below_cursor() else {
+            return;
+        };
+        let cols = self.cols as usize;
+        let height = last - first + 1;
+        let n = (n as usize).min(height);
+        let region = &mut self.cells[first * cols..(last + 1) * cols];
         region.copy_within(n * cols.., 0);
         let vacated = region.len() - n * cols;
         for cell in &mut region[vacated..] {
             *cell = Cell::default();
         }
-        self.dirty.extend(self.cursor_row..self.rows);
+        self.dirty.extend(self.cursor_row..=self.scroll_region.1);
+    }
+
+    /// The half-open row span IL/DL may shift: the cursor's row down to the
+    /// scrolling region's bottom, INCLUSIVE, as 0-based indices.
+    ///
+    /// `None` when the cursor sits outside the region, and then both verbs do
+    /// nothing — DEC's rule, and the one that keeps a pinned footer pinned.
+    /// Without it a program could move below its own region and push the
+    /// footer down through IL, having just been stopped from doing the same
+    /// thing through a newline.
+    fn editable_rows_below_cursor(&self) -> Option<(usize, usize)> {
+        let (top, bottom) = self.scroll_region;
+        if self.cursor_row < top || self.cursor_row > bottom {
+            return None;
+        }
+        Some((self.cursor_row as usize, bottom as usize))
     }
 
     /// CSI J. 0 = cursor to end, 1 = start to cursor, anything else = all.
+    ///
+    /// **Screen-absolute, deliberately, even with a scrolling region set** --
+    /// the one row-spanning verb here that does NOT read the region. `CSI J`
+    /// erases the DISPLAY, and DEC defines its three modes against the
+    /// screen: a region constrains scrolling, not erasure. Clipping this to
+    /// the region would leave a header standing that the program believes it
+    /// erased, and stale text a manifest can still match is worse than none
+    /// at all — a wrong label costs more than a missing one.
     pub fn erase_in_display(&mut self, mode: u16) {
         let cur = self.idx(self.cursor_row, self.cursor_col);
         let len = self.cells.len();
@@ -600,13 +697,48 @@ impl Grid {
         }
     }
 
-    /// Move to the next row, scrolling the top row into scrollback when the
-    /// cursor is already on the last row.
+    /// Move to the next row, scrolling the region when the cursor is already
+    /// on its LAST row -- not the screen's. A cursor parked below the region
+    /// (legal: nothing confines it there) just moves down.
     pub fn newline(&mut self) {
-        if self.cursor_row + 1 < self.rows {
-            self.cursor_row += 1;
-        } else {
+        let (_, bottom) = self.scroll_region;
+        if self.cursor_row == bottom {
             self.scroll_up();
+        } else if self.cursor_row + 1 < self.rows {
+            self.cursor_row += 1;
+        }
+    }
+
+    /// RI (`ESC M`): up one row, opening a blank row at the region's top when
+    /// the cursor is already there. The mirror of [`Self::newline`], and the
+    /// reason a program that scrolls BACKWARDS gets new space instead of
+    /// stale text it believes it replaced.
+    pub fn reverse_index(&mut self) {
+        let (top, _) = self.scroll_region;
+        if self.cursor_row == top {
+            self.scroll_down();
+        } else if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+        }
+    }
+
+    /// SU (`CSI S`): scroll the region up `n` rows, cursor unmoved.
+    ///
+    /// `n` is capped at the region's height: more than that cannot do more
+    /// than blank it, and an uncapped loop would run `u16::MAX` times on a
+    /// parameter a remote program chose.
+    pub fn scroll_up_n(&mut self, n: u16) {
+        let (top, bottom) = self.scroll_region;
+        for _ in 0..n.min(bottom - top + 1) {
+            self.scroll_up();
+        }
+    }
+
+    /// SD (`CSI T`): scroll the region down `n` rows, cursor unmoved.
+    pub fn scroll_down_n(&mut self, n: u16) {
+        let (top, bottom) = self.scroll_region;
+        for _ in 0..n.min(bottom - top + 1) {
+            self.scroll_down();
         }
     }
 
@@ -635,6 +767,11 @@ impl Grid {
         self.cols = cols;
         self.cursor_row = self.cursor_row.min(rows - 1);
         self.cursor_col = self.cursor_col.min(cols - 1);
+        // A region is stated in rows, so it cannot outlive a change to how
+        // many rows there are. Clamping instead would keep a region the
+        // program sized for the old screen, which is a region it never asked
+        // for; the program repaints on SIGWINCH and states a new one.
+        self.scroll_region = (0, rows - 1);
         // Every coordinate on the wire changed meaning (new width, possibly
         // new height), so mark every surviving row dirty. A shrinking
         // resize can otherwise leave stale row indices >= the new
@@ -675,19 +812,53 @@ impl Grid {
         }
     }
 
+    /// Shift the scrolling region up one row, blanking the row it vacates at
+    /// the region's bottom.
+    ///
+    /// **Only a FULL-HEIGHT scroll files the evicted row as scrollback.**
+    /// Scrollback means "what fell off the top of the screen"; a row leaving
+    /// the top of a region never reached the top of the screen, so filing it
+    /// would let a client scrolling back read rows the user never saw leave
+    /// — the same reasoning [`Self::insert_lines`] already carries for rows
+    /// pushed off the bottom.
     fn scroll_up(&mut self) {
-        let first: Vec<Cell> = self.row_cells(0).to_vec();
-        if self.scrollback.len() >= self.scrollback_limit {
-            self.scrollback.pop_front();
+        let (top, bottom) = self.scroll_region;
+        if top == 0 && bottom == self.rows - 1 {
+            let first: Vec<Cell> = self.row_cells(top).to_vec();
+            if self.scrollback.len() >= self.scrollback_limit {
+                self.scrollback.pop_front();
+            }
+            self.scrollback.push_back(first);
         }
-        self.scrollback.push_back(first);
-        self.cells.rotate_left(self.cols as usize);
-        let start = self.idx(self.rows - 1, 0);
-        for cell in &mut self.cells[start..] {
+        self.rotate_region(top, bottom, true);
+    }
+
+    /// Shift the scrolling region down one row, blanking the row it vacates
+    /// at the region's top. Never touches scrollback: the row it discards
+    /// left through the BOTTOM, and scrollback only ever means the top.
+    fn scroll_down(&mut self) {
+        let (top, bottom) = self.scroll_region;
+        self.rotate_region(top, bottom, false);
+    }
+
+    /// The cell moving both scrolls share. Rotating wraps the row leaving one
+    /// end around to the other, where it is immediately blanked — so the
+    /// wrap is how the vacated row gets cleared, not a leak.
+    fn rotate_region(&mut self, top: u16, bottom: u16, up: bool) {
+        let cols = self.cols as usize;
+        let start = top as usize * cols;
+        let end = (bottom as usize + 1) * cols;
+        let region = &mut self.cells[start..end];
+        if up {
+            region.rotate_left(cols);
+        } else {
+            region.rotate_right(cols);
+        }
+        let vacated = if up { region.len() - cols..region.len() } else { 0..cols };
+        for cell in &mut region[vacated] {
             *cell = Cell::default();
         }
-        // Every row's content shifted up one line, so every row is dirty.
-        self.dirty.extend(0..self.rows);
+        self.dirty.extend(top..=bottom);
     }
 }
 

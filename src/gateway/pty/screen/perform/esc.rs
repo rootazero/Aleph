@@ -66,6 +66,10 @@ impl Performer<'_> {
                 self.screen.grid.carriage_return();
                 self.screen.grid.newline();
             }
+            // RI: up one row, scrolling the region DOWN at its top. The
+            // direction IND does not cover, and the one a pager uses to
+            // reveal the line above.
+            b'M' => self.screen.grid.reverse_index(),
             _ => {}
         }
     }

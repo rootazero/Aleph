@@ -243,7 +243,9 @@ impl Performer<'_> {
     fn restore_cursor(&mut self) {
         if let Some(saved) = self.screen.saved_cursor {
             let (row, col) = saved.pos;
-            self.screen.grid.goto(row, col);
+            // Absolute: the position was absolute when it was saved, so
+            // routing it through DECOM would add the region's top again.
+            self.screen.grid.set_cursor(row, col);
             let (fg, bg, attrs) = saved.style;
             self.screen.state.fg = fg;
             self.screen.state.bg = bg;

@@ -143,6 +143,11 @@ impl Performer<'_> {
     /// not an error, it is a mode nothing tracks.
     fn private_mode(&mut self, mode: u16, enable: bool) {
         match mode {
+            // DECOM. Ships with DECSTBM rather than after it: a region
+            // without origin mode is half-right, because a program that sets
+            // both and then addresses `CSI 1;1H` would land at the top of the
+            // SCREEN and offset every row it paints afterwards.
+            6 => self.screen.grid.set_origin_mode(enable),
             // DECAWM.
             7 => self.screen.grid.set_autowrap(enable),
             // Legacy alternate screen. Distinct from 1049 only in that the
@@ -228,6 +233,22 @@ impl Performer<'_> {
             // INTERMEDIATE, never as a parameter, and it is the whole of
             // what separates this from an unrelated `CSI p`.
             'p' if inter == b"!" => self.soft_reset(),
+            // DECSTBM, SU and SD. These three guard on an EMPTY intermediate
+            // where the arms above do not, and the reason is that each has a
+            // live `?`-prefixed homonym that means something else entirely:
+            // `CSI ? r` restores saved private modes and `CSI ? S` is
+            // XTSMGRAPHICS. Without the guard, a program restoring its modes
+            // would silently reset the scrolling region.
+            'r' if inter.is_empty() => {
+                self.screen.grid.set_scroll_region(
+                    flat.first().copied().unwrap_or(0),
+                    flat.get(1).copied().unwrap_or(0),
+                );
+                // DEC: setting the region homes the cursor.
+                self.screen.grid.goto(0, 0);
+            }
+            'S' if inter.is_empty() => self.screen.grid.scroll_up_n(p(0, 1)),
+            'T' if inter.is_empty() => self.screen.grid.scroll_down_n(p(0, 1)),
             // DEC private modes. `?` only ever arrives via `intermediates`,
             // never `params` — a guard on `action` alone would also swallow
             // the private-mode-less `h`/`l` sequences. Every parameter is

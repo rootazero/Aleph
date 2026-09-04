@@ -648,6 +648,11 @@
             // DECSTR. `!` is an intermediate, so the census -- which reads
             // final bytes only -- names `p`, not `!`.
             (b'p', b"ab\x1b[!p"),
+            // DECSTBM homes the cursor, which `observable` reads.
+            (b'r', b"ab\x1b[2;3r"),
+            // SU and SD.
+            (b'S', b"a\r\nb\x1b[1S"),
+            (b'T', b"a\r\nb\x1b[1T"),
         ];
         // `~` is a legal CSI final byte no arm claims.
         each_probe_reaches_the_grid("CSI", probes, b'~', 3, 8);
@@ -707,6 +712,8 @@
             (b'c', b"ab\x1bcZ"),
             (b'D', b"ab\x1bDZ"),
             (b'E', b"ab\x1bEZ"),
+            // RI.
+            (b'M', b"ab\r\ncd\x1bMZ"),
         ];
         // `ESC 9` is a final byte no arm claims.
         each_probe_reaches_the_grid("ESC", probes, b'9', 3, 20);
@@ -1297,6 +1304,264 @@
             "a DCS payload must not paint; the bytes after ST must still land"
         );
         assert_eq!(with.grid.row_text(0), "abcd");
+    }
+
+    // ----------------------------------------------------------------
+    // 0-A A2 + B5: scroll regions (DECSTBM / SU / SD / RI) and origin mode.
+    //
+    // A2 and B5 ship together on purpose. DECOM means nothing without a
+    // region, and a region without DECOM is half-right: a program that sets
+    // both and then addresses `CSI 1;1H` lands at the top of the SCREEN
+    // instead of the top of its region, and every row it paints afterwards
+    // is offset against what it believes it drew.
+    // ----------------------------------------------------------------
+
+    /// The shape this whole feature exists for: a program pins a header and
+    /// a footer and scrolls only the middle (`vim`, `less`, `tmux`, anything
+    /// that sends `CSI 2;23r`). Scrolling the pinned rows marches the header
+    /// off the top while it is still plainly on the user's real terminal --
+    /// and it is the status line the detection manifests match on.
+    #[test]
+    fn decstbm_scrolls_only_the_region_and_pins_the_header() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree\r\nfooter";
+        let mut with = Screen::new(5, 10);
+        with.feed(setup);
+        // Region = rows 2..=4 one-based, i.e. the three middle rows.
+        with.feed(b"\x1b[2;4r");
+        with.feed(b"\x1b[4;1H\nnew");
+
+        let mut without = Screen::new(5, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[4;1H\nnew");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "header", "the pinned header does not move");
+        assert_eq!(with.grid.row_text(4), "footer", "nor does the pinned footer");
+        assert_eq!(with.grid.row_text(1), "two", "the region scrolled by one");
+        assert_eq!(with.grid.row_text(2), "three");
+        assert_eq!(with.grid.row_text(3), "new");
+    }
+
+    /// Scrollback is what fell off the TOP OF THE SCREEN. A row leaving the
+    /// top of a region never reached the top of the screen, so filing it
+    /// would let a client scrolling back read rows the user never saw leave
+    /// -- the same reasoning `insert_lines` already carries for rows pushed
+    /// off the bottom.
+    #[test]
+    fn rows_leaving_a_region_top_do_not_enter_scrollback() {
+        let mut region = Screen::new(4, 10);
+        region.feed(b"a\r\nb\r\nc\r\nd");
+        assert_eq!(region.grid.scrollback_len(), 0, "the setup must not scroll on its own");
+        region.feed(b"\x1b[2;4r\x1b[4;1H\n\n\n");
+        assert_eq!(
+            region.grid.scrollback_len(),
+            0,
+            "three scrolls inside a region file nothing"
+        );
+
+        let mut full = Screen::new(4, 10);
+        full.feed(b"a\r\nb\r\nc\r\nd\n\n\n");
+        assert_eq!(
+            full.grid.scrollback_len(),
+            3,
+            "the contrast: a full-height scroll still files every row it evicts \
+             -- without this the assertion above would pass on a screen that \
+             simply never scrolls"
+        );
+    }
+
+    /// RI (`ESC M`) at the top of the region opens a blank row there and
+    /// pushes the region down. Without it, a program scrolling backwards
+    /// gets nothing: the top of the screen keeps stale text forever while
+    /// the program believes it revealed new content.
+    #[test]
+    fn reverse_index_at_region_top_scrolls_down() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree";
+        let mut with = Screen::new(4, 10);
+        with.feed(setup);
+        with.feed(b"\x1b[2;4r\x1b[2;1H\x1bMX");
+
+        let mut without = Screen::new(4, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[2;4r\x1b[2;1HX");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(0), "header", "the row above the region is untouched");
+        assert_eq!(with.grid.row_text(1), "X", "a blank row opened at the region top");
+        assert_eq!(with.grid.row_text(2), "one");
+        assert_eq!(with.grid.row_text(3), "two");
+        assert_eq!(
+            with.grid.scrollback_len(),
+            0,
+            "the row pushed off the region bottom is discarded, not filed -- it \
+             left downwards, and scrollback only ever means 'off the top'"
+        );
+
+        // Away from the region top, RI is a plain move up.
+        let mut inside = Screen::new(4, 10);
+        inside.feed(setup);
+        inside.feed(b"\x1b[2;4r\x1b[3;1H\x1bMY");
+        assert_eq!(inside.grid.row_text(1), "Yne", "no scroll: the cursor just moved up");
+    }
+
+    /// SU/SD scroll the region without moving the cursor, which is what
+    /// separates them from IND/RI.
+    #[test]
+    fn su_and_sd_scroll_within_the_region() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree";
+        let mut without = Screen::new(4, 10);
+        without.feed(setup);
+
+        let mut su = Screen::new(4, 10);
+        su.feed(setup);
+        su.feed(b"\x1b[2;4r\x1b[2S");
+        assert_ne!(su.visible_text(), without.visible_text());
+        assert_eq!(su.grid.row_text(0), "header");
+        assert_eq!(su.grid.row_text(1), "three");
+        assert_eq!(su.grid.row_text(2), "");
+        assert_eq!(su.grid.row_text(3), "");
+
+        let mut sd = Screen::new(4, 10);
+        sd.feed(setup);
+        sd.feed(b"\x1b[2;4r\x1b[1T");
+        assert_ne!(sd.visible_text(), without.visible_text());
+        assert_eq!(sd.grid.row_text(0), "header");
+        assert_eq!(sd.grid.row_text(1), "");
+        assert_eq!(sd.grid.row_text(2), "one");
+        assert_eq!(sd.grid.row_text(3), "two");
+    }
+
+    /// DECOM (`CSI ?6 h`) makes CUP's row 1 mean the region's top row, and
+    /// clamps at the region's bottom rather than the screen's. Both halves
+    /// are asserted: a version that added the offset but clamped to the
+    /// screen still puts text outside the region the program reserved.
+    #[test]
+    fn origin_mode_makes_cup_relative_to_the_region() {
+        let setup: &[u8] = b"\x1b[3;5r";
+        let mut with = Screen::new(6, 10);
+        with.feed(setup);
+        with.feed(b"\x1b[?6h\x1b[1;1HX");
+
+        let mut without = Screen::new(6, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[1;1HX");
+
+        assert_ne!(with.visible_text(), without.visible_text());
+        assert_eq!(with.grid.row_text(2), "X", "row 1 is the region's top row");
+        assert_eq!(with.grid.row_text(0), "", "and the screen's top is out of reach");
+        assert_eq!(without.grid.row_text(0), "X", "without DECOM, row 1 is the screen's top");
+
+        with.feed(b"\x1b[9;1HY");
+        assert_eq!(with.grid.row_text(4), "Y", "DECOM clamps at the region's bottom");
+        assert_eq!(with.grid.row_text(5), "", "not at the screen's");
+    }
+
+    /// A region is stated in rows, so it cannot outlive a change to how many
+    /// rows there are. RIS resets it for the same reason it resets every
+    /// other mode.
+    #[test]
+    fn resize_and_ris_reset_the_region() {
+        let mut resized = Screen::new(4, 10);
+        resized.feed(b"a\r\nb\r\nc\r\nd\x1b[2;3r");
+        resized.resize(5, 10);
+        resized.feed(b"\x1b[5;1H\nZ");
+        assert_eq!(
+            resized.grid.scrollback_len(),
+            1,
+            "after the resize the region is the whole screen again, so the \
+             scroll evicts a row -- a stale (2,3) region would have scrolled \
+             two rows in the middle and filed nothing"
+        );
+
+        let mut after_ris = Screen::new(4, 10);
+        after_ris.feed(b"\x1b[2;3r\x1bc");
+        after_ris.feed(b"a\r\nb\r\nc\r\nd\r\ne");
+        assert_eq!(after_ris.grid.scrollback_len(), 1, "RIS put the region back");
+        assert_eq!(after_ris.grid.row_text(3), "e");
+
+        let mut still_set = Screen::new(4, 10);
+        still_set.feed(b"\x1b[2;3r");
+        still_set.feed(b"a\r\nb\r\nc\r\nd\r\ne");
+        assert_eq!(
+            still_set.grid.scrollback_len(),
+            0,
+            "the contrast: a region still in force files nothing, which is \
+             what makes the two assertions above measure the reset and not \
+             the grid's height"
+        );
+    }
+
+    /// IL/DL are region-bounded: rows below the region's bottom must not be
+    /// pushed down or pulled up, or the footer a program pinned moves anyway
+    /// through a different verb than the one A2 was written for.
+    #[test]
+    fn insert_and_delete_lines_respect_the_region() {
+        let setup: &[u8] = b"header\r\none\r\ntwo\r\nthree\r\nfooter";
+
+        let mut il = Screen::new(5, 10);
+        il.feed(setup);
+        il.feed(b"\x1b[2;4r\x1b[2;1H\x1b[1L");
+        assert_eq!(il.grid.row_text(0), "header");
+        assert_eq!(il.grid.row_text(1), "", "a blank row inserted at the region top");
+        assert_eq!(il.grid.row_text(2), "one");
+        assert_eq!(il.grid.row_text(3), "two");
+        assert_eq!(
+            il.grid.row_text(4),
+            "footer",
+            "`three` fell off the region's bottom; the footer below it did not move"
+        );
+
+        let mut dl = Screen::new(5, 10);
+        dl.feed(setup);
+        dl.feed(b"\x1b[2;4r\x1b[2;1H\x1b[1M");
+        assert_eq!(dl.grid.row_text(0), "header");
+        assert_eq!(dl.grid.row_text(1), "two");
+        assert_eq!(dl.grid.row_text(2), "three");
+        assert_eq!(
+            dl.grid.row_text(3),
+            "",
+            "the region's last row is blanked, not filled from below the region"
+        );
+        assert_eq!(dl.grid.row_text(4), "footer");
+
+        let mut without = Screen::new(5, 10);
+        without.feed(setup);
+        without.feed(b"\x1b[2;1H\x1b[1L");
+        assert_ne!(il.visible_text(), without.visible_text());
+    }
+
+    /// The one verb in this task that must NOT read the region.
+    ///
+    /// `CSI J` erases the DISPLAY. DEC defines its three modes against the
+    /// screen, and a scrolling region constrains scrolling, not erasure --
+    /// so "respect the region" is the wrong answer here even though it is
+    /// the right answer four lines up in the same dispatch table. A version
+    /// that clipped ED to the region leaves a header standing that the
+    /// program believes it erased, and stale text a manifest can still match
+    /// is the exact failure this round exists to remove: a wrong label is
+    /// dearer than a missing one.
+    #[test]
+    fn erase_in_display_within_a_region_is_still_screen_absolute() {
+        let mut all = Screen::new(4, 10);
+        all.feed(b"header\r\none\r\ntwo\r\nthree");
+        all.feed(b"\x1b[2;4r\x1b[2J");
+        assert_eq!(
+            all.visible_text(),
+            "\n\n\n",
+            "`CSI 2 J` clears every row, including the two outside the region"
+        );
+
+        let mut partial = Screen::new(4, 10);
+        partial.feed(b"header\r\none\r\ntwo\r\nthree");
+        partial.feed(b"\x1b[2;4r\x1b[3;10H\x1b[1J");
+        assert_eq!(
+            partial.grid.row_text(0),
+            "",
+            "erase-to-cursor reaches above the region's top row"
+        );
+        assert_eq!(partial.grid.row_text(1), "");
+        assert_eq!(partial.grid.row_text(2), "");
+        assert_eq!(partial.grid.row_text(3), "three", "and stops at the cursor");
     }
 
     /// HT is a MOVE, not a write of spaces. The two are identical on a
