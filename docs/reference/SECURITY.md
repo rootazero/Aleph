@@ -2530,7 +2530,8 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      `method_admin::MEMBER_CARVE_OUTS` and the handler narrows the response
      rather than refusing it, so a member receives all four id enumerations
      (`exec_tier`/`tiers`/`mode`/`modes`). What was missing was a guard and two
-     stale docs claiming the opposite. `MEMBER_WITHHELD_KEYS` is defined by
+     stale docs claiming the opposite.
+     `aleph_protocol::tool_permissions::OPERATOR_ONLY_KEYS` is defined by
      REMOVAL, which is right, and leaves the four fields the pills exist to read
      protected by nothing but that list staying short — adding `"tiers"` to it
      would compile and pass every test. `config::tests::
