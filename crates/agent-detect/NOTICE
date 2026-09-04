@@ -15,11 +15,35 @@ by src/manifest.rs; they are part of the ported work, not configuration.
 One item was lifted out of herdr src/detect/manifest_update.rs, which is
 otherwise not ported, into src/manifest.rs: `ManifestVersion`.
 
-Modifications: crate-path rewrites; removal of the Remote manifest source, the
-remote-update module, and the platform-specific process-identification block.
+Modifications: crate-path rewrites; removal of the Remote manifest source and
+the remote-update module.
+
+The platform-specific process-identification block was removed wholesale in the
+first port because it needed herdr's own `crate::platform` FFI layer, which R1
+puts out of reach. Round 2 brought back the pure-string part of it, now that
+Aleph has a foreground-process probe to feed it:
+
+  herdr `identify_agent_in_job`      -> engine::identify_agent_from_process
+        (src/detect/mod.rs:243-271)     (its single-process early return only;
+                                         `process_priority` has no candidates
+                                         to rank here and was not ported)
+  herdr `normalized_process_name`    -> the name/argv0/cmdline ordering there
+        (:359-395)
+  herdr `is_generic_runtime_or_shell`-> engine::is_generic_runtime_or_shell
+        (:696-711)                        (verbatim)
+  herdr `is_python_runtime` (:713)   -> engine::is_python_runtime (verbatim)
+
+Still not ported from that block: the runtime-specific argv walkers
+(`cmd /c`, PowerShell `-File`, Cursor's bundled-node layout, the Qwen/bun
+special cases) — each exists for a shape Aleph has no producer for.
+
 src/screen_rules.rs keeps only `detection_update_for_publish_with_osc` of the
 ten public items in herdr src/pane/agent_detection.rs; the rest were cut
 because they are driven by upstream's poll interval and content-sequence
 counter, which Aleph does not have. That file's header lists them by name.
 
-The rest of the Aleph project is MIT-licensed. This crate is not.
+The rest of the Aleph project is MIT-licensed. This crate is not. That split is
+the reason this crate exists as a crate, so it is a boundary and not a note:
+herdr-derived code goes in here, and nowhere else. `src/gateway/pty/foreground.rs`
+in the main crate cites three of herdr's numbers (500 ms, 3 s, 6) in comments
+and reproduces none of its code — see that file's header.
