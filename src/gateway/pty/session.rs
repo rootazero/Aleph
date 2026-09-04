@@ -122,6 +122,18 @@ pub struct PtySession {
     /// Monotonic per-session frame counter. Advances only when a frame is
     /// actually published, so a client's gap detection means what it says.
     seq: crate::sync_primitives::Mutex<u64>,
+    /// The pid of the process this session spawned — the shell, normally.
+    ///
+    /// `None` when `portable-pty` would not say (it returns `Option`).
+    /// Captured at spawn because the reader thread takes ownership of the
+    /// `Child` immediately afterwards and is the only other holder of this
+    /// fact; asking it later would need a channel for something that never
+    /// changes.
+    shell_pid: Option<u32>,
+    /// The foreground-process probe's bookkeeping. Its own lock, held for
+    /// microseconds and NEVER around the `sysinfo` refresh — see
+    /// [`super::foreground`]'s Locks section.
+    foreground: crate::sync_primitives::Mutex<super::foreground::ForegroundState>,
 }
 
 impl PtySession {
@@ -173,6 +185,8 @@ impl PtySession {
         drop(slave);
 
         let killer = child.clone_killer();
+        // Read BEFORE `spawn_reader` moves the child onto the reader thread.
+        let shell_pid = child.process_id();
         let reader = master
             .try_clone_reader()
             .map_err(|e| format!("clone_reader failed: {e}"))?;
@@ -199,6 +213,8 @@ impl PtySession {
             closed: AtomicBool::new(false),
             screen: crate::sync_primitives::Mutex::new(screen),
             seq: crate::sync_primitives::Mutex::new(0),
+            shell_pid,
+            foreground: crate::sync_primitives::Mutex::default(),
         });
 
         spawn_reader(session.clone(), reader, child, bus);
@@ -247,6 +263,69 @@ impl PtySession {
     /// Whether the child has exited or the session was closed.
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
+    }
+
+    /// The pid of the program this session spawned. See the field's doc.
+    ///
+    /// `None` is "the platform would not say", never "there is no child" —
+    /// the only consumer, the non-Unix foreground heuristic, treats it that
+    /// way and gives up rather than guessing (判据 §8).
+    #[must_use]
+    pub fn shell_pid(&self) -> Option<u32> {
+        self.shell_pid
+    }
+
+    /// Probe the terminal's foreground process, if this tick is due.
+    ///
+    /// `frame_produced` and `agent_known` are the gate's two inputs; see
+    /// [`super::foreground::probe_due`] for the three rules. Calling this on
+    /// every tick — not only on ticks that produced a frame — is what makes
+    /// the recheck rule reachable, and the recheck rule is the only thing
+    /// that can notice an agent EXITING.
+    ///
+    /// # Locks
+    ///
+    /// Three acquisitions, none overlapping, and the screen lock is not among
+    /// them:
+    /// 1. the foreground lock, to ask the gate;
+    /// 2. the master lock, for the one `tcgetpgrp` call;
+    /// 3. the foreground lock again, to fold the outcome in.
+    ///
+    /// The process-table refresh happens BETWEEN 2 and 3, holding nothing.
+    /// That ordering is the reason the probe is two functions rather than one
+    /// (see [`super::foreground`]'s Locks section).
+    pub fn maybe_probe_foreground(&self, now: i64, frame_produced: bool, agent_known: bool) {
+        let due = {
+            let state = self.foreground.lock().unwrap_or_else(|e| e.into_inner());
+            super::foreground::probe_due(state.last_probe_at(), now, frame_produced, agent_known)
+        };
+        if !due {
+            return;
+        }
+        let leader = {
+            let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
+            super::foreground::foreground_leader(&**master, self.shell_pid)
+        };
+        let observed = leader.and_then(super::foreground::fact_for_pid);
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .observe(now, observed);
+    }
+
+    /// The foreground process this session is currently believed to be
+    /// running, after the miss hysteresis.
+    ///
+    /// `None` means the probe has not answered — never that the shell is what
+    /// is running. Those are different facts and the wire keeps them apart
+    /// (`RuntimeAgentEntry::program`'s doc).
+    #[must_use]
+    pub fn foreground_fact(&self) -> Option<super::foreground::ForegroundFact> {
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current()
+            .cloned()
     }
 
     /// The diff since the last call, already in wire form, with a fresh `seq`.

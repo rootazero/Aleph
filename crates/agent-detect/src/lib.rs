@@ -33,6 +33,23 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     engine::identify_agent(process_name)
 }
 
+/// Identify which agent is running from a probed process's name, `argv[0]`
+/// and command line. Returns `None` for plain shells and unrecognized
+/// programs.
+///
+/// This is the entry the PTY foreground probe uses, and the reason it exists
+/// beside [`identify_agent`] is that an agent's name is often not the process
+/// name: `claude` runs as a Node script, so the kernel reports `node`. All
+/// behaviour lives in [`engine::identify_agent_from_process`].
+#[must_use]
+pub fn identify_agent_from_process(
+    name: &str,
+    argv0: Option<&str>,
+    cmdline: Option<&str>,
+) -> Option<Agent> {
+    engine::identify_agent_from_process(name, argv0, cmdline)
+}
+
 /// Detect an agent's state from a screen snapshot.
 ///
 /// Upstream's `detect_agent_with_osc` starts with an early return for

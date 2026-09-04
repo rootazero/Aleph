@@ -259,6 +259,96 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     parse_agent_label(process_name)
 }
 
+/// Identify the agent running as ONE probed process, from the three facts a
+/// process table supplies.
+///
+/// Restores the part of upstream's process identification this crate had cut
+/// (see this file's header). Upstream's entry is `identify_agent_in_job`
+/// (herdr 0.8.2 `src/detect/mod.rs:243-271`), which ranks the processes of a
+/// whole foreground JOB; its first act is to look for the process whose pid
+/// IS the group leader and, if that one identifies, return it without
+/// scoring. Aleph probes exactly that one process — `tcgetpgrp` gives the
+/// leader's pid and nothing else — so this is upstream's early return, and
+/// the scoring half (`process_priority`, `:685-694`) is deliberately NOT
+/// ported: with one candidate there is nothing to rank, and a scoring
+/// function with no caller is the zero-consumer abstraction R10 says to cut.
+/// The ordering below is what that scoring encodes for a single process
+/// anyway — the more specific candidate wins, name before argv before
+/// command line.
+///
+/// The name -> argv0 -> cmdline order is upstream's `normalized_process_name`
+/// (`:359-395`), narrowed the same way: upstream's runtime-specific argv
+/// walkers (`cmd /c`, PowerShell `-File`, Cursor's bundled-node layout) each
+/// exist for a shape Aleph has no producer for yet, so they are left upstream
+/// rather than copied in untested.
+#[must_use]
+pub fn identify_agent_from_process(
+    name: &str,
+    argv0: Option<&str>,
+    cmdline: Option<&str>,
+) -> Option<Agent> {
+    identify_agent(name)
+        .or_else(|| argv0.and_then(identify_agent))
+        .or_else(|| cmdline.and_then(script_agent_in_cmdline))
+}
+
+/// The agent named by a command line, when neither the process name nor
+/// `argv[0]` named one.
+///
+/// Two tokens are consulted and no more: the command itself, and — only when
+/// that command is a generic runtime or shell — the first non-flag token
+/// after it, which is the script such a runtime runs. `claude` installs as a
+/// Node script, so `node /usr/local/bin/claude` is the shape that has to
+/// resolve.
+///
+/// Scanning every token instead would answer a different question (判据 §5):
+/// `vim claude.rs` and `git commit -m claude` both contain an agent's name
+/// without an agent running, and a program the panel names wrongly is worse
+/// than one it names not at all (判据 §17).
+fn script_agent_in_cmdline(cmdline: &str) -> Option<Agent> {
+    let mut tokens = cmdline.split_whitespace();
+    let command = tokens.next()?;
+    if let Some(agent) = identify_agent(command) {
+        return Some(agent);
+    }
+    if !is_generic_runtime_or_shell(command) {
+        return None;
+    }
+    identify_agent(tokens.find(|t| !t.starts_with('-'))?)
+}
+
+/// Ported verbatim from herdr `src/detect/mod.rs:696-711`. A program on this
+/// list never names an agent by itself, so seeing one is the signal to look
+/// at what it was asked to run.
+fn is_generic_runtime_or_shell(name: &str) -> bool {
+    let name = normalized_agent_lookup_name(path_basename(name));
+    is_python_runtime(&name)
+        || matches!(
+            name.as_str(),
+            "sh" | "bash"
+                | "zsh"
+                | "fish"
+                | "tmux"
+                | "node"
+                | "bun"
+                | "cmd"
+                | "powershell"
+                | "pwsh"
+        )
+}
+
+/// Ported verbatim from herdr `src/detect/mod.rs:713-721`. `python`,
+/// `python3`, `python3.12` — but not `pythonista`.
+fn is_python_runtime(name: &str) -> bool {
+    name == "python"
+        || name.strip_prefix("python").is_some_and(|version| {
+            !version.is_empty()
+                && version
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
+        })
+}
+
 /// Detect the state of an agent from the live terminal tail snapshot.
 /// If `agent` is `None`, returns `Unknown`.
 ///
@@ -506,6 +596,70 @@ mod tests {
         assert_eq!(identify_agent("muse-bin"), None);
         assert_eq!(identify_agent("muse-bin-"), None);
         assert_eq!(identify_agent("muse-binary"), None);
+    }
+
+    /// The probe hands three facts about ONE process; identification has to
+    /// use all three, because the interesting case is the one where the
+    /// process NAME is a runtime. `claude` installs as a Node script, so the
+    /// kernel's idea of the program is `node` and the agent's name appears
+    /// only in the command line.
+    ///
+    /// `vim claude.rs` is the counter-case that keeps the scan honest: a token
+    /// scan over the WHOLE command line would identify an agent that is not
+    /// running (判据 §5 — a scan whose corpus is "every token" answers a
+    /// different question than the one asked). Only the command, and — when
+    /// that command is a generic runtime — the script it runs, are consulted.
+    #[test]
+    fn identify_agent_from_process_reads_node_scripts() {
+        assert_eq!(
+            identify_agent_from_process(
+                "node",
+                Some("node"),
+                Some("/usr/local/bin/claude --resume x")
+            ),
+            Some(Agent::Claude),
+            "the command line's own program names the agent"
+        );
+        assert_eq!(
+            identify_agent_from_process(
+                "node",
+                Some("node"),
+                Some("node /usr/local/bin/claude --resume x")
+            ),
+            Some(Agent::Claude),
+            "a runtime followed by its script names the agent"
+        );
+        assert_eq!(
+            identify_agent_from_process("sh", None, Some("/bin/sh /tmp/bin/claude")),
+            Some(Agent::Claude),
+            "a shebang script is the shape the end-to-end guard produces"
+        );
+        assert_eq!(
+            identify_agent_from_process("python3", None, Some("python3 -u /opt/pi")),
+            Some(Agent::Pi),
+            "flags between the runtime and its script are skipped"
+        );
+
+        assert_eq!(
+            identify_agent_from_process("vim", Some("vim"), Some("vim claude.rs")),
+            None,
+            "an editor holding a file named after an agent is not that agent"
+        );
+        assert_eq!(
+            identify_agent_from_process("claude", None, None),
+            Some(Agent::Claude),
+            "the process name alone still answers when it is the agent"
+        );
+        assert_eq!(
+            identify_agent_from_process("zsh", Some("-zsh"), Some("-zsh")),
+            None,
+            "a login shell is not an agent"
+        );
+        assert_eq!(
+            identify_agent_from_process("node", None, None),
+            None,
+            "a runtime with nothing to run identifies nothing"
+        );
     }
 
     #[test]
