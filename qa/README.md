@@ -664,8 +664,8 @@ appearing inside your scratch dir.
 pins `RUSTUP_HOME`/`CARGO_HOME` as well.** The paragraph above was true and
 still insufficient, which is the interesting part: it names the exact signature
 (`.rustup/toolchains/` inside the scratch dir) and the fixtures all guarded
-their own cargo lines correctly — eleven `HOME="$REAL_HOME" cargo …` call sites,
-every one right — and the leak happened anyway, three times, 1.3 GB each. A
+their own cargo lines correctly — every `HOME="$REAL_HOME" cargo …` call site
+right — and the leak happened anyway, three times, 1.3 GB each. A
 per-invocation guard covers the line it is written on; `export HOME=` stays in
 force for the whole process, so any *other* rustup-shimmed command (a drive
 script, a `bash`-tool call a scenario makes the agent run, a command typed into
@@ -679,13 +679,13 @@ qa_redirect_home "$QA_ROOT"      # exports HOME, ALEPH_HOME, RUSTUP_HOME, CARGO_
 ```
 
 `tests/qa_fixture_hygiene.rs` enforces it, deriving the fixture list by walking
-`qa/` rather than from a list in the test — a seventh fixture that hand-rolls
-`export HOME=` is named on its first run. There is no allowlist: obeying the
-rule is free, and an allowlist would be a second source of truth about who may
-hand-roll a scratch home. A per-command `HOME=… cmd` prefix is still fine once
-the pins are in the environment (`browser_managed` needs two, for a
-playwright-cli whose session store is HOME-scoped); only the process-wide
-`export HOME=` is refused.
+`qa/` rather than from a list in the test — a newly added fixture that
+hand-rolls `export HOME=` is named on its first run. There is no allowlist:
+obeying the rule is free, and an allowlist would be a second source of truth
+about who may hand-roll a scratch home. A per-command `HOME=… cmd` prefix is
+still fine once the pins are in the environment (`browser_managed` needs two,
+for a playwright-cli whose session store is HOME-scoped); only the
+process-wide `export HOME=` is refused.
 
 **The frame envelope has exactly one reader: `qa/lib/ws.mjs::normalizeFrame`.**
 Four Node drivers each held a byte-identical copy of it, and what had already

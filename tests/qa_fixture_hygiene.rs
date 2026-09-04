@@ -14,9 +14,9 @@
 //! `qa/lib/scratch_home.sh::qa_redirect_home` performs the redirect and the pin
 //! together, so a caller cannot take the isolation without the protection. The
 //! rules below exist because a fix that must be *remembered* at N sites is the
-//! same defect one level up — which is precisely how the leak happened: all
-//! eleven `HOME="$REAL_HOME" cargo …` guards in these fixtures are individually
-//! correct, and they cover only the lines they are written on.
+//! same defect one level up — which is precisely how the leak happened: every
+//! `HOME="$REAL_HOME" cargo …` guard in these fixtures is individually correct,
+//! and they cover only the lines they are written on.
 //!
 //! Every rule derives its subject list by walking `qa/`, never from a list kept
 //! here — a newly added fixture is judged on its first run rather than whenever
