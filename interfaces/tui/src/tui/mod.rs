@@ -962,8 +962,10 @@ mod tests {
             label: "claude".into(),
             cwd: "/tmp".into(),
             agent: Some("claude".into()),
+            program: None,
             state: RuntimeAgentState::Working,
             updated_at: 1,
+            quiet_since: None,
         }
     }
 

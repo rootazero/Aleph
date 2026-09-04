@@ -53,7 +53,11 @@ const WAIT_DEFAULT_TIMEOUT_SECS: u64 = 60;
 /// Hard ceiling for a `wait` window. Stays under the 180s foreground tool
 /// budget so an over-eager `timeout` can't push the blocking wait past the
 /// point where the budget wrapper kills the whole call.
-const WAIT_MAX_TIMEOUT_SECS: u64 = 170;
+///
+/// `pub(crate)` for `builtin_tools::terminal`, whose `wait` action answers to
+/// the same budget: its own ceiling is asserted to stay under this one rather
+/// than restating "180 s minus some slack" a second time (判据 §1).
+pub(crate) const WAIT_MAX_TIMEOUT_SECS: u64 = 170;
 
 /// Arguments for bash execution tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

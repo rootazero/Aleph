@@ -23,7 +23,21 @@ pub const RUNTIME_AGENTS_CHANGED_TOPIC: &str = "runtime.agents.changed";
 /// that it is not derived from what it is checking.
 pub const RUNTIME_AGENTS_LIST_METHOD: &str = "runtime.agents.list";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+// MAINTAINERS — this note is a `//` and must stay one. The `JsonSchema` derive
+// below means the doc comment on this type ships to the MODEL: `terminal{wait}`
+// takes these states as its `until` argument, so whatever is written as `///`
+// here is paid for on every turn that loads that tool, from a crate nobody
+// editing the tool reads. The guard is
+// `builtin_tools::terminal::tests::the_shipped_schema_addresses_the_model_and_not_the_maintainer`.
+//
+// Why the derive is here at all: a tool-local copy of the four names would be a
+// second enumeration of the same closed set — the shape that silently drops a
+// state the day a fifth is added (判据 §1/§5) — and `canvas.rs` already derives
+// it on wire types in this crate.
+/// What an agent in a terminal session is doing right now: `working`,
+/// `blocked` (it is waiting on a human), `idle`, or `unknown` when detection
+/// cannot say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeAgentState {
     Idle,
@@ -43,6 +57,16 @@ pub struct RuntimeAgentEntry {
     /// `None` = the bundled manifest does not recognise this program.
     /// Never a guess.
     pub agent: Option<String>,
+    /// The FOREGROUND program's name, as probed from the process table —
+    /// `claude`, `vim`, or the shell itself once an agent exits.
+    ///
+    /// `None` means the probe could not answer (no permission, an
+    /// unsupported platform, the session already gone). It is never a guess
+    /// and never the spawn label: `label` already answers "what was this
+    /// session started as", and folding the two would make "we could not
+    /// look" indistinguishable from "the shell is what is running".
+    #[serde(default)]
+    pub program: Option<String>,
     pub state: RuntimeAgentState,
     /// Unix epoch MILLISECONDS, from the sampler's flush-tick clock — not the
     /// client's. Advances only when something observable changed (state,
@@ -50,6 +74,16 @@ pub struct RuntimeAgentEntry {
     /// it as "how long has it been like this", not as "when was this last
     /// looked at".
     pub updated_at: i64,
+    /// Unix epoch MILLISECONDS of the moment this session went quiet, once it
+    /// has produced no frame for the sampler's quiet threshold.
+    ///
+    /// This is a FACT about output, not a state. Silence is not idle: an
+    /// agent thinking for five minutes emits nothing, and any code that let
+    /// time alone turn `Working` into `Idle` would be manufacturing evidence
+    /// (spec R2-3). `state` is unaffected by this field — a reader that wants
+    /// "stuck?" renders the age, it does not re-derive the state.
+    #[serde(default)]
+    pub quiet_since: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,8 +105,10 @@ mod tests {
                 label: "claude".into(),
                 cwd: "/tmp".into(),
                 agent: Some("claude".into()),
+                program: Some("claude".into()),
                 state: RuntimeAgentState::Blocked,
                 updated_at: 42,
+                quiet_since: Some(41),
             }],
         };
         let wire = serde_json::to_value(&resp).unwrap();
@@ -89,9 +125,15 @@ mod tests {
             label: "zsh".into(),
             cwd: "/tmp".into(),
             agent: None,
+            program: None,
             state: RuntimeAgentState::Unknown,
             updated_at: 0,
+            quiet_since: None,
         };
-        assert!(serde_json::to_value(&e).unwrap()["agent"].is_null());
+        let wire = serde_json::to_value(&e).unwrap();
+        assert!(wire["agent"].is_null());
+        // Same rule for the probe: "we could not look" must reach the client
+        // as null, not as the shell label standing in for a program.
+        assert!(wire["program"].is_null());
     }
 }

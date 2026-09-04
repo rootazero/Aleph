@@ -192,6 +192,34 @@ Three things about this pair are load-bearing:
 | `sessions_send` | Send to sub-agent | `session_key`, `message` |
 | `sessions_list` | List sub-agents | - |
 
+### Embedded Terminal (read-only)
+
+Observes the PTY sessions the caller owns — the same data `pty.*` and `runtime.*` gate
+operator-only on their RPC and event faces, so this tool is gated the same way
+(`method_authz::OPERATOR_TOOLS` **and** an inline re-check in `builtin_tools/terminal.rs`).
+**No write verb**: a PTY passes neither `[sandbox.command_policy]` nor the exec tier, so typing
+into one would hand the model a shell that bypasses every command gate — an authorization
+decision, not a feature (round-2 spec §7.1 holds the shape it would take if that is ever decided).
+
+| Tool | Description | Args |
+|------|-------------|------|
+| `terminal(list)` | The caller's own PTY sessions: `session_id`, `shell`, `cwd` (the SPAWN dir), `created_at`, `closed` | `action` |
+| `terminal(read)` | One session's current visible screen, no scrollback | `action`, `session_id` |
+| `terminal(status)` | Each session's detected agent state (`working`/`blocked`/`idle`/`unknown`) — the table `runtime.agents.list` serves | `action` |
+| `terminal(wait)` | Block until one session's state enters `until`, then return the entry. Answers `timeout` with the CURRENT entry, `gone` if the session ends first. Never polls the screen | `action`, `session_id`, `until?` (default `["blocked","idle"]`), `timeout_ms?` (default 60000, **clamped** to 150000) |
+| `terminal(explain)` | Why a state was reported: which manifest rule matched, at which manifest version, over which screen text and title | `action`, `session_id` |
+
+⚠️ **`explain`'s state may legitimately differ from `status`'s, and that is not a bug.** `explain`
+re-runs the detection engine over a FRESH read of the live screen; `status` reports the table, which
+carries the sampler's idle-hold damping (`gateway::runtime::IDLE_HOLD_MS`). A session that just went
+idle reads `working` in `status` and `idle` in `explain` for the length of the hold. `explain` is the
+instrument for "is this detection wrong", so it deliberately answers about the screen as it is now.
+
+A session the caller does not own answers `no such session`, byte for byte the same as one that
+never existed. An actor-less caller (cron / A2A / internal wiring) sees only sessions nobody owns,
+which in production means none — the intended fail-closed, see
+[SECURITY.md](SECURITY.md) 内嵌终端 and [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md) §4.
+
 ### Memory Tools
 
 | Tool | Description | Args |

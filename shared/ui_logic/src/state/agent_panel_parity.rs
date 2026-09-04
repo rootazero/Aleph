@@ -24,6 +24,17 @@
 //! frontend files for a self-rolled ordering call. The two tests together
 //! are what make "both faces show one order" enforced instead of merely
 //! documented; neither one alone does.
+//!
+//! # Scope: ordering, and where the OTHER cross-face properties live
+//!
+//! This module's subject is the ORDER rows appear in. That scope is why the
+//! duplicated `entry_name` (the `program → agent → label` row-name chain) sat
+//! in both frontends unnoticed: nothing here was ever going to look at it.
+//! The name is now one derivation next door
+//! ([`super::agent_panel::entry_name`], with its fallback test beside it), and
+//! its source-level half is `no_frontend_derives_its_own_agent_row_name` in
+//! alephcore — the same file as the ordering scan. Adding a cross-face
+//! property here means adding BOTH halves, as ordering and the name each have.
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
 
@@ -48,8 +59,10 @@ fn all_permutations_of_four_entries() -> Vec<Vec<RuntimeAgentEntry>> {
             label: "claude".to_string(),
             cwd: String::new(),
             agent: None,
+            program: None,
             state,
             updated_at: 0,
+            quiet_since: None,
         }
     }
 
@@ -113,7 +126,9 @@ fn all_permutations_of_four_entries() -> Vec<Vec<RuntimeAgentEntry>> {
 #[test]
 fn sorting_is_deterministic_and_total() {
     let mut permutations = all_permutations_of_four_entries().into_iter();
-    let mut canonical = permutations.next().expect("generator always yields 24 permutations");
+    let mut canonical = permutations
+        .next()
+        .expect("generator always yields 24 permutations");
     sort_entries(&mut canonical);
     assert!(canonical
         .windows(2)
@@ -154,5 +169,46 @@ fn the_generator_produces_all_twenty_four_permutations_with_no_duplicates() {
         .collect();
     orderings.sort();
     orderings.dedup();
-    assert_eq!(orderings.len(), 24, "generator produced a duplicate ordering");
+    assert_eq!(
+        orderings.len(),
+        24,
+        "generator produced a duplicate ordering"
+    );
+}
+
+/// S6: the four-state glyph set had a copy in each frontend
+/// (`interfaces/tui/src/tui/widgets/agent_panel.rs` and
+/// `interfaces/webchat/src/components/sidebar/agent_panel.rs`), with no test
+/// spanning both — 判据 §1, one fact with two statements of it, only one of
+/// which would ever have been edited. [`super::agent_panel::state_glyph`] is now the single
+/// table; this pins the property that made it worth sharing.
+///
+/// Reddens if any two states are given the same glyph — in particular if
+/// `Unknown` is ever mapped onto `Idle`'s, which would render "I do not know
+/// what this agent is doing" as "nothing is happening here" (判据 §8).
+#[test]
+fn glyphs_are_distinct_and_unknown_is_not_idle() {
+    use super::agent_panel::state_glyph;
+    use RuntimeAgentState as S;
+
+    let all = [S::Blocked, S::Working, S::Idle, S::Unknown];
+    let glyphs: Vec<&'static str> = all.iter().copied().map(state_glyph).collect();
+
+    let mut distinct = glyphs.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        all.len(),
+        "every state needs its own glyph; got {glyphs:?}"
+    );
+    assert_ne!(
+        state_glyph(S::Unknown),
+        state_glyph(S::Idle),
+        "unknown must never wear idle's glyph"
+    );
+    assert!(
+        glyphs.iter().all(|g| !g.is_empty()),
+        "an empty glyph renders as no glyph at all: {glyphs:?}"
+    );
 }
