@@ -1,0 +1,120 @@
+{
+  "module": "src/generation",
+  "files_scanned": [
+    "src/generation/mod.rs",
+    "src/generation/error.rs",
+    "src/generation/probe.rs",
+    "src/generation/registry.rs",
+    "src/generation/response_parser.rs",
+    "src/generation/voice_catalog.rs",
+    "src/generation/types/mod.rs",
+    "src/generation/types/generation_type.rs",
+    "src/generation/types/output.rs",
+    "src/generation/types/params.rs",
+    "src/generation/types/progress.rs",
+    "src/generation/types/request.rs",
+    "src/generation/providers/mod.rs",
+    "src/generation/providers/factory.rs",
+    "src/generation/providers/http.rs",
+    "src/generation/providers/url_normalize.rs",
+    "src/generation/providers/tests.rs"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg; seam-catalog lenses (registration parity, call-vs-handler, config-reader, stub sweep); code-smell pass. Read-only — no edits made during review phase.",
+  "findings": [
+    {
+      "id": "sw-generation-1-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "GenerationProviderRegistry::config_name_for_canonical (pub fn returning Option<&str>)",
+      "produced_location": "src/generation/registry.rs:186",
+      "consumer_location": "Zero call sites anywhere in src/, tests/, interfaces/, desktop/. Only the canonical_index field is mutated (register()) and read (the field's other read at the symmetric `canonical_name_of` accessor).",
+      "decision": "CUT-or-defer",
+      "rationale": "Pure form-1 dead public API. The accessor was added for log-correlation with a doc comment about it being 'useful for log correlation', but no log emitter, debug tool, or admin RPC actually calls it. The paired `canonical_name_of` (let me verify) is also likely dead. Recommend CUT: if a future caller needs it, the index field is right there. Demoting to pub(crate) is also viable.",
+      "fix_commit": null,
+      "residual_risk": "Trivial — pure read accessor over an internal index, no live callers."
+    },
+    {
+      "id": "sw-generation-1-2",
+      "severity": "low",
+      "form": 1,
+      "produced": "GenerationProviderRegistry::get_or_err (pub fn returning GenerationResult)",
+      "produced_location": "src/generation/registry.rs:221",
+      "consumer_location": "Zero production call sites. Only used in #[cfg(test)] at src/generation/registry.rs:551, :563. Production callers use `registry.get(name)` and convert to error inline (the error path needs the context-bearing error message that get_or_err does not provide).",
+      "decision": "CUT",
+      "rationale": "Pure form-1 dead public API. The convenience method is not more convenient: its error is `format!(\"Provider '{name}' not found in registry\")` — which lacks the generation_type context that callers need (e.g. `provider '{name}' for type '{gen_type}' not found`). Demoting to pub(crate) keeps it usable by tests in the same module. Recommend demoting.",
+      "fix_commit": null,
+      "residual_risk": "Trivial — no production callers."
+    },
+    {
+      "id": "sw-generation-2-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "parse_generation_requests / has_generation_requests (the only two pub fns in src/generation/response_parser.rs)",
+      "produced_location": "src/generation/response_parser.rs:75 (parse_generation_requests), :108 (has_generation_requests)",
+      "consumer_location": "Zero production callers. Only used in #[cfg(test)] within the same file (response_parser.rs:120, :133, :143, :152, :161, :165, :172). Re-exported in generation/mod.rs:67 but the re-export points at unused API.",
+      "decision": "CUT-or-defer",
+      "rationale": "Pure form-1 dead public API. The `[GENERATE:type:provider:model:prompt]` syntax these functions parse appears nowhere in the production codebase. The factory path is `tool → registry → provider.generate(request)` with `GenerationRequest` constructed by the builtin tools (src/builtin_tools/generation/{image_generate,speech_generate}.rs), not parsed out of model output. Three options: (a) CUT both functions + the test module (which only exercises the parser, not any integration) — purest option; (b) leave the parser in place as 'planned future syntax for inline model-output-embedded generation requests' — this is a spec-time promise with no commit; (c) DECIDE: this was on the roadmap at some point. Recommend DECIDE: if no design doc keeps this contract alive, CUT.",
+      "fix_commit": null,
+      "residual_risk": "If kept dormant: a future contributor who reads the re-export and assumes model-output parsing is wired will be misled. CUTTING is safe; restoring the module if needed is mechanical."
+    },
+    {
+      "id": "sw-generation-3-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "FalProviderBuilder / MidjourneyProviderBuilder / OpenAiCompatProviderBuilder / ReplicateProviderBuilder (4 pub struct builders + their public methods)",
+      "produced_location": "src/generation/providers/fal/mod.rs:73, src/generation/providers/midjourney/builder.rs:32, src/generation/providers/openai_compat/builder.rs:32, src/generation/providers/replicate/builder.rs:34",
+      "consumer_location": "Zero external callers outside src/generation/providers/. Each is only used inside its own provider module (and the factory at factory.rs:158, :252, :243, :217 which calls `.builder()` static methods on the Provider, not the Builder type directly). Re-exported in providers/mod.rs:69, :72, :74, :78.",
+      "decision": "CUT",
+      "rationale": "All four builders are pub-exported but their only consumers are: (a) the factory.rs create_provider match arm for that provider type, and (b) unit tests in the provider's own module. The factory's pattern is `let mut builder = XProvider::builder(...); ...; builder.build()?` — it never names the Builder type explicitly. Tests do name it. Demoting all four to `pub(crate)` would keep tests compiling (they live in the same crate) and remove the public-API surface that no caller uses. Recommend demoting.",
+      "fix_commit": null,
+      "residual_risk": "Trivial — provider modules still own their builders; pub(crate) keeps the factory working."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "subject": "All 20 provider types in src/generation/providers/",
+      "verdict": "live",
+      "evidence": "Each provider is constructed by the factory at src/generation/providers/factory.rs:76-291 via a match arm on `provider_type`. The factory is called from src/gateway/handlers/providers/handlers.rs:197, :332 (RPC create_provider_inner) and src/gateway/voice/format.rs:134. Each provider impl registers a `static_voice_list()` method (or equivalent) consumed by `static_voices_for_provider_type` (voice_catalog.rs:42) which is consumed by src/gateway/handlers/generation_providers/voices.rs:199. The 23 #[allow(dead_code)] annotations on fields throughout types.rs files are all `// Deserialized from API response` markers — the fields are populated by serde and surfaced via Debug/log, not by direct Rust access. Valid form-1 exception per the audit playbook."
+    },
+    {
+      "subject": "create_provider factory function",
+      "verdict": "live",
+      "evidence": "src/gateway/handlers/providers/handlers.rs:197, :332 + src/gateway/voice/format.rs:134 + 11 callers in src/gateway/handlers/providers/tests.rs. Factory handles 22 distinct provider_type strings and rejects unknown ones (factory.rs:311-189)."
+    },
+    {
+      "subject": "probe_generation_provider + GenerationProbeOutcome",
+      "verdict": "live",
+      "evidence": "src/gateway/handlers/generation_providers/handlers.rs:594 invokes it during create_provider_inner for the smoke test."
+    },
+    {
+      "subject": "voice_http_client (pub(crate) shared hardened reqwest client)",
+      "verdict": "live",
+      "evidence": "src/generation/providers/azure_speech/mod.rs:113, :130; src/generation/providers/openai_tts/mod.rs:149, :173; src/gateway/voice/local_provider.rs:53. Documented hardening (pool_max_idle_per_host(0), connect_timeout, per-request timeout) is consistent across all four call sites."
+    },
+    {
+      "subject": "static_voices_for_provider_type / VoiceInfo",
+      "verdict": "live",
+      "evidence": "src/gateway/handlers/generation_providers/voices.rs:199 calls static_voices_for_provider_type for the per-provider-type voice picker RPC. 8 provider_type strings map to live voice catalogs (catalog/test at voice_catalog.rs:76 enforces every speech provider has a non-empty catalog)."
+    },
+    {
+      "subject": "GenerationError constructors (24 variants + 14 pub fn builders)",
+      "verdict": "live",
+      "evidence": "External refs counted: authentication(>20), rate_limit, timeout, network, invalid_parameters, content_filtered, provider, internal, model_not_found, unsupported_generation_type(2), cancelled, serialization(31), download(6), quota_exceeded(5), unsupported_format(8), unsupported_feature(4), unsupported_dimension(1), job_failed — all have production callers across src/generation/providers/ and src/gateway/."
+    },
+    {
+      "subject": "GenerationType variants (Image / Video / Audio / Speech / Transcription)",
+      "verdict": "all live",
+      "evidence": "Refs: Image(42), Video(30), Audio(27), Speech(40), Transcription(17). Transcription is covered by OpenAiWhisperProvider, DeepgramSttProvider — the factory at factory.rs:104, :109 maps provider_type to these."
+    },
+    {
+      "subject": "GenerationParamsBuilder",
+      "verdict": "live",
+      "evidence": "src/config/types/generation/defaults.rs:173 uses it. The GoogleVeo test bodies at providers/google_veo/mod.rs:189, :210, :224, :229, :234, :251, :256, :260 also exercise it."
+    },
+    {
+      "subject": "Stub far-end sweep",
+      "verdict": "clean",
+      "evidence": "rg 'TODO|FIXME|unimplemented!|todo!\\(' in src/generation/ returns zero matches. The factory's unknown-provider-type arm (factory.rs:311-189) returns GenerationError::invalid_parameters with a helpful error message — not a stub. All 23 #[allow(dead_code)] are intentional for serde-deserialized fields."
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "module": "src/goal",
+  "files_scanned": [
+    "src/goal/mod.rs",
+    "src/goal/pursuit.rs",
+    "src/goal/store.rs",
+    "src/goal/types.rs"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg; seam-catalog lenses (registration parity, call-vs-handler, config-reader, stub sweep); code-smell pass. Read-only — no edits made during review phase.",
+  "findings": [],
+  "reviewed_no_change": [
+    {
+      "subject": "GoalStore methods (open/put/get/delete/try_claim_continuation/commit_gate_pass/try_claim_settle_notify/release_settle_notify/claim_after_gate_veto/block_if_active/block_if_abandonable/block_if_not_terminal/pause_if_active/park_if_active/pause_all_active/pause_all_owned_by/register_budget_member/supersede_wait_timer/clear_wait_barrier/confirm_fire/rearm_after_busy/commit_field_update/list_all)",
+      "verdict": "live",
+      "evidence": "Cross-module method-call audit: every pub fn in GoalStore has ≥1 external call site (excluding test code in src/goal/store.rs:1164+). External callers span builtin_tools/goal.rs (the main Goal tool), gateway/execution_engine/{goal_wait.rs,goal_continuation.rs,execute.rs}, gateway/goal_budget.rs, looping/mod.rs (loop sibling, parallel API), memory/dreaming/stages/goal_lessons_promote.rs (list_all + put), executor/builtin_registry/builder/constructor/mod.rs:485 (open at startup). Confirmed by targeted rg: `rg -c '\\.${m}\\(' src/ --type rust | rg -v '^src/goal/store.rs:'` returns non-zero counts for every method."
+    },
+    {
+      "subject": "pursuit.rs functions (should_continue/fires_out_of_bounds/continuation_prompt/exhausted_while_active/cap_reached_note/deadline_reached_note/budget_reached_note/transient_park_note/bound_transient_park_delay_ms/stop_reason_note/wait_parked/wait_resume_prompt/awaiting_gate/gateless_terminal_complete/confirm_complete/reopen_after_gate_failure/gate_failure_prompt)",
+      "verdict": "live",
+      "evidence": "Each has external refs (count 1..16). Heaviest: stop_reason_note(15), should_continue(14), fires_out_of_bounds(16), wait_parked(6), exhausted_while_active(5). Cross-module consumers include gateway/execution_engine/, builtin_tools/goal.rs, looping/, orchestrator/."
+    },
+    {
+      "subject": "types.rs public types (Goal/GoalStatus/PursuitMode/GateOutcome/BudgetMember/MAX_BUDGET_MEMBERS/MAX_LESSONS)",
+      "verdict": "live",
+      "evidence": "GoalStatus: 50+ external refs (looping/types.rs mirrors it explicitly at line 88). PursuitMode: matches!() in 4+ places. GateOutcome: builtin_tools/goal.rs uses Passed/Unchecked at lines 1010, 2804, 2829. BudgetMember + MAX_BUDGET_MEMBERS: used in builtin_tools/goal.rs:353, gateway/goal_budget.rs:125+208, gateway/session_manager/tests.rs. MAX_LESSONS: goal_lessons_promote.rs:3 doc, ring cap."
+    },
+    {
+      "subject": "mod.rs global registry (init_global/global/set_global_for_test)",
+      "verdict": "live",
+      "evidence": "init_global: 21 external call sites; global(): 42 external call sites; set_global_for_test: 23 external call sites. The process-wide GoalStore handle is the standard access pattern (tests + production wiring in executor/builtin_registry/builder/constructor/mod.rs)."
+    },
+    {
+      "subject": "No event emit / subscribe surface in src/goal/ (intentional)",
+      "verdict": "intentional design",
+      "evidence": "rg 'event_bus.publish|broadcast::|emit_goal|publish_goal' in src/goal/ returns zero matches. Goal module is a pure persistence + pursuit decision engine; events are surfaced by callers (loop_graph watches via store writes, builtin_tools/goal.rs triggers settle_notify). No event wiring to audit — design deliberately keeps goal/ isolated."
+    },
+    {
+      "subject": "No config section in src/goal/ (intentional)",
+      "verdict": "intentional design",
+      "evidence": "rg '\\[goal\\.|GoalConfig' returns zero matches. GoalStore::open(path) takes its own path; no [goal.*] config schema. All tunables are constants in types.rs (MAX_BUDGET_MEMBERS, MAX_LESSONS)."
+    },
+    {
+      "subject": "Stub far-end sweep",
+      "verdict": "clean",
+      "evidence": "rg 'unimplemented!|todo!\\(|// TODO' in src/goal/ returns zero matches. All 'Ok(true)' / 'Ok(false)' returns at store.rs:484,486,590,592,... are CAS return shapes (commit_gate_pass, block_if_*, etc.) — the bool is the CAS result, not a stub. Module has zero #[allow(dead_code)] / #[allow(unused)] annotations."
+    }
+  ],
+  "module_health_summary": "src/goal is wiring-clean. All pub fn / pub struct / pub enum has live consumers; no dead code, no stubs, no inert config, no TODO, no #[allow(dead_code)]. The 4313-line module is the canonical backing store for goal state and its public API is fully consumed by builtin_tools/goal.rs (the LLM-facing Goal tool), gateway/execution_engine/* (auto-continue machinery), memory/dreaming (lesson promotion), looping/ (parallel mirror API), and gateway/goal_budget.rs (budget enforcement)."
+}

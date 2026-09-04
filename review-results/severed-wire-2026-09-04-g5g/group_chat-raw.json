@@ -1,0 +1,111 @@
+{
+  "module": "src/group_chat",
+  "files_scanned": [
+    "src/group_chat/mod.rs",
+    "src/group_chat/channel.rs",
+    "src/group_chat/coordinator.rs",
+    "src/group_chat/executor.rs",
+    "src/group_chat/orchestrator.rs",
+    "src/group_chat/persona.rs",
+    "src/group_chat/protocol.rs",
+    "src/group_chat/session.rs",
+    "src/resilience/database/group_chat.rs",
+    "src/gateway/handlers/group_chat.rs",
+    "src/gateway/inbound_router/group_chat_handler.rs"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg; seam-catalog lenses (registration parity, call-vs-handler, config-reader, stub sweep); code-smell pass. Read-only — no edits made during review phase.",
+  "findings": [
+    {
+      "id": "sw-group_chat-1-1",
+      "severity": "medium",
+      "form": 1,
+      "produced": "GroupChatExecutor::with_database / GroupChatOrchestrator::with_database (both identical pub fn builders taking Arc<StateDatabase>)",
+      "produced_location": "src/group_chat/executor.rs:95, src/group_chat/orchestrator.rs:70",
+      "consumer_location": "zero call sites. Executor::persist_turn (executor.rs:156) reads `self.db` and silently no-ops on None. Startup at src/bin/aleph-server/commands/start/mod.rs:3033 wires only `GroupChatExecutor::new(handle).with_coordinator_visible(...).with_history_window(...)` — neither with_database nor with_provider_registry is ever invoked.",
+      "decision": "CUT-or-defer",
+      "rationale": "Both with_database builders are declared pub but never called anywhere in src/, tests/, or interfaces/. They are inert scaffolding: the underlying fields (`executor.db`, `orchestrator.db`) start as None and silently no-op the persistence. The design intent is turn-persistence to StateDatabase, but the wiring is severed. Two paths: (a) CONNECT — wire at startup by plumbing the existing StateDatabase into both builders (single trait addition); (b) CUT — delete both builder methods + their fields + persist_turn if no caller is on the roadmap. Recommend CUT: the DB turn-persistence code path exists, but if no caller wants it, it's dead scaffolding that future readers will mistake for a working feature. The `db` field on orchestrator is even more clearly dead (never read).",
+      "fix_commit": null,
+      "residual_risk": "If kept dormant: any operator who configures `GroupChatConfig::history_window_rounds` expects conversation history to land in StateDatabase; the silent skip will surprise them. Deleting requires checking whether turn-persistence is on the near-term roadmap."
+    },
+    {
+      "id": "sw-group_chat-2-1",
+      "severity": "medium",
+      "form": 1,
+      "produced": "GroupChatExecutor::with_provider_registry (builder for Arc<ProviderRegistry>)",
+      "produced_location": "src/group_chat/executor.rs:73",
+      "consumer_location": "Zero external call sites (only tests at executor.rs:994, :1166). At runtime, executor.provider_registry starts as None (executor.rs:60) and resolve_provider (executor.rs:107) silently falls back to default_provider whenever a persona specifies provider = Some(...).",
+      "decision": "CUT-or-defer",
+      "rationale": "Per-persona provider override is a designed feature (PersonaConfig::provider at config/types/group_chat.rs:115, Persona::provider at group_chat/protocol.rs:72), but the wiring from startup to executor is missing. The `provider` field on persona is honored by the executor only when with_provider_registry has been called — at startup it isn't, so the entire feature is dormant. Two paths: (a) CONNECT — share the existing ProviderRegistry used by gateway/execution_engine/engine.rs:147 with GroupChatExecutor::new at startup; (b) CUT — delete the provider field on Persona/PersonaConfig, the with_provider_registry builder, and the provider_registry field. Recommend DECIDE: this is a product call. The painless-wire heuristic argues CUT (no observed production pain, no example config uses per-persona provider), but the persona field is in the public config schema so removing it is a breaking change.",
+      "fix_commit": null,
+      "residual_risk": "If kept dormant: silently ignores per-persona provider overrides. Any user with `provider = \"anthropic\"` on a persona will see all personas use the same default — no warning, just wrong behavior."
+    },
+    {
+      "id": "sw-group_chat-3-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "GroupChatOrchestrator::all_sessions() (returns Vec<(String, SharedSession)>)",
+      "produced_location": "src/group_chat/orchestrator.rs:319",
+      "consumer_location": "Zero production call sites. Only used in #[cfg(test)] blocks at orchestrator.rs:384, :435, :460, :496, :504, :548, :552, :555, :621.",
+      "decision": "CUT",
+      "rationale": "Pure test-only API. Demoting to `pub(crate)` would break the tests (which live in the same module, so `pub(crate)` is fine; or move tests to use a private helper). Either way, the public API of GroupChatOrchestrator does not need to expose a snapshot of all sessions — callers query by id (get_session) or mutate (end_session). Recommend demoting to pub(crate) or moving tests to use an internal `fn sessions_snapshot(&self)` helper.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: no production callers."
+    },
+    {
+      "id": "sw-group_chat-4-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "GroupChatSession::build_history_text() (non-windowed history builder)",
+      "produced_location": "src/group_chat/session.rs:176",
+      "consumer_location": "Only build_history_text_windowed (session.rs:196 — same file, internal helper) and tests (session.rs:351). The windowed variant is what production uses (executor.rs:249).",
+      "decision": "CUT",
+      "rationale": "Helper-of-a-helper. The windowed version calls this when window_rounds is 0 (the default-disables-window case), which is the only remaining live caller. Could be inlined into build_history_text_windowed (a 4-line helper) or kept as a private fn. Recommend demoting to pub(crate) or inlining.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: only one internal caller."
+    },
+    {
+      "id": "sw-group_chat-5-1",
+      "severity": "medium",
+      "form": 1,
+      "produced": "StateDatabase::get_group_chat_session_owner / StateDatabase::list_active_group_chats (DB CRUD methods on src/resilience/database/group_chat.rs)",
+      "produced_location": "src/resilience/database/group_chat.rs:88 (get_group_chat_session_owner), :224 (list_active_group_chats)",
+      "consumer_location": "zero call sites anywhere — neither production code nor tests use either method.",
+      "decision": "CUT",
+      "rationale": "Pure form-1 dead code. The other four CRUD methods on this module (insert_group_chat_session, update_group_chat_session_status, insert_group_chat_turn, get_group_chat_turns) each have exactly one production caller. These two have zero. Either connect them (group_chat_orchestrator uses get_group_chat_session_owner for ownership check, and list_active_group_chats powers a `group_chat.list` admin RPC) or delete them. Recommend DECIDE if there's an active roadmap for an admin/listing RPC; otherwise CUT.",
+      "fix_commit": null,
+      "residual_risk": "Trivial — pure SQL helper, no live callers."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "subject": "RPC method registration parity (group_chat.{start,continue,mention,end,list,history})",
+      "verdict": "live (placeholder + override pattern)",
+      "evidence": "Stateless placeholders registered at src/gateway/handlers/mod.rs:816-825 (return INTERNAL_ERROR 'requires GroupChatOrchestrator runtime'). The real handlers exist in src/gateway/handlers/group_chat.rs (handle_start:92, handle_continue:194, handle_mention:297, handle_end:309, handle_list:363, handle_history:413) and are registered via `register_group_chat_handlers` at src/bin/aleph-server/commands/start/builder/handlers/system.rs:112, called at src/bin/aleph-server/commands/start/mod.rs:3043 (`if let Some(ref executor) = gc_executor { register_group_chat_handlers(...) }`). The placeholders are intentional fallback for the phase-1 HandlerRegistry::new() before the orchestrator is wired."
+    },
+    {
+      "subject": "Inbound router group chat handler",
+      "verdict": "live",
+      "evidence": "src/gateway/inbound_router/group_chat_handler.rs:45 try_handle_group_chat is invoked from src/gateway/inbound_router/mod.rs:1027 inside the inbound message path. Parser uses DefaultGroupChatCommandParser (channel.rs:35). Handlers correctly consume GroupChatRequest::{Start,Continue,Mention,End}."
+    },
+    {
+      "subject": "Persona::validate / PersonaConfig::validate",
+      "verdict": "live",
+      "evidence": "src/config/validate.rs:605 references 'PersonaRegistry::from_configs' doc. Validate calls observed in 27+ sites across config/validate.rs and builtin_tools/."
+    },
+    {
+      "subject": "build_coordinator_prompt / parse_coordinator_plan / build_fallback_plan / build_persona_prompt",
+      "verdict": "live",
+      "evidence": "Used by executor.rs:250,281,287,362 (in production execute_round path)."
+    },
+    {
+      "subject": "Persona::model / Persona::thinking_level",
+      "verdict": "live",
+      "evidence": "executor.rs:380-406 honors both fields with .with_model(persona.model.clone()).with_think_level(think_level). Only provider requires the unwired with_provider_registry (see sw-group_chat-2-1)."
+    },
+    {
+      "subject": "Stub far-end sweep / #[allow(dead_code)]",
+      "verdict": "clean",
+      "evidence": "rg 'TODO|FIXME|unimplemented!|todo!\\(|XXX|#\\[allow\\(dead_code\\)\\]' in src/group_chat/ returns zero matches. The placeholder handlers in src/gateway/handlers/group_chat.rs are intentional fallback (documented as 'Phase-1 placeholders'), not stubs."
+    }
+  ]
+}

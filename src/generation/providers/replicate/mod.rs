@@ -45,7 +45,7 @@ mod provider;
 mod types;
 
 // Re-exports for backward compatibility
-pub use builder::ReplicateProviderBuilder;
+pub(crate) use builder::ReplicateProviderBuilder;
 pub use constants::{
     DEFAULT_ENDPOINT, DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, MODEL_FLUX_SCHNELL, MODEL_MUSICGEN,
     MODEL_SDXL, POLL_INTERVAL_MS,

@@ -268,7 +268,7 @@ pub async fn handle_start(
 }
 
 /// Handle wizard.answer
-pub async fn handle_answer(
+async fn handle_answer(
     req: JsonRpcRequest,
     manager: Arc<WizardSessionManager>,
 ) -> JsonRpcResponse {
@@ -311,7 +311,7 @@ pub async fn handle_answer(
 }
 
 /// Handle wizard.next (get next step without answering)
-pub async fn handle_next(
+async fn handle_next(
     req: JsonRpcRequest,
     manager: Arc<WizardSessionManager>,
 ) -> JsonRpcResponse {

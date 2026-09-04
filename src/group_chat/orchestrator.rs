@@ -316,7 +316,13 @@ impl GroupChatOrchestrator {
     /// Return handles to all active sessions.
     ///
     /// The caller can then lock each session individually to inspect status.
-    pub fn all_sessions(&self) -> Vec<(String, SharedSession)> {
+    ///
+    /// Production callers query by id ([`Self::get_session`]) or mutate
+    /// ([`Self::end_session`]) — only the `#[cfg(test)]` block in this
+    /// module iterates `all_sessions`. Demoted to `pub(crate)` so the test
+    /// suite keeps compiling without widening the API surface to external
+    /// crates. (severed-wire audit 2026-09-04, sw-group_chat-3-1.)
+    pub(crate) fn all_sessions(&self) -> Vec<(String, SharedSession)> {
         self.lock_sessions_map()
             .iter()
             .map(|(id, e)| (id.clone(), Arc::clone(&e.handle)))
