@@ -12,7 +12,10 @@ use super::{current_timestamp_ms, SecurityStore};
 /// Errors that can occur when consuming a bootstrap ticket.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootstrapTicketError {
-    /// Ticket does not exist or has already been consumed.
+    /// The ticket is not redeemable, for any of three reasons: it does not
+    /// exist, it has already been consumed, or it has been **revoked** (by a
+    /// deactivation sweep or `gateway.ticket.revoke`). All three arrive here
+    /// on purpose — see the `Display` impl below.
     Invalid,
     /// Ticket expired before consumption.
     Expired,
@@ -23,6 +26,13 @@ pub enum BootstrapTicketError {
 impl std::fmt::Display for BootstrapTicketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            // Unknown, consumed and revoked deliberately render as one
+            // message. The exchanger is unauthenticated, so telling it which
+            // of the three it holds is an oracle over other people's tickets:
+            // "already consumed" says the code was real and someone redeemed
+            // it, "revoked" says the code was real and a principal was
+            // deactivated. Do NOT "fix" this into three distinguishable
+            // strings — the sameness is the security property.
             Self::Invalid => write!(f, "invalid or already consumed bootstrap ticket"),
             Self::Expired => write!(f, "bootstrap ticket expired"),
             Self::Store(e) => write!(f, "bootstrap ticket store error: {e}"),
@@ -167,7 +177,8 @@ impl SecurityStore {
     ///
     /// Returns the consumed ticket metadata on success. The operation is
     /// idempotent from the caller's perspective: a previously consumed ticket
-    /// is reported as `Invalid`.
+    /// is reported as `Invalid` — and so is a **revoked** one, the same answer
+    /// an unknown code gets, deliberately (see [`BootstrapTicketError`]).
     pub fn consume_bootstrap_ticket(
         &self,
         code: &str,
@@ -357,6 +368,51 @@ mod tests {
             store.consume_bootstrap_ticket("bt-alice", Some("dev-1")),
             Err(BootstrapTicketError::Invalid)
         );
+    }
+
+    /// The three ways a code can fail to be redeemable must arrive as ONE
+    /// answer — same variant and same rendered message. The exchanger is
+    /// unauthenticated, so splitting them is an oracle over other people's
+    /// tickets: "already consumed" says the code was real and somebody
+    /// redeemed it, "revoked" says the code was real and its principal was
+    /// just deactivated. This is what goes red if a later reader mistakes the
+    /// merged `Display` string for an oversight and gives revocation its own
+    /// variant or its own wording.
+    #[test]
+    fn unknown_consumed_and_revoked_codes_are_one_indistinguishable_answer() {
+        let store = store();
+        store
+            .create_bootstrap_ticket("bt-consumed", 60_000, Some("u-alice"))
+            .unwrap();
+        store
+            .create_bootstrap_ticket("bt-revoked", 60_000, Some("u-bob"))
+            .unwrap();
+        store
+            .consume_bootstrap_ticket("bt-consumed", Some("dev-1"))
+            .unwrap();
+        assert_eq!(store.revoke_bootstrap_tickets_for_user("u-bob").unwrap(), 1);
+
+        let answers: Vec<(BootstrapTicketError, String)> =
+            ["bt-never-minted", "bt-consumed", "bt-revoked"]
+                .into_iter()
+                .map(|code| {
+                    let err = store
+                        .consume_bootstrap_ticket(code, Some("dev-2"))
+                        .expect_err("none of these three may be redeemable");
+                    let rendered = err.to_string();
+                    (err, rendered)
+                })
+                .collect();
+
+        assert_eq!(
+            answers[0], answers[1],
+            "a consumed code must answer exactly like a code that never existed"
+        );
+        assert_eq!(
+            answers[0], answers[2],
+            "a revoked code must answer exactly like a code that never existed"
+        );
+        assert_eq!(answers[0].0, BootstrapTicketError::Invalid);
     }
 
     /// Burned is not redeemed. Folding revocation into `consumed_at` would

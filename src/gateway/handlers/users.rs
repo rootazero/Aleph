@@ -547,10 +547,16 @@ pub async fn handle_update(
     match store.get_user(&params.user_id) {
         Ok(Some(user)) => {
             // The revoked/frozen counts are named in the response because
-            // they are the deactivation effects with no other surface:
-            // devices show up only as closed connections, frozen background
-            // work as runs that stopped happening, and a withdrawn channel
-            // approval as traffic that stopped arriving.
+            // they are the deactivation effects with no other surface, all
+            // four of them: devices show up only as closed connections,
+            // frozen background work as runs that stopped happening, a
+            // withdrawn channel approval as traffic that stopped arriving,
+            // and a burned bootstrap ticket as nothing whatsoever —
+            // `gateway.ticket.list` enumerates only still-redeemable rows, so
+            // a burned one just stops being listed, indistinguishable there
+            // from one that was redeemed or expired. That last leg has the
+            // strongest claim to this sentence, which is why the receipt
+            // carries its count.
             let result = aleph_protocol::users::UserUpdateResult {
                 user: user_view(user),
                 revoked_channel_senders: revoked_senders,
@@ -820,9 +826,17 @@ fn burn_outstanding_bootstrap_tickets(
 ///
 /// # Why deactivation has to reach this axis at all
 ///
-/// A principal is bound to Aleph through two independent credentials, and
-/// SECURITY.md says so: a **device** (Panel/CLI, via a bootstrap ticket) and a
-/// **channel sender** (Telegram/webhook/…, via `channel.pairing.approve`).
+/// A principal is bound to Aleph through three separately-cuttable
+/// credentials, one leg of the deactivation sweep each: a **device** already
+/// paired (Panel/CLI — [`deactivate_devices`]), a **channel sender**
+/// (Telegram/webhook/…, via `channel.pairing.approve` — this function), and an
+/// **outstanding bootstrap ticket**, minted but not yet redeemed
+/// ([`burn_outstanding_bootstrap_tickets`]). SECURITY.md lists the ticket as
+/// its own credential beside the device token, and it is: the device leg
+/// enumerates rows that already exist, so an unredeemed ticket survives it and
+/// mints a **fresh** device row afterwards. Counting the ticket as part of the
+/// device leg is what left that hole open.
+///
 /// Deactivation revoked the first and left the second, so an offboarded member
 /// kept messaging the bot from Telegram: `inbound_router::executor` stamps
 /// `ScopeAttribution::personal` from `sender_user` on every inbound turn, so
@@ -1312,9 +1326,13 @@ mod tests {
         assert_eq!(store.list_users().unwrap().len(), 1);
     }
 
-    /// A principal is bound to Aleph through two independent credentials — a
-    /// device and a channel sender. Deactivation revoked the first and left the
-    /// second, so an offboarded member kept talking to the bot from Telegram
+    /// A principal is bound to Aleph through three separately-cuttable
+    /// credentials — a paired device, a channel sender, and an outstanding
+    /// bootstrap ticket (minted, not yet redeemed, burned by
+    /// [`burn_outstanding_bootstrap_tickets`]); the leg list on
+    /// [`revoke_channel_bindings`] is the one that names all three. This test
+    /// covers the second: deactivation revoked the first and left it, so an
+    /// offboarded member kept talking to the bot from Telegram
     /// under their own identity: their sessions, their memory partition, their
     /// curated memory in the prompt, and `goal(action='update')` to thaw the
     /// freeze this same handler had just applied.
