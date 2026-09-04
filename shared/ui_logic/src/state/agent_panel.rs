@@ -1,7 +1,7 @@
 //! The agent panel's model — the single source both sidebars render from.
 //!
-//! R2: sorting, grouping and collapse state live HERE and nowhere else.
-//! Neither `interfaces/tui` nor `interfaces/webchat` may sort again. A
+//! R2: sorting, grouping and the state glyph table live HERE and nowhere
+//! else. Neither `interfaces/tui` nor `interfaces/webchat` may sort again. A
 //! source-level guard in alephcore (`src/gateway/runtime/` tests, added by
 //! Task 10) fails if either frontend's `agent_panel.rs` contains `.sort_by`
 //! or `.sort()`.
@@ -32,6 +32,31 @@ pub fn attention_rank(state: RuntimeAgentState) -> u8 {
     }
 }
 
+/// The four-state glyph, for every surface that draws this panel.
+///
+/// One table, not one per frontend. The TUI and the Panel each carried their
+/// own copy of this `match` with no test spanning both (判据 §1): the two
+/// would have drifted the first time a state was added or a symbol changed,
+/// and the copy nobody edited would have kept rendering the old answer while
+/// looking correct in review. Colour is deliberately NOT here — ratatui
+/// `Color`s and Tailwind class names have nothing in common, and forcing a
+/// shared type on them would put a rendering vocabulary into a crate that
+/// has no renderer.
+///
+/// `Unknown` gets its own glyph and never `Idle`'s: "I cannot tell what this
+/// agent is doing" must not render as "nothing is happening here" (判据 §8).
+/// [`super::agent_panel_parity::glyphs_are_distinct_and_unknown_is_not_idle`]
+/// pins that, plus distinctness across all four.
+#[must_use]
+pub const fn state_glyph(state: RuntimeAgentState) -> &'static str {
+    match state {
+        RuntimeAgentState::Blocked => "\u{25cf}", // ●
+        RuntimeAgentState::Working => "\u{25d0}", // ◐
+        RuntimeAgentState::Idle => "\u{25cb}",    // ○
+        RuntimeAgentState::Unknown => "?",
+    }
+}
+
 /// Order entries by attention rank, then by recency, then by `session_id`.
 ///
 /// `session_id` is the key of the server-side agent table, so it is unique
@@ -50,9 +75,15 @@ pub fn sort_entries(entries: &mut [RuntimeAgentEntry]) {
     });
 }
 
-/// The panel's local layout state — the divider position and whether the
-/// panel is collapsed. Not derived from any entry; owned by whichever
-/// surface renders the split.
+/// The panel's local layout state — the divider position, and nothing else.
+///
+/// A `collapsed: bool` lived here and was CUT (S4): nothing ever read it and
+/// nothing ever set it to `true`. Both faces express "collapsed" through the
+/// ratio the divider already owns — the Panel drags `split_ratio` and the
+/// TUI toggles the whole column — so the flag was a second answer to a
+/// question `split_ratio` had already answered, kept alive only by a default
+/// value and a test asserting that default (判据 §2: a predicate with no
+/// input that can change it). Adding it back needs a reader first.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AgentPanelState {
     /// The clamp-and-NaN-fallback invariant lives in `with_split_ratio`,
@@ -62,7 +93,6 @@ pub struct AgentPanelState {
     /// delta, a stored preference) must construct through
     /// `with_split_ratio`, not by writing this field.
     pub split_ratio: f32,
-    pub collapsed: bool,
 }
 
 /// A ratio at or below this collapses the agent pane to nothing with no way
@@ -73,10 +103,7 @@ pub const MAX_SPLIT_RATIO: f32 = 0.9;
 
 impl Default for AgentPanelState {
     fn default() -> Self {
-        Self {
-            split_ratio: 0.4,
-            collapsed: false,
-        }
+        Self { split_ratio: 0.4 }
     }
 }
 
@@ -94,10 +121,7 @@ impl AgentPanelState {
         } else {
             ratio.clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO)
         };
-        Self {
-            split_ratio,
-            ..self
-        }
+        Self { split_ratio }
     }
 }
 
@@ -156,10 +180,9 @@ mod tests {
     }
 
     #[test]
-    fn default_state_is_uncollapsed_with_a_forty_percent_split() {
+    fn the_default_split_is_forty_percent() {
         let state = AgentPanelState::default();
         assert_eq!(state.split_ratio, 0.4);
-        assert!(!state.collapsed);
     }
 
     #[test]

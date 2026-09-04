@@ -30,7 +30,7 @@ use ratatui::{
 };
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
-use shared_ui_logic::state::agent_panel::sort_entries;
+use shared_ui_logic::state::agent_panel::{sort_entries, state_glyph};
 
 use crate::tui::app::AgentPanelData;
 use crate::tui::theme::DEFAULT_THEME;
@@ -46,18 +46,12 @@ use crate::tui::theme::DEFAULT_THEME;
 /// column "is not obliged to use it at all"; this one does not.
 pub const AGENT_PANEL_WIDTH: u16 = 28;
 
-/// One glyph set. herdr keeps two (Dots / Symbols in `ui/status.rs`); R8-1
-/// picks one for this port. `Unknown` gets `?`, never `Idle`'s glyph — an
-/// unrecognised state must never be misread as "nothing is happening here"
-/// (判据 §8).
-fn state_glyph(state: RuntimeAgentState) -> &'static str {
-    match state {
-        RuntimeAgentState::Blocked => "\u{25cf}", // ●
-        RuntimeAgentState::Working => "\u{25d0}", // ◐
-        RuntimeAgentState::Idle => "\u{25cb}",    // ○
-        RuntimeAgentState::Unknown => "?",
-    }
-}
+// The glyph table used to live here, with a byte-identical twin in the
+// Panel's `components/sidebar/agent_panel.rs` and no test spanning the two
+// (判据 §1). It is now `shared_ui_logic::state::agent_panel::state_glyph`,
+// imported above. Colour stays here: ratatui `Color`s mean nothing to the
+// Panel, which paints Tailwind classes, so `state_color` is genuinely this
+// surface's own and not half of a shared pair.
 
 fn state_color(state: RuntimeAgentState) -> Color {
     match state {
@@ -221,11 +215,11 @@ mod tests {
         assert!(blocked_at < idle_at, "blocked must sort before idle");
 
         assert!(
-            !dump.contains("\u{25cb} unknown-one"),
+            !dump.contains(&format!("{} unknown-one", state_glyph(S::Idle))),
             "unknown must not use the idle glyph"
         );
         assert!(
-            dump.contains("? unknown-one"),
+            dump.contains(&format!("{} unknown-one", state_glyph(S::Unknown))),
             "unknown must render its own glyph"
         );
     }

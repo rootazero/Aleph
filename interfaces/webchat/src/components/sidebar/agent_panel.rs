@@ -32,22 +32,63 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState, RUNTIME_AGENTS_CHANGED_TOPIC};
-use shared_ui_logic::state::agent_panel::{sort_entries, AgentPanelState};
+use shared_ui_logic::state::agent_panel::{sort_entries, state_glyph, AgentPanelState};
 
 use crate::api::runtime_agents::RuntimeAgentsApi;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 
-/// One glyph set, identical to the TUI's (`widgets/agent_panel.rs`,
-/// R8-1/R9-6): `Unknown` gets its own glyph, never `Idle`'s — an
-/// unrecognised state must never be misread as "nothing is happening here"
+// The glyph table used to live here as a byte-identical twin of the TUI's,
+// with no test spanning the two (判据 §1). Both faces now call
+// `shared_ui_logic::state::agent_panel::state_glyph`, imported above.
+
+/// Which of two very different failures the panel is showing.
+///
+/// D8: this surface used to fold both into one red box while the TUI has
+/// kept them apart since R8-6. They are not the same fact and they do not
+/// have the same remedy — one is answered by getting operator privilege,
+/// the other by fixing the connection — so a user shown the wrong one goes
+/// looking in the wrong place (判据 §17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelFailure {
+    /// The gateway's operator gate returned a verdict. Not an outage.
+    Refused,
+    /// Everything else: transport, timeout, a decode this client could not
+    /// do, or a server error carrying some other code.
+    Unavailable,
+}
+
+/// Split a failed `runtime.agents.list` by its JSON-RPC error **code**.
+///
+/// The same rule and the same constant as the TUI's `agent_panel_data`
+/// (`interfaces/tui/src/tui/mod.rs`) — by code, never by matching words in
+/// the message (P8). This function cannot see the message at all, so that
+/// discipline is structural here rather than something a later edit has to
+/// remember.
+///
+/// `None` is `Unavailable` by construction, and that is the load-bearing
+/// half: `RpcFailure` carries no code for anything this client minted
+/// itself, and "I could not ask" must never be promoted to "you may not"
 /// (判据 §8).
-fn state_glyph(state: RuntimeAgentState) -> &'static str {
-    match state {
-        RuntimeAgentState::Blocked => "\u{25cf}", // ●
-        RuntimeAgentState::Working => "\u{25d0}", // ◐
-        RuntimeAgentState::Idle => "\u{25cb}",    // ○
-        RuntimeAgentState::Unknown => "?",
+fn classify_failure(code: Option<i32>) -> PanelFailure {
+    if code == Some(aleph_protocol::jsonrpc::AUTH_REQUIRED) {
+        PanelFailure::Refused
+    } else {
+        PanelFailure::Unavailable
+    }
+}
+
+/// The chip class for each failure, mirroring the TUI's colour split
+/// (`warning` for a verdict, `error` for an outage) in Tailwind terms.
+/// The two must never collapse to one string — that collapse IS D8.
+const fn failure_class(failure: PanelFailure) -> &'static str {
+    match failure {
+        PanelFailure::Refused => {
+            "bg-amber-50 border border-amber-200 text-amber-800 text-xs p-2 rounded-md"
+        }
+        PanelFailure::Unavailable => {
+            "bg-red-50 border border-red-200 text-red-800 text-xs p-2 rounded-md"
+        }
     }
 }
 
@@ -71,7 +112,12 @@ pub fn AgentPanel() -> impl IntoView {
 
     let entries: RwSignal<Vec<RuntimeAgentEntry>> = RwSignal::new(Vec::new());
     let loading = RwSignal::new(true);
-    let error: RwSignal<Option<String>> = RwSignal::new(None);
+    // Two signals, not one, because they render differently and a single
+    // `Option<String>` cannot say which of the two it is holding without a
+    // second look at the message text — the exact re-derivation P8 forbids.
+    // At most one is ever `Some`: `refresh` writes the pair together.
+    let refused: RwSignal<Option<String>> = RwSignal::new(None);
+    let unavailable: RwSignal<Option<String>> = RwSignal::new(None);
     let panel_state = RwSignal::new(AgentPanelState::default());
 
     let refresh = move || {
@@ -80,14 +126,30 @@ pub fn AgentPanel() -> impl IntoView {
             match RuntimeAgentsApi::list(&dash).await {
                 Ok(resp) => {
                     entries.set(resp.agents);
-                    error.set(None);
+                    refused.set(None);
+                    unavailable.set(None);
                 }
-                Err(e) => {
-                    error.set(Some(crate::components::admin_refusal::settings_load_error(
+                Err(failure) => {
+                    // The CODE picks the face; `admin_refusal` still owns the
+                    // COPY, unchanged — it replaces the operator-gate
+                    // sentence with the localized explanation and passes
+                    // every other message through verbatim, so a transport
+                    // error still names its own cause.
+                    let copy = crate::components::admin_refusal::settings_load_error(
                         i18n,
-                        &e,
+                        &failure.message,
                         |e| e.to_string(),
-                    )));
+                    );
+                    match classify_failure(failure.code) {
+                        PanelFailure::Refused => {
+                            refused.set(Some(copy));
+                            unavailable.set(None);
+                        }
+                        PanelFailure::Unavailable => {
+                            unavailable.set(Some(copy));
+                            refused.set(None);
+                        }
+                    }
                 }
             }
             loading.set(false);
@@ -101,8 +163,9 @@ pub fn AgentPanel() -> impl IntoView {
             // Disconnect must fall through to the loading branch below, not
             // the empty-list one — "not connected" and "confirmed zero
             // agents" are different facts (判据 §8/§9; the exact collapse
-            // R8-11 forbids on the TUI face). `error` is intentionally left
-            // as-is: a disconnect is not what produced it.
+            // R8-11 forbids on the TUI face). Both failure signals are
+            // intentionally left as-is: a disconnect is not what produced
+            // them.
             entries.set(Vec::new());
             loading.set(true);
         }
@@ -219,10 +282,28 @@ pub fn AgentPanel() -> impl IntoView {
             </div>
             <div class="flex-1 overflow-y-auto px-3 pb-1 space-y-1 min-h-0">
                 {move || {
-                    if let Some(err) = error.get() {
+                    // Refused first: when both somehow hold a value, a
+                    // verdict is the more specific fact and the one with an
+                    // action behind it.
+                    if let Some(msg) = refused.get() {
                         return view! {
-                            <div class="bg-red-50 border border-red-200 text-red-800 text-xs p-2 rounded-md">
-                                {err}
+                            <div
+                                class=failure_class(PanelFailure::Refused)
+                                data-agent-panel-failure="refused"
+                                role="alert"
+                            >
+                                {msg}
+                            </div>
+                        }.into_any();
+                    }
+                    if let Some(msg) = unavailable.get() {
+                        return view! {
+                            <div
+                                class=failure_class(PanelFailure::Unavailable)
+                                data-agent-panel-failure="unavailable"
+                                role="alert"
+                            >
+                                {msg}
                             </div>
                         }.into_any();
                     }
@@ -311,9 +392,48 @@ mod tests {
     }
 
     /// `Unknown` must never render the same glyph as `Idle` (判据 §8): "I
-    /// don't know" and "it's idle" are different facts.
+    /// don't know" and "it's idle" are different facts. The table itself now
+    /// lives in `shared_ui_logic` and its distinctness across all four states
+    /// is pinned there (`glyphs_are_distinct_and_unknown_is_not_idle`); this
+    /// keeps the assertion on the Panel's own face so adopting the shared
+    /// table cannot quietly drop the property this surface cared about.
     #[test]
     fn unknown_never_wears_idles_glyph() {
         assert_ne!(state_glyph(S::Unknown), state_glyph(S::Idle));
+    }
+
+    /// D8: the Panel used to fold "the operator gate said no" and "the call
+    /// did not come back" into one red box, while the TUI has kept them
+    /// apart since R8-6 (`widgets/agent_panel.rs`'s test of the same name).
+    /// A verdict is not an outage: one is answered by getting operator
+    /// privilege, the other by fixing the connection, and a user shown the
+    /// wrong one goes looking in the wrong place (判据 §17).
+    ///
+    /// The split is decided by the JSON-RPC error CODE, never by matching
+    /// words in the message (P8) — same code and same rule as the TUI's
+    /// `agent_panel_data`. `classify_failure` cannot even see the message,
+    /// so that discipline is structural here rather than remembered.
+    ///
+    /// Reddens if: both faces are given the same class again; if a
+    /// locally-minted failure (`code: None` — socket down, decode failed)
+    /// is read as a verdict; or if a server error with some other code is.
+    #[test]
+    fn refused_and_unavailable_render_differently() {
+        assert_eq!(
+            classify_failure(Some(aleph_protocol::jsonrpc::AUTH_REQUIRED)),
+            PanelFailure::Refused
+        );
+        // A server error that is not the operator gate.
+        assert_eq!(classify_failure(Some(-32603)), PanelFailure::Unavailable);
+        // Locally minted (no socket, timeout, decode) — `RpcFailure` never
+        // carries a code for these, and "I could not ask" is not "you may
+        // not" (判据 §8).
+        assert_eq!(classify_failure(None), PanelFailure::Unavailable);
+
+        assert_ne!(
+            failure_class(PanelFailure::Refused),
+            failure_class(PanelFailure::Unavailable),
+            "the two failures must not share one rendering"
+        );
     }
 }
