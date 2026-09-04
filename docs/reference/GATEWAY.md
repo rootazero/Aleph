@@ -868,6 +868,25 @@ its clients instead is two things, both of which were missing until 2026-08-10
   missing was a client using it instead of guessing "the conversation in front
   of the user". A frame that names a session no local view is showing must be
   **dropped**, never redirected.
+- **A cache of that projection needs a verb that invalidates it, and that verb
+  needs a caller.** `session_admits` caches the `(owner_user_id, scope_id)`
+  pair per session key — fill-on-miss, process-lifetime, bounded FIFO, no TTL,
+  one `Arc` shared by every connection. Caching the **pair of facts** rather
+  than a per-caller verdict is deliberate (a cached verdict has nothing to
+  invalidate, and P2's "removing a member takes effect immediately" would
+  quietly become a lie). But exactly one verb rewrites that pair —
+  `SessionStore::rescope_attribution`, the single exception to spec §10's
+  scope immutability, used by `projects.channel.bind` — and until 2026-09-03
+  `EventVisibilityIndex::forget_session` had **zero callers**, so after a bind
+  the live frames of the newly-shared conversation were refused to every other
+  member of the roster, permanently, while both halves looked implemented. The
+  invalidation now runs inside the bind's rescope loop, **after** each write and
+  for **every** key moved; three mutations (drop it, move it above the write,
+  apply it to the first key only) each redden exactly one test, so the ordering
+  and the "every key" are falsified rather than argued. Its twin `forget_team`
+  was CUT rather than wired — a zero-consumer channel is cheaper to delete than
+  to connect. ⚠️ Still open: nothing in source forces a future second writer of
+  that pair to call it.
 - **A client joining mid-turn needs a pointer to the turn in flight.**
   `chat.history` answers it: the response carries `active_run` — the run id
   currently claiming this session's slot in the `SessionRunRegistry`, or `null`.
@@ -1014,11 +1033,17 @@ onboarding); (4) the legacy shared **Gateway token** (`aleph-<uuid>`,
 `SharedTokenManager`, HMAC-hashed, constant-time verified). A valid
 credential = full operator authority (identical to local); a missing/invalid
 one is walled — the WS dispatch refuses every method but `connect`.
-Revocation is token rotation (`gateway.token.rotate`, which also force-closes
-live remote sockets) or per-device revoke (`gateway.devices.revoke`, which
-drops that device's live sessions to the login wall and then closes their
-sockets with WS 4001 `device_revoked`) — both effective immediately, not at the
-next handshake. The WS
+Revocation has three granularities, all effective immediately rather than at
+the next handshake: token rotation (`gateway.token.rotate`, which also
+force-closes live remote sockets), per-device revoke (`gateway.devices.revoke`,
+which drops that device's live sessions to the login wall and then closes their
+sockets with WS 4001 `device_revoked`), and — since 2026-09-03 —
+`gateway.ticket.revoke` for a still-redeemable **bootstrap ticket**, listed by
+`gateway.ticket.list` and addressed by a non-secret `ticket_id` the listing
+returns instead of the code. That third one exists because rotation does not
+reach it: an unredeemed ticket is not a remote yet, so "revoke all remotes"
+left it fully redeemable, and minting had two faces while cancelling had none.
+Client: `aleph-server pair --list` / `--revoke` (no Panel face yet). The WS
 Origin check (`src/gateway/origin_policy.rs`) additionally blocks public web
 pages from cross-origin-driving the local daemon. See
 [SECURITY.md#auth-ux](SECURITY.md#auth-ux) for the full model.
@@ -1116,6 +1141,38 @@ Abuse protection at WS upgrade: besides the global `max_connections` cap, a
 per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
 `0` disables, loopback exempt) bounds slot-exhaustion — a remote peer
 opening many idle sockets.
+
+### `[gateway.rate_limit]` — the per-principal ceilings, from the operator's side
+
+The rate limiter has keyed off the **principal** rather than the socket since
+2026-08-21 (`rate_limit_identity()`: loopback ⇒ `127.0.0.1`, authenticated ⇒
+`user:<id>`), and until 2026-09-03 every production construction site still
+passed `RateLimitConfig::default()` — no config section, no setter, so an
+operator could neither read the ceilings nor change them, while the defaults'
+own comment recorded that those numbers had already needed changing once.
+
+`[gateway.rate_limit]` now carries a window (`max_requests` +
+`window_secs`) per scope plus `lockout_secs`. Three properties are load-bearing:
+
+- **The numbers live in exactly one place.** The TOML schema's fields are all
+  optional and its `Default` does **not** replay the table — an omitted key
+  falls through to `RateLimitConfig::default()`, which stays the only statement
+  of what the defaults are. Replaying them in the schema would be a second
+  spelling that drifts silently.
+- **`lockout_secs = 0` disables the lockout.** The runtime carries
+  `Option<u64>` and TOML has no null, so without this spelling an operator could
+  only lengthen auth's five-minute lockout, never remove it.
+- **Restart-only, and it says so in its own doc.** The section is not
+  `ConfigPatcher`-reachable. Placing it under `[policies]` would make it
+  live-appliable and is the recorded alternative — a design change, not an
+  extension.
+
+Two limits carried deliberately. There is **no read face**: an operator can set
+the ceilings but still cannot ask a running server what they are. And `Auth` and
+`WebhookAuth` share one window (`RateLimitConfig::config_for` fans both into
+`auth`), so writing `[gateway.rate_limit.auth]` retunes webhook auth too and
+nothing says so — unchanged behaviour, but the section makes it visible for the
+first time.
 
 ### Reverse proxies (opt-in `X-Forwarded-For` resolution)
 
