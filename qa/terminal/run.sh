@@ -386,7 +386,8 @@ if [ "$STAGE" = "panel" ] && [ "$RC" = "0" ]; then
   [ ] 3a  Focus the terminal. Put \`qa-paste-marker\` on the clipboard.
   [ ] 3b  Press Cmd+V (macOS) or Ctrl+Shift+V. \`qa-paste-marker\` appears on
           the screen. Read it back from the pty, not from the canvas:
-            aleph tools invoke terminal '{"action":"read","session_id":"$AGENT_S"}'
+            aleph tools invoke terminal --args '{"action":"read","session_id":"$AGENT_S"}'
+          (\`--args\` is required; the payload is not positional.)
           or the \`terminal{read}\` RPC. Canvas pixels cannot spell.
   [ ] 3c  Press Ctrl+V. It must send 0x16 (literal-next) and NOT paste — the
           marker must NOT appear a second time. Skipping this arm makes 3b
