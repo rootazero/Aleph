@@ -1,0 +1,11 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/capability",
+  "files_scanned": [
+    "src/capability/mod.rs",
+    "src/capability/census.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/), read-before-write triage. census.rs gated by #[cfg(test)] in mod.rs:49 so its surface is test-only and excluded from the production tally.",
+  "findings": []
+}
