@@ -2866,11 +2866,11 @@ attribution, and a bound workspace as the room's default cwd.
   caller, and only the second one is what the code does.
 - **The workspace binding is a privilege, and it has five writers — four
   gated, one exempt by invariant.** *(Was "four writers — three gated" until
-  2026-08-30; `project_manage(bind_workspace)` is the fifth and it calls
-  `ProjectStore::bind_workspace` directly rather than routing through the
-  RPC. A sentence that counts members goes quiet on the day the set grows,
-  which is why the authoritative census is a module doc and not this
-  number.)* Turning `workspace_path` into the room's
+  2026-08-30; `project_manage(bind_workspace)` was the addition that made it
+  five, and it calls `ProjectStore::bind_workspace` directly rather than
+  routing through the RPC. A sentence that counts members goes quiet on the
+  day the set grows, which is why the authoritative census is a module doc
+  and not this number.)* Turning `workspace_path` into the room's
   runtime cwd (a dormant display field waking up) retroactively made every
   writer of that column a directory-choice authority: `projects.add`,
   `projects.create_blank`, and `projects.bind_workspace` all carry the same

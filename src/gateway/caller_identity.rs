@@ -131,30 +131,6 @@ pub fn current_caller_conn_id() -> Option<String> {
     CALLER_CONN_ID.try_with(|c| c.clone()).ok().flatten()
 }
 
-/// Whether this connection may point a working directory at an arbitrary
-/// server-side folder.
-///
-/// Layer-2 (config tier): choosing or creating a working directory is a
-/// config-tier capability. A chat-tier caller — a remote Panel paired at
-/// "chat", or an external channel stamped "guest" — is locked to its default
-/// workspace. Absent role (a trusted local/internal run: cron, A2A, an
-/// in-process test) and `"operator"` pass, mirroring
-/// `TurnContext::caller_is_operator`.
-///
-/// Desktop App: the local Panel runs over loopback, so any loopback connection
-/// passes regardless of pairing tier — on the desktop the local operator IS the
-/// user. Remote LAN connections stay gated, so opening
-/// `[gateway] host = "0.0.0.0"` does not hand arbitrary working-directory
-/// selection to every device on the network.
-///
-/// **One predicate, four call sites, and that is the point.** P2 made a
-/// project room's `workspace_path` the default cwd for every member's run
-/// (`handlers::agent::build_run_request`), which is only safe because the
-/// binding itself was written through a gate at least this strong. The three
-/// writers — `projects.add`, `projects.create_blank`, `projects.bind_workspace`
-/// — therefore ask the same question as the per-run `project_root` override.
-/// Gating only the run would leave "register a folder, then chat in it" as a
-/// two-step path to the same place, with both steps legal.
 /// May this connection start a run **as** the agent whose `allowed_users` list
 /// this is?
 ///
@@ -195,6 +171,12 @@ pub fn caller_may_act_as_agent(allowed_users: Option<&[String]>) -> bool {
 /// lost, it is stamped into `request.metadata` and enforced by
 /// `ScopedToolService`; a tool face must ask that object and pass the answer to
 /// [`caller_may_choose_directory_as`] rather than derive a second one.
+///
+/// Desktop App: the local Panel runs over loopback, so any loopback connection
+/// passes regardless of pairing tier — on the desktop the local operator IS the
+/// user. Remote LAN connections stay gated, so opening
+/// `[gateway] host = "0.0.0.0"` does not hand arbitrary working-directory
+/// selection to every device on the network.
 #[must_use]
 pub fn caller_may_choose_directory() -> bool {
     caller_may_choose_directory_as(

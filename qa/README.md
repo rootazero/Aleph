@@ -177,14 +177,16 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 # Two things hold the five r2 stages themselves honest, because a QA fixture is
 # also code that can stop working without saying so:
 #
-#   * **Every stage has an assertion FLOOR** (`claims` 13, `denied` 5, `rewind` 5,
-#     `knobs` 10, `holes` 12 — measured, not aspirational). Each `drive` call is
-#     its own node process with its own counters, so the last line a green stage
-#     prints is whichever phase ran last; for `claims` that is the cost probe,
-#     which asserts nothing and prints `0 passed, 0 failed`. A phase whose
-#     assertions all vanished prints the SAME line and still exits 0. run.sh sums
-#     the counts and turns a stage RED when it passes while measuring less than
-#     its floor. Adding an assertion raises the floor in the same commit.
+#   * **Every stage has an assertion FLOOR** — the case block at
+#     `qa/resume_boundary/run.sh:234-240` holds the measured counts;
+#     deliberately not copied here — the rewind copy already drifted. Each
+#     `drive` call is its own node process with its own counters, so the last
+#     line a green stage prints is whichever phase ran last; for `claims` that
+#     is the cost probe, which asserts nothing and prints `0 passed, 0 failed`.
+#     A phase whose assertions all vanished prints the SAME line and still
+#     exits 0. run.sh sums the counts and turns a stage RED when it passes
+#     while measuring less than its floor. Adding an assertion raises the floor
+#     in the same commit.
 #   * **The round-1 `crash` / `attribute` stages refuse to run without a real
 #     python3** (exit 78, with the reason named). On this Windows host `python3`
 #     and `python` are both the `WindowsApps` stub — no output, exit 49 — so they

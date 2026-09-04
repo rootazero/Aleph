@@ -17,9 +17,9 @@
 //!
 //! ## `bind_workspace` is here now, and what had to become true first
 //!
-//! Binding a room to a directory is the fifth writer of `workspace_path`, and
-//! since P2 that column is the default cwd of every member's run — so a writer
-//! is a permission grant, not a preference. This verb was kept off the tool
+//! Binding a room to a directory is a writer of `workspace_path`, and since P2
+//! that column is the default cwd of every member's run — so a writer is a
+//! permission grant, not a preference. This verb was kept off the tool
 //! face until 2026-08-29 for a reason that was true when written and is not
 //! any more: the only in-run answer to "may this actor name a server
 //! directory" was `caller_may_choose_directory()`, which reads the ambient
