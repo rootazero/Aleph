@@ -72,8 +72,9 @@ pub fn handle_pair(
         return Ok(());
     }
     if list {
-        // Prune first so an expired row cannot be reported as outstanding by a
-        // stale table — same opportunistic hygiene as the RPC chokepoints.
+        // Opportunistic hygiene, same as the RPC chokepoints — an expired row
+        // would be filtered out of the listing anyway, but pruning here keeps
+        // the table from being the one place nothing ever cleans.
         let _ = mgr.prune_now();
         let tickets = store
             .list_bootstrap_tickets()

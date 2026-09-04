@@ -255,6 +255,102 @@ fn v18_is_idempotent_when_the_ticket_column_is_already_there() {
     assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
 }
 
+/// A store that was already handing out pairing tickets before the handle
+/// column existed must come out of the upgrade with every outstanding one
+/// still addressable. The `ALTER` alone is not enough: a live row left with a
+/// NULL `ticket_id` fails `list_bootstrap_tickets` outright — the listing
+/// deliberately does not filter such a row away (silently omitting a
+/// still-redeemable credential is the wrong direction to fail in), so an
+/// operator upgrading a real database would lose BOTH `pair --list` and
+/// `gateway.ticket.list` and be left in exactly the "a live credential nothing
+/// can cancel" state this family exists to remove.
+#[test]
+fn v19_backfills_a_ticket_outstanding_across_the_upgrade() {
+    let store = SecurityStore::in_memory().unwrap();
+    let now = current_timestamp_ms();
+    {
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // The historical v18 shape, inlined on purpose (as v15's and v18's
+        // fixtures are): it is what the table used to be, so it cannot be
+        // sourced from the constant that describes what it is now.
+        conn.execute_batch(
+            "DROP TABLE bootstrap_tickets;
+             CREATE TABLE bootstrap_tickets (
+                 code                    TEXT PRIMARY KEY,
+                 created_at              INTEGER NOT NULL,
+                 expires_at              INTEGER NOT NULL,
+                 consumed_at             INTEGER,
+                 consumed_by_device_id   TEXT,
+                 user_id                 TEXT,
+                 revoked_at              INTEGER
+             );",
+        )
+        .unwrap();
+        assert!(
+            conn.prepare("SELECT ticket_id FROM bootstrap_tickets LIMIT 0")
+                .is_err(),
+            "the fixture must start WITHOUT the column or this test proves nothing"
+        );
+        // TWO still-live legacy rows, not one: the arm builds a UNIQUE index
+        // over the values it backfills, and a single row can never collide.
+        // Raw inserts — `create_bootstrap_ticket` writes a `ticket_id` itself,
+        // so minting through it would produce no legacy row at all.
+        conn.execute(
+            "INSERT INTO bootstrap_tickets (code, created_at, expires_at, user_id) \
+             VALUES ('legacy-bound', ?1, ?2, 'u-alice')",
+            rusqlite::params![now - 2_000, now + 600_000],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bootstrap_tickets (code, created_at, expires_at, user_id) \
+             VALUES ('legacy-unbound', ?1, ?2, NULL)",
+            rusqlite::params![now - 1_000, now + 600_000],
+        )
+        .unwrap();
+    }
+    store.set_schema_version(18).unwrap();
+
+    store.migrate().unwrap();
+
+    // Assert the EFFECT the operator depends on, not the column's presence.
+    let listed = store
+        .list_bootstrap_tickets()
+        .expect("a NULL ticket_id fails the whole call, so the backfill must have run");
+    assert_eq!(
+        listed.len(),
+        2,
+        "both legacy rows were still redeemable and must survive as addressable rows"
+    );
+    assert!(
+        listed.iter().all(|t| !t.ticket_id.is_empty()),
+        "a backfilled row must carry a usable handle, not an empty string"
+    );
+    assert_ne!(
+        listed[0].ticket_id, listed[1].ticket_id,
+        "the backfill must mint a DISTINCT handle per row, or the UNIQUE index \
+         the same arm builds over them cannot be created and migrate() aborts"
+    );
+    assert!(
+        store.revoke_bootstrap_ticket(&listed[0].ticket_id).unwrap(),
+        "the handle the listing hands out must be the one revocation accepts"
+    );
+    assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
+}
+
+/// …and the re-entrant half: `migrate()` re-run over a store that already has
+/// `ticket_id` must not abort with `duplicate column name`. Named for v19 so a
+/// typo in this arm's probe fails here, instead of taking every later arm —
+/// and somebody else's test — down with it.
+#[test]
+fn v19_is_idempotent_when_the_handle_column_is_already_there() {
+    let store = SecurityStore::in_memory().unwrap();
+    store.set_schema_version(18).unwrap();
+    store
+        .migrate()
+        .expect("re-running v19 over an existing column must not be an error");
+    assert_eq!(store.get_schema_version().unwrap(), SCHEMA_VERSION);
+}
+
 #[test]
 fn test_device_crud() {
     let store = SecurityStore::in_memory().unwrap();
