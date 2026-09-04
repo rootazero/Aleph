@@ -2140,7 +2140,11 @@
     "state_working": "Working",
     "state_idle": "Idle",
     "state_unknown": "Unknown",
-    "empty": "No agents running"
+    "empty": "No agents running",
+    "quiet_seconds": "quiet {{ n }}s",
+    "quiet_minutes": "quiet {{ n }}m",
+    "quiet_hours": "quiet {{ n }}h",
+    "quiet_days": "quiet {{ n }}d"
   },
   "cron": {
     "title": "Scheduled Tasks",

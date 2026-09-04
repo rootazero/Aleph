@@ -483,6 +483,82 @@ mod tests {
         assert_eq!(model.tabs().len(), 1);
     }
 
+    /// I1's first half. The tab strip's decoration is a JOIN, and a join is
+    /// only as fresh as its last run — a session that goes Blocked after the
+    /// view mounted has to reach the glyph. Before the fix `reconcile` had one
+    /// caller (the mount effect), so the glyph froze at whatever the sampler
+    /// happened to be saying at mount and then rendered a state that was no
+    /// longer true. A wrong label costs more than a missing one (判据 §17).
+    ///
+    /// This is the model half; the wire is pinned by
+    /// `the_view_reconciles_on_runtime_agents_changed_and_on_exit` in
+    /// `views/terminal/mod.rs`, because a model that reconciles correctly on
+    /// demand proves nothing about whether anything demands it.
+    #[test]
+    fn a_state_change_after_the_first_reconcile_reaches_the_tab() {
+        let mut model = TabModel::default();
+        let sessions = [session("a", "zsh", false)];
+
+        model.reconcile(
+            &sessions,
+            &[agent("a", RuntimeAgentState::Working, Some("claude"))],
+        );
+        assert_eq!(model.tabs()[0].state, Some(RuntimeAgentState::Working));
+        assert_eq!(model.tabs()[0].program.as_deref(), Some("claude"));
+
+        model.reconcile(
+            &sessions,
+            &[agent("a", RuntimeAgentState::Blocked, Some("codex"))],
+        );
+        assert_eq!(
+            model.tabs()[0].state,
+            Some(RuntimeAgentState::Blocked),
+            "a later sample must replace the earlier one, not be ignored"
+        );
+        assert_eq!(model.tabs()[0].program.as_deref(), Some("codex"));
+
+        // The sampler going silent about a session is "I have nothing to say",
+        // and it must not leave the previous state on screen as if it were
+        // still being asserted (判据 §8).
+        model.reconcile(&sessions, &[]);
+        assert_eq!(model.tabs()[0].state, None);
+        assert_eq!(model.tabs()[0].program, None);
+    }
+
+    /// I1's second half. `on_exit` only MARKS a tab closed; `reconcile` is
+    /// what drops it, and `on_exit`'s own doc promised exactly that. Nothing
+    /// scheduled a reconcile, so the promise described behaviour that did not
+    /// exist and the dimmed dead tab survived for the life of the mount
+    /// (判据 §1).
+    #[test]
+    fn an_exited_tab_is_dropped_by_the_next_reconcile() {
+        let mut model = TabModel::default();
+        model.reconcile(
+            &[session("a", "zsh", false), session("gone", "zsh", false)],
+            &[],
+        );
+        assert!(model.select("gone"));
+
+        model.on_exit("gone");
+        assert!(
+            model
+                .tabs()
+                .iter()
+                .any(|t| t.session_id == "gone" && t.closed),
+            "still listed, marked closed, for the one round trip it takes to confirm"
+        );
+        assert_eq!(model.selected().map(|t| t.session_id.as_str()), Some("a"));
+
+        // The server no longer lists it — `pty.exit` fires after
+        // `manager().remove()`, so the very next list omits it entirely.
+        model.reconcile(&[session("a", "zsh", false)], &[]);
+        assert!(
+            !model.tabs().iter().any(|t| t.session_id == "gone"),
+            "the next reconcile drops it, which is what `on_exit`'s doc claims"
+        );
+        assert_eq!(model.selected().map(|t| t.session_id.as_str()), Some("a"));
+    }
+
     /// A session the server reports as closed is gone; it must not occupy a
     /// tab that clicking would attach to.
     #[test]

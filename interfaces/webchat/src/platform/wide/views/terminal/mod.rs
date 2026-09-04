@@ -11,6 +11,13 @@
 //! `PanelMode::Terminal` on a phone form factor, the same treatment
 //! `PanelMode::Projects` already gets there.
 //!
+//! # What keeps the tab strip current
+//!
+//! Three edges, and none of them is a timer: `runtime.agents.changed` (the
+//! sampler saw a state, program or cwd move), `pty.exit` (a session ended),
+//! and the mount. Each re-runs [`TabModel::reconcile`] against a fresh
+//! `pty.list` + `runtime.agents.list`. Only the mount may create a shell.
+//!
 //! # Which session is showing
 //!
 //! [`tabs::TabModel`] owns that: it holds the tab order, drops sessions the
@@ -30,6 +37,7 @@ use aleph_protocol::pty::{
     PtyAttachResponse, PtyScreenFrame, PtySpawnResponse, PTY_EXIT_TOPIC, PTY_LIST_METHOD,
     PTY_SCREEN_TOPIC,
 };
+use aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::closure::Closure;
@@ -309,6 +317,30 @@ pub fn TerminalView() -> impl IntoView {
         });
     });
 
+    // `runtime.agents.changed` — the twin surface (`components/sidebar/
+    // agent_panel.rs`) has subscribed to this since Task 9 and this view did
+    // not, so one of a pair was live and the other froze at mount (判据 §16).
+    // Without it the four-state glyph and the `program` tooltip render
+    // whatever they were when the view mounted: a session that goes Blocked
+    // afterwards keeps the Working glyph, which is a wrong label rather than
+    // a missing one (判据 §17).
+    //
+    // `subscribe_topic`, NOT `subscribe_topic_ephemeral`, and re-subscribed
+    // from a connect-driven effect — byte for byte the shape the agent panel
+    // uses. The ephemeral form deliberately skips the reconnect ledger and
+    // its doc requires the caller to pair it with `unsubscribe_topic` on
+    // unmount; this view does not do that for its `pty.*` topics today, and
+    // adding a topic that needs it would be adding an obligation rather than
+    // meeting one. A duplicate server-side subscribe is idempotent.
+    Effect::new(move |_| {
+        if !state.is_connected.get() {
+            return;
+        }
+        spawn_local(async move {
+            let _ = state.subscribe_topic(RUNTIME_AGENTS_CHANGED_TOPIC).await;
+        });
+    });
+
     // Another surface asked for a session (the agent panel's row click).
     //
     // A request naming a session this view has no open tab for is REFUSED by
@@ -324,10 +356,19 @@ pub fn TerminalView() -> impl IntoView {
         }
     });
 
-    // `pty.exit`: mark the tab closed and, if it was the showing one, follow
-    // the model to its neighbour.
+    // `pty.exit` and `runtime.agents.changed`, on one registration so there is
+    // one cleanup to get right rather than two.
     Effect::new(move |_| {
         let handler_id = state.subscribe_events(move |ev| {
+            if ev.topic == RUNTIME_AGENTS_CHANGED_TOPIC {
+                // Payload is `{}` and is never read (R6-4); the event is the
+                // signal to re-ask. `false` because only the mount may create
+                // a shell — a refresh that finds nothing open means the user
+                // closed everything, and re-opening it would be the page
+                // arguing with them.
+                refresh_tabs(false);
+                return;
+            }
             if ev.topic != PTY_EXIT_TOPIC {
                 return;
             }
@@ -352,6 +393,13 @@ pub fn TerminalView() -> impl IntoView {
             {
                 attach_to(next);
             }
+            // `on_exit` only MARKS the tab closed; `reconcile` is what drops
+            // it, and until this call nothing ever scheduled one, so the
+            // dimmed dead tab survived for the life of the mount and the
+            // method's own doc described behaviour that did not exist
+            // (判据 §1). The row stays visible for exactly one round trip —
+            // long enough to see WHY it went away, not longer.
+            refresh_tabs(false);
         });
         on_cleanup(move || state.unsubscribe_events(handler_id));
     });
@@ -757,6 +805,68 @@ fn device_pixel_ratio() -> f64 {
 
 #[cfg(test)]
 mod tests {
+    /// I1. The model reconciles correctly when asked; this asserts that
+    /// something asks.
+    ///
+    /// Before the fix `refresh_tabs` had exactly ONE caller — the mount
+    /// effect — and `RUNTIME_AGENTS_CHANGED_TOPIC` did not appear in this file
+    /// at all. Both ends were finished and there was no line between them: the
+    /// sampler published every state change and this view subscribed to
+    /// nothing that carried them (判据 §7). `allow_spawn: bool` existed with
+    /// no caller passing `false`, which is the same defect stated as an
+    /// unreachable branch.
+    ///
+    /// A source scan because that is what the defect was made of — a missing
+    /// subscription and a missing call, neither of which any runtime assertion
+    /// in a headless test can observe. It reads only the PRODUCTION half via
+    /// `i18n_census::production_lines` (which walks `#[cfg(test)]` ITEMS
+    /// rather than cutting at the first marker — this crate has a guard
+    /// against that hand-rolled cut, and it caught the first version of the
+    /// agent-row scan), so this test's own mention of the tokens cannot
+    /// certify itself.
+    ///
+    /// Reddens if: the subscription is dropped; if the changed-topic arm stops
+    /// re-reconciling; if the `pty.exit` arm stops re-reconciling (leaving the
+    /// dead tab permanent again); or if either call is "simplified" to
+    /// `allow_spawn = true`, which would let a background event create shells.
+    #[test]
+    fn the_view_reconciles_on_runtime_agents_changed_and_on_exit() {
+        let production: String = crate::i18n_census::production_lines(include_str!("mod.rs"))
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            production.contains("subscribe_topic(RUNTIME_AGENTS_CHANGED_TOPIC)"),
+            "the terminal view must subscribe to the changed topic, or its tab \
+             decoration is whatever the sampler said at mount and never again"
+        );
+        assert!(
+            production.contains("ev.topic == RUNTIME_AGENTS_CHANGED_TOPIC"),
+            "subscribing without handling the event is a subscription to nothing"
+        );
+
+        // Three reconcile calls: the mount (may spawn) and two that may not.
+        let refreshes = production.matches("refresh_tabs(").count();
+        assert!(
+            refreshes >= 3,
+            "expected the mount plus the two event-driven reconciles, found \
+             {refreshes} call(s) to refresh_tabs"
+        );
+        assert_eq!(
+            production.matches("refresh_tabs(true)").count(),
+            1,
+            "exactly one caller may create a shell, and it is the mount"
+        );
+        assert_eq!(
+            production.matches("refresh_tabs(false)").count(),
+            2,
+            "the changed-topic arm and the pty.exit arm both re-reconcile, and \
+             neither may spawn"
+        );
+    }
+
     /// Source-level guard for the layout bug this view already shipped
     /// once: `flex-1`/`flex-col` on the root element are inert unless its
     /// DOM parent is itself `display: flex`, and it is not. `app.rs` mounts

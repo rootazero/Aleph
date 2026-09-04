@@ -34,13 +34,13 @@ use leptos_router::hooks::use_navigate;
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState, RUNTIME_AGENTS_CHANGED_TOPIC};
 use shared_ui_logic::state::agent_panel::{
-    quiet_label, sort_entries, state_glyph, AgentPanelState,
+    quiet_age, sort_entries, state_glyph, AgentPanelState, QuietAge, QuietUnit,
 };
 
 use crate::api::runtime_agents::RuntimeAgentsApi;
 use crate::components::mode_sidebar::PanelMode;
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, t_string, use_i18n, I18nCtx};
 
 // The glyph table used to live here as a byte-identical twin of the TUI's,
 // with no test spanning the two (判据 §1). Both faces now call
@@ -402,11 +402,37 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
             // The quiet age qualifies the state, it does not replace it: a
             // Working agent silent for five minutes still reads Working.
             // Nothing here turns time into a state (spec R2-3).
-            {quiet_label(entry.quiet_since, crate::views::chat::timeline::now_millis())
-                .map(|quiet| view! {
-                    <span class="shrink-0 text-text-tertiary">{quiet}</span>
+            {quiet_age(entry.quiet_since, crate::views::chat::timeline::now_millis())
+                .map(|age| {
+                    view! {
+                        <span class="shrink-0 text-text-tertiary">{quiet_text(i18n, age)}</span>
+                    }
                 })}
         </button>
+    }
+}
+
+/// The Panel's words for a [`QuietAge`], resolved through this surface's own
+/// locale files.
+///
+/// I2: the previous version rendered `shared_ui_logic`'s composed `"quiet 3m"`
+/// directly. That crate has no i18n, so the string was English on a surface
+/// where Settings -> General moves everything else, and the crate's own
+/// `hardcoded_english_line_ratchet` could not see it because the literal lived
+/// in a different crate (判据 §18). The NUMBER and the UNIT come from
+/// `shared_ui_logic` — one derivation for both faces — and only the words are
+/// local.
+///
+/// One key per unit rather than one key with a unit token, because the two
+/// languages put the number and the unit in different places and a shared
+/// template would force one of them into the other's word order.
+fn quiet_text(i18n: I18nCtx, age: QuietAge) -> String {
+    let n = i64::try_from(age.value).unwrap_or(i64::MAX);
+    match age.unit {
+        QuietUnit::Seconds => t_string!(i18n, agent_panel.quiet_seconds, n = n).to_string(),
+        QuietUnit::Minutes => t_string!(i18n, agent_panel.quiet_minutes, n = n).to_string(),
+        QuietUnit::Hours => t_string!(i18n, agent_panel.quiet_hours, n = n).to_string(),
+        QuietUnit::Days => t_string!(i18n, agent_panel.quiet_days, n = n).to_string(),
     }
 }
 

@@ -30,7 +30,9 @@ use ratatui::{
 };
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState};
-use shared_ui_logic::state::agent_panel::{quiet_label, sort_entries, state_glyph};
+use shared_ui_logic::state::agent_panel::{
+    quiet_age, sort_entries, state_glyph, QuietAge, QuietUnit,
+};
 
 use crate::tui::app::AgentPanelData;
 use crate::tui::theme::DEFAULT_THEME;
@@ -80,6 +82,23 @@ fn entry_name(entry: &RuntimeAgentEntry) -> String {
         .to_string()
 }
 
+/// The TUI's words for a [`QuietAge`].
+///
+/// English lives HERE, not in `shared_ui_logic`: that crate has no i18n and
+/// composing words in it shipped an untranslated string onto the Panel, which
+/// does (I2). This surface is English throughout — the status bar, "loading…",
+/// "no agents running" — so there is nothing for it to resolve against and a
+/// literal is the honest answer here, unlike on the Panel.
+fn quiet_text(age: QuietAge) -> String {
+    let suffix = match age.unit {
+        QuietUnit::Seconds => "s",
+        QuietUnit::Minutes => "m",
+        QuietUnit::Hours => "h",
+        QuietUnit::Days => "d",
+    };
+    format!("quiet {}{suffix}", age.value)
+}
+
 /// One row's spans: glyph (coloured by state), the name, and the quiet age if
 /// there is one.
 ///
@@ -98,9 +117,9 @@ fn entry_line(entry: &RuntimeAgentEntry, now: i64) -> Line<'static> {
         ),
         Span::raw(entry_name(entry)),
     ];
-    if let Some(quiet) = quiet_label(entry.quiet_since, now) {
+    if let Some(age) = quiet_age(entry.quiet_since, now) {
         spans.push(Span::styled(
-            format!(" {quiet}"),
+            format!(" {}", quiet_text(age)),
             Style::default().fg(DEFAULT_THEME.muted),
         ));
     }
@@ -257,6 +276,41 @@ mod tests {
         assert!(
             dump.contains("quiet 3m"),
             "the quiet age must render: {dump:?}"
+        );
+    }
+
+    /// Every unit gets its own suffix, and none of them is empty. A `QuietAge`
+    /// whose unit fell through to the same letter as another would render two
+    /// different durations identically — "quiet 3m" for three minutes and for
+    /// three months is a wrong label, which costs more than a missing one
+    /// (判据 §17).
+    #[test]
+    fn every_quiet_unit_has_its_own_suffix() {
+        let rendered: Vec<String> = [
+            QuietUnit::Seconds,
+            QuietUnit::Minutes,
+            QuietUnit::Hours,
+            QuietUnit::Days,
+        ]
+        .into_iter()
+        .map(|unit| quiet_text(QuietAge { value: 3, unit }))
+        .collect();
+
+        let mut distinct = rendered.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(
+            distinct.len(),
+            4,
+            "units must not share a suffix: {rendered:?}"
+        );
+        assert!(rendered.iter().all(|r| r.contains('3')), "{rendered:?}");
+        assert_eq!(
+            quiet_text(QuietAge {
+                value: 3,
+                unit: QuietUnit::Minutes
+            }),
+            "quiet 3m"
         );
     }
 

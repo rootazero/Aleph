@@ -57,11 +57,33 @@ pub const fn state_glyph(state: RuntimeAgentState) -> &'static str {
     }
 }
 
-/// How long a session has been silent, spelled once for every surface.
+/// The unit [`quiet_age`] picked: the coarsest one that does not round to zero.
+///
+/// A unit, not a word. `shared_ui_logic` has no i18n and must not acquire an
+/// opinion about English — the previous version of this composed `"quiet 3m"`
+/// here, which shipped an untranslated string onto a localized surface where
+/// the Panel's own `hardcoded_english_line_ratchet` could not see it (it only
+/// scans that crate's sources — 判据 §18, a guard that covers what it
+/// enumerates). Each frontend now names the unit in its own language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuietUnit {
+    Seconds,
+    Minutes,
+    Hours,
+    Days,
+}
+
+/// How long a session has been silent: a number and the unit it is counted in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuietAge {
+    pub value: u64,
+    pub unit: QuietUnit,
+}
+
+/// How long a session has been silent, derived once for every surface.
 ///
 /// `None` while it is still producing output — `quiet_since` is `None` then,
-/// and there is nothing to say. `Some("quiet 3m")` once the server has
-/// published a moment it went quiet.
+/// and there is nothing to say.
 ///
 /// # What this is NOT
 ///
@@ -73,24 +95,43 @@ pub const fn state_glyph(state: RuntimeAgentState) -> &'static str {
 /// # Rounding, and which way it is wrong
 ///
 /// Always DOWN, and to the coarsest unit that does not round to zero: 89
-/// seconds is `1m`, not `1.5m` and not `2m`. `now` and `quiet_since` are both
+/// seconds is 1 minute, not 1.5 and not 2. `now` and `quiet_since` are both
 /// Unix epoch MILLISECONDS, and they come from different clocks (the server
 /// stamps `quiet_since`; the caller passes its own `now`), so a skew is
 /// possible. A future `quiet_since` clamps to zero rather than producing a
 /// negative age — meaning a disagreeing clock can only ever make a session
-/// look FRESHER than it is. That is the direction to be wrong in: this label
+/// look FRESHER than it is. That is the direction to be wrong in: this value
 /// exists to raise an eyebrow, and one that overstates would raise it at
 /// nothing.
 #[must_use]
-pub fn quiet_label(quiet_since: Option<i64>, now: i64) -> Option<String> {
+pub fn quiet_age(quiet_since: Option<i64>, now: i64) -> Option<QuietAge> {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+
     let since = quiet_since?;
-    let seconds = now.saturating_sub(since).max(0) / 1000;
-    Some(if seconds < 60 {
-        format!("quiet {seconds}s")
-    } else if seconds < 3600 {
-        format!("quiet {}m", seconds / 60)
+    // `max(0)` before the cast: a future `quiet_since` must clamp, not wrap.
+    let seconds = now.saturating_sub(since).max(0).unsigned_abs() / 1_000;
+    Some(if seconds < MINUTE {
+        QuietAge {
+            value: seconds,
+            unit: QuietUnit::Seconds,
+        }
+    } else if seconds < HOUR {
+        QuietAge {
+            value: seconds / MINUTE,
+            unit: QuietUnit::Minutes,
+        }
+    } else if seconds < DAY {
+        QuietAge {
+            value: seconds / HOUR,
+            unit: QuietUnit::Hours,
+        }
     } else {
-        format!("quiet {}h", seconds / 3600)
+        QuietAge {
+            value: seconds / DAY,
+            unit: QuietUnit::Days,
+        }
     })
 }
 
@@ -217,56 +258,195 @@ mod tests {
     }
 
     /// `None` in, `None` out: a session that is still producing output has
-    /// no quiet age, and inventing "quiet 0s" for it would put a label on
+    /// no quiet age, and inventing "0 seconds" for it would put a label on
     /// every healthy row.
     ///
     /// Rounding is DOWN at every boundary, and a clock that disagrees can
     /// only ever make a session look fresher (a future `quiet_since` clamps
     /// to zero rather than going negative).
     ///
-    /// Reddens if: an active session gains a label; if any boundary rounds up
-    /// (59s must not be "1m", 119s must not be "2m"); or if a negative age
-    /// escapes as a negative number.
+    /// Reddens if: an active session gains an age; if any boundary rounds up
+    /// (59s must not become 1 minute, 119s must not become 2); or if a
+    /// negative age escapes as a wrapped-around number.
     #[test]
-    fn quiet_label_is_none_when_active_and_rounds_down() {
+    fn quiet_age_is_none_when_active_and_rounds_down() {
         const NOW: i64 = 1_000_000_000;
+        fn age(ms_ago: i64) -> QuietAge {
+            quiet_age(Some(NOW - ms_ago), NOW).expect("a quiet session has an age")
+        }
 
-        assert_eq!(quiet_label(None, NOW), None, "an active session has no age");
+        assert_eq!(quiet_age(None, NOW), None, "an active session has no age");
 
-        assert_eq!(quiet_label(Some(NOW), NOW).as_deref(), Some("quiet 0s"));
         assert_eq!(
-            quiet_label(Some(NOW - 59_999), NOW).as_deref(),
-            Some("quiet 59s"),
+            age(0),
+            QuietAge {
+                value: 0,
+                unit: QuietUnit::Seconds
+            }
+        );
+        assert_eq!(
+            age(59_999),
+            QuietAge {
+                value: 59,
+                unit: QuietUnit::Seconds
+            },
             "one millisecond short of a minute is still seconds"
         );
         assert_eq!(
-            quiet_label(Some(NOW - 60_000), NOW).as_deref(),
-            Some("quiet 1m")
+            age(60_000),
+            QuietAge {
+                value: 1,
+                unit: QuietUnit::Minutes
+            }
         );
         assert_eq!(
-            quiet_label(Some(NOW - 119_000), NOW).as_deref(),
-            Some("quiet 1m"),
-            "1m59s rounds DOWN to 1m"
+            age(119_000),
+            QuietAge {
+                value: 1,
+                unit: QuietUnit::Minutes
+            },
+            "1m59s rounds DOWN to 1 minute"
         );
         assert_eq!(
-            quiet_label(Some(NOW - 180_000), NOW).as_deref(),
-            Some("quiet 3m")
+            age(180_000),
+            QuietAge {
+                value: 3,
+                unit: QuietUnit::Minutes
+            }
         );
         assert_eq!(
-            quiet_label(Some(NOW - 3_599_000), NOW).as_deref(),
-            Some("quiet 59m")
+            age(3_599_000),
+            QuietAge {
+                value: 59,
+                unit: QuietUnit::Minutes
+            }
         );
         assert_eq!(
-            quiet_label(Some(NOW - 3_600_000), NOW).as_deref(),
-            Some("quiet 1h")
+            age(3_600_000),
+            QuietAge {
+                value: 1,
+                unit: QuietUnit::Hours
+            }
+        );
+        assert_eq!(
+            age(86_399_000),
+            QuietAge {
+                value: 23,
+                unit: QuietUnit::Hours
+            },
+            "one second short of a day is still hours"
+        );
+        assert_eq!(
+            age(86_400_000),
+            QuietAge {
+                value: 1,
+                unit: QuietUnit::Days
+            }
+        );
+        assert_eq!(
+            age(200_000_000),
+            QuietAge {
+                value: 2,
+                unit: QuietUnit::Days
+            }
         );
 
-        // Clock skew: a `quiet_since` in the future is clamped, never negative.
+        // Clock skew: a `quiet_since` in the future clamps, never wraps.
         assert_eq!(
-            quiet_label(Some(NOW + 500_000), NOW).as_deref(),
-            Some("quiet 0s"),
+            quiet_age(Some(NOW + 500_000), NOW),
+            Some(QuietAge {
+                value: 0,
+                unit: QuietUnit::Seconds
+            }),
             "a disagreeing clock may only make a session look fresher"
         );
+    }
+
+    /// `shared_ui_logic` must not acquire an opinion about English. This is
+    /// the structural half of I2: the module may name units, never words, and
+    /// only a scan of its own source can say so — a type cannot.
+    ///
+    /// # It reads LITERALS, not prose
+    ///
+    /// The first version of this searched the raw text for `"quiet "` and went
+    /// red on its own doc comments, which discuss the string this fix removed.
+    /// A guard that fires on the explanation of the rule is a guard that will
+    /// be silenced rather than obeyed (判据 §3: a false positive costs more
+    /// than a missing one, because it gets quoted as evidence). So it looks at
+    /// string literals only, with comments stripped first, and asks whether
+    /// any of them contains a WORD — three consecutive ASCII letters. The four
+    /// glyphs (`"\u{25cf}"`, `"?"`) survive that; `format!("quiet {n}m")`
+    /// does not.
+    ///
+    /// # Why the test-module cut is checked rather than assumed
+    ///
+    /// Cutting production code at the first `#[cfg(test)]` marker under-scans
+    /// the moment a second one appears above the test module, and it does so
+    /// silently — the webchat crate has a dedicated guard against exactly that
+    /// hand-rolled cut. This crate has no equivalent helper, so the cut asserts
+    /// its own precondition instead: exactly one marker in the file. A second
+    /// one reddens here rather than quietly shrinking what is checked.
+    #[test]
+    fn this_module_composes_no_user_facing_words() {
+        let src = include_str!("agent_panel.rs").replace('\r', "");
+        let marker = src
+            .find("#[cfg(test)]")
+            .expect("this file has a test module");
+        // Counting markers would be circular — this very function mentions the
+        // attribute, in prose and as a literal. Pinning WHERE the first one
+        // lands is not: if anything gated ever appears above the test module,
+        // the cut stops being the test-module boundary and this reddens
+        // instead of quietly scanning less.
+        assert!(
+            src[marker..]
+                .trim_start_matches("#[cfg(test)]")
+                .trim_start()
+                .starts_with("mod tests {"),
+            "the first `#[cfg(test)]` in this file must be the test module's, \
+             or the cut below is no longer the production/test boundary"
+        );
+        let production = &src[..marker];
+
+        // Comments first: they discuss the copy this rule forbids.
+        let code: String = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut run = 0_usize;
+        let mut literal = String::new();
+        for c in code.chars() {
+            if !in_string {
+                if c == '"' {
+                    in_string = true;
+                    literal.clear();
+                    run = 0;
+                }
+                continue;
+            }
+            if escaped {
+                escaped = false;
+                run = 0;
+                continue;
+            }
+            match c {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {
+                    literal.push(c);
+                    run = if c.is_ascii_alphabetic() { run + 1 } else { 0 };
+                    assert!(
+                        run < 3,
+                        "string literal {literal:?} in a crate with no i18n reads as \
+                         user-facing copy; the words belong to whichever frontend \
+                         renders them, and only the number and the unit belong here"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

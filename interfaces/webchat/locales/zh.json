@@ -2140,7 +2140,11 @@
     "state_working": "运行中",
     "state_idle": "空闲",
     "state_unknown": "未知",
-    "empty": "没有正在运行的智能体"
+    "empty": "没有正在运行的智能体",
+    "quiet_seconds": "静默 {{ n }} 秒",
+    "quiet_minutes": "静默 {{ n }} 分钟",
+    "quiet_hours": "静默 {{ n }} 小时",
+    "quiet_days": "静默 {{ n }} 天"
   },
   "cron": {
     "title": "定时任务",
