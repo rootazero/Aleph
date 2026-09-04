@@ -137,17 +137,17 @@ pub fn TerminalView() -> impl IntoView {
             //
             // The three-way classification lives in `resolve_attach_target`
             // (pure, unit-tested there) because "nothing to adopt" and "I
-            // could not read the answer" are different facts and only the
-            // first may create a shell. See that function's doc for why the
-            // transport-error arm and the decode arm deliberately differ.
+            // could not get an answer" are different facts, and only the
+            // first may create a shell.
             let existing: Option<String> = match session::resolve_attach_target(
                 state.rpc_call(PTY_LIST_METHOD, serde_json::json!({})).await,
             ) {
                 session::AttachDecision::Attach(sid) => Some(sid),
                 session::AttachDecision::Spawn => None,
-                // Read, not readable: the call succeeded, so a spawn would
-                // succeed too and quietly leave a second shell beside a live
-                // one whose screen is still on the server. Stop and say so.
+                // A `pty.list` that did not succeed is never read as "there
+                // are no sessions" — spawning on a guess leaves a second
+                // shell beside a live one whose screen is still on the
+                // server, and nothing on this page pointing at it.
                 session::AttachDecision::Fail(msg) => {
                     error.set(Some(admin_refusal::settings_load_error(i18n, &msg, |e| {
                         e.to_string()

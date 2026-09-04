@@ -27,7 +27,7 @@ use aleph_protocol::pty::{
 /// What the view should do after asking the server which sessions exist.
 ///
 /// Three outcomes, not two, because "there is nothing to adopt" and "I could
-/// not read the answer" are different facts and only the first one licenses a
+/// not get an answer" are different facts and only the first one licenses a
 /// spawn. Folding them together is how a client ends up running a second
 /// shell beside a live one whose screen is still on the server, with nothing
 /// on the page pointing at it.
@@ -38,8 +38,9 @@ pub enum AttachDecision {
     /// The list was READ and held nothing live. The only confirmed absence,
     /// and the only decision that may create a shell.
     Spawn,
-    /// The server answered with something this client cannot read. Show it;
-    /// do not act on it.
+    /// No usable answer: the call failed, or it returned something this
+    /// client cannot read. Show it; do not act on it. Notably NOT a claim
+    /// that the server has no sessions — it may have several.
     Fail(String),
 }
 
@@ -49,22 +50,29 @@ pub enum AttachDecision {
 /// behaviour here is a three-way classification that a Leptos effect cannot
 /// be asked about in a unit test.
 ///
-/// The two failure arms deliberately differ, and the difference is the whole
-/// point rather than an inconsistency:
+/// **A `pty.list` that did not SUCCEED never justifies a spawn.** Every `Err`
+/// — transport or decode — is a `Fail`. Only an `Ok` that was decoded and
+/// held nothing open yields `Spawn`.
 ///
-/// - A **transport error** means the call never landed. Spawning is still
-///   right, because the spawn travels the same broken transport and reports
-///   its own failure loudly — the user sees an error either way, and nothing
-///   is silently duplicated. Failing here instead would turn every transient
-///   cold-load hiccup into a dead terminal pane.
-/// - A **decode failure** is the opposite situation: the call SUCCEEDED. A
-///   spawn issued after it will also succeed, so reading this as "no
-///   sessions" produces a working-looking second shell and orphans the first
-///   — the silent outcome, which is the expensive one.
+/// The tempting weaker rule is "a transport error means the call never
+/// landed, so the spawn after it will fail too and nothing is silently
+/// duplicated". That is false, and `send_rpc`'s own doc says why: its 30s
+/// timeout branch exists to cover *"a server that accepts the request and
+/// then never replies without closing the socket"*. There the request DID
+/// land, the socket is still open, and the `pty.spawn` that follows can
+/// succeed — producing exactly the silent second shell beside a live one
+/// that this function exists to prevent. `Err` only ever says "I do not
+/// know", and "I do not know" is never grounds to create a second shell
+/// (判据 §8).
+///
+/// This uniformity is also why no error CODE is consulted. `rpc_call` drops
+/// `RpcFailure.code` and `rpc_call_with_code` would keep it, but with one
+/// answer for every `Err` there is nothing to branch on.
 #[must_use]
 pub fn resolve_attach_target(list_result: Result<serde_json::Value, String>) -> AttachDecision {
-    let Ok(value) = list_result else {
-        return AttachDecision::Spawn;
+    let value = match list_result {
+        Ok(value) => value,
+        Err(e) => return AttachDecision::Fail(format!("pty.list failed: {e}")),
     };
     match serde_json::from_value::<PtyListResponse>(value) {
         Ok(list) => list
@@ -865,15 +873,28 @@ mod tests {
         assert_eq!(empty, AttachDecision::Spawn);
     }
 
-    /// Pins the deliberate asymmetry between the two arms so that a later
-    /// reader does not "unify" them. A transport error means the call never
-    /// landed, and the spawn that follows travels the same broken transport
-    /// and reports its own failure loudly — nothing is silently duplicated.
-    /// A decode failure is the opposite: the call SUCCEEDED, so the spawn
-    /// after it succeeds too and the duplicate is silent.
+    /// A transport error is not "there are no sessions" either, and the
+    /// reasoning that once said otherwise here was wrong on the codebase's
+    /// own terms: `send_rpc`'s 30s timeout branch covers "a server that
+    /// accepts the request and then never replies without closing the
+    /// socket". The request landed, the socket is open, and the `pty.spawn`
+    /// after it can succeed — the silent duplicate shell, reached by the
+    /// arm that was supposed to be the safe one.
+    ///
+    /// So the rule has no exceptions: anything that is not a decoded `Ok`
+    /// is a `Fail`. Both `Err` arms are asserted the same way on purpose —
+    /// there is no asymmetry left to pin.
     #[test]
-    fn a_transport_error_still_spawns_because_the_spawn_will_fail_too() {
-        let decision = resolve_attach_target(Err("connection reset".to_string()));
-        assert_eq!(decision, AttachDecision::Spawn);
+    fn a_transport_error_is_a_failure_not_a_spawn() {
+        for message in ["connection reset", "Request timed out", "Not connected"] {
+            let decision = resolve_attach_target(Err(message.to_string()));
+            match decision {
+                AttachDecision::Fail(msg) => assert!(
+                    msg.contains(message),
+                    "the error must name what went wrong; got {msg:?}"
+                ),
+                other => panic!("{message:?} must not become {other:?}"),
+            }
+        }
     }
 }
