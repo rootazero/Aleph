@@ -704,4 +704,24 @@ mod tests {
         .unwrap();
         assert_eq!(rows[0].owner_label(), Some("u-bob"));
     }
+
+    /// The envelope answers the same question `connected` does, one level up:
+    /// a reply that never says how many devices there are must be reported,
+    /// not rendered as "No paired devices." The sibling outage this contract
+    /// cites — the channel-pairing page reporting "no approved senders" on a
+    /// channel that had several — was a missing ENVELOPE, not a missing row
+    /// field.
+    #[test]
+    fn a_reply_without_the_envelope_key_fails_instead_of_reading_as_an_empty_inventory() {
+        let err = decode_devices(&json!({}))
+            .expect_err("a reply with no `devices` key is a server this client cannot describe");
+        assert!(err.to_string().contains("devices"), "{err}");
+    }
+
+    /// The honest empty still renders as empty.
+    #[test]
+    fn an_explicitly_empty_inventory_renders_as_empty() {
+        let rows = decode_devices(&json!({ "devices": [] })).unwrap();
+        assert!(rows.is_empty());
+    }
 }

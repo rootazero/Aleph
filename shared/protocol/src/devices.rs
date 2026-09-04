@@ -28,11 +28,20 @@
 //! a blank inventory is an inventory an operator cannot revoke from — the
 //! explicit warning [`crate::channel_pairing::ApprovedSenderRow`] carries.
 //!
-//! `connected` is deliberately **required**. It is the only field whose absence
-//! a lenient default would turn into a claim: `unwrap_or(false)` renders a
-//! missing key as "offline", and "offline" is a statement about a device, not
-//! an admission that the server did not say. A row that cannot answer it must
-//! fail to decode so the client reports a server it cannot describe.
+//! `connected` is deliberately **required** — the only field on a ROW whose
+//! absence a lenient default would turn into a claim: `unwrap_or(false)`
+//! renders a missing key as "offline", and "offline" is a statement about a
+//! device, not an admission that the server did not say. A row that cannot
+//! answer it must fail to decode so the client reports a server it cannot
+//! describe.
+//!
+//! The **envelope** `devices` is required for the same reason, one level up.
+//! `#[serde(default)]` there would let a reply that never said how many
+//! devices exist decode as zero of them, and the page would print "No paired
+//! devices." — a count, sourced from a server that gave none. That is exactly
+//! the sibling outage above: the channel-pairing page reported "no approved
+//! senders" because of a missing ENVELOPE, not a missing row field. Leniency
+//! belongs on the columns a row may honestly lack, never on the answer itself.
 
 use serde::{Deserialize, Serialize};
 
@@ -92,10 +101,13 @@ impl PairedDeviceRow {
     /// spelled at each call site is a fallback that drifts.
     #[must_use]
     pub fn owner_label(&self) -> Option<&str> {
-        self.display_name
-            .as_deref()
-            .or(self.user_id.as_deref())
-            .filter(|s| !s.is_empty())
+        // An empty string is not a name, on either field: the fallback has to
+        // see through it, or a directory row with a blank label prints as a
+        // device with no owner at all.
+        fn named(s: &Option<String>) -> Option<&str> {
+            s.as_deref().filter(|s| !s.is_empty())
+        }
+        named(&self.display_name).or_else(|| named(&self.user_id))
     }
 }
 
@@ -103,10 +115,14 @@ impl PairedDeviceRow {
 ///
 /// The envelope is a wire key too — a correct row array under a key the client
 /// does not walk is the same outage as a wrong row.
+///
+/// `devices` therefore carries **no** `#[serde(default)]`: a reply that omits
+/// it must fail to decode rather than read as an empty inventory. `{"devices":
+/// []}` is the honest empty and still decodes. See the module doc — the
+/// attribute is not leniency here, it is a fabricated count.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PairedDeviceList {
     /// The paired Panel devices, in store order.
-    #[serde(default)]
     pub devices: Vec<PairedDeviceRow>,
 }
 
@@ -220,5 +236,33 @@ mod tests {
         assert_eq!(r.owner_label(), Some("Bob"));
         r.display_name = None;
         assert_eq!(r.owner_label(), Some("u-bob"));
+        r.display_name = Some(String::new());
+        assert_eq!(
+            r.owner_label(),
+            Some("u-bob"),
+            "an empty resolved name is not a name; the doc promises the id"
+        );
+    }
+
+    /// The envelope is a wire key, and it answers the same question `connected`
+    /// does. A reply that never says how many devices there are must fail to
+    /// decode rather than read as "none" — the sibling outage this module cites
+    /// was a missing ENVELOPE, not a missing per-row field.
+    #[test]
+    fn a_response_without_the_envelope_key_fails_rather_than_reading_as_empty() {
+        let err = serde_json::from_value::<PairedDeviceList>(serde_json::json!({}))
+            .expect_err("a missing `devices` key is an unknown, never an empty inventory");
+        assert!(
+            err.to_string().contains("devices"),
+            "the decode error must name the field: {err}"
+        );
+    }
+
+    /// An explicit empty array is the honest empty, and still decodes.
+    #[test]
+    fn an_explicitly_empty_inventory_still_decodes() {
+        let list: PairedDeviceList =
+            serde_json::from_value(serde_json::json!({ "devices": [] })).unwrap();
+        assert!(list.devices.is_empty());
     }
 }
