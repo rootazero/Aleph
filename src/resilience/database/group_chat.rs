@@ -20,14 +20,6 @@ pub struct GroupChatTurn {
 }
 
 /// An active session summary.
-#[derive(Debug, Clone)]
-pub struct GroupChatSessionSummary {
-    pub id: String,
-    pub topic: Option<String>,
-    pub source_channel: String,
-    pub created_at: i64,
-}
-
 impl StateDatabase {
     // =========================================================================
     // Group Chat Sessions CRUD
@@ -75,34 +67,6 @@ impl StateDatabase {
             )
             .map_err(|e| AlephError::config(format!("Failed to insert group chat session: {e}")))?;
             Ok(())
-        })
-        .await
-    }
-
-    /// Read the owner_user_id stamp for a given group chat session, if any.
-    ///
-    /// Returns `Ok(None)` if the session does not exist OR was created before
-    /// the `owner_user_id` column migration ran (legacy rows are NULL by
-    /// design — see `migrate_add_group_chat_owner`). Callers should treat
-    /// both cases identically: the session has no recorded ownership stamp.
-    pub async fn get_group_chat_session_owner(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<String>, AlephError> {
-        use rusqlite::OptionalExtension;
-        let session_id = session_id.to_string();
-        self.with_conn(move |conn| {
-            let owner: Option<Option<String>> = conn
-                .query_row(
-                    "SELECT owner_user_id FROM group_chat_sessions WHERE id = ?1",
-                    params![session_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to read group chat session owner: {e}"))
-                })?;
-            Ok(owner.flatten())
         })
         .await
     }
@@ -216,46 +180,6 @@ impl StateDatabase {
                 })?;
 
             Ok(turns)
-        })
-        .await
-    }
-
-    /// List all active group chat sessions.
-    pub async fn list_active_group_chats(
-        &self,
-    ) -> Result<Vec<GroupChatSessionSummary>, AlephError> {
-        self.with_conn(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT id, topic, source_channel, created_at
-                    FROM group_chat_sessions
-                    WHERE status = 'active'
-                    ORDER BY created_at DESC
-                    "#,
-                )
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to prepare active group chats query: {e}"))
-                })?;
-
-            let sessions = stmt
-                .query_map([], |row| {
-                    Ok(GroupChatSessionSummary {
-                        id: row.get::<_, String>(0)?,
-                        topic: row.get::<_, Option<String>>(1)?,
-                        source_channel: row.get::<_, String>(2)?,
-                        created_at: row.get::<_, i64>(3)?,
-                    })
-                })
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to query active group chats: {e}"))
-                })?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    AlephError::config(format!("Failed to collect active group chats: {e}"))
-                })?;
-
-            Ok(sessions)
         })
         .await
     }
