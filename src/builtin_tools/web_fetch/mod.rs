@@ -12,11 +12,11 @@ use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::security::ssrf::{safe_fetch, validate_url_async, SafeFetchRequest, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
 use async_trait::async_trait;
 use scraper::Html;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use cache::{cache_key, cache_lookup, cache_store};
 
@@ -34,9 +34,6 @@ pub struct WebFetchTool {
     enable_readability: bool,
     /// SSRF protection policy
     ssrf_policy: SsrfPolicy,
-    /// Configured fetch providers (from `[fetch]`), tried in order before the
-    /// built-in path. Empty → built-in reqwest+readability only.
-    fetch_providers: Vec<std::sync::Arc<dyn crate::fetch::FetchProvider>>,
 }
 
 impl WebFetchTool {
@@ -71,7 +68,6 @@ impl WebFetchTool {
             timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
             enable_readability: true,
             ssrf_policy: SsrfPolicy::default(),
-            fetch_providers: Vec::new(),
         }
     }
 
@@ -92,18 +88,7 @@ impl WebFetchTool {
             timeout_secs: policy.timeout_seconds,
             enable_readability: policy.enable_readability,
             ssrf_policy: SsrfPolicy::default(),
-            fetch_providers: Vec::new(),
         }
-    }
-
-    /// Inject the selected fetch providers (from `[fetch]`). Empty = built-in only.
-    #[must_use]
-    pub fn with_fetch_providers(
-        mut self,
-        providers: Vec<std::sync::Arc<dyn crate::fetch::FetchProvider>>,
-    ) -> Self {
-        self.fetch_providers = providers;
-        self
     }
 
     /// Fetch and extract content from a URL (internal implementation)
@@ -137,56 +122,16 @@ impl WebFetchTool {
             return Ok(result);
         }
 
-        // Configured fetch providers (if any): URL → markdown via an operator-
-        // hosted backend. SSRF-validate the *target* URL once so the agent can't
-        // use a provider to reach internal hosts. On any provider failure, fall
-        // through to the next provider, then the built-in fetch below.
-        //
-        // This is NOT redundant with the `safe_fetch` further down: that call is
-        // only reached when there are no providers or every provider failed. A
-        // provider is a confused deputy — `crawl4ai` is operator-hosted (its own
-        // config example is a LAN address), so it dereferences the URL from
-        // inside the network the SSRF policy exists to protect, using its own
-        // HTTP client that we do not control.
-        if !self.fetch_providers.is_empty() {
-            // BT-D-R4-22: validate_url_async returns (Url, SocketAddr)
-            // where the SocketAddr is the DNS pin we use for the built-in
-            // reqwest path. Fetch providers resolve DNS again inside their
-            // own HTTP client, so a provider fetch is exposed to
-            // DNS-rebinding in the gap between this validate and the
-            // provider's connection.
-            //
-            // Policy: when the SSRF gate accepts the URL, SKIP the
-            // provider path entirely. The built-in `safe_fetch` below
-            // threads the validated SocketAddr into reqwest's connection
-            // and is the only path that closes the rebinding window.
-            // Operators who deliberately want a provider (crawl4ai,
-            // firecrawl, …) should accept that those providers are a
-            // separate trust domain; until the provider API learns to
-            // accept a pre-resolved pin we cannot run them through the
-            // same gate. The host policy (deny list / private ranges)
-            // is still enforced above, so a provider cannot reach a
-            // outright-denied host — only the rebinding IP at a
-            // host-policy-allowed host is the gap, and that gap is now
-            // closed by skipping the provider.
-            if let Err(e) = validate_url_async(&args.url, &self.ssrf_policy).await {
-                let msg = format!("Fetch blocked or failed: {e}");
-                notify_tool_result(Self::NAME, &msg, false);
-                return Err(ToolError::Network(msg));
-            }
-            warn!(
-                url = %args.url,
-                providers_configured = self.fetch_providers.len(),
-                "fetch providers skipped: SSRF DNS pin is not threaded into provider \
-                 HTTP clients (BT-D-R4-22), falling through to the built-in safe fetch"
-            );
-            // Intentional fall-through to the built-in safe_fetch below.
-            // The provider loop is removed; if a future provider API
-            // learns to accept a pre-resolved pin, reintroduce the loop
-            // with `provider.fetch_pinned(&args.url, pinned).await` and
-            // verify the pin is honored all the way down.
-        }
-
+        // No fetch-provider branch here. `[fetch]` providers (crawl4ai,
+        // firecrawl) are deliberately NOT wired into this tool: they receive
+        // the target URL as a string and resolve/follow it on their own
+        // network, so the SSRF DNS pin computed here cannot be enforced on
+        // the fetch that actually happens (BT-D-R4-22). Neither provider API
+        // accepts a pre-resolved address, and routing only the Aleph→provider
+        // hop through `safe_fetch` would leave the audited High-severity gap
+        // (provider-side rebinding + redirect following inside the LAN) wide
+        // open. The constructor logs a one-time startup warning when `[fetch]`
+        // is configured so the config surface is not silently inert.
         info!("Fetching URL: {}", args.url);
 
         // SSRF-protected fetch with DNS pinning
@@ -354,7 +299,6 @@ impl Clone for WebFetchTool {
             timeout_secs: self.timeout_secs,
             enable_readability: self.enable_readability,
             ssrf_policy: self.ssrf_policy.clone(),
-            fetch_providers: self.fetch_providers.clone(),
         }
     }
 }
@@ -410,7 +354,6 @@ impl AlephTool for WebFetchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::ssrf::SsrfPolicy;
     use crate::tools::AlephTool;
 
     fn dummy_result(url: &str, content: &str) -> WebFetchResult {
@@ -564,18 +507,6 @@ mod tests {
         assert_eq!(json["extractor"], "readability");
     }
 
-    #[test]
-    fn extractor_crawl4ai_serializes_to_lowercase() {
-        let result = WebFetchResult {
-            url: "https://example.com".to_string(),
-            title: None,
-            content: "# Hello".to_string(),
-            extractor: Extractor::Crawl4ai,
-        };
-        let json = serde_json::to_value(&result).unwrap();
-        assert_eq!(json["extractor"], "crawl4ai");
-    }
-
     // ─── Focus prompt ──────────────────────────────────────────────────
 
     #[test]
@@ -637,109 +568,28 @@ mod tests {
         assert!(prompt_text.chars().count() <= 512);
     }
 
-    #[test]
-    fn new_tool_has_no_fetch_providers() {
+    /// The built-in path is the ONLY path: with no provider wiring left
+    /// (BT-D-R4-22 removal), the SSRF gate inside `safe_fetch` must refuse
+    /// the cloud metadata endpoint outright. An IP literal keeps the block
+    /// decision pre-DNS, so the test is hermetic.
+    #[tokio::test]
+    async fn ssrf_gate_blocks_metadata_endpoint() {
         let tool = WebFetchTool::new();
-        assert!(
-            tool.fetch_providers.is_empty(),
-            "default tool must have no fetch providers"
-        );
-    }
-
-    /// BT-D-R4-22: fetch providers are deliberately SKIPPED — the validated
-    /// DNS pin cannot be threaded into a provider's own HTTP client, so
-    /// running one would reopen the DNS-rebinding window between validate and
-    /// connect. A configured provider must never be consulted; the call falls
-    /// through to the built-in pinned fetch. The dead-port URL makes that
-    /// fall-through fail fast and deterministically without external network.
-    #[tokio::test]
-    async fn fetch_providers_are_skipped_for_dns_pin_gap() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        struct SpyProvider(Arc<AtomicBool>);
-        #[async_trait::async_trait]
-        impl crate::fetch::FetchProvider for SpyProvider {
-            async fn fetch(&self, _url: &str) -> crate::error::Result<String> {
-                self.0.store(true, Ordering::SeqCst);
-                Ok("# FROM-PROVIDER".into())
-            }
-            fn name(&self) -> &str {
-                "spy"
-            }
-            fn is_available(&self) -> bool {
-                true
-            }
-        }
-
-        let called = Arc::new(AtomicBool::new(false));
-        let tool = WebFetchTool::new()
-            .with_ssrf_policy(SsrfPolicy::disabled())
-            .with_fetch_providers(vec![Arc::new(SpyProvider(Arc::clone(&called)))]);
         let result = tool
             .call_impl(WebFetchArgs {
-                // Port 1 refuses connections on any sane host — the built-in
-                // fetch fails fast with no external network involved.
-                url: "http://127.0.0.1:1/fetch-provider-test".to_string(),
-                extract_mode: ExtractMode::Markdown,
-                prompt: None,
-            })
-            .await;
-        assert!(result.is_err(), "built-in fetch to a dead port must fail");
-        assert!(
-            !called.load(Ordering::SeqCst),
-            "provider must not be consulted: the DNS pin cannot be threaded into it (BT-D-R4-22)"
-        );
-    }
-
-    /// A configured fetch provider is a confused deputy: `crawl4ai` is an
-    /// operator-hosted service (its own config example is `http://10.0.0.1:11235`
-    /// — a LAN address), so handing it an attacker-chosen URL makes *it* reach
-    /// the internal host on the agent's behalf. The built-in `safe_fetch` below
-    /// never runs on this path, so the target URL must be validated before the
-    /// provider is handed anything.
-    #[tokio::test]
-    async fn fetch_provider_path_still_validates_ssrf() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        struct SpyProvider(Arc<AtomicBool>);
-        #[async_trait::async_trait]
-        impl crate::fetch::FetchProvider for SpyProvider {
-            async fn fetch(&self, _url: &str) -> crate::error::Result<String> {
-                self.0.store(true, Ordering::SeqCst);
-                Ok("# LEAKED-INTERNAL-CONTENT".into())
-            }
-            fn name(&self) -> &str {
-                "spy"
-            }
-            fn is_available(&self) -> bool {
-                true
-            }
-        }
-
-        let called = Arc::new(AtomicBool::new(false));
-        let tool =
-            WebFetchTool::new().with_fetch_providers(vec![Arc::new(SpyProvider(called.clone()))]);
-
-        let result = tool
-            .call_impl(WebFetchArgs {
-                // Cloud metadata endpoint: an IP literal, so the block decision
-                // needs no DNS and the test stays hermetic.
                 url: "http://169.254.169.254/latest/meta-data/".to_string(),
                 extract_mode: ExtractMode::Markdown,
                 prompt: None,
             })
             .await;
-
         assert!(
             result.is_err(),
             "metadata endpoint must be refused, got: {result:?}"
         );
+        let msg = result.unwrap_err().to_string();
         assert!(
-            !called.load(Ordering::SeqCst),
-            "provider must never be handed a blocked URL — it fetches from \
-             inside the operator's network"
+            msg.contains("Fetch blocked or failed"),
+            "expected SSRF refusal, got: {msg}"
         );
     }
 }

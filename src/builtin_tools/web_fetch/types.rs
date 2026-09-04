@@ -15,6 +15,11 @@ pub enum ExtractMode {
 }
 
 /// Which extraction method produced the content
+///
+/// Only the two built-in extractors remain: the crawl4ai/firecrawl variants
+/// were removed when fetch-provider delegation was unwired (BT-D-R4-22 — the
+/// SSRF DNS pin cannot be enforced on a provider-side crawl, so `web_fetch`
+/// no longer routes to external URL→markdown backends).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Extractor {
@@ -22,34 +27,9 @@ pub enum Extractor {
     Readability,
     /// CSS selector-based fallback
     Selector,
-    /// crawl4ai backend (operator-hosted headless crawler → markdown)
-    Crawl4ai,
-    /// Firecrawl backend (operator-hosted structured extraction API)
-    Firecrawl,
 }
 
 impl Extractor {
-    /// Map a `FetchProvider::name()` value to the corresponding [`Extractor`].
-    ///
-    /// Used by `web_fetch` to record which backend actually served the
-    /// content — previously the result hardcoded [`Self::Crawl4ai`]
-    /// regardless of whether crawl4ai, firecrawl, or any future provider
-    /// had done the work, which is form-5 name drift in `WebFetchResult`.
-    /// Unknown providers fall through to [`Self::Crawl4ai`] so legacy
-    /// callers (and the read-only built-in fallback path that doesn't go
-    /// through `FetchProvider`) keep working; new providers are expected
-    /// to land here before being added to the registry.
-    #[must_use]
-    pub fn for_provider_name(name: &str) -> Self {
-        match name {
-            "firecrawl" => Self::Firecrawl,
-            // crawl4ai is the default; covers the legacy hardcoded path
-            // and any operator-hosted headless crawler whose name we
-            // haven't enumerated yet.
-            _ => Self::Crawl4ai,
-        }
-    }
-
     /// Stable lower-case token used in the JSON wire format and in the
     /// human-facing result summary. Matches the `rename_all = "lowercase"`
     /// serde tag so callers can compare against the raw JSON field
@@ -59,8 +39,6 @@ impl Extractor {
         match self {
             Self::Readability => "readability",
             Self::Selector => "selector",
-            Self::Crawl4ai => "crawl4ai",
-            Self::Firecrawl => "firecrawl",
         }
     }
 }
