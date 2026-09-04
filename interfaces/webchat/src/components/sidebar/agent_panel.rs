@@ -30,11 +30,13 @@
 use leptos::ev::{pointercancel, pointermove, pointerup};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_navigate;
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState, RUNTIME_AGENTS_CHANGED_TOPIC};
 use shared_ui_logic::state::agent_panel::{sort_entries, state_glyph, AgentPanelState};
 
 use crate::api::runtime_agents::RuntimeAgentsApi;
+use crate::components::mode_sidebar::PanelMode;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 
@@ -76,6 +78,24 @@ fn classify_failure(code: Option<i32>) -> PanelFailure {
     } else {
         PanelFailure::Unavailable
     }
+}
+
+/// Open one session in the terminal view: name the session, and hand back the
+/// route that switches the panel to it.
+///
+/// D3: both ends of this were finished and there was no line between them —
+/// the row that tells you an agent is BLOCKED was a plain `<div>`, so the one
+/// thing a person wants to do on reading it had no path on this page at all
+/// (判据 §7).
+///
+/// One function rather than two statements at the call site, because "which
+/// session" and "which panel" have to agree and a second call site is where
+/// they would stop agreeing. Returning the route instead of navigating keeps
+/// this testable off the browser: `use_navigate` needs a router context, a
+/// signal write does not.
+fn open_in_terminal(selection: RwSignal<Option<String>>, session_id: &str) -> &'static str {
+    selection.set(Some(session_id.to_string()));
+    PanelMode::Terminal.path()
 }
 
 /// The chip class for each failure, mirroring the TUI's colour split
@@ -339,6 +359,12 @@ pub fn AgentPanel() -> impl IntoView {
 #[component]
 fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
     let i18n = use_i18n();
+    let dash = expect_context::<DashboardState>();
+    // `use_navigate` returns a non-`Copy` closure; the row's click handler is
+    // `move` and outlives this body, so it is parked in a `StoredValue` the
+    // same way `views/agents/mod.rs` and `views/settings/moa/mod.rs` do.
+    let navigate = StoredValue::new(use_navigate());
+    let session_id = entry.session_id.clone();
     let state = entry.state;
     let state_label = match state {
         RuntimeAgentState::Blocked => t_string!(i18n, agent_panel.state_blocked).to_string(),
@@ -347,8 +373,19 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
         RuntimeAgentState::Unknown => t_string!(i18n, agent_panel.state_unknown).to_string(),
     };
 
+    // A `<button>`, not a `<div>`: this is a control now, and a div with a
+    // click handler is unreachable by keyboard and invisible to a screen
+    // reader.
     view! {
-        <div class="flex items-center gap-1.5 text-xs" title=entry.cwd.clone()>
+        <button
+            type="button"
+            class="w-full flex items-center gap-1.5 text-xs text-left rounded px-1 -mx-1 hover:bg-surface-hover"
+            title=entry.cwd.clone()
+            on:click=move |_| {
+                let route = open_in_terminal(dash.terminal_selection, &session_id);
+                navigate.with_value(|nav| nav(route, leptos_router::NavigateOptions::default()));
+            }
+        >
             <span class=format!(
                 "shrink-0 px-1 py-0 rounded text-[10px] leading-4 font-medium {}",
                 state_chip_class(state)
@@ -356,7 +393,7 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
                 {format!("{} {}", state_glyph(state), state_label)}
             </span>
             <span class="truncate text-text-primary">{entry.label.clone()}</span>
-        </div>
+        </button>
     }
 }
 
@@ -364,6 +401,7 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
 mod tests {
     use super::*;
     use aleph_protocol::runtime::RuntimeAgentState as S;
+    use leptos::prelude::Owner;
 
     fn entry(session_id: &str, state: S) -> RuntimeAgentEntry {
         RuntimeAgentEntry {
@@ -389,6 +427,68 @@ mod tests {
         let mut entries = vec![entry("i", S::Idle), entry("b", S::Blocked)];
         sort_entries(&mut entries);
         assert_eq!(entries[0].state, RuntimeAgentState::Blocked);
+    }
+
+    /// D3: the agent panel and the terminal were both fully built and there
+    /// was no wire between them — the row that tells you an agent is BLOCKED
+    /// was a plain `<div>`, so the one thing a person wants to do on reading
+    /// it (go look at that terminal) had no path on this page at all
+    /// (判据 §7: two ends complete, no line in the middle).
+    ///
+    /// Two halves, both necessary:
+    ///
+    /// * the behaviour — clicking names the session and hands back the route
+    ///   that switches the panel, as ONE function, so "which session" and
+    ///   "which mode" cannot drift into two call sites that disagree;
+    /// * the wiring — a source check that `AgentRow`'s markup actually calls
+    ///   it. Without this half, deleting `on:click` leaves the function
+    ///   perfectly tested and completely unreachable, which is the exact
+    ///   defect this task exists to fix (判据 §4: assert the effect arrived,
+    ///   not that a helper is correct).
+    #[test]
+    fn agent_row_click_selects_the_session_and_switches_mode() {
+        let owner = Owner::new();
+        owner.set();
+
+        let selection = RwSignal::new(None::<String>);
+        let route = open_in_terminal(selection, "sess-7");
+
+        assert_eq!(selection.get_untracked().as_deref(), Some("sess-7"));
+        assert_eq!(
+            crate::components::mode_sidebar::PanelMode::from_path(route),
+            crate::components::mode_sidebar::PanelMode::Terminal,
+            "the route this hands back must classify as the terminal panel"
+        );
+
+        // Production half of the file only: this test's own source mentions
+        // both tokens, and a scan that reads itself certifies nothing.
+        //
+        // `i18n_census::production_lines`, NOT a `split("#[cfg(test)]")` of my
+        // own. This crate has a guard against exactly that hand-rolled cut
+        // (`no_guard_in_this_crate_hand_rolls_the_cfg_test_cut`) and it caught
+        // the first version of this test: cutting at the first marker walks
+        // off the end of whatever it could not see and then reports a clean
+        // pass for it — a guard that under-scans silently is 判据 §3, and this
+        // crate already paid for it once.
+        let production: String = crate::i18n_census::production_lines(include_str!("agent_panel.rs"))
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let row = production
+            .split("fn AgentRow")
+            .nth(1)
+            .expect("the AgentRow component must exist");
+        assert!(
+            row.contains("on:click"),
+            "AgentRow must carry a click handler, or the panel and the \
+             terminal are two finished ends with no line between them"
+        );
+        assert!(
+            row.contains("open_in_terminal"),
+            "AgentRow's click handler must go through `open_in_terminal`, \
+             not spell the selection write and the route out a second time"
+        );
     }
 
     /// `Unknown` must never render the same glyph as `Idle` (判据 §8): "I

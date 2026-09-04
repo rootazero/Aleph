@@ -21,34 +21,49 @@
 //! pre-filter (see that method's doc for why).
 
 use aleph_protocol::pty::{
-    PtyAttachResponse, PtyListResponse, PtyScreenFrame, PtyScreenPatch, PtyStyleRun,
+    PtyAttachResponse, PtyListResponse, PtyScreenFrame, PtyScreenPatch, PtySessionInfo, PtyStyleRun,
 };
 
-/// What the view should do after asking the server which sessions exist.
+/// What came back from asking the server which sessions exist.
 ///
-/// Three outcomes, not two, because "there is nothing to adopt" and "I could
-/// not get an answer" are different facts and only the first one licenses a
-/// spawn. Folding them together is how a client ends up running a second
-/// shell beside a live one whose screen is still on the server, with nothing
-/// on the page pointing at it.
+/// Two outcomes, and the split is the whole point: "the server was understood"
+/// and "I could not get an answer" are different facts, and only the first one
+/// can license creating a shell. Folding them together is how a client ends up
+/// running a second shell beside a live one whose screen is still on the
+/// server, with nothing on the page pointing at it.
+///
+/// This replaces the earlier `AttachDecision`, which additionally picked WHICH
+/// session to adopt (the first open one). That half is now `TabModel`'s — the
+/// tab strip decides what is showing — and leaving a second selector here
+/// would be two answers to one question (判据 §1). The classification rule and
+/// its tests are unchanged and carried over verbatim below.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AttachDecision {
-    /// A live session was named; adopt it.
-    Attach(String),
-    /// The list was READ and held nothing live. The only confirmed absence,
-    /// and the only decision that may create a shell.
-    Spawn,
+pub enum ListOutcome {
+    /// The response was READ. The rows are exactly what the server said, open
+    /// and closed alike; an empty vector here is a CONFIRMED absence.
+    Read(Vec<PtySessionInfo>),
     /// No usable answer: the call failed, or it returned something this
     /// client cannot read. Show it; do not act on it. Notably NOT a claim
     /// that the server has no sessions — it may have several.
     Fail(String),
 }
 
-/// Decide what to do with the result of a `pty.list` call.
+/// May the view create a shell?
+///
+/// Only ever called on the rows inside a [`ListOutcome::Read`] — a `Fail`
+/// carries none, so there is no way to reach this function with a list that
+/// was never read. That is the "an `Err` is never a spawn" rule expressed in
+/// the type rather than in a reviewer's memory (判据 §8).
+#[must_use]
+pub fn should_spawn(sessions: &[PtySessionInfo]) -> bool {
+    !sessions.iter().any(|s| !s.closed)
+}
+
+/// Classify the result of a `pty.list` call.
 ///
 /// Pure, and separated from the view for exactly that reason: the interesting
-/// behaviour here is a three-way classification that a Leptos effect cannot
-/// be asked about in a unit test.
+/// behaviour here is a classification that a Leptos effect cannot be asked
+/// about in a unit test.
 ///
 /// **A `pty.list` that did not SUCCEED never justifies a spawn.** Every `Err`
 /// — transport or decode — is a `Fail`. Only an `Ok` that was decoded and
@@ -69,20 +84,14 @@ pub enum AttachDecision {
 /// `RpcFailure.code` and `rpc_call_with_code` would keep it, but with one
 /// answer for every `Err` there is nothing to branch on.
 #[must_use]
-pub fn resolve_attach_target(list_result: Result<serde_json::Value, String>) -> AttachDecision {
+pub fn resolve_session_list(list_result: Result<serde_json::Value, String>) -> ListOutcome {
     let value = match list_result {
         Ok(value) => value,
-        Err(e) => return AttachDecision::Fail(format!("pty.list failed: {e}")),
+        Err(e) => return ListOutcome::Fail(format!("pty.list failed: {e}")),
     };
     match serde_json::from_value::<PtyListResponse>(value) {
-        Ok(list) => list
-            .sessions
-            .into_iter()
-            .find(|s| !s.closed)
-            .map_or(AttachDecision::Spawn, |s| {
-                AttachDecision::Attach(s.session_id)
-            }),
-        Err(e) => AttachDecision::Fail(format!("pty.list decode failed: {e}")),
+        Ok(list) => ListOutcome::Read(list.sessions),
+        Err(e) => ListOutcome::Fail(format!("pty.list decode failed: {e}")),
     }
 }
 
@@ -820,9 +829,9 @@ mod tests {
     /// it (判据 §8: an `Err` may only say "I do not know").
     #[test]
     fn a_malformed_list_payload_is_a_failure_not_an_empty_list() {
-        let decision = resolve_attach_target(Ok(serde_json::json!({ "sessions": "not an array" })));
-        match decision {
-            AttachDecision::Fail(msg) => assert!(
+        let outcome = resolve_session_list(Ok(serde_json::json!({ "sessions": "not an array" })));
+        match outcome {
+            ListOutcome::Fail(msg) => assert!(
                 !msg.is_empty(),
                 "the message is what names the remedy; an empty one is a blank error card"
             ),
@@ -837,24 +846,37 @@ mod tests {
     /// a legitimately empty list.
     #[test]
     fn a_row_the_client_cannot_decode_is_a_failure_not_an_empty_list() {
-        let decision = resolve_attach_target(Ok(serde_json::json!({
+        let outcome = resolve_session_list(Ok(serde_json::json!({
             "sessions": [{ "shell": "zsh", "closed": false }]
         })));
         assert!(
-            matches!(decision, AttachDecision::Fail(_)),
+            matches!(outcome, ListOutcome::Fail(_)),
             "a row without session_id is unreadable, not an absence"
         );
     }
 
+    /// A list with something live in it is read, kept whole (the closed row
+    /// included — `TabModel::reconcile` is what drops those), and does NOT
+    /// license a spawn.
     #[test]
     fn a_list_holding_a_live_session_attaches_to_it() {
-        let decision = resolve_attach_target(Ok(serde_json::json!({
+        let outcome = resolve_session_list(Ok(serde_json::json!({
             "sessions": [
                 { "session_id": "dead", "shell": "zsh", "cwd": "", "created_at": 1, "closed": true },
                 { "session_id": "live", "shell": "zsh", "cwd": "", "created_at": 2, "closed": false },
             ]
         })));
-        assert_eq!(decision, AttachDecision::Attach("live".to_string()));
+        let ListOutcome::Read(sessions) = outcome else {
+            panic!("a readable list must be Read, got {outcome:?}");
+        };
+        assert_eq!(
+            sessions.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+            vec!["dead", "live"]
+        );
+        assert!(
+            !should_spawn(&sessions),
+            "a live session is exactly what must NOT produce a second shell"
+        );
     }
 
     /// A decoded list with nothing live is the one case that is genuinely an
@@ -862,15 +884,21 @@ mod tests {
     /// adopt. Only here may the view spawn.
     #[test]
     fn a_decoded_list_with_no_live_session_is_the_only_confirmed_spawn() {
-        let decision = resolve_attach_target(Ok(serde_json::json!({
+        let outcome = resolve_session_list(Ok(serde_json::json!({
             "sessions": [
                 { "session_id": "dead", "shell": "zsh", "cwd": "", "created_at": 1, "closed": true },
             ]
         })));
-        assert_eq!(decision, AttachDecision::Spawn);
+        let ListOutcome::Read(sessions) = outcome else {
+            panic!("a readable list must be Read, got {outcome:?}");
+        };
+        assert!(should_spawn(&sessions));
 
-        let empty = resolve_attach_target(Ok(serde_json::json!({ "sessions": [] })));
-        assert_eq!(empty, AttachDecision::Spawn);
+        let empty = resolve_session_list(Ok(serde_json::json!({ "sessions": [] })));
+        let ListOutcome::Read(sessions) = empty else {
+            panic!("an empty list is an ANSWER, not a failure");
+        };
+        assert!(should_spawn(&sessions));
     }
 
     /// A transport error is not "there are no sessions" either, and the
@@ -887,12 +915,15 @@ mod tests {
     #[test]
     fn a_transport_error_is_a_failure_not_a_spawn() {
         for message in ["connection reset", "Request timed out", "Not connected"] {
-            let decision = resolve_attach_target(Err(message.to_string()));
-            match decision {
-                AttachDecision::Fail(msg) => assert!(
+            let outcome = resolve_session_list(Err(message.to_string()));
+            match outcome {
+                ListOutcome::Fail(msg) => assert!(
                     msg.contains(message),
                     "the error must name what went wrong; got {msg:?}"
                 ),
+                // `Fail` carries no rows, so there is no way to hand this to
+                // `should_spawn` at all — the rule is enforced by the type,
+                // not by remembering to check here.
                 other => panic!("{message:?} must not become {other:?}"),
             }
         }

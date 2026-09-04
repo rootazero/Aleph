@@ -10,13 +10,25 @@
 //! phone screen yet — `app.rs`'s `MainContent` renders nothing for
 //! `PanelMode::Terminal` on a phone form factor, the same treatment
 //! `PanelMode::Projects` already gets there.
+//!
+//! # Which session is showing
+//!
+//! [`tabs::TabModel`] owns that: it holds the tab order, drops sessions the
+//! server has closed, and decides where the selection lands when the showing
+//! one exits. `DashboardState::terminal_selection` is that answer's ADDRESS —
+//! other surfaces (the agent panel's row click) write it to REQUEST a session,
+//! and this view writes it back to PUBLISH what it settled on. One authority,
+//! one published copy, and [`publish_selection`] is the only place that writes
+//! the copy.
 
 pub mod keymap;
 pub mod render;
 pub mod session;
+pub mod tabs;
 
 use aleph_protocol::pty::{
-    PtyAttachResponse, PtyScreenFrame, PtySpawnResponse, PTY_LIST_METHOD, PTY_SCREEN_TOPIC,
+    PtyAttachResponse, PtyScreenFrame, PtySpawnResponse, PTY_EXIT_TOPIC, PTY_LIST_METHOD,
+    PTY_SCREEN_TOPIC,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -24,9 +36,11 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
 
+use crate::api::runtime_agents::RuntimeAgentsApi;
 use crate::components::admin_refusal;
 use crate::context::DashboardState;
 use session::{ApplyOutcome, AttachOutcome, ClientScreen};
+use tabs::{TabBar, TabModel};
 
 #[component]
 pub fn TerminalView() -> impl IntoView {
@@ -38,6 +52,11 @@ pub fn TerminalView() -> impl IntoView {
     // subscriber 60 times a second for a canvas that repaints itself anyway.
     let screen = StoredValue::new(None::<ClientScreen>);
     let session_id = StoredValue::new(None::<String>);
+    // A signal, unlike `screen`: the tab strip is a view of it, so a change
+    // here has to re-render. It changes on a session list, an exit and a
+    // title — human-paced events, not the 60/s frame rate that made `screen`
+    // a `StoredValue`.
+    let tabs = RwSignal::new(TabModel::default());
     let repaint_tick = RwSignal::new(0_u32);
     let error = RwSignal::new(None::<String>);
     // Server-configured canvas font (`[policies.terminal]`). Seeded with the
@@ -118,98 +137,54 @@ pub fn TerminalView() -> impl IntoView {
         });
     };
 
-    // Mount: subscribe BEFORE resolving a session. Whatever the shell prints
-    // on startup then cannot land in the gap between spawn and subscribe.
+    // Point this view at one session: seat a fresh `ClientScreen` for it,
+    // report our viewport, and attach.
     //
-    // Resolving is list-then-spawn, NOT spawn. See the note below this block.
-    Effect::new(move |_| {
-        let state = state;
+    // A no-op when it is already the showing session, which is what makes it
+    // safe to call from every place that can settle on a selection (mount, a
+    // tab click, an agent-panel request, an exit falling to a neighbour)
+    // without any of them having to know what the others did.
+    //
+    // The 24x80 is a placeholder that is never observed: `finish_attach`
+    // re-seats both the geometry and `seq` from the attach response, and
+    // `measure_and_report` corrects the server's idea of our viewport in the
+    // same breath. Setting the id BEFORE the RPC matters — the frame handler
+    // DROPS frames whose session it cannot name, and a dropped frame is not a
+    // buffered one.
+    let attach_to = move |sid: String| {
+        if session_id.get_value().as_deref() == Some(sid.as_str()) {
+            return;
+        }
+        screen.set_value(Some(ClientScreen::new(24, 80, 0, sid.clone())));
+        session_id.set_value(Some(sid.clone()));
+        measure_and_report(
+            canvas_ref,
+            state,
+            Some(sid.clone()),
+            font_family.get_value(),
+            font_size_px.get_value(),
+            repaint_tick,
+        );
+        resync(sid);
+    };
+
+    // Open a new shell.
+    //
+    // The spawn response is adopted straight into the tab model rather than
+    // re-listing to discover what we just created: that second round trip can
+    // itself fail, and a running shell with no tab pointing at it is exactly
+    // the shape D2 was.
+    let spawn_new = move || {
         spawn_local(async move {
-            if let Err(e) = state.subscribe_topic_ephemeral(PTY_SCREEN_TOPIC).await {
-                error.set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
-                    e.to_string()
-                })));
-                return;
-            }
-
-            // A live session already on the server IS this view's session.
-            // A refresh, a second tab and a reconnect all arrive here.
-            //
-            // The three-way classification lives in `resolve_attach_target`
-            // (pure, unit-tested there) because "nothing to adopt" and "I
-            // could not get an answer" are different facts, and only the
-            // first may create a shell.
-            let existing: Option<String> = match session::resolve_attach_target(
-                state.rpc_call(PTY_LIST_METHOD, serde_json::json!({})).await,
-            ) {
-                session::AttachDecision::Attach(sid) => Some(sid),
-                session::AttachDecision::Spawn => None,
-                // A `pty.list` that did not succeed is never read as "there
-                // are no sessions" — spawning on a guess leaves a second
-                // shell beside a live one whose screen is still on the
-                // server, and nothing on this page pointing at it.
-                session::AttachDecision::Fail(msg) => {
-                    error.set(Some(admin_refusal::settings_load_error(i18n, &msg, |e| {
-                        e.to_string()
-                    })));
-                    return;
-                }
-            };
-
-            if let Some(sid) = existing {
-                // Dimensions and seq arrive with the attach response and
-                // `finish_attach` re-seats both, so this placeholder is never
-                // observed. Setting the id BEFORE the RPC matters: the frame
-                // handler DROPS frames whose session it cannot name, and a
-                // dropped frame is not a buffered one.
-                screen.set_value(Some(ClientScreen::new(24, 80, 0, sid.clone())));
-                session_id.set_value(Some(sid.clone()));
-                // Correct the placeholder immediately: this reattached
-                // session may have been sized by someone else entirely, and
-                // our own measured viewport has not been reported yet (the
-                // resize effect below raced this async continuation and, on
-                // its first synchronous run, had no session id to report
-                // against). See `measure_and_report`'s doc for why this call
-                // is safe post-`.await`.
-                measure_and_report(
-                    canvas_ref,
-                    state,
-                    Some(sid.clone()),
-                    font_family.get_value(),
-                    font_size_px.get_value(),
-                    repaint_tick,
-                );
-                resync(sid);
-                return;
-            }
-
-            let (rows, cols) = (24_u16, 80_u16); // replaced by the measured
-                                                 // viewport in the resize step below
             match state
-                .rpc_call(
-                    "pty.spawn",
-                    serde_json::json!({ "rows": rows, "cols": cols }),
-                )
+                .rpc_call("pty.spawn", serde_json::json!({ "rows": 24, "cols": 80 }))
                 .await
             {
                 Ok(v) => match serde_json::from_value::<PtySpawnResponse>(v) {
                     Ok(resp) => {
-                        screen.set_value(Some(ClientScreen::new(
-                            resp.rows,
-                            resp.cols,
-                            resp.seq,
-                            resp.session_id.clone(),
-                        )));
-                        session_id.set_value(Some(resp.session_id.clone()));
-                        measure_and_report(
-                            canvas_ref,
-                            state,
-                            Some(resp.session_id.clone()),
-                            font_family.get_value(),
-                            font_size_px.get_value(),
-                            repaint_tick,
-                        );
-                        resync(resp.session_id);
+                        tabs.update(|m| m.adopt_spawned(&resp.session_id, &resp.shell));
+                        publish_selection(state, tabs);
+                        attach_to(resp.session_id);
                     }
                     Err(e) => error.set(Some(admin_refusal::settings_write_error(
                         i18n,
@@ -222,13 +197,163 @@ pub fn TerminalView() -> impl IntoView {
                 // server's message names the remedy; show it verbatim.
                 // `settings_write_error` replaces only the generic
                 // admin-privilege refusal (`pty.*` is fully admin-gated) --
-                // every other message, gate and jail included, passes
-                // through unframed.
+                // every other message, gate and jail included, passes through
+                // unframed.
                 Err(e) => error.set(Some(admin_refusal::settings_write_error(i18n, &e, |e| {
                     e.to_string()
                 }))),
             }
         });
+    };
+
+    // Ask the server what exists and rebuild the tab strip from it.
+    //
+    // `allow_spawn` is only true on the first pass. A later refresh that finds
+    // nothing open means the user closed everything, and re-opening a shell
+    // they just closed would be the page arguing with them.
+    let refresh_tabs = move |allow_spawn: bool| {
+        spawn_local(async move {
+            // "Nothing to adopt" and "I could not get an answer" are different
+            // facts, and only the first may create a shell. The classification
+            // lives in `session::resolve_session_list` (pure, unit-tested
+            // there); the "may I spawn" half is `session::should_spawn`, which
+            // a `Fail` cannot even be handed because it carries no rows.
+            let sessions = match session::resolve_session_list(
+                state.rpc_call(PTY_LIST_METHOD, serde_json::json!({})).await,
+            ) {
+                session::ListOutcome::Read(sessions) => sessions,
+                session::ListOutcome::Fail(msg) => {
+                    error.set(Some(admin_refusal::settings_load_error(i18n, &msg, |e| {
+                        e.to_string()
+                    })));
+                    return;
+                }
+            };
+
+            // Agent rows only DECORATE a tab (a state glyph, and the
+            // foreground program as its tooltip). A failure here therefore
+            // degrades to "no decoration", not to a claim: every tab's `state`
+            // stays `None`, which `TabModel` documents as "the sampler said
+            // nothing" and which renders as no glyph at all — never as Idle
+            // (判据 §8).
+            let agents = RuntimeAgentsApi::list(&state)
+                .await
+                .map(|resp| resp.agents)
+                .unwrap_or_default();
+
+            tabs.update(|m| m.reconcile(&sessions, &agents));
+
+            // Honour a request another surface left behind before this view
+            // had a session list to check it against: the agent panel writes
+            // `terminal_selection` and then navigates here, so the write can
+            // easily land before this view has ever listed anything.
+            if let Some(requested) = state.terminal_selection.try_get_untracked().flatten() {
+                tabs.update(|m| {
+                    m.select(&requested);
+                });
+            }
+            publish_selection(state, tabs);
+
+            match tabs
+                .try_with_untracked(|m| m.selected_id().map(str::to_string))
+                .flatten()
+            {
+                Some(sid) => attach_to(sid),
+                None if allow_spawn && session::should_spawn(&sessions) => spawn_new(),
+                None => {}
+            }
+        });
+    };
+
+    // Ask the server to end a session.
+    //
+    // Deliberately does NOT remove the tab here. `pty.exit` is what says the
+    // shell is gone; a tab removed optimistically on a close that was refused
+    // would hide a shell that is still running (判据 §8 — the request is not
+    // the outcome).
+    let close_tab = move |sid: String| {
+        spawn_local(async move {
+            if let Err(e) = state
+                .rpc_call("pty.close", serde_json::json!({ "session_id": sid }))
+                .await
+            {
+                error.set(Some(admin_refusal::settings_write_error(i18n, &e, |e| {
+                    e.to_string()
+                })));
+            }
+        });
+    };
+
+    // Mount: subscribe BEFORE listing. Whatever a shell prints on startup then
+    // cannot land in the gap between spawn and subscribe.
+    Effect::new(move |_| {
+        let state = state;
+        spawn_local(async move {
+            if let Err(e) = state.subscribe_topic_ephemeral(PTY_SCREEN_TOPIC).await {
+                error.set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
+                    e.to_string()
+                })));
+                return;
+            }
+            // A session that exits while this view is open must not leave a
+            // tab that attaches to nothing. A failed subscription here is
+            // reported but does not stop the rest: the tabs still work, they
+            // just stop noticing exits until the next list.
+            if let Err(e) = state.subscribe_topic_ephemeral(PTY_EXIT_TOPIC).await {
+                error.set(Some(admin_refusal::settings_load_error(i18n, &e, |e| {
+                    e.to_string()
+                })));
+            }
+
+            refresh_tabs(true);
+        });
+    });
+
+    // Another surface asked for a session (the agent panel's row click).
+    //
+    // A request naming a session this view has no open tab for is REFUSED by
+    // the model and nothing happens — the strip keeps showing what it was
+    // showing rather than blanking the canvas for a session that is gone.
+    Effect::new(move |_| {
+        let Some(requested) = state.terminal_selection.get() else {
+            return;
+        };
+        let accepted = tabs.try_update(|m| m.select(&requested)).unwrap_or(false);
+        if accepted {
+            attach_to(requested);
+        }
+    });
+
+    // `pty.exit`: mark the tab closed and, if it was the showing one, follow
+    // the model to its neighbour.
+    Effect::new(move |_| {
+        let handler_id = state.subscribe_events(move |ev| {
+            if ev.topic != PTY_EXIT_TOPIC {
+                return;
+            }
+            // Hand-parsed: `shared/protocol` has a type for `pty.list` and for
+            // the screen frame, but none for this event's payload, and that
+            // crate is frozen for this round (see the report's concerns). A
+            // missing or non-string `session_id` is DROPPED rather than
+            // guessed at — closing the wrong tab is worse than missing one.
+            let Some(sid) = ev
+                .data
+                .get("session_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+            else {
+                return;
+            };
+            tabs.update(|m| m.on_exit(&sid));
+            publish_selection(state, tabs);
+            if let Some(next) = tabs
+                .try_with_untracked(|m| m.selected_id().map(str::to_string))
+                .flatten()
+            {
+                attach_to(next);
+            }
+        });
+        on_cleanup(move || state.unsubscribe_events(handler_id));
     });
 
     // Font config: read `[policies.terminal]`'s font fields once at mount.
@@ -304,7 +429,33 @@ pub fn TerminalView() -> impl IntoView {
                     .map_or(ApplyOutcome::Buffered, |s| s.apply(frame))
             });
             match outcome {
-                Some(ApplyOutcome::Applied) => repaint_tick.update(|n| *n = n.wrapping_add(1)),
+                Some(ApplyOutcome::Applied) => {
+                    repaint_tick.update(|n| *n = n.wrapping_add(1));
+                    // S7: `ClientScreen::title()` had no reader at all — the
+                    // server parsed OSC 0/2 and the client stored it for
+                    // nobody. It names the tab now. Guarded on "did it
+                    // change" because this runs on every applied frame and an
+                    // unconditional signal write would re-render the strip at
+                    // the frame rate.
+                    if let (Some(sid), Some(title)) = (
+                        session_id.get_value(),
+                        screen.with_value(|s| {
+                            s.as_ref().and_then(|s| s.title().map(str::to_string))
+                        }),
+                    ) {
+                        let changed = tabs
+                            .try_with_untracked(|m| {
+                                m.tabs()
+                                    .iter()
+                                    .find(|t| t.session_id == sid)
+                                    .is_some_and(|t| t.title != title)
+                            })
+                            .unwrap_or(false);
+                        if changed {
+                            tabs.update(|m| m.on_title(&sid, &title));
+                        }
+                    }
+                }
                 Some(ApplyOutcome::Gap { .. }) => {
                     if let Some(mine) = session_id.get_value() {
                         resync(mine);
@@ -441,6 +592,19 @@ pub fn TerminalView() -> impl IntoView {
         // overflow-hidden`). See `terminal_view_root_carries_an_explicit_height_class`
         // below for the guard.
         <div class="flex flex-1 min-w-0 min-h-0 h-full flex-col" data-terminal-view="">
+            <TabBar
+                tabs=Signal::derive(move || tabs.get().tabs().to_vec())
+                selected=Signal::derive(move || tabs.get().selected_id().map(str::to_string))
+                // A click REQUESTS a session; it does not select one directly.
+                // Everything that changes what is showing goes through
+                // `terminal_selection` and the effect above it, so there is one
+                // path into the model and not one per control (判据 §6).
+                on_select=Callback::new(move |sid: String| {
+                    state.terminal_selection.set(Some(sid));
+                })
+                on_close=Callback::new(move |sid: String| close_tab(sid))
+                on_new=Callback::new(move |(): ()| spawn_new())
+            />
             {move || error.get().map(|e| view! {
                 <div class="px-3 py-2 text-sm text-danger" role="alert">{e}</div>
             })}
@@ -451,6 +615,33 @@ pub fn TerminalView() -> impl IntoView {
                 on:keydown=on_keydown
             />
         </div>
+    }
+}
+
+/// Publish the model's selection to `DashboardState`, so other surfaces can
+/// see what the terminal settled on and re-request it later.
+///
+/// The ONLY writer of `terminal_selection` inside this view: every other place
+/// that changes the selection changes the model and then calls this, so the
+/// published copy can never disagree with the authority (判据 §1).
+///
+/// Skips the write when nothing changed. `RwSignal::set` notifies on every
+/// call, same value or not, and the effect that reads this signal calls back
+/// into the model — a same-value write would be a round of work per event for
+/// no change.
+fn publish_selection(state: DashboardState, tabs: RwSignal<TabModel>) {
+    // `try_` on both reads: every caller is on the far side of an `.await` or
+    // inside an event callback, and the plain forms panic on a disposed
+    // signal (`crate::disposed_reads`). A `None` from either means the scope
+    // that owns them is gone, and there is nobody left to publish to.
+    let Some(current) = tabs.try_with_untracked(|m| m.selected_id().map(str::to_string)) else {
+        return;
+    };
+    let Some(published) = state.terminal_selection.try_get_untracked() else {
+        return;
+    };
+    if published != current {
+        state.terminal_selection.set(current);
     }
 }
 

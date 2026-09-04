@@ -2787,5 +2787,9 @@
     "phase_speaking": "Speaking · start talking to interrupt",
     "repeated_misses": "Still not catching it — press esc and use text instead",
     "reply_failed": "That reply went wrong — try again in a moment?"
+  },
+  "terminal": {
+    "new_tab": "New terminal",
+    "close_tab": "Close terminal"
   }
 }
