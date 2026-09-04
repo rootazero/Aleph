@@ -304,63 +304,8 @@ impl CanvasStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::canvas::{
-        AiFrameStatus, CanvasOp, FracIndex, Shape, ShapeCommon, ShapeStyle,
-    };
-    use filetime::FileTime;
-    use std::path::Path;
 
     const PNG: &str = "image/png";
-
-    fn common(id: &str) -> ShapeCommon {
-        ShapeCommon {
-            id: id.to_string(),
-            x: 0.0,
-            y: 0.0,
-            w: 100.0,
-            h: 100.0,
-            z: FracIndex::first(),
-            parent_id: None,
-        }
-    }
-
-    fn upsert_image(id: &str, asset_id: &str) -> CanvasOp {
-        CanvasOp::UpsertShape {
-            shape: Shape::Image {
-                common: common(id),
-                asset_id: asset_id.to_string(),
-                natural_w: 1.0,
-                natural_h: 1.0,
-            },
-        }
-    }
-
-    fn upsert_ai_frame(id: &str, reference_asset_ids: Vec<String>) -> CanvasOp {
-        CanvasOp::UpsertShape {
-            shape: Shape::AiImageFrame {
-                common: common(id),
-                prompt: "p".to_string(),
-                reference_asset_ids,
-                status: AiFrameStatus::Draft,
-            },
-        }
-    }
-
-    fn upsert_note(id: &str) -> CanvasOp {
-        CanvasOp::UpsertShape {
-            shape: Shape::Note {
-                common: common(id),
-                style: ShapeStyle::default(),
-                text: "hi".to_string(),
-            },
-        }
-    }
-
-    /// Push a file's mtime past the orphan grace window.
-    fn age_past_grace(path: &Path) {
-        let old = SystemTime::now() - (ORPHAN_GRACE + Duration::from_secs(3600));
-        filetime::set_file_mtime(path, FileTime::from_system_time(old)).unwrap();
-    }
 
     async fn store_with_canvas() -> (tempfile::TempDir, CanvasStore, String) {
         let dir = tempfile::tempdir().unwrap();
