@@ -3,7 +3,10 @@
 #
 #   ./qa/multiuser_audit/run.sh
 #
-# Three claims, none of which any unit test can make:
+# The claims below, none of which any unit test can make. There is deliberately
+# no count in this sentence: it read "three claims" while the list had grown a
+# fourth, which is the cheapest possible instance of the shape this fixture
+# exists to catch.
 #
 #   1. The security audit trail is READABLE. Five producers had been writing to
 #      `security_audit_log` with no reader anywhere; this drives the whole path
@@ -18,6 +21,11 @@
 #   3. Revoking a device credential leaves an authority-change record naming
 #      whose credential it was — a producer the `AuthorityChange` doc listed and
 #      never had.
+#   4. `users.get` composes the SAME join BEFORE the irreversible write. Until
+#      it existed, the only way to learn what a principal held was to
+#      deactivate them and read claim 2's receipt. Stage 3b asserts the preview
+#      while she is still active, including the declined heartbeat leg, which
+#      must read as "not counted" and never as a zero.
 #
 # Everything lands in a scratch HOME/ALEPH_HOME under $QA_ROOT: two processes on
 # one vault is a documented way to lose vault data (PROCESS_MANAGEMENT.md).
@@ -221,6 +229,39 @@ fi
 
 OUT="$(al audit --type authority_change)"
 expect "minting the ticket was recorded" "gateway.ticket.create: bound to $ALICE" "$OUT"
+
+# --------------------------------------------------------------------------
+say "3b. the dossier is readable BEFORE the one-way door"
+# The claim: this join — devices, spend, background work, rooms, all for one
+# principal — used to exist ONLY as the receipt of the deactivation below, i.e.
+# only after the write it should have informed. Every assertion here is made
+# while ALICE is still active, and every one of them has a counterpart in the
+# receipt further down; that pairing is the point.
+OUT="$(al users show "$ALICE")"
+expect "the dossier names the principal"    "($ALICE)"          "$OUT"
+expect "and their role"                     "role:     member"  "$OUT"
+expect "and their status, still active"     "status:   active"  "$OUT"
+if [ "$PAIRED" = "1" ]; then
+  expect "and counts her live panel device" "1 live panel device"   "$OUT"
+else
+  expect "and says she holds none"          "no live panel devices" "$OUT"
+fi
+expect "and reports her rooms"              "rooms:    none" "$OUT"
+# Fail-closed (criterion #8) on the wire and out of the CLI: nothing was spent,
+# and "nothing recorded" must not be rendered as a measured 0.00 — that is the
+# figure an operator would act on.
+expect "an unrecorded spend is a sentence"  "no spend recorded this period" "$OUT"
+refute "and never a dollar figure"          "0.00"                          "$OUT"
+# The DECLINED heartbeat arm again, on the read side. This fixture's patcher
+# sets `[heartbeat] enabled = false`, so the preview must make exactly the
+# distinction the receipt below makes: a leg nobody measured is not a leg that
+# found nothing. A preview that folded it into `0` would tell the operator this
+# principal owns no heartbeat task while their tasks were still armed.
+expect "an unmeasured heartbeat leg says so" "Heartbeat tasks were NOT counted" "$OUT"
+refute "and never a fabricated count"        "heartbeat task(s)"                "$OUT"
+# Admin-only, no carve-out, no Panel face (OI-63): the verb reached the server
+# and came back rendered, which is the half a unit test cannot claim.
+expect "and warns what deactivation would cost" "That is not undone by reactivating" "$OUT"
 
 OUT="$(al users update "$ALICE" --status deactivated)"
 # The claim this round fixes: the CLI used to print one hard-coded sentence and

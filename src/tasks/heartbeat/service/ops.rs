@@ -187,10 +187,15 @@ pub fn toggle_task<C: Clock>(
 /// behind would make a frozen task and a task disabled by its owner two
 /// different-looking rows for one state.
 ///
-/// Legacy rows are never touched: `owner_user_id: None` compares unequal to
-/// `Some(user_id)` for every `user_id`, so a task created before P1 stamped
-/// owners survives every deactivation. That is deliberate — an unowned task
-/// belongs to nobody, and freezing it would be this sweep inventing an owner.
+/// Legacy rows are never touched: the owner half of the predicate is
+/// [`aleph_protocol::users::owned_by`], shared with the three sibling sweeps
+/// and with [`count_owned_by`], and `owner_user_id: None` matches no
+/// `user_id`, so a task created before P1 stamped owners survives every
+/// deactivation. That is deliberate — an unowned task belongs to nobody, and
+/// freezing it would be this sweep inventing an owner.
+///
+/// The `enabled` half is deliberately NOT shared with the counter — see
+/// [`count_owned_by`].
 ///
 /// Returns ids rather than a count so the caller can emit one
 /// `HeartbeatTaskChanged` per changed task; the count is `ids.len()`.
@@ -198,7 +203,9 @@ pub fn pause_all_owned_by(store: &mut HeartbeatStore, user_id: &str) -> Vec<Stri
     let owned: Vec<String> = store
         .tasks()
         .iter()
-        .filter(|t| t.enabled && t.owner_user_id.as_deref() == Some(user_id))
+        .filter(|t| {
+            t.enabled && aleph_protocol::users::owned_by(t.owner_user_id.as_deref(), user_id)
+        })
         .map(|t| t.id.clone())
         .collect();
     // Read first, mutate second: `tasks_mut()` marks the store dirty on the
@@ -211,6 +218,24 @@ pub fn pause_all_owned_by(store: &mut HeartbeatStore, user_id: &str) -> Vec<Stri
         }
     }
     owned
+}
+
+/// How many tasks `user_id` OWNS — the read-only counterpart of
+/// [`pause_all_owned_by`], and the heartbeat leg of `users.get`'s dossier.
+///
+/// Same owner predicate, a **deliberately different** enabled filter: the
+/// sweep counts `enabled && owned` because that is what it disabled; this
+/// counts `owned` so a disabled task the principal still owns shows up in the
+/// preview. Reusing the sweep's `enabled` filter here would under-report.
+///
+/// Read-only — `tasks()`, never `tasks_mut()`, so a count never marks the
+/// store dirty.
+pub fn count_owned_by(store: &HeartbeatStore, user_id: &str) -> usize {
+    store
+        .tasks()
+        .iter()
+        .filter(|t| aleph_protocol::users::owned_by(t.owner_user_id.as_deref(), user_id))
+        .count()
 }
 
 /// Delete a task by ID.
@@ -331,6 +356,45 @@ mod tests {
             store.get_task("hb-legacy").unwrap().enabled,
             "a task with owner_user_id: None belongs to nobody and must \
              survive every deactivation"
+        );
+    }
+
+    /// The deliberate asymmetry, pinned with two explicit numbers rather than
+    /// with an equality: a DISABLED task alice owns is 0-changed to the sweep
+    /// and still hers in the dossier.
+    #[test]
+    fn the_count_reports_ownership_not_what_the_sweep_would_change() {
+        let mut store = make_store();
+
+        let mut mine = make_test_task("hb-mine");
+        mine.owner_user_id = Some("u-alice".to_string());
+        store.add_task(mine);
+
+        let mut mine_off = make_test_task("hb-mine-off");
+        mine_off.owner_user_id = Some("u-alice".to_string());
+        mine_off.enabled = false;
+        store.add_task(mine_off);
+
+        let mut theirs = make_test_task("hb-theirs");
+        theirs.owner_user_id = Some("u-bob".to_string());
+        store.add_task(theirs);
+
+        store.add_task(make_test_task("hb-legacy"));
+
+        assert_eq!(
+            count_owned_by(&store, "u-alice"),
+            2,
+            "the read counts what she OWNS, the disabled task included"
+        );
+        assert_eq!(
+            pause_all_owned_by(&mut store, "u-alice").len(),
+            1,
+            "the sweep reports only what it CHANGED — the disabled task is 0-changed"
+        );
+        assert_eq!(
+            count_owned_by(&store, "u-nobody"),
+            0,
+            "a legacy task with no owner appears in no principal's dossier"
         );
     }
 

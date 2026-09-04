@@ -1022,6 +1022,9 @@ async fn dispatch_users(
         UsersAction::Create { display_name, role } => {
             users_cmd::create(server_url, config, &display_name, role.as_deref(), json).await
         }
+        UsersAction::Show { user_id } => {
+            users_cmd::show(server_url, config, &user_id, json).await
+        }
         UsersAction::Update {
             user_id,
             display_name,

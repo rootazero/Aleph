@@ -792,6 +792,18 @@ impl HandlerRegistry {
                 async move { users::handle_list(req, s).await }
             });
             let s = default_store.clone();
+            // The same project catalogue the `projects.*` block above shares
+            // (`ProjectStore::shared()`), so the room ids in a dossier and
+            // the rooms `projects.list` serves are one table, not two.
+            let detail_ctx = users::UserDetailContext {
+                projects: crate::projects::ProjectStore::shared(),
+            };
+            registry.register("users.get", move |req| {
+                let s = s.clone();
+                let ctx = detail_ctx.clone();
+                async move { users::handle_get(req, s, ctx).await }
+            });
+            let s = default_store.clone();
             registry.register("users.create", move |req| {
                 let s = s.clone();
                 async move { users::handle_create(req, s).await }

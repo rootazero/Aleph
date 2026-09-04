@@ -760,6 +760,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let s = s.clone();
             async move { alephcore::gateway::handlers::users::handle_list(req, s).await }
         });
+        // `users.get` — the admin dossier read. Registered here AND in
+        // `handlers/mod.rs`'s default registry: a `users.*` method added to
+        // only one of the two is the "registration faces, hand-copied" shape
+        // this family has four instances of already. The project catalogue is
+        // `ProjectStore::shared()`, the same process-wide handle
+        // `register_projects_handlers` uses further down, so a dossier's room
+        // ids come from the table `projects.list` serves.
+        let s = users_store.clone();
+        let detail_ctx = alephcore::gateway::handlers::users::UserDetailContext {
+            projects: alephcore::projects::ProjectStore::shared(),
+        };
+        server.handlers_mut().register("users.get", move |req| {
+            let s = s.clone();
+            let ctx = detail_ctx.clone();
+            async move { alephcore::gateway::handlers::users::handle_get(req, s, ctx).await }
+        });
         let s = users_store.clone();
         server.handlers_mut().register("users.create", move |req| {
             let s = s.clone();
@@ -3839,5 +3855,68 @@ mod tests {
                  configured"
             );
         }
+    }
+
+    /// `users.*` has TWO registration faces — this file at boot, and
+    /// `gateway::handlers::mod`'s default in-memory registry, whose own
+    /// comment says boot re-registers against the same store. A method added
+    /// to one and not the other resolves in half the processes that run this
+    /// code and in half the test harnesses, with nothing red.
+    ///
+    /// This is the boot half, and its expectation is **derived from the other
+    /// face's source**, never from a list retyped here: every `users.` method
+    /// the default registry registers must also be registered here. The
+    /// mirror-image direction is asserted on the library side
+    /// (`gateway::handlers::users`'s
+    /// `the_default_registry_and_boot_register_the_same_users_methods`), so
+    /// neither face can grow a method the other lacks.
+    ///
+    /// The registration here lives inside an `async fn` that opens sockets
+    /// and databases, so the only thing a unit test can read is the source.
+    ///
+    /// CRLF-safe and comment-stripped for the reason the spend census above
+    /// documents: an anchored `"\n#[cfg(test)]"` needle matches nothing on a
+    /// Windows checkout, and a doc comment naming the method — this one
+    /// included — would satisfy a naive `contains`.
+    #[test]
+    fn boot_registers_every_users_method_the_default_registry_has() {
+        let boot = include_str!("mod.rs").replace('\r', "");
+        let boot_production = alephcore::utils::source_scan::production_prefix(&boot);
+        assert!(
+            boot_production.len() < boot.len(),
+            "the #[cfg(test)] split matched nothing — this test would be \
+             reading its own source"
+        );
+        let boot_production = alephcore::utils::source_scan::strip_comment_lines(&boot_production);
+
+        let defaults = include_str!("../../../../gateway/handlers/mod.rs").replace('\r', "");
+        let defaults = alephcore::utils::source_scan::strip_comment_lines(
+            &alephcore::utils::source_scan::production_prefix(&defaults),
+        );
+        let wanted = registered_users_methods(&defaults);
+        assert!(
+            wanted.contains(&"users.get".to_string()),
+            "the scrape found no `users.get` in the default registry — this \
+             guard is reading the wrong file or the wrong shape, and would \
+             pass over an empty set"
+        );
+
+        for method in wanted {
+            assert!(
+                boot_production.contains(&format!("register(\"{method}\"")),
+                "{method} is registered in the default registry but boot never \
+                 registers it — it would resolve in test harnesses and be \
+                 METHOD_NOT_FOUND on a real server"
+            );
+        }
+    }
+
+    /// Every `users.*` method name a `.register("…")` call in `src` names.
+    fn registered_users_methods(src: &str) -> Vec<String> {
+        src.split("register(\"users.")
+            .skip(1)
+            .filter_map(|seg| seg.split('"').next())
+            .map(|suffix| format!("users.{suffix}"))
+            .collect()
     }
 }

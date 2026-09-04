@@ -170,10 +170,46 @@ pub struct RevokedChannelSender {
     pub sender_id: String,
 }
 
-/// The four background legs a deactivation freezes.
+/// Whether a background-work row stamped with `owner_user_id` belongs to the
+/// principal `user_id`.
 ///
-/// Heartbeat was the fourth and it arrived a round late. Until then this doc
-/// read "the three background legs a deactivation freezes" — a complete
+/// **One predicate for two readers.** The deactivation freeze
+/// (`pause_all_owned_by` on goals / loops / crons / heartbeat tasks) and the
+/// read-only preview behind `users.get` both ask this same question, and they
+/// used to ask it as four hand-written copies of
+/// `owner_user_id.as_deref() == Some(user_id)` — one per subsystem. A fifth
+/// subsystem, or a change of mind about legacy rows, would have had to be
+/// found in every copy.
+///
+/// Exact equality against `Some(user_id)`, which is what decides the legacy
+/// case: a row with `owner_user_id: None` predates the P1 owner stamp and
+/// belongs to nobody. It therefore appears in NO principal's dossier and is
+/// frozen by NO deactivation — freezing it would be the sweep inventing an
+/// owner, and counting it would attribute someone else's work to whoever the
+/// operator happened to look up.
+#[must_use]
+pub fn owned_by(owner_user_id: Option<&str>, user_id: &str) -> bool {
+    owner_user_id == Some(user_id)
+}
+
+/// The four background legs of one principal's holdings.
+///
+/// Two callers, deliberately different filters, **same owner predicate**
+/// ([`owned_by`]):
+///
+/// - `users.update`'s deactivation receipt — what the freeze **changed**
+///   (`enabled && owned`).
+/// - `users.get`'s preview — what the principal **owns** (`owned`), whether
+///   or not it is currently running.
+///
+/// The two numbers are not equal and must never be made equal: a read that
+/// reused the freeze's `enabled` filter would silently under-report the
+/// preview (a paused goal the operator is about to strand would not appear),
+/// and a freeze that reused the read's filter would over-report what it
+/// stopped. Each surface asserts its own number; nothing asserts they match.
+///
+/// Heartbeat was the fourth leg and it arrived a round late. Until then this
+/// doc read "the three background legs a deactivation freezes" — a complete
 /// inventory, in the voice of the thing that would know — while a deactivated
 /// second admin's heartbeat tasks kept firing and kept delivering. A receipt
 /// that names three of four legs is worse than one that names none: the
@@ -263,6 +299,80 @@ pub struct UserUpdateResult {
     pub reactivation_effects: Option<ReactivationEffects>,
 }
 
+/// Parameters for `users.get`.
+///
+/// `deny_unknown_fields` so a misspelled key is refused rather than silently
+/// answering about whoever `user_id` happened to default to — this read is
+/// the one an operator makes immediately before an irreversible write.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserGetParams {
+    pub user_id: String,
+}
+
+/// `users.get` → everything one principal holds, **before** the one-way door.
+///
+/// # Why this exists
+///
+/// The only place a principal's devices, spend and frozen background work
+/// were ever joined was [`UserUpdateResult`] — the receipt of
+/// `users.update { status: "deactivated" }`, i.e. AFTER the irreversible
+/// status write. Criterion #15: the join existed only as the receipt of a
+/// door that had already closed. This is the same join, readable first.
+///
+/// # Composed only from shapes that already have a home
+///
+/// [`UserView`], [`FrozenBackgroundWork`] (the SAME type the freeze reports,
+/// never a second leg enumeration beside it), [`crate::spend::SpendRow`], and
+/// room ids. Nothing here is a second spelling of a fact another surface
+/// already owns.
+///
+/// # What this does NOT widen
+///
+/// This is an admin composition of existing reads, not a visibility change.
+/// It does **not** widen `stamped_owner_visible` / `ambient_owner_visible`
+/// (ruling OI-2): no member gains sight of anything, because the whole method
+/// sits behind the `users.` admin prefix and, per OI-63, has no Panel face —
+/// it is CLI-only over loopback. Sessions and transcripts are deliberately
+/// absent: an admin arm on the session visibility predicate is a real
+/// authorization change that needs its own ruling, and transcripts stay
+/// behind `trace.*`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UserDetail {
+    pub user: UserView,
+
+    /// How many **live panel devices** this principal holds.
+    ///
+    /// The number's meaning is the server query's filter, stated so no reader
+    /// invents a wider one: `revoked_at IS NULL AND device_type = 'panel'`.
+    /// It is a count and not a list on purpose — `gateway.devices.list`
+    /// already emits every row WITH its `user_id` and `display_name`, so an
+    /// id list here would be a third spelling of "this person's devices"
+    /// (criterion #1). Ask that method for the rows.
+    pub live_panel_devices: usize,
+
+    /// Every room (project) this principal is a member of, oldest membership
+    /// first. Ids only: the room's own name and status are `projects.get`'s
+    /// to report.
+    pub room_ids: Vec<String>,
+
+    /// What this principal has spent in the period that is open right now.
+    ///
+    /// `None` means **no spend was recorded for them in this period** — the
+    /// renderer must say exactly that and must never print `0.00`, which
+    /// reads as a measured figure (criterion #8). A ledger that could not be
+    /// read is not this field's `None`: that fails the whole request, the way
+    /// `spend.query` already refuses to render an unreadable ledger as a
+    /// quiet window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend: Option<crate::spend::SpendRow>,
+
+    /// What a deactivation would strand: everything this principal OWNS,
+    /// running or not. See [`FrozenBackgroundWork`] for why this number is
+    /// deliberately not the number the freeze reports.
+    pub background_work: FrozenBackgroundWork,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +451,93 @@ mod tests {
         let dir = [named("u-blank", "   ", "active")];
         assert_eq!(resolve("", &dir), Resolution::None);
         assert_eq!(resolve("   ", &dir), Resolution::None);
+    }
+
+    /// The legacy half of the one shared owner predicate: a row stamped
+    /// before P1 belongs to nobody, so it must not be counted for — nor
+    /// frozen by — any principal at all.
+    #[test]
+    fn an_unstamped_row_belongs_to_no_principal() {
+        assert!(owned_by(Some("u-alice"), "u-alice"));
+        assert!(!owned_by(Some("u-bob"), "u-alice"));
+        assert!(
+            !owned_by(None, "u-alice"),
+            "a legacy row has no owner; attributing it would invent one"
+        );
+        assert!(
+            !owned_by(None, OWNERLESS_PROBE),
+            "no user_id whatsoever may claim an unstamped row"
+        );
+    }
+
+    /// A `user_id` that could plausibly be confused with "unowned".
+    const OWNERLESS_PROBE: &str = "";
+
+    /// A dossier read must not be answerable about a key the server does not
+    /// understand — this is the read an operator makes right before a
+    /// one-way write.
+    #[test]
+    fn a_misspelled_get_key_is_refused_rather_than_defaulted() {
+        let ok: UserGetParams =
+            serde_json::from_value(serde_json::json!({"user_id": "u-alice"})).unwrap();
+        assert_eq!(ok.user_id, "u-alice");
+        assert!(serde_json::from_value::<UserGetParams>(
+            serde_json::json!({"user_id": "u-alice", "usr_id": "u-bob"})
+        )
+        .is_err());
+    }
+
+    fn detail(spend: Option<crate::spend::SpendRow>) -> UserDetail {
+        UserDetail {
+            user: named("u-alice", "Alice", "active"),
+            live_panel_devices: 2,
+            room_ids: vec!["p-one".to_string()],
+            spend,
+            background_work: FrozenBackgroundWork {
+                goals: 1,
+                loops: 0,
+                crons: 2,
+                heartbeats: Some(3),
+            },
+        }
+    }
+
+    /// An unrecorded spend must not serialize as a number. `0.0` on the wire
+    /// is a measurement, and the whole point of this read is that the
+    /// operator acts on it.
+    #[test]
+    fn an_unrecorded_spend_is_absent_on_the_wire_not_zero() {
+        let wire = serde_json::to_value(detail(None)).unwrap();
+        assert!(
+            wire.get("spend").is_none(),
+            "an absent ledger row must not render as a dollar figure, got {wire}"
+        );
+        let back: UserDetail = serde_json::from_value(wire).unwrap();
+        assert_eq!(back.spend, None);
+    }
+
+    /// The dossier carries the SAME leg struct the freeze receipt carries —
+    /// a second `{goals, loops, crons, heartbeats}` declared here would let a
+    /// fifth leg land on one surface and not the other (criterion #1).
+    #[test]
+    fn the_dossier_reuses_the_freeze_receipt_leg_shape() {
+        let row = crate::spend::SpendRow {
+            principal: "u-alice".to_string(),
+            usd: 1.25,
+            unpriced_calls: 0,
+            partial_calls: 1,
+        };
+        let original = detail(Some(row));
+        let wire = serde_json::to_value(&original).unwrap();
+        assert_eq!(wire["background_work"]["heartbeats"], 3);
+        assert_eq!(wire["spend"]["usd"], 1.25);
+        assert_eq!(wire["live_panel_devices"], 2);
+        let back: UserDetail = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, original);
+        // The struct the freeze reports and the struct the preview reports
+        // are one type, so this assignment compiles or the surfaces have
+        // drifted apart.
+        let _: FrozenBackgroundWork = original.background_work;
     }
 
     /// `is_active` is compared against the shared constant, not a literal

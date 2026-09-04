@@ -27,7 +27,8 @@
 //! whose own credential is what is being managed.
 
 use aleph_protocol::users::{
-    UserCreateParams, UserCreateResult, UserListResult, UserUpdateParams, UserUpdateResult,
+    UserCreateParams, UserCreateResult, UserDetail, UserGetParams, UserListResult,
+    UserUpdateParams, UserUpdateResult,
 };
 use serde_json::Value;
 
@@ -100,6 +101,126 @@ pub async fn create(
 
     client.close().await?;
     Ok(())
+}
+
+/// Show everything one principal holds — the read that belongs BEFORE the
+/// irreversible write.
+///
+/// The same devices / spend / background-work join `update` prints as a
+/// deactivation receipt, except this one can be read while the decision is
+/// still reversible. Every field the server sends is rendered here: a
+/// composition whose only client drops half of it is the defect
+/// [`print_update_effects`] already exists to answer.
+pub async fn show(
+    server_url: &str,
+    config: &CliConfig,
+    user_id: &str,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url, config).await?;
+
+    let params = UserGetParams {
+        user_id: user_id.to_string(),
+    };
+    let result: Value = client.call("users.get", Some(params)).await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        let detail: UserDetail = serde_json::from_value(result.clone())
+            .map_err(|e| aleph_client::CliError::Other(e.to_string()))?;
+        for line in detail_lines(&detail) {
+            println!("{line}");
+        }
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
+/// The lines [`show`] prints, as values — split out for the same reason
+/// [`update_effect_lines`] is: "the CLI prints the heartbeat count" is not
+/// something a test can check while the only way to observe it is stdout.
+fn detail_lines(detail: &UserDetail) -> Vec<String> {
+    let mut lines = vec![
+        format!("{} ({})", detail.user.display_name, detail.user.user_id),
+        format!("  role:     {}", detail.user.role),
+        format!("  status:   {}", detail.user.status),
+    ];
+
+    // The number's meaning is the server's filter, said out loud: a bare
+    // "devices: 2" would invite the reader to think it covers cluster nodes
+    // and revoked pairings too.
+    lines.push(match detail.live_panel_devices {
+        0 => "  devices:  no live panel devices".to_string(),
+        1 => "  devices:  1 live panel device".to_string(),
+        n => format!("  devices:  {n} live panel devices"),
+    });
+
+    if detail.room_ids.is_empty() {
+        lines.push("  rooms:    none".to_string());
+    } else {
+        lines.push(format!("  rooms:    {}", detail.room_ids.join(", ")));
+    }
+
+    // `None` is "no spend recorded", never `0.00`: a dollar figure reads as a
+    // measurement, and this is the line an operator acts on.
+    match &detail.spend {
+        None => lines.push("  spend:    no spend recorded this period".to_string()),
+        Some(row) => {
+            lines.push(format!("  spend:    ${:.2} this period", row.usd));
+            // A total whose confidence is invisible invites a decision the
+            // number cannot support — same reasoning as `SpendRow`'s own doc.
+            if row.partial_calls > 0 {
+                lines.push(format!(
+                    "            (a lower bound — {} call(s) were only partially priced)",
+                    row.partial_calls
+                ));
+            }
+            if row.unpriced_calls > 0 {
+                lines.push(format!(
+                    "            ({} call(s) carried no price at all and are not in that figure)",
+                    row.unpriced_calls
+                ));
+            }
+        }
+    }
+
+    let work = detail.background_work;
+    match work.heartbeats {
+        Some(heartbeats) => {
+            if work.is_empty() {
+                lines.push("  owns:     no goals, loops, crons or heartbeat tasks".to_string());
+            } else {
+                lines.push(format!(
+                    "  owns:     {} goal(s), {} loop(s), {} cron(s), {heartbeats} heartbeat task(s)",
+                    work.goals, work.loops, work.crons
+                ));
+            }
+        }
+        None => {
+            // Only three legs were measured, so only three may be named —
+            // the same two-sentence split the deactivation receipt makes.
+            lines.push(format!(
+                "  owns:     {} goal(s), {} loop(s), {} cron(s)",
+                work.goals, work.loops, work.crons
+            ));
+            lines.push(
+                "            Heartbeat tasks were NOT counted: no heartbeat service is \
+                 running on that server. Run `aleph doctor` — `core/capability-wiring` \
+                 names the cause."
+                    .to_string(),
+            );
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(
+        "Deactivating them freezes the background work they own and revokes those \
+         devices. That is not undone by reactivating."
+            .to_string(),
+    );
+    lines
 }
 
 /// Rename a principal, change their role, or deactivate them.
@@ -477,6 +598,110 @@ mod tests {
                 .iter()
                 .any(|l| l == "  background work: goals/loops/crons/heartbeat tasks remain paused"),
             "the server's recovery guidance must reach the operator unedited: {lines:?}"
+        );
+    }
+
+    fn dossier(
+        spend: Option<aleph_protocol::spend::SpendRow>,
+        work: aleph_protocol::users::FrozenBackgroundWork,
+    ) -> UserDetail {
+        UserDetail {
+            user: aleph_protocol::users::UserView {
+                user_id: "u-alice".to_string(),
+                display_name: "Alice".to_string(),
+                role: "member".to_string(),
+                status: "active".to_string(),
+            },
+            live_panel_devices: 2,
+            room_ids: vec!["p-ops".to_string(), "p-design".to_string()],
+            spend,
+            background_work: work,
+        }
+    }
+
+    /// Every field the server composes must reach the operator's screen. A
+    /// dossier whose only client drops half of it is the receipt-nobody-
+    /// renders defect this whole surface exists to avoid (round-4 ⓪) — and
+    /// each leg of the background work is named separately, so a fifth leg
+    /// that never gets a renderer is visible here.
+    #[test]
+    fn the_dossier_renders_every_field_the_server_sent() {
+        let lines = detail_lines(&dossier(
+            Some(aleph_protocol::spend::SpendRow {
+                principal: "u-alice".to_string(),
+                usd: 12.5,
+                unpriced_calls: 0,
+                partial_calls: 0,
+            }),
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 1,
+                loops: 2,
+                crons: 3,
+                heartbeats: Some(4),
+            },
+        ));
+        let text = lines.join("\n");
+        assert!(text.contains("Alice (u-alice)"), "{text}");
+        assert!(text.contains("role:     member"), "{text}");
+        assert!(text.contains("status:   active"), "{text}");
+        assert!(text.contains("2 live panel devices"), "{text}");
+        assert!(text.contains("p-ops, p-design"), "{text}");
+        assert!(text.contains("$12.50 this period"), "{text}");
+        assert!(
+            text.contains("1 goal(s), 2 loop(s), 3 cron(s), 4 heartbeat task(s)"),
+            "every background leg must be named: {text}"
+        );
+    }
+
+    /// The fail-closed line (criterion #8): an unrecorded spend prints a
+    /// sentence, never `$0.00`. Asserted on the RENDERED line, not on the
+    /// `Option` — the `Option` being `None` proves nothing about what the
+    /// operator reads.
+    #[test]
+    fn an_unrecorded_spend_prints_no_spend_recorded_and_never_a_dollar_figure() {
+        let lines = detail_lines(&dossier(
+            None,
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 0,
+                loops: 0,
+                crons: 0,
+                heartbeats: Some(0),
+            },
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "  spend:    no spend recorded this period"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("$")),
+            "a dollar figure reads as a measurement; there is no measurement here: {lines:?}"
+        );
+    }
+
+    /// An unmeasured heartbeat leg gets its own sentence and no number, the
+    /// same two-sentence split the deactivation receipt makes.
+    #[test]
+    fn an_unmeasured_heartbeat_leg_is_named_as_unmeasured_not_as_zero() {
+        let lines = detail_lines(&dossier(
+            None,
+            aleph_protocol::users::FrozenBackgroundWork {
+                goals: 1,
+                loops: 0,
+                crons: 0,
+                heartbeats: None,
+            },
+        ));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Heartbeat tasks were NOT counted")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("heartbeat task(s)")),
+            "an unmeasured leg must not print a count of any kind: {lines:?}"
         );
     }
 }

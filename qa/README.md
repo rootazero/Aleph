@@ -231,6 +231,14 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # driver), and zero is the point — only a deactivation carries
                                  # that field, so the sentence appearing at all proves the server
                                  # measured it, it crossed the wire, and the CLI rendered it.
+                                 # Round-10 also added stage 3b, `aleph users show`: the SAME
+                                 # devices/spend/background-work join read while she is still
+                                 # active. Until `users.get` existed the only way to learn what a
+                                 # principal held was to deactivate them and read the receipt, so
+                                 # the pairing between 3b's assertions and the receipt's is the
+                                 # claim. It pins two fail-closed renderings the receipt cannot:
+                                 # an unrecorded spend prints a sentence and never `0.00`, and the
+                                 # declined heartbeat leg prints "NOT counted" and never a number.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation

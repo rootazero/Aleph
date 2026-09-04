@@ -461,6 +461,11 @@ mod tests {
         ("trace.get", Class::Admin),
         ("trace.list", Class::Admin),
         ("users.create", Class::Admin),
+        // A dossier over ANOTHER principal's holdings. Admin, and
+        // deliberately not a `MEMBER_CARVE_OUTS` entry beside `users.me` /
+        // `users.list`: those two are "my own record" and "who exists", this
+        // one is somebody else's devices, spend and background work.
+        ("users.get", Class::Admin),
         ("users.list", Class::Open),
         ("users.me", Class::Open),
         ("users.update", Class::Admin),

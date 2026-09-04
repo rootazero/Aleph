@@ -1163,6 +1163,39 @@ impl ProjectStore {
         })
     }
 
+    /// Every room `user_id` is a member of, oldest membership first — the
+    /// by-member direction of [`Self::members`].
+    ///
+    /// It did not exist before `users.get` needed it, and the absence was
+    /// easy to misread: [`Self::list`] is explicitly **unfiltered**,
+    /// [`Self::members`] is per-project, and [`Self::rosters`] returns the
+    /// whole machine's membership keyed the other way round. Deriving one
+    /// principal's rooms from `rosters()` would read every membership row on
+    /// the machine to answer a question `idx_project_members_user` already
+    /// indexes.
+    ///
+    /// Ids only, and no join against `projects`: a membership row whose
+    /// project has since been removed is a fact about the roster table, and
+    /// this method reports the roster table. Naming the rooms is
+    /// `projects.get`'s job.
+    pub fn room_ids_for_member(&self, user_id: &str) -> Result<Vec<String>, ProjectError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT project_id FROM project_members WHERE user_id = ?1 ORDER BY added_at",
+                )
+                .map_err(db_err)?;
+            let rows = stmt
+                .query_map([user_id], |r| r.get::<_, String>(0))
+                .map_err(db_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(db_err)?);
+            }
+            Ok(out)
+        })
+    }
+
     /// Every project's roster in ONE query, keyed by project id.
     ///
     /// Exists so a list endpoint that renders rosters does not run
@@ -1788,6 +1821,34 @@ mod tests {
         assert!(
             !roster::is_member(&p.id, "u-bob"),
             "spec §10: removal revokes visibility immediately"
+        );
+    }
+
+    /// The by-member direction: one principal's rooms, and NOT anybody
+    /// else's. A query that dropped its `WHERE user_id = ?1` would still
+    /// return a plausible list of room ids — the assertion that catches that
+    /// is the one naming the room only the OTHER principal sits in.
+    #[test]
+    fn room_ids_for_member_names_only_that_principals_rooms() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let hers = store.create("hers", Some("u-alice"), None).unwrap();
+        let his = store.create("his", Some("u-bob"), None).unwrap();
+        let shared = store.create("shared", Some("u-bob"), None).unwrap();
+        store.add_member(&shared.id, "u-alice").unwrap();
+
+        let rooms = store.room_ids_for_member("u-alice").unwrap();
+        assert!(rooms.contains(&hers.id));
+        assert!(rooms.contains(&shared.id));
+        assert!(
+            !rooms.contains(&his.id),
+            "a room she is not seated in must not appear in her dossier"
+        );
+        assert_eq!(rooms.len(), 2);
+
+        assert!(
+            store.room_ids_for_member("u-nobody").unwrap().is_empty(),
+            "a principal with no membership row has no rooms, not everyone's"
         );
     }
 

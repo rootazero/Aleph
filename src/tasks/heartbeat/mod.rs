@@ -42,11 +42,13 @@ pub type SharedHeartbeatService = Arc<Mutex<HeartbeatService>>;
 ///
 /// `ConsumerDecides`, NOT the cron twin's `IndistinguishableDefault`, and the
 /// derivation is written down because copying the twin is the reflex.
-/// `GLOBAL_CRON` earns that variant honestly: `FreezeReport::crons` is a
-/// `usize` that stays `0` when the handle is absent, so the receipt says
-/// "this principal owned no cron jobs" and no reader can tell. The heartbeat
-/// leg is an `Option<usize>` on both `FreezeReport` and the wire
-/// (`aleph_protocol::users::FrozenBackgroundWork::heartbeats`) precisely so
+/// `GLOBAL_CRON` earns that variant honestly:
+/// `aleph_protocol::users::FrozenBackgroundWork::crons` is a `usize` that
+/// stays `0` when the handle is absent, so the receipt says "this principal
+/// owned no cron jobs" and no reader can tell. The heartbeat leg is an
+/// `Option<usize>` on that same struct — which the freeze, the `users.get`
+/// preview and the wire all now share, rather than a private twin of it —
+/// precisely so
 /// absence CANNOT read as a measured zero — the one consumer, this module's
 /// caller in `gateway::handlers::users::freeze_owned_heartbeats`, decides
 /// that `None` means "not measured" and both the receipt and the CLI say so
@@ -269,6 +271,16 @@ impl HeartbeatService {
             self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         }
         Ok(paused.len())
+    }
+
+    /// How many tasks `user_id` OWNS — the read-only counterpart of
+    /// [`Self::pause_all_owned_by`] and the heartbeat leg of `users.get`'s
+    /// dossier. The selection (including its deliberate difference from the
+    /// sweep's) lives in [`ops::count_owned_by`]; this wrapper only takes the
+    /// lock, and never persists — a count changes nothing.
+    pub async fn count_owned_by(&self, user_id: &str) -> usize {
+        let store = self.state.store.lock().await;
+        ops::count_owned_by(&store, user_id)
     }
 
     /// Request a graceful shutdown of the timer loop.
