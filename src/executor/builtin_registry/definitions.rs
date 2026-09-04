@@ -2472,7 +2472,47 @@ mod tests {
     /// exactly the failure mode this constant's own rule warns about.
     /// A future round that adds bytes MUST re-run the ratchet and copy the
     /// printed total, not compute it from prior deltas.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_772;
+    ///
+    /// 2026-09-04 (multi-user round 10, T25): 112_772 -> 113_075 B (+303),
+    /// all `project_manage`, for the sentence that says a roster verb is
+    /// addressable by display name. Measured twice and the two agree, the same
+    /// way the entries above do: the ratchet printed the total on this tree
+    /// (113_075 = 93_479 catalog + 16_613 registry-only + 1_039 injected +
+    /// 1_944 bridge, the last three byte-identical to the 2026-09-01 figures,
+    /// so nothing outside the catalog moved), and the added segment of the
+    /// literal measures exactly 303 bytes, so nothing else's description moved
+    /// either. Note the base commit `b8d95edf9` sat at exactly 112_772 — the
+    /// 2026-09-01 raise was set AT its measurement, not above it, so this
+    /// round had zero headroom and any byte at all went red. That is the
+    /// ratchet working, not a surprise.
+    ///
+    /// The three questions, for these bytes:
+    ///
+    /// (1) No schema can carry it. `project_manage` is not in
+    /// `default_core_tools()`, so under progressive disclosure its schema —
+    /// including the `user` field's own description — is not resident: the
+    /// catalog line is the whole of what a model reads when deciding whether
+    /// to fetch the schema at all. An argument the catalog copy never mentions
+    /// is an argument no model sends, which is how `bind_workspace` shipped
+    /// unreachable on this very tool once already (see its module doc). And
+    /// "exactly one of `user_id` or `user`" is a relation BETWEEN two fields,
+    /// which no per-field description states even once the schema is loaded.
+    ///
+    /// (2) A stronger model cannot infer them. That this server has a
+    /// name -> principal resolver at all, that a name nobody active bears or
+    /// that more than one person bears is refused rather than guessed, and
+    /// that the id to quote back is the one `member_list` returns beside each
+    /// name, are facts about this repository. A model assuming the ordinary
+    /// shape would send a display name as `user_id` and seat a
+    /// `project_members` row nobody owns — the exact failure T25 closed.
+    ///
+    /// (3) The consumers are shipped and dispatched: both roster arms accept
+    /// `user` (`builtin_tools::project_manage`, `MemberAdd`/`MemberRemove`),
+    /// `projects::authz::principal_id_for_name` is the single resolver behind
+    /// them and puts its winner to the one active-principal predicate, and
+    /// `the_model_facing_copy_names_the_same_faces` pins this sentence
+    /// verbatim, so the copy and the argument cannot drift apart.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_075;
 
     #[test]
     fn catalog_description_bytes_ratchet() {
