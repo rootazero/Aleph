@@ -95,6 +95,46 @@ pub fn resolve_session_list(list_result: Result<serde_json::Value, String>) -> L
     }
 }
 
+/// The end marker of a bracketed paste. Named because it is written twice for
+/// two different reasons — once to close the paste, once to be REMOVED from
+/// the payload — and those two must never drift apart.
+const PASTE_END: &str = "\x1b[201~";
+
+/// Turn clipboard text into the bytes a PTY should receive.
+///
+/// Wraps in `ESC[200~ ... ESC[201~` **only** when the program has said it
+/// wants bracketed paste (`CSI ?2004 h`, arriving as
+/// `PtyScreenPatch::bracketed_paste`).
+///
+/// `None` means the server has not told us yet — the field is `Some` only when
+/// the mode CHANGED, so a client that pasted before the first such frame knows
+/// nothing. Unknown is not "on": wrapping when the program is not expecting it
+/// leaves the literal escape sequences in the user's command line, which is a
+/// visible corruption of what they pasted. Not wrapping when it IS expecting
+/// it merely gives up the "this was pasted, do not execute it" hint, which is
+/// the weaker assumption and the right one to make while we do not know
+/// (spec §5, 判据 §8).
+///
+/// # Why the end marker is stripped
+///
+/// A paste containing `ESC[201~` would end the bracket early, and everything
+/// after it would arrive as ordinary typed input — which a shell with
+/// bracketed paste on treats as a command it may run on the next newline.
+/// Removing the marker is what makes "paste is inert until the user presses
+/// Enter" true for arbitrary clipboard content rather than only for content
+/// that happens not to contain it. Nothing is stripped in the unwrapped case:
+/// there is no bracket to break out of, and silently editing bytes the user
+/// asked to send would be its own lie.
+#[must_use]
+pub fn encode_paste(text: &str, bracketed: Option<bool>) -> Vec<u8> {
+    if bracketed == Some(true) {
+        let safe = text.replace(PASTE_END, "");
+        format!("\x1b[200~{safe}{PASTE_END}").into_bytes()
+    } else {
+        text.as_bytes().to_vec()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyOutcome {
     Applied,
@@ -158,6 +198,18 @@ pub struct ClientScreen {
     cursor: (u16, u16),
     title: Option<String>,
     alt_screen: bool,
+    /// `CSI ?25 h/l`. Starts TRUE: a terminal that has said nothing about its
+    /// cursor has one, and defaulting to hidden would paint a frozen-looking
+    /// screen on every fresh attach.
+    cursor_visible: bool,
+    /// `CSI ?2004 h/l`, or `None` while the server has not said.
+    ///
+    /// Deliberately `Option<bool>` and not `bool`: the patch field is `Some`
+    /// only when the mode CHANGED, so "we have not been told" is a real state
+    /// here and it is not the same as "off". [`encode_paste`] treats the two
+    /// identically today, but it must be able to tell them apart to keep
+    /// being able to (判据 §8).
+    bracketed_paste: Option<bool>,
     /// `Some` while an attach is in flight; frames land here instead of on
     /// the grid, because the snapshot they must be ordered against has not
     /// arrived yet.
@@ -188,6 +240,8 @@ impl ClientScreen {
             cursor: (0, 0),
             title: None,
             alt_screen: false,
+            cursor_visible: true,
+            bracketed_paste: None,
             pending: None,
         }
     }
@@ -215,6 +269,20 @@ impl ClientScreen {
     #[must_use]
     pub const fn alt_screen(&self) -> bool {
         self.alt_screen
+    }
+
+    /// Whether the program wants its cursor drawn (`CSI ?25 h/l`).
+    #[must_use]
+    pub const fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    /// Whether the program has asked for bracketed paste, or `None` if it has
+    /// not said either way. Feed it to [`encode_paste`]; do not collapse the
+    /// `None` here.
+    #[must_use]
+    pub const fn bracketed_paste(&self) -> Option<bool> {
+        self.bracketed_paste
     }
 
     #[must_use]
@@ -372,6 +440,17 @@ impl ClientScreen {
         if let Some(alt) = patch.alt_screen {
             self.alt_screen = alt;
         }
+        // Both of these are "Some only when it changed", like `alt_screen`
+        // above: a `None` leaves the stored value alone. It must NOT be read
+        // as `false` — for the cursor that would blink it out of existence on
+        // every frame that did not mention it, and for bracketed paste it
+        // would turn "the program asked for it" back into "unknown".
+        if let Some(visible) = patch.cursor_visible {
+            self.cursor_visible = visible;
+        }
+        if let Some(bracketed) = patch.bracketed_paste {
+            self.bracketed_paste = Some(bracketed);
+        }
         if let Some(t) = &patch.title {
             self.title = Some(t.clone());
         }
@@ -386,6 +465,17 @@ mod tests {
     };
 
     const SID: &str = "s";
+
+    /// A frame carrying nothing but `patch`, at this screen's geometry.
+    fn patch_frame(seq: u64, patch: PtyScreenPatch) -> PtyScreenFrame {
+        PtyScreenFrame {
+            session_id: SID.to_string(),
+            seq,
+            rows: 4,
+            cols: 10,
+            patch,
+        }
+    }
 
     fn run(text: &str) -> PtyStyleRun {
         PtyStyleRun {
@@ -821,6 +911,173 @@ mod tests {
         assert_eq!(s.seq(), u64::MAX, "seq must not move for a discarded frame");
     }
 
+    /// D11 / spec §5. `Some(true)` is the ONLY value that wraps.
+    ///
+    /// `None` is the case that matters: `PtyScreenPatch::bracketed_paste` is
+    /// `Some` only when the mode CHANGED, so a paste that happens before the
+    /// first such frame has genuinely not been told anything. Reading that as
+    /// "on" leaves `ESC[200~` sitting in the user's command line — a visible
+    /// corruption of what they pasted — while reading it as "off" only gives
+    /// up a hint. Unknown takes the weaker assumption (判据 §8).
+    ///
+    /// Reddens if `None` or `Some(false)` starts wrapping, if `Some(true)`
+    /// stops, or if the end marker survives inside a wrapped payload.
+    #[test]
+    fn paste_wraps_when_bracketed_paste_is_on_and_not_when_unknown() {
+        assert_eq!(
+            encode_paste("ls -la", Some(true)),
+            b"\x1b[200~ls -la\x1b[201~".to_vec()
+        );
+        assert_eq!(encode_paste("ls -la", None), b"ls -la".to_vec());
+        assert_eq!(encode_paste("ls -la", Some(false)), b"ls -la".to_vec());
+
+        // A payload carrying the end marker would close the bracket early and
+        // hand the rest to the shell as ordinary typed input — which, with
+        // bracketed paste on, is exactly the input it may run. The marker is
+        // removed so "a paste is inert until the user presses Enter" holds for
+        // arbitrary clipboard content and not just for content that happens
+        // not to contain it.
+        let hostile = "safe\x1b[201~rm -rf /";
+        let wrapped = encode_paste(hostile, Some(true));
+        assert_eq!(wrapped, b"\x1b[200~saferm -rf /\x1b[201~".to_vec());
+        assert_eq!(
+            String::from_utf8_lossy(&wrapped)
+                .matches("\x1b[201~")
+                .count(),
+            1,
+            "exactly one end marker, and it is ours"
+        );
+
+        // Nothing is stripped when there is no bracket to break out of:
+        // silently editing bytes the user asked to send would be its own lie.
+        assert_eq!(
+            encode_paste(hostile, None),
+            hostile.as_bytes().to_vec(),
+            "an unwrapped paste is passed through byte for byte"
+        );
+
+        // Multi-byte text survives; this is bytes, not chars.
+        assert_eq!(encode_paste("中文", None), "中文".as_bytes().to_vec());
+    }
+
+    /// C9. `?25 l` hides the cursor; `?25 h` shows it again; a patch that says
+    /// NOTHING leaves it alone.
+    ///
+    /// The third case is the one that bites: `cursor_visible` is `Some` only
+    /// when the mode changed, so reading a `None` as `false` would blink the
+    /// cursor out on every frame that did not mention it. `ClientScreen`
+    /// starts `true` for the same reason — a fresh attach has been told
+    /// nothing, and a shell prompt with no cursor reads as a frozen terminal.
+    ///
+    /// "Render skips it" is asserted through `render::cursor_rect`, which is
+    /// where `paint` gets the answer: a `CanvasRenderingContext2d` cannot be
+    /// constructed off the browser, so there is nowhere else an assertion
+    /// about the painted result could live.
+    #[test]
+    fn cursor_visible_false_is_stored_and_render_skips_the_cursor() {
+        use crate::platform::wide::views::terminal::render::{cursor_rect, CellMetrics};
+
+        let metrics = CellMetrics {
+            width: 8.0,
+            height: 16.0,
+            font_px: 14.0,
+            font_family: "monospace".to_string(),
+        };
+
+        let mut s = ClientScreen::new(4, 10, 0, SID);
+        assert!(
+            s.cursor_visible(),
+            "a screen that has been told nothing has a cursor"
+        );
+        assert!(cursor_rect(&s, &metrics).is_some());
+
+        // ?25 l
+        assert_eq!(
+            s.apply(patch_frame(
+                1,
+                PtyScreenPatch {
+                    cursor_visible: Some(false),
+                    ..Default::default()
+                }
+            )),
+            ApplyOutcome::Applied
+        );
+        assert!(!s.cursor_visible());
+        assert_eq!(
+            cursor_rect(&s, &metrics),
+            None,
+            "a hidden cursor has no rectangle to paint"
+        );
+
+        // A frame that says nothing about the cursor must NOT re-show it.
+        assert_eq!(
+            s.apply(patch_frame(2, PtyScreenPatch::default())),
+            ApplyOutcome::Applied
+        );
+        assert!(
+            !s.cursor_visible(),
+            "`None` means unchanged, not `true` — otherwise the cursor \
+             reappears on the next frame that happens to be silent about it"
+        );
+
+        // ?25 h
+        assert_eq!(
+            s.apply(patch_frame(
+                3,
+                PtyScreenPatch {
+                    cursor_visible: Some(true),
+                    ..Default::default()
+                }
+            )),
+            ApplyOutcome::Applied
+        );
+        assert!(s.cursor_visible());
+        assert!(cursor_rect(&s, &metrics).is_some());
+    }
+
+    /// The paste mode is a THREE-state fact on this screen and stays one:
+    /// unknown, off, on. Collapsing `None` into `false` here is what would
+    /// make `encode_paste`'s `None` arm unreachable and its test vacuous.
+    #[test]
+    fn bracketed_paste_starts_unknown_and_only_a_patch_moves_it() {
+        let mut s = ClientScreen::new(4, 10, 0, SID);
+        assert_eq!(s.bracketed_paste(), None);
+
+        assert_eq!(
+            s.apply(patch_frame(
+                1,
+                PtyScreenPatch {
+                    bracketed_paste: Some(true),
+                    ..Default::default()
+                }
+            )),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(s.bracketed_paste(), Some(true));
+
+        assert_eq!(
+            s.apply(patch_frame(2, PtyScreenPatch::default())),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(
+            s.bracketed_paste(),
+            Some(true),
+            "a silent frame leaves the mode alone"
+        );
+
+        assert_eq!(
+            s.apply(patch_frame(
+                3,
+                PtyScreenPatch {
+                    bracketed_paste: Some(false),
+                    ..Default::default()
+                }
+            )),
+            ApplyOutcome::Applied
+        );
+        assert_eq!(s.bracketed_paste(), Some(false));
+    }
+
     /// The finding this function exists for. A payload the client cannot
     /// decode is the server saying something unreadable — it is NOT the
     /// server saying "you have no sessions". Reading it as the latter makes
@@ -870,7 +1127,10 @@ mod tests {
             panic!("a readable list must be Read, got {outcome:?}");
         };
         assert_eq!(
-            sessions.iter().map(|s| s.session_id.as_str()).collect::<Vec<_>>(),
+            sessions
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["dead", "live"]
         );
         assert!(

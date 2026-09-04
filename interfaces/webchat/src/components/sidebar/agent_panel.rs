@@ -33,7 +33,9 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::use_navigate;
 
 use aleph_protocol::runtime::{RuntimeAgentEntry, RuntimeAgentState, RUNTIME_AGENTS_CHANGED_TOPIC};
-use shared_ui_logic::state::agent_panel::{sort_entries, state_glyph, AgentPanelState};
+use shared_ui_logic::state::agent_panel::{
+    quiet_label, sort_entries, state_glyph, AgentPanelState,
+};
 
 use crate::api::runtime_agents::RuntimeAgentsApi;
 use crate::components::mode_sidebar::PanelMode;
@@ -223,7 +225,11 @@ pub fn AgentPanel() -> impl IntoView {
     let container_ref = NodeRef::<leptos::html::Div>::new();
     #[allow(clippy::type_complexity)]
     let drag_handles: StoredValue<
-        Option<(WindowListenerHandle, WindowListenerHandle, WindowListenerHandle)>,
+        Option<(
+            WindowListenerHandle,
+            WindowListenerHandle,
+            WindowListenerHandle,
+        )>,
     > = StoredValue::new(None);
 
     let stop_drag = move || {
@@ -392,9 +398,29 @@ fn AgentRow(entry: RuntimeAgentEntry) -> impl IntoView {
             )>
                 {format!("{} {}", state_glyph(state), state_label)}
             </span>
-            <span class="truncate text-text-primary">{entry.label.clone()}</span>
+            <span class="truncate text-text-primary">{entry_name(&entry)}</span>
+            // The quiet age qualifies the state, it does not replace it: a
+            // Working agent silent for five minutes still reads Working.
+            // Nothing here turns time into a state (spec R2-3).
+            {quiet_label(entry.quiet_since, crate::views::chat::timeline::now_millis())
+                .map(|quiet| view! {
+                    <span class="shrink-0 text-text-tertiary">{quiet}</span>
+                })}
         </button>
     }
+}
+
+/// What to call this row: the FOREGROUND program if the probe could see one,
+/// else the recognised agent, else the spawn label. Same order and same
+/// reasoning as the TUI's `entry_name` — falling order of how current the fact
+/// is, ending at the one field that always exists.
+fn entry_name(entry: &RuntimeAgentEntry) -> String {
+    entry
+        .program
+        .as_deref()
+        .or(entry.agent.as_deref())
+        .unwrap_or(&entry.label)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -427,6 +453,31 @@ mod tests {
         let mut entries = vec![entry("i", S::Idle), entry("b", S::Blocked)];
         sort_entries(&mut entries);
         assert_eq!(entries[0].state, RuntimeAgentState::Blocked);
+    }
+
+    /// The Panel names its rows the same way the TUI does, and by the same
+    /// derivation — `entry_name` is the only place either face answers "what
+    /// is running here", so the two cannot drift into different answers.
+    #[test]
+    fn a_row_prefers_the_probed_program_then_the_agent_then_the_label() {
+        let mut e = entry("s", S::Working);
+        e.label = "spawn-label".to_string();
+
+        assert_eq!(entry_name(&e), "spawn-label", "only the label exists");
+
+        e.agent = Some("codex".to_string());
+        assert_eq!(
+            entry_name(&e),
+            "codex",
+            "a recognised agent beats the label"
+        );
+
+        e.program = Some("claude".to_string());
+        assert_eq!(
+            entry_name(&e),
+            "claude",
+            "what is running right now beats what was recognised"
+        );
     }
 
     /// D3: the agent panel and the terminal were both fully built and there
@@ -470,11 +521,12 @@ mod tests {
         // off the end of whatever it could not see and then reports a clean
         // pass for it — a guard that under-scans silently is 判据 §3, and this
         // crate already paid for it once.
-        let production: String = crate::i18n_census::production_lines(include_str!("agent_panel.rs"))
-            .into_iter()
-            .map(|(_, line)| line)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let production: String =
+            crate::i18n_census::production_lines(include_str!("agent_panel.rs"))
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect::<Vec<_>>()
+                .join("\n");
         let row = production
             .split("fn AgentRow")
             .nth(1)

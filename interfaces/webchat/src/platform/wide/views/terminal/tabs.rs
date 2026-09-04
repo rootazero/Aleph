@@ -215,11 +215,10 @@ impl TabModel {
         // would leave `selected()` answering `None` while `selected_id()`
         // still named it — two answers to one question, and the view would
         // attach to neither.
-        let still_open = self.selected.as_deref().is_some_and(|id| {
-            self.tabs
-                .iter()
-                .any(|t| t.session_id == id && !t.closed)
-        });
+        let still_open = self
+            .selected
+            .as_deref()
+            .is_some_and(|id| self.tabs.iter().any(|t| t.session_id == id && !t.closed));
         if !still_open {
             self.selected = self
                 .tabs
@@ -290,7 +289,6 @@ impl TabModel {
         }
     }
 }
-
 
 /// The tab strip.
 ///
@@ -452,7 +450,9 @@ mod tests {
 
         let tabs = model.tabs();
         assert_eq!(
-            tabs.iter().map(|t| t.session_id.as_str()).collect::<Vec<_>>(),
+            tabs.iter()
+                .map(|t| t.session_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "b", "c"],
             "tab order comes from the session list, not the agent list"
         );
@@ -579,7 +579,10 @@ mod tests {
         assert_eq!(derive_title(None, Some("claude"), "zsh", "s1"), "claude");
         assert_eq!(derive_title(None, None, "zsh", "s1"), "zsh");
         // Empty is not a value at any level.
-        assert_eq!(derive_title(Some(""), Some("claude"), "zsh", "s1"), "claude");
+        assert_eq!(
+            derive_title(Some(""), Some("claude"), "zsh", "s1"),
+            "claude"
+        );
         assert_eq!(derive_title(Some(""), Some(""), "zsh", "s1"), "zsh");
         // Nothing at all still has to render something clickable.
         assert_eq!(derive_title(None, None, "", "s1"), "s1");

@@ -115,7 +115,9 @@ fn all_permutations_of_four_entries() -> Vec<Vec<RuntimeAgentEntry>> {
 #[test]
 fn sorting_is_deterministic_and_total() {
     let mut permutations = all_permutations_of_four_entries().into_iter();
-    let mut canonical = permutations.next().expect("generator always yields 24 permutations");
+    let mut canonical = permutations
+        .next()
+        .expect("generator always yields 24 permutations");
     sort_entries(&mut canonical);
     assert!(canonical
         .windows(2)
@@ -156,7 +158,11 @@ fn the_generator_produces_all_twenty_four_permutations_with_no_duplicates() {
         .collect();
     orderings.sort();
     orderings.dedup();
-    assert_eq!(orderings.len(), 24, "generator produced a duplicate ordering");
+    assert_eq!(
+        orderings.len(),
+        24,
+        "generator produced a duplicate ordering"
+    );
 }
 
 /// S6: the four-state glyph set had a copy in each frontend

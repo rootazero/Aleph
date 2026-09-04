@@ -57,6 +57,43 @@ pub const fn state_glyph(state: RuntimeAgentState) -> &'static str {
     }
 }
 
+/// How long a session has been silent, spelled once for every surface.
+///
+/// `None` while it is still producing output — `quiet_since` is `None` then,
+/// and there is nothing to say. `Some("quiet 3m")` once the server has
+/// published a moment it went quiet.
+///
+/// # What this is NOT
+///
+/// It is not a state. Silence is not idle: an agent thinking for five minutes
+/// emits nothing, and `RuntimeAgentEntry::state` is unaffected by this value
+/// (spec R2-3). Rendering the age is how "is it stuck?" becomes answerable
+/// without any code turning time into evidence.
+///
+/// # Rounding, and which way it is wrong
+///
+/// Always DOWN, and to the coarsest unit that does not round to zero: 89
+/// seconds is `1m`, not `1.5m` and not `2m`. `now` and `quiet_since` are both
+/// Unix epoch MILLISECONDS, and they come from different clocks (the server
+/// stamps `quiet_since`; the caller passes its own `now`), so a skew is
+/// possible. A future `quiet_since` clamps to zero rather than producing a
+/// negative age — meaning a disagreeing clock can only ever make a session
+/// look FRESHER than it is. That is the direction to be wrong in: this label
+/// exists to raise an eyebrow, and one that overstates would raise it at
+/// nothing.
+#[must_use]
+pub fn quiet_label(quiet_since: Option<i64>, now: i64) -> Option<String> {
+    let since = quiet_since?;
+    let seconds = now.saturating_sub(since).max(0) / 1000;
+    Some(if seconds < 60 {
+        format!("quiet {seconds}s")
+    } else if seconds < 3600 {
+        format!("quiet {}m", seconds / 60)
+    } else {
+        format!("quiet {}h", seconds / 3600)
+    })
+}
+
 /// Order entries by attention rank, then by recency, then by `session_id`.
 ///
 /// `session_id` is the key of the server-side agent table, so it is unique
@@ -177,6 +214,59 @@ mod tests {
         sort_entries(&mut v);
         assert_eq!(v[0].session_id, "first");
         assert_eq!(v[1].session_id, "second");
+    }
+
+    /// `None` in, `None` out: a session that is still producing output has
+    /// no quiet age, and inventing "quiet 0s" for it would put a label on
+    /// every healthy row.
+    ///
+    /// Rounding is DOWN at every boundary, and a clock that disagrees can
+    /// only ever make a session look fresher (a future `quiet_since` clamps
+    /// to zero rather than going negative).
+    ///
+    /// Reddens if: an active session gains a label; if any boundary rounds up
+    /// (59s must not be "1m", 119s must not be "2m"); or if a negative age
+    /// escapes as a negative number.
+    #[test]
+    fn quiet_label_is_none_when_active_and_rounds_down() {
+        const NOW: i64 = 1_000_000_000;
+
+        assert_eq!(quiet_label(None, NOW), None, "an active session has no age");
+
+        assert_eq!(quiet_label(Some(NOW), NOW).as_deref(), Some("quiet 0s"));
+        assert_eq!(
+            quiet_label(Some(NOW - 59_999), NOW).as_deref(),
+            Some("quiet 59s"),
+            "one millisecond short of a minute is still seconds"
+        );
+        assert_eq!(
+            quiet_label(Some(NOW - 60_000), NOW).as_deref(),
+            Some("quiet 1m")
+        );
+        assert_eq!(
+            quiet_label(Some(NOW - 119_000), NOW).as_deref(),
+            Some("quiet 1m"),
+            "1m59s rounds DOWN to 1m"
+        );
+        assert_eq!(
+            quiet_label(Some(NOW - 180_000), NOW).as_deref(),
+            Some("quiet 3m")
+        );
+        assert_eq!(
+            quiet_label(Some(NOW - 3_599_000), NOW).as_deref(),
+            Some("quiet 59m")
+        );
+        assert_eq!(
+            quiet_label(Some(NOW - 3_600_000), NOW).as_deref(),
+            Some("quiet 1h")
+        );
+
+        // Clock skew: a `quiet_since` in the future is clamped, never negative.
+        assert_eq!(
+            quiet_label(Some(NOW + 500_000), NOW).as_deref(),
+            Some("quiet 0s"),
+            "a disagreeing clock may only make a session look fresher"
+        );
     }
 
     #[test]

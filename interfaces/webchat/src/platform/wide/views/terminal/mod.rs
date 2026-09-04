@@ -439,9 +439,8 @@ pub fn TerminalView() -> impl IntoView {
                     // the frame rate.
                     if let (Some(sid), Some(title)) = (
                         session_id.get_value(),
-                        screen.with_value(|s| {
-                            s.as_ref().and_then(|s| s.title().map(str::to_string))
-                        }),
+                        screen
+                            .with_value(|s| s.as_ref().and_then(|s| s.title().map(str::to_string))),
                     ) {
                         let changed = tabs
                             .try_with_untracked(|m| {
@@ -532,35 +531,19 @@ pub fn TerminalView() -> impl IntoView {
         cb.forget();
     });
 
-    // Keydown -> the PTY, base64-encoded (raw bytes, not JS `btoa`: control
+    // Bytes -> the PTY, base64-encoded (raw bytes, not JS `btoa`: control
     // bytes and multi-byte UTF-8 -- Ctrl-C is 0x03, CJK input is more than
-    // one byte per character -- round-trip corrupted through `btoa`'s
-    // Latin-1 assumption). Reuses the voice-capture path's pure encoder
-    // rather than adding a second one.
+    // one byte per character -- round-trip corrupted through `btoa`'s Latin-1
+    // assumption). Reuses the voice-capture path's pure encoder rather than
+    // adding a second one.
     //
-    // A key `encode_key` does not claim is left alone entirely, not even
-    // `prevent_default()`, so any browser/OS shortcut we do not mean to
-    // swallow keeps working. Meta-chord letters (Cmd-C copy, Cmd-V paste on
-    // macOS) are the same case by a different route: `encode_key` has no way
-    // to express "meta" (its tested contract is key/ctrl/alt/shift only), so
-    // the copy/paste the user almost certainly means is handled here, by
-    // never forwarding a meta chord at all, rather than by teaching
-    // `keymap.rs` a modifier it cannot report on.
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.meta_key() {
-            return;
-        }
+    // One function for both keystrokes and pastes: they are the same wire
+    // call, and a second copy of it is where the two would drift.
+    let send_bytes = move |bytes: Vec<u8>| {
         let Some(sid) = session_id.get_value() else {
             return;
         };
-        let Some(bytes) =
-            keymap::encode_key(&ev.key(), ev.ctrl_key(), ev.alt_key(), ev.shift_key())
-        else {
-            return;
-        };
-        ev.prevent_default();
         let data = crate::views::voice::wav::base64_encode(&bytes);
-        let state = state;
         spawn_local(async move {
             let _ = state
                 .rpc_call(
@@ -569,6 +552,53 @@ pub fn TerminalView() -> impl IntoView {
                 )
                 .await;
         });
+    };
+
+    // A key the keymap does not claim is left alone entirely, not even
+    // `prevent_default()`, so any browser/OS shortcut we do not mean to
+    // swallow keeps working. That now includes the PASTE chords: the meta
+    // bail that used to live here has moved into `keymap::encode_key`, which
+    // takes `meta` and answers `Browser` for Cmd-V and Ctrl-Shift-V — one
+    // decision in one place rather than half a rule on each side (判据 §6).
+    let on_keydown = move |ev: web_sys::KeyboardEvent| match keymap::encode_key(
+        &ev.key(),
+        ev.ctrl_key(),
+        ev.alt_key(),
+        ev.shift_key(),
+        ev.meta_key(),
+    ) {
+        keymap::KeyAction::Bytes(bytes) => {
+            ev.prevent_default();
+            send_bytes(bytes);
+        }
+        keymap::KeyAction::Browser => {}
+    };
+
+    // Paste. The clipboard's TEXT is only readable from a `paste` event — a
+    // `keydown` handler cannot reach it at all — which is the whole reason
+    // the keymap hands the paste chords back to the browser instead of
+    // encoding them.
+    //
+    // Wrapped in `ESC[200~ ... ESC[201~` only when the program has asked for
+    // bracketed paste. `ClientScreen::bracketed_paste()` answers `None` until
+    // the server has said, and `encode_paste` treats unknown as "do not
+    // wrap": the escape sequences showing up literally in someone's command
+    // line is a visible corruption, while not sending them only gives up a
+    // hint (spec §5).
+    let on_paste = move |ev: web_sys::ClipboardEvent| {
+        let Some(text) = ev
+            .clipboard_data()
+            .and_then(|d| d.get_data("text").ok())
+            .filter(|t| !t.is_empty())
+        else {
+            return;
+        };
+        // Read synchronously, inside the event handler, and passed to
+        // `send_bytes` as a value: the mode belongs to the screen as it is
+        // NOW, not as it may be by the time the `pty.input` RPC resolves.
+        let bracketed = screen.with_value(|s| s.as_ref().and_then(ClientScreen::bracketed_paste));
+        ev.prevent_default();
+        send_bytes(session::encode_paste(&text, bracketed));
     };
 
     view! {
@@ -613,6 +643,7 @@ pub fn TerminalView() -> impl IntoView {
                 tabindex="0"
                 class="flex-1 min-h-0 outline-none"
                 on:keydown=on_keydown
+                on:paste=on_paste
             />
         </div>
     }
