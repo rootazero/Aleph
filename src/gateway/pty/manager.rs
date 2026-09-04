@@ -207,47 +207,115 @@ pub struct PtyManager {
     max_sessions: AtomicUsize,
 }
 
-/// One flush iteration for one session: take the diff frame, then sample the
-/// agent state off the same screen.
+/// One flush iteration for one session: take the diff frame, probe the
+/// foreground process if the gate allows, then sample the agent state off the
+/// same screen.
 ///
 /// Extracted from [`PtyManager::start_flush_loop`]'s loop body rather than
 /// written inline so the wire between the PTY and `gateway::runtime` has a
-/// caller a test can drive. Sampling sits inside the `Some(frame)` arm on
-/// purpose: a frame exists exactly when the screen changed, which is the
-/// sampling cadence the spec asked for — the sampler starts no clock of its
-/// own (判据 §12).
+/// caller a test can drive. The sampler still starts no clock of its own
+/// (判据 §12) — it runs on the flush tick, and only when that tick found
+/// something new.
 ///
-/// The frame is taken first (one screen lock, released), then
-/// [`PtySession::with_screen`] takes it again for the length of one sample.
-/// The sample therefore sees a screen at least as new as the frame, never
-/// older, and the grid is never cloned.
+/// Two things count as new, and the second one had to be added after the
+/// end-to-end guard caught its absence:
+/// - the screen produced a frame, the ordinary case; or
+/// - the foreground PROGRAM changed with the screen standing still, which is
+///   what an agent that starts, paints once and goes quiet looks like. Without
+///   this arm the probe identified it and the table never heard.
+///
+/// The probe itself runs unconditionally, above both. Gated on frames it could
+/// never fire rule 3 of [`crate::gateway::pty::foreground::probe_due`] — the
+/// recheck for a session that has gone silent — and that rule is the only
+/// thing that can notice an agent EXITING. It would also have made
+/// `frame_produced` true at the only call site, a predicate that cannot vary
+/// (判据 §2).
+///
+/// The frame is taken first (one screen lock, released), the probe runs
+/// holding no screen lock at all, then [`PtySession::with_screen`] takes it
+/// again for the length of one sample. The sample therefore sees a screen at
+/// least as new as the frame, never older, and the grid is never cloned.
 ///
 /// `now` is unix millis, taken ONCE per tick by the caller and shared with
-/// [`crate::gateway::runtime::RuntimeAgents::release_expired`] — every entry
+/// [`crate::gateway::runtime::RuntimeAgents::release_expired`] and
+/// [`crate::gateway::runtime::RuntimeAgents::mark_quiet`] — every entry
 /// touched in one pass carries the same instant, and the sampler never reads
 /// a clock of its own (判据 §12).
 ///
-/// The second element of the return is [`RuntimeAgents::sample`]'s own
+/// The second element of the return is `RuntimeAgents::sample`'s own
 /// `changed` bool (task 6): whether anything OBSERVABLE — state, agent,
-/// label, or cwd — differs from the entry's last sample. `start_flush_loop`
-/// keys `runtime.agents.changed` on it, so it is surfaced here rather than
-/// discarded, exactly like the frame it travels with.
-pub(crate) fn flush_session(
-    session: &PtySession,
-    now: i64,
-) -> Option<(aleph_protocol::pty::PtyScreenFrame, bool)> {
-    let frame = session.feed_and_take_frame()?;
+/// program, label, cwd, or a quiet mark clearing — differs from the entry's
+/// last sample. `start_flush_loop` keys `runtime.agents.changed` on it, so it
+/// is surfaced here rather than discarded, exactly like the frame it travels
+/// with.
+pub(crate) fn flush_session(session: &PtySession, now: i64) -> FlushOutcome {
+    let agents = crate::gateway::runtime::agents();
+    let frame = session.feed_and_take_frame();
+    let program_changed =
+        session.maybe_probe_foreground(now, frame.is_some(), agents.agent_known(&session.id));
+    // A frame is the usual reason to re-sample; a changed foreground program
+    // is the other one, and leaving it out is how an agent that paints once
+    // and goes quiet gets identified by the probe and then never published
+    // (measured on the first real run of
+    // `a_real_agent_started_after_spawn_is_identified`: the probe saw
+    // `/bin/sh …/claude` while the table still said `program: "sh",
+    // agent: None`, 521 ms stale). The screen lock is taken for that case too,
+    // but only when the program actually moved.
+    if frame.is_none() && !program_changed {
+        return FlushOutcome {
+            frame: None,
+            agent_changed: false,
+        };
+    }
+
+    let foreground = session.foreground_fact();
+    // The live cwd, in a fixed order of authority, so no reader has to guess
+    // which source won (判据 §12).
+    //
+    // 1. OSC 7 — the shell TELLING us where it is. Stream B adds
+    //    `Screen::cwd()`; until it lands there is nothing to read here, and
+    //    this comment is the marker Task M attaches it to. It goes FIRST when
+    //    it arrives.
+    // 2. the foreground process's own cwd, from the probe.
+    // 3. the spawn directory, which never changes.
+    let cwd = foreground
+        .as_ref()
+        .and_then(|f| f.cwd.clone())
+        .unwrap_or_else(|| session.cwd.clone());
+
     let changed = session.with_screen(|screen| {
-        crate::gateway::runtime::agents().sample(
-            &session.id,
-            &session.shell,
-            &session.cwd,
+        agents.sample(crate::gateway::runtime::SampleInput {
+            session_id: &session.id,
+            shell: &session.shell,
+            program: foreground.as_ref().map(|f| f.name.as_str()),
+            argv0: foreground.as_ref().and_then(|f| f.argv0.as_deref()),
+            cmdline: foreground.as_ref().and_then(|f| f.cmdline.as_deref()),
+            cwd: &cwd,
             screen,
-            session.is_closed(),
+            process_exited: session.is_closed(),
             now,
-        )
+        })
     });
-    Some((frame, changed))
+    FlushOutcome {
+        frame,
+        agent_changed: changed,
+    }
+}
+
+/// What one [`flush_session`] pass produced.
+///
+/// Two independent facts, which is why this is a struct and not the old
+/// `Option<(frame, bool)>`: a tick can produce a screen frame, an agent-table
+/// change, both, or neither, and the pair `(None, true)` — the foreground
+/// program moved while the screen stood still — is exactly the case the old
+/// shape could not express.
+pub(crate) struct FlushOutcome {
+    /// The screen diff to publish on `pty.screen`, when the screen changed.
+    pub frame: Option<aleph_protocol::pty::PtyScreenFrame>,
+    /// Whether the agent table changed — `RuntimeAgents::sample`'s own
+    /// `changed`. `start_flush_loop` folds this across sessions and publishes
+    /// at most one `runtime.agents.changed` per tick.
+    pub agent_changed: bool,
 }
 
 /// Publish `runtime.agents.changed` on `bus` iff `changed`. Payload is
@@ -629,10 +697,11 @@ impl PtyManager {
                 // ignore, and then they ignore the real ones too (R6-4).
                 let mut any_agent_changed = false;
                 for session in sessions {
-                    let Some((frame, changed)) = flush_session(&session, now) else {
+                    let outcome = flush_session(&session, now);
+                    any_agent_changed |= outcome.agent_changed;
+                    let Some(frame) = outcome.frame else {
                         continue;
                     };
-                    any_agent_changed |= changed;
                     let Ok(data) = serde_json::to_value(&frame) else {
                         continue;
                     };
@@ -648,6 +717,11 @@ impl PtyManager {
                 any_agent_changed |= !crate::gateway::runtime::agents()
                     .release_expired(now)
                     .is_empty();
+                // Same argument, second fact: a session that went quiet
+                // produces no frame, so the loop above cannot reach it either.
+                // This publishes the SILENCE and never touches `state` — time
+                // alone must not turn Working into Idle (spec R2-3).
+                any_agent_changed |= !crate::gateway::runtime::agents().mark_quiet(now).is_empty();
                 publish_agents_changed_if(any_agent_changed, &bus);
             }
         });

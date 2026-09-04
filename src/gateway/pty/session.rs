@@ -275,13 +275,19 @@ impl PtySession {
         self.shell_pid
     }
 
-    /// Probe the terminal's foreground process, if this tick is due.
+    /// Probe the terminal's foreground process, if this tick is due. Returns
+    /// whether the believed foreground process CHANGED.
     ///
     /// `frame_produced` and `agent_known` are the gate's two inputs; see
     /// [`super::foreground::probe_due`] for the three rules. Calling this on
     /// every tick — not only on ticks that produced a frame — is what makes
     /// the recheck rule reachable, and the recheck rule is the only thing
     /// that can notice an agent EXITING.
+    ///
+    /// The return value is what lets `flush_session` re-sample a session whose
+    /// screen did not change but whose foreground program did; without it, a
+    /// program that starts, paints once and goes quiet is identified here and
+    /// never published.
     ///
     /// # Locks
     ///
@@ -294,13 +300,29 @@ impl PtySession {
     /// The process-table refresh happens BETWEEN 2 and 3, holding nothing.
     /// That ordering is the reason the probe is two functions rather than one
     /// (see [`super::foreground`]'s Locks section).
-    pub fn maybe_probe_foreground(&self, now: i64, frame_produced: bool, agent_known: bool) {
+    pub fn maybe_probe_foreground(
+        &self,
+        now: i64,
+        frame_produced: bool,
+        agent_known: bool,
+    ) -> bool {
         let due = {
-            let state = self.foreground.lock().unwrap_or_else(|e| e.into_inner());
-            super::foreground::probe_due(state.last_probe_at(), now, frame_produced, agent_known)
+            let mut state = self.foreground.lock().unwrap_or_else(|e| e.into_inner());
+            // Remember the frame even when the gate is about to say no: a
+            // frame that lands inside the rate limit's shadow still means the
+            // screen changed, and dropping it is how a program that paints
+            // once and goes quiet stays unidentified forever (see
+            // `foreground::probe_due`).
+            state.note_frame(frame_produced);
+            super::foreground::probe_due(
+                state.last_probe_at(),
+                now,
+                state.frame_since_probe(),
+                agent_known,
+            )
         };
         if !due {
-            return;
+            return false;
         }
         let leader = {
             let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
@@ -310,7 +332,7 @@ impl PtySession {
         self.foreground
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .observe(now, observed);
+            .observe(now, observed)
     }
 
     /// The foreground process this session is currently believed to be

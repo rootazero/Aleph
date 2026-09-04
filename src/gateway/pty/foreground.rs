@@ -115,6 +115,20 @@ pub struct ForegroundFact {
     pub observed_at: i64,
 }
 
+impl ForegroundFact {
+    /// Whether two observations describe the same process doing the same
+    /// thing in the same place — everything except [`Self::observed_at`],
+    /// which moves on every hit and so cannot be part of "did this change".
+    #[must_use]
+    pub fn same_subject(&self, other: &Self) -> bool {
+        self.pid == other.pid
+            && self.name == other.name
+            && self.argv0 == other.argv0
+            && self.cmdline == other.cmdline
+            && self.cwd == other.cwd
+    }
+}
+
 /// Whether this tick should probe.
 ///
 /// Three rules, and they are the whole gate (spec §4.1) — deliberately not a
@@ -124,7 +138,7 @@ pub struct ForegroundFact {
 ///
 /// 1. Never probed ⇒ probe. The first observation of a session is what makes
 ///    the very first identification possible at all.
-/// 2. The screen produced a frame this tick and the last probe is at least
+/// 2. A frame has arrived SINCE THE LAST PROBE and that probe is at least
 ///    [`PROBE_MIN_INTERVAL_MS`] old ⇒ probe. Frames are the cheap signal that
 ///    something happened.
 /// 3. An agent is already identified here and the last probe is at least
@@ -132,20 +146,31 @@ pub struct ForegroundFact {
 ///    rule that can fire for a silent session, and without it an agent's
 ///    EXIT is never noticed.
 ///
+/// ⚠️ Rule 2 says "since the last probe", not "on this tick", and the
+/// difference is the whole rule. The first version asked whether THIS 16 ms
+/// tick produced a frame, and `a_real_agent_started_after_spawn_is_identified`
+/// caught what that means: a program that starts, paints once and goes quiet
+/// paints entirely inside the 500 ms shadow of the previous probe, so its one
+/// frame is thrown away, no later frame ever arrives, and rule 3 cannot help
+/// because nothing was identified. "Not identified" became an absorbing state
+/// (判据 §2: the interesting question is not whether the rule is right but
+/// when it can fire). The caller keeps the sticky bit — see
+/// [`ForegroundState::note_frame`].
+///
 /// Pure, so the cost guard can drive it a thousand times without touching the
 /// process table.
 #[must_use]
 pub fn probe_due(
     last_probe_at: Option<i64>,
     now: i64,
-    frame_produced: bool,
+    frame_since_probe: bool,
     agent_known: bool,
 ) -> bool {
     let Some(last) = last_probe_at else {
         return true;
     };
     let age = now.saturating_sub(last);
-    (frame_produced && age >= PROBE_MIN_INTERVAL_MS) || (agent_known && age >= PROBE_RECHECK_MS)
+    (frame_since_probe && age >= PROBE_MIN_INTERVAL_MS) || (agent_known && age >= PROBE_RECHECK_MS)
 }
 
 /// The pid of the process group the kernel says owns this terminal.
@@ -304,12 +329,44 @@ pub struct ForegroundState {
     fact: Option<ForegroundFact>,
     /// Consecutive misses since the last hit.
     misses: u32,
+    /// Whether any frame has arrived since the last probe.
+    ///
+    /// Sticky, and that is the point: see the warning on [`probe_due`]. A
+    /// per-tick answer loses every frame that lands inside the rate limit's
+    /// shadow, which is where a program that paints once and goes quiet does
+    /// all of its painting.
+    frame_since_probe: bool,
 }
 
 impl ForegroundState {
+    /// Record whether this tick produced a frame. Idempotent and sticky —
+    /// once true it stays true until the next probe consumes it.
+    pub fn note_frame(&mut self, produced: bool) {
+        self.frame_since_probe |= produced;
+    }
+
+    /// Whether a frame has arrived since the last probe. Feeds [`probe_due`].
+    #[must_use]
+    pub const fn frame_since_probe(&self) -> bool {
+        self.frame_since_probe
+    }
+
     /// Fold one probe outcome in. `now` is the tick that authorised it.
-    pub fn observe(&mut self, now: i64, observed: Option<ForegroundFact>) {
+    ///
+    /// Returns whether the BELIEVED foreground process changed — a different
+    /// program, a moved cwd, or the hysteresis finally forgetting one. The
+    /// caller needs that answer because identification is an INPUT to the
+    /// agent sampler, and the sampler is otherwise only reached when the
+    /// screen produced a frame: a program that starts, paints once and goes
+    /// quiet would be identified here and then never published.
+    ///
+    /// `observed_at` is excluded from the comparison. It moves on every hit by
+    /// construction, so including it would make this return `true` forever and
+    /// the answer would carry no information (判据 §2).
+    pub fn observe(&mut self, now: i64, observed: Option<ForegroundFact>) -> bool {
         self.last_probe_at = Some(now);
+        self.frame_since_probe = false;
+        let before = self.fact.take();
         match observed {
             Some(fact) => {
                 self.misses = 0;
@@ -317,10 +374,15 @@ impl ForegroundState {
             }
             None => {
                 self.misses = self.misses.saturating_add(1);
-                if self.misses >= PROBE_MISSES_TO_FORGET {
-                    self.fact = None;
-                }
+                self.fact = (self.misses < PROBE_MISSES_TO_FORGET)
+                    .then(|| before.clone())
+                    .flatten();
             }
+        }
+        match (&before, &self.fact) {
+            (None, None) => false,
+            (Some(a), Some(b)) => !a.same_subject(b),
+            _ => true,
         }
     }
 
@@ -431,6 +493,69 @@ mod tests {
                 "probe_due({last:?}, {now}, frame={frame}, known={known}): {why}"
             );
         }
+    }
+
+    /// A frame that arrives while the gate is shut must still earn the next
+    /// probe.
+    ///
+    /// This is the defect `a_real_agent_started_after_spawn_is_identified`
+    /// found on its first real run, written down as a unit: the fake `claude`
+    /// started, painted its chrome and slept, all within 500 ms of the
+    /// previous probe. With a per-tick answer that frame was discarded, no
+    /// later frame ever arrived (the program was asleep), and rule 3 could not
+    /// help because nothing had been identified — so the session was
+    /// unidentifiable for the rest of its life.
+    #[test]
+    fn a_frame_inside_the_rate_shadow_still_earns_the_next_probe() {
+        let mut state = ForegroundState::default();
+        state.observe(0, Some(fact("sh", 0)));
+
+        // A frame at t=10ms: far too early to probe.
+        state.note_frame(true);
+        assert!(
+            !probe_due(state.last_probe_at(), 10, state.frame_since_probe(), false),
+            "the rate limit still applies"
+        );
+
+        // Nothing more happens: every later tick reports no frame of its own.
+        for tick in [100, 200, 300, 400] {
+            state.note_frame(false);
+            assert!(!probe_due(
+                state.last_probe_at(),
+                tick,
+                state.frame_since_probe(),
+                false
+            ));
+        }
+
+        state.note_frame(false);
+        assert!(
+            probe_due(
+                state.last_probe_at(),
+                PROBE_MIN_INTERVAL_MS,
+                state.frame_since_probe(),
+                false
+            ),
+            "the frame from t=10 must still be remembered at t={PROBE_MIN_INTERVAL_MS} -- \
+             otherwise a program that paints once and sleeps is never looked at again"
+        );
+
+        // And the probe consumes it: no frame, no further probes.
+        state.observe(
+            PROBE_MIN_INTERVAL_MS,
+            Some(fact("claude", PROBE_MIN_INTERVAL_MS)),
+        );
+        assert!(
+            !state.frame_since_probe(),
+            "a probe must consume the sticky bit, or the gate degenerates into \
+             one probe per PROBE_MIN_INTERVAL_MS forever"
+        );
+        assert!(!probe_due(
+            state.last_probe_at(),
+            PROBE_MIN_INTERVAL_MS * 3,
+            state.frame_since_probe(),
+            false
+        ));
     }
 
     /// A hit is believed at once; a miss is not believed until

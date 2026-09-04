@@ -287,34 +287,61 @@ pub fn identify_agent_from_process(
     argv0: Option<&str>,
     cmdline: Option<&str>,
 ) -> Option<Agent> {
-    identify_agent(name)
-        .or_else(|| argv0.and_then(identify_agent))
-        .or_else(|| cmdline.and_then(script_agent_in_cmdline))
+    identify_agent(&normalized_program_name(name, argv0, cmdline))
 }
 
-/// The agent named by a command line, when neither the process name nor
-/// `argv[0]` named one.
+/// What to CALL the program a process is running.
+///
+/// herdr's `normalized_process_name` (`src/detect/mod.rs:359-395`), and the
+/// single derivation [`identify_agent_from_process`] is built on: identifying
+/// the agent is "does this name resolve to one", so the two cannot disagree
+/// about which token they looked at.
+///
+/// The kernel's answer is often not the program's name. A `#!/bin/sh` script
+/// called `claude` is reported by macOS as `bash`; `claude` installed as a
+/// Node script is reported as `node`. Both are true and neither is what a
+/// panel should print, which is why this returns the token that identified an
+/// agent when one did — as INVOKED (`claude-code` stays `claude-code`), not
+/// canonicalised, so `program` says what is running while `agent` says which
+/// agent that is.
+///
+/// With nothing recognised it falls back to `argv[0]`'s basename, or the
+/// kernel's name when there is no `argv[0]`. Never empty, never a guess.
+#[must_use]
+pub fn normalized_program_name(name: &str, argv0: Option<&str>, cmdline: Option<&str>) -> String {
+    let effective = argv0.unwrap_or(name);
+    for candidate in [name, effective] {
+        if identify_agent(candidate).is_some() {
+            return path_basename(candidate).to_owned();
+        }
+    }
+    if let Some(token) = cmdline.and_then(agent_token_in_cmdline) {
+        return path_basename(token).to_owned();
+    }
+    path_basename(effective).to_owned()
+}
+
+/// The token of a command line that names an agent, if any.
 ///
 /// Two tokens are consulted and no more: the command itself, and — only when
 /// that command is a generic runtime or shell — the first non-flag token
-/// after it, which is the script such a runtime runs. `claude` installs as a
-/// Node script, so `node /usr/local/bin/claude` is the shape that has to
-/// resolve.
+/// after it, which is the script such a runtime runs.
 ///
 /// Scanning every token instead would answer a different question (判据 §5):
 /// `vim claude.rs` and `git commit -m claude` both contain an agent's name
 /// without an agent running, and a program the panel names wrongly is worse
 /// than one it names not at all (判据 §17).
-fn script_agent_in_cmdline(cmdline: &str) -> Option<Agent> {
+fn agent_token_in_cmdline(cmdline: &str) -> Option<&str> {
     let mut tokens = cmdline.split_whitespace();
     let command = tokens.next()?;
-    if let Some(agent) = identify_agent(command) {
-        return Some(agent);
+    if identify_agent(command).is_some() {
+        return Some(command);
     }
     if !is_generic_runtime_or_shell(command) {
         return None;
     }
-    identify_agent(tokens.find(|t| !t.starts_with('-'))?)
+    let script = tokens.find(|t| !t.starts_with('-'))?;
+    identify_agent(script).is_some().then_some(script)
 }
 
 /// Ported verbatim from herdr `src/detect/mod.rs:696-711`. A program on this
@@ -659,6 +686,44 @@ mod tests {
             identify_agent_from_process("node", None, None),
             None,
             "a runtime with nothing to run identifies nothing"
+        );
+    }
+
+    /// `program` on the wire is what to CALL the running program, and the
+    /// kernel's name is frequently not it: macOS reports a `#!/bin/sh` script
+    /// named `claude` as `bash` (measured — see
+    /// `gateway::runtime`'s end-to-end guard), and a Node-installed `claude`
+    /// as `node`. Publishing either would put "bash" in the panel while
+    /// Claude is on screen, and a wrong label is worse than a missing one
+    /// (判据 §17).
+    ///
+    /// The last two rows are the fallback: when nothing is recognised the
+    /// answer is still a name, never empty and never a guess.
+    #[test]
+    fn normalized_program_name_prefers_the_program_over_the_interpreter() {
+        assert_eq!(
+            normalized_program_name("bash", Some("/bin/sh"), Some("/bin/sh /tmp/bin/claude")),
+            "claude",
+            "a shebang script must be named by the script, not the interpreter"
+        );
+        assert_eq!(
+            normalized_program_name("node", Some("node"), Some("node /usr/local/bin/claude --x")),
+            "claude"
+        );
+        assert_eq!(
+            normalized_program_name("claude-code", None, None),
+            "claude-code",
+            "as INVOKED, not canonicalised -- `agent` is what says which agent it is"
+        );
+        assert_eq!(
+            normalized_program_name("bash", Some("/bin/sh"), Some("/bin/sh")),
+            "sh",
+            "a plain shell is named by its argv[0], which is what the user typed"
+        );
+        assert_eq!(
+            normalized_program_name("vim", Some("vim"), Some("vim claude.rs")),
+            "vim",
+            "an editor holding a file named after an agent is still vim"
         );
     }
 
