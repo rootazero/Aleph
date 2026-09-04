@@ -132,19 +132,19 @@ impl std::fmt::Display for SubscriptionId {
 
 /// A subscription to global events with filtering.
 ///
-/// Field visibility matches [`crate::event::Subscription`] (also re-exported
-/// as `pub Subscription`): callbacks and filters are currently inspected
-/// only inside this module, but the struct is also returned from public
-/// APIs that downstream code may pattern-match on. Keep the fields `pub`
-/// until either an explicit inspector API is added or the visibility is
-/// tightened in one patch.
-pub struct Subscription {
+/// Private to `global_bus`: no public API exposes a `Subscription` (only
+/// [`SubscriptionId`] crosses the module boundary), so the previous
+/// `pub`-with-`pub`-fields shape — kept, per its own comment, "until the
+/// visibility is tightened in one patch" — is tightened here (2026-09
+/// severed-wire review). The struct was also re-exported as
+/// `crate::event::Subscription` with zero callers; that re-export is gone.
+struct Subscription {
     /// Unique identifier for this subscription
-    pub id: SubscriptionId,
+    id: SubscriptionId,
     /// Filter to match events
-    pub filter: EventFilter,
+    filter: EventFilter,
     /// Callback to invoke when matching events arrive
-    pub callback: Arc<dyn Fn(GlobalEvent) + Send + Sync>,
+    callback: Arc<dyn Fn(GlobalEvent) + Send + Sync>,
 }
 
 impl std::fmt::Debug for Subscription {
