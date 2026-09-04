@@ -46,20 +46,15 @@ pub fn patch(p: &ScreenPatch) -> PtyScreenPatch {
         cursor: p.cursor,
         alt_screen: p.alt_screen,
         title: p.title.clone(),
-        // The three below are reserved wire fields with no producer yet: the
-        // server screen does not track these modes, so `None` here is the
-        // literal truth ("unchanged / not known"), not a placeholder standing
-        // in for a value we have. Each is wired by Stream B task B3, which
-        // adds the `ScreenPatch` fields these will read.
-        //
-        // wired by Stream B, guarded by
-        // `cursor_visibility_rides_the_patch_only_when_it_changes`
-        cursor_visible: None,
-        // wired by Stream B, guarded by `bracketed_paste_mode_rides_the_patch`
-        bracketed_paste: None,
-        // wired by Stream B, guarded by
-        // `osc7_file_uri_with_empty_or_localhost_host_sets_cwd_and_percent_decodes`
-        cwd: None,
+        // Straight through, `None` and all: `None` here is the server
+        // screen's own "unchanged since the last patch", so translating it
+        // to anything else would invent news. `attach_snapshot` reaches the
+        // wire through this same function applied to `Screen::full_patch`,
+        // which fills all three with their CURRENT values -- so a client
+        // attaching late is served by this line, not by a separate path.
+        cursor_visible: p.cursor_visible,
+        bracketed_paste: p.bracketed_paste,
+        cwd: p.cwd.clone(),
         bell: p.bell,
     }
 }

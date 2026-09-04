@@ -9,6 +9,69 @@ use super::Performer;
 /// is bounded before it is stored.
 pub(super) const OSC_PAYLOAD_MAX_CHARS: usize = 256;
 
+/// `OSC 7`'s payload: a `file://` URI naming the shell's working directory.
+///
+/// Only an EMPTY host or `localhost` names this machine. Anything else
+/// describes another machine's filesystem, and a path from it is not this
+/// session's cwd — publishing it would be a specific lie about where the
+/// terminal is, which reads as fact to everything downstream. Dropped, so
+/// the next source in the chain answers instead.
+///
+/// A bare path with no scheme is rejected too. OSC 7 is defined as a URI;
+/// treating an unrecognised payload as a path is how a scheme nobody checked
+/// becomes a path somebody trusts.
+fn parse_osc7_cwd(payload: &str) -> Option<String> {
+    let rest = payload.strip_prefix("file://")?;
+    // The first `/` starts the path, so everything before it is the host.
+    // A payload with no `/` at all carries no path and is not a location.
+    let split = rest.find('/')?;
+    let (host, path) = rest.split_at(split);
+    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+        return None;
+    }
+    // Sanitised AFTER decoding, not before: `%0A` is a control character
+    // that only exists once the escape is resolved, so a filter that ran
+    // first would pass it straight through. Same cap and same reason as
+    // `retain_osc_progress` -- untrusted child output held for the lifetime
+    // of the session is bounded before it is stored.
+    let decoded: String = percent_decode(path)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(OSC_PAYLOAD_MAX_CHARS)
+        .collect();
+    (!decoded.is_empty()).then_some(decoded)
+}
+
+/// Percent-decoding, bytes first.
+///
+/// `%E4%B8%AD` is ONE character written as three escapes, so decoding has to
+/// accumulate bytes and convert once at the end; resolving each escape to a
+/// `char` on its own turns every non-ASCII path into mojibake. A `%` that
+/// does not begin a valid escape is kept literally — it is a legal character
+/// in a path, and dropping it would silently rename a directory.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Some(byte) = hex_pair(bytes[i + 1], bytes[i + 2]) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_pair(hi: u8, lo: u8) -> Option<u8> {
+    let digit = |c: u8| char::from(c).to_digit(16).map(|v| v as u8);
+    Some(digit(hi)? * 16 + digit(lo)?)
+}
+
 /// The `;`-separated tail of an OSC, put back together.
 ///
 /// One implementation for both kinds on purpose. This file used to hold the
@@ -68,6 +131,16 @@ impl Performer<'_> {
         }
         if *kind == b"9" {
             self.retain_osc_progress(&params[1..]);
+            return;
+        }
+        if *kind == b"7" && params.len() > 1 {
+            // Only a URI this machine can vouch for replaces the cwd. A
+            // rejected one leaves the previous answer standing: a value that
+            // failed its check has the standing to say "I don't know", never
+            // to supply an answer (判据 §8).
+            if let Some(path) = parse_osc7_cwd(&join_payload(&params[1..])) {
+                self.screen.state.cwd = Some(path);
+            }
         }
     }
 }

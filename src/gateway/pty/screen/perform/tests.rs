@@ -1564,6 +1564,224 @@
         assert_eq!(partial.grid.row_text(3), "three", "and stops at the cursor");
     }
 
+    // ----------------------------------------------------------------
+    // 0-A C9 / C5 / B1: the three observable bits the client cannot derive.
+    //
+    // All three are server-side facts by construction: the mode is set by a
+    // sequence only the emulator sees, so a client that is not told cannot
+    // work them out. Each rides `take_patch` under the same "Some only when
+    // changed" rule `alt_screen` and `title` already follow, and each is
+    // carried WHOLE by `full_patch` so a client attaching late gets the
+    // current value rather than the last change it happened to miss.
+    // ----------------------------------------------------------------
+
+    /// DECTCEM (`CSI ?25 h/l`). A patch that repeated the level every frame
+    /// would ship it 62 times a second per session for no news; a patch that
+    /// never shipped it would leave the Panel drawing a cursor the program
+    /// asked to hide. `Some` exactly on the change is the only shape that is
+    /// neither.
+    #[test]
+    fn cursor_visibility_rides_the_patch_only_when_it_changes() {
+        let mut s = Screen::new(3, 10);
+        let first = s
+            .take_patch()
+            .expect("a fresh screen announces its initial mode bits");
+        assert_eq!(
+            first.cursor_visible,
+            Some(true),
+            "the default is visible, and a client has to be told what it is \
+             rather than assuming"
+        );
+
+        s.feed(b"\x1b[?25l");
+        assert_eq!(
+            s.take_patch().expect("hiding the cursor is news").cursor_visible,
+            Some(false)
+        );
+        assert!(!s.cursor_visible());
+
+        s.feed(b"\x1b[?25l");
+        assert!(
+            s.take_patch().is_none(),
+            "the same mode set twice is not news"
+        );
+
+        s.feed(b"x");
+        assert_eq!(
+            s.take_patch().expect("printing is news").cursor_visible,
+            None,
+            "unchanged means ABSENT, not `Some(false)` on every frame"
+        );
+
+        s.feed(b"\x1b[?25h");
+        assert_eq!(s.take_patch().expect("showing again").cursor_visible, Some(true));
+        assert!(s.cursor_visible());
+    }
+
+    /// Mode 2004. The Panel needs this to decide whether a paste is wrapped
+    /// in `ESC[200~ … ESC[201~`, and it is observable only here — the
+    /// sequence never reaches the client.
+    #[test]
+    fn bracketed_paste_mode_rides_the_patch() {
+        let mut s = Screen::new(3, 10);
+        assert_eq!(
+            s.take_patch().expect("first patch").bracketed_paste,
+            Some(false),
+            "off by default -- and a client with no value must assume the \
+             weakest thing, which is what makes the default worth publishing"
+        );
+        assert!(!s.bracketed_paste());
+
+        s.feed(b"\x1b[?2004h");
+        assert_eq!(
+            s.take_patch().expect("enabling is news").bracketed_paste,
+            Some(true)
+        );
+        assert!(s.bracketed_paste());
+
+        s.feed(b"y");
+        assert_eq!(
+            s.take_patch().expect("printing is news").bracketed_paste,
+            None,
+            "unchanged means absent"
+        );
+
+        s.feed(b"\x1b[?2004l");
+        assert_eq!(
+            s.take_patch().expect("disabling is news").bracketed_paste,
+            Some(false)
+        );
+    }
+
+    /// OSC 7 is the cheap half of live cwd: it lands entirely inside
+    /// `screen/` and touches no platform API, so it does not carry the R1
+    /// decision that PID probing does. It is a SUPPLEMENT to the spawn
+    /// directory, not a replacement — only shells with integration
+    /// configured emit it.
+    #[test]
+    fn osc7_file_uri_with_empty_or_localhost_host_sets_cwd_and_percent_decodes() {
+        let mut empty_host = Screen::new(3, 10);
+        empty_host.feed(b"\x1b]7;file:///home/me/src\x1b\\");
+        assert_eq!(empty_host.cwd(), Some("/home/me/src"));
+
+        let mut local = Screen::new(3, 10);
+        local.feed(b"\x1b]7;file://localhost/home/me\x07");
+        assert_eq!(
+            local.cwd(),
+            Some("/home/me"),
+            "`localhost` names this machine as surely as an empty host does"
+        );
+
+        let mut encoded = Screen::new(3, 10);
+        encoded.feed("\x1b]7;file:///home/me/a%20b/%E4%B8%AD\x07".as_bytes());
+        assert_eq!(
+            encoded.cwd(),
+            Some("/home/me/a b/\u{4e2d}"),
+            "one non-ASCII character arrives as THREE escapes, so decoding has \
+             to accumulate bytes and convert once -- decoding escape by escape \
+             yields mojibake for every non-ASCII path"
+        );
+
+        let mut with_semicolon = Screen::new(3, 10);
+        with_semicolon.feed(b"\x1b]7;file:///tmp/a;b\x07");
+        assert_eq!(
+            with_semicolon.cwd(),
+            Some("/tmp/a;b"),
+            "`vte` splits the payload on `;`, so this path arrives in pieces \
+             and has to be rejoined -- the same trap the title arm had"
+        );
+
+        let mut patched = Screen::new(3, 10);
+        let _ = patched.take_patch();
+        patched.feed(b"\x1b]7;file:///tmp\x07");
+        assert_eq!(
+            patched.take_patch().expect("a new cwd is news").cwd.as_deref(),
+            Some("/tmp")
+        );
+        patched.feed(b"z");
+        assert_eq!(
+            patched.take_patch().expect("printing is news").cwd,
+            None,
+            "unchanged means absent, same rule as the two bits above"
+        );
+    }
+
+    /// A `file://` URI naming another machine describes another machine's
+    /// filesystem. Dropping it leaves the previous answer standing, which is
+    /// the only honest outcome: a rejected value has the standing to say "I
+    /// don't know", never to supply one (判据 §8).
+    #[test]
+    fn osc7_with_a_foreign_host_is_dropped() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"\x1b]7;file:///home/me\x07");
+        assert_eq!(
+            s.cwd(),
+            Some("/home/me"),
+            "the setup must land, or the assertion below cannot tell 'dropped' \
+             from 'this never worked at all'"
+        );
+
+        s.feed(b"\x1b]7;file://build-box/srv/other\x07");
+        assert_eq!(
+            s.cwd(),
+            Some("/home/me"),
+            "a foreign host leaves the last known-good value rather than \
+             overwriting it with a path that is not this session's"
+        );
+
+        let mut never = Screen::new(3, 10);
+        never.feed(b"\x1b]7;file://build-box/srv/other\x07");
+        assert_eq!(
+            never.cwd(),
+            None,
+            "with nothing known before, it stays unknown -- 'unknown' must not \
+             be filled in with the remote path"
+        );
+
+        let mut bare_path = Screen::new(3, 10);
+        bare_path.feed(b"\x1b]7;/home/me\x07");
+        assert_eq!(
+            bare_path.cwd(),
+            None,
+            "OSC 7 is defined as a file:// URI; a bare path is not one, and \
+             guessing that it meant one is how a scheme nobody checked becomes \
+             a path somebody trusts"
+        );
+    }
+
+    /// A client attaching after the changes have already been shipped to a
+    /// live client gets them from `full_patch`, not from the diff stream it
+    /// was not there for.
+    ///
+    /// This is exactly the pair of calls `PtySession::attach_snapshot` makes
+    /// (`convert::patch(&screen.full_patch())`), so the whole snapshot path
+    /// for these three fields lives inside `screen/` and needs no wiring
+    /// elsewhere. The wire half is asserted below for that reason: a
+    /// `full_patch` that carried the values into a `convert::patch` that
+    /// dropped them would pass the first three assertions.
+    #[test]
+    fn attach_snapshot_carries_the_current_mode_bits() {
+        let mut s = Screen::new(3, 10);
+        s.feed(b"\x1b[?25l\x1b[?2004h\x1b]7;file:///srv\x07");
+
+        let _ = s.take_patch();
+        assert!(
+            s.take_patch().is_none(),
+            "the diff stream must be drained, or this test proves nothing \
+             about a LATE attach"
+        );
+
+        let snapshot = s.full_patch();
+        assert_eq!(snapshot.cursor_visible, Some(false));
+        assert_eq!(snapshot.bracketed_paste, Some(true));
+        assert_eq!(snapshot.cwd.as_deref(), Some("/srv"));
+
+        let wire = crate::gateway::pty::screen::convert::patch(&snapshot);
+        assert_eq!(wire.cursor_visible, Some(false));
+        assert_eq!(wire.bracketed_paste, Some(true));
+        assert_eq!(wire.cwd.as_deref(), Some("/srv"));
+    }
+
     /// HT is a MOVE, not a write of spaces. The two are identical on a
     /// fresh row and differ the moment a tab crosses text that is already
     /// there -- which is exactly what a shell does when it redraws a line,

@@ -34,6 +34,13 @@ pub struct Screen {
     last_sent_title: Option<String>,
     /// Alt-screen flag as of the last `take_patch`, same reasoning.
     last_sent_alt: Option<bool>,
+    /// The three observable mode bits as of the last `take_patch`. `None`
+    /// means "never published", which is why the very first patch announces
+    /// all three: a client that has been told nothing cannot tell a default
+    /// from a value nobody sent.
+    last_sent_cursor_visible: Option<bool>,
+    last_sent_bracketed_paste: Option<bool>,
+    last_sent_cwd: Option<String>,
     /// What `ESC 7` (DECSC) stashed, for `ESC 8` to put back. One slot, not
     /// one per screen buffer: DECSC/DECRC in a shell prompt are always
     /// paired inside one buffer, and a second slot would have no producer.
@@ -49,7 +56,6 @@ struct SavedCursor {
     style: (Color, Color, Attrs),
 }
 
-#[derive(Default)]
 struct ScreenState {
     fg: Color,
     bg: Color,
@@ -66,7 +72,39 @@ struct ScreenState {
     /// Claude's rules assume `4;3` stays painted while it waits for
     /// permission, which is why no rule reads `4;3` alone as working.
     osc_progress: Option<String>,
+    /// DECTCEM (`CSI ?25 h/l`). Visible unless a program says otherwise.
+    cursor_visible: bool,
+    /// Bracketed paste (mode 2004). Off until a program turns it on, and the
+    /// client must assume the same: wrapping a paste the program did not ask
+    /// to have wrapped puts `ESC[200~` into its input.
+    bracketed_paste: bool,
+    /// Live working directory from `OSC 7`. `None` = the program has never
+    /// reported one, so a caller falls through to the next source (the
+    /// foreground process, then the spawn directory) rather than reading
+    /// this absence as "no directory".
+    cwd: Option<String>,
     bell: bool,
+}
+
+/// Hand-written rather than derived because ONE field's default is not its
+/// type's: a cursor is visible until a program hides it, and
+/// `#[derive(Default)]` would make every new session start out reporting a
+/// hidden cursor. The derive was correct until this field existed, which is
+/// exactly the kind of change that keeps a derive looking right.
+impl Default for ScreenState {
+    fn default() -> Self {
+        Self {
+            fg: Color::default(),
+            bg: Color::default(),
+            attrs: Attrs::default(),
+            title: None,
+            osc_progress: None,
+            cursor_visible: true,
+            bracketed_paste: false,
+            cwd: None,
+            bell: false,
+        }
+    }
 }
 
 impl Screen {
@@ -80,6 +118,9 @@ impl Screen {
             state: ScreenState::default(),
             last_sent_title: None,
             last_sent_alt: None,
+            last_sent_cursor_visible: None,
+            last_sent_bracketed_paste: None,
+            last_sent_cwd: None,
             saved_cursor: None,
         }
     }
@@ -113,6 +154,30 @@ impl Screen {
     #[must_use]
     pub fn osc_progress(&self) -> Option<&str> {
         self.state.osc_progress.as_deref()
+    }
+
+    /// Whether the program wants a cursor drawn (DECTCEM).
+    #[must_use]
+    pub const fn cursor_visible(&self) -> bool {
+        self.state.cursor_visible
+    }
+
+    /// Whether the program has bracketed paste enabled (mode 2004). A client
+    /// wraps a paste in `ESC[200~ … ESC[201~` only when this is true.
+    #[must_use]
+    pub const fn bracketed_paste(&self) -> bool {
+        self.state.bracketed_paste
+    }
+
+    /// The live working directory the program last reported through `OSC 7`.
+    ///
+    /// `None` means "this program has told me nothing" — never "there is no
+    /// directory". OSC 7 only arrives from shells with integration
+    /// configured, so this is a supplement to the spawn directory and to a
+    /// foreground-process probe, not a replacement for either.
+    #[must_use]
+    pub fn cwd(&self) -> Option<&str> {
+        self.state.cwd.as_deref()
     }
 
     /// Reads and clears the bell flag — a bell is an edge, not a level.
@@ -170,21 +235,43 @@ impl Screen {
         let alt = self.alt_screen();
         let alt_changed = Some(alt) != self.last_sent_alt;
         let bell = self.take_bell();
+        let cursor_visible = self.state.cursor_visible;
+        let cursor_visible_changed = Some(cursor_visible) != self.last_sent_cursor_visible;
+        let bracketed_paste = self.state.bracketed_paste;
+        let bracketed_paste_changed = Some(bracketed_paste) != self.last_sent_bracketed_paste;
+        let cwd_changed = self.state.cwd != self.last_sent_cwd;
 
         let patch = super::diff::ScreenPatch {
             rows: super::diff::patch_rows(&self.grid, dirty),
             cursor: Some(self.grid.cursor()),
             alt_screen: alt_changed.then_some(alt),
             title: title_changed.then(|| self.state.title.clone()).flatten(),
+            cursor_visible: cursor_visible_changed.then_some(cursor_visible),
+            bracketed_paste: bracketed_paste_changed.then_some(bracketed_paste),
+            cwd: cwd_changed.then(|| self.state.cwd.clone()).flatten(),
             bell,
         };
         // Cursor is always present above, so emptiness is decided on the
-        // fields that actually carry news.
-        if patch.rows.is_empty() && !title_changed && !alt_changed && !bell {
+        // fields that actually carry news. Every new bit has to be named
+        // here as well as in the struct above: a bit that changed but was
+        // left out of this condition ships a patch whose only content is
+        // dropped as "nothing changed" -- silently, since the frame simply
+        // never arrives.
+        if patch.rows.is_empty()
+            && !title_changed
+            && !alt_changed
+            && !bell
+            && !cursor_visible_changed
+            && !bracketed_paste_changed
+            && !cwd_changed
+        {
             return None;
         }
         self.last_sent_title.clone_from(&self.state.title);
         self.last_sent_alt = Some(alt);
+        self.last_sent_cursor_visible = Some(cursor_visible);
+        self.last_sent_bracketed_paste = Some(bracketed_paste);
+        self.last_sent_cwd.clone_from(&self.state.cwd);
         Some(patch)
     }
 
@@ -198,6 +285,14 @@ impl Screen {
             cursor: Some(self.grid.cursor()),
             alt_screen: Some(self.alt_screen()),
             title: self.state.title.clone(),
+            // CURRENT values, not "changed" ones: this is the attach path,
+            // and a client that was not here for the change has to be told
+            // the level. `PtySession::attach_snapshot` reaches the wire by
+            // handing this straight to `convert::patch`, so these three
+            // lines are the whole of the snapshot wiring for these bits.
+            cursor_visible: Some(self.state.cursor_visible),
+            bracketed_paste: Some(self.state.bracketed_paste),
+            cwd: self.state.cwd.clone(),
             bell: false,
         }
     }

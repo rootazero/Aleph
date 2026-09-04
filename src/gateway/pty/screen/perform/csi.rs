@@ -150,6 +150,9 @@ impl Performer<'_> {
             6 => self.screen.grid.set_origin_mode(enable),
             // DECAWM.
             7 => self.screen.grid.set_autowrap(enable),
+            // DECTCEM. Observed, never acted on: the server draws nothing,
+            // so this bit exists only to be published to whoever does.
+            25 => self.screen.state.cursor_visible = enable,
             // Legacy alternate screen. Distinct from 1049 only in that the
             // alternate buffer survives the round trip.
             47 | 1047 => self.toggle_alt_screen(enable, AltBuffer::Legacy),
@@ -163,6 +166,10 @@ impl Performer<'_> {
                 }
             }
             1049 => self.toggle_alt_screen(enable, AltBuffer::Cleared),
+            // Bracketed paste. Same posture as DECTCEM: the server never
+            // pastes, so the only point of tracking it is that a client
+            // cannot -- the sequence that sets it never leaves this process.
+            2004 => self.screen.state.bracketed_paste = enable,
             _ => {}
         }
     }
