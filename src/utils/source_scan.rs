@@ -1734,13 +1734,16 @@ pub fn after() {}
         // Every file some parent declares as `#[cfg(test)] mod <stem>;`.
         let mut declared: std::collections::BTreeSet<String> = Default::default();
         for (rel, text) in &sources {
-            let dir = match rel.rsplit_once('/') {
-                Some((d, leaf)) if leaf == "mod.rs" => d.to_string(),
-                Some((d, leaf)) => {
-                    // `dir.rs` is the 2018-edition parent of `dir/`.
-                    format!("{d}/{}", leaf.trim_end_matches(".rs"))
-                }
-                None => continue,
+            let Some((parent, leaf)) = rel.rsplit_once('/') else {
+                continue;
+            };
+            // The module PATH this file's `mod x;` lines are relative to:
+            // `a/b/mod.rs` declares into `a/b`, and `a/b.rs` into `a/b` too
+            // (it is the 2018-edition parent of `a/b/`).
+            let dir = if leaf == "mod.rs" {
+                parent.to_string()
+            } else {
+                format!("{parent}/{}", leaf.trim_end_matches(".rs"))
             };
             for line in cfg_test_portion(text).lines() {
                 let t = line.trim_start();

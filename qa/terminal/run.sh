@@ -171,6 +171,19 @@ BIN="$TARGET_DIR/debug/aleph-server"
 [ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
 # The one trace a swallowed build failure leaves behind. See qa/lib/build.sh.
 echo "binary: $BIN ($(date -r "$BIN" '+%Y-%m-%d %H:%M:%S'))"
+# Remember exactly which bytes this run is about to execute. A cargo
+# build/check/clippy running concurrently shares `target/`, and it will swap
+# this file out MID-RUN — the fixture then fails with something like
+# `Method not found: runtime.agents.list`, which reads exactly like the
+# handler was never registered, i.e. like the defect this fixture exists to
+# catch. Measured once: a concurrent `cargo clippy --workspace --all-targets`
+# restored an OLDER artifact whose boot log printed `rows_filled=` where this
+# tree's `projection_reconciler` prints `holes_filled=`.
+#
+# Pure observation — it changes nothing, it only refuses to let the swap be
+# read as a product defect (判据 §8: "I could not ask" is not "the answer is
+# no").
+BIN_STAMP="$(date -r "$BIN" '+%s')-$(wc -c <"$BIN" | tr -d ' ')"
 echo "worktree: $REPO"
 
 if [ "$STAGE" = "tui" ]; then
@@ -414,6 +427,18 @@ if [ "$STAGE" = "panel" ] && [ "$RC" = "0" ]; then
 CHECKLIST
   echo "waiting — the board stays up until Ctrl-C"
   while kill -0 "$SERVER_PID" 2>/dev/null; do sleep 5; done
+fi
+
+NOW_STAMP="$(date -r "$BIN" '+%s')-$(wc -c <"$BIN" 2>/dev/null | tr -d ' ')"
+if [ "$NOW_STAMP" != "$BIN_STAMP" ]; then
+  echo
+  echo "!!! HARNESS_BINARY_SWAPPED_MID_RUN"
+  echo "!!!   started with $BIN_STAMP, ended with $NOW_STAMP"
+  echo "!!!   Something rebuilt $BIN while this run was using it — a cargo"
+  echo "!!!   build/check/clippy sharing target/, or another worktree."
+  echo "!!!   Whatever this run reported is about TWO binaries. Re-run it"
+  echo "!!!   alone before believing any failure above."
+  RC=1
 fi
 
 say "server log tail"
