@@ -93,7 +93,14 @@ URL="ws://127.0.0.1:$GATEWAY_PORT/ws"
 al() { "$CLI" --server "$URL" "$@" 2>&1; }
 
 say "generate a baseline config"
-timeout 25 "$SERVER" start >"$QA_ROOT/gen.log" 2>&1 &
+# `--port` on the GENERATION boot. The config does not exist yet, so without
+# it this boot binds the built-in default port — and if anything already holds
+# that port (another fixture, a dev server, the operator's own daemon) the
+# process exits before writing a config at all. The symptom is
+# `no config generated at …`, which reads like a permissions or path problem;
+# the cause is one line further up the log. Binding the port this run already
+# owns makes the generation boot as isolated as the real one.
+timeout 25 "$SERVER" --port "$GATEWAY_PORT" start >"$QA_ROOT/gen.log" 2>&1 &
 GEN_PID=$!
 for _ in $(seq 1 50); do [ -f "$CONFIG" ] && break; sleep 0.5; done
 kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null
