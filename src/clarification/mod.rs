@@ -272,7 +272,7 @@ impl ClarificationRequest {
 /// Id given to the single question of [`ClarificationRequest::text`] /
 /// [`ClarificationRequest::select`]. Callers that only ever ask one thing
 /// (workflow `clarify` steps, plan approval) never need to invent one.
-pub const DEFAULT_QUESTION_ID: &str = "answer";
+const DEFAULT_QUESTION_ID: &str = "answer";
 
 // =============================================================================
 // Wire views
@@ -286,14 +286,14 @@ pub const DEFAULT_QUESTION_ID: &str = "answer";
 /// Shipping `value` too would invite a client to send it back and quietly
 /// become a second interpreter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClarificationOptionView {
+struct ClarificationOptionView {
     /// What the user reads.
-    pub label: String,
+    label: String,
     /// Why they might pick it. **This is the field whose absence made the
     /// Panel and TUI render a bare label while channels rendered
     /// `label — description`.**
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    description: Option<String>,
 }
 
 /// Wire projection of one [`ClarificationQuestion`].
