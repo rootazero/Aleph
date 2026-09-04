@@ -129,6 +129,44 @@ pub fn test_text(path: &std::path::Path, src: &str) -> String {
     cfg_test_portion(src)
 }
 
+/// The production half of a file, ASKING ITS PARENT whether the whole file is
+/// tests. The exact complement of [`test_text`], and the one a
+/// directory-walking census wants.
+///
+/// [`production_prefix`] works one file at a time, so a whole-file test module
+/// — `tests.rs`, `guard_tests.rs`, `drift_tests.rs`, `proptest_enums.rs` and
+/// the rest — carries no `#[cfg(test)]` of its own (its PARENT applies one)
+/// and comes back as 100% production. Every guard walking `src/` then scans
+/// test code as if it shipped.
+///
+/// # Why not "skip files called tests.rs"
+///
+/// Because that is the list [`test_text`] already refused to write, and its
+/// cost is measured, by the guard below, on this repo: **107** whole-file
+/// test modules under `src/`, **30 of them not named `tests.rs`** —
+/// `mock_server.rs`, `testkit.rs`, `test_utils.rs`, `census.rs`,
+/// `guard_tests.rs`, `drift_tests.rs`, `dispatchable.rs`, the `proptest_*`
+/// modules, and `config/tests/mod.rs`. A `rel.ends_with("/tests.rs")` rule
+/// sees 77 of the 107 (判据 §3: a guard's green covers the shapes it
+/// recognises, and §5: a name list only covers the day it was written).
+///
+/// Both numbers carry their predicate: "files under `src/` that
+/// `declared_as_a_test_module` resolves", at `f84ad424a` plus this round's
+/// two fixes to that function. An earlier sentence here said 104 and 19,
+/// counted by grepping `#[cfg(test)] mod X;` declaration LINES across five
+/// trees — a different population, and a smaller one precisely because the
+/// grep shared the bug the guard then found (判据 §18).
+///
+/// A parent that cannot be read answers "not a test module", so the file is
+/// scanned as an ordinary one — the pre-existing behaviour, not a new claim.
+#[must_use]
+pub fn production_text(path: &std::path::Path, src: &str) -> String {
+    if declared_as_a_test_module(path) {
+        return String::new();
+    }
+    production_prefix(src)
+}
+
 /// Whether `path`'s parent module declares it with `#[cfg(test)] mod <stem>;`.
 ///
 /// Both spellings of a parent are tried — `dir/mod.rs` for `dir/child.rs`,
@@ -138,6 +176,29 @@ pub fn test_text(path: &std::path::Path, src: &str) -> String {
 /// `src/builtin_tools/terminal.rs`). A parent that cannot be read answers
 /// `false`: the file is then scanned as an ordinary one, which is the
 /// pre-existing behaviour rather than a new claim.
+///
+/// # Three shapes, and this recognised one of them
+///
+/// A whole-file test module can be `mod x;` (a file), `pub mod x;` (any
+/// visibility), or `mod x;` where `x/` is a DIRECTORY with a `mod.rs`. The
+/// first version accepted only the first: it compared the trimmed line to the
+/// literal `"mod <stem>;"`, and for a directory module it asked for the stem
+/// of `mod.rs`, i.e. a module called `mod`. Both misses were found by
+/// `production_text_empties_whole_file_test_modules_and_only_those` the first
+/// time it ran, on `src/acp/mock_server.rs` (`pub mod`) and
+/// `src/config/tests/mod.rs` (a directory) — 判据 §3: what a guard
+/// recognises, not what its author had in mind.
+///
+/// # The visibility prefix is part of the declaration
+///
+/// The first version compared the trimmed line to the literal
+/// `"mod <stem>;"`, which is false for every `pub mod x;` — and this repo has
+/// eight of them under `#[cfg(test)]`, `src/acp/mock_server.rs` and
+/// `src/capability/census.rs` included. `census` is the one this file's OWN
+/// test suite already discusses by name ("`capability/mod.rs`, which
+/// genuinely holds a mid-file `#[cfg(test)] pub(crate) mod census;`"), so the
+/// spelling was known here and the matcher still did not accept it —
+/// 判据 §3: what a guard recognises, not what its author had in mind.
 fn declared_as_a_test_module(path: &std::path::Path) -> bool {
     let absolute;
     let path = if path.is_absolute() {
@@ -146,8 +207,22 @@ fn declared_as_a_test_module(path: &std::path::Path) -> bool {
         absolute = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
         &absolute
     };
-    let (Some(stem), Some(dir)) = (path.file_stem(), path.parent()) else {
-        return false;
+    // A directory module is named by its DIRECTORY, and its parent is one
+    // level further up: `src/config/tests/mod.rs` is `mod tests;` declared in
+    // `src/config/mod.rs`, not `mod mod;` declared in `src/config/tests/`.
+    // Without this the lookup asks for a module called `mod` and every
+    // directory-shaped test module answers "not a test module".
+    let (stem, dir) = if path.file_name().is_some_and(|n| n == "mod.rs") {
+        let dir = path.parent();
+        match (dir.and_then(std::path::Path::file_name), dir.and_then(std::path::Path::parent)) {
+            (Some(name), Some(up)) => (name.to_owned(), up),
+            _ => return false,
+        }
+    } else {
+        match (path.file_stem(), path.parent()) {
+            (Some(stem), Some(dir)) => (stem.to_owned(), dir),
+            _ => return false,
+        }
     };
     let declaration = format!("mod {};", stem.to_string_lossy());
     [dir.join("mod.rs"), dir.with_extension("rs")]
@@ -156,8 +231,32 @@ fn declared_as_a_test_module(path: &std::path::Path) -> bool {
         .any(|text| {
             cfg_test_portion(&text)
                 .lines()
-                .any(|line| line.trim() == declaration)
+                .any(|line| strip_visibility(line.trim()) == declaration)
         })
+}
+
+/// A leading `pub`, `pub(crate)`, `pub(super)` or `pub(in path)`, removed.
+///
+/// Returns the input unchanged when there is none, so a caller can compare
+/// against the bare form either way.
+fn strip_visibility(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("pub") else {
+        return line;
+    };
+    let rest = match rest.strip_prefix('(') {
+        // `pub(crate)` / `pub(super)` / `pub(in a::b)` — skip to the matching
+        // `)`. Module paths contain no nested parens, so `find` is exact.
+        Some(inner) => match inner.find(')') {
+            Some(end) => &inner[end + 1..],
+            None => return line,
+        },
+        None => rest,
+    };
+    // `pub` must be a whole word: `public_mod x;` is not a visibility.
+    match rest.strip_prefix(' ') {
+        Some(tail) => tail.trim_start(),
+        None => line,
+    }
 }
 
 /// What the production half does with a line that belongs to the test half.
@@ -1599,6 +1698,119 @@ pub fn after() {}
         let src = "let a = \"x\";\nlet b = '_';\nlet c = r#\"raw\"#;\n";
         let out = strip_comment_lines(src);
         assert_eq!(out.trim(), src.trim(), "got:\n{out}");
+    }
+
+    /// `production_text` empties a whole-file test module and leaves an
+    /// ordinary file alone — measured against THIS repo, not a fixture.
+    ///
+    /// The population is derived by reading every `#[cfg(test)] mod X;` out
+    /// of the file that declares it, so this cannot drift the way a list of
+    /// filenames would. Two things are asserted about that population,
+    /// because either alone is satisfiable by a broken implementation:
+    ///
+    ///  * every member empties — a `production_text` that returned the file
+    ///    unchanged fails here;
+    ///  * at least one member is NOT named `tests` — which is what makes the
+    ///    `rel.ends_with("/tests.rs")` rule this replaced insufficient. If
+    ///    that ever stops being true, the name rule became adequate and this
+    ///    guard is testing nothing (判据 §2).
+    ///
+    /// And the negative arm: an ordinary production file must still come back
+    /// with its code, or "everything is empty" would pass both checks above.
+    #[test]
+    fn production_text_empties_whole_file_test_modules_and_only_those() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let sources = rust_sources_under(&root);
+        assert!(
+            sources.len() > 1000,
+            "the walk found only {} files — a guard that examined nothing is \
+             green and blind",
+            sources.len()
+        );
+
+        // Every file some parent declares as `#[cfg(test)] mod <stem>;`.
+        let mut declared: std::collections::BTreeSet<String> = Default::default();
+        for (rel, text) in &sources {
+            let dir = match rel.rsplit_once('/') {
+                Some((d, leaf)) if leaf == "mod.rs" => d.to_string(),
+                Some((d, leaf)) => {
+                    // `dir.rs` is the 2018-edition parent of `dir/`.
+                    format!("{d}/{}", leaf.trim_end_matches(".rs"))
+                }
+                None => continue,
+            };
+            for line in cfg_test_portion(text).lines() {
+                let t = line.trim_start();
+                let t = t
+                    .strip_prefix("pub(crate) ")
+                    .or_else(|| t.strip_prefix("pub(super) "))
+                    .or_else(|| t.strip_prefix("pub "))
+                    .unwrap_or(t);
+                let Some(rest) = t.strip_prefix("mod ") else {
+                    continue;
+                };
+                let Some(name) = rest.strip_suffix(';') else {
+                    continue;
+                };
+                let name = name.trim();
+                if name.is_empty()
+                    || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    continue;
+                }
+                declared.insert(format!("{dir}/{name}.rs"));
+                declared.insert(format!("{dir}/{name}/mod.rs"));
+            }
+        }
+
+        let by_path: std::collections::BTreeMap<&str, &String> =
+            sources.iter().map(|(r, t)| (r.as_str(), t)).collect();
+        let mut emptied = 0usize;
+        let mut not_named_tests: Vec<&str> = Vec::new();
+        for rel in &declared {
+            let Some(text) = by_path.get(rel.as_str()) else {
+                continue;
+            };
+            let prod = production_text(std::path::Path::new(rel), text);
+            assert!(
+                prod.trim().is_empty(),
+                "{rel} is declared `#[cfg(test)] mod …;` by its parent, so its \
+                 production half is empty; production_text returned {} bytes",
+                prod.len()
+            );
+            emptied += 1;
+            if !rel.ends_with("/tests.rs") {
+                not_named_tests.push(rel.as_str());
+            }
+        }
+
+        assert!(
+            emptied > 50,
+            "only {emptied} whole-file test modules were found under src/ — \
+             the derivation broke, and an empty population passes every \
+             assertion in this test"
+        );
+        assert!(
+            !not_named_tests.is_empty(),
+            "every whole-file test module is now called `tests.rs`, so the \
+             name rule `production_text` replaced would have been adequate \
+             and this guard no longer separates them"
+        );
+        // A production file, for the negative arm.
+        let me = by_path
+            .get("src/utils/source_scan.rs")
+            .expect("this file is under the walk");
+        assert!(
+            production_text(std::path::Path::new("src/utils/source_scan.rs"), me)
+                .contains("pub fn production_text"),
+            "an ordinary file must keep its production code"
+        );
+        eprintln!(
+            "production_text: {emptied} whole-file test modules under src/, \
+             {} of them not named tests.rs (e.g. {:?})",
+            not_named_tests.len(),
+            &not_named_tests[..not_named_tests.len().min(5)]
+        );
     }
 
     /// The shared walker used by guards this round: sanity-checks it can

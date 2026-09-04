@@ -54,7 +54,7 @@ pub use vault::VaultCheck;
 #[cfg(test)]
 mod presence_discipline {
     use crate::utils::source_scan::{
-        code_text, production_code_lines, production_prefix, rust_sources_under,
+        code_text, production_code_lines, production_text, rust_sources_under,
     };
 
     /// Spellings that answer "is it there?" with `false` for BOTH "it is not
@@ -820,7 +820,9 @@ mod presence_discipline {
         let mut probe_users = 0usize;
 
         for (rel, text) in &sources {
-            let prod = code_text(&production_prefix(text));
+            // See `production_text`: whole-file test modules are invisible to
+            // the per-file `#[cfg(test)]` cut.
+            let prod = code_text(&production_text(std::path::Path::new(rel), text));
             if prod.contains("Presence::of(") || prod.contains("DirListing::of(") {
                 probe_users += 1;
             }

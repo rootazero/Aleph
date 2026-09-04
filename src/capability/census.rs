@@ -241,7 +241,8 @@
 //! round's ledger is a gap the next reader never sees.
 
 use crate::utils::source_scan::{
-    cfg_test_portion, code_text, production_prefix, rust_sources_under, strip_comment_lines,
+    cfg_test_portion, code_text, production_prefix, production_text, rust_sources_under,
+    strip_comment_lines,
 };
 
 /// One process-global container `static`, as the rule sees it.
@@ -676,7 +677,10 @@ fn take_census() -> Census {
         lazy: Vec::new(),
     };
     for (rel, text) in sources {
-        let prod = strip_comment_lines(&production_prefix(&text));
+        // `production_text`, not `production_prefix`: a whole-file test
+        // module has no `#[cfg(test)]` of its own, so the per-file cut hands
+        // this walk 100% of a test file as production (判据 §3).
+        let prod = strip_comment_lines(&production_text(std::path::Path::new(&rel), &text));
         let mut spans: Option<Vec<FnSpan>> = None;
         for line in prod.lines() {
             let Some((name, container)) = parse_static_decl(line) else {

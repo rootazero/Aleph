@@ -919,6 +919,40 @@ mod tests {
             Some(Agent::Pi),
         );
 
+        // The env bleed is not always tidy `VAR=value` tokens. This is a
+        // VERBATIM reading of `exec npx pi` on this machine: the leader is
+        // npm, the real `pi` is its child, and an exported variable whose
+        // VALUE CONTAINS SPACES has scattered bare words (`prefer`, `modern`,
+        // `like`) into the command line where a program name could sit.
+        //
+        // They are harmless for one structural reason worth stating: argv
+        // comes before the environment, so the operand is always reached
+        // first, and the walk takes THE FIRST operand rather than scanning
+        // for something that identifies. A scan would find whatever word the
+        // operator happened to put in a prompt string.
+        assert_eq!(
+            identify_agent_from_process(
+                "node",
+                Some("npm exec pi"),
+                Some(
+                    "npm exec pi ZSH_AI_PROMPT_EXTEND=Always prefer modern CLI tools \
+                     like ripgrep, fd, and bat. CLAUDE_CODE_MESSAGING_TOKEN=25c6ea90"
+                ),
+            ),
+            Some(Agent::Pi),
+        );
+        // The same bleed with no operand at all must find nothing, not the
+        // first bare word of somebody's shell prompt.
+        assert_eq!(
+            identify_agent_from_process(
+                "node",
+                Some("node"),
+                Some("node ZSH_AI_PROMPT_EXTEND=Always prefer claude over codex"),
+            ),
+            None,
+            "the first operand is the script; a scan would have found `claude`"
+        );
+
         // `env` EXECs, so the process table never shows it — the shape that
         // arrives is the script's own. Pinned because the leftover list
         // claimed `env` was unidentified and the measurement says otherwise.

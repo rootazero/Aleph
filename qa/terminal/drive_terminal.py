@@ -510,11 +510,215 @@ async def stage_cwd(c):
     )
 
 
+# --------------------------------------------------------------------------
+# real
+# --------------------------------------------------------------------------
+
+
+async def stage_real(c):
+    """A REAL agent binary, run directly and again behind a REAL `npx`.
+
+    Everything the other stages prove, they prove against `fake-claude` — a
+    bash script whose NAME is `claude`. That is one arm of
+    `normalized_program_name` (kernel name / argv0) and it is the only arm a
+    stand-in can reach by construction: a script named after an agent
+    identifies because it is named after an agent. The shapes a real install
+    has and a stand-in cannot fake are
+
+      * a `#!/usr/bin/env node` CLI whose kernel name is `node` and whose
+        script path is the only token carrying the agent's name,
+      * a CLI that rewrites `process.title`, so `argv[0]` is the title and
+        macOS bleeds the ENVIRONMENT into `cmd()` after it,
+      * a launcher (`npx`) that stays the pgrp leader while the agent runs as
+        its child.
+
+    `QA_REAL_AGENT` / `QA_REAL_AGENT_NAME` come from run.sh, which searches
+    PATH for an executable named after one of the bundled manifests and keeps
+    only one that is still alive after a few seconds. When it finds none this
+    stage is SKIPPED, loudly and with the search reported — a stage that
+    passed on a machine with no agent installed would be green for the one
+    reason that means nothing (判据 §2).
+    """
+    real = os.environ.get("QA_REAL_AGENT", "")
+    name = os.environ.get("QA_REAL_AGENT_NAME", "")
+    if not real or not name:
+        note(
+            "SKIP: no real agent binary found on PATH — "
+            f"tried: {os.environ.get('QA_REAL_AGENT_TRIED', '(not reported)')}"
+        )
+        note("this stage asserts NOTHING on this machine; it is not a pass")
+        return
+    note(f"real agent: {name} -> {real}")
+
+    # ---- 1. the real binary, run directly -------------------------------
+    direct = (await c.spawn(command="sh", cwd=f"{WORK}/spawn"))["session_id"]
+    await c.send(direct, "echo qa-real-shell\n")
+    await c.until(direct, lambda e: True, 15, "the real-agent session's first frame")
+    await c.send(direct, f"exec {real}\n")
+
+    entry, took = await c.until(
+        direct,
+        lambda e: e.get("agent") == name,
+        60,
+        f"the real `{name}` binary to be identified",
+    )
+    entry = entry or {}
+    note(f"identified after {took:.1f}s: {entry}")
+    check(
+        entry.get("agent") == name,
+        f"a REAL {name} binary is identified as {name}",
+        f"agent={entry.get('agent')!r} program={entry.get('program')!r}",
+    )
+    program = entry.get("program") or ""
+    # The program label is a string a human reads in the panel. A process
+    # title can be `npm exec claude` and a macOS command line can be
+    # `pi TERM_PROGRAM=Apple_Terminal`; neither is a program name.
+    check(
+        program and " " not in program,
+        "the PROGRAM label is one word — not a process title, not a title "
+        "with an environment variable glued to it",
+        f"program={program!r}",
+    )
+    check(
+        "=" not in program,
+        "no environment assignment reached the program label",
+        f"program={program!r}",
+    )
+
+    # ---- 2. the same binary behind a real npx ---------------------------
+    npx = os.environ.get("QA_REAL_NPX", "")
+    if not npx:
+        note("SKIP the wrapper half: no npx on PATH (or no local .bin could be staged)")
+        return
+    note(f"wrapper: npx -> {npx}")
+    wrapped = (await c.spawn(command="sh", cwd=npx))["session_id"]
+    await c.send(wrapped, "echo qa-wrapper-shell\n")
+    await c.until(wrapped, lambda e: True, 15, "the wrapper session's first frame")
+    await c.send(wrapped, f"exec npx {name}\n")
+
+    entry, took = await c.until(
+        wrapped,
+        lambda e: e.get("agent") == name,
+        90,
+        f"`npx {name}` to be identified as {name}",
+    )
+    entry = entry or {}
+    note(f"wrapper identified after {took:.1f}s: {entry}")
+    check(
+        entry.get("agent") == name,
+        f"`npx {name}` identifies as {name} — the leader is npm, the agent is "
+        "its child, and the leader's own command line is what names it",
+        f"agent={entry.get('agent')!r} program={entry.get('program')!r}",
+    )
+    program = entry.get("program") or ""
+    check(
+        program == name,
+        "the wrapper's program label is the AGENT, not `npm exec <agent>`",
+        f"program={program!r}",
+    )
+
+
+# --------------------------------------------------------------------------
+# panel
+# --------------------------------------------------------------------------
+
+
+KEEP_SESSIONS = False
+
+
+async def stage_panel(c):
+    """Set the board for the BROWSER half, then leave it standing.
+
+    Tabs, agent-panel row click, paste and cursor visibility are the four
+    behaviours with unit tests and no metal. Three of them cannot be reached
+    from the wire at all:
+
+      * a tab TITLE is a rendering of a row this fixture can already assert;
+        what is unproven is that the rendering happens,
+      * "Cmd+V is left to the browser" is a claim ABOUT THE BROWSER, and no
+        unit test has one,
+      * the cursor is a rect painted on a `<canvas>`, so its absence is a
+        pixel fact.
+
+    So this stage does what `qa/canvas` does: it builds the state the
+    checklist needs and stops, and `run.sh` prints the checklist and waits.
+    The sessions are deliberately NOT closed on exit.
+
+    The board:
+      * `agent`   spawned as `sh`, then runs an agent — its tab must NOT read
+                  `sh`, which is the phase-1 defect's exact shape;
+      * `plain`   spawned as `sh` and left alone — the falsifier, so a tab
+                  strip that titled everything `claude` cannot pass.
+    """
+    global KEEP_SESSIONS
+    KEEP_SESSIONS = True
+
+    real = os.environ.get("QA_REAL_AGENT", "")
+    name = os.environ.get("QA_REAL_AGENT_NAME", "")
+
+    agent_s = (await c.spawn(command="sh", cwd=f"{WORK}/spawn"))["session_id"]
+    plain_s = (await c.spawn(command="sh", cwd=f"{WORK}/spawn"))["session_id"]
+    await c.send(agent_s, "echo qa-panel-agent\n")
+    await c.send(plain_s, "echo qa-panel-plain\n")
+    await c.until(agent_s, lambda e: True, 15, "the agent session's first frame")
+    await c.until(plain_s, lambda e: True, 15, "the control session's first frame")
+
+    if real and name:
+        note(f"running the REAL {name} at {real}")
+        await c.send(agent_s, f"exec {real}\n")
+        expect = name
+    else:
+        note("no real agent found; falling back to the fake `claude`")
+        await c.send(agent_s, f'export PATH="{BIN_DIR}:$PATH"\n')
+        await c.send(agent_s, "claude\n")
+        expect = "claude"
+
+    entry, took = await c.until(
+        agent_s,
+        lambda e: e.get("agent") == expect,
+        60,
+        f"the agent session to be identified as {expect}",
+    )
+    entry = entry or {}
+    note(f"identified after {took:.1f}s: {entry}")
+    check(
+        entry.get("agent") == expect,
+        "the board is set: the wire already says which agent this is, so a "
+        "tab that disagrees is the PANEL's defect and not the server's",
+        f"agent={entry.get('agent')!r} program={entry.get('program')!r}",
+    )
+
+    control = await c.entry(plain_s) or {}
+    check(
+        control.get("agent") is None and control.get("program") is not None,
+        "the control session answered and named no agent",
+        f"program={control.get('program')!r} agent={control.get('agent')!r}",
+    )
+
+    # run.sh reads these back to print session-specific checklist lines.
+    board = {
+        "agent_session": agent_s,
+        "plain_session": plain_s,
+        "expected_agent": expect,
+        "expected_program": entry.get("program"),
+        "control_program": control.get("program"),
+    }
+    with open(os.environ.get("QA_PANEL_BOARD", "/dev/null"), "w", encoding="utf-8") as fh:
+        json.dump(board, fh, indent=2)
+    note(f"board: {json.dumps(board)}")
+
+
 STAGES = {
     "identify": stage_identify,
     "wait": stage_wait,
     "quiet": stage_quiet,
     "cwd": stage_cwd,
+    "real": stage_real,
+    "panel": stage_panel,
+    # Same board, different consumer: `panel` hands it to a browser, `tui`
+    # hands it to `drive_tui.py`. One setup so the two faces cannot be shown
+    # different worlds (判据 §9).
+    "tui": stage_panel,
 }
 
 
@@ -526,7 +730,9 @@ async def main():
     try:
         await STAGES[STAGE](c)
     finally:
-        for s in SPAWNED:
+        # The `panel` stage hands the board to a browser; closing its sessions
+        # here would leave the checklist with nothing to look at.
+        for s in [] if KEEP_SESSIONS else SPAWNED:
             try:
                 await c.call("pty.close", {"session_id": s}, timeout=10)
             except Exception as exc:  # noqa: BLE001 - cleanup must not mask the verdict
