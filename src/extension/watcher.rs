@@ -372,26 +372,6 @@ impl ExtensionWatcher {
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| WATCHED_EXTENSIONS.contains(&ext))
     }
-
-    /// Add a directory to watch (while running)
-    pub fn add_watch_dir(&self, dir: PathBuf) -> Result<()> {
-        let debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
-
-        if debouncer_lock.is_some() && dir.exists() {
-            // Note: We can't call watch on debouncer.watcher() because it's behind Arc<Mutex<>>
-            // For now, restart is required to add new directories
-            drop(debouncer_lock);
-            warn!(
-                dir = %dir.display(),
-                "Adding watch directory requires restart"
-            );
-            return Err(AlephError::config(
-                "Cannot add directory to running watcher. Please restart the watcher.",
-            ));
-        }
-
-        Ok(())
-    }
 }
 
 impl Drop for ExtensionWatcher {
