@@ -155,8 +155,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         // the catalogue (CLI / programmatic entry). Register
                         // it so the desktop picker shows it next time.
                         //
-                        // This is the one writer of `workspace_path` that
-                        // skips `require_directory_choice` — see the census in
+                        // This is the writer of `workspace_path` that is
+                        // EXEMPT — the census's one UNGATED writer. (The tool
+                        // face's `bind_workspace` also bypasses
+                        // `require_directory_choice`, but substitutes
+                        // `require_operator_tier`; this line substitutes
+                        // nothing.) See the census in
                         // `gateway::handlers::projects`'s module doc. Exempt
                         // because it never INTRODUCES a directory: it records
                         // the one this run is already executing in. The
