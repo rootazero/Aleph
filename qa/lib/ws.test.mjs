@@ -17,7 +17,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeFrame, unclassifiedFrameCount } from "./ws.mjs";
+import { frameDigest, normalizeFrame, unclassifiedFrameCount } from "./ws.mjs";
 
 test("event_envelope_yields_the_bus_topic", () => {
   const msg = {
@@ -71,4 +71,40 @@ test("a_recognised_envelope_leaves_the_unclassified_counter_alone", () => {
   normalizeFrame({ topic: "chat.delta", data: {} });
   normalizeFrame({ method: "stream.end", params: {} });
   assert.equal(unclassifiedFrameCount(), before);
+});
+
+// The `else` branch is not the only way to end up with no topic: an `event`
+// envelope whose `params` carries no `topic` yields null too, and that is
+// precisely the frame a fixture reads as "no frame arrived". The counter has
+// to cover the case by its RESULT (topic === null), not by the shape it
+// happened to enumerate.
+test("a_topic_less_event_envelope_counts_as_unclassified", () => {
+  const before = unclassifiedFrameCount();
+  const frame = normalizeFrame({ method: "event", params: {} });
+  assert.equal(frame.topic, null);
+  assert.equal(unclassifiedFrameCount(), before + 1);
+});
+
+// The counter is worth nothing if it is only readable in a debugger: every
+// fixture line that reports a missing frame renders it through `frameDigest`,
+// so a fifth server envelope reaches the fixture's own output as a number
+// instead of as "no frame arrived".
+test("the_failure_digest_prints_the_topics_and_the_unclassified_count", () => {
+  const frames = [
+    normalizeFrame({ method: "event", params: { topic: "team.t1.message", data: {} } }),
+    normalizeFrame({ topic: "projects.changed", data: {} }),
+  ];
+  normalizeFrame({ jsonrpc: "2.0", result: { ok: true } });
+  assert.equal(
+    frameDigest(frames),
+    `unclassified: ${unclassifiedFrameCount()}; topics: team.t1.message,projects.changed`,
+    "the count must be IN the string a failing fixture prints, not only readable from the module",
+  );
+});
+
+test("the_failure_digest_of_an_empty_tap_still_carries_the_count", () => {
+  assert.equal(
+    frameDigest([]),
+    `unclassified: ${unclassifiedFrameCount()}; topics: (none)`,
+  );
 });

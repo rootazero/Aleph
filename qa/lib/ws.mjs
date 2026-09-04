@@ -30,7 +30,7 @@
 // observe a bus `event` frame at all, so a future Python fixture that needs a
 // topic must port `normalizeFrame` first rather than assume one shape.
 
-/// Frames that matched none of the three shapes, since this module was loaded.
+/// Frames that yielded no topic at all, since this module was loaded.
 let unclassified = 0;
 
 /**
@@ -50,18 +50,40 @@ export function normalizeFrame(msg) {
   } else {
     topic = msg.topic ?? msg.method ?? null;
     data = msg.data ?? msg.params ?? null;
-    if (topic === null) {
-      unclassified += 1;
-    }
+  }
+  // Counted by the RESULT, not by the branch: an `event` envelope carrying no
+  // `topic` reaches a fixture as exactly the same silence as a shape none of
+  // the branches recognises, so counting only the `else` case would leave the
+  // guard blind to one of the two ways of producing "no frame arrived".
+  if (topic === null) {
+    unclassified += 1;
   }
   return { topic, data, raw: msg };
 }
 
 /**
- * How many frames carried neither an `event` envelope nor a `topic`/`method`
- * key. A fifth server envelope shows up here as a number a fixture can print,
- * instead of as each fixture's product-shaped lie ("no frame arrived").
+ * How many frames yielded no topic — neither an `event` envelope carrying one
+ * nor a `topic`/`method` key. Read it through `frameDigest`, which is what the
+ * fixtures print.
  */
 export function unclassifiedFrameCount() {
   return unclassified;
+}
+
+/**
+ * The failure-detail rendering of a tap: the topics that DID arrive, plus the
+ * unclassified count.
+ *
+ * This is the line that makes the counter worth keeping. Every fixture
+ * assertion that reports a missing frame renders its tap through this, so a
+ * fifth server envelope surfaces as `unclassified: N` in the fixture's own
+ * output instead of as its product-shaped lie ("no frame arrived") — a number
+ * nobody can read is a display value with no renderer.
+ */
+export function frameDigest(frames) {
+  const topics = frames.map((f) => f.topic ?? "(null)").join(",");
+  // The count comes FIRST: a caller that truncates this line (the fixtures
+  // bound their detail output) must not be able to cut off the one part that
+  // is not visible anywhere else.
+  return `unclassified: ${unclassifiedFrameCount()}; topics: ${topics || "(none)"}`;
 }

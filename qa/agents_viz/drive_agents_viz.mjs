@@ -37,7 +37,7 @@
 // what separates them is the subscription state alone.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeFrame } from "../lib/ws.mjs";
+import { frameDigest, normalizeFrame } from "../lib/ws.mjs";
 
 const [portArg, REQUEST_LOG, MODE = "claims", MODE_ARG] = process.argv.slice(2);
 const PORT = Number(portArg);
@@ -337,7 +337,7 @@ async function claims() {
   // ===== plan carriers =====================================================
   console.log("\n=== plan: one mutating scratchpad call, three carriers ===");
   const planRun = await runTurn(tui, "QA-PLAN write the checklist");
-  check(Boolean(planRun.done), "the QA-PLAN run completes", `frames: ${tui.frames.map((f) => f.topic).join(",")}`);
+  check(Boolean(planRun.done), "the QA-PLAN run completes", frameDigest(tui.frames));
   const sessionKey = planRun.sessionKey;
 
   // P1 — the live carrier: a scratchpad snapshot inside this run's
@@ -410,7 +410,7 @@ async function claims() {
       spawned.raw?.method === "event" &&
       spawned.raw?.params?.topic === TOPIC,
     "D1 an UNFILTERED connection receives run.subagent_tree spawned, double-nested",
-    show(spawned?.raw ?? tui.frames.map((f) => f.topic), 600),
+    spawned ? show(spawned.raw, 600) : frameDigest(tui.frames),
   );
   const node = spawned?.data?.node;
   check(
@@ -425,14 +425,14 @@ async function claims() {
   check(
     settled?.data?.lifecycle === "completed" && typeof settled?.data?.total_tokens === "number",
     "D3 the settled frame arrives with lifecycle=completed and a numeric total_tokens",
-    show(settled?.data ?? tui.frames.map((f) => f.topic), 600),
+    settled ? show(settled.data, 600) : frameDigest(tui.frames),
   );
 
   const done = await tui.waitFrame(
     (f) => f.topic === "stream.run_complete" && f.data?.run_id === started.run_id,
     120_000,
   );
-  check(Boolean(done), "the delegation run completes", tui.frames.map((f) => f.topic).join(","));
+  check(Boolean(done), "the delegation run completes", frameDigest(tui.frames));
 
   // D4 / D5 — same frames, decided by subscription state alone. Settle-time
   // ordering across sockets is not guaranteed, so give the subscribed socket
@@ -442,7 +442,7 @@ async function claims() {
   check(
     panelKinds.includes("spawned") && panelKinds.includes("settled"),
     "D4 a FILTERED connection that subscribed to the topic receives spawned + settled",
-    `panel tree kinds: ${JSON.stringify(panelKinds)}; all: ${panel.frames.map((f) => f.topic).join(",")}`,
+    `panel tree kinds: ${JSON.stringify(panelKinds)}; ${frameDigest(panel.frames)}`,
   );
   const blindKinds = blind.frames.filter(isTree).map((f) => f.data?.kind);
   check(
@@ -506,7 +506,9 @@ async function marker(text, sessionKey) {
   const turn = await runTurn(c, text, sessionKey, 180_000);
   await cardTask;
   const tree = c.frames.filter(isTree).map((f) => f.data?.kind);
-  console.log(`run ${turn.runId} ${turn.done ? turn.done.topic : "DID NOT COMPLETE"}; tree frames: ${JSON.stringify(tree)}`);
+  console.log(
+    `run ${turn.runId} ${turn.done ? turn.done.topic : "DID NOT COMPLETE"}; tree frames: ${JSON.stringify(tree)}; ${frameDigest(c.frames)}`,
+  );
   c.close();
   process.exit(turn.done ? 0 : 1);
 }

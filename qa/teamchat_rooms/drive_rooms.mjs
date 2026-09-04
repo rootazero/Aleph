@@ -22,7 +22,7 @@
 // the assertions pick.
 import fs from "node:fs";
 import os from "node:os";
-import { normalizeFrame } from "../lib/ws.mjs";
+import { frameDigest, normalizeFrame } from "../lib/ws.mjs";
 
 const [portArg, WORKSPACE, REQUEST_LOG, DELETE_PATH] = process.argv.slice(2);
 const PORT = Number(portArg);
@@ -438,7 +438,7 @@ async function main() {
     check(
       Boolean(frame),
       `${who}'s socket receives Alice's message frame, attributed to her`,
-      conns[who].seen((f) => String(f.topic || "").startsWith("team.")).map((f) => f.topic).join("\n"),
+      frameDigest(conns[who].seen((f) => String(f.topic || "").startsWith("team."))),
     );
     if (frame) {
       check(
@@ -477,7 +477,7 @@ async function main() {
   check(
     Boolean(bobBubble),
     "an OBSERVED message is still broadcast live to the other human",
-    "no team.<id>.message frame with Bob as author reached Alice",
+    `no team.<id>.message frame with Bob as author reached Alice — ${frameDigest(conns.alice.frames)}`,
   );
 
   // ===== Phase 4: @-mention re-activates, and raises a card ==============
@@ -733,7 +733,7 @@ async function main() {
     check(
       Boolean(frame),
       `projects.changed: the rename reaches ${who}'s socket live`,
-      conns[who].frames.map((f) => f.topic).join(", ").slice(0, 400),
+      frameDigest(conns[who].frames).slice(0, 400),
     );
   }
 

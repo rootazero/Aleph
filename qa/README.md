@@ -699,8 +699,10 @@ born as a weakened version of another. The full prose now lives on the shared
 function, which names `src/gateway/server/handler.rs::extract_topic_and_data` as
 the producer-side owner it mirrors, so the two surviving representations are
 *linked*, not merely fewer. `node --test qa/lib/ws.test.mjs` pins all three
-shapes and an unclassified-frame counter, so a fifth server envelope surfaces as
-a number rather than as each fixture's product-shaped lie ("no frame arrived").
+shapes plus a counter of the frames that yielded NO topic, and every fixture
+assertion that reports a missing frame prints its tap through `frameDigest`,
+which renders that count — so a fifth server envelope reads as `unclassified: N`
+in the fixture output instead of as the product-shaped lie ("no frame arrived").
 Deliberately **not** shared: the `Conn` classes around it — their pending maps,
 `attempt()` return shapes and poll budgets differ per fixture, and lifting those
 would change what each one asserts. Deliberately **no** `qa/lib/ws.py`: the
