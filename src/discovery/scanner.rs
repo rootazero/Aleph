@@ -414,7 +414,7 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
     match component_name {
         "agents" => Some(AGENT_FILE),
         "skills" => Some(SKILL_FILE),
-        // plugins use has_plugin_manifest() via discover_plugins()
+        // plugins use has_plugin_manifest() via discover_plugins_with_extra()
         _ => None,
     }
 }
