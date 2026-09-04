@@ -11,11 +11,12 @@
 //!
 //! Orphan reclamation: an asset lands BEFORE the op that references it
 //! (`asset.put` → `canvas.apply`), so "unreferenced" alone is not "garbage".
-//! [`CanvasStore::sweep_orphan_assets`] therefore only reaps unreferenced
-//! files whose mtime is older than [`ORPHAN_GRACE`] — the window that keeps
-//! the put→apply race from eating a just-uploaded asset — and a dedupe hit
-//! in `put_asset` re-touches the file so a re-referenced old asset re-arms
-//! the same window.
+//! Reaping only removes unreferenced files whose mtime is older than
+//! [`ORPHAN_GRACE`] — the window that keeps the put→apply race from eating a
+//! just-uploaded asset — and a dedupe hit in `put_asset` re-touches the file
+//! so a re-referenced old asset re-arms the same window. The actual sweep
+//! runs in-apply (still inside the per-canvas critical section); the unit
+//! tests below exercise that path through real `apply` calls.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -227,31 +228,10 @@ impl CanvasStore {
         }
     }
 
-    /// Reap unreferenced assets older than [`ORPHAN_GRACE`]; returns how many
-    /// were removed. Takes the canvas's write lock so the referenced set
-    /// cannot go stale mid-sweep (an apply adding a reference to an old
-    /// asset either commits before the sweep reads the doc, or waits).
-    pub async fn sweep_orphan_assets(&self, id: &str) -> Result<usize, CanvasError> {
-        Self::checked_id(id)?;
-        let mut guard = self.locks.lock(id, self.doc_path(id)).await?;
-        let doc = guard
-            .existing_mut()
-            .ok_or_else(|| CanvasError::NotFound(format!("canvas {id}")))?;
-        let referenced: HashSet<String> = doc
-            .shapes
-            .iter()
-            .flat_map(|s| s.asset_ids())
-            .map(str::to_string)
-            .collect();
-        let removed = self.sweep_assets_with(id, &referenced).await?;
-        drop(guard);
-        Ok(removed)
-    }
-
     /// The sweep body, given an already-computed referenced set. Callers hold
-    /// the canvas's write lock ([`Self::sweep_orphan_assets`] and `apply`'s
-    /// in-passing sweep, which reuses the set from the batch it just
-    /// committed while still inside the critical section).
+    /// the canvas's write lock (`apply`'s in-passing sweep, which reuses the
+    /// set from the batch it just committed while still inside the
+    /// critical section).
     pub(super) async fn sweep_assets_with(
         &self,
         id: &str,
@@ -508,136 +488,6 @@ mod tests {
             matches!(err, CanvasError::NotFound(_)),
             "a well-formed id that hits nothing is NotFound: {err:?}"
         );
-        drop(dir);
-    }
-
-    #[tokio::test]
-    async fn sweep_spares_young_orphans_and_reaps_old_ones() {
-        let (dir, store, id) = store_with_canvas().await;
-        let young = store.put_asset(&id, PNG, b"young orphan").await.unwrap();
-        let old = store.put_asset(&id, PNG, b"old orphan").await.unwrap();
-        let assets = dir.path().join(&id).join("assets");
-        age_past_grace(&assets.join(&old));
-
-        let removed = store.sweep_orphan_assets(&id).await.unwrap();
-        assert_eq!(removed, 1, "exactly the aged orphan goes");
-        assert!(!assets.join(&old).exists(), "the old orphan is reaped");
-        assert!(
-            assets.join(&young).exists(),
-            "the young orphan sits inside the put->apply grace window"
-        );
-        drop(dir);
-    }
-
-    #[tokio::test]
-    async fn sweep_never_touches_a_referenced_asset_however_old() {
-        let (dir, store, id) = store_with_canvas().await;
-        let by_image = store.put_asset(&id, PNG, b"in an image").await.unwrap();
-        let by_ref = store.put_asset(&id, PNG, b"an ai reference").await.unwrap();
-        let doc = store.get(&id).await.unwrap();
-        store
-            .apply(
-                &id,
-                doc.revision,
-                vec![
-                    upsert_image("i1", &by_image),
-                    upsert_ai_frame("f1", vec![by_ref.clone()]),
-                ],
-                None,
-            )
-            .await
-            .unwrap();
-        let assets = dir.path().join(&id).join("assets");
-        age_past_grace(&assets.join(&by_image));
-        age_past_grace(&assets.join(&by_ref));
-
-        let removed = store.sweep_orphan_assets(&id).await.unwrap();
-        assert_eq!(removed, 0, "referenced assets are never orphans");
-        assert!(assets.join(&by_image).exists());
-        assert!(assets.join(&by_ref).exists(), "AiImageFrame refs count too");
-        drop(dir);
-    }
-
-    #[tokio::test]
-    async fn a_dedup_re_put_renews_the_grace_window() {
-        let (dir, store, id) = store_with_canvas().await;
-        let asset = store.put_asset(&id, PNG, b"revived").await.unwrap();
-        let path = dir.path().join(&id).join("assets").join(&asset);
-        age_past_grace(&path);
-
-        // The re-put dedupes — and must re-arm the grace window, or the
-        // put -> sweep -> apply interleaving lands a dangling reference.
-        let again = store.put_asset(&id, PNG, b"revived").await.unwrap();
-        assert_eq!(again, asset);
-        let removed = store.sweep_orphan_assets(&id).await.unwrap();
-        assert_eq!(removed, 0, "a just-re-put asset is not an old orphan");
-        assert!(path.exists());
-        drop(dir);
-    }
-
-    #[tokio::test]
-    async fn apply_sweeps_old_orphans_in_passing() {
-        let (dir, store, id) = store_with_canvas().await;
-        let orphan = store.put_asset(&id, PNG, b"stale").await.unwrap();
-        let kept = store.put_asset(&id, PNG, b"kept").await.unwrap();
-        let assets = dir.path().join(&id).join("assets");
-        age_past_grace(&assets.join(&orphan));
-        age_past_grace(&assets.join(&kept));
-
-        // No explicit sweep: the apply itself reaps the aged orphan, and the
-        // batch's OWN reference (added in this very apply) is honored — the
-        // referenced set is the committed document's, not the pre-apply one.
-        let doc = store.get(&id).await.unwrap();
-        store
-            .apply(&id, doc.revision, vec![upsert_image("i1", &kept)], None)
-            .await
-            .unwrap();
-        assert!(!assets.join(&orphan).exists(), "apply sweeps in passing");
-        assert!(assets.join(&kept).exists(), "just-referenced survives");
-
-        // And the apply that DROPS the reference reaps it in the same
-        // breath: the file's aged mtime is already past grace, and this
-        // apply's own sweep runs against the just-committed (empty)
-        // reference set.
-        let doc = store.get(&id).await.unwrap();
-        store
-            .apply(
-                &id,
-                doc.revision,
-                vec![CanvasOp::DeleteShape { id: "i1".into() }, upsert_note("n1")],
-                None,
-            )
-            .await
-            .unwrap();
-        assert!(!assets.join(&kept).exists(), "a dropped reference orphans");
-        drop(dir);
-    }
-
-    #[tokio::test]
-    async fn a_stray_file_in_the_assets_dir_is_left_alone() {
-        let (dir, store, id) = store_with_canvas().await;
-        // Make the assets dir exist the normal way, then plant a stranger.
-        store.put_asset(&id, PNG, b"real").await.unwrap();
-        let assets = dir.path().join(&id).join("assets");
-        let stray = assets.join("README.txt");
-        std::fs::write(&stray, "not ours").unwrap();
-        age_past_grace(&stray);
-
-        let removed = store.sweep_orphan_assets(&id).await.unwrap();
-        assert_eq!(removed, 0);
-        assert!(
-            stray.exists(),
-            "a name we could not have minted is not ours to delete"
-        );
-        drop(dir);
-    }
-
-    #[tokio::test]
-    async fn sweep_on_a_missing_canvas_is_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CanvasStore::new(dir.path().to_path_buf());
-        let err = store.sweep_orphan_assets("cv-nope").await.unwrap_err();
-        assert!(matches!(err, CanvasError::NotFound(_)));
         drop(dir);
     }
 }
