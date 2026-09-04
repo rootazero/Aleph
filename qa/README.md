@@ -685,6 +685,23 @@ the pins are in the environment (`browser_managed` needs two, for a
 playwright-cli whose session store is HOME-scoped); only the process-wide
 `export HOME=` is refused.
 
+**The frame envelope has exactly one reader: `qa/lib/ws.mjs::normalizeFrame`.**
+Four Node drivers each held a byte-identical copy of it, and what had already
+decayed was the *comment*: one carried the three-shape list plus the incident it
+cost, one a two-line abbreviation with both dropped, two nothing at all — a copy
+born as a weakened version of another. The full prose now lives on the shared
+function, which names `src/gateway/server/handler.rs::extract_topic_and_data` as
+the producer-side owner it mirrors, so the two surviving representations are
+*linked*, not merely fewer. `node --test qa/lib/ws.test.mjs` pins all three
+shapes and an unclassified-frame counter, so a fifth server envelope surfaces as
+a number rather than as each fixture's product-shaped lie ("no frame arrived").
+Deliberately **not** shared: the `Conn` classes around it — their pending maps,
+`attempt()` return shapes and poll budgets differ per fixture, and lifting those
+would change what each one asserts. Deliberately **no** `qa/lib/ws.py`: the
+Python fixtures as a family read only the single-shape `stream.*` JSON-RPC
+notifications and never observe a bus `event` frame at all, so a future Python
+fixture that needs a topic must port `normalizeFrame` first.
+
 **Debug builds need `RUST_MIN_STACK=268435456` (256 MB).** The 32 MB floor in
 `main.rs::worker_stack_size` is not enough for a debug-built agent run with
 tools; it aborts with `tokio-rt-worker has overflowed its stack`. `run.sh`

@@ -36,6 +36,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { normalizeFrame } from "../lib/ws.mjs";
 
 const [portArg, QA_ROOT, CMD = "help", ...REST] = process.argv.slice(2);
 const PORT = Number(portArg);
@@ -109,16 +110,7 @@ class Conn {
         this.pending.delete(msg.id);
         return;
       }
-      let topic = null;
-      let data = null;
-      if (msg.method === "event" && msg.params) {
-        topic = msg.params.topic ?? null;
-        data = msg.params.data ?? msg.params;
-      } else {
-        topic = msg.topic ?? msg.method ?? null;
-        data = msg.data ?? msg.params ?? null;
-      }
-      this.frames.push({ topic, data, raw: msg });
+      this.frames.push(normalizeFrame(msg));
     });
     return this.rpc("connect", params);
   }
