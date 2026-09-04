@@ -146,6 +146,46 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
 - **探测答不出时退回 shell 标签**：那是**更弱的答案，不是错的答案**（`pty.spawn` 带显式 `command` 时
   agent 名字确实在那里）；`program` 保持 `None`——「我们没能看」和「那里跑的是 shell」是两句话。
 
+#### 3.2.1 包装器：一条 launcher 链，不是一次进程树遍历
+
+一条命令行是**一串 launcher 最后落到一个程序**。`agent_token_in_cmdline` 按这条链走：每一步要么
+自己就是 agent（结束），要么把活交给下一个 launcher（`sudo` / `npx` / `uv tool run` …），要么是个
+通用运行时、它的脚本就是那个程序（`node …/cli.js`）。链**有界**（`MAX_LAUNCHER_LAYERS = 3`），
+越界答 `None`。
+
+下表每一行都是 **2026-09-05 在真机上量出来的**，不是推的：用 `pty.fork` 起进程、`tcgetpgrp` 取前台
+进程组组长、再对那个 pid 读 `sysinfo` 的 `name` / `cmd[0]` / `cmd.join(" ")`——正是
+`foreground::fact_for_pid` 收集的同三个事实。
+
+| 起法 | 组长的 `name` / `argv0` / `cmdline` | 修前 | 修后 |
+|---|---|---|---|
+| 叫 `claude` 的 shell 脚本 | `bash` / `/bin/bash` / `/bin/bash …/claude` | ✅ `claude` | ✅ |
+| `env FOO=1 claude` | 同上——**`env` 会 exec，进程表里根本不出现** | ✅ `claude` | ✅ |
+| 真 `pi`（node `cli.js`，设了 `process.title`） | `node` / `pi` / `pi TERM_PROGRAM=Apple_Terminal` | ✅ `pi` | ✅ |
+| `claude-code`（node bin 软链） | `node` / `node` / `node …/bin/claude-code` | ✅ `claude` | ✅ |
+| **`node …/node_modules/@anthropic-ai/claude-code/cli.js`** | `node` / `node` / `node …/cli.js` | ❌ `node` / `None` | ✅ `claude-code` / Claude |
+| **`npx claude`** | `node` / `npm exec claude` / `npm exec claude TERM_PROGRAM=… SHELL=…` | ❌ `"npm exec claude"` / `None` | ✅ `claude` / Claude |
+| **`uvx <agent>`** | `uv` / `/opt/homebrew/bin/uv` / `uv tool uvx --offline --from <pkg> <cmd>` | ❌ `uv` / `None` | ✅ `<cmd>` |
+| `sudo claude` | 本机无免密 sudo，**未量到**；按 launcher 表处理 | ❌ | ✅（单测形状） |
+
+三个由此定下来的事：
+
+1. **`env` 从来就是好的。** 遗留清单把它列进「识别不了」是错的——它 exec 掉自己，进程表里没有它。
+2. **`npx` / `uvx` 的 agent 是组长的孩子**，和组长同一个 pgid。所以 `engine.rs` 里那句
+   「Aleph 只探一个进程，`tcgetpgrp` 只给组长的 pid」**作为不移植 herdr `identify_agent_in_job`
+   打分半边的理由是假的**（判据 §1：一句承重的注释错了）。仍然不移植，但理由换了：**量到的每一个
+   包装器都把自己的 operand 写在组长自己的命令行里**，而后代遍历要付一次**全量进程表刷新**——
+   每一次探测、每一个闲置 shell 都要付（`deepest_newest_descendant` 的文档说了这就是它是第二选择的
+   原因）。哪天出现一个把 operand 藏起来的包装器，那时候才需要它。
+3. **macOS 的 `cmd()` 会把环境变量渗进 argv。** 一个重写了标题的进程（每个 Node CLI 都会）让
+   `sysinfo` 从 argv 区读进 env 区，所以真实读数是 `pi TERM_PROGRAM=Apple_Terminal` 和
+   `npm exec claude TERM_PROGRAM=… SHELL=…`。因此 (a) `VAR=value` 形状的 token 没有资格被当成
+   程序名，(b) `normalized_program_name` 的兜底取 `argv[0]` 的**第一个空白分隔词**——程序名不含空格，
+   把整条标题（或粘着环境变量的标题）交给面板是**一个具体的谎**（判据 §17）。
+
+**这张表只覆盖它列出的那些形状**（判据 §18）：`launcher_spec` 是一份名单，名单只覆盖立法当天的世界
+（判据 §5）。不认识的包装器答 `None` 并把包装器本身报成 program——弱答案，不是错答案。
+
 | 常量 | 值 | 所有者 | 说明 |
 |---|---|---|---|
 | `IDLE_HOLD_MS` | 700 | `src/gateway/runtime/mod.rs` | Working→Idle 的去抖。herdr 用**计数**确认（`src/pane.rs:727` 缩短轮询让确认累积），Aleph **刻意只用墙钟**：这里的帧只在屏幕变化时存在，一个跑完就安静下来的 agent 不再产帧，数一个不保证会到的再观察等于让它永远卡在 Working |

@@ -307,6 +307,15 @@ pub fn identify_agent_from_process(
 ///
 /// With nothing recognised it falls back to `argv[0]`'s basename, or the
 /// kernel's name when there is no `argv[0]`. Never empty, never a guess.
+///
+/// That fallback takes the FIRST WHITESPACE-DELIMITED WORD of `argv[0]`,
+/// because on macOS `argv[0]` is not always argv. A process that rewrites its
+/// title — every Node CLI does — leaves `sysinfo` reporting the title in
+/// `argv[0]`'s place, so the measured values are `"npm exec claude"` for
+/// `npx claude` and `"pi TERM_PROGRAM=Apple_Terminal"` for `pi`. A program
+/// name never contains a space; handing the panel a whole title, or one with
+/// an environment variable glued to it, is a specific lie about what is
+/// running (判据 §17).
 #[must_use]
 pub fn normalized_program_name(name: &str, argv0: Option<&str>, cmdline: Option<&str>) -> String {
     let effective = argv0.unwrap_or(name);
@@ -318,30 +327,214 @@ pub fn normalized_program_name(name: &str, argv0: Option<&str>, cmdline: Option<
     if let Some(token) = cmdline.and_then(agent_token_in_cmdline) {
         return path_basename(token).to_owned();
     }
-    path_basename(effective).to_owned()
+    path_basename(first_word(effective)).to_owned()
+}
+
+/// The first whitespace-delimited word, or the whole string when it has none.
+/// Never empty for a non-empty input, so [`normalized_program_name`] keeps
+/// its "never empty" promise.
+fn first_word(value: &str) -> &str {
+    value.split_whitespace().next().unwrap_or(value)
 }
 
 /// The token of a command line that names an agent, if any.
 ///
-/// Two tokens are consulted and no more: the command itself, and — only when
-/// that command is a generic runtime or shell — the first non-flag token
-/// after it, which is the script such a runtime runs.
+/// A command line is a CHAIN OF LAUNCHERS ending in one program. Each step
+/// either names an agent (done), hands off to the next launcher (`sudo`,
+/// `npx`, `uv tool run`, …), or is a generic runtime whose script is the
+/// program (`node …/cli.js`). Every shape below was read off a real PTY
+/// through `tcgetpgrp` + `sysinfo` on 2026-09-05 — see
+/// `docs/reference/TERMINAL_RUNTIME.md` for the measurement:
 ///
-/// Scanning every token instead would answer a different question (判据 §5):
-/// `vim claude.rs` and `git commit -m claude` both contain an agent's name
-/// without an agent running, and a program the panel names wrongly is worse
-/// than one it names not at all (判据 §17).
+/// ```text
+/// npm exec claude TERM_PROGRAM=…               (`npx claude`)  -> claude
+/// /opt/homebrew/bin/uv tool uvx --from X agent (`uvx agent`)   -> agent
+/// sudo claude                                                  -> claude
+/// /bin/bash /usr/local/bin/claude              (a shell script) -> claude
+/// node /…/node_modules/@anthropic-ai/claude-code/cli.js         -> claude-code
+/// ```
+///
+/// ⚠️ Two things this deliberately is NOT.
+///
+/// It is not a scan of every token (判据 §5): `vim claude.rs` and
+/// `git commit -m claude` both carry an agent's name with no agent running,
+/// and a program the panel names wrongly is worse than one it names not at
+/// all (判据 §17). Only a token in OPERAND position of a launcher named here
+/// is ever consulted, `sudo -u claude systemctl …` included — `-u`'s value is
+/// skipped as a value, not read as a program.
+///
+/// It is not a walk of the process TREE either. For `npx` and `uvx` the agent
+/// really does run as a child of the pgrp leader, so ranking the whole
+/// foreground job (herdr's `identify_agent_in_job` scoring half) would also
+/// answer them. It is not ported because every wrapper measured names its
+/// operand in the LEADER's own command line, and a descendant walk costs a
+/// full process-table refresh on every probe of every idle shell —
+/// `gateway::pty::foreground::deepest_newest_descendant` says why that is
+/// second choice. A wrapper that hides its operand would need it; none does.
 fn agent_token_in_cmdline(cmdline: &str) -> Option<&str> {
-    let mut tokens = cmdline.split_whitespace();
-    let command = tokens.next()?;
-    if identify_agent(command).is_some() {
-        return Some(command);
-    }
-    if !is_generic_runtime_or_shell(command) {
+    let tokens: Vec<&str> = cmdline.split_whitespace().collect();
+    let mut cursor = 0usize;
+    // Bounded so a pathological command line cannot walk far: `sudo npx
+    // claude` is two hand-offs, and nothing measured needs more than two.
+    // `..=` because the budget counts HAND-OFFS — reading the program the
+    // last hand-off pointed at needs one pass beyond them.
+    for _ in 0..=MAX_LAUNCHER_LAYERS {
+        let command = *tokens.get(cursor)?;
+        if identify_agent(command).is_some() {
+            return Some(command);
+        }
+        if let Some(token) = package_path_agent_token(command) {
+            return Some(token);
+        }
+        if let Some(next) = launcher_operand_index(command, &tokens, cursor) {
+            cursor = next;
+            continue;
+        }
+        if is_generic_runtime_or_shell(command) {
+            // A runtime's script is positional and unambiguous: it IS the
+            // program, so the chain ends here whether or not it names an
+            // agent. Checked before the launcher branch would have been
+            // wrong for `bun x claude`, which is why the launcher branch
+            // runs first and declines when its subcommand is absent.
+            let script = tokens[cursor + 1..].iter().copied().find(|t| is_operand(t))?;
+            return identify_agent(script)
+                .map(|_| script)
+                .or_else(|| package_path_agent_token(script));
+        }
         return None;
     }
-    let script = tokens.find(|t| !t.starts_with('-'))?;
-    identify_agent(script).is_some().then_some(script)
+    None
+}
+
+/// How many launcher hand-offs are followed before giving up. Spendable in
+/// full (`sudo nice npx claude`) and refused on the next one — see
+/// `the_launcher_chain_is_bounded`, because an unreachable bound and an
+/// absent one read the same (判据 §2).
+const MAX_LAUNCHER_LAYERS: usize = 3;
+
+/// How far past a launcher its operand is looked for. A launcher with more
+/// flags than this between it and its operand answers `None`, which is the
+/// fail-closed direction (判据 §8).
+const MAX_LAUNCHER_OPERAND_SCAN: usize = 12;
+
+/// Whether a token can be a program name — not a flag, and not one of the
+/// `VAR=value` assignments that `env` takes.
+///
+/// The assignment case is not hypothetical tidiness. On macOS a process that
+/// rewrites its title (every Node CLI does) leaves `sysinfo::cmd()` reading
+/// past the argv region into the environment, so real measured command lines
+/// are `pi TERM_PROGRAM=Apple_Terminal` and
+/// `npm exec claude TERM_PROGRAM=Apple_Terminal SHELL=/bin/zsh`. Without this
+/// an environment variable would be eligible to be named as the program.
+fn is_operand(token: &str) -> bool {
+    !token.starts_with('-') && !is_env_assignment(token)
+}
+
+/// `NAME=value`, where `NAME` is a shell-legal variable name. Requiring a
+/// legal name is what keeps a path that happens to contain `=` an operand.
+fn is_env_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The index of `command`'s operand — the program it was asked to run — or
+/// `None` when `command` is not a launcher, or is one whose subcommand this
+/// invocation does not use (`bun script.ts` is the runtime, `bun x claude`
+/// the launcher).
+fn launcher_operand_index(command: &str, tokens: &[&str], cursor: usize) -> Option<usize> {
+    let (subcommands, value_flags) = launcher_spec(command)?;
+    let mut i = cursor + 1;
+    // A launcher with no subcommand vocabulary takes its operand directly;
+    // one with a vocabulary must actually spend a word from it, so a runtime
+    // that shares its name (`bun`) is not mistaken for the launcher.
+    let mut spent_subcommand = subcommands.is_empty();
+    let limit = (cursor + MAX_LAUNCHER_OPERAND_SCAN).min(tokens.len().saturating_sub(1));
+    while i <= limit {
+        let token = tokens[i];
+        if value_flags.contains(&token) {
+            // The flag AND the value it consumes, so `sudo -u claude cmd`
+            // never reports the username as the program (判据 §17).
+            i += 2;
+        } else if token.starts_with('-') || is_env_assignment(token) {
+            i += 1;
+        } else if subcommands.contains(&token) {
+            spent_subcommand = true;
+            i += 1;
+        } else {
+            return spent_subcommand.then_some(i);
+        }
+    }
+    None
+}
+
+/// The launchers this file knows, as (subcommand vocabulary, flags that eat
+/// the token after them).
+///
+/// A roster, and rosters only cover the world on the day they were written
+/// (判据 §5) — an unknown launcher answers `None`, which reports the launcher
+/// as the program rather than guessing. `env` is on it for completeness only:
+/// measured, `env` EXECs its operand, so the process table never shows `env`
+/// at all and the shape arrives here already resolved.
+fn launcher_spec(command: &str) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    const SUDO_VALUE_FLAGS: &[&str] = &[
+        "-u", "-g", "-p", "-C", "-r", "-t", "-U", "-h", "--user", "--group", "--prompt",
+        "--close-from", "--role", "--type", "--host", "--other-user",
+    ];
+    let name = normalized_agent_lookup_name(path_basename(command));
+    Some(match name.as_str() {
+        "sudo" | "doas" => (&[] as &[&str], SUDO_VALUE_FLAGS),
+        "env" => (&[], &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"]),
+        "nice" | "ionice" => (&[], &["-n", "-c", "--adjustment", "--class"]),
+        "stdbuf" => (&[], &["-i", "-o", "-e", "--input", "--output", "--error"]),
+        "nohup" | "setsid" | "command" | "time" | "timeout" | "chrt" => (&[], &[]),
+        "npx" | "pnpx" | "bunx" => (&[], &["-p", "--package", "-c", "--call"]),
+        "npm" | "pnpm" => (
+            &["exec", "run", "run-script", "dlx", "x"],
+            &["-w", "--workspace", "-c", "--call", "--package", "-p"],
+        ),
+        "yarn" => (&["dlx", "exec", "run"], &["--package", "-p"]),
+        "bun" => (&["x", "run"], &[]),
+        "uvx" | "pipx" => (
+            &["run"],
+            &["--from", "--with", "-p", "--python", "--index", "--spec"],
+        ),
+        "uv" => (
+            &["tool", "run", "uvx"],
+            &["--from", "--with", "-p", "--python", "--index"],
+        ),
+        _ => return None,
+    })
+}
+
+/// The package directory of a script path, when that path lies inside an
+/// installed package tree and the package names an agent.
+///
+/// `node /…/node_modules/@anthropic-ai/claude-code/cli.js` runs an agent
+/// every visible token of which is generic: the kernel says `node`, the
+/// script's basename normalises to `cli`. The agent's name is the PACKAGE —
+/// and a package directory is written by the publisher, which is the answer
+/// to "这段字是谁写的" (判据 §5). Only components under an installed package
+/// root are consulted, so a working copy at `~/claude/index.js` and a home
+/// directory belonging to a user called `claude` are both left alone.
+///
+/// The LAST package root wins: in `…/node_modules/a/node_modules/b/cli.js`
+/// the code that runs is published by `b`.
+fn package_path_agent_token(script: &str) -> Option<&str> {
+    const PACKAGE_ROOTS: [&str; 3] = ["node_modules", "site-packages", "dist-packages"];
+    let components: Vec<&str> = script.split(['/', '\\']).collect();
+    let root = components
+        .iter()
+        .rposition(|c| PACKAGE_ROOTS.contains(c))?;
+    components[root + 1..]
+        .iter()
+        .copied()
+        .find(|c| identify_agent(c).is_some())
 }
 
 /// Ported verbatim from herdr `src/detect/mod.rs:696-711`. A program on this
@@ -636,6 +829,199 @@ mod tests {
     /// running (判据 §5 — a scan whose corpus is "every token" answers a
     /// different question than the one asked). Only the command, and — when
     /// that command is a generic runtime — the script it runs, are consulted.
+    /// Every launcher shape below is a TRANSCRIPT, not a guess: each was read
+    /// off a real PTY on 2026-09-05 by spawning the command under `pty.fork`,
+    /// asking `tcgetpgrp` for the foreground pgrp leader, and printing that
+    /// pid's `sysinfo` `name` / `cmd[0]` / `cmd.join(" ")` — the exact three
+    /// facts `gateway::pty::foreground::fact_for_pid` collects. Before this,
+    /// every one of them answered `None` with a real `program`, which is
+    /// fail-closed but is not identification.
+    #[test]
+    fn measured_launcher_shapes_identify_the_agent_they_launched() {
+        // `npx claude`. npx re-execs as npm, so the leader IS the wrapper and
+        // the agent runs as its child; `TERM_PROGRAM=…` is the macOS
+        // title-rewrite bleed, present in the real reading.
+        assert_eq!(
+            identify_agent_from_process(
+                "node",
+                Some("npm exec claude"),
+                Some("npm exec claude TERM_PROGRAM=Apple_Terminal SHELL=/bin/zsh"),
+            ),
+            Some(Agent::Claude),
+            "`npx claude`: the leader's own command line names its operand"
+        );
+        // …and the label the panel prints must be the program, not the title.
+        assert_eq!(
+            normalized_program_name(
+                "node",
+                Some("npm exec claude"),
+                Some("npm exec claude TERM_PROGRAM=Apple_Terminal SHELL=/bin/zsh"),
+            ),
+            "claude",
+        );
+
+        // `uvx <agent>`: leader is `uv`, two subcommand words then flags.
+        // The token shape is the verbatim reading of `uvx --offline --from
+        // graphifyy graphify-mcp`; only the operand is substituted, because
+        // no agent on this machine installs as a uv tool. So this pins the
+        // SHAPE from the metal and the name from the table — which is the
+        // whole claim, and is not the same as having run an agent this way.
+        assert_eq!(
+            identify_agent_from_process(
+                "uv",
+                Some("/opt/homebrew/bin/uv"),
+                Some("/opt/homebrew/bin/uv tool uvx --offline --from pkg codex"),
+            ),
+            Some(Agent::Codex),
+            "`uvx`: `--from`'s value is a value, the operand is the operand"
+        );
+
+        // `sudo claude` — and the counter-case in the same breath.
+        assert_eq!(
+            identify_agent_from_process("sudo", Some("sudo"), Some("sudo claude --resume")),
+            Some(Agent::Claude),
+        );
+        assert_eq!(
+            identify_agent_from_process(
+                "sudo",
+                Some("sudo"),
+                Some("sudo -u claude systemctl restart nginx"),
+            ),
+            None,
+            "`-u claude` is a username; naming it as the program is 判据 §17"
+        );
+
+        // A node CLI whose script name is generic: the agent's name is the
+        // published package, and nothing else in the line carries it.
+        assert_eq!(
+            identify_agent_from_process(
+                "node",
+                Some("node"),
+                Some("node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+            ),
+            Some(Agent::Claude),
+        );
+        assert_eq!(
+            normalized_program_name(
+                "node",
+                Some("node"),
+                Some("node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+            ),
+            "claude-code",
+            "the package is what is running; `cli` and `node` are both generic"
+        );
+
+        // Real `pi` on this machine: a node CLI that sets `process.title`, so
+        // the title lands in argv[0] and the environment bleeds into cmd().
+        // Already worked — pinned so it stays worked.
+        assert_eq!(
+            identify_agent_from_process("node", Some("pi"), Some("pi TERM_PROGRAM=Apple_Terminal")),
+            Some(Agent::Pi),
+        );
+
+        // `env` EXECs, so the process table never shows it — the shape that
+        // arrives is the script's own. Pinned because the leftover list
+        // claimed `env` was unidentified and the measurement says otherwise.
+        assert_eq!(
+            identify_agent_from_process(
+                "bash",
+                Some("/bin/bash"),
+                Some("/bin/bash /usr/local/bin/claude"),
+            ),
+            Some(Agent::Claude),
+        );
+    }
+
+    /// The launcher walk must not become the whole-token scan 判据 §5 warns
+    /// about. Each line here contains an agent's name and no agent.
+    #[test]
+    fn a_name_outside_operand_position_is_never_the_program() {
+        for (name, argv0, cmdline) in [
+            ("vim", "vim", "vim claude.rs"),
+            ("git", "git", "git commit -m claude"),
+            ("grep", "grep", "grep -r codex src/"),
+            // A launcher whose operand is not an agent must not keep looking.
+            ("sudo", "sudo", "sudo systemctl restart claude.service"),
+            // A package root is required: a working copy is not a package.
+            ("node", "node", "node /home/claude/project/cli.js"),
+            // A subcommand vocabulary that is never spent is not a launcher
+            // hand-off — `bun script.ts` runs a script called `script.ts`.
+            ("bun", "bun", "bun /srv/app/claude.ts"),
+        ] {
+            assert_eq!(
+                identify_agent_from_process(name, Some(argv0), Some(cmdline)),
+                None,
+                "{cmdline:?} names no running agent"
+            );
+        }
+    }
+
+    /// `bun` is both a runtime and a launcher, and which one it is depends on
+    /// the next token. Both directions, because a dispatch that only ever
+    /// takes one arm is 判据 §2.
+    #[test]
+    fn a_program_that_is_both_runtime_and_launcher_takes_both_arms() {
+        assert_eq!(
+            identify_agent_from_process("bun", Some("bun"), Some("bun x claude")),
+            Some(Agent::Claude),
+            "launcher arm: `x` is spent, `claude` is the operand — the runtime \
+             arm would have stopped at the script `x`"
+        );
+        assert_eq!(
+            identify_agent_from_process("bun", Some("bun"), Some("bun /usr/local/bin/claude")),
+            Some(Agent::Claude),
+            "runtime arm: no subcommand is spent, so the script is the program"
+        );
+        // Neither arm recognises anything, and the documented fallback holds:
+        // argv[0]'s basename. This function answers "which agent", so a
+        // non-agent script is not renamed — widening it to "which program"
+        // would be a different question with a different blast radius.
+        assert_eq!(
+            normalized_program_name("bun", Some("bun"), Some("bun /srv/app/serve.ts")),
+            "bun",
+        );
+    }
+
+    /// The chain is bounded and the bound is reachable, so "bounded" is not a
+    /// claim only a comment makes.
+    #[test]
+    fn the_launcher_chain_is_bounded() {
+        assert_eq!(
+            identify_agent_from_process("sudo", Some("sudo"), Some("sudo nice npx claude")),
+            Some(Agent::Claude),
+            "three layers is the budget and it is spendable"
+        );
+        assert_eq!(
+            identify_agent_from_process(
+                "sudo",
+                Some("sudo"),
+                Some("sudo nice nohup npx claude"),
+            ),
+            None,
+            "a fourth layer is refused rather than followed"
+        );
+    }
+
+    /// An environment variable is never eligible to be named as the program.
+    /// This is not hygiene: macOS really does report
+    /// `pi TERM_PROGRAM=Apple_Terminal` as a command line.
+    #[test]
+    fn an_environment_assignment_is_not_a_program() {
+        assert!(is_env_assignment("TERM_PROGRAM=Apple_Terminal"));
+        assert!(is_env_assignment("SHELL=/bin/zsh"));
+        assert!(is_env_assignment("X="));
+        assert!(!is_env_assignment("=value"), "no name is not an assignment");
+        assert!(!is_env_assignment("2FOO=x"), "a name cannot start with a digit");
+        assert!(
+            !is_env_assignment("/opt/a=b/bin/claude"),
+            "a path is an operand even when it contains `=`"
+        );
+        assert_eq!(
+            identify_agent_from_process("env", Some("env"), Some("env FOO=1 claude")),
+            Some(Agent::Claude),
+        );
+    }
+
     #[test]
     fn identify_agent_from_process_reads_node_scripts() {
         assert_eq!(
