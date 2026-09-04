@@ -28,18 +28,6 @@ impl SubscriptionManager {
         }
     }
 
-    /// Get or create a filter for a connection
-    pub async fn get_filter(&self, conn_id: &str) -> Option<TopicFilter> {
-        let subs = self.subscriptions.read().await;
-        subs.get(conn_id).cloned()
-    }
-
-    /// Set the filter for a connection
-    pub async fn set_filter(&self, conn_id: &str, filter: TopicFilter) {
-        let mut subs = self.subscriptions.write().await;
-        subs.insert(conn_id.to_string(), filter);
-    }
-
     /// Add patterns to a connection's filter
     pub async fn add_patterns(&self, conn_id: &str, patterns: Vec<String>) {
         let mut subs = self.subscriptions.write().await;
