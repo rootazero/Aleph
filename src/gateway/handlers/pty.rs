@@ -1516,17 +1516,18 @@ mod tests {
         // finding anything — a moved directory, a broken lexer, a test binary
         // built from another worktree — fails loudly instead of passing
         // vacuously.
-        const KNOWN_REACHERS: [&str; 4] = [
+        const KNOWN_REACHERS: [&str; 5] = [
             "src/gateway/handlers/pty.rs",
             "src/gateway/pty/mod.rs",
             "src/config/live_apply.rs",
-            // A WHOLE-FILE test module: the file carries no `#[cfg(test)]` of
-            // its own, its parent declares it with `#[cfg(test)] mod tests;`.
+            // WHOLE-FILE test modules: these carry no `#[cfg(test)]` of their
+            // own, their parents declare them with `#[cfg(test)] mod tests;`.
             // The census could not see this shape at all until
             // `source_scan::test_text` resolved it, and being listed here is
             // what makes a regression to that blindness loud instead of
-            // silent — the scan would simply stop finding the file.
+            // silent — the scan would simply stop finding the files.
             "src/gateway/runtime/tests.rs",
+            "src/builtin_tools/terminal/tests.rs",
         ];
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
