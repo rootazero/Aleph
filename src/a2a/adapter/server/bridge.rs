@@ -84,6 +84,59 @@ impl AgentLoopBridge {
         }
     }
 
+    /// The `TurnContext` installed around a spawned A2A streaming run.
+    ///
+    /// PR-7 / BT-D-R4-06 + BT-D-R4-07: PR-4 taught
+    /// [`crate::gateway::visibility::ambient_actor`] to fall back to
+    /// `TURN_CONTEXT`. Without this scope wrap nothing set the task-local
+    /// around the spawn, so the bridge's tool dispatch reached the actor-less
+    /// (unrestricted) arm.
+    ///
+    /// What this does NOT do — the comment that used to stand here asserted
+    /// both of the following as fact, and both were false:
+    ///
+    /// - There is no machine sentinel. `TurnContext` has no actor field for one
+    ///   to live in; the only identity it carries is `session_key`, and
+    ///   [`AgentLoopBridge::build_run_request`] pins
+    ///   `SessionKey::task("main", ...)`. So `ambient_actor()`'s third arm hands
+    ///   the literal AGENT id `"main"` to predicates that compare against USER
+    ///   ids — every one of them answers false and an A2A streaming run is
+    ///   silently DENIED, rather than being unrestricted or being a separate
+    ///   (machine) actor.
+    /// - Installing this context was not behaviour-preserving. It moved the
+    ///   streaming run OFF the unrestricted arm; "denied everywhere" is a
+    ///   behaviour change, not "today's behavior unchanged".
+    ///
+    /// [`crate::gateway::pty::session::SpawnOptions::created_by`] names the same
+    /// two-kinds-of-identity hazard correctly and is worth reading first: a
+    /// column that holds a user id everywhere else starts holding an agent id
+    /// the moment a run is the caller.
+    ///
+    /// Pinned by `a2a_streaming_run_acts_as_the_agent_id_not_a_machine_sentinel`
+    /// so the sentinel cannot be re-derived from prose.
+    ///
+    /// Promoting this to a real machine principal (a new identity kind plus an
+    /// `ambient_actor()` arm) is deliberately NOT done here — it would have zero
+    /// consumers today. Filed, not built.
+    ///
+    /// UNVERIFIED, stated so the next reader checks rather than assumes: the
+    /// synchronous `handle_message` path installs no `TURN_CONTEXT` at all, and
+    /// the two A2A faces are believed to agree only because the engine supplies
+    /// its own at dispatch.
+    fn a2a_turn_context(request: &RunRequest) -> TurnContext {
+        TurnContext {
+            session_key: request.session_key.clone(),
+            run_id: request.run_id.clone(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: None,
+            channel_tool_permissions: None,
+            unattended: true,
+            plan_gate: None,
+            side_question: false,
+        }
+    }
+
     /// Determine the `context_id`: use `session_id` if provided, otherwise `task_id`.
     fn context_id<'a>(task_id: &'a str, session_id: Option<&'a str>) -> &'a str {
         session_id.unwrap_or(task_id)
@@ -261,29 +314,9 @@ impl A2AMessageHandler for AgentLoopBridge {
         let task_id_owned = task_id.to_string();
         let context_id_owned = context_id.to_string();
 
-        // PR-7 / BT-D-R4-06 + BT-D-R4-07: build a TurnContext that carries
-        // an actor for the spawned run. PR-4 already taught ambient_actor()
-        // to fall back to TURN_CONTEXT; without this scope wrap the
-        // A2A bridge's tool dispatch hit the unrestricted arm anyway,
-        // because nothing set the task-local around the spawn. The actor
-        // here is the stable sentinel "a2a_peer" — distinct from "main"
-        // and from any human channel id, so the visibility predicates see an
-        // A2A run as belonging to a separate (machine) actor. A future PR can
-        // promote this to the authenticated peer agent id once the A2A wire
-        // carries that field; the sentinel keeps today's behavior unchanged
-        // for honest callers and stops the actor-less arm from being the only
-        // free path through visibility.
-        let a2a_turn = TurnContext {
-            session_key: request.session_key.clone(),
-            run_id: request.run_id.clone(),
-            channel_id: String::new(),
-            conversation_id: String::new(),
-            caller_role: None,
-            channel_tool_permissions: None,
-            unattended: true,
-            plan_gate: None,
-            side_question: false,
-        };
+        // What this actor actually is, and what it is NOT, is written on
+        // `a2a_turn_context` — read it before adding an identity here.
+        let a2a_turn = Self::a2a_turn_context(&request);
 
         tokio::spawn(TURN_CONTEXT.scope(
             a2a_turn,
@@ -740,6 +773,33 @@ mod tests {
             }
             other => panic!("Expected Task session key, got {:?}", other),
         }
+    }
+
+    /// The ambient actor of an A2A streaming run is the literal AGENT id
+    /// `"main"` that `build_run_request` pins — there is no machine sentinel.
+    ///
+    /// This pins the truth so the deleted `"a2a_peer"` claim cannot be
+    /// re-derived from prose: an actor comparable against USER ids is what the
+    /// visibility predicates expect, and an agent id makes every one of them
+    /// answer false. Reads the production `TurnContext` builder rather than a
+    /// re-typed literal, so dropping `a2a_turn_context`'s result would take the
+    /// assertion with it.
+    #[tokio::test]
+    async fn a2a_streaming_run_acts_as_the_agent_id_not_a_machine_sentinel() {
+        let request = AgentLoopBridge::build_run_request("task-actor", "hello");
+        let turn = AgentLoopBridge::a2a_turn_context(&request);
+
+        let actor = TURN_CONTEXT
+            .scope(turn, async { crate::gateway::visibility::ambient_actor() })
+            .await;
+
+        assert_eq!(
+            actor.as_deref(),
+            Some("main"),
+            "an A2A run acts as the agent id from its SessionKey; there is no \
+             machine sentinel, and an agent id is not comparable against the \
+             user ids the visibility predicates hold"
+        );
     }
 
     #[test]
