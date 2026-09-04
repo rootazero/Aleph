@@ -182,8 +182,16 @@ impl GenerationProviderRegistry {
     /// The config section name a canonical provider name resolves to, if any.
     /// Useful for log correlation: `canonical_name_of("openai-image")` answers
     /// `"dalle"` when the provider was registered under that section.
+    ///
+    /// Dead public API — zero callers anywhere in src/, tests/, interfaces/,
+    /// desktop/. The accessor was added speculatively for incident-triage log
+    /// correlation but no log emitter, debug tool, or admin RPC actually
+    /// consults it. Demoted to `pub(crate)` so the canonical_index field still
+    /// has its symmetric accessor for any future log-correlation tool inside
+    /// the crate; external callers see no surface. (severed-wire audit
+    /// 2026-09-04, sw-generation-1-1.)
     #[must_use]
-    pub fn config_name_for_canonical(&self, canonical: &str) -> Option<&str> {
+    pub(crate) fn config_name_for_canonical(&self, canonical: &str) -> Option<&str> {
         self.canonical_index.get(canonical).map(String::as_str)
     }
 
@@ -218,7 +226,7 @@ impl GenerationProviderRegistry {
     /// let result = registry.get_or_err("nonexistent");
     /// assert!(result.is_err());
     /// ```
-    pub fn get_or_err(&self, name: &str) -> GenerationResult<Arc<dyn GenerationProvider>> {
+    pub(crate) fn get_or_err(&self, name: &str) -> GenerationResult<Arc<dyn GenerationProvider>> {
         self.get(name).ok_or_else(|| {
             GenerationError::internal(format!("Provider '{name}' not found in registry"))
         })
