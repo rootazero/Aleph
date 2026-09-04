@@ -789,6 +789,20 @@ pub trait HarnessRunner: Send + Sync {
         None
     }
 
+    /// Hand the spawner the SAME verifier chain this runner installs on its
+    /// own harness. Threaded into `SubagentTool` so a subagent that enters
+    /// a tool-call death loop is caught by the same structural watchdog
+    /// (ToolLoopVerifier, StopHookVerifier, ScratchpadGoalVerifier, …) the
+    /// parent enforces on itself. The SpawnerBase / AgentRuntime side has
+    /// always carried the field — only the SubagentTool construction site
+    /// was missing, so every spawned subagent silently ran with
+    /// `verifier_chain: None` (AGENTS-R4-01). Default `None` keeps test
+    /// mocks / the simple engine on the no-verifier path, matching the
+    /// pre-2026-09 behaviour.
+    fn verifier_chain(&self) -> Option<Arc<crate::verification::VerifierChain>> {
+        None
+    }
+
     /// Estimate the context-window occupancy of this session's *next* prompt,
     /// for sessions that never ran an LLM turn (no persisted real occupancy).
     /// Deterministic token counting only — no LLM call (R7). Default `None`
