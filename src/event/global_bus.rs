@@ -114,43 +114,15 @@ impl SubscriptionId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
-
-    /// Get the inner string reference
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Convert into inner String
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
 }
 
-impl From<String> for SubscriptionId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for SubscriptionId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
+// NOTE: `as_str` / `into_inner` / `Deref` / `From<String>` / `From<&str>`
+// were removed in the 2026-09 severed-wire review — zero callers anywhere in
+// the workspace. `Display` is the only accessor left because the tracing
+// macros render the id via `%id`.
 impl std::fmt::Display for SubscriptionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl std::ops::Deref for SubscriptionId {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
