@@ -1500,7 +1500,7 @@ mod tests {
     #[serial_test::parallel(pty_global_manager)]
     fn every_test_that_reaches_the_global_pty_manager_is_tagged() {
         use crate::utils::source_scan::{
-            cfg_test_portion, code_text, rust_sources_under, scan_test_bodies,
+            code_text, rust_sources_under, scan_test_bodies, test_text,
         };
 
         const PARALLEL_TAG: &str = "#[serial_test::parallel(pty_global_manager)]";
@@ -1516,10 +1516,17 @@ mod tests {
         // finding anything — a moved directory, a broken lexer, a test binary
         // built from another worktree — fails loudly instead of passing
         // vacuously.
-        const KNOWN_REACHERS: [&str; 3] = [
+        const KNOWN_REACHERS: [&str; 4] = [
             "src/gateway/handlers/pty.rs",
             "src/gateway/pty/mod.rs",
             "src/config/live_apply.rs",
+            // A WHOLE-FILE test module: the file carries no `#[cfg(test)]` of
+            // its own, its parent declares it with `#[cfg(test)] mod tests;`.
+            // The census could not see this shape at all until
+            // `source_scan::test_text` resolved it, and being listed here is
+            // what makes a regression to that blindness loud instead of
+            // silent — the scan would simply stop finding the file.
+            "src/gateway/runtime/tests.rs",
         ];
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1533,7 +1540,11 @@ mod tests {
                 continue;
             }
             let in_pty_module = path.contains("/gateway/pty/");
-            let code = code_text(&cfg_test_portion(&src));
+            // `test_text`, not `cfg_test_portion`: a file that is a whole test
+            // module (its parent declares `#[cfg(test)] mod tests;`) carries no
+            // `#[cfg(test)]` of its own, so the narrower call returns "" for it
+            // and this walk skips a file full of tests without saying so.
+            let code = code_text(&test_text(std::path::Path::new(&path), &src));
             let reaches = |l: &str| {
                 l.contains(QUALIFIED)
                     || (in_pty_module && (l.contains(VIA_SUPER) || l.contains(BARE)))
