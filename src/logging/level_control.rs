@@ -128,7 +128,7 @@ fn warn_invalid_level_once(value: u8) {
 /// prefix), or (b) a `target=value` whose target names us (see
 /// [`is_alephcore_target`]). Per-target entries for non-`alephcore` crates
 /// (e.g. `h2=warn`) are skipped. Falls back to `Info` when nothing parses.
-pub(crate) fn init_log_level() {
+fn init_log_level() {
     INIT.call_once(|| {
         let Ok(rust_log) = std::env::var("RUST_LOG") else {
             return;
@@ -164,7 +164,7 @@ pub(crate) fn init_log_level() {
 /// crate name, the crate's library alias, an absolute path under it, or a
 /// binary with the `aleph-` prefix.
 fn is_alephcore_target(target: &str) -> bool {
-    matches!(target, "alephcore" | "aleph" | "alephcore_lib")
+    matches!(target, "alephcore" | "aleph")
         || target.starts_with("alephcore::")
         || target.starts_with("aleph_server")
         || target.starts_with("aleph-cli")
@@ -252,7 +252,7 @@ pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     /// Serializes tests that mutate the global log-level atomic. Without this
     /// guard, `cargo test`'s parallel test runner would let one test's

@@ -65,7 +65,7 @@ pub use ledger::{
 };
 pub use record::{LedgerAction, LedgerOutcome, LedgerRecord, NewRecord};
 pub use schema::{IDENTITY_SCHEMA, LEDGER_ADD_PRINCIPAL_SQL};
-pub use verify::{verify_chain, ChainFault, ChainReport};
+pub use verify::{ChainFault, ChainReport};
 
 use crate::sync_primitives::Arc;
 

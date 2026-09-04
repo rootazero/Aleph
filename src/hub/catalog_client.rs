@@ -128,11 +128,10 @@ pub const ALEPH_HUB_NAME: &str = "Aleph Hub";
 pub const ALEPH_HUB_URL: &str = "https://hub.heyaleph.com/catalog.json";
 
 #[derive(Debug, Clone)]
-pub enum CatalogError {
+pub(crate) enum CatalogError {
     Network(String),
     Parse(String),
     Schema(String),
-    Other(String),
 }
 
 impl fmt::Display for CatalogError {
@@ -141,7 +140,6 @@ impl fmt::Display for CatalogError {
             CatalogError::Network(s) => write!(f, "network: {s}"),
             CatalogError::Parse(s) => write!(f, "parse: {s}"),
             CatalogError::Schema(s) => write!(f, "schema: {s}"),
-            CatalogError::Other(s) => write!(f, "{s}"),
         }
     }
 }
@@ -257,11 +255,6 @@ impl AlephHubCatalog {
                 .as_deref()
                 .and_then(sanitize_generated_at),
         })
-    }
-
-    /// Fetch the artifact over HTTP and normalize it.
-    pub async fn fetch(&self) -> Result<Vec<ExtensionEntry>, CatalogError> {
-        self.fetch_ingested().await.map(|i| i.entries)
     }
 
     async fn fetch_ingested(&self) -> Result<Ingested, CatalogError> {

@@ -4,8 +4,7 @@
 //! ≥1 perf assertion (cache hit count), ≥1 property test (to_metadata_form
 //! consistency with field-by-field manual conversion).
 
-use crate::sync_primitives::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use proptest::prelude::*;

@@ -22,7 +22,7 @@ pub struct CatalogFilter {
 /// what it does — and matching the stored JSON blob with `LIKE` would hit the
 /// key names too (`"kind":"mcp"` matching a search for `mcp`).
 #[must_use]
-pub fn matches_query(e: &ExtensionEntry, query: &str) -> bool {
+fn matches_query(e: &ExtensionEntry, query: &str) -> bool {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return true;
@@ -41,7 +41,7 @@ pub fn matches_query(e: &ExtensionEntry, query: &str) -> bool {
 /// The same file also carries the install provenance ledger
 /// (`hub::origin::init_origin_schema`) so both tables are created together and a
 /// fresh install never sees one without the other.
-pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
+pub(super) fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         // PRAGMA ordering matters: WAL must come before any read/write on this
         // connection, and `busy_timeout` only takes effect on the next statement.
@@ -65,7 +65,7 @@ pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     crate::hub::origin::init_origin_schema(conn)
 }
 
-pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<()> {
+fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<()> {
     let data = serde_json::to_string(e)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
     conn.execute(
@@ -87,7 +87,7 @@ pub fn upsert_entry(conn: &Connection, e: &ExtensionEntry) -> rusqlite::Result<(
     Ok(())
 }
 
-pub fn query_entries(
+fn query_entries(
     conn: &Connection,
     f: &CatalogFilter,
 ) -> rusqlite::Result<Vec<ExtensionEntry>> {
@@ -125,14 +125,14 @@ pub fn query_entries(
     Ok(out)
 }
 
-pub fn clear_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usize> {
+fn clear_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usize> {
     conn.execute(
         "DELETE FROM catalog WHERE source_id = ?1",
         params![source_id],
     )
 }
 
-pub fn count_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usize> {
+fn count_source(conn: &Connection, source_id: &str) -> rusqlite::Result<usize> {
     conn.query_row(
         "SELECT COUNT(*) FROM catalog WHERE source_id = ?1",
         params![source_id],

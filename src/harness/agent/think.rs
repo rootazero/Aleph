@@ -1,7 +1,6 @@
 //! Think phase — single-turn LLM call with guardrails, budget checks, and verifier dispatch.
 
-use std::sync::atomic::Ordering;
-
+use crate::sync_primitives::Ordering;
 use tokio_util::sync::CancellationToken;
 
 use super::AgentHarness;
@@ -823,7 +822,7 @@ impl AgentHarness {
             if let (Some(budget), Some(usage)) =
                 (self.deps.context_budget.as_ref(), response.usage.as_ref())
             {
-                let observed = usage.prompt_tokens_total() as usize;
+                let observed = usize::try_from(usage.prompt_tokens_total()).unwrap_or(usize::MAX);
                 budget.lock().await.observe_actual_usage(observed);
             }
         }
@@ -957,7 +956,7 @@ impl AgentHarness {
             requested_tool_calls: response.tool_calls.len(),
             executed_tool_calls: 0,
             productive: false,
-            total_tokens: turn_tokens as usize,
+            total_tokens: usize::try_from(turn_tokens).unwrap_or(usize::MAX),
         };
         let outcome_for_trace;
         let metrics_for_trace;
@@ -1085,7 +1084,7 @@ impl AgentHarness {
                 requested_tool_calls: requested,
                 executed_tool_calls: executed,
                 productive: executed > 0,
-                total_tokens: turn_tokens as usize,
+                total_tokens: usize::try_from(turn_tokens).unwrap_or(usize::MAX),
             };
             result = Ok(TurnStep::cont(executed));
         }
