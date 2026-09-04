@@ -7,6 +7,19 @@
 **Constraint that frames every row**: R3/禁用清单 bans a second VT implementation. Every gap below is
 closed by *extending* `screen/`, never by importing. Cost column is priced as an extension.
 
+> **Status update, 2026-09-04 (terminal round 2, branch `worktree-terminal-round2`).** Every row below
+> keeps its original wording — it is the record of what was true on 2026-09-03 — and carries a
+> `SHIPPED` line where round 2 closed it. **Closed:** A2, A3, A4, A5, A6, A8, B5, C1, C5.
+> **Partially closed, and the heading says which half:** B1 (OSC 7 only — no OSC 9;9, no OSC 1337)
+> and C9 (`?25` only — no DECSCUSR shape, no `?12` blink). **Not closed: A7 (SCS / DEC Special
+> Graphics).** The round-2 spec's §4.7 asked for "A2–A8" to be stamped, but its own §4.2
+> implementation table has no A7 row and the code has no branch: `perform/esc.rs::esc` returns early
+> on a non-empty intermediate, so `ESC ( 0` is dropped by construction. A status line claiming a
+> capability the code does not have is worse than no status line (判据 §17), so A7 stays open —
+> and this row's own advice ("wait for a capture that shows it firing") still stands.
+> Round-2 落点索引 → [FEATURE_LOCATOR §6.11](../../reference/FEATURE_LOCATOR.md) ·
+> 子系统全文 → [TERMINAL_RUNTIME.md](../../reference/TERMINAL_RUNTIME.md).
+
 ---
 
 ## Summary: the two emulators do not differ in *coverage*, they differ in *kind*
@@ -61,7 +74,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **Cost to extend** | **Small.** One `match` arm in `osc_dispatch` next to the existing `b"0" \| b"2"` arm, one `Option<String>` on `ScreenState`, one accessor beside `Screen::title()`, and replacing the constant at `runtime/mod.rs:160`. herdr needed 70 lines of hand-rolled OSC scanning because libghostty does not surface OSC 9 to embedders; `vte` does, so Aleph gets it for a fraction of the cost. Note the payload convention the manifests expect: the part **after** `9;`, i.e. `"4;3;"` not `"3"` — see `src/pane/osc.rs:487-490` and `grok.toml:93`'s `^4;1;-1$`. Sanitise like `sanitize_agent_osc_string` (`src/pane/osc.rs:536-545`): strip control chars, cap length (herdr uses 256, `src/pane/osc.rs:448`). |
 | **SHIPPED** | Wired on 2026-09-03. `ScreenState.osc_progress` + `Performer::retain_osc_progress` + `Screen::osc_progress()` in `src/gateway/pty/screen/perform.rs`; `RuntimeAgents::sample` now reads it and `OSC_PROGRESS_UNAVAILABLE` is deleted. Five guards, each falsified by hand: the runtime wire (`the_osc_progress_wire_is_actually_connected` — cut the read and grok's `4;1;-1`/`4;0;0` collapse to one state), the namespace filter, the char cap, the control-char strip, and the payload shape. **Two claims in the rows above were wrong and are corrected here** (判据 §18 — my own instrument): (1) `vte` 0.14.1 does NOT hand over `["9", "4;3;"]` — it splits on every `;`, so `\e]9;4;3;50\a` arrives as `["9","4","3","50"]`. The code rejoins `params[1..]`, which is correct under either shape. (2) herdr's retention is **not** a model to copy verbatim: it stores every OSC 9 payload, so a ConEmu cwd report (`9;9;<path>`) or an iTerm2 notification (`9;<text>`) silently overwrites a live progress level with a string no rule matches. Aleph retains only `4`/`4;…`, deliberately. |
 
-### A2 · Scroll regions — DECSTBM (`CSI r`), SU/SD (`CSI S` / `CSI T`), RI (`ESC M`)
+### A2 · Scroll regions — DECSTBM (`CSI r`), SU/SD (`CSI S` / `CSI T`), RI (`ESC M`) ✅ SHIPPED 2026-09-04
 
 | | |
 |---|---|
@@ -69,8 +82,9 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch for any of them.** `CSI r`, `CSI S`, `CSI T` all fall into the CSI catch-all at `perform.rs:404`; `ESC M` falls into the ESC catch-all at `perform.rs:351`. `Grid` has no scroll-region field at all (`grid.rs:79-95`), and `Grid::newline` (`grid.rs:523-529`) unconditionally scrolls the **whole** screen via `scroll_up` (`grid.rs:596-609`), which unconditionally evicts row 0 into scrollback. |
 | **What breaks in practice** | A program that pins a header or status bar and scrolls only the middle — `tmux`, `less`, `vim`, anything using `CSI 2;23r` — makes Aleph scroll the pinned rows too. The header marches upward off the screen and the agent's own status line (exactly what the manifests match on) disappears from `visible_text()` while it is still visibly on the user's real terminal. `ESC M` is worse in the other direction: a program scrolling *backwards* at row 0 gets nothing, so the top of the screen keeps stale text forever while the program believes it revealed new content. Both produce a `visible_text()` that no longer corresponds to any frame the agent ever painted, which is the failure mode where a wrong label is costlier than a missing one. |
 | **Cost to extend** | **Medium.** New `(u16, u16)` region state on `Grid`, defaulting to the full height, plus `set_scroll_region` reset on resize and on RIS. Then `newline`, `scroll_up`, `insert_lines`, `delete_lines` and `erase_in_display` must all read the region instead of `0..rows` — five call sites, each of which currently hardcodes the full-screen assumption. `ESC M` needs a matching `scroll_down` that Grid does not have. Left/right margins (DECLRMM, mode 69) can be left out; almost nothing emits them. One subtlety worth pricing in: when a region is active, rows scrolling off the region top must **not** enter scrollback — only rows leaving a full-height screen do. `scroll_up` currently pushes unconditionally at `grid.rs:601`. |
+| **SHIPPED** | 2026-09-04 (terminal round 2, commit `e7cb7e8e8`). `Grid.scroll_region` + `set_scroll_region`; DECSTBM homes the cursor as DEC specifies; `CSI S` / `CSI T` / `ESC M` all read the region, and **all five** of `newline` / `scroll_up` / `insert_lines` / `delete_lines` / `erase_in_display` were moved onto it. Rows leaving a region top do **not** enter scrollback. `resize` and RIS reset it. The three arms guard on an EMPTY intermediate because each has a live `?`-prefixed homonym (`CSI ? r` restores private modes, `CSI ? S` is XTSMGRAPHICS). Guards: `decstbm_scrolls_only_the_region_and_pins_the_header`, `rows_leaving_a_region_top_do_not_enter_scrollback`, `reverse_index_at_region_top_scrolls_down`, `su_and_sd_scroll_within_the_region`, `resize_and_ris_reset_the_region`, `insert_and_delete_lines_respect_the_region`, `erase_in_display_within_a_region_is_still_screen_absolute`. |
 
-### A3 · DECAWM autowrap (`CSI ?7 h` / `CSI ?7 l`)
+### A3 · DECAWM autowrap (`CSI ?7 h` / `CSI ?7 l`) ✅ SHIPPED 2026-09-04
 
 | | |
 |---|---|
@@ -78,8 +92,9 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch.** `?7h`/`?7l` fail the guard at `perform.rs:401` (which tests `flat.first() == Some(&1049)`) and fall to `perform.rs:404`. `Grid::put` wraps unconditionally at `grid.rs:225-228`. |
 | **What breaks in practice** | A program that disables autowrap to paint a full-width status line — the standard trick for writing to the last cell without scrolling — gets a phantom line break from Aleph, and if the cursor was on the bottom row, a phantom **scroll**. Every subsequent frame is then offset by one row against what the program thinks it painted, and because the program never repaints the rows it believes are untouched, the offset persists and compounds. A `bottom_non_empty_lines(8)` region (the shape `qwen.toml:96` and most manifests use) then samples the wrong eight lines. |
 | **Cost to extend** | **Small.** One `bool` on `ScreenState` (or `Grid`), one guarded arm alongside the 1049 arm, and one branch in `put`: with wrap off, clamp `cursor_col` at `cols - 1` and overwrite in place instead of calling `newline()`. The `cursor_col <= cols` "wrap is owed" invariant documented at `grid.rs:80-88` is the thing to be careful with — with DECAWM off, that state must never be entered. |
+| **SHIPPED** | 2026-09-04 (commit `b7392f4e7`). `Grid.autowrap` via `CSI ?7 h/l`. With autowrap off, `put` overwrites the last column and does **not** enter the deferred-wrap state. Guard: `decawm_off_overwrites_the_last_column_instead_of_wrapping`. |
 
-### A4 · Full reset — RIS (`ESC c`) and DECSTR (`CSI ! p`)
+### A4 · Full reset — RIS (`ESC c`) and DECSTR (`CSI ! p`) ✅ SHIPPED 2026-09-04
 
 | | |
 |---|---|
@@ -87,8 +102,9 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch for either.** `ESC c` → ESC catch-all `perform.rs:351`. `CSI ! p` carries intermediate `!`, and since `csi_dispatch` only inspects `inter` inside the 1049 arm, action `'p'` reaches the catch-all at `perform.rs:404`. |
 | **What breaks in practice** | The most direct instance of "a stale answer read as a current one". An agent that crashes and whose wrapper runs `reset`, or a TUI that issues RIS on exit, leaves Aleph's grid holding the agent's **last painted frame forever**. The manifest engine keeps matching that frame; the runtime table keeps publishing `Working` on the strength of a spinner that stopped spinning minutes ago. Unlike a missing sequence that merely degrades, this one actively manufactures false evidence, and there is no timeout in `screen/` that ever clears it — `RuntimeAgentTable`'s idle hold (`gateway/runtime/mod.rs:191-210`) only bounds working→idle, not evidence staleness. |
 | **Cost to extend** | **Small.** `ESC c`: reset grid to blank, cursor home, clear SGR state, drop `saved_cursor`, exit alt screen, reset scroll region and DECAWM, clear the title. `CSI ! p` is the soft variant (same minus the erase and minus scrollback). The only design call is whether RIS should also clear scrollback — xterm does; keeping it is defensible for Aleph since scrollback is not part of `visible_text()`. Say which and write it in the comment. |
+| **SHIPPED** | 2026-09-04 (commits `b7392f4e7`, `a1a1e0f78`). `ESC c` (RIS) via `Performer::full_reset`, `CSI ! p` (DECSTR) via `soft_reset` — the `!` arrives as an INTERMEDIATE, which is the whole of what separates it from an unrelated `CSI p`. RIS clears grid, title, saved cursor, the retained OSC 9;4 progress level and both mode bits; **scrollback survives on purpose** (`Grid::reset` says why). A cleared title reaches the wire as `Some("")` (`published_clear`), because a `.flatten()` would have made Some→None read as "unchanged". Guards: `ris_clears_grid_title_and_saved_cursor`, `decstr_resets_modes_but_keeps_the_grid`, `ris_clears_the_progress_level_and_the_two_mode_bits`, `decstr_restores_the_two_mode_bits_but_keeps_the_progress_level`, `a_title_cleared_by_ris_reaches_the_wire_as_an_empty_string`. ⚠️ Deliberate divergence recorded rather than hidden: this DECSTR also exits the alternate screen, which xterm's soft reset does not. |
 
-### A5 · IND (`ESC D`) and NEL (`ESC E`)
+### A5 · IND (`ESC D`) and NEL (`ESC E`) ✅ SHIPPED 2026-09-04
 
 | | |
 |---|---|
@@ -96,8 +112,9 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch.** Both hit the ESC catch-all at `perform.rs:351`. `esc_dispatch` handles only `7` and `8` (`perform.rs:326-350`). |
 | **What breaks in practice** | Text lands on the wrong row. A program emitting `ESC D` expects the cursor one row down at the same column; Aleph leaves it where it was, so the next run of characters overwrites the line above instead of starting a new one. Output is not lost, it is *overlaid* — which is worse than lost, because the resulting line is a plausible-looking mixture of two real lines and a manifest regex can match it. Likelihood is moderate: most output uses `\n`, but terminfo-driven `cursor_down`/`newline` capabilities resolve to these on many entries. |
 | **Cost to extend** | **Small.** Two arms in the existing `match byte` in `esc_dispatch`: `b'D' => grid.newline()`, `b'E' => { grid.carriage_return(); grid.newline(); }`. Both grid methods already exist (`grid.rs:523`, `:531`). Once A2 lands, `ESC D` must respect the scroll region — same call path as `\n`, so it follows for free. |
+| **SHIPPED** | 2026-09-04 (commit `b7392f4e7`). `ESC D` (IND) is `newline()` — **not** a carriage return as well, which would overlay the next run of text onto the start of the line and produce a plausible mixture of two real lines that a manifest regex can match. `ESC E` (NEL) is carriage return + newline. Guard: `ind_moves_down_same_column_nel_moves_down_col_zero`. |
 
-### A6 · REP (`CSI Ps b`) — repeat preceding character
+### A6 · REP (`CSI Ps b`) — repeat preceding character ✅ SHIPPED 2026-09-04
 
 | | |
 |---|---|
@@ -105,6 +122,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch** — CSI catch-all at `perform.rs:404`. Aleph also does not retain a "last printed char", so there is nothing to repeat even if the arm existed. |
 | **What breaks in practice** | A horizontal rule emitted as `─` + `CSI 79 b` renders as a single `─` followed by 79 missing columns. Everything after it on that row is shifted 79 columns left. Any manifest rule anchored with `^` or matching a box-drawn separator sees a line that does not exist on the real screen. Likelihood is genuinely uncertain: `rep` is in modern terminfo and libraries that consult terminfo (ncurses, tmux) will emit it, while hand-rolled TUI renderers (ratatui, Ink) do not. I did not verify which of Aleph's 21 target agents emit it. |
 | **Cost to extend** | **Small.** One `char` on `ScreenState` set in `print`, one arm calling `put` N times. The only trap is that REP must repeat the last *printed* character, not the last character seen — a control byte or escape between the two invalidates it, so the field must be cleared in `execute` and on CSI dispatch. |
+| **SHIPPED** | 2026-09-04 (commit `b7392f4e7`). `CSI Ps b` over `Grid.last_printed`; a missing candidate writes **nothing** (the alternative is repeating whatever byte came last). Every C0 control and every non-CSI escape invalidates the candidate unconditionally — including bytes no arm claims, because "the dispatcher ignored it" is not the same as "it never arrived". Guard: `rep_repeats_the_last_printed_char_and_a_control_byte_invalidates_it`. |
 
 ### A7 · DEC Special Graphics charset — SCS (`ESC ( 0`, `ESC ) 0`, and `SI`/`SO`)
 
@@ -115,7 +133,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What breaks in practice** | Direct text corruption of the readable kind: with G0 mapped to DEC Special Graphics, the program sends `lqqqk` meaning `┌───┐`, and Aleph's `visible_text()` returns the literal `lqqqk`. A model reading that screen sees garbage words interleaved with real ones, and a manifest `line_regex` anchored on a box character never matches. **The trigger is conditional**, which is why this sits at the bottom of Tier A rather than the top: modern agent TUIs emit UTF-8 box characters directly. The exposure is ncurses-derived programs running under a non-UTF-8 locale or with `NCURSES_NO_UTF8_ACS` set, `dialog`/`whiptail`, and `tmux` in ACS mode. I did not measure how often Aleph's actual workloads hit it. |
 | **Cost to extend** | **Medium.** Needs a G0/G1 slot pair plus a shift state on `Screen`, `SI`/`SO` arms in `execute`, an `ESC ( ` / `ESC ) ` path that survives the intermediates guard, and a 31-entry lookup applied in `print` before `Grid::put`. Medium rather than small because the intermediates early-return at `perform.rs:323` has to be narrowed carefully — it is currently load-bearing for DECALN and the comment says so; loosening it without replacing that protection re-opens the bug it was written for. |
 
-### A8 · Legacy alternate screen — modes 47 and 1047
+### A8 · Legacy alternate screen — modes 47 and 1047 ✅ SHIPPED 2026-09-04
 
 | | |
 |---|---|
@@ -123,11 +141,12 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch.** The arm at `perform.rs:401` is guarded on `flat.first() == Some(&1049)`; 47 and 1047 fail the guard and fall to `perform.rs:404`. `Screen::alt_screen()` (`perform.rs:82-84`) is defined as `saved.is_some()`, so it reports `false` throughout. |
 | **What breaks in practice** | A program using the legacy pair paints its full-screen UI **onto the primary grid**, and on exit does not restore — so the shell's scrollback is destroyed and the agent's last frame stays on screen indefinitely. Simultaneously the `alt_screen` flag published to the Panel and to `PtyScreenPatch` (`convert.rs:44`) says `false` while a full-screen program is plainly running. Likelihood is low — 1049 has been the default for two decades — but the severity is the same as A4, and the diagnosis cost is high because nothing looks broken until you notice the scrollback is gone. |
 | **Cost to extend** | **Small.** Widen the guard at `perform.rs:401` from `Some(&1049)` to the set `{47, 1047, 1049}`, and route 1048 to the existing `saved_cursor` slot. The one real semantic difference: 1049 clears the alt grid on entry and restores the cursor on exit; 47/1047 do neither. `toggle_alt_screen` (`perform.rs:246-289`) already creates a fresh `Grid` on entry, which is 1049's behaviour, so 47/1047 would need the incoming grid preserved across enter/exit rather than recreated. Price that as the actual work; the guard widening is trivial and, done alone, would be wrong. |
+| **SHIPPED** | 2026-09-04 (commits `b7392f4e7`, `a1a1e0f78`). Modes `?47` / `?1047` reuse the alternate buffer and **keep** what was parked there on the last exit; `?1048` saves/restores the cursor; `?1049` = 1047 + 1048 per xterm, so it saves and restores cursor and SGR and always starts from a cleared alt grid. The parked buffer follows `resize` and the scrollback limit. Guards: `legacy_alt_screen_47_and_1047_keep_the_alt_grid_across_exit`, `mode_1048_saves_and_restores_the_cursor`, `mode_1049_saves_and_restores_the_cursor_and_style`, `a_parked_alternate_buffer_follows_resize_and_the_scrollback_limit`. ⚠️ Known residue: RIS leaves the parked alt buffer populated, so a `?47` entry after a reset restores pre-reset content. |
 
 ---
 ## Tier B — Marginal: real, bounded, and not on the path that decides a state
 
-### B1 · Live working directory — OSC 7, OSC 9;9, OSC 1337 `CurrentDir=`
+### B1 · Live working directory — OSC 7, OSC 9;9, OSC 1337 `CurrentDir=` ⚠️ PARTIALLY SHIPPED 2026-09-04 (OSC 7 only)
 
 | | |
 |---|---|
@@ -135,6 +154,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch** — OSC 7/9/1337 all fall out the bottom of `osc_dispatch` at `perform.rs:411-415`. |
 | **What breaks in practice** | Nothing in *classification* — I checked, and no manifest uses a `cwd` region (`crates/agent-detect/src/manifest.rs` routes only `screen`, `osc_title`, `osc_progress` and the line regions). What breaks is *display*: `RuntimeAgentEntry.cwd` reaches both panels, and its own doc comment at `shared/protocol/src/runtime.rs:39-42` says it is the spawn directory, not the live one. A session that `cd`s shows a stale path forever. The reason this is a finding and not a restatement: **that doc comment names PID probing as the remedy, and PID probing is the more expensive of the two options.** herdr does not probe PIDs for cwd; it reads OSC 7. Wiring that lands entirely inside `screen/` and touches no platform API, so it does not carry the R1 decision the comment anticipates. |
 | **Cost to extend** | **Small** for the VT half — one arm in `osc_dispatch`, one `Option<String>` on `ScreenState`, one accessor, and a `cwd` source swap at `gateway/runtime/mod.rs:147`. Note the coverage limit honestly when writing it up: OSC 7 only arrives from shells with integration configured, so it is a *supplement* to a spawn-dir fallback, not a replacement — and the two remedies are complementary, not competing (PID probing still covers shells that emit nothing). |
+| **SHIPPED (partial)** | 2026-09-04 (commit `e04ca0898` for the VT half, `734af02e0` for the consumer). **OSC 7 only.** `ScreenState.cwd` + `Screen::cwd()`; a `file://` URI is accepted only with an EMPTY host or `localhost` (a path on another machine is a specific lie about where the session is), and percent-decoded. This row's own prediction held: the consumer is a three-tier order derived in ONE place (`pty/manager.rs::flush_session`) — OSC 7 › the foreground process's own cwd (the probe from the same round) › the spawn dir — so the two remedies are complementary, not competing. **NOT shipped: OSC 9;9 (ConEmu) and OSC 1337 `CurrentDir=` (iTerm2).** `osc_dispatch` retains only `9;4` out of the OSC 9 namespace and has no 1337 arm. Guards: `osc7_file_uri_with_empty_or_localhost_host_sets_cwd_and_percent_decodes`, `osc7_with_a_foreign_host_is_dropped`, `cwd_prefers_osc7_then_foreground_then_spawn`. |
 
 ### B2 · Combining marks, ZWJ and variation selectors
 
@@ -163,7 +183,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What breaks in practice** | A line editor in insert mode gets overwrite semantics, so typed-into-the-middle text clobbers what follows instead of shifting it. Confined to the row being edited and self-corrects on the next full redraw. Very low likelihood: modern line editors use `CSI @` (ICH) — which Aleph **does** handle (`perform.rs:377`) — rather than IRM. |
 | **Cost to extend** | **Small.** One flag, one branch in `put` delegating to the existing `insert_chars` (`grid.rs:375`). |
 
-### B5 · Origin mode — DECOM (`CSI ?6 h`)
+### B5 · Origin mode — DECOM (`CSI ?6 h`) ✅ SHIPPED 2026-09-04 (with A2, as this row required)
 
 | | |
 |---|---|
@@ -171,6 +191,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 | **What Aleph does today** | **No branch** (`perform.rs:404`); `Grid::goto` (`grid.rs:289`) is always screen-absolute. |
 | **What breaks in practice** | Nothing *today*, because DECOM only means anything when a scroll region is set and Aleph has none. It becomes a real defect the moment A2 lands: a program that sets a region, enables origin mode, and then issues `CSI 1;1H` expects the top of the *region*, and would get the top of the screen. Listed here so it is not forgotten — **A2 and B5 must ship together or A2 is half-right.** |
 | **Cost to extend** | **Small**, given A2. One flag plus a row offset inside `goto`/`goto_row`. Zero value before A2. |
+| **SHIPPED** | 2026-09-04 (commit `e7cb7e8e8`, the same commit as A2 — "A2 and B5 must ship together or A2 is half-right" was followed). `Grid.origin_mode` via `CSI ?6 h/l`; `goto` and `goto_row` add the region offset. Guard: `origin_mode_makes_cup_relative_to_the_region`. |
 
 ### B6 · Selective erase — DECSED / DECSEL (`CSI ? J`, `CSI ? K`)
 
@@ -205,7 +226,7 @@ Ordered by expected cost to Aleph (likelihood × severity), not by what herdr co
 These are real capability differences and would all be gaps if Aleph were a terminal. It is not: it samples
 text and a title on the server and publishes a state. Each row says why the difference costs nothing.
 
-### C1 · DCS hook / put / unhook — the named hypothesis, and it costs almost nothing
+### C1 · DCS hook / put / unhook — the named hypothesis, and it costs almost nothing ✅ SHIPPED 2026-09-04
 
 The plan named this as a known gap. **Confirmed as a gap, refuted as a cost.**
 
@@ -229,6 +250,8 @@ Two narrow caveats, stated so the "costs nothing" is not overclaimed:
 
 **Cost to extend: small, and the reason to do it is documentation, not behaviour.**
 
+
+**SHIPPED 2026-09-04** (commit `b7392f4e7`). `hook` / `put` / `unhook` are now explicit no-ops with a comment — exactly the 6-line documentation change this row argued for, so the silence is a decision rather than the by-construction omission. Guard: `dcs_hook_put_unhook_are_explicit_no_ops`. The unterminated-DCS caveat above still stands: that is `vte`'s state machine, not Aleph's.
 ### C2 · Kitty graphics (APC)
 
 herdr wires it end to end: libghostty's APC handler (`vendor/libghostty-vt/src/terminal/apc.zig:13-29`) with a
@@ -256,7 +279,7 @@ terminal view wants disambiguated keys — and note the structural point if that
 sequence is only ever seen by the *server*, so the flag would have to be tracked in `screen/` and published,
 even though the encoding itself belongs in the Panel's `keymap.rs`. Cost then: **medium**.
 
-### C5 · Bracketed paste (mode 2004)
+### C5 · Bracketed paste (mode 2004) ✅ SHIPPED 2026-09-04
 
 herdr tracks it (`vendor/libghostty-vt/src/terminal/modes.zig:295`) and exposes
 `bracketed_paste_enabled()` (`src/pane/terminal.rs:1689`) so a paste is wrapped in `\e[200~ … \e[201~`.
@@ -265,6 +288,8 @@ Aleph has no branch. **Nothing breaks for detection.** For the Panel it is laten
 consumer to starve today. Same structural note as C4 — the mode bit can only be observed server-side.
 Cost: **small** (one flag, one accessor, one wire field) if a paste path is ever added.
 
+
+**SHIPPED 2026-09-04** (VT half `e04ca0898`, consumer `5422d0aff`). `ScreenState.bracketed_paste` via `CSI ?2004 h/l`, published on `PtyScreenPatch.bracketed_paste` (`Option<bool>`, `Some` only when it changes). The paste path this row said did not exist now does: the Panel canvas's `on:paste` wraps in `ESC[200~ … ESC[201~` **only** when the last patch said the mode is on. `None` means "we have not been told" and takes the weakest assumption — no wrapping. RIS clears it. Guards: `bracketed_paste_mode_rides_the_patch`, `paste_wraps_when_bracketed_paste_is_on_and_not_when_unknown`, `bracketed_paste_starts_unknown_and_only_a_patch_moves_it`.
 ### C6 · Mouse tracking (modes 1000 / 1002 / 1003 / 1006 / 1016) and focus reporting (1004)
 
 herdr tracks all of them (`vendor/libghostty-vt/src/terminal/modes.zig:279-287`, `:282`), exposes
@@ -293,13 +318,15 @@ a dumber rendering than it needed to. I did not find a case where this bites in 
 one. Cost to extend: **large** — it is not a `perform.rs` branch, it is a new outbound edge from `screen/`
 to the PTY writer, with ordering guarantees (herdr needed a whole ordered-response mechanism for exactly this).
 
-### C9 · Cursor visibility (`?25`), cursor shape (DECSCUSR `CSI q`), cursor blink (`?12`)
+### C9 · Cursor visibility (`?25`), cursor shape (DECSCUSR `CSI q`), cursor blink (`?12`) ⚠️ PARTIALLY SHIPPED 2026-09-04 (`?25` only)
 
 herdr tracks all three (`vendor/libghostty-vt/src/terminal/modes.zig:267-268`, shape mapping at
 `src/pane/terminal.rs:104`, exposed as `TerminalCursorState` at `:84`/`:438`). Aleph has no branch; it
 publishes a cursor *position* only (`diff::ScreenPatch.cursor`, `perform.rs:133`). **Nothing breaks for
 detection**; the Panel renders a cursor that a program asked to hide. Cost: **small**, cosmetic.
 
+
+**SHIPPED (partial) 2026-09-04** (VT half `e04ca0898`, renderer `5422d0aff`). **`CSI ?25 h/l` only.** `ScreenState.cursor_visible` rides `PtyScreenPatch.cursor_visible` (`Some` only on change) and the Panel skips drawing the cursor when it is `Some(false)`. RIS/DECSTR reset it to visible. **NOT shipped: DECSCUSR cursor shape (`CSI q`) and blink (`?12`)** — no branch for either. Guards: `cursor_visibility_rides_the_patch_only_when_it_changes`, `cursor_visible_false_is_stored_and_render_skips_the_cursor`.
 ### C10 · Colour palette and clipboard OSCs — OSC 4 / 10 / 11 / 12 / 104, OSC 52
 
 herdr has a whole tracker for palette queries because it must answer them and reconcile them with the host

@@ -1026,7 +1026,7 @@ the operator could not have removed.
 
 ---
 
-### 内嵌终端（`pty.*`）
+### 内嵌终端（`pty.*`） {#embedded-terminal}
 
 - **两面 operator-only**：RPC 面在 `method_admin::ADMIN_PREFIXES`，订阅面在 `event_scope::default_rules`。
 - **cwd jail 只管起点**。终端内部的 `cd` 不受约束 —— 命令粒度的闸在交互式字节流上不可表达（`vim` 里的回车不是命令）。
@@ -1048,6 +1048,33 @@ the operator could not have removed.
   见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份名单会变，这句话不该跟着腐烂）。
   一条精确点名 `self_config` 的 `[policies.tool_permissions]` 条目仍能站下这张卡（那是人写的
   决定，创建它的那次写入自己已经经过这条规则举过卡），这是有意的。
+- **第三张脸：`terminal` 工具（2026-09-04 增量，仍然只读）**。同一份数据现在有三个入口——`pty.*` RPC、
+  `pty.*`/`runtime.*` 事件、以及给 LLM 的 `terminal` 工具——所以**三张脸各关一次**（判据 §9）。
+  工具面五个动词全部只读：`list`（有哪些会话）· `read`（当前可见屏幕，无 scrollback）· `status`
+  （每个会话被检测出的 agent 状态）· `wait`（阻塞到某个状态出现，靠 `RuntimeAgents` 的变更 watch 唤醒，
+  **不轮询屏幕、不碰会话**）· `explain`（哪条 manifest 规则、在哪个 manifest 版本、基于哪段屏幕文本判的）。
+  **没有写动词**：PTY 不经 `[sandbox.command_policy]` 也不经 exec tier，把写入给 LLM 就是给它一个绕过全部
+  命令闸的 shell——那是授权架构的决定，不是一个功能（第 2 期 spec §7.1 记着「若裁定要做」的形状）。
+  闸：`method_authz::OPERATOR_TOOLS` 的成员 **＋** `builtin_tools/terminal.rs` 里的内联复查，两道。
+- **零身份的调用方看不见任何有归属的会话（有意的 fail-closed）**。归属过滤在工具面只有**一个**谓词
+  （`builtin_tools/terminal.rs::terminal_admits`，`list` 直接用它、`read`/`wait`/`explain` 经
+  `owner_record_admits` + `PtyManager::owner_of` 用它），所以五张镜头不可能对「哪些行你能看」给出不同答案。
+  对**有身份**的调用方它逐字节等于 `pty::owner_admits`；对 `actor == None` 它**刻意更窄**——
+  `owner_admits` 那条臂答"不受限"，这里只放行 `created_by == None` 的会话。
+  ⚠️ 后果要说清：**生产上每一次 spawn 都盖 actor**（loopback 的 operator 在 `connect` 就解析成
+  `OWNER_USER_ID`），所以一个真的没有调用者的运行（cron / A2A / 内部接线）**一个会话都看不见**。
+  这是**有意的**：一次没有身份的自动运行不该继承 operator 的终端。要重新打开它，开口在**身份系统**
+  （让那次运行带上身份），不在这个工具——把这条臂放宽是一行策略改动，但那一行会把"未知"读成"全体"。
+  不属于你的会话一律答 `no such session`，与"不存在"逐字节同形（否则每个动词都成了枚举别人 session id
+  的 oracle）。守卫 `an_actorless_caller_sees_only_unowned_sessions` ·
+  `a_loopback_operator_is_not_an_actor_less_caller` · `read_of_someone_elses_session_is_refused_like_unknown`。
+- **⚠️ 一个记录在案、尚未修的闸缺口**（不是本轮引入）：在 `ScopedToolService` 路径上，chat 档位 / member
+  调用方会触发 `OPERATOR_TOOLS` 的审批卡，**而即使人批准了，内联复查仍然拒绝**——批准只翻转派发管线的
+  `authorized`，没有任何东西重盖 `TurnContext`。决定的修法是一条**接缝**（把 `check_operator_gate` 已经算出的
+  `approved_by_operator_gate` 传下来），那条缝还不存在。**别用「删掉内联检查」来修**：审批卡的文案今天写着
+  "…which changes Aleph's own configuration"，对一个只读工具是假的，删掉内联检查等于让一张贴错标签的卡
+  真的授出一次读别人终端屏幕的权限。全文在 `builtin_tools/terminal.rs` 的模块 doc 与
+  `method_authz.rs` 的 `terminal` 条目 → [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md) §4
 
 ---
 
