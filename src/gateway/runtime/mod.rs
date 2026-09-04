@@ -616,20 +616,26 @@ impl RuntimeAgents {
     /// beside `pty::manager().remove`, so "the session is gone" has exactly
     /// one answer.
     ///
-    /// Only an id that was actually there bumps the generation: removing
-    /// something absent changed nothing, and a waiter woken by it would find
-    /// the table exactly as it left it. (Tests call this to clean up the
-    /// global table, so the no-op case is common, not hypothetical.)
+    /// **Bumps the generation unconditionally, including when there was no
+    /// row.** The earlier version bumped only when one existed, on the
+    /// reasoning that "removing something absent changed nothing" — true of
+    /// the TABLE, and false of the thing waiters actually ask about. A
+    /// session that exits before it was ever sampled removes nothing here,
+    /// and a `terminal{wait}` on it is asking whether that session is still
+    /// alive: the exit IS its answer, and without a bump it does not hear it
+    /// until its own window closes (60 s by default). Measured before the
+    /// change: `gone` after 5.003 s of a 5 s window.
+    ///
+    /// The cost of the wider bump is one spurious wake-up per absent remove,
+    /// which every waiter answers by re-reading the table and going back to
+    /// sleep — and the callers are session exits and test cleanup, not a
+    /// per-frame path.
     pub fn remove(&self, session_id: &str) {
-        let existed = self
-            .entries
+        self.entries
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(session_id)
-            .is_some();
-        if existed {
-            self.bump();
-        }
+            .remove(session_id);
+        self.bump();
     }
 }
 

@@ -1278,8 +1278,11 @@ fn agent_change_clears_the_idle_hold() {
 ///
 /// So the generation counter is asserted against every producer that can make
 /// the table look different: a changed sample, a released idle hold, a quiet
-/// flip, and a removal. An unchanged sample must NOT bump it — a watch that
-/// fires at the 16 ms flush cadence is a busy loop with extra steps.
+/// flip, and a removal — a removal of an ABSENT row included, because a
+/// session that exits before its first sample is exactly the case a waiter
+/// cannot learn about any other way. An unchanged sample must NOT bump it — a
+/// watch that fires at the 16 ms flush cadence is a busy loop with extra
+/// steps, and that is the one case where "nothing to report" is the truth.
 #[test]
 fn subscribe_bumps_on_every_observable_change() {
     let agents = RuntimeAgents::default();
@@ -1323,13 +1326,15 @@ fn subscribe_bumps_on_every_observable_change() {
     agents.remove("s1");
     assert!(*rx.borrow() > after_quiet, "a removal must bump");
 
-    // 6. removing something that was not there is not a change
+    // 6. removing something that was not there ALSO bumps: a waiter on a
+    // session that exited before it was ever sampled has no row to lose, and
+    // the exit is precisely the answer it is waiting for
+    // (`builtin_tools::terminal::tests::wait_reports_gone_when_an_unsampled_session_exits`).
     let after_remove = *rx.borrow();
     agents.remove("never-existed");
-    assert_eq!(
-        *rx.borrow(),
-        after_remove,
-        "removing an absent row is not an observable change"
+    assert!(
+        *rx.borrow() > after_remove,
+        "an exit must wake waiters even when the table had no row to drop"
     );
 }
 

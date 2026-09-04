@@ -157,10 +157,14 @@ pub struct TerminalArgs {
     pub timeout_ms: Option<u64>,
 }
 
-/// Output envelope shared by all three actions — same shape as
-/// `MoaManageOutput`: a flat `success`/`message`/`data` triple rather than a
-/// per-action type, since the three actions have nothing in common to
-/// factor beyond "did it work" and "here is the payload".
+/// Output envelope shared by every action — same shape as `MoaManageOutput`:
+/// a flat `success`/`message`/`data` triple rather than a per-action type,
+/// since the actions have nothing in common to factor beyond "did it work"
+/// and "here is the payload".
+///
+/// No count in that sentence on purpose: this doc said "all three" while the
+/// enum had five, which is a list that rots (判据 §1/§16). The set is
+/// [`TerminalAction`]; read it there.
 #[derive(Debug, Clone, Serialize)]
 pub struct TerminalOutput {
     pub success: bool,
@@ -274,7 +278,10 @@ impl AlephTool for TerminalTool {
 ///
 /// The narrowing (D7) is the one place this tool deliberately departs from the
 /// predicate the other two `pty.*` faces share, so it is spelled once and used
-/// by all four actions rather than four times (判据 §9). `owner_admits`'s
+/// by EVERY action rather than once per action (判据 §9 — and deliberately
+/// without a number: the previous wording said "all four" while five actions
+/// reached it, and a reader who counts four consumers of the ownership
+/// predicate does not go looking for the fifth). `owner_admits`'s
 /// unrestricted `actor: None` arm is right for the faces it was written for —
 /// an RPC handler reached only through a `connect`-authenticated dispatch,
 /// where `None` means "this deployment resolves no users", and where `pty.*`
@@ -570,6 +577,10 @@ async fn wait_for_session(
         // produce `timeout`, so honouring it literally spends the caller's
         // whole foreground budget to report nothing. Say which words are
         // accepted instead of guessing which one was meant.
+        // Falsified on 2026-09-04 by replacing this arm with
+        // `&WAIT_DEFAULT_UNTIL`: `wait_refuses_an_empty_until_instead_of_stalling`
+        // goes red (see the task-D report). Its first version could not —
+        // the ownership gate refused the id before this arm ran.
         Some([]) => {
             return Err("wait requires at least one state in `until` \
                  (blocked / idle / working / unknown); omit it for [blocked, idle]"
@@ -764,8 +775,8 @@ mod tests {
     /// the two shapes schemars emitted.
     ///
     /// schemars 1.2 renders a fieldless enum as a flat `enum` array ONLY when
-    /// no variant carries a doc comment; the moment one does — and all three
-    /// of `TerminalAction`'s do, because the model reads them — it emits
+    /// no variant carries a doc comment; the moment one does — and every
+    /// `TerminalAction` variant does, because the model reads them — it emits
     /// `oneOf` of `{const, description}` instead, to have somewhere to put
     /// the per-variant text. Both shapes mean the same thing to a provider,
     /// and which one ships is decided by something as innocent as deleting a
@@ -992,12 +1003,14 @@ mod tests {
     /// owned session is sampled into it — otherwise the `status` half is
     /// vacuous (an empty table hides everything, whatever the predicate says).
     ///
-    /// All FOUR verbs that can name or hand out a session id, not the three
-    /// spec §4.4 lists: `wait` takes a `session_id` too, and a gate applied to
-    /// three of four addressed actions is not a gate — it is the shape this
-    /// tool's own module doc describes for `plugin_manage` (one face closed,
-    /// one open). `wait`'s window is zero here so the refusal (or the
-    /// immediate timeout) is what is measured, not a sleep.
+    /// EVERY verb that can name or hand out a session id, not the subset
+    /// spec §4.4 lists: `wait` and `explain` take a `session_id` too, and a
+    /// gate applied to some of the addressed actions is not a gate — it is
+    /// the shape this tool's own module doc describes for `plugin_manage`
+    /// (one face closed, one open). Adding a verb without adding it here is
+    /// what this test exists to make expensive. `wait`'s window is zero so
+    /// the refusal (or the immediate timeout) is what is measured, not a
+    /// sleep.
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn an_actorless_caller_sees_only_unowned_sessions() {
@@ -1042,6 +1055,8 @@ mod tests {
         let anon_read_unowned = read_session(Some(&unowned), None);
         let anon_wait_owned = wait_for_session(Some(&owned), None, Some(0), None).await;
         let anon_wait_unowned = wait_for_session(Some(&unowned), None, Some(0), None).await;
+        let anon_explain_owned = explain_session(Some(&owned), None);
+        let anon_explain_unowned = explain_session(Some(&unowned), None);
         let owner_list = list_sessions(Some("u-owner")).expect("list as owner");
 
         // Close BEFORE asserting — same reason as
@@ -1081,6 +1096,12 @@ mod tests {
             "`wait` is addressed by session id too — the same refusal, byte for byte, or it \
              becomes the oracle `read` refuses to be"
         );
+        assert_eq!(
+            anon_explain_owned,
+            Err(pty::no_such_session(&owned)),
+            "…and `explain`, which hands back the screen's title and tail: every face has to \
+             answer the actor-less caller the same way, or the newest one is the hole"
+        );
 
         assert!(
             ids(&anon_list, "sessions").contains(&unowned),
@@ -1101,6 +1122,10 @@ mod tests {
             Ok("timeout".to_string()),
             "…and waitable: an unowned session in `unknown` with a zero window times out, \
              which is the shape that proves the gate let the call through at all"
+        );
+        assert!(
+            anon_explain_unowned.is_ok(),
+            "…and explainable: {anon_explain_unowned:?}"
         );
 
         assert!(
@@ -1324,6 +1349,61 @@ mod tests {
         );
     }
 
+    /// A session that ends BEFORE it was ever sampled must WAKE its waiter,
+    /// not be discovered when the window finally closes.
+    ///
+    /// The elapsed assertion is the whole test, and asserting the outcome
+    /// word alone is not enough — I wrote it that way first and it passed
+    /// against the unfixed code. `wait_for_state` re-runs its verdict once
+    /// when the deadline fires, so the answer was already `gone`; it just
+    /// arrived a full window late. With the 60 s default that is a caller
+    /// told a minute after the fact.
+    ///
+    /// The table never holds a row for this id, so the only thing that can
+    /// wake the waiter is `RuntimeAgents::remove` bumping the generation for
+    /// a row that was not there. It used to bump only when a row existed
+    /// (review round 1, Minor 2).
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn wait_reports_gone_when_an_unsampled_session_exits() {
+        use crate::gateway::pty::SpawnOptions;
+        use aleph_protocol::runtime::RuntimeAgentState;
+        use std::sync::Arc;
+
+        let id = pty::manager()
+            .spawn(&SpawnOptions::default())
+            .expect("spawn")
+            .session_id;
+        // Never sampled: this table has no row for the session at any point.
+        let table = Arc::new(crate::gateway::runtime::RuntimeAgents::default());
+
+        let exiting = Arc::clone(&table);
+        let exiting_id = id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            // `close` rather than `remove` so the child is killed too — a
+            // bare registry removal would leak a live shell into the rest of
+            // this test binary. Both spellings leave the waiter the same two
+            // facts: gone from the registry, absent from the table.
+            let _ = pty::manager().close(&exiting_id);
+            exiting.remove(&exiting_id);
+        });
+
+        let window = std::time::Duration::from_secs(5);
+        let started = std::time::Instant::now();
+        let outcome = wait_for_state(&table, &id, &[RuntimeAgentState::Blocked], window).await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(outcome, WaitOutcome::Gone);
+        assert!(
+            elapsed < window / 5,
+            "the exit must WAKE the waiter: it answered `gone` only after {elapsed:?} of a \
+             {window:?} window, which means it slept to the deadline and found out on its way \
+             out. The margin is deliberately wide — this fails on a mechanism, not on a \
+             slow machine"
+        );
+    }
+
     /// The clamp, and the reason there is one. `600_000` is the brief's own
     /// over-ask; the assertion below it is the one that matters — the ceiling
     /// is checked against `bash_exec`'s budget constant, not against a second
@@ -1362,12 +1442,44 @@ mod tests {
 
     /// An empty `until` can only produce a timeout, so it is refused with the
     /// vocabulary instead of honoured literally for a full window.
+    ///
+    /// Two things here are the fix for a guard that could not go red (review
+    /// round 1, I1), and both matter:
+    ///
+    /// * the id is a REAL session nobody owns, so the actor-less caller is
+    ///   admitted and the call reaches the `until` check. The first version
+    ///   passed `"s-empty-until"`, which exists in no registry: the ownership
+    ///   gate refused it first and the empty-`until` arm was never executed.
+    /// * the assertion is on wording only THIS refusal carries. The old one
+    ///   looked for `"until"`, which `no such session: s-empty-until` contains
+    ///   as part of the id — so deleting the refusal arm left the test green.
+    ///
+    /// `timeout_ms: Some(0)` so that a deleted refusal arm fails in
+    /// milliseconds instead of defaulting to `[blocked, idle]` and blocking
+    /// for the full 60 s window before the assertion can fail.
     #[tokio::test]
     #[serial_test::parallel(pty_global_manager)]
     async fn wait_refuses_an_empty_until_instead_of_stalling() {
-        let out = wait_for_session(Some("s-empty-until"), Some(&[]), None, None).await;
-        let message = out.expect_err("an empty `until` is refused");
-        assert!(message.contains("until"), "{message}");
+        use crate::gateway::pty::SpawnOptions;
+
+        let unowned = pty::manager()
+            .spawn(&SpawnOptions {
+                created_by: None,
+                ..Default::default()
+            })
+            .expect("spawn")
+            .session_id;
+
+        let out = wait_for_session(Some(&unowned), Some(&[]), Some(0), None).await;
+
+        let _ = pty::manager().close(&unowned);
+
+        let message = out.expect_err("an empty `until` is refused, not waited out");
+        assert!(
+            message.contains("at least one state"),
+            "the refusal must be the empty-`until` one and not the ownership gate's, or this \
+             guard passes with the behaviour deleted: {message}"
+        );
     }
 
     // ── explain ───────────────────────────────────────────────────────────
