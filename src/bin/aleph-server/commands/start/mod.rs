@@ -171,6 +171,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         ping_interval_secs: full_config.gateway.ping_interval_secs,
         idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         lane: full_config.gateway.lane.clone(),
+        // `[gateway.rate_limit]` — restart-only, like every other key here:
+        // this is the only moment the section is read.
+        rate_limit: full_config.gateway.rate_limit.clone().into(),
         require_idempotency_key: full_config.gateway.require_idempotency_key,
         allowed_origins: full_config.gateway.allowed_origins.clone(),
         allow_any_origin: full_config.gateway.allow_any_origin,

@@ -315,6 +315,10 @@ pub struct GatewayConfig {
     pub tls_key_path: String,
     /// Mirrors `GatewayServerConfig::tls.san`.
     pub tls_san: Vec<String>,
+    /// Per-principal RPC rate-limit ceilings. Populated by the binary from
+    /// the TOML `[gateway.rate_limit]` block (or the compiled defaults).
+    /// RESTART-ONLY: read once here, when the limiter is built.
+    pub rate_limit: RateLimitConfig,
 }
 
 impl Default for GatewayConfig {
@@ -336,6 +340,7 @@ impl Default for GatewayConfig {
             tls_san: Vec::new(),
             lane: LaneConfig::default(),
             require_idempotency_key: false,
+            rate_limit: RateLimitConfig::default(),
         }
     }
 }
@@ -545,6 +550,9 @@ impl GatewayServer {
         };
 
         let lane_config = config.lane.clone();
+        // The one production site that can honor `[gateway.rate_limit]`:
+        // `new` takes no config at all.
+        let rate_limit_config = config.rate_limit.clone();
 
         Self {
             addr,
@@ -556,7 +564,7 @@ impl GatewayServer {
             protocol_watcher,
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
-            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            rate_limiter: Arc::new(RateLimiter::new(rate_limit_config)),
             lane_manager: Arc::new(LaneManager::new(lane_config)),
             idempotency_guard: Arc::new(crate::gateway::idempotency::IdempotencyGuard::new(
                 std::time::Duration::from_secs(300), // 5 minute TTL
@@ -1464,6 +1472,102 @@ mod tests {
         assert!(
             parsed_member.is_success(),
             "member must reach a member-open method: {resp_member}"
+        );
+    }
+
+    /// The ceiling an operator configured must be the ceiling that rejects.
+    /// Asserting only that `with_config` returns a server would stay green
+    /// with the limiter still built from `RateLimitConfig::default()`, which
+    /// is exactly the state this task found.
+    #[test]
+    fn with_config_enforces_the_configured_rpc_heavy_ceiling() {
+        use super::super::rate_limiter::{RateLimitKey, RateLimitScope, WindowConfig};
+
+        let configured = 3;
+        // Guard the guard: a ceiling equal to the default would pass for the
+        // wrong reason.
+        assert!(
+            RateLimitConfig::default().rpc_heavy.max_requests > configured,
+            "the test ceiling must differ from the compiled default"
+        );
+
+        let config = GatewayConfig {
+            rate_limit: RateLimitConfig {
+                rpc_heavy: WindowConfig {
+                    max_requests: configured,
+                    window_secs: 60,
+                    lockout_secs: None,
+                },
+                ..RateLimitConfig::default()
+            },
+            ..GatewayConfig::default()
+        };
+        let server = GatewayServer::with_config("127.0.0.1:0".parse().unwrap(), config);
+
+        // Not loopback: a `user:` principal is what round-6 made the identity.
+        let key = RateLimitKey::new("user:alice", RateLimitScope::RpcHeavy);
+        for i in 1..=configured {
+            assert!(
+                server.rate_limiter.check_and_record(&key).is_ok(),
+                "call {i} is within the configured ceiling"
+            );
+        }
+        assert!(
+            server.rate_limiter.check_and_record(&key).is_err(),
+            "call {} must be rejected at the CONFIGURED ceiling, not waved \
+             through until the default {} is reached",
+            configured + 1,
+            RateLimitConfig::default().rpc_heavy.max_requests
+        );
+    }
+
+    /// `GatewayServer::new` takes no config and must keep the compiled
+    /// default — the no-config path is what every embedder and test uses.
+    #[test]
+    fn new_without_config_keeps_the_default_ceiling() {
+        use super::super::rate_limiter::{RateLimitKey, RateLimitScope};
+
+        let server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        let key = RateLimitKey::new("user:bob", RateLimitScope::RpcHeavy);
+        let ceiling = RateLimitConfig::default().rpc_heavy.max_requests;
+        for i in 1..=ceiling {
+            assert!(
+                server.rate_limiter.check_and_record(&key).is_ok(),
+                "call {i} is within the default ceiling"
+            );
+        }
+        assert!(
+            server.rate_limiter.check_and_record(&key).is_err(),
+            "the default ceiling still applies on the no-config path"
+        );
+    }
+
+    /// Both ends of the `[gateway.rate_limit]` wire have their own tests —
+    /// the TOML parses (gateway/config.rs) and a populated `GatewayConfig`
+    /// reaches the limiter (above). The middle is one line in the binary, and
+    /// nothing else fails if it hands over `RateLimitConfig::default()`
+    /// instead: the section would parse, the limiter would run, and the
+    /// configured number would simply never arrive.
+    #[test]
+    fn the_binary_feeds_the_configured_section_into_the_server_config() {
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bin/aleph-server/commands/start/mod.rs"
+        ))
+        .expect("the start command is readable from this test");
+        let code = crate::utils::source_scan::strip_comment_lines(&src);
+
+        let start = code
+            .find("ServerConfig {")
+            .expect("the boot mapping still builds a ServerConfig literal");
+        let end = code[start..].find("};").expect("the literal is terminated") + start;
+        let literal = &code[start..end];
+
+        assert!(
+            literal.contains("full_config.gateway.rate_limit"),
+            "the boot mapping must read the parsed [gateway.rate_limit] \
+             section; a `rate_limit: RateLimitConfig::default()` here leaves \
+             the operator's numbers parsed and discarded"
         );
     }
 

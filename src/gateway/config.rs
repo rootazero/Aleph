@@ -173,6 +173,19 @@ pub struct GatewayServerConfig {
     /// without a `[gateway.lane]` block keep loading.
     #[serde(default)]
     pub lane: LaneConfig,
+    /// Per-principal RPC rate-limit ceilings (`[gateway.rate_limit]`).
+    /// Missing keys fall back to
+    /// [`RateLimitConfig::default`](crate::gateway::rate_limiter::RateLimitConfig::default),
+    /// so old TOML files without the block keep loading unchanged.
+    ///
+    /// RESTART-ONLY: read once at boot by `GatewayServer::with_config`.
+    /// `[gateway.*]` is not reachable by `self_config` / `ConfigPatcher`, so
+    /// changing a ceiling is edit-the-file-and-restart. The two byte-route
+    /// limiters (`server/artifact_route.rs`, `server/canvas_asset_route.rs`)
+    /// are deliberately NOT configured from here — both declare themselves
+    /// private to their route.
+    #[serde(default)]
+    pub rate_limit: crate::gateway::rate_limiter::RateLimitTomlConfig,
     /// How often the server sends a WS-level Ping frame per connection.
     /// Detects half-open TCP sockets that the OS hasn't reaped (e.g. after
     /// a laptop sleeps). Default 30s.
@@ -246,6 +259,7 @@ impl Default for GatewayServerConfig {
             trusted_proxy: TrustedProxyConfig::default(),
             allow_insecure_remote: false,
             lane: LaneConfig::default(),
+            rate_limit: crate::gateway::rate_limiter::RateLimitTomlConfig::default(),
             ping_interval_secs: default_ping_interval_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),
             require_idempotency_key: false,
@@ -831,6 +845,103 @@ model = "test"
         let defaults = GatewayServerConfig::default();
         assert!(defaults.allowed_origins.is_empty());
         assert!(!defaults.allow_any_origin);
+    }
+
+    /// An absent `[gateway.rate_limit]` must produce exactly the ceilings the
+    /// binary shipped with before the section existed. Asserted field by
+    /// field, not against a `Debug` string: a `Debug` comparison passes for
+    /// two structs that print the same and would keep passing if a field were
+    /// renamed out of the printout.
+    #[test]
+    fn absent_rate_limit_section_equals_the_compiled_default_field_by_field() {
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        let toml = r#"
+[agents.main]
+model = "test"
+
+[gateway]
+port = 18790
+"#;
+        let config = GatewayConfig::from_toml(toml).expect("legacy config still loads");
+        let got: RateLimitConfig = config.gateway.rate_limit.clone().into();
+        let want = RateLimitConfig::default();
+
+        for (scope, g, w) in [
+            ("auth", &got.auth, &want.auth),
+            ("rpc_default", &got.rpc_default, &want.rpc_default),
+            ("rpc_write", &got.rpc_write, &want.rpc_write),
+            ("rpc_heavy", &got.rpc_heavy, &want.rpc_heavy),
+            ("rpc_realtime", &got.rpc_realtime, &want.rpc_realtime),
+        ] {
+            assert_eq!(g.max_requests, w.max_requests, "{scope}.max_requests");
+            assert_eq!(g.window_secs, w.window_secs, "{scope}.window_secs");
+            assert_eq!(g.lockout_secs, w.lockout_secs, "{scope}.lockout_secs");
+        }
+        assert_eq!(got.exempt_loopback, want.exempt_loopback, "exempt_loopback");
+        assert_eq!(got.max_entries, want.max_entries, "max_entries");
+    }
+
+    /// A section that names one key overrides that key and nothing else — the
+    /// unnamed scopes and the unnamed keys within a named scope keep the
+    /// compiled default. Replaying the whole table would be the only other
+    /// way to change one number, and a replayed table narrows silently as the
+    /// defaults move.
+    #[test]
+    fn partial_rate_limit_section_overrides_only_what_it_names() {
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        let toml = r#"
+[agents.main]
+model = "test"
+
+[gateway.rate_limit]
+max_entries = 5000
+
+[gateway.rate_limit.rpc_heavy]
+max_requests = 3
+"#;
+        let config = GatewayConfig::from_toml(toml).expect("partial section loads");
+        let got: RateLimitConfig = config.gateway.rate_limit.clone().into();
+        let want = RateLimitConfig::default();
+
+        assert_eq!(got.rpc_heavy.max_requests, 3, "the named key is honored");
+        assert_eq!(
+            got.rpc_heavy.window_secs, want.rpc_heavy.window_secs,
+            "an unnamed key inside a named scope keeps the default window"
+        );
+        assert_eq!(
+            got.rpc_heavy.lockout_secs, want.rpc_heavy.lockout_secs,
+            "an unnamed key inside a named scope keeps the default lockout"
+        );
+        assert_eq!(
+            got.auth.max_requests, want.auth.max_requests,
+            "an unnamed scope is untouched"
+        );
+        assert_eq!(got.auth.lockout_secs, want.auth.lockout_secs);
+        assert_eq!(got.exempt_loopback, want.exempt_loopback);
+        assert_eq!(got.max_entries, 5000, "the named scalar is honored");
+    }
+
+    /// `lockout_secs = 0` is how TOML spells "no lockout" — the runtime type
+    /// carries `Option<u64>` and TOML has no null. Without this encoding an
+    /// operator could only lengthen `auth`'s lockout, never remove it.
+    #[test]
+    fn zero_lockout_secs_disables_the_lockout() {
+        use crate::gateway::rate_limiter::RateLimitConfig;
+
+        let toml = r#"
+[agents.main]
+model = "test"
+
+[gateway.rate_limit.auth]
+lockout_secs = 0
+"#;
+        let config = GatewayConfig::from_toml(toml).expect("parse lockout opt-out");
+        let got: RateLimitConfig = config.gateway.rate_limit.clone().into();
+        assert_eq!(got.auth.lockout_secs, None);
+        // The default it replaced was a real lockout, so this asserts a change.
+        assert!(RateLimitConfig::default().auth.lockout_secs.is_some());
     }
 
     #[test]
