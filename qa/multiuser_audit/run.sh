@@ -35,9 +35,10 @@
 # ## Why Node and not Python
 #
 # This fixture had five `python3` legs. On a Windows host the only `python3` on
-# PATH is the WindowsApps stub: `python3 - <<'PY'` prints nothing, edits nothing
-# and exits 0, so the config rewrite silently did not happen and the run died
-# far from its cause. Its two sibling multi-user fixtures (`teamchat_rooms`,
+# PATH is the WindowsApps stub: `python3 - <<'PY'` prints nothing and edits
+# nothing, so the config rewrite silently did not happen and the run died far
+# from its cause. (Its exit code is stub-version dependent and deliberately not
+# recorded here; the silence is the operative half.) Its two sibling multi-user fixtures (`teamchat_rooms`,
 # `rooms_channel_bind`) already do all of this from Node, so this is reuse and
 # not a second toolchain: the config patcher IS `qa/teamchat_rooms/
 # patch_config.mjs` (the same file `qa/agents_viz/run.sh` calls) and the pairing

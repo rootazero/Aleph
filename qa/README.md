@@ -245,6 +245,17 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # devices, bootstrap tickets, channel senders), because a preview
                                  # that names two of the four effects the receipt below reports is
                                  # read by the operator as coverage.
+                                 #
+                                 # FLOOR: run.sh's own `[ "$FAIL" -eq 0 ] || exit 1`
+                                 # — zero failures, and deliberately no number
+                                 # here (the header carries no claim count
+                                 # either, and says so). ⚠️ Like its two room
+                                 # siblings, it enforces no MINIMUM assertion
+                                 # count: a phase whose precondition stopped
+                                 # holding fires nothing, shrinks the total and
+                                 # still exits 0. The only defence is comparing
+                                 # totals across runs, so record what a run
+                                 # printed — 2026-09-04 cold: 38 passed.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation
@@ -257,6 +268,17 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # project-page tab has a server-side effect. Same 0.0.0.0 + LAN-leg
                                  # reason as `multiuser_audit`. Node, not Python — see its run.sh
                                  # header.
+                                 #
+                                 # FLOOR: `drive_rooms.mjs`'s `report()` —
+                                 # `process.exit(FAIL === 0 ? 0 : 1)`. Zero
+                                 # failures, no minimum count; both driver
+                                 # report paths add FAIL+1 on an exception, so
+                                 # an abort is caught, but a phase that quietly
+                                 # never fires is not. This one has a
+                                 # cross-check the other two lack: its run.sh
+                                 # header records the total an earlier
+                                 # measurement saw, and a 2026-09-04 cold run
+                                 # printed exactly that again.
 
 ./qa/agents_viz/run.sh claims    # §4.11 / §5.13 / §3.13 tasks+agents visualization: the two
                                  # severed wires the round fixed, each asserted by effect on a
@@ -312,8 +334,31 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
                                  # that platform's SHELL_MARKER_JS arm is still unrun
 
-./qa/spend_budget/run.sh         # §5.22 round-7's per-principal dollar ceiling. Eleven assertions,
-                                 # each reading an EFFECT (a ledger row on disk, a wire error code,
+./qa/rooms_channel_bind/run.sh   # §5.22 round-9: a channel GROUP conversation bound into a project
+                                 # room. Three real identities, a webhook channel (the binding key is
+                                 # (channel_id, peer_kind, peer_id) and the mechanism does not know
+                                 # which transport it is — webhook is the only kind a fixture can
+                                 # drive with one signed POST). Its three oracles deliberately never
+                                 # ask the server: the memory partition is read out of memory.db, the
+                                 # session row out of sessions.db, and <room_context> plus the speaker
+                                 # prefix out of the mock model's own request log. Carries the three
+                                 # negative arms that make the positive ones mean something (a paired
+                                 # non-member stays personal; an unpaired stranger runs on bare `main`
+                                 # with no room block; a member's projects.channel.bind is refused),
+                                 # and one addendum where a genuine store failure must answer
+                                 # "unknown" rather than "nothing to move".
+                                 #
+                                 # FLOOR: `drive_bind.mjs`'s `report()` —
+                                 # `process.exit(FAIL === 0 ? 0 : 1)`. SKIPPED is counted and printed
+                                 # but NOT gated, so a skipped scenario still exits 0 — read the skip
+                                 # count, it is not part of the floor. 2026-09-04 cold: 52 passed, 0
+                                 # skipped. ⚠️ Its addendum D (does the room-settings channel section
+                                 # survive a narrow viewport) is a BROWSER claim; a shell run neither
+                                 # makes it nor breaks it, and it has not been looked at since the
+                                 # fixture shipped.
+
+./qa/spend_budget/run.sh         # §5.22 round-7's per-principal dollar ceiling. Every assertion reads
+                                 # an EFFECT (a ledger row on disk, a wire error code,
                                  # a CLI table, a survived restart) rather than counting an RPC's
                                  # "it returned 200"; two of them read `spend_ledger` with
                                  # `sqlite3` directly rather than through `spend.query`, which is
@@ -321,10 +366,19 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # handler that reads it back. This is the fixture the root
                                  # CLAUDE.md `src/spend/` row routes to.
                                  #
+                                 # FLOOR: run.sh's own `[ "$FAIL" -eq 0 ] || exit 1`.
+                                 # Deliberately no count here — an inline number
+                                 # for a set the script itself owns is the shape
+                                 # the five rewind/claims/denied/knobs/holes
+                                 # floors were removed for.
+                                 #
                                  # NEEDS A REAL python3, and therefore does not run on a
                                  # Windows host, where the only `python3` on PATH is the
-                                 # WindowsApps stub (it prints nothing and exits 0 — a
-                                 # heredoc leg silently does nothing). Its sibling
+                                 # WindowsApps stub: it prints nothing and silently does
+                                 # nothing, so a heredoc leg no-ops and the run dies far
+                                 # from its cause. (No exit code is written down here —
+                                 # it is stub-version dependent, and the operative half
+                                 # of the sentence is the silence.) Its sibling
                                  # `multiuser_audit` was ported to Node; this one was not,
                                  # deliberately: `spend_rpc.py`, `mock_anthropic.py`, the
                                  # float comparisons and the `jf` helper are a much larger
