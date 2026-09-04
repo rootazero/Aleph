@@ -48,9 +48,6 @@ pub struct SkillEntry {
     /// Source URL (for github-installed skills).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// ISO date when installed (for non-official skills).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub installed_at: Option<String>,
 }
 
 impl InstallRegistry {
@@ -226,7 +223,6 @@ impl InstallRegistry {
                         source: SkillOrigin::Local,
                         version: None,
                         url: None,
-                        installed_at: None,
                     },
                 );
             }
@@ -255,7 +251,6 @@ mod tests {
             source: SkillOrigin::Official,
             version: Some(version.to_string()),
             url: None,
-            installed_at: None,
         }
     }
 

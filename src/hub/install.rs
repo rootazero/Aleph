@@ -253,7 +253,6 @@ pub fn install_git_skill(
             source: crate::bundled::manifest::SkillOrigin::Github,
             version: entry.version.clone(),
             url: Some(git_url.clone()),
-            installed_at: None,
         },
     );
     // Best-effort persistence of the install registry: the skill is already
