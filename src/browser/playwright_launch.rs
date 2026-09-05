@@ -103,26 +103,6 @@ impl<'a> LaunchPolicy<'a> {
     }
 }
 
-/// The `--browser` value for a [`BrowserType`], or `None` when the CLI has no
-/// way to ask for it.
-///
-/// `playwright-cli open --browser` accepts `chrome | firefox | webkit | msedge`
-/// (verbatim from `--help`). `Chromium` is Playwright's own default, so it is
-/// expressed by *omitting* the flag rather than by naming it — passing a value
-/// the CLI does not list would be a hard `Unknown option` failure.
-///
-/// `Brave` has no channel in Playwright and therefore no honest mapping; it
-/// stays in [`super::manager::unhonored_managed_fields`] so the operator is
-/// told at boot instead of silently getting Chromium.
-#[must_use]
-pub fn browser_flag_value(browser: &BrowserType) -> Option<&'static str> {
-    match browser {
-        BrowserType::Chromium | BrowserType::Brave => None,
-        BrowserType::Chrome => Some("chrome"),
-        BrowserType::Edge => Some("msedge"),
-    }
-}
-
 /// The `--config` JSON for a launch, following the documented
 /// `.playwright/cli.config.json` schema.
 ///
@@ -184,33 +164,6 @@ pub fn output_dir_for(session_key: &str) -> Result<PathBuf, super::error::Browse
     Ok(browser_state_dir("cli-output")?.join(sanitize_session_key(session_key)))
 }
 
-/// The `open` argv (after the `-s=<session>` flag the driver always prepends).
-///
-/// `--headed` belongs to `open` and to nothing else: it used to be prepended
-/// to the `tab-new` argv, where the CLI rejects it outright
-/// (`Unknown option: --headed`, exit 1) — so headed mode was not a degraded
-/// mode, it was a hard failure on every call.
-///
-/// No URL is passed: `open` alone lands on `about:blank`, which keeps the
-/// launch out of the SSRF guard's way. The caller navigates afterwards through
-/// the normal, guarded path.
-#[must_use]
-pub fn open_argv(launch: &SessionLaunch, config_path: &Path) -> Vec<String> {
-    let mut argv = vec![
-        "open".to_string(),
-        "--config".to_string(),
-        config_path.to_string_lossy().into_owned(),
-    ];
-    if !launch.headless {
-        argv.push("--headed".to_string());
-    }
-    if let Some(value) = browser_flag_value(&launch.browser) {
-        argv.push("--browser".to_string());
-        argv.push(value.to_string());
-    }
-    argv
-}
-
 /// The `attach` argv (after the `-s=<session>` flag the driver always prepends).
 ///
 /// `--cdp` takes the http form of the endpoint. Both `http://…` and
@@ -223,10 +176,6 @@ pub fn open_argv(launch: &SessionLaunch, config_path: &Path) -> Vec<String> {
 /// are now properties of the Chrome argv Aleph builds — see
 /// [`super::chromium_launch::ChromiumLaunchSpec::argv`] and
 /// [`super::chromium_resolve::resolve_binary`].
-// TODO(plan-1 task 5): remove this allow. Task 5 (playwright_cli.rs) is the
-// only consumer; until then this fn has no non-test caller and `-D warnings`
-// (justfile:486, CI:345) would fail.
-#[allow(dead_code)]
 #[must_use]
 pub(crate) fn attach_argv(
     endpoint: &super::chromium_launch::CdpEndpoint,
@@ -364,23 +313,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn headed_puts_the_flag_on_open_where_the_cli_accepts_it() {
-        let launch = SessionLaunch {
-            headless: false,
-            ..SessionLaunch::headless_default()
-        };
-        let argv = open_argv(&launch, Path::new("/tmp/c.json"));
-        assert_eq!(argv[0], "open");
-        assert!(argv.contains(&"--headed".to_string()));
-    }
-
-    #[test]
-    fn headless_omits_the_headed_flag() {
-        let argv = open_argv(&SessionLaunch::headless_default(), Path::new("/tmp/c.json"));
-        assert!(!argv.contains(&"--headed".to_string()));
-    }
-
     /// `--config` rides on the attach for the same reason it rode on the open:
     /// passing it is what DISPLACES the ambient `.playwright/cli.config.json`
     /// the CLI would otherwise load from the process cwd — a file that can
@@ -404,27 +336,6 @@ mod tests {
                 "/tmp/c.json"
             ]
         );
-    }
-
-    /// Only the values the CLI's own `--help` lists may be passed; anything
-    /// else is `Unknown option` + exit 1, so `Chromium` (Playwright's default)
-    /// is expressed by omission and `Brave` has no mapping at all.
-    #[test]
-    fn browser_flag_only_carries_values_the_cli_accepts() {
-        assert_eq!(browser_flag_value(&BrowserType::Chromium), None);
-        assert_eq!(browser_flag_value(&BrowserType::Brave), None);
-        assert_eq!(browser_flag_value(&BrowserType::Chrome), Some("chrome"));
-        assert_eq!(browser_flag_value(&BrowserType::Edge), Some("msedge"));
-
-        let argv = open_argv(
-            &SessionLaunch {
-                browser: BrowserType::Edge,
-                ..SessionLaunch::headless_default()
-            },
-            Path::new("/tmp/c.json"),
-        );
-        let i = argv.iter().position(|a| a == "--browser").unwrap();
-        assert_eq!(argv[i + 1], "msedge");
     }
 
     /// The OTHER caller of `launch_config_json`, which the arity change would

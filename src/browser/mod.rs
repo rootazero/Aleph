@@ -1,13 +1,15 @@
 pub mod backend;
 pub(crate) mod chrome_mcp;
 pub(crate) mod chrome_mcp_backend;
-// TODO(plan-1 task 6): remove this allow. Consumers land in Task 5 (playwright_cli.rs) and Task 6 (manager.rs); until then this module has no non-test caller and `-D warnings` (justfile:486, CI:345) would fail.
+// TODO(plan-1 task 6): remove this allow. Task 5 wired the launch half
+// (`ChromiumChild` / `ChromiumLaunchSpec` / `CdpEndpoint` /
+// `DEVTOOLS_PORT_DEADLINE`); what is still without a non-test caller is the
+// orphan-reaper half Task 6 owns — `ArgvProbe`, `argv_names_dir`,
+// `argv_probe`, `ProcessFacts`, `reap_orphans`, `reap_orphans_now`. Those six
+// are exactly what must make the allow unnecessary; `-D warnings`
+// (justfile:486, CI:345) fails without it until then.
 #[allow(dead_code)]
 pub(crate) mod chromium_launch;
-// TODO(plan-1 task 5): remove this allow. Task 5 (playwright_cli.rs) is the
-// only consumer; until then this module has no non-test caller and
-// `-D warnings` (justfile:486, CI:345) would fail.
-#[allow(dead_code)]
 pub(crate) mod chromium_resolve;
 mod discovery;
 pub mod error;

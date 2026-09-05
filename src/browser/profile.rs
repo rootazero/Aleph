@@ -34,12 +34,13 @@ pub enum BrowserDriver {
 pub struct ProfileConfig {
     /// Which browser engine to use.
     ///
-    /// Honored by both drivers, with one gap: the managed driver passes
-    /// `playwright-cli open --browser`, which accepts `chrome` / `msedge`
-    /// (and expresses Chromium by omission) but has no value for `Brave`. A
-    /// managed Brave profile is warned about at startup
-    /// (`ProfileManager::new` → `unhonored_managed_fields`) rather than
-    /// silently given Chromium.
+    /// Honored by both drivers. The managed driver no longer passes the engine
+    /// to `playwright-cli` (it launches the browser itself); the value steers
+    /// `discovery::find_chromium_preferred`. When the requested engine is not
+    /// installed the search degrades to whatever is, and
+    /// `PlaywrightCliDriver::ensure_chromium` warns with the engine it actually
+    /// resolved — the substitution is reported by the code that performs it,
+    /// which is why the old boot-time warning is gone.
     #[serde(default)]
     pub browser: BrowserType,
 

@@ -93,8 +93,10 @@ impl ProfileManager {
     #[must_use]
     pub fn new(config: BrowserSystemConfig) -> Self {
         let ssrf_guard = ArcSwap::from_pointee(BrowserSsrfGuard::new(config.policy.clone()));
-        let playwright_cli_driver =
-            Arc::new(PlaywrightCliDriver::new(config.playwright_cli.clone()));
+        let playwright_cli_driver = Arc::new(PlaywrightCliDriver::new(
+            config.playwright_cli.clone(),
+            config.runtime.clone(),
+        ));
 
         let mut profiles = HashMap::new();
 
@@ -146,20 +148,6 @@ impl ProfileManager {
                     last_activity: std::time::Instant::now(),
                 },
             );
-        }
-
-        // Say so at boot when a profile sets something its driver cannot honor.
-        // Silently ignoring a configured field is the bug; a warning is the
-        // minimum honest answer while the managed driver has no equivalent.
-        for (name, p) in &profiles {
-            for field in unhonored_managed_fields(&p.config) {
-                tracing::warn!(
-                    profile = %name,
-                    field,
-                    "browser profile sets a field the managed (playwright-cli) driver cannot \
-                     honor — it is ignored; use an existing-session profile if you need it"
-                );
-            }
         }
 
         // The Chrome MCP driver consults the profile map when it has to launch
@@ -561,35 +549,6 @@ fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_s
     now.saturating_duration_since(last_activity).as_secs() > timeout_secs
 }
 
-/// Fields this profile sets that the **managed** (playwright-cli) driver cannot
-/// honor — empty for an existing-session profile, which honors all of them.
-///
-/// This list used to name five fields. It named them because an earlier round
-/// looked for the settings among the CLI's *flags*, did not find them, and
-/// recorded "no equivalent exists" rather than guessing flag names — the right
-/// instinct, applied to the wrong surface. `playwright-cli open` takes
-/// `--config <file>`, whose documented schema carries `browser.userDataDir` and
-/// `browser.launchOptions` (Playwright's `LaunchOptions`, i.e. `proxy` and
-/// `args`); `--browser` selects the engine; and `close` ends a session. Four of
-/// the five are now wired — see [`super::playwright_launch`] and
-/// [`ProfileManager::reap_idle`].
-///
-/// What is left is genuinely unhonorable: `Brave` has no Playwright channel, so
-/// a managed Brave profile would silently get Chromium. Saying so at boot beats
-/// accepting the setting and dropping it.
-fn unhonored_managed_fields(cfg: &ProfileConfig) -> Vec<&'static str> {
-    if cfg.driver != BrowserDriver::Managed {
-        return Vec::new();
-    }
-    let mut fields = Vec::new();
-    if super::playwright_launch::browser_flag_value(&cfg.browser).is_none()
-        && cfg.browser != BrowserType::default()
-    {
-        fields.push("browser");
-    }
-    fields
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,55 +782,6 @@ mod tests {
         // target either — it must downgrade, not resurrect anything.
         drop(manager);
         assert!(!apply_policy_to(Some(&handle), open));
-    }
-
-    /// The warning must name what is dropped and **nothing else**: a boot
-    /// warning about a setting that now works trains the operator to ignore
-    /// the warning.
-    #[test]
-    fn managed_profiles_name_the_fields_their_driver_drops() {
-        // Four of these reach the browser now — via `open --config` and
-        // `--browser` — so the only thing left to warn about is the engine
-        // Playwright has no channel for.
-        let cfg = ProfileConfig {
-            driver: BrowserDriver::Managed,
-            proxy: Some("socks5://127.0.0.1:1080".into()),
-            user_data_dir: Some("/tmp/p".into()),
-            extra_args: vec!["--disable-gpu".into()],
-            browser: BrowserType::Brave,
-            idle_timeout_secs: 60,
-            ..Default::default()
-        };
-        assert_eq!(unhonored_managed_fields(&cfg), vec!["browser"]);
-
-        // …and an engine that DOES have a mapping is silent, so the warning
-        // tracks the mapping rather than "differs from the default".
-        for honored in [BrowserType::Chrome, BrowserType::Edge] {
-            let cfg = ProfileConfig {
-                driver: BrowserDriver::Managed,
-                browser: honored.clone(),
-                proxy: Some("socks5://127.0.0.1:1080".into()),
-                user_data_dir: Some("/tmp/p".into()),
-                extra_args: vec!["--disable-gpu".into()],
-                idle_timeout_secs: 60,
-                ..Default::default()
-            };
-            assert!(
-                unhonored_managed_fields(&cfg).is_empty(),
-                "{honored:?} is mapped and must not warn"
-            );
-        }
-
-        // A default managed profile sets none of them → silence.
-        assert!(unhonored_managed_fields(&ProfileConfig::default()).is_empty());
-        // The existing-session driver honors all of them → silence.
-        let existing = ProfileConfig {
-            driver: BrowserDriver::ExistingSession,
-            proxy: Some("socks5://127.0.0.1:1080".into()),
-            idle_timeout_secs: 60,
-            ..Default::default()
-        };
-        assert!(unhonored_managed_fields(&existing).is_empty());
     }
 
     #[test]

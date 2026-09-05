@@ -111,7 +111,19 @@ pub async fn generate(
 
     // The operator's settings, not fresh defaults — see
     // [`is_browser_engine_available`] for what inheriting nothing cost.
-    let driver = PlaywrightCliDriver::new(config.cloned().unwrap_or_default());
+    //
+    // ⚠️ The `[browser.runtime]` half IS fresh defaults, and knowingly so: this
+    // tool is handed a `PlaywrightCliConfig` and nothing else, so the operator's
+    // Chromium pin and download mirror are not reachable from here. The default
+    // still resolves a browser (system first, Playwright's own after), so the
+    // PDF path works; what it does not do is honour a pin. Threading the
+    // runtime config needs a `ProfileManager` accessor plus a builder field —
+    // see `executor/builtin_registry/builder/constructor/mod.rs`, where
+    // `with_playwright_config` already does exactly this for the other half.
+    let driver = PlaywrightCliDriver::new(
+        config.cloned().unwrap_or_default(),
+        crate::browser::profile::BrowserRuntimeConfig::default(),
+    );
     let session = "aleph-pdf-gen";
     // PDF rendering wants no window; the launch is otherwise unconfigured.
     // Passing it is what lets the first call open the browser at all — until
