@@ -1775,7 +1775,7 @@ All outbound HTTP requests go through the SSRF engine:
 | MCP SSE transport | `mcp/transport/sse.rs` | `validate_url_with_pinned()` |
 | MCP preflight probe | `mcp/preflight.rs` | `validate_url_async()` + pinned `resolve()` |
 | A2A push webhook | `a2a/service/notification.rs` | `validate_url_async()` at register, `safe_fetch()` at send |
-| Fetch providers (crawl4ai/firecrawl) | `builtin_tools/web_fetch/mod.rs` | `validate_url_async()` before handing the URL to the provider |
+| ~~Fetch providers (crawl4ai/firecrawl)~~ | **removed from runtime** (BT-D-R4-22) | The `[fetch]` provider chain was excised: a provider re-resolves DNS and follows redirects from **its own** network position, so the Aleph-side DNS pin cannot cross the process boundary — validate-then-delegate was exactly the audited High-severity gap. Config surface kept (`[fetch]` section, `fetch_config.get/update/test` RPC); boot logs a one-time warn via `inert_fetch_backend_names` when `[fetch]` is enabled. `web_fetch` uses the built-in `safe_fetch()` path only |
 | Media pipeline URLs | `media/pipeline.rs` | `validate_url_async()` |
 | Browser navigation | `browser/network_policy.rs` | `validate_url_async()` via `BrowserSsrfGuard` |
 

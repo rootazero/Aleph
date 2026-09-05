@@ -1,4 +1,6 @@
+pub(crate) mod error;
 mod factory;
+pub mod handle;
 mod health;
 pub(crate) mod merge;
 pub(crate) mod notes;
@@ -29,6 +31,8 @@ mod web_fetch_fallback;
 /// - **Bing**: Cost-effective
 /// - **Exa.ai**: Semantic search
 /// - **Firecrawl**: Search + full-content scraping
+/// - **Jina**: LLM-ready, pre-ranked snippets (`s.jina.ai`)
+/// - **`DuckDuckGo`**: Zero-credential HTML scrape (last-resort fallback)
 ///
 /// # Example
 ///
@@ -54,8 +58,12 @@ mod web_fetch_fallback;
 /// ```
 // Re-exports
 pub use factory::{ProviderFactory, ProviderFactoryRegistry};
-pub use options::{Recency, SearchOptions};
+pub use handle::{
+    decline_global_search_handle, install_global_search_handle, try_global_search_handle,
+    SearchApplyError, SearchHandle,
+};
+pub use options::{Recency, SearchOptions, MAX_SEARCH_RESULTS};
 pub use provider::{SearchCapabilities, SearchProvider};
-pub use registry::{SearchAnswer, SearchRegistry};
+pub use registry::{MultiSearchAnswer, SearchAnswer, SearchRegistry};
 pub use result::SearchResult;
 pub use web_fetch_fallback::WebFetchSerpFallback;

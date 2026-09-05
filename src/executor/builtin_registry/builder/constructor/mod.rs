@@ -45,32 +45,40 @@ impl BuiltinToolRegistry {
     /// - Tool policy is enforced layered (Guardrails + Sandbox + `ApprovalGate`).
     ///   See docs/reference/SANDBOX.md.
     pub async fn with_config(mut config: BuiltinToolConfig) -> crate::error::Result<Self> {
-        let search_tool = SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
-            config.search_registry.as_ref(),
-            config.tavily_api_key.as_deref(),
-        ));
+        // A live handle wins: the tool then reads every `[search]` hot-apply
+        // off the swap cell. Without one (CLI, tests) the registry is resolved
+        // once, from the bare key if there is one — `SearchRegistry::for_tool`.
+        let search_tool = match config.search_handle.as_ref() {
+            Some(handle) => SearchTool::with_registry_cell(handle.registry_cell()),
+            None => SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
+                None,
+                config.tavily_api_key.as_deref(),
+            )),
+        };
         let web_fetch_tool = if let Some(ref cfg) = config.config {
-            // Single read for both consumers: two independent `read().await`s
-            // could observe different config generations if a patch lands
-            // between them (policy from generation N, fetch providers from N+1).
             let cfg_guard = cfg.read().await;
-            let mut tool = WebFetchTool::with_policy(&cfg_guard.policies.web_fetch)
+            let tool = WebFetchTool::with_policy(&cfg_guard.policies.web_fetch)
                 .with_ssrf_policy(cfg_guard.ssrf.clone());
+            // BT-D-R4-22: `[fetch]` providers are intentionally NOT wired into
+            // `WebFetchTool`. A fetch provider receives the target URL as a
+            // string and resolves/follows it from its own network position
+            // (crawl4ai is typically a LAN-hosted crawler), so the SSRF DNS
+            // pin computed here cannot be enforced on the fetch that actually
+            // happens — neither provider API accepts a pre-resolved address,
+            // and validate-then-delegate is exactly the High-severity pattern
+            // the audit flagged. The config section stays (operator intent +
+            // the fetch_config.test connection-check RPC), but the runtime
+            // path is built-in `safe_fetch` only. Surface that once at
+            // startup instead of letting the config silently do nothing.
             if let Some(ref fetch_cfg) = cfg_guard.fetch {
-                if fetch_cfg.enabled {
-                    let vault = config.shared_token_manager.clone();
-                    let resolve = move |k: &str| -> Option<String> {
-                        vault
-                            .as_ref()
-                            .and_then(|m| m.get_secret(k).ok().flatten())
-                            .map(|s| s.expose().to_string())
-                    };
-                    let ctx = crate::fetch::factory::FetchBuildCtx {
-                        search: cfg_guard.search.as_ref(),
-                        resolve_secret: &resolve,
-                    };
-                    let registry = crate::fetch::FetchRegistry::from_config(fetch_cfg, &ctx);
-                    tool = tool.with_fetch_providers(registry.select());
+                let inert = inert_fetch_backend_names(fetch_cfg);
+                if !inert.is_empty() {
+                    tracing::warn!(
+                        backends = ?inert,
+                        "[fetch] providers configured but not active: URL delegation to fetch \
+                         backends is disabled (BT-D-R4-22: the SSRF DNS pin cannot be enforced \
+                         on a provider-side crawl). web_fetch uses the built-in SSRF-pinned fetch."
+                    );
                 }
             }
             tool
@@ -1473,5 +1481,95 @@ async fn resolve_transcription(
             );
             None
         }
+    }
+}
+
+/// Names of the `[fetch]` backends an operator configured that will never be
+/// consulted at runtime (BT-D-R4-22 — see the `web_fetch_tool` construction
+/// above). Empty when the section is absent, disabled, or empty; the caller
+/// logs a single startup warning for the non-empty case so the config is not
+/// silently inert.
+///
+/// A firecrawl-only setup has no `[fetch].backends` entry (Strategy V: it
+/// shares the `[search]` config), so an enabled section with a non-empty
+/// `default_provider` but no backends still names the default — the operator
+/// expects fetch routing from it either way.
+fn inert_fetch_backend_names(
+    fetch_cfg: &crate::config::types::FetchConfigInternal,
+) -> Vec<String> {
+    if !fetch_cfg.enabled {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = fetch_cfg.backends.keys().cloned().collect();
+    if names.is_empty() && !fetch_cfg.default_provider.is_empty() {
+        names.push(fetch_cfg.default_provider.clone());
+    }
+    names.sort();
+    names
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inert_fetch_backend_names;
+    use crate::config::types::{FetchBackendConfig, FetchConfigInternal};
+    use std::collections::HashMap;
+
+    fn backend(provider_type: &str) -> FetchBackendConfig {
+        FetchBackendConfig {
+            provider_type: provider_type.into(),
+            api_key: None,
+            base_url: Some("http://x:11235".into()),
+            timeout_seconds: None,
+            verified: false,
+            enabled: true,
+        }
+    }
+
+    fn fetch_cfg(
+        enabled: bool,
+        default_provider: &str,
+        backends: HashMap<String, FetchBackendConfig>,
+    ) -> FetchConfigInternal {
+        FetchConfigInternal {
+            enabled,
+            default_provider: default_provider.into(),
+            fallback_providers: None,
+            backends,
+        }
+    }
+
+    #[test]
+    fn disabled_section_warns_about_nothing() {
+        let mut backends = HashMap::new();
+        backends.insert("crawl4ai".into(), backend("crawl4ai"));
+        let cfg = fetch_cfg(false, "crawl4ai", backends);
+        assert!(
+            inert_fetch_backend_names(&cfg).is_empty(),
+            "an operator who disabled the section opted out deliberately"
+        );
+    }
+
+    #[test]
+    fn enabled_section_names_configured_backends_sorted() {
+        let mut backends = HashMap::new();
+        backends.insert("zeta".into(), backend("crawl4ai"));
+        backends.insert("alpha".into(), backend("crawl4ai"));
+        let cfg = fetch_cfg(true, "alpha", backends);
+        assert_eq!(inert_fetch_backend_names(&cfg), vec!["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn firecrawl_style_section_without_backends_still_warns() {
+        // Strategy V: firecrawl shares the [search] config, so an enabled
+        // [fetch] section can have a default_provider but zero backend
+        // entries. The operator still expects fetch routing — warn.
+        let cfg = fetch_cfg(true, "firecrawl", HashMap::new());
+        assert_eq!(inert_fetch_backend_names(&cfg), vec!["firecrawl"]);
+    }
+
+    #[test]
+    fn enabled_but_truly_empty_section_warns_about_nothing() {
+        let cfg = fetch_cfg(true, "", HashMap::new());
+        assert!(inert_fetch_backend_names(&cfg).is_empty());
     }
 }

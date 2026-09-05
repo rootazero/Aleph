@@ -1023,15 +1023,19 @@ pub fn create_tool_boxed(
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
         "search" => {
-            // The "registry, else bare key, else empty" decision lives in
-            // `SearchRegistry::for_tool` — it used to be written out here and
-            // again in `builder/constructor/mod.rs`, under a comment saying
-            // the two must mirror each other.
-            let registry = crate::search::SearchRegistry::for_tool(
-                config.and_then(|cfg| cfg.search_registry.as_ref()),
-                config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
-            );
-            Some(Box::new(SearchTool::with_registry(registry)))
+            // A live handle wins: the tool then reads every `[search]`
+            // hot-apply off the swap cell. Without one the "bare key, else
+            // empty" decision lives in `SearchRegistry::for_tool` — it used
+            // to be written out here and again in `builder/constructor/mod.rs`,
+            // under a comment saying the two must mirror each other.
+            let tool = match config.and_then(|cfg| cfg.search_handle.as_ref()) {
+                Some(handle) => SearchTool::with_registry_cell(handle.registry_cell()),
+                None => SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
+                    None,
+                    config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
+                )),
+            };
+            Some(Box::new(tool))
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
         "google_meet" => Some(Box::new(
@@ -2996,7 +3000,19 @@ mod tests {
     /// believing it had constrained one.
     ///
     /// Set flush against the measurement, as the rule above requires.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_302;
+    /// 2026-09-05: 104_302 -> 104_663 B (+361), all of it `search`
+    /// (2_050 -> 2_411): the `queries: Vec<String>` optional parameter and
+    /// its doc lines (multi-query fan-out; mutually exclusive with `query`).
+    /// Not read off a diff — the guard's own per-tool ledger names `search`
+    /// as the only row that moved. Against the three questions: (1) the
+    /// parameter's existence, shape and exclusivity with `query` are runtime
+    /// facts the schema is the only carrier of; (2) unguessable — nothing
+    /// else on the tool face says several questions can ride one call;
+    /// (3) `search` owns the web-search surface, and its prose/schema
+    /// pinning guard covers the new field. The single-query path's schema
+    /// bytes are unchanged; trimming the new doc lines would ship an array
+    /// parameter the model cannot tell from `query`.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_663;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3067,7 +3083,7 @@ mod tests {
         ("recall_events", 553),
         ("remember", 1907),
         ("scratchpad", 4014),
-        ("search", 2050),
+        ("search", 2411),
         ("self_config", 3553),
         ("self_manage", 328),
         ("session_list", 931),

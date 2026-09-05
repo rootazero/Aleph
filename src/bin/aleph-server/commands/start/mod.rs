@@ -941,15 +941,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
 
-        // crawl4ai web_fetch backend: vault key "web_fetch:crawl4ai"
-        {
-            let c4 = &mut loaded_app_config.policies.web_fetch.crawl4ai;
-            if c4.enabled && c4.token.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret("web_fetch:crawl4ai") {
-                    c4.token = Some(secret.expose().to_string());
-                }
-            }
-        }
+        // NOTE: no vault hydration for `policies.web_fetch.crawl4ai.token`
+        // here — that struct field has no reader (the legacy section only
+        // feeds `Config::migrate_fetch`, which carries no secret). The fetch
+        // provider path resolves `fetch:crawl4ai` / legacy `web_fetch:crawl4ai`
+        // straight from the vault where it builds the backend
+        // (`fetch_config.test` RPC); materializing the secret into a config
+        // struct nobody reads only widened its in-memory footprint.
     }
 
     // Resolve agent definitions from config (initializes workspace directories)

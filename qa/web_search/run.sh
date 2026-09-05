@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real-machine QA for the web search face (§3.6).
+# Real-machine QA for the web search face (§3.18).
 #
 #   ./qa/web_search/run.sh reach     # a parameter the model named reaches the backend's query string
 #   ./qa/web_search/run.sh order     # a backend that can carry the asked-for dimension is asked first

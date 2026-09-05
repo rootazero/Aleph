@@ -101,11 +101,15 @@ struct SearxngResult {
 }
 
 impl SearxngProvider {
+    /// `allow_private_network` is the operator's explicit `[ssrf]
+    /// allow_private_network` switch, threaded from boot config through the
+    /// factory: a self-hosted SearXNG on the LAN (loopback or RFC1918) is the
+    /// most common deployment of this backend and is refused without it.
     pub fn new(
         base_url: impl Into<String>,
         engines: Option<String>,
         min_request_interval_ms: Option<u64>,
-        allow_private_upstream: bool,
+        allow_private_network: bool,
     ) -> Result<Self> {
         let base_url = base_url.into();
         if base_url.is_empty() {
@@ -120,21 +124,18 @@ impl SearxngProvider {
             ));
         }
 
-        // Refuse IP-literal hosts (loopback / RFC1918 / link-local) and the
-        // blocked-hostname list, UNLESS the operator opted this backend in.
-        // The SearXNG base URL is operator-configured, so accepting
-        // `http://10.0.0.5` by default would turn every search through this
-        // backend into a way to query internal HTTP services.
-        //
-        // The opt-in is not a loophole, it is the gate's missing exit. A
-        // self-hosted SearXNG on `127.0.0.1:8080` is the project's OWN
-        // documented deployment, and this check used to have no way past it
-        // — the comment here claimed the outbound guard served "any operator
-        // who actually needs an internal SearXNG" while this line had already
-        // made that operator impossible (判据 §14).
+        // Refuse upstreams that would turn every search query into an SSRF
+        // probe: cloud metadata endpoints and legacy IP literals under every
+        // policy (a metadata service answers ANY path with instance
+        // credentials, and `search_config.update` is model-reachable), and
+        // loopback / private / link-local targets unless the operator
+        // explicitly set `[ssrf] allow_private_network = true` — the switch
+        // the request-time guard (`security/ssrf`) honours for exactly this
+        // class of internal service. Without the switch the refusal names it,
+        // so a LAN deployment is a config edit away, not a code change.
         if let Ok(parsed) = url::Url::parse(&trimmed) {
             if let Some(host) = parsed.host_str() {
-                reject_ssrf_target_host("SearXNG", host, allow_private_upstream)?;
+                reject_ssrf_target_host("SearXNG", host, allow_private_network)?;
             }
         }
 
@@ -287,6 +288,7 @@ impl crate::search::ProviderFactory for SearxngFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
+        allow_private_network: bool,
     ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
     {
         let Some(base) = backend.base_url.as_deref().filter(|s| !s.is_empty()) else {
@@ -297,7 +299,7 @@ impl crate::search::ProviderFactory for SearxngFactory {
             base.to_string(),
             backend.engines.clone(),
             backend.min_request_interval_ms,
-            backend.allow_private_upstream,
+            allow_private_network,
         ) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
@@ -314,28 +316,31 @@ mod tests {
 
     #[test]
     fn test_searxng_provider_creation() {
+        // `searxng.test`, not `localhost`: the constructor refuses
+        // loopback/blocked hosts as SSRF targets, so a fixture that must
+        // construct successfully needs a public-looking hostname.
         let provider =
-            SearxngProvider::new("http://localhost:8080".to_string(), None, None, true).unwrap();
+            SearxngProvider::new("http://searxng.test:8080".to_string(), None, None, false).unwrap();
         assert_eq!(provider.name(), "searxng");
         assert!(provider.is_available());
     }
 
     #[test]
     fn test_searxng_provider_rejects_empty_url() {
-        let result = SearxngProvider::new("".to_string(), None, None, true);
+        let result = SearxngProvider::new("".to_string(), None, None, false);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_searxng_provider_trims_trailing_slash() {
         let provider =
-            SearxngProvider::new("http://localhost:8080/".to_string(), None, None, true).unwrap();
-        assert_eq!(provider.base_url, "http://localhost:8080");
+            SearxngProvider::new("http://searxng.test:8080/".to_string(), None, None, false).unwrap();
+        assert_eq!(provider.base_url, "http://searxng.test:8080");
     }
 
     #[test]
     fn test_searxng_provider_rejects_invalid_scheme() {
-        let result = SearxngProvider::new("ftp://localhost:8080".to_string(), None, None, true);
+        let result = SearxngProvider::new("ftp://localhost:8080".to_string(), None, None, false);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("must use http:// or https://"));
@@ -344,8 +349,7 @@ mod tests {
     #[test]
     fn test_searxng_provider_accepts_https() {
         let provider =
-            SearxngProvider::new("https://searx.example.com".to_string(), None, None, false)
-                .unwrap();
+            SearxngProvider::new("https://searx.example.com".to_string(), None, None, false).unwrap();
         assert_eq!(provider.base_url, "https://searx.example.com");
     }
 
@@ -367,7 +371,7 @@ mod tests {
     #[test]
     fn provider_zero_interval_disables_throttle() {
         let p =
-            SearxngProvider::new("http://localhost:8080".to_string(), None, Some(0), true).unwrap();
+            SearxngProvider::new("http://searxng.test:8080".to_string(), None, Some(0), false).unwrap();
         assert!(p.min_interval.is_zero());
     }
 
@@ -401,21 +405,70 @@ mod tests {
     #[test]
     fn provider_normalizes_empty_engines_to_none() {
         let p = SearxngProvider::new(
-            "http://localhost:8080".to_string(),
+            "http://searxng.test:8080".to_string(),
             Some(String::new()),
             None,
-            true,
+            false,
         )
         .unwrap();
         assert!(p.engines.is_none());
         let p2 = SearxngProvider::new(
-            "http://localhost:8080".to_string(),
+            "http://searxng.test:8080".to_string(),
             Some("bing".to_string()),
             None,
-            true,
+            false,
         )
         .unwrap();
         assert_eq!(p2.engines.as_deref(), Some("bing"));
+    }
+
+    /// The constructor's SSRF check against the operator switch, end to end:
+    /// loopback is refused by default (the switch is off), admitted when the
+    /// operator opts in, and the cloud-metadata endpoint is refused under
+    /// BOTH — an opt-in to private networking is not an opt-in to
+    /// credential exfiltration. The per-host matrix lives in
+    /// `base::tests::construction_check_quadrants_of_the_private_network_switch`;
+    /// this pins that the provider actually consumes the flag.
+    #[test]
+    fn constructor_honours_the_private_network_switch_and_its_floor() {
+        let refused = SearxngProvider::new("http://127.0.0.1:8080".to_string(), None, None, false);
+        let text = refused.expect_err("loopback refused by default").to_string();
+        assert!(text.contains("allow_private_network"), "{text}");
+
+        let allowed = SearxngProvider::new("http://127.0.0.1:8080".to_string(), None, None, true);
+        assert!(allowed.is_ok(), "loopback allowed under the operator switch");
+
+        let lan = SearxngProvider::new("http://192.168.1.8:8080".to_string(), None, None, true);
+        assert!(lan.is_ok(), "an RFC1918 SearXNG is what the switch exists for");
+
+        for floor in [
+            "http://169.254.169.254/",
+            // The URL parser canonicalizes legacy IP literal encodings BEFORE
+            // the classifier runs, so the hex form of the metadata address is
+            // classified as 169.254.169.254 itself — the encoding buys an
+            // attacker nothing, and the floor holds.
+            "http://0xa9fea9fe/",
+            "http://metadata.google.internal/",
+        ] {
+            for allow_private in [false, true] {
+                assert!(
+                    SearxngProvider::new(floor.to_string(), None, None, allow_private).is_err(),
+                    "{floor} must stay refused with allow_private_network={allow_private}"
+                );
+            }
+        }
+
+        // Same canonicalization, other direction: `0x7f000001` IS 127.0.0.1
+        // by the time the classifier sees it, so it gets exactly loopback's
+        // answer — refused by default, admitted under the switch. The
+        // reject-legacy-literals branch in `classify_ssrf_target_host` covers
+        // host strings that never went through URL parsing; on this path
+        // there is no un-normalized input to protect.
+        assert!(SearxngProvider::new("http://0x7f000001:8080".to_string(), None, None, false)
+            .is_err());
+        assert!(
+            SearxngProvider::new("http://0x7f000001:8080".to_string(), None, None, true).is_ok()
+        );
     }
 
     /// Empty `results` with non-empty `unresponsive_engines` must surface as

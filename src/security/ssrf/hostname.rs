@@ -45,12 +45,48 @@ pub(crate) fn is_blocked_hostname(hostname: &str) -> bool {
     false
 }
 
+/// Returns true if the hostname names a cloud instance-metadata service.
+///
+/// The metadata subset of [`is_blocked_hostname`], exposed separately because
+/// the two classes carry different policy: `localhost`-family names become
+/// acceptable when an operator opts into private-network upstreams
+/// (`[ssrf] allow_private_network`), while a metadata endpoint answers ANY
+/// path with instance credentials — it stays blocked under every policy, and
+/// the search-provider construction check
+/// (`search::providers::base::reject_ssrf_target_host`) relies on this to keep
+/// that floor when the switch is on.
+pub(crate) fn is_cloud_metadata_hostname(hostname: &str) -> bool {
+    let lower = normalize_host(hostname);
+    if is_cloud_metadata_name(&lower) {
+        return true;
+    }
+    // Same punycode/homograph chain as `is_blocked_hostname`, scoped to the
+    // metadata names: an opt-in to private networks must not open a
+    // homograph lane to a metadata service.
+    if lower.contains("xn--") {
+        let unicode = url::quirks::domain_to_unicode(&lower);
+        let unicode_lower = unicode.to_lowercase();
+        if is_cloud_metadata_name(&unicode_lower) {
+            return true;
+        }
+        let normalized = crate::security::content_sanitizer::normalize_homoglyphs(&unicode_lower);
+        if is_cloud_metadata_name(&normalized) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Exact hostnames of cloud instance-metadata services (GCP's two spellings).
+/// AWS/Azure share the `169.254.169.254` literal, which `ip::is_cloud_metadata`
+/// covers; these names are how the same endpoint is reached by hostname.
+fn is_cloud_metadata_name(lower: &str) -> bool {
+    matches!(lower, "metadata.google.internal" | "metadata.internal")
+}
+
 fn check_blocked(lower: &str) -> bool {
     // Exact matches
-    if matches!(
-        lower,
-        "localhost" | "localhost.localdomain" | "metadata.google.internal" | "metadata.internal"
-    ) {
+    if is_cloud_metadata_name(lower) || matches!(lower, "localhost" | "localhost.localdomain") {
         return true;
     }
     // Suffix matches

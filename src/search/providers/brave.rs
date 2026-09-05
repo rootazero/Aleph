@@ -143,6 +143,9 @@ impl crate::search::ProviderFactory for BraveFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
+        // No operator-supplied upstream URL on this provider — its endpoint is
+        // hardcoded, so there is nothing for the SSRF switch to admit.
+        _allow_private_network: bool,
     ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
     {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {

@@ -1,7 +1,9 @@
 use crate::error::{AlephError, Result};
+use crate::search::error::SearchErrorKind;
 use crate::search::health::ProviderHealth;
 use crate::search::notes::{
-    all_empty, answered_after_failures, degraded, fanout_partial, merged_duplicates,
+    all_empty, answered_after_failures, answered_past_unavailable, degraded, failure_line,
+    fanout_partial, for_query, merged_duplicates, merged_duplicates_across_queries, query_failed,
 };
 use crate::search::{
     SearchCapabilities, SearchOptions, SearchProvider, SearchResult, WebFetchSerpFallback,
@@ -21,23 +23,6 @@ const UNCONFIGURED_DEFAULT: &str = "none";
 /// reaches an operator's log line and a caller's `SearchAnswer.provider`, and
 /// two spellings of it would be two different backends to anyone grepping.
 const WEB_FETCH_FALLBACK_NAME: &str = "web-fetch-fallback";
-
-/// Map an `AlephError` returned by a search provider to a short, stable
-/// kind label used for structured log output. Lets ops grep the search
-/// log by failure mode (`kind=auth`, `kind=rate-limit`, ...) without
-/// having to parse free-form error messages.
-pub(super) const fn classify_search_error(e: &AlephError) -> &'static str {
-    match e {
-        AlephError::AuthenticationError { .. } => "auth",
-        AlephError::RateLimitError { .. } => "rate-limit",
-        AlephError::Timeout { .. } => "timeout",
-        AlephError::NetworkError { .. } => "network",
-        AlephError::Cancelled => "cancelled",
-        AlephError::Validation(_) | AlephError::InvalidConfig { .. } => "config",
-        AlephError::ProviderError { .. } => "provider",
-        _ => "other",
-    }
-}
 /// Search provider registry and router
 ///
 /// This module manages multiple search providers and routes requests
@@ -58,6 +43,32 @@ pub struct SearchAnswer {
     pub provider: String,
     /// Sentences from [`crate::search::notes`] naming what this answer is
     /// missing and which lever the caller can pull. Empty is the common case.
+    pub notes: Vec<String>,
+}
+
+/// What several queries asked together returned.
+///
+/// One merged set rather than one list per query: the point of asking
+/// several questions at once is the union, and a page two of them found is
+/// still one page. Per-query provenance survives as the index each result
+/// carries, and notes that are true of one query stay attributed to it.
+#[derive(Debug, Clone)]
+pub struct MultiSearchAnswer {
+    /// The distinct queries that were asked, in the order given.
+    pub queries: Vec<String>,
+    /// The merged results. Each pair is the index of the query (into
+    /// [`Self::queries`]) whose answer the result came from, and the result
+    /// itself; a page several queries found appears once, attributed to the
+    /// first of them in asking order.
+    pub results: Vec<(usize, SearchResult)>,
+    /// Every backend that answered at least one query, in first-use order.
+    /// Different queries can be answered by different backends — the chain
+    /// falls through per query.
+    pub providers: Vec<String>,
+    /// Aggregated notes: the answering queries' own notes (deduplicated —
+    /// the same backend degrading the same dimension for every query says
+    /// so once), one line per failed or empty query attributed to it, and
+    /// the merge's duplicate count.
     pub notes: Vec<String>,
 }
 
@@ -126,8 +137,14 @@ impl SearchRegistry {
     }
 
     /// Returns true if a `WebFetch` SERP fallback is currently armed.
-    /// Used by the panel / `aleph doctor` to surface the user-visible
-    /// "fallback enabled" indicator without leaking the inner Arc.
+    ///
+    /// Test-only today: the two consumers an earlier comment named (the
+    /// panel, `aleph doctor`) are separate processes that cannot call a Rust
+    /// method on a registry inside the server, and nothing in-crate reads it
+    /// outside this module's tests. If a real in-process consumer appears
+    /// (e.g. a `search.status` RPC surfacing "fallback armed"), drop the
+    /// gate rather than adding a second accessor.
+    #[cfg(test)]
     #[must_use]
     pub const fn has_web_fetch_fallback(&self) -> bool {
         self.web_fetch_fallback.is_some()
@@ -191,15 +208,25 @@ impl SearchRegistry {
     /// missing credentials are skipped with a warning rather than aborting
     /// the load. Returns `None` when the config is `None`, search is
     /// disabled, or no usable backend was constructed — caller should
-    /// then leave `BuiltinToolConfig.search_registry = None` and the
-    /// `search` tool falls back to its legacy `TAVILY_API_KEY` path.
+    /// then leave `BuiltinToolConfig.search_handle = None`, and
+    /// [`SearchRegistry::for_tool`] will synthesize a one-backend registry
+    /// from a bare `TAVILY_API_KEY` (via [`SearchRegistry::from_env_only`])
+    /// when the `search` tool is built.
+    ///
+    /// `allow_private_network` is the operator's `[ssrf]` switch, forwarded
+    /// to provider construction: it admits loopback / private `base_url`s
+    /// (a self-hosted SearXNG on the LAN) while cloud metadata endpoints
+    /// stay refused under every policy. Pass
+    /// `config.ssrf.allow_private_network` — never a literal.
     #[must_use]
     pub fn from_config(
         config: Option<&crate::config::types::SearchConfigInternal>,
+        allow_private_network: bool,
     ) -> Option<Self> {
         Self::from_config_with_factories(
             config,
             &crate::search::ProviderFactoryRegistry::with_defaults(),
+            allow_private_network,
         )
     }
 
@@ -210,6 +237,7 @@ impl SearchRegistry {
     pub fn from_config_with_factories(
         config: Option<&crate::config::types::SearchConfigInternal>,
         factories: &crate::search::ProviderFactoryRegistry,
+        allow_private_network: bool,
     ) -> Option<Self> {
         let cfg = config?;
         if !cfg.enabled {
@@ -224,10 +252,15 @@ impl SearchRegistry {
         };
         // Thread the optional `[search]` fields through to `SearchOptions`.
         // Each `cfg.* -> defaults.*` mapping is documented at the field site
-        // in `SearchConfigInternal`. If a future field is added there without
-        // a corresponding line here, the `dropped_keys` audit below logs the
-        // omission at boot so the contract drift is visible without a test
-        // having to break first.
+        // in `SearchConfigInternal`. The mapping is complete today (every
+        // field of the struct is consumed somewhere in this function); the
+        // source-level test `every_search_config_field_is_consumed_here`
+        // fails if a field is added there without a corresponding line here,
+        // so the contract drift is caught by a test rather than by a user
+        // whose setting silently never reaches a provider. (A runtime
+        // "dropped key" warning cannot exist: struct fields are not
+        // enumerable at runtime, and `deny_unknown_fields` would brick older
+        // configs on downgrade, so the guard lives at the source level.)
         defaults.language = cfg.language.clone().or(defaults.language);
         defaults.region = cfg.region.clone().or(defaults.region);
         if let Some(safe) = cfg.safe_search {
@@ -246,7 +279,7 @@ impl SearchRegistry {
         registry.config_defaults = Some(defaults);
         let mut any_added = false;
         for (name, backend) in &cfg.backends {
-            match factories.build(name, backend) {
+            match factories.build(name, backend, allow_private_network) {
                 Ok(Some(provider)) => {
                     // rust-doctor-disable-next-line excessive-clone
                     registry.add_provider(name.clone(), provider);
@@ -405,22 +438,32 @@ impl SearchRegistry {
     /// Assemble the answer a backend just produced, with the notes it owes.
     ///
     /// One place, because the three points that can produce an answer (a named
-    /// backend, the chain, the SERP fallback) owe the same three sentences for
-    /// the same three reasons; written out at each of them they come out
+    /// backend, the chain, the SERP fallback) owe the same sentences for the
+    /// same reasons; written out at each of them they come out
     /// nearly-but-not-quite the same. `answered_empty` is how many backends
     /// were asked and came back with nothing — it is only read when `results`
     /// is empty, which is the only case where that count is an answer.
+    ///
+    /// `failed` and `unavailable` are separate on purpose: the first counts
+    /// backends that were asked and errored, the second backends the chain
+    /// skipped without a request. Folding them into one number made the note
+    /// report a "failure" that never happened on a backend that was never
+    /// asked.
     fn answer(
         options: &SearchOptions,
         provider: String,
         have: SearchCapabilities,
         results: Vec<SearchResult>,
         failed: usize,
+        unavailable: usize,
         answered_empty: usize,
     ) -> SearchAnswer {
         let mut notes = Self::degradation_notes(options, &provider, have);
         if failed > 0 {
             notes.push(answered_after_failures(&provider, failed));
+        }
+        if unavailable > 0 {
+            notes.push(answered_past_unavailable(unavailable));
         }
         if results.is_empty() {
             notes.push(all_empty(answered_empty));
@@ -484,8 +527,16 @@ impl SearchRegistry {
         if !degraded.is_empty() {
             // The configured order is no longer literally the order tried, so
             // "why did the second backend answer?" needs one more fact than
-            // the config file to answer.
-            let mut names: Vec<&str> = degraded.iter().map(String::as_str).collect();
+            // the config file to answer — and the recorded failure kind is
+            // what tells the operator whether to wait (quota) or to fix
+            // something (auth) before the demotion expires on its own.
+            let mut names: Vec<String> = degraded
+                .iter()
+                .map(|n| match self.health.last_failure_kind(n) {
+                    Some(kind) => format!("{n} ({})", kind.as_str()),
+                    None => n.clone(),
+                })
+                .collect();
             names.sort_unstable();
             log::info!(
                 target: "search",
@@ -565,15 +616,15 @@ impl SearchRegistry {
                     answered.push(name);
                 }
                 Err(e) => {
-                    let kind = classify_search_error(&e);
+                    let kind = SearchErrorKind::of(&e);
                     // Named backends are an instruction, so health never
                     // reorders or skips them — but a failure is a failure
                     // whichever face observed it, and the chain would
                     // otherwise never learn about a backend that is only ever
                     // reached by name.
                     self.health.note_failure(&name, &e);
-                    log::warn!(target: "search", "provider={name} kind={kind} {e}");
-                    errors.push(format!("{name} [{kind}] {e}"));
+                    log::warn!(target: "search", "provider={name} kind={} {e}", kind.as_str());
+                    errors.push(failure_line(&name, kind, &e));
                 }
             }
         }
@@ -620,6 +671,126 @@ impl SearchRegistry {
         })
     }
 
+    /// Ask several queries at once and merge what comes back.
+    ///
+    /// Each query walks the exact path [`Self::search`] walks — same chain,
+    /// same named-backend fan-out, same health bookkeeping — concurrently,
+    /// because the alternative is paying each chain's latency in series for
+    /// an answer that is only interesting as a whole. Concurrency needs no
+    /// extra care here for the same reason `fan_out` does: the futures
+    /// borrow the registry and the options and nothing outlives the call,
+    /// and [`ProviderHealth`] is internally locked with every method taking
+    /// `&self`, so two queries recording a failure at the same instant is
+    /// just two inserts.
+    ///
+    /// Partial success is success, per query: a query whose whole chain
+    /// failed narrows the merged set instead of ending the call, and says so
+    /// in the notes. Only *every* query failing is an `Err`, one report per
+    /// query. A query that answered with zero results is not a failure — it
+    /// contributes an empty list (keeping result attribution aligned with
+    /// [`MultiSearchAnswer::queries`]) and a note attributed to it.
+    pub async fn search_multi(
+        &self,
+        queries: &[String],
+        options: &SearchOptions,
+    ) -> Result<MultiSearchAnswer> {
+        // Distinct, non-empty, in asking order: asking the same question
+        // twice spends the chain's quota twice for the same answer.
+        let mut seen = std::collections::HashSet::new();
+        let queries: Vec<String> = queries
+            .iter()
+            .map(|q| q.trim().to_string())
+            .filter(|q| !q.is_empty())
+            .filter(|q| seen.insert(q.clone()))
+            .collect();
+        if queries.is_empty() {
+            return Err(AlephError::invalid_input(
+                "search_multi needs at least one non-empty query",
+            ));
+        }
+
+        let outcomes = futures::future::join_all(
+            queries
+                .iter()
+                .map(|q| async move { self.search(q, options).await }),
+        )
+        .await;
+
+        let mut per_query: Vec<Vec<SearchResult>> = Vec::with_capacity(queries.len());
+        let mut providers: Vec<String> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        let mut seen_notes = std::collections::HashSet::new();
+        let mut failures: Vec<(&String, AlephError)> = Vec::new();
+
+        for (query, outcome) in queries.iter().zip(outcomes) {
+            match outcome {
+                Ok(mut answer) => {
+                    if !providers.contains(&answer.provider) {
+                        providers.push(answer.provider.clone());
+                    }
+                    // A query that found nothing still answered — that is not
+                    // a failure. But its `all_empty` note is true of *this*
+                    // query, and unattributed it would read as the whole call
+                    // finding nothing. Both places an answer is assembled
+                    // (`answer`, `fan_out`) push that note last and only into
+                    // an empty answer; lift it out and re-attribute it.
+                    let empty_note = if answer.results.is_empty() {
+                        answer.notes.pop()
+                    } else {
+                        None
+                    };
+                    per_query.push(answer.results);
+                    for note in answer.notes {
+                        // The same backend degrading the same dimension for
+                        // every query says so once, not once per query.
+                        if seen_notes.insert(note.clone()) {
+                            notes.push(note);
+                        }
+                    }
+                    if let Some(note) = empty_note {
+                        notes.push(for_query(query, &note));
+                    }
+                }
+                Err(e) => {
+                    // Keep the slot: an empty list keeps result attribution
+                    // aligned with `queries`, and the merge already skips
+                    // empty sources without shifting the others.
+                    per_query.push(Vec::new());
+                    notes.push(query_failed(query));
+                    failures.push((query, e));
+                }
+            }
+        }
+
+        if providers.is_empty() {
+            let mut lines = vec![format!("All {} queries failed:", queries.len())];
+            for (query, e) in &failures {
+                // The per-query report is itself multi-line; indent it so the
+                // nesting survives.
+                lines.push(format!(
+                    "query `{query}`: {}",
+                    e.to_string().replace('\n', "\n  ")
+                ));
+            }
+            return Err(AlephError::provider(lines.join("\n")));
+        }
+
+        let (results, duplicates) = crate::search::merge::merge_by_rank_indexed(
+            per_query,
+            options.validated_max_results(),
+        );
+        if duplicates > 0 {
+            notes.push(merged_duplicates_across_queries(duplicates));
+        }
+
+        Ok(MultiSearchAnswer {
+            queries,
+            results,
+            providers,
+            notes,
+        })
+    }
+
     /// Set fallback providers
     pub fn set_fallback_providers(&mut self, providers: Vec<String>) {
         self.fallback_providers = providers;
@@ -661,6 +832,11 @@ impl SearchRegistry {
         }
 
         let mut errors: Vec<String> = Vec::new();
+        // Backends skipped because `is_available()` is false. Tracked apart
+        // from `errors` because no request was ever made: the note that
+        // counts earlier failures must not count these, and the aggregate
+        // report must not head them "failed".
+        let mut unavailable: Vec<String> = Vec::new();
         // Providers that answered with zero results. Tracked separately from
         // `errors` so the end of this function can tell "nobody found it"
         // (worth reporting as an empty `Ok`) from "nobody was asked at all"
@@ -680,8 +856,8 @@ impl SearchRegistry {
                 // fixes the configuration, so a demotion would buy nothing and
                 // expire on a timer that has nothing to do with the cause.
                 let msg = format!("{provider_name} [unavailable] missing configuration");
-                log::warn!("{msg}");
-                errors.push(msg);
+                log::warn!(target: "search", "{msg}");
+                unavailable.push(msg);
                 continue;
             }
             match provider.search(query, options).await {
@@ -697,6 +873,7 @@ impl SearchRegistry {
                         have,
                         results,
                         errors.len(),
+                        unavailable.len(),
                         0,
                     ));
                 }
@@ -718,14 +895,14 @@ impl SearchRegistry {
                     empty.push(provider_name);
                 }
                 Err(e) => {
-                    let kind = classify_search_error(&e);
+                    let kind = SearchErrorKind::of(&e);
                     self.health.note_failure(&provider_name, &e);
-                    let msg = format!("{provider_name} [{kind}] {e}");
                     log::warn!(
                         target: "search",
-                        "provider={provider_name} kind={kind} {e}"
+                        "provider={provider_name} kind={} {e}",
+                        kind.as_str()
                     );
-                    errors.push(msg);
+                    errors.push(failure_line(&provider_name, kind, &e));
                 }
             }
         }
@@ -753,12 +930,13 @@ impl SearchRegistry {
                         SearchCapabilities::default(),
                         results,
                         errors.len(),
+                        unavailable.len(),
                         empty.len() + 1,
                     ));
                 }
                 Err(e) => {
-                    let kind = classify_search_error(&e);
-                    errors.push(format!("{WEB_FETCH_FALLBACK_NAME} [{kind}] {e}"));
+                    let kind = SearchErrorKind::of(&e);
+                    errors.push(failure_line(WEB_FETCH_FALLBACK_NAME, kind, &e));
                 }
             }
         }
@@ -771,7 +949,7 @@ impl SearchRegistry {
         // *nobody* answered (every attempt errored, or there were no
         // candidates at all) is an `Err`.
         match empty.first() {
-            None if errors.is_empty() => {
+            None if errors.is_empty() && unavailable.is_empty() => {
                 // Nothing was attempted at all: no candidate resolved to a
                 // configured backend. "All providers failed" would be a report
                 // about a chain that does not exist, and it tells the reader
@@ -781,14 +959,26 @@ impl SearchRegistry {
                      config.toml, or set TAVILY_API_KEY in the environment",
                 ))
             }
+            None if errors.is_empty() => {
+                // Candidates existed but every one reported itself
+                // unavailable, so no request was ever sent. That is a
+                // configuration problem, not an upstream failure —
+                // "failed" would point the reader at the wrong lever.
+                let mut lines = vec!["No configured search backend is usable:".to_string()];
+                lines.extend(unavailable);
+                Err(AlephError::invalid_config(lines.join("\n")))
+            }
             None => {
                 // One `name [kind] message` line per attempted backend, headed
                 // by a summary line — the classifier's `kind` has computed a
                 // label for every failure since it was written; this report is
                 // its first real consumer, read by both the model deciding
                 // whether to retry and the operator grepping the log.
+                // Unavailable backends are listed after the failures, still
+                // tagged `[unavailable]`, so the report loses no name.
                 let mut lines = vec!["All search providers failed:".to_string()];
                 lines.extend(errors);
+                lines.extend(unavailable);
                 Err(AlephError::provider(lines.join("\n")))
             }
             Some(first) => {
@@ -801,6 +991,7 @@ impl SearchRegistry {
                     have,
                     Vec::new(),
                     errors.len(),
+                    unavailable.len(),
                     empty.len(),
                 ))
             }
@@ -812,22 +1003,24 @@ impl SearchRegistry {
 mod tests {
     use super::*;
 
+    /// The `AlephError` → kind mapping lives in `search::error` and is pinned
+    /// there; what the registry owes is proof that the chain, the fan-out and
+    /// the fallback all read the *same* classifier — which the failure-report
+    /// tests below exercise end to end.
     #[test]
-    fn classify_search_error_covers_observable_kinds() {
-        let cases: &[(AlephError, &'static str)] = &[
-            (AlephError::authentication("brave", "bad token"), "auth"),
-            (AlephError::rate_limit("429 too many"), "rate-limit"),
-            (AlephError::network("dns failure"), "network"),
-            (AlephError::provider("5xx upstream"), "provider"),
-            (AlephError::Cancelled, "cancelled"),
-        ];
-        for (err, expected) in cases {
-            assert_eq!(
-                classify_search_error(err),
-                *expected,
-                "wrong kind for: {err}",
-            );
-        }
+    fn the_chain_reads_the_shared_classifier() {
+        assert_eq!(
+            SearchErrorKind::of(&AlephError::authentication("brave", "bad token")),
+            SearchErrorKind::Auth,
+        );
+        assert_eq!(
+            SearchErrorKind::of(&AlephError::rate_limit("429")),
+            SearchErrorKind::Quota,
+        );
+        assert_eq!(
+            SearchErrorKind::of(&AlephError::Cancelled),
+            SearchErrorKind::Cancelled,
+        );
     }
 
     /// Zero-config still works: a machine with TAVILY_API_KEY and no [search]
@@ -882,14 +1075,40 @@ mod tests {
         /// is the case merging exists for; `with_own_pages` makes them
         /// disagree instead.
         host: String,
-        /// Fail with `Cancelled` rather than a network error, so a test can
-        /// tell "the caller went away" from "the backend misbehaved".
-        cancelled: bool,
+        /// The error `search` returns when `should_fail`. Defaults to a
+        /// network error; a factory rather than a stored `AlephError` because
+        /// errors are not `Clone` and a mock may be asked more than once.
+        fail_with: Option<Box<dyn Fn() -> AlephError + Send + Sync>>,
         /// How many times this backend was actually asked. Ordering tests
         /// assert on this rather than on the returned results: a demoted
         /// backend that still gets a request has not been demoted, and the
         /// answer looks identical either way.
         asks: crate::sync_primitives::AtomicUsize,
+        /// What `is_available` reports. False models a configured backend
+        /// whose credentials never resolve, so a test can tell "skipped
+        /// without a request" apart from "asked and failed".
+        available: bool,
+        /// Mint urls keyed by the query text, so two different queries return
+        /// different pages — the default (query-independent urls) models one
+        /// question asked twice.
+        keyed_by_query: bool,
+        /// Prepend one query-independent landing url to every answer, so two
+        /// different queries share exactly one page — the case cross-query
+        /// deduplication exists for.
+        shared_landing: bool,
+        /// Fail (only) when the query contains this substring, so one query of
+        /// a multi-query call can fail while the others answer.
+        fail_on: Option<String>,
+        /// Answer empty (only) when the query contains this substring.
+        empty_on: Option<String>,
+        /// Artificial latency, for tests that assert queries run
+        /// concurrently rather than in series.
+        delay: Option<std::time::Duration>,
+        /// How many calls are in flight right now, and the most ever
+        /// observed — the observable difference between `join_all` and a
+        /// loop.
+        in_flight: Arc<crate::sync_primitives::AtomicUsize>,
+        max_in_flight: Arc<crate::sync_primitives::AtomicUsize>,
     }
 
     impl MockProvider {
@@ -900,15 +1119,31 @@ mod tests {
                 result_count,
                 capabilities: SearchCapabilities::default(),
                 host: "example.com".to_string(),
-                cancelled: false,
+                fail_with: None,
                 asks: crate::sync_primitives::AtomicUsize::new(0),
+                available: true,
+                keyed_by_query: false,
+                shared_landing: false,
+                fail_on: None,
+                empty_on: None,
+                delay: None,
+                in_flight: Arc::new(crate::sync_primitives::AtomicUsize::new(0)),
+                max_in_flight: Arc::new(crate::sync_primitives::AtomicUsize::new(0)),
             }
         }
 
-        /// Fail as a cancellation instead of a network error.
-        fn cancelling(mut self) -> Self {
-            self.cancelled = true;
+        /// Fail with the error `f` produces, so a test can pick the failure
+        /// kind the chain observes rather than always failing as a network
+        /// error.
+        fn failing_with(mut self, f: impl Fn() -> AlephError + Send + Sync + 'static) -> Self {
+            self.fail_with = Some(Box::new(f));
             self
+        }
+
+        /// Fail as a cancellation instead of a network error, so a test can
+        /// tell "the caller went away" from "the backend misbehaved".
+        fn cancelling(self) -> Self {
+            self.failing_with(|| AlephError::Cancelled)
         }
 
         /// Declares `recency` support, for capability-ordering tests.
@@ -933,6 +1168,37 @@ mod tests {
             self.host = format!("{}.test", self.name);
             self
         }
+
+        /// Report `is_available() == false`, as a configured backend whose
+        /// credentials never resolve does.
+        fn unavailable(mut self) -> Self {
+            self.available = false;
+            self
+        }
+
+        /// Key minted urls by the query text.
+        fn keyed_by_query(mut self) -> Self {
+            self.keyed_by_query = true;
+            self
+        }
+
+        /// Prepend one query-independent url to every answer.
+        fn with_shared_landing(mut self) -> Self {
+            self.shared_landing = true;
+            self
+        }
+
+        /// Fail when the query contains `needle`.
+        fn failing_on(mut self, needle: &str) -> Self {
+            self.fail_on = Some(needle.to_string());
+            self
+        }
+
+        /// Answer empty when the query contains `needle`.
+        fn empty_on(mut self, needle: &str) -> Self {
+            self.empty_on = Some(needle.to_string());
+            self
+        }
     }
 
     #[async_trait::async_trait]
@@ -942,7 +1208,7 @@ mod tests {
         }
 
         fn is_available(&self) -> bool {
-            true
+            self.available
         }
 
         fn capabilities(&self, _options: &SearchOptions) -> SearchCapabilities {
@@ -952,19 +1218,46 @@ mod tests {
         async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
             self.asks
                 .fetch_add(1, crate::sync_primitives::Ordering::Relaxed);
-            if self.should_fail {
-                return Err(if self.cancelled {
-                    AlephError::Cancelled
-                } else {
-                    AlephError::network("Mock provider failure")
-                });
+            if let Some(delay) = self.delay {
+                let now = self.in_flight.fetch_add(1, crate::sync_primitives::Ordering::Relaxed) + 1;
+                self.max_in_flight
+                    .fetch_max(now, crate::sync_primitives::Ordering::Relaxed);
+                tokio::time::sleep(delay).await;
+                self.in_flight.fetch_sub(1, crate::sync_primitives::Ordering::Relaxed);
+            }
+            let fail = self.should_fail
+                || self.fail_on.as_deref().is_some_and(|n| query.contains(n));
+            if fail {
+                return Err(self.fail_with.as_ref().map_or_else(
+                    || AlephError::network("Mock provider failure"),
+                    |f| f(),
+                ));
+            }
+            if self.empty_on.as_deref().is_some_and(|n| query.contains(n)) {
+                return Ok(Vec::new());
             }
 
             let mut results = Vec::new();
+            if self.shared_landing {
+                results.push(SearchResult {
+                    title: format!("{query} - Overview"),
+                    url: format!("https://{}/overview", self.host),
+                    snippet: "Shared landing page".to_string(),
+                    full_content: None,
+                    published_date: None,
+                    provider: Some(self.name.clone()),
+                    relevance_score: Some(1.0),
+                });
+            }
             for i in 0..self.result_count.min(options.max_results) {
+                let url = if self.keyed_by_query {
+                    format!("https://{}/{}/{}", self.host, query.replace(' ', "-"), i + 1)
+                } else {
+                    format!("https://{}/{}", self.host, i + 1)
+                };
                 results.push(SearchResult {
                     title: format!("{} - Result {}", query, i + 1),
-                    url: format!("https://{}/{}", self.host, i + 1),
+                    url,
                     snippet: format!("Snippet for result {}", i + 1),
                     full_content: None,
                     published_date: None,
@@ -1125,6 +1418,146 @@ mod tests {
         assert_eq!(results.len(), 5);
     }
 
+    /// A backend the chain skipped without asking (unavailable) is not a
+    /// failure: the note that counts earlier failures must count only
+    /// backends that were actually asked and errored, and the skip gets its
+    /// own sentence.
+    #[tokio::test]
+    async fn unavailable_backends_are_skips_not_failures_in_the_notes() {
+        let mut registry = SearchRegistry::new("dead-config".to_string());
+        registry.add_provider(
+            "dead-config".to_string(),
+            Arc::new(MockProvider::new("dead-config", false, 3).unavailable()),
+        );
+        registry.add_provider(
+            "flaky".to_string(),
+            Arc::new(MockProvider::new("flaky", true, 0)),
+        );
+        registry.add_provider(
+            "steady".to_string(),
+            Arc::new(MockProvider::new("steady", false, 2)),
+        );
+        registry.set_fallback_providers(vec!["flaky".to_string(), "steady".to_string()]);
+
+        let answer = registry
+            .search("q", &SearchOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(answer.provider, "steady");
+        let failure_note = answer
+            .notes
+            .iter()
+            .find(|n| n.contains("answered after"))
+            .unwrap_or_else(|| panic!("a failure note is owed: {:?}", answer.notes));
+        assert!(
+            failure_note.contains("after 1 earlier backend(s) failed"),
+            "only the backend that was asked and errored may be counted: {failure_note}"
+        );
+        assert!(
+            answer
+                .notes
+                .iter()
+                .any(|n| n.contains("skipped as unavailable")),
+            "the skip must be reported as a skip, not folded into the failure count: {:?}",
+            answer.notes
+        );
+    }
+
+    /// A chain whose every candidate reports itself unavailable never sent a
+    /// request, so the aggregate error must say "not usable" (a configuration
+    /// problem), not "failed" (an upstream problem).
+    #[tokio::test]
+    async fn a_chain_of_only_unavailable_backends_is_a_config_error_not_a_failure() {
+        let mut registry = SearchRegistry::new("a".to_string());
+        registry.add_provider(
+            "a".to_string(),
+            Arc::new(MockProvider::new("a", false, 1).unavailable()),
+        );
+
+        let err = registry
+            .search("q", &SearchOptions::default())
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("No configured search backend is usable"),
+            "nothing was asked, so nothing failed: {msg}"
+        );
+        assert!(
+            msg.contains("a [unavailable]"),
+            "the per-backend line still names who was skipped: {msg}"
+        );
+    }
+
+    /// The config → registry mapping above is manual, and a field added to
+    /// `SearchConfigInternal` without a line here is silently dropped: serde
+    /// fills it from TOML, nobody reads it, and the operator's setting never
+    /// reaches a provider. Runtime detection is impossible (struct fields are
+    /// not enumerable, and `deny_unknown_fields` would brick older binaries
+    /// reading newer configs), so this guard reads both sources instead:
+    /// every `pub <field>` of `SearchConfigInternal` must be named in this
+    /// file's production half as `cfg.<field>`, or listed in
+    /// `INTENTIONALLY_UNMAPPED` with the reason the omission is safe.
+    #[test]
+    fn every_search_config_field_is_consumed_here() {
+        use crate::utils::source_scan::{code_text, production_prefix};
+
+        /// Fields of `SearchConfigInternal` this function deliberately does
+        /// not thread into the registry, each with the reason. Empty today;
+        /// an entry here is the reviewed, in-code record of an omission —
+        /// the honest form of the boot-time "dropped keys" warning this
+        /// mapping's comment once promised and no Rust runtime can deliver.
+        const INTENTIONALLY_UNMAPPED: &[(&str, &str)] = &[];
+
+        let config_src = include_str!("../config/types/search.rs");
+        let start = config_src
+            .find("pub struct SearchConfigInternal")
+            .expect("SearchConfigInternal must exist in config/types/search.rs");
+        let body = &config_src[start..];
+        let end = body.find("\n}").expect("the struct body ends");
+        let fields: Vec<&str> = body[..end]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("pub "))
+            // Field lines are `pub name: ty,`; the struct declaration line
+            // itself (`pub struct SearchConfigInternal {`) has no colon.
+            .filter(|line| line.contains(':'))
+            .filter_map(|line| line.split(':').next())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect();
+        assert!(
+            fields.len() >= 12,
+            "only {} field(s) were parsed out of SearchConfigInternal — a guard \
+             that examined nothing is green and blind, not clean",
+            fields.len()
+        );
+
+        let production = code_text(&production_prefix(include_str!("registry.rs")));
+        for field in &fields {
+            if let Some((_, reason)) = INTENTIONALLY_UNMAPPED.iter().find(|(f, _)| f == field) {
+                assert!(
+                    !reason.trim().is_empty(),
+                    "an unmapped field needs a reason, not just a name: {field}"
+                );
+                continue;
+            }
+            assert!(
+                production.contains(&format!("cfg.{field}")),
+                "SearchConfigInternal.{field} is never read in registry.rs — the operator's \
+                 setting would be accepted, persisted, and silently dropped. Either thread it \
+                 through in from_config_with_factories or record the omission in \
+                 INTENTIONALLY_UNMAPPED with the reason."
+            );
+        }
+        for (field, _) in INTENTIONALLY_UNMAPPED {
+            assert!(
+                fields.contains(field),
+                "INTENTIONALLY_UNMAPPED names `{field}`, which is not a field of \
+                 SearchConfigInternal — delete the stale entry"
+            );
+        }
+    }
+
     // ─── WebFetch SERP fallback wiring (Round-2) ────────────────────────
 
     #[tokio::test]
@@ -1239,7 +1672,7 @@ mod tests {
             backends,
             ..Default::default()
         };
-        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        let registry = SearchRegistry::from_config(Some(&cfg), false).expect("registry");
         assert!(
             registry.has_web_fetch_fallback(),
             "default web_fetch_fallback=true must arm the fallback"
@@ -1275,7 +1708,7 @@ mod tests {
             backends,
             ..Default::default()
         };
-        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        let registry = SearchRegistry::from_config(Some(&cfg), false).expect("registry");
         let options = registry.default_options();
         assert_eq!(options.max_results, 17);
         assert_eq!(options.timeout_seconds, 42);
@@ -1330,7 +1763,7 @@ mod tests {
             backends,
             ..Default::default()
         };
-        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        let registry = SearchRegistry::from_config(Some(&cfg), false).expect("registry");
         assert_eq!(
             registry.default_provider, "ddg",
             "unconstructable default must be promoted to a constructed provider"
@@ -1362,16 +1795,12 @@ mod tests {
             max_results: 5,
             timeout_seconds: 10,
             backends,
-            // EXPLICIT, and it must stay explicit: this test's whole subject is
-            // the `false` case. `c647b5b95` replaced this line with
-            // `..Default::default()`, whose `web_fetch_fallback` is `true` —
-            // so the test configured the opposite of what it asserts and has
-            // been red ever since. A test that takes its subject from a
-            // `Default` is not testing the subject (判据 §1).
+            // Explicit: `Default` arms the fallback, and this test exists to
+            // pin the opt-out, so the opted-out value must be written out.
             web_fetch_fallback: false,
             ..Default::default()
         };
-        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        let registry = SearchRegistry::from_config(Some(&cfg), false).expect("registry");
         assert!(
             !registry.has_web_fetch_fallback(),
             "web_fetch_fallback=false must leave the registry without a fallback"
@@ -1880,6 +2309,70 @@ mod tests {
         );
     }
 
+    /// The point of the classification: three backends failing three
+    /// different ways produce a report whose lines name three different
+    /// levers — fix the key, wait out the quota, retry later — instead of
+    /// one undifferentiated "failed".
+    #[tokio::test]
+    async fn the_failure_report_phrases_each_kind_by_its_lever() {
+        let mut reg = SearchRegistry::new("tavily");
+        reg.add_provider(
+            "tavily".into(),
+            Arc::new(MockProvider::new("tavily", true, 0)
+                .failing_with(|| AlephError::authentication("tavily", "401"))),
+        );
+        reg.add_provider(
+            "brave".into(),
+            Arc::new(MockProvider::new("brave", true, 0)
+                .failing_with(|| AlephError::rate_limit("429"))),
+        );
+        reg.add_provider(
+            "searxng".into(),
+            Arc::new(MockProvider::new("searxng", true, 0)
+                .failing_with(|| AlephError::provider("503"))),
+        );
+        reg.set_fallback_providers(vec!["brave".to_string(), "searxng".to_string()]);
+
+        let err = reg
+            .search("q", &SearchOptions::default())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("tavily [auth]"), "{err}");
+        assert!(err.contains("API key"), "auth must point at the key: {err}");
+        assert!(err.contains("brave [quota]"), "{err}");
+        assert!(
+            err.contains("retry later"),
+            "quota must say to wait, not to fix: {err}"
+        );
+        assert!(err.contains("searxng [transient]"), "{err}");
+        assert!(
+            err.contains("retrying later may help"),
+            "transient must say a retry can heal it: {err}"
+        );
+    }
+
+    /// The named-backend face owes the same wording as the chain — a caller
+    /// who picked the backends is exactly the person who can act on which
+    /// lever each failure names.
+    #[tokio::test]
+    async fn the_fanout_failure_report_uses_the_same_kind_wording() {
+        let mut reg = SearchRegistry::new("a");
+        reg.add_provider(
+            "a".into(),
+            Arc::new(MockProvider::new("a", true, 0)
+                .failing_with(|| AlephError::authentication("a", "401"))),
+        );
+        let named = SearchOptions {
+            providers: vec!["a".to_string()],
+            ..Default::default()
+        };
+        let err = reg.search("q", &named).await.unwrap_err().to_string();
+        assert!(err.contains("a [auth]"), "{err}");
+        assert!(err.contains("API key"), "{err}");
+    }
+
     /// Dropping a dimension the caller asked for is the failure this note
     /// exists to prevent: the search still runs, but silently unfiltered on
     /// that axis reads exactly like a filtered answer.
@@ -2084,5 +2577,229 @@ mod tests {
             "a named backend is asked whatever its health"
         );
         assert_eq!(answer.provider, "good");
+    }
+
+    // ─── Multi-query ─────────────────────────────────────────────────
+
+    /// One provider answering every query, for the multi-query tests.
+    fn one_provider_registry(provider: MockProvider) -> SearchRegistry {
+        let mut registry = SearchRegistry::new("mock".to_string());
+        registry.add_provider("mock".to_string(), Arc::new(provider));
+        registry
+    }
+
+    /// The whole point of asking several questions at once: one merged set,
+    /// every row still naming the query that found it, and a page two
+    /// queries share appearing once — counted, and said out loud.
+    #[tokio::test]
+    async fn several_queries_merge_and_keep_their_provenance() {
+        let registry = one_provider_registry(
+            MockProvider::new("mock", false, 2)
+                .keyed_by_query()
+                .with_shared_landing(),
+        );
+        let answer = registry
+            .search_multi(
+                &["alpha".to_string(), "beta".to_string()],
+                &SearchOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(answer.queries, vec!["alpha", "beta"]);
+        assert_eq!(answer.providers, vec!["mock"]);
+        let rows: Vec<(usize, &str)> = answer
+            .results
+            .iter()
+            .map(|(q, r)| (*q, r.url.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (0, "https://example.com/overview"),
+                (0, "https://example.com/alpha/1"),
+                (1, "https://example.com/beta/1"),
+                (0, "https://example.com/alpha/2"),
+                (1, "https://example.com/beta/2"),
+            ],
+            "rank-interleaved across queries, shared page kept by the first query"
+        );
+        assert!(
+            answer.notes.iter().any(|n| n.contains("more than one query")),
+            "the merged duplicate is announced: {:?}",
+            answer.notes
+        );
+    }
+
+    /// allSettled semantics: one query's whole chain failing narrows the
+    /// merged set and says so — it does not sink the other queries' answer.
+    #[tokio::test]
+    async fn one_query_failing_narrows_the_answer_rather_than_ending_it() {
+        let registry = one_provider_registry(
+            MockProvider::new("mock", false, 1)
+                .keyed_by_query()
+                .failing_on("boom"),
+        );
+        let answer = registry
+            .search_multi(
+                &["fine".to_string(), "boom".to_string()],
+                &SearchOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(answer.queries, vec!["fine", "boom"]);
+        assert!(
+            answer.results.iter().all(|(q, _)| *q == 0),
+            "only the surviving query contributed: {:?}",
+            answer.results
+        );
+        assert!(
+            answer
+                .notes
+                .iter()
+                .any(|n| n.contains("query `boom`") && n.contains("failed")),
+            "the failed query is named: {:?}",
+            answer.notes
+        );
+    }
+
+    /// Only *every* query failing is an `Err`, and it loses no query's
+    /// report on the way out.
+    #[tokio::test]
+    async fn every_query_failing_is_an_err_that_lists_each_query() {
+        let registry = one_provider_registry(MockProvider::new("mock", true, 0));
+        let err = registry
+            .search_multi(
+                &["a".to_string(), "b".to_string()],
+                &SearchOptions::default(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("All 2 queries failed"), "{err}");
+        assert!(err.contains("query `a`"), "{err}");
+        assert!(err.contains("query `b`"), "{err}");
+    }
+
+    /// An empty answer is an answer, per query: the note naming it must name
+    /// *which* query found nothing, or it reads as the whole call's verdict.
+    #[tokio::test]
+    async fn a_query_that_finds_nothing_is_attributed_to_that_query() {
+        let registry = one_provider_registry(
+            MockProvider::new("mock", false, 1)
+                .keyed_by_query()
+                .empty_on("nothing"),
+        );
+        let answer = registry
+            .search_multi(
+                &["something".to_string(), "nothing".to_string()],
+                &SearchOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            answer.results.iter().all(|(q, _)| *q == 0),
+            "the empty query contributed no rows: {:?}",
+            answer.results
+        );
+        let zero_notes: Vec<&String> = answer
+            .notes
+            .iter()
+            .filter(|n| n.contains("zero results"))
+            .collect();
+        assert_eq!(zero_notes.len(), 1, "{:?}", answer.notes);
+        assert!(
+            zero_notes[0].contains("query `nothing`"),
+            "unattributed it would read as the whole call's verdict: {}",
+            zero_notes[0]
+        );
+    }
+
+    /// An empty slice — or only whitespace — is an input error, not an empty
+    /// answer.
+    #[tokio::test]
+    async fn search_multi_with_no_usable_query_is_rejected() {
+        let registry = one_provider_registry(MockProvider::new("mock", false, 1));
+        for queries in [
+            Vec::new(),
+            vec!["   ".to_string()],
+            vec![String::new(), " ".to_string()],
+        ] {
+            let err = registry
+                .search_multi(&queries, &SearchOptions::default())
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("at least one non-empty query"),
+                "{queries:?} -> {err}"
+            );
+        }
+    }
+
+    /// The same question twice is asked once: quota is spent per distinct
+    /// query, not per list entry.
+    #[tokio::test]
+    async fn a_query_listed_twice_is_asked_once() {
+        let provider = Arc::new(MockProvider::new("mock", false, 1).keyed_by_query());
+        let mut registry = SearchRegistry::new("mock".to_string());
+        registry.add_provider("mock".to_string(), provider.clone());
+
+        let answer = registry
+            .search_multi(
+                &["dup".to_string(), "dup".to_string(), "other".to_string()],
+                &SearchOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer.queries, vec!["dup", "other"]);
+        assert_eq!(provider.asks(), 2, "one ask per distinct query");
+    }
+
+    /// The queries run concurrently: with 100ms of latency each, three in
+    /// series would never see more than one call in flight.
+    #[tokio::test]
+    async fn queries_run_concurrently_not_in_series() {
+        let mut provider = MockProvider::new("mock", false, 1).keyed_by_query();
+        provider.delay = Some(std::time::Duration::from_millis(100));
+        let max_in_flight = Arc::clone(&provider.max_in_flight);
+        let registry = one_provider_registry(provider);
+
+        registry
+            .search_multi(
+                &["a".to_string(), "b".to_string(), "c".to_string()],
+                &SearchOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            max_in_flight.load(crate::sync_primitives::Ordering::Relaxed),
+            3,
+            "three queries, one provider: series would peak at 1"
+        );
+    }
+
+    /// One query through the multi path must be the single-query path
+    /// wearing an index: same rows, same notes, same answering backend.
+    #[tokio::test]
+    async fn one_query_via_search_multi_matches_the_single_query_path() {
+        let registry = one_provider_registry(MockProvider::new("mock", false, 2));
+        let options = SearchOptions::default();
+
+        let single = registry.search("q", &options).await.unwrap();
+        let multi = registry
+            .search_multi(&["q".to_string()], &options)
+            .await
+            .unwrap();
+
+        assert_eq!(multi.queries, vec!["q"]);
+        assert_eq!(multi.providers, vec![single.provider]);
+        assert_eq!(multi.notes, single.notes);
+        let multi_urls: Vec<&str> = multi.results.iter().map(|(_, r)| r.url.as_str()).collect();
+        let single_urls: Vec<&str> = single.results.iter().map(|r| r.url.as_str()).collect();
+        assert_eq!(multi_urls, single_urls);
+        assert!(multi.results.iter().all(|(q, _)| *q == 0));
     }
 }

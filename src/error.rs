@@ -64,6 +64,28 @@ pub enum AlephError {
         suggestion: Option<String>,
     },
 
+    /// The upstream answered with a success status but a body that did not
+    /// match its contract (unparseable JSON, an HTML challenge page where
+    /// data was expected). Distinct from `ProviderError` because the lever
+    /// differs: the backend is reachable and answered, it just no longer
+    /// speaks the protocol we parsed — retrying it unchanged will fail the
+    /// same way until the backend (or our parser) changes.
+    #[error("Invalid response: {message}")]
+    InvalidResponse {
+        message: String,
+        suggestion: Option<String>,
+    },
+
+    /// The upstream rejected the request itself — a 4xx other than
+    /// authentication (401/403) or quota (429). Sending the same request
+    /// again will fail the same way; something about the request as shaped
+    /// (a parameter, an option) has to change.
+    #[error("Request rejected: {message}")]
+    RequestRejected {
+        message: String,
+        suggestion: Option<String>,
+    },
+
     /// Request timeout
     #[error("Request timed out")]
     Timeout { suggestion: Option<String> },
@@ -264,6 +286,26 @@ impl AlephError {
         }
     }
 
+    /// Create an invalid-response error with a message
+    pub fn invalid_response<S: Into<String>>(msg: S) -> Self {
+        Self::InvalidResponse {
+            message: msg.into(),
+            suggestion: Some(
+                "The service answered but not in the expected format; try a different provider or report a bug".to_string(),
+            ),
+        }
+    }
+
+    /// Create a request-rejected error with a message
+    pub fn request_rejected<S: Into<String>>(msg: S) -> Self {
+        Self::RequestRejected {
+            message: msg.into(),
+            suggestion: Some(
+                "The service refused the request itself; check the parameters being sent".to_string(),
+            ),
+        }
+    }
+
     /// Create an invalid config error with a message
     pub fn invalid_config<S: Into<String>>(msg: S) -> Self {
         Self::InvalidConfig {
@@ -328,6 +370,8 @@ impl AlephError {
             | Self::AuthenticationError { suggestion, .. }
             | Self::RateLimitError { suggestion, .. }
             | Self::ProviderError { suggestion, .. }
+            | Self::InvalidResponse { suggestion, .. }
+            | Self::RequestRejected { suggestion, .. }
             | Self::Timeout { suggestion }
             | Self::NoProviderAvailable { suggestion }
             | Self::InvalidConfig { suggestion, .. }
@@ -397,6 +441,12 @@ impl AlephError {
                 // Show the actual error message for debugging
                 // Previously we hid 5xx errors, but users need to see what went wrong
                 format!("AI service error: {message}. Please try again.")
+            }
+            Self::InvalidResponse { message, .. } => {
+                format!("The service returned an unexpected response: {message}")
+            }
+            Self::RequestRejected { message, .. } => {
+                format!("The service rejected the request: {message}")
             }
             Self::ClipboardError { message, .. } => {
                 format!("Clipboard error: {message}. Please check your system permissions.")
@@ -592,11 +642,18 @@ impl AlephError {
             Self::NetworkError { .. } => ErrorClass::Transient,
             Self::RateLimitError { .. } => ErrorClass::Transient,
             Self::ProviderError { .. } => ErrorClass::Transient,
+            // A body that does not parse is backend-side misbehavior of the
+            // same family as a 5xx: another provider answers fine, and the
+            // same provider may heal (a challenge page is not permanent).
+            Self::InvalidResponse { .. } => ErrorClass::Transient,
             Self::Timeout { .. } => ErrorClass::Transient,
             Self::McpTimeout => ErrorClass::Transient,
             Self::ExecutionTimeout { .. } => ErrorClass::Transient,
             // Fixable — model can self-correct on next turn
             Self::AuthenticationError { .. } => ErrorClass::Fixable,
+            // The request as shaped was refused (4xx); reshaping it — other
+            // parameters, another provider — can succeed.
+            Self::RequestRejected { .. } => ErrorClass::Fixable,
             Self::ToolNotFound { .. } => ErrorClass::Fixable,
             Self::MissingInput { .. } => ErrorClass::Fixable,
             Self::Validation(_) => ErrorClass::Fixable,

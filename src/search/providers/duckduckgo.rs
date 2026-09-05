@@ -82,8 +82,11 @@ impl SearchProvider for DuckDuckGoProvider {
         // a 200 OK page almost always means DDG served a challenge / 0-result
         // page, which the LLM cannot distinguish from "no matches" unless we
         // surface it as an error and trip the consecutive-failure cap.
+        // `InvalidResponse`, not `ProviderError`: DDG answered, it just did
+        // not answer in the markup the parser expects — the same distinction
+        // `base::parse_json` makes for JSON backends.
         if results.is_empty() {
-            return Err(AlephError::provider(format!(
+            return Err(AlephError::invalid_response(format!(
                 "{NAME} returned 0 results — DDG may have served a challenge \
                  page or the HTML selectors are stale. Consider switching \
                  search providers."
@@ -312,6 +315,9 @@ impl crate::search::ProviderFactory for DuckDuckGoFactory {
         &self,
         name: &str,
         _backend: &crate::config::types::SearchBackendConfig,
+        // Hardcoded endpoint, no operator-supplied URL — see the sibling
+        // factories for the same comment.
+        _allow_private_network: bool,
     ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
     {
         match DuckDuckGoProvider::new() {

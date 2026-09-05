@@ -2,6 +2,7 @@
 //!
 //! Implements `AlephTool` trait for AI agent integration.
 
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -18,8 +19,15 @@ use crate::utils::text_format::truncate_chars;
 /// Arguments for search tool
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub struct SearchArgs {
-    /// Search query
+    /// Search query. Optional when `queries` is given; the two are merged.
+    #[serde(default)]
     pub query: String,
+    /// More questions to ask alongside `query`, for research that needs
+    /// several angles at once. Each is answered independently and the answers
+    /// merge into one set, with each result tagged by the query that found
+    /// it. At most 5 queries total per call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<String>,
     /// Max results. Omit to use the operator's `[search].max_results`.
     #[serde(default)]
     pub limit: Option<usize>,
@@ -93,6 +101,46 @@ impl SearchArgs {
     }
 }
 
+/// Most queries a single call will ask.
+///
+/// Each query pays a full walk of the provider chain, so the bound is what
+/// keeps "give me forty angles" from becoming forty rate-limit windows at
+/// once. Five covers the research pattern this exists for — two to four
+/// angles, asked together — with one to spare, and the schema description
+/// says the number so the model learns it before the error has to teach it.
+const MAX_QUERIES: usize = 5;
+
+/// The distinct queries this call will ask: `query` first, then `queries`,
+/// trimmed, empties dropped, repeats collapsed.
+///
+/// One rule for both fields because they name one concept — what to ask —
+/// and a caller should not have to know which spelling won. The failure
+/// names both fields too: an empty `queries` array is only a mistake when
+/// `query` is empty as well.
+fn resolve_queries(args: &SearchArgs) -> std::result::Result<Vec<String>, ToolError> {
+    let mut seen = std::collections::HashSet::new();
+    let queries: Vec<String> = std::iter::once(&args.query)
+        .chain(args.queries.iter())
+        .map(|q| q.trim())
+        .filter(|q| !q.is_empty())
+        .filter(|q| seen.insert(q.to_string()))
+        .map(str::to_string)
+        .collect();
+    if queries.is_empty() {
+        return Err(ToolError::InvalidArgs(
+            "give `query` or `queries`: at least one non-empty query is required".to_string(),
+        ));
+    }
+    if queries.len() > MAX_QUERIES {
+        return Err(ToolError::InvalidArgs(format!(
+            "at most {MAX_QUERIES} queries per call (got {}); narrow the question, or run the \
+             rest as separate calls",
+            queries.len()
+        )));
+    }
+    Ok(queries)
+}
+
 /// Longest snippet handed to the model, in characters.
 ///
 /// Deliberately not `grep`'s 240: a grep line is a *locator* for a file the
@@ -138,6 +186,15 @@ pub struct SearchResult {
     /// recoverable from anything else in the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Which of the call's queries returned this result, as an index into
+    /// the answer's `queries` list.
+    ///
+    /// Present only when the call asked several questions, for the same
+    /// reason `provider` is present only in a multi-backend merge: with one
+    /// query the index would be 0 on every row and `query` has already said
+    /// it once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_index: Option<usize>,
 }
 
 /// Output from search tool containing results and original query
@@ -145,6 +202,12 @@ pub struct SearchResult {
 pub struct SearchOutput {
     pub results: Vec<SearchResult>,
     pub query: String,
+    /// Every distinct query the call asked, in asking order — the list each
+    /// result's `query_index` points into. Present only when the call asked
+    /// more than one question; a single-query answer is byte-identical to
+    /// what it was before `queries` existed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<String>,
     /// Which backend answered. The chain can fall through several, and "who
     /// said this" is not recoverable from the results.
     pub provider_used: String,
@@ -165,11 +228,36 @@ fn render_results(
     results: Vec<crate::search::SearchResult>,
     attribute_each_result: bool,
 ) -> (Vec<SearchResult>, Vec<String>) {
+    render_all(
+        results.into_iter().map(|r| (0, r)).collect(),
+        attribute_each_result,
+        false,
+    )
+}
+
+/// The same rendering for a merged multi-query set, with each row tagged by
+/// the query that found it.
+fn render_multi(
+    results: Vec<(usize, crate::search::SearchResult)>,
+    attribute_each_result: bool,
+) -> (Vec<SearchResult>, Vec<String>) {
+    render_all(results, attribute_each_result, true)
+}
+
+/// The one clamp loop both renderings share. `attribute_provider` /
+/// `attribute_query` decide which provenance the rows carry; the clamping —
+/// and the notes it owes — is identical either way, and written once because
+/// two clamp loops is how one of them silently stops firing.
+fn render_all(
+    results: Vec<(usize, crate::search::SearchResult)>,
+    attribute_provider: bool,
+    attribute_query: bool,
+) -> (Vec<SearchResult>, Vec<String>) {
     let mut clamped_snippets = 0usize;
     let mut clamped_bodies = 0usize;
     let mapped = results
         .into_iter()
-        .map(|r| {
+        .map(|(query_index, r)| {
             // A snippet cut off a result that also carries its page body is
             // not a loss: the text is right there, one field down. Counting
             // it would emit `snippets_clamped`, whose lever is "fetch the url
@@ -200,7 +288,8 @@ fn render_results(
                 relevance_score: r.relevance_score,
                 published_date: r.published_date,
                 full_content,
-                provider: attribute_each_result.then_some(r.provider).flatten(),
+                provider: attribute_provider.then_some(r.provider).flatten(),
+                query_index: attribute_query.then_some(query_index),
             }
         })
         .collect();
@@ -220,12 +309,16 @@ fn render_results(
 
 /// Web search tool over the provider registry.
 ///
-/// There is exactly one way in: whatever boot could construct, resolved by
-/// [`SearchRegistry::for_tool`]. An empty registry is a legitimate state — the
-/// tool still exists and says what is missing when called.
+/// The registry is read through an [`ArcSwap`] cell on every call rather
+/// than captured at construction: `[search]` is a declared-live config
+/// section, and the cell is how a hot-applied rebuild
+/// ([`crate::search::SearchHandle`]) reaches the very next search without a
+/// restart. A tool built from a bare registry wraps it in a cell nobody
+/// swaps — the pre-live-apply behaviour, kept for construction sites with
+/// no handle (tests, one-shot callers).
 #[derive(Clone)]
 pub struct SearchTool {
-    registry: Arc<SearchRegistry>,
+    registry: Arc<ArcSwap<SearchRegistry>>,
 }
 
 impl SearchTool {
@@ -243,7 +336,10 @@ impl SearchTool {
     /// guarantee, that page bodies are expensive, and that naming a backend
     /// is an instruction rather than a hint.
     pub const DESCRIPTION: &'static str = "Search the web for current information. \
-         One query per call; ask several questions with several calls. \
+         `query` asks one question; add `queries` to ask several angles of a \
+         research question in one call — at most 5 total. They run concurrently, \
+         and the answer merges them: a page several queries found appears once, \
+         tagged with the query that found it. \
          `recency` (`day|week|month|year`) bounds how old a result may be. \
          `domains` and `exclude_domains` restrict results by site. Both are \
          preferences, not guarantees: a backend that cannot express one still \
@@ -254,13 +350,25 @@ impl SearchTool {
          or more asks them all at once and merges the answers, which spends one \
          call's quota per backend — breadth for a research question, waste for a lookup.";
 
-    /// Create with a `SearchRegistry`, the only way in.
+    /// Create with a `SearchRegistry`, wrapped in a cell nobody swaps.
     ///
     /// Build the argument with [`SearchRegistry::for_tool`] rather than
     /// deciding here what an install with nothing configured should get: that
     /// decision has two callers, and it used to be written out at both.
+    ///
+    /// Construction sites that CAN have a live handle (the daemon's tool
+    /// registry) must use [`Self::with_registry_cell`] instead — a tool built
+    /// here never observes a `[search]` hot-apply.
     pub fn with_registry(registry: Arc<SearchRegistry>) -> Self {
-        info!("SearchTool initialized with the provider registry");
+        Self::with_registry_cell(Arc::new(ArcSwap::new(registry)))
+    }
+
+    /// Create over the live swap cell a [`crate::search::SearchHandle`]
+    /// publishes to. Every call reads the current generation, so a
+    /// `[search]` config write hot-applied by `config::live_apply` is what
+    /// the very next search runs on.
+    pub fn with_registry_cell(registry: Arc<ArcSwap<SearchRegistry>>) -> Self {
+        info!("SearchTool initialized over the provider registry cell");
         Self { registry }
     }
 
@@ -268,40 +376,99 @@ impl SearchTool {
     async fn call_impl(&self, args: SearchArgs) -> std::result::Result<SearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        let args_summary = format!("搜索: {}", &args.query);
+        // `query` and `queries` merge into one list; both empty is a usage
+        // error, not an empty search.
+        let queries = match resolve_queries(&args) {
+            Ok(queries) => queries,
+            Err(e) => {
+                notify_tool_result(Self::NAME, &e.to_string(), false);
+                return Err(e);
+            }
+        };
+        let args_summary = if queries.len() == 1 {
+            format!("搜索: {}", queries[0])
+        } else {
+            format!("搜索: {} 等 {} 个查询", queries[0], queries.len())
+        };
         notify_tool_start(Self::NAME, &args_summary);
+
+        // One coherent registry generation for this whole call: a hot-apply
+        // landing mid-call must not mix the old chain's defaults with the new
+        // chain's providers.
+        let registry = self.registry.load_full();
 
         // Start from the operator's `[search]` defaults (max_results /
         // timeout_seconds); whatever the model named still wins.
-        let options = args.to_options(&self.registry.default_options());
+        let options = args.to_options(&registry.default_options());
 
-        match self.registry.search(&args.query, &options).await {
+        if queries.len() == 1 {
+            // The single-query path, byte for byte what it was before
+            // `queries` existed: one chain walk, one answer, no merge.
+            let query = queries[0].clone();
+            return match registry.search(&query, &options).await {
+                Ok(answer) => {
+                    // Attribute per result only for a merged answer: with one
+                    // backend the name is the same on every row and
+                    // `provider_used` has already said it.
+                    let (results, clamp_notes) =
+                        render_results(answer.results, options.providers.len() > 1);
+                    // The registry's notes first: which backend answered and what
+                    // it could not express frames everything below it.
+                    let mut notes = answer.notes;
+                    notes.extend(clamp_notes);
+
+                    info!(count = results.len(), "Search completed via registry");
+                    let result_summary = format!("找到 {} 条搜索结果", results.len());
+                    notify_tool_result(Self::NAME, &result_summary, true);
+
+                    Ok(SearchOutput {
+                        results,
+                        query,
+                        queries: Vec::new(),
+                        provider_used: answer.provider,
+                        notes,
+                    })
+                }
+                Err(e) => {
+                    // Every backend failed, or none was configured. The registry's
+                    // message already distinguishes the two and names the lever
+                    // for each, so it goes to the model unedited.
+                    let error_msg = e.to_string();
+                    notify_tool_result(Self::NAME, &error_msg, false);
+                    Err(ToolError::Execution(error_msg))
+                }
+            };
+        }
+
+        match registry.search_multi(&queries, &options).await {
             Ok(answer) => {
-                // Attribute per result only for a merged answer: with one
-                // backend the name is the same on every row and
-                // `provider_used` has already said it.
+                // Per-row provider attribution when the queries were answered
+                // by different backends; per-row query attribution always —
+                // that is the whole shape of a multi-query answer.
                 let (results, clamp_notes) =
-                    render_results(answer.results, options.providers.len() > 1);
-                // The registry's notes first: which backend answered and what
-                // it could not express frames everything below it.
+                    render_multi(answer.results, answer.providers.len() > 1);
                 let mut notes = answer.notes;
                 notes.extend(clamp_notes);
 
-                info!(count = results.len(), "Search completed via registry");
+                info!(
+                    queries = answer.queries.len(),
+                    count = results.len(),
+                    "Multi-query search completed via registry"
+                );
                 let result_summary = format!("找到 {} 条搜索结果", results.len());
                 notify_tool_result(Self::NAME, &result_summary, true);
 
                 Ok(SearchOutput {
                     results,
-                    query: args.query,
-                    provider_used: answer.provider,
+                    query: answer.queries[0].clone(),
+                    queries: answer.queries,
+                    provider_used: answer.providers.join("+"),
                     notes,
                 })
             }
             Err(e) => {
-                // Every backend failed, or none was configured. The registry's
-                // message already distinguishes the two and names the lever
-                // for each, so it goes to the model unedited.
+                // Every query failed. The registry's report already lists
+                // each query and its per-backend failures.
                 let error_msg = e.to_string();
                 notify_tool_result(Self::NAME, &error_msg, false);
                 Err(ToolError::Execution(error_msg))
@@ -501,5 +668,210 @@ mod tests {
             err.contains("TAVILY_API_KEY") || err.contains("[search]"),
             "the message has to name what to set: {err}"
         );
+    }
+
+    // ─── Multi-query ────────────────────────────────────────────────
+
+    /// `query` and `queries` name one concept: the list to ask. `query`
+    /// leads, both are trimmed, empties are dropped, repeats collapse — and
+    /// either spelling alone is enough.
+    #[test]
+    fn query_and_queries_merge_into_one_list() {
+        let args = SearchArgs {
+            query: " alpha ".into(),
+            queries: vec!["beta".into(), "alpha".into(), "  ".into()],
+            ..Default::default()
+        };
+        assert_eq!(resolve_queries(&args).unwrap(), vec!["alpha", "beta"]);
+
+        let queries_only = SearchArgs {
+            queries: vec!["a".into(), "b".into()],
+            ..Default::default()
+        };
+        assert_eq!(resolve_queries(&queries_only).unwrap(), vec!["a", "b"]);
+
+        let query_only: SearchArgs = serde_json::from_str(r#"{"query": "x"}"#).unwrap();
+        assert_eq!(resolve_queries(&query_only).unwrap(), vec!["x"]);
+    }
+
+    /// Both fields empty is a usage error naming both fields — an empty
+    /// `queries` array is only a mistake when `query` is empty as well.
+    #[test]
+    fn neither_query_nor_queries_is_rejected() {
+        let err = resolve_queries(&SearchArgs::default()).unwrap_err().to_string();
+        assert!(err.contains("query"), "{err}");
+        assert!(err.contains("queries"), "{err}");
+
+        let empty_array: SearchArgs = serde_json::from_str(r#"{"queries": []}"#).unwrap();
+        assert!(resolve_queries(&empty_array).is_err());
+    }
+
+    /// The cap the description promises is the cap the tool enforces, and
+    /// the error says the number.
+    #[test]
+    fn more_queries_than_the_cap_is_rejected() {
+        let args = SearchArgs {
+            queries: (0..=MAX_QUERIES).map(|i| format!("q{i}")).collect(),
+            ..Default::default()
+        };
+        let err = resolve_queries(&args).unwrap_err().to_string();
+        assert!(err.contains(&MAX_QUERIES.to_string()), "{err}");
+
+        let at_cap = SearchArgs {
+            queries: (0..MAX_QUERIES).map(|i| format!("q{i}")).collect(),
+            ..Default::default()
+        };
+        assert_eq!(resolve_queries(&at_cap).unwrap().len(), MAX_QUERIES);
+
+        assert!(
+            SearchTool::DESCRIPTION.contains(&MAX_QUERIES.to_string()),
+            "the description must state the cap the tool enforces"
+        );
+        assert!(
+            SearchTool::DESCRIPTION.contains("`queries`"),
+            "the description must name the parameter"
+        );
+    }
+
+    /// A backend whose answers key on the query text, so two queries return
+    /// different pages, plus one page every query shares — and a query
+    /// containing "boom" fails.
+    struct StubProvider;
+
+    #[async_trait::async_trait]
+    impl crate::search::SearchProvider for StubProvider {
+        async fn search(
+            &self,
+            query: &str,
+            _options: &SearchOptions,
+        ) -> Result<Vec<crate::search::SearchResult>> {
+            if query.contains("boom") {
+                return Err(crate::error::AlephError::network("boom"));
+            }
+            Ok(vec![
+                crate::search::SearchResult::new("shared", "https://stub.test/shared", "s"),
+                crate::search::SearchResult::new(
+                    format!("{query} page"),
+                    format!("https://stub.test/{}", query.replace(' ', "-")),
+                    "s",
+                ),
+            ])
+        }
+
+        fn name(&self) -> &str {
+            "stub"
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+    }
+
+    fn stub_tool() -> SearchTool {
+        let mut registry = SearchRegistry::new("stub");
+        registry.add_provider("stub".to_string(), Arc::new(StubProvider));
+        SearchTool::with_registry(Arc::new(registry))
+    }
+
+    /// A call that asks one question is byte-identical on the wire to what
+    /// it was before `queries` existed: no `queries` list, no per-row
+    /// `query_index`.
+    #[tokio::test]
+    async fn a_single_query_call_carries_no_multi_query_machinery() {
+        let output = stub_tool()
+            .call_impl(SearchArgs {
+                query: "rust".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.query, "rust");
+        assert!(output.queries.is_empty());
+        assert!(output.results.iter().all(|r| r.query_index.is_none()));
+
+        let wire = serde_json::to_value(&output).unwrap();
+        assert!(wire.get("queries").is_none(), "{wire}");
+        assert!(
+            wire["results"].as_array().unwrap().iter().all(|r| r.get("query_index").is_none()),
+            "{wire}"
+        );
+    }
+
+    /// Several questions, one merged answer: the shared page appears once,
+    /// every row names the query that found it, and the merge says how many
+    /// repeats it dropped.
+    #[tokio::test]
+    async fn several_queries_merge_and_stay_attributed() {
+        let output = stub_tool()
+            .call_impl(SearchArgs {
+                queries: vec!["alpha".into(), "beta".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(output.queries, vec!["alpha", "beta"]);
+        assert_eq!(output.query, "alpha", "the first query leads");
+        assert_eq!(output.provider_used, "stub");
+
+        let shared: Vec<&SearchResult> = output
+            .results
+            .iter()
+            .filter(|r| r.url == "https://stub.test/shared")
+            .collect();
+        assert_eq!(shared.len(), 1, "the page both queries found, once");
+        assert_eq!(shared[0].query_index, Some(0), "kept by the first query");
+
+        let by_url: std::collections::HashMap<&str, Option<usize>> = output
+            .results
+            .iter()
+            .map(|r| (r.url.as_str(), r.query_index))
+            .collect();
+        assert_eq!(by_url["https://stub.test/alpha"], Some(0));
+        assert_eq!(by_url["https://stub.test/beta"], Some(1));
+        assert!(
+            output.notes.iter().any(|n| n.contains("more than one query")),
+            "{:?}",
+            output.notes
+        );
+    }
+
+    /// One question failing leaves the other's answer standing, and the
+    /// notes name the query that failed.
+    #[tokio::test]
+    async fn a_failing_query_does_not_sink_the_others() {
+        let output = stub_tool()
+            .call_impl(SearchArgs {
+                queries: vec!["fine".into(), "boom".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(
+            output.results.iter().all(|r| r.query_index == Some(0)),
+            "only the surviving query contributed"
+        );
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|n| n.contains("query `boom`") && n.contains("failed")),
+            "{:?}",
+            output.notes
+        );
+    }
+
+    /// Every query failing is the only multi-query `Err`.
+    #[tokio::test]
+    async fn every_query_failing_is_the_only_multi_query_error() {
+        let err = stub_tool()
+            .call_impl(SearchArgs {
+                queries: vec!["boom one".into(), "boom two".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("All 2 queries failed"), "{err}");
     }
 }

@@ -49,6 +49,10 @@ pub(super) fn ProviderDetailPanel(
 
     let saving = RwSignal::new(false);
     let save_success = RwSignal::new(false);
+    // Set from the server's verified verdict on the last save: true only when
+    // the change persisted but did NOT hot-apply (`reload_impact == "restart"`).
+    // The saved-successfully banner alone would claim otherwise by omission.
+    let save_needs_restart = RwSignal::new(false);
     let testing = RwSignal::new(false);
     let test_success = RwSignal::new(Option::<bool>::None);
     let deleting = RwSignal::new(false);
@@ -230,6 +234,7 @@ pub(super) fn ProviderDetailPanel(
         saving.set(true);
         error.set(None);
         save_success.set(false);
+        save_needs_restart.set(false);
 
         let mut cfg = config.get();
         cfg.enabled = form_enabled.get();
@@ -246,7 +251,8 @@ pub(super) fn ProviderDetailPanel(
 
         spawn_local(async move {
             match SearchConfigApi::update(&state, cfg.clone()).await {
-                Ok(()) => {
+                Ok(outcome) => {
+                    save_needs_restart.set(outcome.needs_restart());
                     config.set(cfg);
                     save_success.set(true);
                     set_timeout(
@@ -273,6 +279,7 @@ pub(super) fn ProviderDetailPanel(
 
         saving.set(true);
         error.set(None);
+        save_needs_restart.set(false);
 
         let mut cfg = config.get();
         cfg.default_provider = provider_name.clone();
@@ -287,7 +294,8 @@ pub(super) fn ProviderDetailPanel(
 
         spawn_local(async move {
             match SearchConfigApi::update(&state, cfg.clone()).await {
-                Ok(()) => {
+                Ok(outcome) => {
+                    save_needs_restart.set(outcome.needs_restart());
                     config.set(cfg);
                     save_success.set(true);
                     set_timeout(
@@ -607,6 +615,20 @@ pub(super) fn ProviderDetailPanel(
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                     </svg>
                                     {t!(i18n, settings.search.saved_successfully)}
+                                </div>
+                            })}
+
+                            // Honest degradation: the server persisted the change
+                            // but reported it did NOT hot-apply. Shown alongside
+                            // (not instead of) the success banner — both are true.
+                            {move || save_needs_restart.get().then(|| view! {
+                                <div class="p-3 bg-warning-subtle border border-warning/20 rounded-lg text-warning text-sm flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <circle cx="12" cy="12" r="10"/>
+                                        <line x1="12" y1="16" x2="12" y2="12"/>
+                                        <line x1="12" y1="8" x2="12.01" y2="8"/>
+                                    </svg>
+                                    {t!(i18n, settings.search.restart_required_hint)}
                                 </div>
                             })}
 

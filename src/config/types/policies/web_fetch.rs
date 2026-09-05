@@ -38,7 +38,28 @@ pub struct WebFetchPolicy {
     #[serde(default = "default_enable_readability")]
     pub enable_readability: bool,
 
-    /// crawl4ai backend (optional). Disabled by default.
+    /// Whether PDF responses take the lopdf text-extraction pipeline
+    /// (per-page `[page N]` markers, honest error when there is no text
+    /// layer). When false, PDFs fall through to the HTML path, which
+    /// mangles binary content into lossy UTF-8 — kept only as an escape
+    /// hatch.
+    /// Default: true
+    #[serde(default = "default_pdf_extract")]
+    pub pdf_extract: bool,
+
+    /// Whether YouTube URLs take the yt-dlp transcript pipeline (subtitles
+    /// cleaned from VTT, scrolling-overlap deduplicated). Soft failures
+    /// (yt-dlp not installed, no subtitles) fall back to the generic HTTP
+    /// path. Default: true
+    #[serde(default = "default_youtube_transcript")]
+    pub youtube_transcript: bool,
+
+    /// Legacy crawl4ai backend config. Read only by `Config::migrate_fetch`,
+    /// which folds it into `[fetch].backends.crawl4ai` at load. Note that
+    /// `[fetch]` providers are currently NOT wired into `web_fetch` at
+    /// runtime (BT-D-R4-22: the SSRF DNS pin cannot be enforced on a
+    /// provider-side crawl); a configured backend triggers a one-time startup
+    /// warning and the built-in pinned fetch is used instead.
     #[serde(default)]
     pub crawl4ai: Crawl4aiConfig,
 }
@@ -51,6 +72,8 @@ impl Default for WebFetchPolicy {
             user_agent: default_user_agent(),
             timeout_seconds: default_timeout_seconds(),
             enable_readability: default_enable_readability(),
+            pdf_extract: default_pdf_extract(),
+            youtube_transcript: default_youtube_transcript(),
             crawl4ai: Crawl4aiConfig::default(),
         }
     }
@@ -76,15 +99,25 @@ const fn default_enable_readability() -> bool {
     true
 }
 
+const fn default_pdf_extract() -> bool {
+    true
+}
+
+const fn default_youtube_transcript() -> bool {
+    true
+}
+
 const fn default_crawl4ai_timeout() -> u64 {
     60
 }
 
-/// crawl4ai web_fetch backend configuration.
+/// Legacy crawl4ai backend configuration (`[policies.web_fetch.crawl4ai]`).
 ///
-/// When `enabled`, `web_fetch` routes page fetches through the configured
-/// crawl4ai server (URL → markdown) and falls back to the built-in fetch on
-/// any failure. Disabled by default → no behavior change.
+/// Superseded by `[fetch].backends.crawl4ai`; `Config::migrate_fetch` folds
+/// this section into `[fetch]` at load. Fetch providers are not wired into
+/// `web_fetch` at runtime (BT-D-R4-22) — see the `fetch` module docs. The
+/// struct is still constructed programmatically by
+/// `crate::fetch::providers::crawl4ai` for the connection-test RPC.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Crawl4aiConfig {
     /// Whether the crawl4ai backend is active. Default: false.
@@ -100,9 +133,10 @@ pub struct Crawl4aiConfig {
     #[serde(default = "default_crawl4ai_timeout")]
     pub timeout_seconds: u64,
 
-    /// Runtime-only bearer token, injected from the encrypted vault at
-    /// startup (vault key `web_fetch:crawl4ai`). Never persisted to
-    /// config.toml — mirrors `SearchBackendConfig::api_key`.
+    /// Runtime-only bearer token. Never persisted to config.toml —
+    /// populated programmatically from the vault-resolved
+    /// `FetchBackendConfig.api_key` when the connection-test RPC builds a
+    /// backend (mirrors `SearchBackendConfig::api_key`).
     #[serde(default, skip_serializing)]
     #[schemars(skip)]
     pub token: Option<String>,
@@ -131,6 +165,17 @@ mod tests {
         assert_eq!(policy.user_agent, "Aleph/1.0");
         assert_eq!(policy.timeout_seconds, 30);
         assert!(policy.enable_readability);
+        assert!(policy.pdf_extract);
+        assert!(policy.youtube_transcript);
+    }
+
+    #[test]
+    fn pdf_extract_parses_explicit_false() {
+        let toml = r#"
+            pdf_extract = false
+        "#;
+        let policy: WebFetchPolicy = toml::from_str(toml).unwrap();
+        assert!(!policy.pdf_extract);
     }
 
     #[test]

@@ -55,6 +55,14 @@ pub enum ReloadImpact {
 ///   a property of the READER — no hot-swap call exists or is needed.
 /// - `execution` — `[execution] max_runs_*` are pushed to the live
 ///   `ConcurrencyLimiter`; new caps bind on the next admission.
+/// - `search` — the `search` tool reads its provider registry through a
+///   boot-installed [`crate::search::SearchHandle`]'s `ArcSwap` on every
+///   call, so rebuilding from the patched config and storing into it is what
+///   makes a `[search]` change live. The rebuild re-resolves backend API keys
+///   from the vault (`SearchBackendConfig::api_key` is `skip_serializing`, so
+///   a patched `Config` never carries them); a rebuild that cannot resolve
+///   its secrets keeps the old registry and the verdict downgrades to
+///   `Restart` rather than claiming a swap that did not happen.
 ///
 /// ⚠️ This is a **declaration**, and the code that executes it is
 /// [`crate::config::live_apply::apply_live_sections`] — one table, one
@@ -64,7 +72,7 @@ pub enum ReloadImpact {
 /// `config.patch` of `route.mode` reported "no restart needed" and changed
 /// nothing. `live_apply`'s `every_live_section_has_an_apply_arm` fails if an
 /// entry here has no arm there, or vice versa.
-pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution"];
+pub(crate) const LIVE_SECTIONS: &[&str] = &["route", "behavior", "execution", "search"];
 
 /// Sub-sections applied live even though their *parent* top-level section is
 /// not — the parent has other fields with no live-apply wiring, so declaring
@@ -252,6 +260,23 @@ mod tests {
         assert_eq!(ReloadImpact::classify("behavior"), ReloadImpact::Live);
         assert_eq!(
             ReloadImpact::classify("behavior.output_mode"),
+            ReloadImpact::Live
+        );
+    }
+
+    #[test]
+    fn search_is_live() {
+        // The whole `[search]` section is live: the provider registry the
+        // `search` tool reads is rebuilt and swapped per write
+        // (`search::handle`), so defaults, chain order and backend sets all
+        // bind on the next search call.
+        assert_eq!(ReloadImpact::classify("search"), ReloadImpact::Live);
+        assert_eq!(
+            ReloadImpact::classify("search.max_results"),
+            ReloadImpact::Live
+        );
+        assert_eq!(
+            ReloadImpact::classify("search.backends.searxng.base_url"),
             ReloadImpact::Live
         );
     }

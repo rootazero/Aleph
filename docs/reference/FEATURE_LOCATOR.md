@@ -1780,10 +1780,10 @@ SSOT（`unicode_guard::is_invisible_char`）长出了零宽与方向标记，补
 
 ### 3.18 Web 搜索面：七个字段两个写入点，与十五个等着它们的译码器 (Web Search Face · 2026-08-31)
 
-- **口语关键词**：web 搜索、`search` 工具、Tavily / SearXNG / Brave / Exa / Jina、时效性 / recency / 新鲜度、域名过滤 / site:、full_content、provider 覆写、**多后端扇出 / 合并去重 / URL 归一化**、**搜索后端连接测试**、**凭据脱敏**、搜索后端排序、搜索降级说明
-- **锚点**：`src/search/options.rs`（`Recency` 四词表 + 每 provider 映射器 + `providers` 列表）· `src/search/provider.rs`（`SearchCapabilities`，**签名吃 `&SearchOptions`**）· `src/search/providers/capability_census.rs`（源码级守卫，**三态 `Declared`**）· `src/search/providers/base.rs`（**HTTP 错误单一漏斗 `send` + 脱敏 + `retain_usable`**）· `src/search/registry.rs`（能力感知排序 · 空结果续链 · **`fan_out` / `attributed`** · `SearchAnswer`）· **`src/search/merge.rs`（结果身份：URL 归一化 + 按名次交错）** · `src/search/notes.rs`（省略与降级的单一源）· `src/builtin_tools/search.rs`（工具面）· `shared/protocol/src/search/`（后端清单单一源）· **`src/gateway/handlers/search_config/test.rs`（连接测试 → factory）** · `interfaces/webchat/.../settings/search.rs`（卡片派生）· 真机 `qa/web_search/`
+- **口语关键词**：web 搜索、`search` 工具、Tavily / SearXNG / Brave / Exa / Jina、时效性 / recency / 新鲜度、域名过滤 / site:、full_content、provider 覆写、**多后端扇出 / 合并去重 / URL 归一化**、**搜索后端连接测试**、**凭据脱敏**、搜索后端排序、搜索降级说明、**多查询 / 并发搜索（`queries`）**、**搜索报 quota / 429 / 限流**、**auth 失败 / 401 / 403**、**fetch provider 配了不生效 / crawl4ai / firecrawl 抓取链摘除**、**Panel 改搜索后端没生效 / 保存后要重启**、**PDF 抓取是乱码 / 扫描件报错 / web_fetch 读 PDF**、**YouTube 字幕 / transcript / yt-dlp**
+- **锚点**：`src/search/options.rs`（`Recency` 四词表 + 每 provider 映射器 + `providers` 列表）· `src/search/provider.rs`（`SearchCapabilities`，**签名吃 `&SearchOptions`**）· `src/search/error.rs`（`SearchErrorKind`，**派生非携带**）· **`src/search/handle.rs`（`SearchHandle`：`ArcSwap` 热替换 + live-apply 臂，`[search]` 免重启）** · `src/search/providers/capability_census.rs`（源码级守卫，**三态 `Declared`**）· `src/search/providers/error_funnel_census.rs`（**HTTP 漏斗的源码级守卫**，三条）· `src/search/providers/base.rs`（**HTTP 错误单一漏斗 `send` + 脱敏 + `retain_usable`**）· `src/search/registry.rs`（能力感知排序 · 空结果续链 · **`fan_out` / `attributed`** · `SearchAnswer`）· **`src/search/merge.rs`（结果身份：URL 归一化 + 按名次交错）** · `src/search/notes.rs`（省略与降级的单一源）· `src/builtin_tools/search.rs`（工具面）· **`src/builtin_tools/web_fetch/{pdf,youtube}.rs`（特判提取：lopdf 文本层 / yt-dlp 字幕，软硬失败分类）** · `shared/protocol/src/search/`（后端清单单一源）· **`src/gateway/handlers/search_config/test.rs`（连接测试 → factory）** · `interfaces/webchat/.../settings/search.rs`（卡片派生）· 真机 `qa/web_search/`
 - **职责**：把 `SearchOptions` 的字段接到模型够得到的工具面上，让接不上的维度**出声**而不是静默消失，消灭「哪些后端存在」与「怎么从配置造一个后端」的重复表述，并让一次调用能问多个后端、把它们的答案合成一个集合。
-- **状态**：✅ 两轮落地（第一轮 15 任务计划 `docs/superpowers/plans/2026-08-30-web-search-face.md`，spec 同日；第二轮 2026-09-01，见下方「第二轮」）。
+- **状态**：✅ 四轮落地（第一轮 15 任务计划 `docs/superpowers/plans/2026-08-30-web-search-face.md`，spec 同日；第二轮 2026-09-01，见下方「第二轮」；深度重构轮 + live-apply/PDF/YouTube 续轮 2026-09-01，见下方「深度重构轮」）。
 
 **开工时的缺口（四条，全部是既有判据的新实例）**
 
@@ -1970,6 +1970,61 @@ CONTROL 是**归因臂**：没有它，capped 臂上的任何 4xx 分不出「ke
 1. **真正的闸（跳过）**——收益是单后端死掉时也不付超时；代价就是上一轮识别的第三态。**重访**：实测 p50 被单后端情形主导时。
 2. **给降级者一个更短的探测超时**——能补上第一条的一半，但「等多久」从此有两个答案。
 3. **`retain_usable` 丢弃数的载体 / 逐结果共识计数 / 扩后端表**——三条重访条件本轮**逐条回代码核过，都还没到**：没有共识排序面；没有任何后端的丢弃比例被实测过；`domain_filter`（exa/tavily）、`recency`（七个）、`full_content`（exa/firecrawl/tavily）三个维度各自都还有 provider 支持。
+
+### 深度重构轮（2026-09-01）：kind 是派生不是携带 · 查询维度的并发 · [fetch] 链摘除而非接回
+
+`pi-web-access` 对照的第二轮续。前两轮从它身上移植了三件事（扇出、跨 provider 脱敏、逐字段解析），本轮把剩下两件——**kind 驱动的错误分类**与 **`queries[]` 并发**——落地，外加一次对照审计逼出来的摘除决策（B3）。三段各自独立，共享同一条判据：**一个不能让读者采取行动的分类，不值得存在**。
+
+**B3 · [fetch] 抓取链：摘除，而不是接回（本轮最关键的决策）**
+
+BT-D-R4-22 的 DNS-pin 缺口是**结构性**的：crawl4ai / firecrawl 服务端收到 URL 后在**自己的网络位置**重新解析 DNS 并自行跟随重定向，Aleph 侧 `safe_fetch` 的 pin 无法穿越进程边界——两个 provider API 都不接受一个预解析的地址，validate-then-delegate 正是审计标 High 的那个形状。「接回」因此同时是**重新引入 High 缺口**与**制造已修复的假象**；而内置 readability 已覆盖 HTML→markdown，provider 的增量价值趋零。两个方向都指向摘除。
+
+- 删 `src/fetch/registry.rs` 与 `src/fetch/factory.rs` **整文件**；`builtin_tools/web_fetch/mod.rs` 删 `fetch_providers` 字段与 151-190 的跳过块；`web_fetch/types.rs` 删 `Extractor::{Crawl4ai,Firecrawl}`；`crawl4ai.rs` 删零调用者的 `health_check` 与永真的 `is_healthy`；`fetch/provider.rs` trait 删 `is_available`；`start/mod.rs:893` 删死的 vault 注入块。
+- `constructor/mod.rs` 摘除 `FetchRegistry` 装配，改为 `[fetch] enabled` 时**一次性启动 warn**——新纯函数 `inert_fetch_backend_names`（constructor/mod.rs:1490）。配了不生效必须出声，静默才是缺陷。
+- **配置面刻意保留**：`[fetch]` 段、`fetch_config.get/update/test` RPC、`Config::migrate_fetch` 不动——运维意图与连接测试还有读者，删配置面是另一笔账。
+
+**B1 · `SearchErrorKind`：kind 是派生，不是携带**
+
+新文件 `src/search/error.rs`，8 个 kind（`Transient` / `Quota` / `Auth` / `Config` / `InvalidResponse` / `RequestRejected` / `Cancelled` / `Other`）。关键设计：**kind 不从产地携带，从变体派生**——`base::send` 漏斗在唯一知道 HTTP 状态码的地方选 `AlephError` 变体（为此新增 `InvalidResponse` / `RequestRejected` 两个变体），`SearchErrorKind::of(&AlephError)` 是全 crate 唯一映射，trait 签名一个字不动。携带一个 kind 字段会让产地与分类器各执一词；从变体派生让「两边不一致」在结构上不可能。状态码映射：401/403→`Auth`、429→`Quota`、其余 4xx→`RequestRejected`、5xx→`Transient`、200 坏 body→`InvalidResponse`。落地：`health.rs` 的 `FailureRecord` 带 kind（`last_failure_kind`）；`notes.rs::failure_line` 按 kind 给**杠杆措辞**——auth 指去修 key、quota 指稍后重试、`Other` **不编造杠杆**（错的标签比缺的贵，第二轮 B 的同款）。Jina 用信封里结构化的 `code` 字段分类，不是 regex 嗅探错误文本（守 R8）。
+
+与 pi-web-access 的三处**刻意**分叉，各附理由：① **凭证缺失不设独立 kind**——它在构造期就被 `is_available` 短路，永远到不了链上，设了就是一个没有生产者的变体；② **kind 只驱动信息质量，不改路由**——Aleph 的链语义是「每个 provider 只问一次」，没有同 provider 重试可喂，让 kind 碰路由就是给一个不存在的决策写输入；③ **冷却窗口不按 kind 区分**——没有证据支持 quota 该比 transient 冷更久，给了就是第二个没人答得上「等多久」的常量（对照 `MIRROR_COOLDOWN` 那次「拿另一个模块的事实当理由」）。
+
+**B2 · 多查询：并发在查询维度，不在 provider 维度**
+
+- 工具面：`SearchArgs` 新增 `queries: Vec<String>`（≤5 条，`MAX_QUERIES`，builtin_tools/search.rs:110），与 `query` 合并去重（**`query` 优先**），两者至少给一个——`resolve_queries` 的报错同时点名两个字段，空 `queries` 数组只有在 `query` 也缺时才算错。
+- registry 新增 `search_multi`（registry.rs:683）：**查询维度**并发，`&self` 共享、health 记录经内部锁线程安全；单查询路径零改动复用——一条查询走的就是同一条链，不是第二份实现。
+- `MultiSearchAnswer`：`queries` 列表 + 每条结果带**查询索引归因**——一页被多个查询命中只出现一次，归因**首个发现它**的查询（与第二轮「可寻址的那个名字赢」同一条判据的另一根轴）。notes 新增 `merged_duplicates_across_queries` 与 `query_failed`。
+- **allSettled 语义**：单查询失败不影响其他，**全失败**才整体 `Err`——部分成功就是成功（第二轮扇出的同一条）。
+- 测试含 `queries_run_concurrently_not_in_series`：并发是**时序断言**，不是「都成功了」。
+
+**Phase A · 修复与熵减**
+
+1. **`dropped_keys` boot 审计在 Rust 不可能诚实实现**——struct 字段运行时不可枚举，`deny_unknown_fields` 又有 brick-on-save 风险；registry.rs:233-246 的原注释承诺的是一个兑现不了的东西。改为源码级测试 `every_search_config_field_is_consumed_here`（registry.rs:1493 附近）：解析 `config/types/search.rs` 的 `SearchConfigInternal` 每个 pub 字段，断言它在 registry.rs 生产代码里以 `cfg.<field>` 被消费；有意不映射的须登记 `INTENTIONALLY_UNMAPPED`（当前为空）并附理由，失配即红。这是 capability_census 那条「守卫钉在源码上」在配置面上的同款。
+2. **新文件 `src/search/providers/error_funnel_census.rs`**——把第二轮「HTTP 错误只有一个漏斗」从注释升级为守卫，三条测试：`no_provider_dispatches_or_maps_http_errors_outside_the_funnel`（`.send()` / `.status()` / `StatusCode` / `error_for_status` / `Client::builder` 不得出现在 provider 文件）、`every_provider_actually_uses_the_funnel`（反空转：一个都不用漏斗 = 守卫空过）、`every_allowance_is_load_bearing`（例外表防腐烂，当前为空）。复用 capability_census 的 `provider_sources()` / `production_view()`（为此提为 `pub(super)`）；`base.rs:22-26` 注释写实。
+3. **`has_web_fetch_fallback` 的注释谎称 panel/doctor 消费**——panel/doctor 是独立进程，调不到 server 内的 Rust 方法。收窄为 `#[cfg(test)]` 门控（registry.rs:147-149）+ 注释写实。
+4. **文档漂移**：`src/search/mod.rs` Supported Providers 7→9（补 Jina / DuckDuckGo）；`options.rs` 映射表补 Exa / Jina 列。
+5. **`MAX_SEARCH_RESULTS` 单一来源**（options.rs:147，值 100 向配置侧对齐）：`validated_max_results`、`gateway update.rs:41`、`config/validate.rs:518` 三处收敛——此前是同一事实的三份表述。
+6. **unavailable 与 failed 分开计数**：`notes.rs:60-71` 新增 `answered_past_unavailable`；registry `answer()` 加 `unavailable` 参数；全链仅 unavailable 时聚合错误改 `invalid_config`，不再谎称 "failed"——凭证缺失的后端不是「失败了」，是「没问过」，这正是 B1 不设 credential kind 的同一事实在聚合层的另一张脸；skip 日志补 `target: "search"`。
+7. **引用写实**：`qa/web_search/run.sh:3` 的章节引用 §3.6→§3.18；registry `from_config` 文档的 "legacy TAVILY_API_KEY path" 措辞写实。
+8. **附带修复（HEAD 既有，阻塞验证）**：`skill_install.rs:74` 的 `clippy::single_match`；registry 测试 `from_config_respects_opt_out` 缺显式 `web_fetch_fallback:false`；searxng.rs×5 / firecrawl.rs×1 测试 fixture 主机名 localhost→`searxng.test` / `firecrawl.test`——SSRF 拒绝 localhost 之后旧 fixture 全部失效，**守卫拦住的东西连测试里的假后端也拦**。
+
+**阻塞修复（全量验证逼出的两项）**
+
+9. **SearXNG 构造期 SSRF 检查对齐 `[ssrf] allow_private_network`（修 HEAD 既有回归）**：`441f54660` 的构造期 `reject_ssrf_target_host` 无条件拒绝 IP 字面量/私网 base_url，其注释承诺「内网用户由请求期守卫兜底」——但请求期守卫默认同样拦 127.0.0.1，承诺为假，**LAN 自托管 SearXNG（最典型部署形态）在 HEAD 生产路径必然失败**，qa/web_search 装置因此 0/6 全灭。修复保持 default-deny（威胁模型：`search_config.update` 是模型可达 RPC，完全放行私网 base_url = 被注入的模型可把查询流导向内网）：新增纯函数 `classify_ssrf_target_host` 三态判定（`Allow / AllowUnderPrivateNetworkOptIn / Reject`），开关 `[ssrf] allow_private_network=true` 时私网 base_url 放行 + WARN（`target: "search"`），**云 metadata（169.254.169.254 / `fd00:ec2::254` / `metadata.google.internal` 含 punycode 同形字链）与 legacy IP 字面量两条地板任何策略下不放行**。传导链全显式参数（不读全局态）：`agent_init` → `SearchRegistry::from_config(cfg, allow)` → factory trait（9 个实现全更新）→ `SearxngProvider::new` / `FirecrawlProvider::new` → `base::reject_ssrf_target_host(.., allow)`；`search_config.test` 探测路径同读 live 配置，「测试连接」与启动判定一致。实测发现 `url::Url::parse` 先归一化 legacy 字面量（`0xa9fea9fe` 被当 169.254.169.254 本体拦截，有测试钉住）。**打磨话术**：「searxng 配 localhost/内网 IP 起不来」＝默认策略在拒，operator 置 `[ssrf] allow_private_network = true`；「开关开了还拒」＝撞的是 metadata/legacy-literal 地板，不是私网类。
+10. **两个 ratchet 有意识地抬升**（政策内三问已写入常量上方的日期化注释）：`REGISTRY_SCHEMA_CEILING_BYTES` 104,302→104,663 与 `CATALOG_DESCRIPTION_CEILING_BYTES` 112,772→112,960，增长全部来自 `search` 工具一行（+361B = `queries` 参数及其文档）。三问要点：schema 承载不了参数间关系（`queries` 并发扇出 vs `query` 单问题、同传报错）；更强模型推不出「N 个问题该走一次 `queries` 扇出而非 N 次顺序 `search`（后者重复付链排序/健康降级/合并成本）」；无其他工具承载。单查询路径字节零增长。
+
+**验证状态**：`cargo clippy -p alephcore --lib --bins -- -D warnings` 零警告；全量 `cargo test -p alephcore --lib` **17,914 passed / 3 failed**（3 条均为 HEAD 既有：`skill::manifest` 空名、`harness` 行预算 5241>5237、`strategy::planner` stray brace）；`--bins` 94/0；`qa/web_search` **六阶段全 PASS**（reach 4/4 · order 4/4 · degrade 3/3 · empty 3/3 · fanout 11/11 · demote 6/6，修复前 0/6）。HEAD 既有问题（非本轮引入，如实记下）：`tests/subagent_deps_inherit.rs` 编译失败、`agents::subagent_tool::recovery` 的 `the_directory_face_reads_only_the_parent_log` 呈时序性抖动。
+
+**续轮（同日）：`[search]` 进 live-apply · PDF/YouTube 特判**
+
+- **`[search]` 热生效**（治「Panel 改搜索配置需重启但无提示」）：新文件 `src/search/handle.rs`——`SearchHandle { ArcSwap<SearchRegistry>, vault }` 装进 `CapabilitySlot` 进程全局槽（`install_/try_/decline_global_search_handle`，对齐 route handle 先例；census 46→47）。`SearchTool` 每次调用 `load_full()` 取当前代。`LIVE_SECTIONS` 加 `"search"`，apply 臂重建 `from_config(&cfg.search, cfg.ssrf.allow_private_network)` + 逐 backend vault 取 key；**vault 读取失败保留旧 registry 且该节不进落地清单**（`classify_verified` 自动降级为 restart——「重建失败保旧」的真实路径是 vault 失败，`from_config` 对坏 backend 本就 warn+skip 不产生 Err）。`search_config.update/delete/test` 响应带 `reload_impact: live|restart`（形状照抄 execution_config）；Panel `detail_panel.rs` 仅在响应为 restart 时亮警告条（locale key `settings.search.restart_required_hint`，中英）。**打磨话术**：「Panel 改了搜索后端没生效」＝看保存响应的 `reload_impact`；「提示要重启」＝handle 缺席环境（CLI/测试）或 vault 读取失败，不是 bug。
+- **PDF 特判**（`web_fetch/pdf.rs`，380 行）：`call_impl` 在 HTML 大小闸之前分派——`Content-Type: application/pdf` 双向权威（`text/html`+`.pdf` 尾 = HTML 错误页，不拦截），仅 octet-stream/缺 header 时回退 URL hint。`lopdf 0.39`（printpdf 传递依赖提升为直接依赖，`default-features=false` 对齐，零新增编译重量）逐页提取 + `[page N]` 标记；加密先试空密码（owner-password-only 形态），失败诚实报「password-protected」；无文本层报「scanned or image-only」；**单页坏死跳过记 debug，全文档无文本才报错**；20MB 预算（`FETCH_BODY_CAP` 为此从 10MB 提到 20MB，非 PDF 响应仍由 post-fetch 10MB 闸拒绝）。开关 `[policies.web_fetch] pdf_extract`（默认 true，关掉则回落旧行为）。
+- **YouTube transcript 特判**（`web_fetch/youtube.rs`，~960 行）：`detect_youtube` 严格匹配 watch/youtu.be/shorts/embed/m./music.（频道页/首页/playlist/仿冒域名一律 None）→ `fetch_transcript` 经 `YtDlpRunner` trait 边界起 yt-dlp（`--write-subs --write-auto-subs`，手工字幕优先；30s 超时 + 8MiB stdout 上限；**`ProcessOutput` 没有 stderr 字段——防泄漏靠类型不靠约定**）→ `clean_vtt` 七步清洗（内联标签/实体/空 cue/**滚动重叠去重**——auto-subs 的 suffix-prefix 重叠剔除，60-cue 样本至少减半/相邻重复折叠/>1.5s 间断分段）。软失败（`YtDlpUnavailable`/`NoSubtitles`，`is_soft()`）回退通用 HTTP 路径，硬失败诚实报错。**SSRF 安全靠构造**：`detect_youtube` 只认真 YouTube host，`fetch_transcript` 用裸 video id 重建 canonical URL，调用方控制的 host 永远到不了网络。开关 `youtube_transcript`（默认 true）。**未接 runtimes 设施**：`SPECS` 无 yt-dlp 的 `RuntimeSpec`，`probe()` 恒 not-found——当前最小 PATH 扫描，代码内留有升级注释。
+- **萃取器归因**：`Extractor::{Pdf, Youtube}`（serde `"pdf"`/`"youtube"`），结果摘要行带方法名（「已获取网页内容 (N 字符, pdf)」）。
+
+**明确否决（评估记录，勿重做）**：query-rewrite 小模型改写——违 R8/R10（模型自己会拆查询，middleware 改写是纯税），且与 B2 `queries[]` 功能重叠；托管 PDF 服务（Datalab/Gemini vision）与视频理解/帧提取——二期候选；策展 UI（pi-web-access curator 形态）——R6「AI 来找你」哲学的反向，降级为未来 Panel 侧轻量结果呈现再议。
+
+**续轮验证状态**：全量 `--lib` **17,959 passed / 3 failed**（同三条 HEAD 既有）；clippy `--lib --bins` 零警告；`aleph-panel` check 绿。
 
 ## 4. Loop 层
 

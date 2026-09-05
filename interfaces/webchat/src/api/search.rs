@@ -42,6 +42,28 @@ pub struct SearchTestResult {
     pub message: String,
 }
 
+/// What a `search_config.update` / `deleteBackend` save actually did about
+/// the RUNNING process — persisted is not the same as applied.
+///
+/// `reload_impact` is the server's verified verdict
+/// (`config::live_apply::classify_verified`): `"live"` when the rebuilt
+/// registry was swapped onto the running tool, `"restart"` when the change
+/// only reached disk. Absent when talking to a server older than the field;
+/// treated as unknown, never as `"live"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchUpdateOutcome {
+    pub success: bool,
+    #[serde(default)]
+    pub reload_impact: Option<String>,
+}
+
+impl SearchUpdateOutcome {
+    /// True only when the server explicitly said the change did NOT hot-apply.
+    pub fn needs_restart(&self) -> bool {
+        self.reload_impact.as_deref() == Some("restart")
+    }
+}
+
 pub struct SearchConfigApi;
 
 impl SearchConfigApi {
@@ -50,10 +72,13 @@ impl SearchConfigApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    pub async fn update(state: &DashboardState, config: SearchConfig) -> Result<(), String> {
+    pub async fn update(
+        state: &DashboardState,
+        config: SearchConfig,
+    ) -> Result<SearchUpdateOutcome, String> {
         let params = serde_json::to_value(&config).map_err(|e| e.to_string())?;
-        state.rpc_call("search_config.update", params).await?;
-        Ok(())
+        let result = state.rpc_call("search_config.update", params).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
     pub async fn test_connection(
