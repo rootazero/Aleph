@@ -348,9 +348,11 @@ pub fn stop(json: bool) -> CliResult<()> {
 
     #[cfg(not(unix))]
     {
-        return Err(CliError::Other(
+        // Tail expression, not a `return`: the `#[cfg(unix)] Ok(())` below is
+        // stripped on this target, so this block IS the end of the function.
+        Err(CliError::Other(
             "Daemon stop is only supported on Unix systems".to_string(),
-        ));
+        ))
     }
 
     #[cfg(unix)]

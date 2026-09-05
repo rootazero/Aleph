@@ -65,12 +65,15 @@ impl Replacement {
     }
 }
 
+// Production callers all `match` on the enum directly (which
+// #[non_exhaustive] permits). The four accessors below exist for the unit-test
+// suite (`tests/` under this module) and nothing else — the 2026-09-04
+// severed-wire audit established that and demoted them from `pub` to
+// `pub(crate)`, which is what made dead-code analysis able to see them at
+// all. `#[cfg(test)]` finishes the job: the reason was already written down,
+// this makes it the mechanism.
+#[cfg(test)]
 impl GuardrailDecision {
-    // Production callers all `match` on the enum directly (which #[non_exhaustive]
-    // permits). The four accessors below are kept pub(crate) for the unit-test
-    // suite (`tests/` under this module) — they were previously `pub`, but no
-    // production caller anywhere in src/ consults them, so widening the API
-    // surface was dead. (severed-wire audit 2026-09-04, sw-guardrails-2-1.)
     #[must_use]
     pub(crate) const fn is_block(&self) -> bool {
         matches!(self, Self::Block { .. })

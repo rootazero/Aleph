@@ -279,6 +279,12 @@ impl TopicFilter {
 
     /// Create a filter with full subscription entries (patterns + optional
     /// `where_clause` predicates).
+    ///
+    /// `#[cfg(test)]` because the test suite in this file is its only caller.
+    /// That was already true and already written down; gating it makes the
+    /// sentence and the mechanism agree, instead of leaving a production-shaped
+    /// constructor that production never calls.
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn with_subscriptions(subscriptions: Vec<TopicSubscription>) -> Self {
         Self { subscriptions }
@@ -356,21 +362,20 @@ impl GatewayEventBus {
     /// Create a new event bus with default channel size
     #[must_use]
     pub fn new() -> Self {
-        let (sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
-        let (typed_sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
-        Self {
-            sender,
-            typed_sender,
-        }
+        Self::with_capacity(EVENT_CHANNEL_SIZE)
     }
 
-    /// Create a new event bus with custom channel size
+    /// Create a new event bus with a custom channel size.
     ///
-    /// `pub(crate)` because every production construction uses the default
-    /// `new()` constructor — this knob is dormant. Kept (vs. deleted) so the
-    /// `#[cfg(test)]` blocks that exercise capacity-bound paths still compile,
-    /// and so the future tuning knob has a ready home. (severed-wire audit
-    /// 2026-09-04, sw-gateway-2-2.)
+    /// `pub(crate)` because every production construction goes through
+    /// [`Self::new`], which is now defined AS this function — previously the
+    /// two built the same value independently, which is why this one read as
+    /// dead code and why the channel size lived in two places (判据 §1).
+    ///
+    /// ⚠️ The 2026-09-04 severed-wire audit kept it with the reason "so the
+    /// `#[cfg(test)]` blocks that exercise capacity-bound paths still
+    /// compile". Measured 2026-09-05: there are no such blocks, and there
+    /// never were — the sentence described a consumer that does not exist.
     #[must_use]
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
