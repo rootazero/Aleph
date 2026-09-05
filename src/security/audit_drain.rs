@@ -82,8 +82,8 @@ async fn drain_loop(
             received = rx.recv() => match received {
                 Some(entry) => {
                     let event_type = entry.event_type;
-                    let store = store.clone();
-                    match tokio::task::spawn_blocking(move || store.insert_audit_entry(&entry)).await {
+                    let store_for_insert = store.clone();
+                    match tokio::task::spawn_blocking(move || store_for_insert.insert_audit_entry(&entry)).await {
                         Ok(Err(e)) => tracing::error!(error = %e, ?event_type, "audit drain insert failed"),
                         Err(e) => tracing::error!(error = %e, "audit drain insert task panicked"),
                         _ => {}

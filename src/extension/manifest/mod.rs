@@ -348,7 +348,7 @@ fn has_any_component(root: &Path) -> bool {
 // =============================================================================
 
 /// Parse YAML frontmatter from markdown content
-pub fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
+pub fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
     content: &str,
     path: &Path,
 ) -> ExtensionResult<(T, String)> {

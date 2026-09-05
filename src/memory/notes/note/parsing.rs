@@ -187,11 +187,14 @@ fn collect_extra_frontmatter(yaml: &str) -> ExtraFrontmatter {
         return ExtraFrontmatter::new();
     };
     map.into_iter()
-        .filter_map(|(k, v)| match k {
-            serde_yml::Value::String(key) if !KNOWN_FRONTMATTER_KEYS.contains(&key.as_str()) => {
-                Some((key, v))
+        .filter_map(|(k, v)| {
+            // noyalib's `Mapping` iterates owned `(String, Value)` pairs —
+            // the key is already a plain String, not a `Value::String`.
+            if KNOWN_FRONTMATTER_KEYS.contains(&k.as_str()) {
+                None
+            } else {
+                Some((k, v))
             }
-            _ => None,
         })
         .collect()
 }

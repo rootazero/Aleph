@@ -124,7 +124,7 @@ pub(crate) fn yaml_extra_block(extra: &super::parsing::ExtraFrontmatter) -> Stri
     let mut map = serde_yml::Mapping::new();
     for (k, v) in extra {
         // rust-doctor-disable-next-line excessive-clone
-        map.insert(serde_yml::Value::String(k.clone()), v.clone());
+        map.insert(k.clone(), v.clone());
     }
     let Ok(rendered) = serde_yml::to_string(&serde_yml::Value::Mapping(map)) else {
         // Unrepresentable value: drop the passthrough block rather than emit a

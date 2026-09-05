@@ -285,20 +285,32 @@ impl RuntimeSecurityGuard {
         // 3. PII Filtering
         if self.config.pii_filtering {
             if let Some(engine) = &self.pii_engine {
-                let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
+                // The std RwLock read guard is !Send and must never live
+                // across an `.await` (see the lock-discipline header); the
+                // counts come out of the critical section, the audit awaits
+                // happen after it.
+                let counts = {
+                    let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
 
-                let should_filter = match &context.provider_name {
-                    Some(provider) => !engine_guard
-                        .is_platform_excluded(context.platform_name.as_deref(), provider),
-                    None => true,
+                    let should_filter = match &context.provider_name {
+                        Some(provider) => !engine_guard
+                            .is_platform_excluded(context.platform_name.as_deref(), provider),
+                        None => true,
+                    };
+
+                    if should_filter {
+                        let result = engine_guard
+                            .filter_with_platform(&current_text, context.platform_name.as_deref());
+                        let blocked = result.blocked_count;
+                        let warned = result.warned_count;
+                        current_text =
+                            Self::apply_filter_result(result, &mut reasons, &mut warnings);
+                        Some((blocked, warned))
+                    } else {
+                        None
+                    }
                 };
-
-                if should_filter {
-                    let result = engine_guard
-                        .filter_with_platform(&current_text, context.platform_name.as_deref());
-                    let blocked = result.blocked_count;
-                    let warned = result.warned_count;
-                    current_text = Self::apply_filter_result(result, &mut reasons, &mut warnings);
+                if let Some((blocked, warned)) = counts {
                     if blocked > 0 {
                         self.log_audit(
                             &context,
@@ -498,8 +510,12 @@ impl RuntimeSecurityGuard {
         // Inbound PII filtering: scrub sensitive data echoed back by LLM
         if self.config.pii_filtering {
             if let Some(engine) = &self.pii_engine {
-                let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
-                let result = engine_guard.filter(text);
+                // Same !Send rule as process_outbound: the read guard is
+                // dropped before the audit awaits below.
+                let result = {
+                    let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
+                    engine_guard.filter(text)
+                };
                 if result.blocked_count > 0 {
                     self.log_audit(
                         context,

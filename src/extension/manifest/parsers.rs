@@ -102,7 +102,7 @@ struct McpServerEntry {
 ///
 /// Returns (parsed frontmatter, body text). If no frontmatter delimiters are
 /// found, returns default frontmatter and the full content as body.
-fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
+fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
     content: &str,
 ) -> Result<(T, String)> {
     let content = content.trim();
