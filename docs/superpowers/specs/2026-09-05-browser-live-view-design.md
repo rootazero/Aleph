@@ -400,3 +400,23 @@ Managed 的现有八场景（`qa/browser_managed/run.sh`）整套重跑。**变�
 - `README.md` —— 怎么重跑。
 
 这些脚本是丢弃式 spike 产物，只为 §8 的 obscura 重评能原样再跑一遍而保留；不是测试，不进 `qa/`。
+
+### D6 — 引擎路线转向：主备双轨制（2026-09-05 晚，用户裁定，**在 plan 1 执行期间下达，不回滚 plan 1**）
+
+用户裁定推翻 D3 的**默认引擎**部分，保留 D3 的**交付顺序**：
+
+1. **obscura 升为 first-class 默认内核。** Agent 发起的信息检索、DOM 解析、轻量页面交互走 obscura——理由是 Aleph 全栈 Rust、以低驻留内存和快响应为定位，而 Chromium 是为了开发简单选的一条偏离设计原则的路。
+2. **在 CDP 之上抽象统一的 Agent Browser 接口。** obscura 与 Chromium 都说 CDP，核心逻辑不得与任一具体实现绑定。
+3. **Chromium 降为「逃生舱」。** 目标页在 obscura 下渲染异常、或遇到极严苛的验证码环境时，经同一接口无缝切到本地 Chromium 完成该任务。
+4. **可能不需要栅格化。** 用户提出的进一步问题：Aleph 是否真的需要把页面渲染成给人看的像素？直接在 obscura 的 Rust 层把 DOM 树与布局信息转成**专供大模型理解的空间状态 JSON 树**，可能才是端侧智能上超越传统封装方案的突破口。
+
+**这条裁定与 §2 的实测证据的关系，必须原样带进转向计划，不得因为改了方向就当那些数字不存在：**
+
+- §2 里「obscura 输在哪」的三条阻塞项中，**只有第一条（每个 CDP 连接各自作用域的 target ⇒ 第二个连接 `getTargets` 为空、attach 报 "Target not found"）是专属于人类可视化直播的**。在 D6 的分工下直播留在 Chromium，这条不再挡路。原先那句「obscura 除体积内存外无优势」的结论**作用域只覆盖直播那条路**，写得不够清楚——这是判据 §18（结论的作用域是方法，不是目录）。
+- 另外两条**直接落在 D6 交给 obscura 的那 90% 上**，转向计划必须先实测再设计：
+  - **单 V8 isolate**：github.com 上 `Runtime.evaluate("1")` 实测等待 16.8 s / 12.4 s。agent 的每次取值都排在页面脚本之后。
+  - **`Accessibility.getFullAXTree` 无 name-from-content**：HN 229 个链接命名到 0 个（Chrome 198/229）。
+- **第 4 点是第二条的解法**：不走 AX 树、自己从 DOM+布局生成空间状态 JSON，accname 缺失就从缺陷变成无关项。剩下必须实测的是 isolate 延迟。
+- 复测脚本仍在 `docs/superpowers/specs/2026-09-05-browser-live-view-evidence/`（`probe.mjs` / `probe2.mjs` / `probe3.mjs`），针对的是 release v0.2.1；源码在 2026-09-04 已比 release 多出 `Input.insertText`，**转向前先按当前 HEAD 重测一遍，不要拿 v0.2.1 的数字当今天的事实**。
+
+**对 plan 1 的处置：不回滚。** plan 1 交付的是「Aleph 自己拥有浏览器进程的生命周期 + `attach --cdp` 接入 + 运行时供给 + 停机回收」，这些在双轨制下**全部保留**——它们描述的是「谁拥有进程」，不是「进程是谁」。需要在转向轮里重新命名或泛化的是那些把 Chromium 写进契约的标识符，清单见 plan 1 Task 10 的文档条目。
