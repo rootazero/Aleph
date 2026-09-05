@@ -41,7 +41,7 @@
 6. **提议的 Task 7 拆成两个任务（7 与 8）。** 注册一个新工具要动六处（`definitions.rs` 的条目 + `REGISTRY_SCHEMA_BASELINE` 行 + `standalone` 的 `=> None` 臂、`groups.rs`、`registry/struct_def.rs`、`builder/constructor/mod.rs`、`registry/tool_registry_impl.rs`、`builder/core_tools.rs`）外加一条描述字节棘轮（`CATALOG_DESCRIPTION_CEILING_BYTES = 113_719`）。塞进供给任务里会让「哪一步红了」不可归因。**全计划共 10 个任务。**
 7. **三处代码在翻转后失去被引用者，本计划 CUT 它们，但第三处的理由不是「恒真」**：`playwright_launch::open_argv`（:207-234）与 `playwright_launch::browser_flag_value`（:106-123；`attach` 不收 `--browser`/`--headed`，引擎选择改由 `chromium_resolve` 承担）确实成了死码。`manager::unhonored_managed_fields`（:580-591）**不是**恒空——它的真实谓词是 `browser_flag_value(&cfg.browser).is_none() && cfg.browser != BrowserType::default()`（`manager.rs:585-587`），也就是**恰好 Brave**，删掉 `browser_flag_value` 之后这个条件仍然表达得出来。它被删是因为它保护的那件事**换了地方**：那条启动告警存在的意义是「一个 managed Brave profile 不要静默拿到 Chromium」，而翻转之后引擎由 `chromium_resolve` 兑现。⚠️ 只说「我们自己起 Brave 所以 honor 了」是**半个替换**：`find_chromium_preferred`（`discovery.rs:125-150`）在首选引擎不存在时**静默降级**（`prefer_paths` 只是重排，回落只打 `debug!`）。所以本轮把告警搬进解析器本身——`resolve_binary` 返回**实际解析出的引擎**，与 profile 请求的引擎不一致时 `warn!`（判据 §1：一份推导；判据 §16：修在一边的判据要主动搬过去）。
 8. **STRUCTURAL：sidecar 不放在各自的 user-data-dir 里，放在一个注册表目录。** 初稿把 `aleph-chromium.json` 写进每个 profile 的 udd，于是 boot 清扫只能扫「派生出来的那个根」，而配了 `user_data_dir` 的 profile（本仓 QA 自己就配，`qa/browser_managed/run.sh:85`）的 sidecar 落在根之外，**永远扫不到**。改为一个注册表：`browser_state_dir("chromium")/<sanitize_session_key(profile)>.json`，每份记 `{pid, http_url, user_data_dir, aleph_version}`。清扫只走那一个目录，「有哪些浏览器要收」这件事就只有一个推导点（判据 §12）。
-9. **STRUCTURAL：守护进程优雅退出时要杀掉自己的 Chromium（spec §3.6「退出时杀」）。** `std::process::Child` 不在 drop 时 kill，初稿也没有任何 shutdown 钩子——每次重启都留一个浏览器，等下一次 boot 清扫。本轮在 `src/bin/aleph-server/commands/start/mod.rs:3642` 之后的有序停机段落里加一次 `browser::manager::shutdown_browsers_global()`，与同段 `:3658` 的 `bash_exec::kill_all_running_background()` **同形同理由**（那一行的注释逐字写着为什么 `kill_on_drop` 不够、为什么必须显式调用、为什么放在这里而不是信号处理器里）。
+9. **STRUCTURAL：守护进程退出时要杀掉自己的 Chromium，而退出有 _两_ 条路（spec §3.6「退出时杀」）。** `std::process::Child` 不在 drop 时 kill，初稿也没有任何 shutdown 钩子——每次重启都留一个浏览器。本轮抄的是 `bash_exec::kill_all_running_background()` 的形状，而那个形状**有两半**：有序路径在 `src/bin/aleph-server/commands/start/mod.rs:3657`，**以及**卡死兜底在 `src/bin/aleph-server/commands/start/helpers.rs:519`——后者以 `std::process::exit(0)`（`helpers.rs:537`）收尾，**整段有序停机根本不会跑到**。那条兜底不是稀有情况：`SHUTDOWN_FAILSAFE = 5 s`（`helpers.rs:437`）是特意对齐 `aleph-server stop` 自己的 SIGTERM→SIGKILL 窗口的，而它的注释写着卡死的停机「usually coincides with load」。只挂一半 ⇒ **负载中的 `aleph-server stop` 会漏掉浏览器**，而现成的普查测试 `both_daemon_exit_paths_reap_background_jobs`（`helpers.rs:616-645`）抓不到，因为它 grep 的是 `kill_all_running_background(` 这个字面量。所以本轮两处都挂，并把那条普查测试扩成同时钉住浏览器那半。判据 §16（孪生）与 §6（先数一遍：这个动词有几个退出点）。
 10. **`session_active` 与 `idle_managed_profiles` 从 `TabRegistry::has_tabs` 改成子进程活性。** 现状两处都用 `has_tabs`，且 manager.rs:355-357 逐字承认那是「近似」。翻转后「有没有浏览器」有了一个确切答案（我们自己的 `Child`），留着近似就是同一个问题的第二个答案（判据 §1）。`reap_idle_tabs` 的候选筛选**继续**用 `has_tabs`——那问的是 tab 不是浏览器。
 11. **现有 `open` 场景的预言机会失效，Task 9 负责搬家。** `qa/browser_managed/drive_browser.py` 用 `playwright-cli list` 打印的 `user-data-dir` 证明「Aleph 生成的 `--config` 真的到了浏览器」。`attach` 之后 CLI 不再拥有 profile 目录，那一行不可能再报出我们的 udd。新的预言机是 `<udd>/DevToolsActivePort` 存在 + `curl http://127.0.0.1:<port>/json/version` 200——**更强**，因为它证明的是浏览器确实被我们用那个 udd 起起来了，而不是 CLI 转述了一遍我们写给它的配置。
 
@@ -67,7 +67,9 @@
 | `ProcessRefreshKind::with_cmd(UpdateKind) -> Self` | `impl_get_set!` 生成，`:2531` | 链式，只刷 `cmd` 这一项 |
 | `UpdateKind::Always` | `:2319-2327`（枚举三值 `Never` / `Always` / `OnlyIfNotSet`，**默认 `Never`**） | 必须显式给 `Always`，否则 `cmd()` 根本不被填 |
 | `Process::cmd(&self) -> &[OsString]` | `:1695` | **argv 向量**，不是拼好的一行 |
-| `ProcessRefreshKind`、`UpdateKind` 的 crate 根导出 | `src/lib.rs:85-87` | `use sysinfo::{ProcessRefreshKind, UpdateKind};` |
+| `Process::status(&self) -> ProcessStatus` | `:1869` | **不在任何刷新开关后面**——`impl_get_set!(ProcessRefreshKind, …)` 一共只有 memory / cwd / cmd / exe / tasks / user（`:2515-2533`），全 crate 无 `with_status`，所以这一次刷新已经把它填好了 |
+| `ProcessStatus::Zombie` | `:1380`（doc：「Terminated but not reaped by its parent」） | 已经退出的进程，`cmd()` 通常为空 |
+| `ProcessRefreshKind`、`UpdateKind`、`ProcessStatus` 的 crate 根导出 | `src/lib.rs:85-87` | `use sysinfo::{ProcessRefreshKind, ProcessStatus, UpdateKind};` |
 - Produces:
   ```rust
   pub(crate) const DEVTOOLS_PORT_DEADLINE: std::time::Duration;
@@ -450,6 +452,29 @@ mod tests {
         );
     }
 
+    /// A zombie is not an unknown. It has already exited — the kernel is only
+    /// holding the entry until its parent reaps it — so there is nothing to
+    /// kill and the record is stale. Answering `Unreadable` here would keep the
+    /// sidecar on every boot forever for a process that can never be reaped
+    /// again, which is the `Unreadable` arm's protection turned into a leak.
+    ///
+    /// ⚠️ This test exercises `reap_orphans`' handling of the state, not
+    /// `argv_probe`'s classification of it — the mapping from
+    /// `ProcessStatus::Zombie` to `Absent` lives in the production reader and
+    /// has no unit coverage, because manufacturing a zombie in-process is not
+    /// worth what it costs. Recorded rather than implied.
+    #[test]
+    fn a_zombie_is_absent_and_its_record_goes() {
+        let reg = registry_with(&[("default", 555, "/tmp/udd/default")]);
+        let killed = std::cell::RefCell::new(Vec::new());
+        let n = reap_orphans(reg.path(), &|_| ArgvProbe::Absent, &|pid| {
+            killed.borrow_mut().push(pid)
+        });
+        assert_eq!(n, 0, "a process that already exited must not be 'reaped'");
+        assert!(killed.borrow().is_empty());
+        assert!(!reg.path().join("default.json").exists());
+    }
+
     /// The case the first two drafts of this function got backwards, kept as
     /// its own test because it is the expensive one.
     ///
@@ -704,7 +729,9 @@ pub(crate) fn sidecar_path(session_key: &str) -> Result<PathBuf, BrowserError> {
 /// (判据 §8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArgvProbe {
-    /// The pid is not in the process table. It is gone.
+    /// The pid is not in the process table — or it is a **zombie**, i.e. it has
+    /// already exited and the kernel is holding the entry until its parent
+    /// reaps it. Either way there is nothing left to kill, so the record goes.
     Absent,
     /// The pid is there and its command line could not be read. Routine on
     /// Windows. We have learned nothing.
@@ -1048,18 +1075,39 @@ fn argv_probe(pid: u32) -> ArgvProbe {
     let argv = crate::utils::process_alive::with_process_specifics(
         pid,
         ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
-        |p| {
-            p.cmd()
+        |p| ProcessFacts {
+            argv: p
+                .cmd()
                 .iter()
                 .map(|s| s.to_string_lossy().into_owned())
-                .collect::<Vec<String>>()
+                .collect(),
+            is_zombie: p.status() == sysinfo::ProcessStatus::Zombie,
         },
     );
     match argv {
         None => ArgvProbe::Absent,
-        Some(v) if v.is_empty() => ArgvProbe::Unreadable,
-        Some(v) => ArgvProbe::Argv(v),
+        // A zombie has already exited; the entry is a corpse the kernel keeps
+        // until its parent reaps it, and its `cmd()` is typically empty. Left
+        // as `Unreadable` it would keep its sidecar on every boot forever, for
+        // a process that can never be killed again. `Absent` is the honest
+        // answer: there is nothing here to stop.
+        //
+        // Free to ask for: `Process::status()` (sysinfo 0.39.3
+        // `src/common/system.rs:1869`) sits behind no refresh flag — the
+        // `impl_get_set!` list at `:2515-2533` covers memory / cwd / cmd / exe
+        // / tasks / user and there is no `with_status` anywhere in the crate —
+        // so it is already populated on the process this call refreshed.
+        Some(v) if v.is_zombie => ArgvProbe::Absent,
+        Some(v) if v.argv.is_empty() => ArgvProbe::Unreadable,
+        Some(v) => ArgvProbe::Argv(v.argv),
     }
+}
+
+/// What one refresh yields about a process. A struct rather than a tuple so the
+/// `match` above reads as the three answers it is deciding between.
+struct ProcessFacts {
+    argv: Vec<String>,
+    is_zombie: bool,
 }
 
 /// [`reap_orphans`] wired to the real process table.
@@ -2784,7 +2832,8 @@ pub(crate) fn chromium_user_data_dir(
 **Files:**
 - Modify `src/browser/manager.rs`：`new`（:96-97，Task 5 已改一行）· `spawn_idle_reaper`（:208-263）· `reap_idle`（:306-350）· `idle_managed_profiles`（:352-370）· `session_active`（:372-384）· 新增 `live_endpoint` / `shutdown_browsers` / `shutdown_browsers_global` · **改写现有测试 `test_get_profile_state_removed_in_favor_of_session_active`（:631-643）** · 测试模块新增三条
 - Modify `src/browser/mod.rs`（一行 `pub(crate) use chromium_launch::CdpEndpoint;`，crate 内可见即可——`live_endpoint` 本身也是 `pub(crate)`，Plan 2 的视图与它同 crate；**手写，不交给 `rustfmt`**）
-- Modify `src/bin/aleph-server/commands/start/mod.rs`：有序停机段落（`:3642` 的 `run_until_shutdown` 之后、`:3658` 的 `kill_all_running_background()` 旁边）加一次浏览器停机
+- Modify `src/bin/aleph-server/commands/start/mod.rs`：有序停机段落（`:3642` 的 `setup_graceful_shutdown` / `:3643` 的 `run_until_shutdown` 之后、`:3657` 的 `kill_all_running_background()` 旁边）加一次浏览器停机
+- Modify `src/bin/aleph-server/commands/start/helpers.rs`：**卡死兜底**里 `:519` 的 `kill_all_running_background()` 旁边加同一次调用（在 `:537` 的 `std::process::exit(0)` 之前）；并把普查测试 `both_daemon_exit_paths_reap_background_jobs`（`:616-645`）扩成同时钉住浏览器那半
 
 **Interfaces:**
 - Consumes: `PlaywrightCliDriver::{endpoint, chromium_alive, shutdown_chromium}`（Task 5）· `chromium_launch::reap_orphans_now`（Task 1，**不再取参数**——它自己解析注册表目录）
@@ -3045,6 +3094,18 @@ pub(crate) use chromium_launch::CdpEndpoint;
     /// spec §3.6「退出时杀」. `std::process::Child` does not kill on drop, and
     /// under `attach --cdp` the CLI was never the browser's parent — so without
     /// this every restart leaves a Chromium running until the next boot sweep.
+    ///
+    /// **Must finish inside `SHUTDOWN_FAILSAFE` (5 s, `start/helpers.rs:437`),**
+    /// because one of its two call sites is the wedged-shutdown watchdog and
+    /// the `std::process::exit(0)` after it waits for nobody. What that buys
+    /// this function is a rule, not a budget: SIGKILL plus a bounded reap per
+    /// child, and **never a graceful handshake**. No SIGTERM-then-wait, no CDP
+    /// `Browser.close`, no round trip to a browser that may be the reason the
+    /// shutdown wedged in the first place. `Child::kill()` is immediate and
+    /// `Child::wait()` after a successful kill returns as soon as the kernel
+    /// reaps — microseconds, not a negotiation (see `ChromiumChild::shutdown`,
+    /// which skips the wait entirely when the kill did not succeed, precisely
+    /// so a child we could not signal cannot park this loop).
     pub fn shutdown_browsers(&self) -> usize {
         self.playwright_cli_driver.shutdown_all_chromium()
     }
@@ -3084,7 +3145,7 @@ pub fn shutdown_browsers_global() -> usize {
         n
     }
 ```
-  然后在 `src/bin/aleph-server/commands/start/mod.rs` 的有序停机段落里，紧跟 `:3658` 的 `kill_all_running_background()` 那一段之后加：
+  然后在**两条**退出路径上各挂一次。① `src/bin/aleph-server/commands/start/mod.rs`，紧跟 `:3657` 的 `kill_all_running_background()` 那一段之后：
 ```rust
     // Same shape and the same reason as the background-bash reap above: the
     // browsers are OUR child processes, `Child` does not kill on drop, and
@@ -3098,6 +3159,61 @@ pub fn shutdown_browsers_global() -> usize {
         tracing::info!(count = browsers, "stopped managed browsers on shutdown");
     }
 ```
+  ② `src/bin/aleph-server/commands/start/helpers.rs`，紧跟 `:519` 的 `kill_all_running_background()` 那一段之后、`:537` 的 `std::process::exit(0)` 之前——**这一半是本轮 review 抓到的漏挂**：
+```rust
+        // The wedged path. `std::process::exit(0)` below skips the orderly
+        // block entirely, so the browser stop has to be here too — and this is
+        // the path that matters most: `SHUTDOWN_FAILSAFE` is matched to
+        // `aleph-server stop`'s own SIGTERM→SIGKILL window, and the comment
+        // above notes a wedged shutdown "usually coincides with load". A
+        // browser leaked here is leaked on exactly the shutdowns most likely
+        // to happen. Idempotent with the `start_server` call site.
+        let browsers = alephcore::browser::manager::shutdown_browsers_global();
+        if browsers > 0 {
+            tracing::warn!(count = browsers, "stopped managed browsers before forced exit");
+        }
+```
+  ⚠️ **位置相对于 bash reap**：放在它之后、在那段为 `kill_on_drop` 留的 2 秒 `sleep` **之前**。浏览器的停机是同步的 `kill()` + 有界 `wait()`（下一步），不依赖调度器再走一轮，所以它不需要那 2 秒，但它必须在 `exit(0)` 之前跑完。
+
+  ③ 扩普查测试。`helpers.rs:616-645` 的 `both_daemon_exit_paths_reap_background_jobs` 目前把 `let reaper = "kill_all_running_background";` 写死成一个字符串；改成**两个**都钉，其余结构（`production_prefix` 剥测试模块、非空性断言、断言 `ident(` 而不是裸名字）原样保留：
+```rust
+    /// Deliberately covers BOTH sites AND both reapers. They are not
+    /// redundant — `start_server`'s call is the orderly path (and the only one
+    /// reached when `run_until_shutdown` returns an error rather than a
+    /// signal), while this file's is the wedged path, where the failsafe
+    /// `std::process::exit(0)` skips the orderly block entirely.
+    ///
+    /// The browser reaper joined this pin because it is the same shape with
+    /// the same failure mode: `std::process::Child` does not kill on drop, and
+    /// under `attach --cdp` playwright-cli was never the browser's parent, so
+    /// a missing call leaks a Chromium — and leaks it on precisely the loaded
+    /// shutdowns the failsafe exists for.
+    #[test]
+    fn both_daemon_exit_paths_reap_background_jobs_and_browsers() {
+        for reaper in ["kill_all_running_background", "shutdown_browsers_global"] {
+            for (label, raw) in [
+                ("start/helpers.rs", include_str!("helpers.rs")),
+                ("start/mod.rs", include_str!("mod.rs")),
+            ] {
+                let src = raw.replace('\r', "");
+                let production = alephcore::utils::source_scan::production_prefix(&src);
+                if label.ends_with("helpers.rs") {
+                    assert!(
+                        production.len() < src.len(),
+                        "{label}: the #[cfg(test)] bound matched nothing — this \
+                         test would then be reading its own source"
+                    );
+                }
+                assert!(
+                    production.contains(&format!("{reaper}(")),
+                    "{label} must call {reaper}() on its exit path — a child \
+                     process this daemon owns outlives it otherwise"
+                );
+            }
+        }
+    }
+```
+  ⚠️ 测试**改名**（加 `_and_browsers`），因为它守的事变了；名字不改就是同一事实的两份表述里那份撒谎的注释（判据 §1）。
 
 - [ ] **跑到绿（分开跑）。**
   ```
@@ -3110,7 +3226,8 @@ pub fn shutdown_browsers_global() -> usize {
   2. 把 `live_endpoint` 的 `ExistingSession` 臂改成也去问 driver → `live_endpoint_is_none_without_a_browser_and_never_answers_for_existing_session` 仍会绿（因为没有浏览器）——**这说明第二条守卫此刻是空的**。把它补强：在那条测试里额外断言 `manager.get_driver("user") == Some(BrowserDriver::ExistingSession)`，让「问的是哪个 driver」成为断言的一部分，然后重做这次变异并确认变红。（判据 §3：一条没被证伪过的守卫不算守卫。）
   3. 把 `shutdown_all_chromium` 的 `child.shutdown()` 换成只 `drop(child)` → `shutdown_browsers_kills_what_it_launched_and_says_how_many` 必须变红。**这一条守的正是 `Child` 不在 drop 时 kill 这件事**，也就是这个函数存在的全部理由。
   三次都恢复。
-- [ ] `rustfmt src/browser/manager.rs src/browser/playwright_cli.rs src/bin/aleph-server/commands/start/mod.rs`（三个都是叶子文件——`start/mod.rs` 虽然叫 `mod.rs`，`grep -n "^pub mod\|^mod " src/bin/aleph-server/commands/start/mod.rs` 确认它是否声明子模块；**若声明了就不要格式化它**，那一笔只加了五行，手写即可）
+- [ ] `rustfmt src/browser/manager.rs src/browser/playwright_cli.rs`（两个叶子文件）
+  ⚠️ **`src/bin/aleph-server/commands/start/mod.rs` 与 `.../start/helpers.rs` 都不在这一行里。** 前者声明五个外联子模块（`builder` `:26`、`orchestrator_init` `:40`、`helpers` `:43`、`runtime_warmup` `:51`、`bootstrap_factories` `:54`），`rustfmt <file>` 会**递归**进整棵 `start/`（含 `builder/**`）；后者虽然只有一个内联 `mod tests`，但为了不让「哪个能格式化」变成一条要逐次判断的规则，这一笔对它们两个的改动（各一段调用 + 一条测试改名）**一律手写**。判断标准写死在这里，省得下一个人再 `grep` 一次。
 - [ ] **提交。**
   ```
   git add src/browser/manager.rs src/browser/mod.rs src/browser/playwright_cli.rs \
@@ -3606,6 +3723,7 @@ impl HealthCheck for ChromiumMissingCheck {
 - Create `src/builtin_tools/runtime_manage.rs`
 - Modify `src/builtin_tools/mod.rs`（`pub mod` 按字母序插在 `remember` 与 `scratchpad` 之间；若同文件有对应的 `pub use` 区块，一并加）—— **手写，不交给 `rustfmt`**：这个文件声明每一个 builtin-tool 模块，`rustfmt` 会递归重排整棵 `src/builtin_tools/`
 - Modify `src/gateway/method_authz.rs:31-…`（`OPERATOR_TOOLS`）与它的测试（`:251-260` 的 `operator_tools_has_no_duplicates`、`:261-290` 的 `chat_safe_tools_stay_open`）
+- Modify `src/builtin_tools/bash_exec.rs:449`：`fn session_label()` 现在是**私有**的，本任务要在同 crate 的另一个模块里用它，改成 `pub(crate) fn session_label()`。⚠️ **只放开可见性，不复制它**：它的 doc（`:453-464`）逐字警告过 `SessionKey::to_key_string()` 是那个诱人的错答案（会让每一行都 `None`，读起来像「这个作业没有会话」）。本地再写一份 label 推导就是同一事实的第二份表述（判据 §1），而错在这里的代价是一个**查不到的作业 id**。
 - Modify `src/executor/builtin_registry/definitions.rs`：`BUILTIN_TOOL_DEFINITIONS` 加条目（照 `:248-252` 的 `list_models` 形状）· `standalone` 的 `=> None` 臂区（`:1170-1186` 一带）· `REGISTRY_SCHEMA_BASELINE`（`:3027+`）加一行 · 必要时抬 `CATALOG_DESCRIPTION_CEILING_BYTES`（`:2603`）与 `REGISTRY_SCHEMA_CEILING_BYTES`（`:2999`）
 - Modify `src/executor/builtin_registry/groups.rs`（`:100-137` 的自管理组，`"doctor"` 附近 —— ⚠️ 这张表**只用于展示**，加进去不构成任何授权判断；授权在 `method_authz.rs`，见下）
 - Modify `src/executor/builtin_registry/registry/struct_def.rs`（`:72-82` 一带）
@@ -3614,14 +3732,17 @@ impl HealthCheck for ChromiumMissingCheck {
 - Modify `src/executor/builtin_registry/builder/core_tools.rs`（照 `:185-189` 的 `reg(...)`）
 
 **Interfaces:**
-- Consumes: `crate::runtimes::{ensure_capability, find_spec, supported_on_current_os, SPECS}`（`src/gateway/handlers/runtimes.rs:12` 已在用同一组）· `crate::runtimes::ledger::{CapabilityLedger, CapabilityStatus}` · `crate::runtimes::post_install::config_env`（Task 7）· `crate::runtimes::specs::EnvFromConfig`（Task 7）· `crate::tools::probes::browser::managed_cli_path`
+- Consumes: `crate::runtimes::{ensure_capability, find_spec, supported_on_current_os, SPECS}`（`src/gateway/handlers/runtimes.rs:12` 已在用同一组）· `crate::runtimes::ledger::{CapabilityLedger, CapabilityStatus}` · `crate::runtimes::post_install::config_env`（Task 7）· `crate::runtimes::specs::EnvFromConfig`（Task 7）· `crate::tools::probes::browser::managed_cli_path` · **后台作业机件**：`crate::builtin_tools::process_registry::{process_registry, ProcessRegistry::register_running, RegisterOutcome, ProcessRegistry::list}`（`src/builtin_tools/process_registry.rs:262` / `:155-161` / `:643`）与 `crate::builtin_tools::bash_exec::session_label`——就是 `bash {background: true}` 用的那一套（`bash_exec.rs:302` 的 `spawn_background` 是同一个模式，但它是 bash 工具上的私有方法，所以复用的是**机件**不是那个函数）
 - Produces:
   ```rust
   pub struct RuntimeManageTool;
   pub struct RuntimeManageArgs { pub action: RuntimeAction, pub capability: Option<String> }
   pub enum RuntimeAction { List, Install }
   pub struct RuntimeManageOutput { pub ok: bool, pub message: String, pub runtimes: Vec<RuntimeRow> }
+  pub(crate) trait ChromiumLocator { async fn locate(&self) -> RuntimeRow; }
+  pub(crate) trait InstallSpawner  { fn spawn(&self, capability: &str) -> Result<u64, String>; }
   ```
+  ⚠️ `install` **不 await 安装本身**：它注册一个后台作业、立刻返回作业 id，模型用既有的 `bash{process_action:"wait", process_id}` 轮询（那个动词自己钳在 `WAIT_MAX_TIMEOUT_SECS`）。理由与本计划三处「不在首次使用时安装」是同一条：150 MB 下载放不进 180 s 的工具预算。把安装挪到这个工具再在这里阻塞，只是把问题搬了个家（判据 §1）。
 
 **授权裁定（review 采纳，初稿答错了表）：`runtime_manage` 进 `method_authz::OPERATOR_TOOLS`。** 初稿只说了 `groups.rs`「按它自己的模块 doc 只用于展示，不带授权含义」——那句话是真的，但它不是这个问题的答案。真正的闸是 `src/gateway/method_authz.rs:31` 的 `OPERATOR_TOOLS`（chat-tier 通道在工具派发处被拒），而这个工具最近的三个兄弟 `skill_install` / `skill_manage` / `hub_install_run` 全在里面。`runtime_manage{install}` 会跑 `ensure_capability`，也就是台账的 bootstrap 安装器（npm 全局安装、`curl | sh` 脚本）与 post-install 子命令——一次调用在宿主机上装软件。所以它进 `OPERATOR_TOOLS`。⚠️ 不按动作拆（`list` 开放、`install` 收紧）：那张表按**工具名**判定，拆开要动判定机制本身，而 `list` 的价值不足以换那个改动；chat tier 想知道装了什么，`doctor` 仍然开放。
 
@@ -3635,12 +3756,43 @@ mod tests {
     use super::*;
     use crate::tools::AlephTool;
 
+    /// A spawner that registers nothing and starts nothing.
+    struct StubSpawner {
+        started: std::sync::Mutex<Vec<String>>,
+        answer: Result<u64, String>,
+    }
+
+    impl StubSpawner {
+        fn ok(id: u64) -> Arc<Self> {
+            Arc::new(Self { started: std::sync::Mutex::new(Vec::new()), answer: Ok(id) })
+        }
+        fn started(&self) -> Vec<String> {
+            self.started.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+    }
+
+    #[async_trait]
+    impl InstallSpawner for StubSpawner {
+        fn spawn(&self, capability: &str) -> Result<u64, String> {
+            self.started
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(capability.to_string());
+            self.answer.clone()
+        }
+    }
+
+    fn tool(spawner: Arc<dyn InstallSpawner>) -> RuntimeManageTool {
+        RuntimeManageTool::with_parts(Arc::new(StubLocator("Ready (stub)")), spawner)
+    }
+
     /// `install` without a capability is not "install everything" — it is a
     /// malformed call, and answering it with a guess would install whichever
-    /// spec happens to be first in the table.
+    /// spec happens to be first in the table. It must also start nothing.
     #[tokio::test]
     async fn install_without_a_capability_refuses_instead_of_guessing() {
-        let out = RuntimeManageTool::new()
+        let spawner = StubSpawner::ok(7);
+        let out = tool(spawner.clone())
             .call(RuntimeManageArgs {
                 action: RuntimeAction::Install,
                 capability: None,
@@ -3649,6 +3801,82 @@ mod tests {
             .expect("tool answers");
         assert!(!out.ok);
         assert!(out.message.contains("capability"), "{}", out.message);
+        assert!(spawner.started().is_empty(), "a malformed call started an install");
+    }
+
+    /// **The install must not sit on the tool call.** A ~150 MB download cannot
+    /// fit the 180 s per-tool budget, and `bash_exec::WAIT_MAX_TIMEOUT_SECS`
+    /// (170 s) is the constraint CLAUDE.md forbids extending — the very fact
+    /// this plan cites three times to justify not installing from
+    /// `resolve_binary`. So the answer comes back with a job id, immediately,
+    /// and names the verb that polls it.
+    ///
+    /// The wall-clock bound is the assertion: a stub spawner returns instantly,
+    /// so anything slow here means the tool awaited the installer.
+    #[tokio::test]
+    async fn install_returns_a_job_id_immediately_instead_of_awaiting_the_download() {
+        let spawner = StubSpawner::ok(42);
+        let started = std::time::Instant::now();
+        let out = tool(spawner.clone())
+            .call(RuntimeManageArgs {
+                action: RuntimeAction::Install,
+                capability: Some("chromium".into()),
+            })
+            .await
+            .expect("tool answers");
+        assert!(out.ok, "{}", out.message);
+        assert_eq!(spawner.started(), vec!["chromium".to_string()]);
+        assert!(out.message.contains("42"), "the job id must reach the model: {}", out.message);
+        assert!(
+            out.message.contains("process_action"),
+            "the answer must name the verb that polls it: {}",
+            out.message
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "install blocked for {:?} — it awaited the installer",
+            started.elapsed()
+        );
+    }
+
+    /// The non-chromium branch takes the SAME path. It is the one that used to
+    /// be worse than the download: `ensure_capability` runs npm global installs
+    /// and `curl … | sh` bootstrap scripts with no timeout of its own at all.
+    /// A plan that backgrounded only the browser would leave the unbounded one
+    /// inline (判据 §5: 不在我这张表上的那部分呢).
+    #[tokio::test]
+    async fn a_ledger_capability_is_backgrounded_the_same_way() {
+        let spawner = StubSpawner::ok(9);
+        let out = tool(spawner.clone())
+            .call(RuntimeManageArgs {
+                action: RuntimeAction::Install,
+                capability: Some("playwright-cli".into()),
+            })
+            .await
+            .expect("tool answers");
+        assert!(out.ok, "{}", out.message);
+        assert_eq!(spawner.started(), vec!["playwright-cli".to_string()]);
+        assert!(out.message.contains("9"), "{}", out.message);
+    }
+
+    /// A refused registration (the per-session cap) is reported, not swallowed:
+    /// answering "installing…" over a job that was never started is the
+    /// report-success-for-a-no-op shape (判据 §11).
+    #[tokio::test]
+    async fn a_refused_registration_is_reported_rather_than_claimed_as_started() {
+        let spawner: Arc<dyn InstallSpawner> = Arc::new(StubSpawner {
+            started: std::sync::Mutex::new(Vec::new()),
+            answer: Err("this session already has 5 background jobs running".into()),
+        });
+        let out = tool(spawner)
+            .call(RuntimeManageArgs {
+                action: RuntimeAction::Install,
+                capability: Some("chromium".into()),
+            })
+            .await
+            .expect("tool answers");
+        assert!(!out.ok);
+        assert!(out.message.contains("background jobs running"), "{}", out.message);
     }
 
     /// An unknown capability must name what IS installable. "unknown capability:
@@ -3712,6 +3940,12 @@ mod tests {
     /// answer to "what runtimes are there" (判据 §9).
     #[tokio::test]
     async fn list_answers_from_the_same_spec_table_as_the_rpc() {
+        // The ledger path is a pure join (`utils::paths.rs:249-251`, no
+        // directory creation), and every assertion below is over the static
+        // `SPECS` table — but point HOME at a scratch dir anyway so the answer
+        // can never become a property of the developer's own ledger.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let out = RuntimeManageTool::with_locator(Arc::new(StubLocator("Ready (stub)")))
             .call(RuntimeManageArgs {
                 action: RuntimeAction::List,
@@ -3725,6 +3959,88 @@ mod tests {
             assert!(names.contains(&spec.name), "{} missing from the tool face", spec.name);
         }
         assert!(names.contains(&"chromium"), "chromium is installable, so it must be listable");
+    }
+
+    /// **The job id has to be pollable, by the verb the answer names.**
+    ///
+    /// The registry resolves ownership with plain equality on the session label
+    /// (`process_registry.rs:671-673`), and every `bash` lookup passes exactly
+    /// what `bash_exec::session_label()` returns. Register under any other
+    /// derivation — `SessionKey::to_key_string()` is the tempting wrong one,
+    /// and the label's own inverse doc warns about it — and the id comes back
+    /// fine, names a real slot, and resolves to `NotFound` for the caller who
+    /// was told to poll it: a success that leads nowhere (判据 §11).
+    ///
+    /// Drives the REAL registration path with a job that does nothing, so the
+    /// two label derivations are proven to agree rather than assumed to.
+    #[tokio::test]
+    async fn an_install_job_resolves_under_the_label_bash_wait_uses() {
+        use crate::builtin_tools::process_registry::{process_registry, PollOutcome};
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let id = RegistrySpawner::register(format!("{INSTALL_JOB_PREFIX}chromium"), async {
+            install_output(true, "stub".into())
+        })
+        .expect("the registry had a free slot");
+
+        // The EXACT lookup `bash{process_action:"wait"}` performs
+        // (`bash_exec.rs:498` then `:574`).
+        let caller = crate::builtin_tools::bash_exec::session_label();
+        assert!(
+            !matches!(process_registry().poll(id, caller.as_deref()), PollOutcome::NotFound),
+            "the id runtime_manage handed back is not pollable by the verb its \
+             own message names"
+        );
+
+        // Non-vacuity: the assertion above must be able to fail. A DIFFERENT
+        // label has to answer NotFound, or `owns` is not doing what this test
+        // claims and the check above would pass for a job registered under
+        // anything at all.
+        assert!(
+            matches!(
+                process_registry().poll(id, Some("some-other-session")),
+                PollOutcome::NotFound
+            ),
+            "ownership is not label-scoped — this test proves nothing"
+        );
+    }
+
+    /// A running install has to be visible where the model looks next. Without
+    /// this, `list` after an `install` shows the pre-install answer and the
+    /// model concludes nothing happened — a report that is true field by field
+    /// and false as a whole.
+    ///
+    /// Registers a real slot (the registry is in-process and the abort handle
+    /// is from a task that parks forever), then asserts the row is named; the
+    /// job is aborted at the end so it does not outlive the test.
+    #[tokio::test]
+    async fn list_names_an_install_that_is_still_running() {
+        use crate::builtin_tools::process_registry::{process_registry, RegisterOutcome};
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let parked = tokio::spawn(async { std::future::pending::<()>().await });
+        let RegisterOutcome::Registered(id) = process_registry().register_running(
+            format!("{INSTALL_JOB_PREFIX}chromium"),
+            crate::builtin_tools::bash_exec::session_label(),
+            parked.abort_handle(),
+        ) else {
+            panic!("the registry refused a slot in a test with no other jobs");
+        };
+
+        let out = RuntimeManageTool::with_locator(Arc::new(StubLocator("Ready (stub)")))
+            .call(RuntimeManageArgs { action: RuntimeAction::List, capability: None })
+            .await
+            .expect("tool answers");
+        parked.abort();
+
+        assert!(out.ok, "{}", out.message);
+        assert!(
+            out.message.contains(&id.to_string()) && out.message.contains("chromium"),
+            "a running install must be named by list: {}",
+            out.message
+        );
     }
 
     /// The doctor's fix hint (Task 7) names this tool by string. Nothing
@@ -3787,10 +4103,22 @@ const CHROMIUM: &str = "chromium";
 /// the two paths cannot drift into installing different things.
 const CHROMIUM_INSTALL_ARGS: &[&str] = &["install-browser", CHROMIUM];
 
-/// How long the browser download may take. Generous: it is ~150 MB over a
-/// mirror that may be slow, and the alternative to waiting is a browser that
-/// silently is not there.
-const CHROMIUM_INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+// NO install timeout constant lives here, and its absence is the point.
+//
+// A ~150 MB download does not fit a tool call: the per-tool budget is 180 s and
+// `bash_exec::WAIT_MAX_TIMEOUT_SECS = 170` (`src/builtin_tools/bash_exec.rs:60`)
+// is the hard constraint CLAUDE.md forbids extending — the very fact this
+// module's own fail-closed message cites to justify NOT installing from
+// `browser::chromium_resolve::resolve_binary`. Routing the install here and
+// then blocking on it would move the problem, not solve it (判据 §1: one fact,
+// two answers).
+//
+// So `install` uses the machinery CLAUDE.md names for exactly this ("长任务
+// （>3 min build/install）必须 `background: true`"): register the job in
+// `process_registry()` and return its id immediately. The model polls with the
+// verb that already exists — `bash{process_action:"wait", process_id}`, itself
+// clamped to `WAIT_MAX_TIMEOUT_SECS` (`bash_exec.rs:553`) — and
+// `kill_all_running_background` reaps the job on daemon exit for free.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -3864,6 +4192,7 @@ impl ChromiumLocator for RealChromiumLocator {
 #[derive(Clone)]
 pub struct RuntimeManageTool {
     locator: Arc<dyn ChromiumLocator>,
+    spawner: Arc<dyn InstallSpawner>,
 }
 
 impl Default for RuntimeManageTool {
@@ -3881,12 +4210,25 @@ impl std::fmt::Debug for RuntimeManageTool {
 impl RuntimeManageTool {
     #[must_use]
     pub fn new() -> Self {
-        Self { locator: Arc::new(RealChromiumLocator) }
+        Self {
+            locator: Arc::new(RealChromiumLocator),
+            spawner: Arc::new(RegistrySpawner),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn with_locator(locator: Arc<dyn ChromiumLocator>) -> Self {
-        Self { locator }
+        Self { locator, spawner: Arc::new(RegistrySpawner) }
+    }
+
+    /// Both seams at once, for the tests that must neither spawn node nor
+    /// register a real background job.
+    #[cfg(test)]
+    pub(crate) fn with_parts(
+        locator: Arc<dyn ChromiumLocator>,
+        spawner: Arc<dyn InstallSpawner>,
+    ) -> Self {
+        Self { locator, spawner }
     }
 
     async fn ledger() -> Result<Arc<tokio::sync::RwLock<CapabilityLedger>>> {
@@ -3932,15 +4274,38 @@ impl RuntimeManageTool {
         // said "Missing" while a system Chrome sat in /Applications would be a
         // lie the model would act on.
         runtimes.push(locator.locate().await);
-        RuntimeManageOutput {
-            ok: true,
-            message: format!("{} runtime(s).", runtimes.len()),
-            runtimes,
-        }
+        // An install this tool started is still running somewhere; `list` is
+        // where a model looks next, so it says so rather than showing the
+        // pre-install answer and letting the model conclude nothing happened.
+        let running = running_install_jobs();
+        let message = if running.is_empty() {
+            format!("{} runtime(s).", runtimes.len())
+        } else {
+            format!(
+                "{} runtime(s). {} install(s) still running: {} — poll with \
+                 `bash{{process_action:\"wait\", process_id:<id>}}`.",
+                runtimes.len(),
+                running.len(),
+                running
+                    .iter()
+                    .map(|(id, cmd)| format!("{id} ({cmd})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        RuntimeManageOutput { ok: true, message, runtimes }
     }
 
+    /// Start an install and return **immediately** with its background job id.
+    ///
+    /// Nothing here awaits the installer. Both branches — the chromium download
+    /// and `ensure_capability` (npm global installs, `curl … | sh` bootstrap
+    /// scripts, which have no timeout of their own at all) — are detached into
+    /// the same registry `bash {background: true}` uses, so neither can sit on
+    /// a 180 s tool budget and neither can run unbounded and unobservable.
     async fn install(
         capability: Option<String>,
+        spawner: &Arc<dyn InstallSpawner>,
         locator: &Arc<dyn ChromiumLocator>,
     ) -> RuntimeManageOutput {
         let Some(name) = capability.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
@@ -3963,21 +4328,149 @@ impl RuntimeManageTool {
                 runtimes: Vec::new(),
             };
         }
-        let message = if name == CHROMIUM {
-            install_chromium().await
-        } else {
-            let ledger = match Self::ledger().await {
-                Ok(l) => l,
-                Err(e) => return RuntimeManageOutput { ok: false, message: format!("{e}"), runtimes: Vec::new() },
-            };
-            match ensure_capability(name, &ledger).await {
-                Ok(path) => format!("{name} is ready at {}.", path.display()),
-                Err(e) => return RuntimeManageOutput { ok: false, message: format!("{name} install failed: {e}"), runtimes: Vec::new() },
+        match spawner.spawn(name) {
+            Ok(job_id) => {
+                let mut out = Self::list(locator).await;
+                out.message = format!(
+                    "Installing {name} in the background as job {job_id}. It downloads over the \
+                     network and will not finish inside a tool call, so poll it with \
+                     `bash{{process_action:\"wait\", process_id:{job_id}}}` (or \
+                     `process_action:\"poll\"` for a non-blocking peek). This tool's `list` \
+                     action also reports the job while it runs."
+                );
+                out
             }
+            Err(why) => RuntimeManageOutput {
+                ok: false,
+                message: format!("could not start the {name} install: {why}"),
+                runtimes: Vec::new(),
+            },
+        }
+    }
+}
+
+/// This tool's own background jobs, read out of the shared registry.
+///
+/// Filtered by the command prefix `install` writes, so a `cargo build` the user
+/// backgrounded through `bash` does not get reported as a runtime install. The
+/// registry is per-caller already; this narrows by verb, not by ownership.
+fn running_install_jobs() -> Vec<(u64, String)> {
+    let registry = crate::builtin_tools::process_registry::process_registry();
+    let caller = crate::builtin_tools::bash_exec::session_label();
+    registry
+        .list(caller.as_deref())
+        .into_iter()
+        .filter(|row| row.status == "running" && row.command.starts_with(INSTALL_JOB_PREFIX))
+        .map(|row| (row.id, row.command.clone()))
+        .collect()
+}
+
+/// The command string every install job is registered under. One constant, two
+/// readers (the spawner writes it, `running_install_jobs` filters on it) — a
+/// second spelling would make the filter silently match nothing.
+const INSTALL_JOB_PREFIX: &str = "runtime_manage install ";
+
+/// How an install is started. Injected for the same reason [`ChromiumLocator`]
+/// is: a unit test must neither spawn node nor register a real background job.
+#[async_trait]
+pub(crate) trait InstallSpawner: Send + Sync {
+    /// Register the install as a background job and return its id, without
+    /// waiting for it.
+    fn spawn(&self, capability: &str) -> Result<u64, String>;
+}
+
+/// The production spawner: the same registry `bash {background: true}` uses.
+pub(crate) struct RegistrySpawner;
+
+impl RegistrySpawner {
+    /// The registration half, separated from the work.
+    ///
+    /// Two reasons. **The label must match byte for byte.**
+    /// `ProcessRegistry::owns` (`src/builtin_tools/process_registry.rs:671-673`)
+    /// is `entry.session_label.as_deref() == caller` — plain equality on
+    /// `Option<&str>`, no normalisation — and every lookup `bash` performs
+    /// (`poll` / `wait` / `list`, all through `handle_process_action`'s
+    /// `let caller = session_label();` at `bash_exec.rs:498`, e.g. the
+    /// `registry.poll(id, caller.as_deref())` at `:574`) passes exactly what
+    /// `bash_exec::session_label()` (`:449-451`) produces:
+    /// `current_session().map(|sid| serde_json::to_string(&sid)…)`. That is
+    /// **serde JSON of the `SessionId`**, deliberately not
+    /// `SessionKey::to_key_string()` — the inverse's own doc (`:453-464`) warns
+    /// that reaching for `from_key_string` "returns `None` for every row, which
+    /// reads exactly like 'this job had no session'". Register under any other
+    /// derivation and the id this tool hands back is un-pollable: a reported
+    /// success that leads nowhere (判据 §11).
+    ///
+    /// **And it makes that derivation testable** without running an installer:
+    /// a test registers a job that does nothing and resolves it through the
+    /// same lookup, so the two halves are proven to agree rather than assumed to.
+    fn register<F>(command: String, job: F) -> Result<u64, String>
+    where
+        F: std::future::Future<Output = crate::builtin_tools::code_exec::CodeExecOutput>
+            + Send
+            + 'static,
+    {
+        use crate::builtin_tools::process_registry::{process_registry, RegisterOutcome};
+        let registry = process_registry();
+        // The one derivation. Not a local re-implementation.
+        let label = crate::builtin_tools::bash_exec::session_label();
+
+        // Same ordering hazard `spawn_background` solves and the same solution:
+        // a fast failure could otherwise complete before `register_running`
+        // inserts the slot, and the outcome would be dropped. The task waits on
+        // a oneshot carrying its own id.
+        let (id_tx, id_rx) = tokio::sync::oneshot::channel::<u64>();
+        let join = tokio::spawn(async move {
+            let Ok(id) = id_rx.await else {
+                // Registration failed; there is nothing to report against.
+                return;
+            };
+            let outcome = job.await;
+            crate::builtin_tools::process_registry::process_registry().finish(id, outcome);
+        });
+
+        match registry.register_running(command, label, join.abort_handle()) {
+            RegisterOutcome::Registered(id) => {
+                // The task is parked until it learns its id; send it now that
+                // the slot exists.
+                let _ = id_tx.send(id);
+                Ok(id)
+            }
+            RegisterOutcome::TooManyRunning { limit } => {
+                join.abort();
+                Err(format!(
+                    "this session already has {limit} background jobs running; \
+                     poll or kill one first (`bash{{process_action:\"list\"}}`)"
+                ))
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl InstallSpawner for RegistrySpawner {
+    fn spawn(&self, capability: &str) -> Result<u64, String> {
+        let cap = capability.to_string();
+        Self::register(format!("{INSTALL_JOB_PREFIX}{capability}"), async move {
+            run_install(&cap).await
+        })
+    }
+}
+
+/// The install itself, running detached. Returns the shape the registry stores
+/// for `poll` / `wait` to hand back.
+async fn run_install(capability: &str) -> crate::builtin_tools::code_exec::CodeExecOutput {
+    if capability == CHROMIUM {
+        install_chromium().await
+    } else {
+        let ledger = match RuntimeManageTool::ledger().await {
+            Ok(l) => l,
+            Err(e) => return install_output(false, format!("{e}")),
         };
-        let mut out = Self::list(locator).await;
-        out.message = message;
-        out
+        match ensure_capability(capability, &ledger).await {
+            Ok(path) => install_output(true, format!("{capability} is ready at {}.", path.display())),
+            Err(e) => install_output(false, format!("{capability} install failed: {e}")),
+        }
     }
 }
 
@@ -4031,12 +4524,18 @@ async fn chromium_row() -> RuntimeRow {
 
 /// Run the same command the ledger's post-install action runs, with the same
 /// environment.
-async fn install_chromium() -> String {
-    let Some(cli) = crate::tools::probes::browser::managed_cli_path() else {
-        return "Cannot install chromium: playwright-cli is not provisioned yet. \
-                Install that first (`runtime_manage{action:\"install\", \
-                capability:\"playwright-cli\"}`), which also installs chromium."
-            .to_string();
+async fn install_chromium() -> crate::builtin_tools::code_exec::CodeExecOutput {
+    let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
+        .await
+        .unwrap_or(None);
+    let Some(cli) = cli else {
+        return install_output(
+            false,
+            "Cannot install chromium: playwright-cli is not provisioned yet. Install that \
+             first (`runtime_manage{action:\"install\", capability:\"playwright-cli\"}`), \
+             whose own post-install step installs chromium too."
+                .to_string(),
+        );
     };
     let mut cmd = tokio::process::Command::new(&cli);
     cmd.args(CHROMIUM_INSTALL_ARGS)
@@ -4048,35 +4547,56 @@ async fn install_chromium() -> String {
         cmd.env(key, value);
     }
     use crate::utils::no_window::NoWindow;
-    match tokio::time::timeout(CHROMIUM_INSTALL_TIMEOUT, cmd.no_window().output()).await {
+    // No `tokio::time::timeout` here. This runs on the detached registry task,
+    // where the bound that matters is the registry's own — the same place a
+    // backgrounded `cargo build` lives, and for the same reason. A timeout here
+    // would be a second, smaller answer to "how long may this run" than the one
+    // the caller can already see and cancel through `bash{process_action:…}`.
+    match cmd.no_window().output().await {
         // Exit 0 is not the claim. The claim is that the NEXT browser call
         // works, and the resolver is one await away — so ask it (判据 §4:
         // assert the effect arrived, not that the call happened). This CLI has
         // produced exit-0-and-nothing-happened before: appendix D.9.11 records
         // `browser_pdf` answering "Saved PDF to <path>" over a file it had been
         // refused permission to write.
-        Ok(Ok(out)) if out.status.success() => match chromium_row().await {
-            row if row.path.is_some() => format!(
-                "chromium installed and resolves at {}.",
-                row.path.unwrap_or_default()
+        Ok(out) if out.status.success() => match chromium_row().await {
+            row if row.path.is_some() => install_output(
+                true,
+                format!(
+                    "chromium installed and resolves at {}.",
+                    row.path.unwrap_or_default()
+                ),
             ),
-            row => format!(
-                "`install-browser chromium` exited 0 but no browser resolves afterwards ({}). \
-                 Check [browser.runtime] binary_path and download_host.",
-                row.status
+            row => install_output(
+                false,
+                format!(
+                    "`install-browser chromium` exited 0 but no browser resolves afterwards ({}). \
+                     Check [browser.runtime] binary_path and download_host.",
+                    row.status
+                ),
             ),
         },
-        Ok(Ok(out)) => format!(
-            "chromium install failed (exit {}): {}",
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).trim()
+        Ok(out) => install_output(
+            false,
+            format!(
+                "chromium install failed (exit {}): {}. If this network blocks Playwright's \
+                 CDN, set [browser.runtime] download_host to a mirror and try again.",
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
         ),
-        Ok(Err(e)) => format!("chromium install could not run: {e}"),
-        Err(_) => format!(
-            "chromium install did not finish within {}s; if this network blocks \
-             Playwright's CDN, set [browser.runtime] download_host to a mirror.",
-            CHROMIUM_INSTALL_TIMEOUT.as_secs()
-        ),
+        Err(e) => install_output(false, format!("chromium install could not run: {e}")),
+    }
+}
+
+/// One shape for everything the detached install can report, so `poll` / `wait`
+/// hand the model the same envelope a background `bash` job does.
+fn install_output(ok: bool, message: String) -> crate::builtin_tools::code_exec::CodeExecOutput {
+    crate::builtin_tools::code_exec::CodeExecOutput {
+        success: ok,
+        stdout: if ok { message.clone() } else { String::new() },
+        stderr: if ok { String::new() } else { message },
+        ..Default::default()
     }
 }
 
@@ -4088,7 +4608,10 @@ impl crate::tools::AlephTool for RuntimeManageTool {
          playwright-cli, chromium). Use `list` to see what is installed and where, and \
          `install` with a `capability` when a tool has just refused because its runtime is \
          missing — the refusal names the capability. `chromium` is the browser the managed \
-         browser driver launches; installing it downloads ~150 MB.";
+         browser driver launches. Installs run in the BACKGROUND and return a job id \
+         immediately (a download is minutes, not one tool call): poll it with \
+         `bash{process_action:\"wait\", process_id:<id>}`, or `list` again to see whether \
+         it is still running.";
 
     type Args = RuntimeManageArgs;
     type Output = RuntimeManageOutput;
@@ -4096,7 +4619,9 @@ impl crate::tools::AlephTool for RuntimeManageTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         Ok(match args.action {
             RuntimeAction::List => Self::list(&self.locator).await,
-            RuntimeAction::Install => Self::install(args.capability, &self.locator).await,
+            RuntimeAction::Install => {
+                Self::install(args.capability, &self.spawner, &self.locator).await
+            }
         })
     }
 }
@@ -4177,11 +4702,14 @@ impl crate::tools::AlephTool for RuntimeManageTool {
   cargo test -p alephcore --lib executor::builtin_registry
   cargo test -p alephcore --lib gateway::method_authz
   ```
-- [ ] **证伪三次。**
+- [ ] **证伪五次。**
   1. 把 `is_installable` 改成只 `find_spec(name).is_some()` → `chromium_is_installable_and_is_deliberately_not_a_ledger_spec` 必须变红。
   2. 把 `OPERATOR_TOOLS` 里那一行删掉 → `installing_a_runtime_is_operator_only` 必须变红。
   3. 把 `RuntimeManageTool` 的 `NAME` 改成 `"runtimes_manage"` → `the_doctor_fix_hint_names_a_tool_that_actually_exists` 必须变红。**这条守的是 doctor 那句 fix hint 不许变成谎话。**
-  三次都恢复。
+  3b. 把 `RegistrySpawner::register` 里的 `bash_exec::session_label()` 换成任何别的推导（例如 `current_session().map(|s| s.to_key_string())`）→ `an_install_job_resolves_under_the_label_bash_wait_uses` 必须变红。**这条守的是「返回的 id 能被它自己那句话点名的动词查到」**，也是本轮 addendum 的全部内容。
+  4. 把 `install` 改回「spawn 之后 `await` 那个 join handle」→ `install_returns_a_job_id_immediately_instead_of_awaiting_the_download` 必须因为**耗时断言**变红（不是因为 id 断言）。⚠️ 若它没红，说明 stub spawner 让整条路径太快而那条 1 秒界限量不到东西——那就把 stub 改成 `std::thread::sleep(1.5s)` 之后再返回 id，重做一次，确认红。**一条量不到东西的耗时断言就是恒绿**（判据 §2）。
+  5. 把 `running_install_jobs` 的 `starts_with(INSTALL_JOB_PREFIX)` 去掉（改成不过滤）→ 不会红；改成恒 `false` → `list_names_an_install_that_is_still_running` 必须变红。两个方向都做，因为前者告诉你这条过滤**目前没有守卫**（一个 `cargo build` 会被报成 runtime 安装），是否补一条断言由执行者决定并写进 FEATURE_LOCATOR。
+  五次都恢复。
 - [ ] `rustfmt src/builtin_tools/runtime_manage.rs src/executor/builtin_registry/definitions.rs src/executor/builtin_registry/groups.rs src/executor/builtin_registry/registry/struct_def.rs src/executor/builtin_registry/registry/tool_registry_impl.rs src/executor/builtin_registry/builder/core_tools.rs src/gateway/method_authz.rs`
   ⚠️ **`src/builtin_tools/mod.rs` 与 `src/executor/builtin_registry/builder/constructor/mod.rs` 不在这一行里。** 前者声明每一个 builtin-tool 模块，`rustfmt <file>` 会递归重排整棵 `src/builtin_tools/`；后者先 `grep -n "^pub mod\|^mod " src/executor/builtin_registry/builder/constructor/mod.rs` 确认，**声明了子模块就手写那两行**（一个 `let` 与结构体字面量里的一行），它们没有可格式化的东西。
 - [ ] `cargo test -p alephcore --lib --no-run` · `cargo test -p alephcore --bins` · `cargo test -p alephcore --features test-helpers --test '*' --no-run` 全绿。
@@ -4198,9 +4726,14 @@ impl crate::tools::AlephTool for RuntimeManageTool {
   on it, so a spec would sit at Missing forever; the install re-runs the very
   argv the playwright-cli post-install already uses, with the same mirror env,
   and reports whether a browser resolves afterwards rather than trusting exit 0.
-  It joins OPERATOR_TOOLS beside skill_install and hub_install_run: one call
-  installs software on the host. The Chromium lookup is injected so no unit
-  test spawns node.
+  Nothing is awaited inline: both branches register a background job in the
+  registry bash {background: true} uses and hand back its id, because a 150 MB
+  download does not fit the 180s tool budget - the same reason installs were
+  kept off the browser launch path. list names a running install so the model
+  does not read the pre-install answer as nothing having happened. It joins
+  OPERATOR_TOOLS beside skill_install and hub_install_run: one call installs
+  software on the host. Both the Chromium lookup and the spawner are injected,
+  so no unit test spawns node or registers a real job.
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01TKV5PtutzoBvbT4yTpsyRY"
@@ -4453,8 +4986,16 @@ async def main():
         if not chrome_pids(args.expect_user_data_dir):
             break
         await asyncio.sleep(0.5)
+    # ⚠️ SCOPE. This claim covers the ORDERLY exit path only: SIGTERM to an idle
+    #    server returns from `run_until_shutdown` well inside the 5 s failsafe,
+    #    so the wedged path (`start/helpers.rs`, the one that ends in
+    #    `process::exit(0)`) is never taken here and this pgrep says NOTHING
+    #    about it. That half is pinned by the source census
+    #    `both_daemon_exit_paths_reap_background_jobs_and_browsers`, not by this
+    #    fixture — stated rather than left to be inferred, because "the QA is
+    #    green" would otherwise read as covering both.
     check(
-        "SIGTERM to aleph-server leaves no Chrome carrying its user-data-dir",
+        "SIGTERM to aleph-server leaves no Chrome carrying its user-data-dir (ORDERLY path only)",
         not chrome_pids(args.expect_user_data_dir),
         " ".join(chrome_pids(args.expect_user_data_dir)),
     )
@@ -4530,7 +5071,8 @@ sys.exit(asyncio.run(main()))
 - [ ] **变异验证（三处，spec §6.4 的纪律）。**
   1. 去掉 `chromium_launch.rs` 里 `me.write_sidecar().await;` → `run.sh attach` 的 claim 5b 三条必须变红。（单测覆盖不到这条线：`reap_orphans_*` 自己写 sidecar，`write_sidecar` 是 best-effort 且失败时启动照样成功。这就是为什么这条断言在真机上。）
   2. 去掉 `reap_idle` 里的 `shutdown_chromium(&name)` → `run.sh reap` 上一步新加的那条 claim 必须变红。
-  3. 去掉 `start/mod.rs` 里新加的 `shutdown_browsers_global()` → `run.sh attach` 的第 8 组两条 claim 必须变红。**这一条是 spec §3.6 唯一的真机证据。**
+  3. 去掉 `start/mod.rs` 里新加的 `shutdown_browsers_global()` → `run.sh attach` 的第 8 组两条 claim 必须变红。**这是有序退出路径唯一的真机证据。**
+  4. 去掉 `start/helpers.rs` 里新加的那一次 → `attach` **不会**变红（idle 的 SIGTERM 走的是有序路径，兜底根本不触发），而 `cargo test -p alephcore --bins`（或 `cargo test --bin aleph-server`）里的 `both_daemon_exit_paths_reap_background_jobs_and_browsers` 必须变红。**这一对正是为什么两种证据都要有**：装置看不见的那一半，由源码普查钉住。
   三处都恢复。
 - [ ] **既有场景回归（九个，`run.sh:30` 的白名单逐字数过——spec §6.4 写「八场景」，实际是九个，判据 §6「先数一遍」），逐个跑，逐个记结果。**
   ```bash
@@ -4587,10 +5129,11 @@ sys.exit(asyncio.run(main()))
   - **⑪ 拿来比对的那个东西本身就选错了——「读哪一份 argv」比「怎么比对」更靠前。** 孤儿清扫要按 pid 读 argv 再比对我们的 `--user-data-dir`。最顺手的读法是 `gateway::pty::foreground::fact_for_pid(pid).cmdline`，而它的 doc 逐字写着「The whole command line, **space-joined**」（`foreground.rs:142-143`）——在那个字符串上比对**只能**是 `str::contains`，token 相等在那条路上根本表达不出来。而这条谓词授权的动作是 SIGKILL。两条假阳性，都不需要什么巧合：① **前缀撞车**，清扫遍历同一个根下的各个 profile，它构造的 flag 天然互为前缀，`--user-data-dir=<root>/default` 是活着的 `--user-data-dir=<root>/default-2` 的子串，于是**邻居 profile 的浏览器被杀**——正是这条检查要防的事，栽在它最可能的邻居上（`sanitize_session_key` 产出 `work` / `work-archive` 这类名字是常态）；② **macOS 的 argv/env 渗漏**，本仓早已实测并钉住：`crates/agent-detect/src/engine.rs:427-431` 逐字记着「改写 process.title 的进程（每个 Node CLI 都改）会让 `sysinfo::cmd()` 读过 argv 区进环境」，`:938-957` 钉着一条真实读数，一个值里带空格的环境变量把 `prefer` / `modern` / `like` 几个裸词撒进了命令行。那个模块的防御是**分词 + 跳过 `VAR=value` + 取第一个操作数而不是扫描**（`:944-948` 写明「argv 在环境之前，所以第一个操作数总是先到；扫描会找到运维随手写进 prompt 的某个词」）。判据 §16：孪生子系统已经回答过这个问题，答案要搬过来。
     修法是**换读者**，一次修好两个：读 `sysinfo::Process::cmd()`（`Vec<OsString>`，就是 argv 向量本身）而不是那一行拼好的字符串，比对用整 token 相等（并且两种写法都认——`--user-data-dir=<path>` 与两 token 的 `--user-data-dir <path>`，Chrome 两种都收）。顺带把状态从 `Option` 变成三态 `ArgvProbe{Absent, Unreadable, Argv}`：`Option` 分不出「没有这个进程」与「有但读不出 argv」（Windows 上后者是常态），而初稿两种都删记录——第二种下浏览器还活着而唯一能再找到它的东西没了，判据 §8 撞上 §15（一次性的闩漏一次就是永远）。现在四条臂：匹配 → 杀并删记录；`Argv` 但不匹配（pid 被回收）→ 不杀、删记录；`Absent` → 删记录；`Unreadable` → **什么都不做，记录留着**。⚠️ 读者建在 `utils::process_alive::with_process_specifics` 之上而不是自己新起一个 `System`——那个 helper 的 doc 自己写着它是本仓单 pid `sysinfo` 惯用法的唯一所有者。
   - **⑫ 「Chrome 中途死」有两种说法，初稿只接住一种。** `run()` 原本只在 `NoSession` 上重启；但浏览器死掉时 CLI 报的可能是 `ECONNREFUSED`（分类为 `AttachFailed`），那就一路透传给模型，浏览器**这个进程生命周期内再也起不来**。现在两道：每个动词**之前**一次 `try_wait`（我们自己的子进程，便宜），以及事后 `needs_relaunch(err, alive)` —— `NoSession` 恒重启，`AttachFailed` **只在浏览器已死时**重启。后半句是 D.9.10 换了身衣服：当年是第二次 `open` 丢掉全部 tab，现在是第二个 Chromium 写同一个 `DevToolsActivePort`。
-  - **⑬ 退出时杀，与 `bash {background}` 同形。** `std::process::Child` 不在 drop 时 kill，而 `attach --cdp` 之下 playwright-cli 从来不是浏览器的父进程——所以没有显式停机钩子的话，每次重启都留一个浏览器。`shutdown_browsers_global()` 挂在 `start/mod.rs` 有序停机段落里 `kill_all_running_background()` 旁边，那一行的注释逐字论证过为什么自动机制不够、为什么必须显式、为什么放在这个位置（两条信号路径都经过它，致命错误退出也经过它）。
+  - **⑬ 退出时杀，与 `bash {background}` 同形——而那个形状有 _两_ 半。** `std::process::Child` 不在 drop 时 kill，而 `attach --cdp` 之下 playwright-cli 从来不是浏览器的父进程，所以没有显式停机钩子就每次重启留一个浏览器。抄的是 `kill_all_running_background()`，它挂在**两处**：有序停机（`start/mod.rs:3657`）**与**卡死兜底（`start/helpers.rs:519`，以 `std::process::exit(0)` 收尾，有序段落根本跑不到）。只挂前者 ⇒ 负载中的 `aleph-server stop` 照样漏浏览器，而 `SHUTDOWN_FAILSAFE = 5 s` 恰恰是对齐 `aleph stop` 的 SIGTERM→SIGKILL 窗口设的、注释里写着卡死「usually coincides with load」——**漏的正是最可能发生的那种停机**。本轮两处都挂，并把现成的普查测试改名扩成 `both_daemon_exit_paths_reap_background_jobs_and_browsers`（它 grep 的是 `ident(` 字面量，不扩就抓不到）。⚠️ 真机装置**看不见**这一半：idle 的 SIGTERM 走有序路径，`attach` 的 pgrep 只证明那一条；兜底那条由源码普查钉住，两种证据各管一半，说清楚而不是让「QA 全绿」读成两条都覆盖了。停机函数因此有一条规则而不是一个预算：SIGKILL + 有界回收，**绝不做优雅握手**——不 SIGTERM-then-wait、不发 CDP `Browser.close`，因为那要往一个可能正是停机卡死原因的浏览器上跑一次往返。
   - **⑭ 三个超时必须严格嵌套，否则最里面那条臂恒假。** doctor 的 `browser/chromium-missing` 跑的是启动路径同一个解析器，而 `DiagnosticEngine` 在 `DEFAULT_CHECK_TIMEOUT = 20s`（`check.rs:27`）就**放弃这个检查并发它自己的 `Warning`**。初稿把检查内部预算设成 25 s，于是它自己那条「could not verify」永远跑不到，而任何慢探针都把 `aleph-server doctor` 变成琥珀色——正是 `diagnostics/checks/mod.rs:6-10` 点名的「退出码变成常数」。现在 6 s（`--dry-run`）< 8 s（检查自己）< 20 s（引擎），并且这个嵌套关系由一条测试断言，不是由注释描述。
+  - **⑭b 一条为了绕开预算而设的路，自己踩进了同一个预算。** 「不在 `resolve_binary` 里装 Chromium」的理由是 180 s 工具预算（`bash_exec::WAIT_MAX_TIMEOUT_SECS = 170`，CLAUDE.md 明写不许扩展），而重定向的目标 `runtime_manage{install}` 初稿**内联 await 一个 600 s 的安装**——同一个事实两个答案（判据 §1），且非 chromium 那一支更糟：`ensure_capability` 跑 npm 全局安装与 `curl | sh` 引导脚本，自己**一个超时都没有**。改法用的是 CLAUDE.md 为这件事点名的机件（「长任务（>3 min build/install）必须 `background: true`」）：注册进 `process_registry()`、立刻返回作业 id、模型用既有的 `bash{process_action:"wait"}` 轮询（那个动词自己钳在 170 s），顺带被 `kill_all_running_background` 在停机时回收。`list` 会报出还在跑的安装作业——否则模型装完再 `list`，读到的是安装前那份答案，每一栏都对而整体是假的。
   - **⑮ [装置] `qa/browser_managed/run.sh attach`，以及一条必须搬家的预言机。** 新阶段证明 §6.4 的 `launch` 一句。同时 `open`/`ambient`/`headed` 三个场景原来的预言机——`playwright-cli list` 打印出我们的 `user-data-dir`——在 attach 之后不可能再成立（CLI 不拥有那个目录）。搬到 `<udd>/DevToolsActivePort` + `curl /json/version`，**更强**：旧的证明「CLI 转述了我们写给它的配置」，新的证明「浏览器确实是用那个目录被我们起起来的」。
-  - **验证**：<在此逐字填入本轮实测：`cargo test -p alephcore --lib` 的 passed/failed 数与失败项的 HEAD 复验结论；`aleph-server doctor` 里 chromium 那一行的原文；`run.sh attach` 的 claim 数；八场景逐个的 rc 与不能跑的那些的理由；两条 ceiling 常量的新旧值与逐工具归因>。
+  - **验证**：<在此逐字填入本轮实测：`cargo test -p alephcore --lib` 的 passed/failed 数与失败项的 HEAD 复验结论；`aleph-server doctor` 里 chromium 那一行的原文；`run.sh attach` 的 claim 数；**九个**既有场景逐个的 rc 与不能跑的那些的理由；两条 ceiling 常量的新旧值与逐工具归因>。
 ```
 
   ⚠️ 最后一行的尖括号占位**必须**在提交前用真实读数替换。一条写着数字却没测过的验证行，正是判据 §18 说的那种量具。
@@ -4664,9 +5207,11 @@ nothing.
 1. **Spec 覆盖对照。** §3.1 → Task 1/4/5（spawn + 端口文件 + `attach --cdp` 永不 `open` + 生命周期归 Aleph + 惰性 re-attach）与 Task 6（收割器杀浏览器、退出时杀）。§3.2 的访问器 → Task 5 的 `PlaywrightCliDriver::endpoint` + Task 6 的 `ProfileManager::live_endpoint`（**只有访问器，没有视图**）。§3.6 「退出时杀 / 崩溃后按 udd 收孤儿 / boot 清上次残留」→ Task 6 的 `shutdown_browsers_global` + Task 1 的注册表清扫 + Task 9 的两条真机 claim。§6.1 → Task 2（三个配置键）+ Task 3（解析顺序、fail-closed 文案、**明写不在首次使用时安装**、明写不取 headless-shell）+ Task 7（`download_host` 透传 + doctor 哨兵）+ Task 8（R8 工具 + 授权）。§6.2 的四行 → 端口超时 = `LaunchFailed{stage:"devtools-port"}`；Chrome 中途死 = Task 5 的**两道**（动词前 `try_wait` + 事后 `needs_relaunch`）；CLI 崩/被收割 = `AttachFailed` → 重启一次 → 再 attach；Chromium 未装 = `ChromiumUnavailable` + doctor + 工具。§6.3 → Task 2（`[browser.live]` 三键属于 Plan 2）。§6.4 的 `launch` 一句 → Task 9。§6.5 第 1 步的既有场景回归 → Task 9 最后一步（**九个**，不是八个，白名单数过）。
 2. **占位符扫描。** 全文无 `TBD` / 「类似 Task N」/「加上错误处理」。仅有的尖括号占位在 Task 10 的「验证」行与两条 ceiling 数值，都**必须由实测填入**，并各自带一句「不许抄，要测」的说明——这是判据 §18 要的形状，不是占位符。Task 9 的 claim 条数也刻意不写死。
 3. **跨任务签名一致性（评审前改过三处，评审后又改三处）。** 评审前：`PlaywrightCliDriver::new` 加 runtime 参数；子进程映射从 manager 挪到 driver；`resolve_binary` 带上来源。评审后：① `resolve_binary` 从 `(PathBuf, ChromiumSource)` 变成 `ResolvedChromium{path, source, engine}`，三个消费者（Task 5/7/8）同批更新；② `ChromiumChild::spawn` 多收一个 `session_key`（sidecar 进注册表，不再由 udd 定位）；③ `reap_orphans` 的注入效果先变成三个（argv / present / kill）、再随 addendum 收回两个（`ArgvProbe` 三态自带 present），`reap_orphans_now` 不再取参数；`argv_names_dir` 的入参从 `&str` 变成 `&[String]`。
-4. **锚点复核。** 评审逐条核过 24 个锚点：20 个精确、4 个差一两行、2 个真错。本轮全部修正 —— `post_install.rs` 的 `run` 分派改 `:68-78`；`browser_flag_value` 改 `:106-123`（`:110-121` 会留下四行悬空）；`managed_profiles_name_the_fields_their_driver_drops` 改 `:830-875`（`:838` 在函数体中段）；Task 9 的 `--chromium-udd-root` 整个删掉（它从未被定义过）。新引入的锚点（`method_authz.rs:31`、`check.rs:27` / `:205-225`、`manager.rs:631-643` / `:585-587`、`start/mod.rs:3642` / `:3658`、`discovery.rs:85-98`、`playwright_launch.rs:458-475`、`bash_exec.rs:476`）全部在本次会话里带行号读过。
+4. **锚点复核。** 评审逐条核过 24 个锚点：20 个精确、4 个差一两行、2 个真错。本轮全部修正 —— `post_install.rs` 的 `run` 分派改 `:68-78`；`browser_flag_value` 改 `:106-123`（`:110-121` 会留下四行悬空）；`managed_profiles_name_the_fields_their_driver_drops` 改 `:830-875`（`:838` 在函数体中段）；Task 9 的 `--chromium-udd-root` 整个删掉（它从未被定义过）。新引入的锚点（`method_authz.rs:31`、`check.rs:27` / `:205-225`、`manager.rs:631-643` / `:585-587`、`start/mod.rs:3642` / `:3657`、`start/helpers.rs:437` / `:519` / `:537` / `:616-645`、`bash_exec.rs:60` / `:302` / `:553`、`process_registry.rs:155-161` / `:262` / `:643`、`discovery.rs:85-98`、`playwright_launch.rs:458-475`、`bash_exec.rs:476`）全部在本次会话里带行号读过。
 5. **评审 addendum（5b）落实。** 孤儿清扫的**读者**换了：从 `fact_for_pid(pid).cmdline`（space-joined 字符串，只支持子串扫描，且是 pty 侧类型的另一种契约）换成直接读 `sysinfo::Process::cmd()` 的 argv 向量，比对改为整 token 相等并同时认 `--user-data-dir=<path>` 与两 token 写法；`Option` 换成三态 `ArgvProbe{Absent, Unreadable, Argv}`，`present` 闭包随之取消（三态自带那个答案）。测试注入了 addendum 点名的五组向量：带 env 渗漏的真匹配、`default` vs `default-2` 的前缀兄弟、`Unreadable` 保留记录、`Absent` 删记录、被回收的 pid 不杀不留；外加 flag 整串出现在某个 env 值里的那一条。证伪清单里加了「改回子串扫描 → 两条测试同时红」。生产读者走 `utils::process_alive::with_process_specifics(pid, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always), |p| p.cmd()…)`——那个 helper 把刷新种类作为参数收下、只刷这一个 pid，并且它的 doc（`process_alive.rs:116-127`）逐字声明自己是本仓这个惯用法的唯一实现、第二份会在「刷新哪些字段」上漂移（判据 §1）。它返回的 `Option` 恰好就是 `Absent` 的分界。用到的四个 `sysinfo` 名字逐个在 `Cargo.lock` 钉住的 **0.39.3** vendored 源码里核对过并列成表（不是从 0.39.6 或记忆里抄的——两个版本都在本机 registry 里，抄错版本正是判据 §18 那种量具错）；其中 `UpdateKind::Always` 是承重的：默认是 `Never`，不写它 `cmd()` 就是空的，于是**每一次**探测都会答 `Unreadable`。三态用枚举而非 `Option` + `present` 闭包，理由写在枚举 doc 里：`match` 变成穷尽的，且两个必须彼此同意的闭包不复存在。`ForegroundFact` / `fact_for_pid` 的引用已从 Interfaces 与实现中删除；FEATURE_LOCATOR ⑪ 保留那段叙述，因为那是本轮**为什么**换读者的记录，删掉它下一轮就会有人再选一次那个 API。
-6. **本轮修掉的判据错误（自查 + 评审各一半）。** ① `ChromiumChild::alive` 把 `try_wait` 的 `Err` 读成「死了」——把「我不知道」当值花掉（§8），已改成读成「活着」，由随后的 attach 结算。② doctor 读不到配置时回落 `Default::default()`——已改成 `unknown_finding`，**并且同一笔把 `runtime_manage` 的 `chromium_row` 也改了**（评审指出孪生没跟上，§16）。③ `reap_orphans` 把「argv 读不出」当「进程没了」删记录——不可逆，§8×§15，已三态分开。④ attach 锚点从 `||` 改成 `&&`：`classify_failure` 跑在可能含页面文本的输出上，`ECONNREFUSED` 是任何程序都会写的句子。⑤ `unhonored_managed_fields` 的「恒空」论断是错的，已改写并把它保护的事真正接管。⑥ 三个超时不嵌套导致 doctor 的超时臂恒假，已改成 6 < 8 < 20 并**用测试断言这个嵌套**。⑦ Task 8 的 `list` 测试会在 `cargo test --lib` 里 spawn node，违反 `playwright_cli.rs:150-165` 那条封印纪律，已改为注入 locator。
+6. **第三轮评审（对 `d740facd3` 的复审）落实。** 两条新 HIGH：① `shutdown_browsers_global()` 只挂了一半——它抄的 `kill_all_running_background()` 有**两个**退出点（有序 `start/mod.rs:3657`、卡死兜底 `start/helpers.rs:519`，后者以 `process::exit(0)` 收尾），而 `SHUTDOWN_FAILSAFE = 5 s` 正是对齐 `aleph stop` 的 SIGTERM→SIGKILL 窗口的，所以漏的恰是**负载下最可能发生**的那种停机；现成的普查测试按字面量 grep，不扩就抓不到。本轮两处都挂、把普查测试改名扩成 `both_daemon_exit_paths_reap_background_jobs_and_browsers`，并在停机函数 doc 里写死那条规则（SIGKILL + 有界回收，绝不优雅握手，因为它必须在 5 s 内跑完）。② `runtime_manage{install}` 内联 await 600 s，踩进它自己被设计来绕开的那个 180 s 预算；改成注册后台作业 + 立刻返回 id + `bash{process_action:"wait"}` 轮询，非 chromium 那一支（本来一个超时都没有）同样处理，`list` 报出在跑的作业。两条 MEDIUM：`argv_probe` 的全表刷新在 `ab0f6ae0b` 已经改掉（复审读的是更早的提交，本轮 grep 确认全文再无 `System::new_with_specifics` 的**代码**，只剩解释为什么不用它的散文）；Task 6 的 `rustfmt` 行不再声称 `start/mod.rs` 是叶子文件（它声明五个子模块），那一笔与 `helpers.rs` 一律手写。
+7. **第三轮 addendum 落实。** ① 后台作业的**归属标签**必须与 `bash` 的 `wait` 完全一致：`ProcessRegistry::owns`（`process_registry.rs:671-673`）是 `Option<&str>` 的裸相等，而每一次 `bash` 查询都传 `bash_exec::session_label()`（`:449-451`，`current_session()` 的 **serde JSON**，不是 `SessionKey::to_key_string()`——那个函数的逆向 doc `:453-464` 逐字警告过）。注册用别的推导 ⇒ 返回的 id 名义上存在、对被告知去查它的人却恒 `NotFound`，是判据 §11 那种「报成功但通向虚无」。本轮把 `RegistrySpawner` 的**注册半**拆成 `register(command, job)`，用同一个 `session_label()`，并加一条驱动真实注册路径的测试（作业体是个立刻返回的 stub，不下载任何东西）＋一条非空性断言（换个标签必须 `NotFound`，否则那条断言什么都没证明）。`session_label` 需从私有改成 `pub(crate)`——**只放开可见性，不复制推导**。工具 `DESCRIPTION` 现在明说「后台跑、返回 id、用 `bash{process_action:"wait"}` 轮询」。② 僵尸进程从 `Unreadable` 改判 `Absent`：`Process::status()`（0.39.3 `:1869`）不在任何刷新开关后面（全 crate 无 `with_status`，`impl_get_set!` 只有六项），所以这一次刷新已经拿得到；僵尸已经退出、杀不了第二次，留着记录就是把 `Unreadable` 那条保护变成一个永久泄漏。⚠️ 「`Zombie` → `Absent`」这一步本身**没有单测**（在进程内造一个僵尸不值那个代价），写在测试 doc 里而不是让人以为它被覆盖了。
+8. **本轮修掉的判据错误（自查 + 评审各一半）。** ① `ChromiumChild::alive` 把 `try_wait` 的 `Err` 读成「死了」——把「我不知道」当值花掉（§8），已改成读成「活着」，由随后的 attach 结算。② doctor 读不到配置时回落 `Default::default()`——已改成 `unknown_finding`，**并且同一笔把 `runtime_manage` 的 `chromium_row` 也改了**（评审指出孪生没跟上，§16）。③ `reap_orphans` 把「argv 读不出」当「进程没了」删记录——不可逆，§8×§15，已三态分开。④ attach 锚点从 `||` 改成 `&&`：`classify_failure` 跑在可能含页面文本的输出上，`ECONNREFUSED` 是任何程序都会写的句子。⑤ `unhonored_managed_fields` 的「恒空」论断是错的，已改写并把它保护的事真正接管。⑥ 三个超时不嵌套导致 doctor 的超时臂恒假，已改成 6 < 8 < 20 并**用测试断言这个嵌套**。⑦ Task 8 的 `list` 测试会在 `cargo test --lib` 里 spawn node，违反 `playwright_cli.rs:150-165` 那条封印纪律，已改为注入 locator。
 
 ---
 
@@ -4680,3 +5225,5 @@ nothing.
 - **MEDIUM「`shutdown` 应先 SIGTERM 再 SIGKILL，或走 CDP `Browser.close`」——不做，但后果已记录。** 优雅关闭要引入一个宽限计时器与一条 CDP 调用，而本计划刻意不引入 CDP 客户端（那是 Plan 2 的 `src/browser/live/cdp.rs`）。代价（singleton 锁残留、恢复提示）写进了 FEATURE_LOCATOR ⑨。
 - **LOW「两个 profile 配同一个 `user_data_dir` 会在端口文件上撞车」——只记录，不修。** 这是既有形状（旧的 `--config userDataDir` 同样共享），修它要给 profile 之间加一条互斥规则，超出本轮范围。sidecar 已按 profile 键控，所以清扫不会互相误伤。
 - **LOW「`ChromiumSource` 应参与 `--headless=new` 还是 `--headless` 的选择」——不做。** 取掉 headless-shell 之后候选只剩 Chrome / Chromium / Edge / Brave，`--headless=new` 对 112 以上全部正确；一个只有一种取值的开关不该先有分支。
+- **LOW「`running_install_jobs` 的前缀过滤本身没有守卫」——记录，由执行者定。** 一条 `cargo build` 若恰好以那个前缀命名会被报成 runtime 安装，但那个前缀是本模块自己写下的常量，没有第二个写者。Task 8 的证伪步骤 5 让执行者亲眼看到「去掉过滤不会红」，并要求把是否补一条断言的裁定写进 FEATURE_LOCATOR——**看见空守卫再决定**，比现在替他决定好。
+- 第三轮的三条 LOW 全部已应用：`:3658` → `:3657`（前言 §9 与 FL ⑬）；Task 8 的 `list` 测试加了 `AlephHomeEnvGuard`；FL 验证模板里的「八场景」改成「**九个**既有场景」，与 Task 9 的标题和白名单一致。
