@@ -18,6 +18,22 @@
 //! --dry-run` prints the install location for the exact build THIS CLI would
 //! use, so the same binary that installs it is the one that says where it is
 //! (判据 §1: one derivation).
+//!
+//! # The dry-run answer names what the CLI would install NEXT, not what IS installed
+//!
+//! `--dry-run` reports the revision this `playwright-cli` release would
+//! fetch today — not necessarily the revision sitting on disk. Playwright
+//! bumps that number with nearly every release, and a browser installed a
+//! few releases back stays perfectly usable. Measured on the machine this
+//! module was written on: the dry-run named `chromium-1219`, while
+//! `chromium-1208` and `chromium-1228` were the ones actually present, each
+//! with a working executable — so treating the dry-run answer as "the
+//! answer" would fail next to two usable browsers. [`resolve_binary`]'s
+//! Playwright route therefore treats the dry-run's directory as a POINTER
+//! INTO the cache, not as the answer: if nothing usable sits there,
+//! [`scan_sibling_installs`] looks at its PARENT for other
+//! `chromium-<revision>` directories and picks the newest one that looks
+//! like a complete install.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -32,16 +48,19 @@ use super::profile::{BrowserRuntimeConfig, BrowserType};
 /// How long the `--dry-run` probe may take.
 ///
 /// It performs **no download** — it prints a table and exits (measured: it
-/// answered instantly on the machine this plan was written on). Six seconds is
-/// therefore generous, and the ceiling matters upward as well as downward: the
-/// doctor check that calls this (`diagnostics::checks::chromium_missing`)
-/// bounds the whole resolution at 8 s so that ITS own "could not verify" answer
-/// fires, and that 8 s sits under the engine's `DEFAULT_CHECK_TIMEOUT` of 20 s
-/// (`src/diagnostics/check.rs:27`), past which the engine abandons the check
-/// and emits a `Warning` of its own. Three budgets, strictly nested: 6 < 8 < 20,
-/// and the nesting is asserted by
-/// `diagnostics::checks::chromium_missing::the_check_answers_before_the_engine_abandons_it`
-/// rather than restated as prose — which is why this is `pub(crate)`.
+/// answered instantly on the machine this plan was written on). Six seconds
+/// is therefore generous.
+///
+/// This must stay under whatever deadline the doctor check that will call it
+/// sets for the WHOLE resolution, which must in turn stay under the
+/// diagnostics engine's own `DEFAULT_CHECK_TIMEOUT` of 20 s
+/// (`src/diagnostics/check.rs:27`) — past which the engine abandons the check
+/// and emits a `Warning` of its own. **That doctor check does not exist yet**
+/// (`diagnostics::checks::chromium_missing` is Task 7's work); asserting a
+/// specific bound for it here would state a relationship no code enforces.
+/// Task 7 owns choosing that deadline and asserting the nesting for real —
+/// this constant is `pub(crate)` so Task 7's test can read it rather than
+/// restate `6`.
 pub(crate) const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// The header anchor of the browser block in `--dry-run` output.
@@ -81,6 +100,19 @@ const EXECUTABLE_LEAVES: &[&str] = &[
 /// Playwright-managed route, i.e. only when no pin and no system browser
 /// answered, and the result is cached by the caller.
 const WALK_MAX_DEPTH: usize = 5;
+
+/// Marker Playwright writes into a completed install directory — already
+/// present as unrecognised filler in this file's own fixture
+/// (`an_unrecognised_layout_answers_none_rather_than_a_wrong_file`). Reused
+/// here as a positive signal: a directory with an executable but no marker
+/// is a half-finished install, and [`scan_sibling_installs`] ranks it below
+/// one that has both.
+const INSTALLATION_COMPLETE_MARKER: &str = "INSTALLATION_COMPLETE";
+
+/// Maximum bytes of a failing subprocess's stderr kept in an error message —
+/// enough to show a real diagnostic without letting a runaway stream flood a
+/// log line.
+const STDERR_LOG_CAP: usize = 400;
 
 /// Where the resolved binary came from. Carried so the log line and the doctor
 /// finding can say which of the three answers won, instead of only that one did.
@@ -178,6 +210,78 @@ fn files_under(dir: &Path, depth: usize) -> Vec<PathBuf> {
     out
 }
 
+/// Truncate `s` to at most `max_bytes` bytes, cutting only at a char
+/// boundary. `s` came from `String::from_utf8_lossy` over a subprocess's
+/// stderr — arbitrary bytes — so a blind `&s[..max_bytes]` could land inside
+/// a multibyte character and panic (P7: never slice a string by raw byte
+/// count; use `char_indices()`/`is_char_boundary`).
+fn capped(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Installed `chromium-<revision>` siblings of the dry-run's own answer,
+/// found by scanning its PARENT directory — see the module doc for why the
+/// dry-run's own directory is not necessarily what is on disk.
+///
+/// Returns every revision whose directory name matched the `chromium-`
+/// prefix (so a caller can report "these are the revisions we saw" even when
+/// none of them panned out) alongside the best candidate's executable, if
+/// any.
+///
+/// Ranking, highest first: (has [`INSTALLATION_COMPLETE_MARKER`] AND an
+/// executable) before (has an executable but no marker), and within either
+/// tier, the numerically highest revision wins — a finished install beats a
+/// newer half-finished one, and the newest finished install beats an older
+/// one.
+///
+/// `chromium_headless_shell-<rev>` siblings use an underscore where this
+/// scan requires a hyphen, so `strip_prefix("chromium-")` excludes them
+/// without extra logic — never hand one of those to a `headless = false`
+/// profile, which is exactly what [`EXECUTABLE_LEAVES`] already refuses to do.
+fn scan_sibling_installs(dry_run_location: &Path) -> (Vec<u64>, Option<PathBuf>) {
+    let Some(parent) = dry_run_location.parent() else {
+        return (Vec::new(), None);
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return (Vec::new(), None);
+    };
+
+    let mut seen_revisions = Vec::new();
+    let mut candidates: Vec<(bool, u64, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let Some(revision) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("chromium-"))
+            .and_then(|rev| rev.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        seen_revisions.push(revision);
+        if let Some(exe) = executable_among(&files_under(&path, WALK_MAX_DEPTH)) {
+            let has_marker = path.join(INSTALLATION_COMPLETE_MARKER).is_file();
+            candidates.push((has_marker, revision, exe));
+        }
+    }
+    seen_revisions.sort_unstable();
+    let best = candidates
+        .into_iter()
+        .max_by_key(|(has_marker, revision, _)| (*has_marker, *revision))
+        .map(|(_, _, exe)| exe);
+    (seen_revisions, best)
+}
+
 /// Resolve the binary the managed driver should launch for `browser`.
 ///
 /// # Errors
@@ -263,12 +367,15 @@ pub(crate) async fn resolve_binary(
     }
 }
 
-/// Ask the CLI where its own Chromium lives, then find the executable there.
+/// Ask the CLI where its own Chromium lives, then find the executable there
+/// — or, if the dry-run's own directory holds nothing usable, the newest
+/// sibling install that does (see [`scan_sibling_installs`] and the module
+/// doc).
 ///
 /// The `Err` is a sentence for [`BrowserError::ChromiumUnavailable`]'s `tried`
-/// field, not an error to propagate: "the CLI would not answer" and "the CLI
-/// answered a directory that is not there yet" are both just "this route did
-/// not produce a browser".
+/// field, not an error to propagate: "the CLI would not answer", "the CLI
+/// exited non-zero", and "neither the named directory nor any sibling had a
+/// usable executable" are all just "this route did not produce a browser".
 async fn playwright_managed(cli_binary: &Path) -> Result<PathBuf, String> {
     let mut cmd = Command::new(cli_binary);
     cmd.args(["install-browser", "chromium", "--dry-run"])
@@ -286,12 +393,40 @@ async fn playwright_managed(cli_binary: &Path) -> Result<PathBuf, String> {
             ))
         }
     };
+    if !output.status.success() {
+        // A non-zero exit is "I could not ask", never "it is not there" — the
+        // only evidence (stderr) is captured here instead of thrown away, so
+        // this cannot collapse into the same message as "nothing installed".
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "playwright-cli install-browser chromium --dry-run exited with {}: {}",
+            output.status,
+            capped(stderr.trim(), STDERR_LOG_CAP)
+        ));
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let Some(dir) = parse_install_location(&stdout) else {
         return Err("playwright-cli did not report an install location for chromium".to_string());
     };
-    executable_among(&files_under(&dir, WALK_MAX_DEPTH))
-        .ok_or_else(|| format!("no chromium executable under {}", dir.display()))
+    if let Some(exe) = executable_among(&files_under(&dir, WALK_MAX_DEPTH)) {
+        return Ok(exe);
+    }
+
+    // The dry-run names the revision the CLI would install NEXT, which may
+    // not be on disk even when an older, perfectly usable revision is.
+    let asked_revision = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("(unparsed)");
+    let (seen_revisions, sibling_exe) = scan_sibling_installs(&dir);
+    if let Some(exe) = sibling_exe {
+        return Ok(exe);
+    }
+    Err(format!(
+        "no chromium executable under {} (dry-run asked for {asked_revision}; scanned sibling \
+         installs {seen_revisions:?} and found none with a usable executable)",
+        dir.display()
+    ))
 }
 
 /// Whether the resolved binary is a substitution worth warning about.
@@ -512,22 +647,29 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         ));
     }
 
+    /// The fifth case: a non-default request whose resolved engine is
+    /// unidentifiable is still a mismatch. Reachable since the sibling scan
+    /// (F1) can hand back an executable `engine_of` cannot name — an
+    /// unidentified engine must not be read as "the request was honoured".
+    #[test]
+    fn brave_requested_but_engine_unidentified_is_a_mismatch() {
+        assert!(engine_mismatch(&BrowserType::Brave, None));
+    }
+
     /// The only one of `resolve_binary`'s three routes reachable without a
     /// real browser or a real `playwright-cli`: a pin pointing at a file that
     /// exists. `cli_binary` is a nonsense path — the pin route must win before
     /// either of the other two routes is even consulted.
+    ///
+    /// Uses `tempfile::tempdir()` rather than hand-rolling `env::temp_dir()`
+    /// plus manual cleanup: cleanup then runs on drop, including on a panic
+    /// from a failing assert, instead of leaking a directory (`src/utils/
+    /// scratch.rs`'s own doc records 4,987 leaked entries / 3.8 GB from
+    /// exactly this class of hand-rolled cleanup).
     #[tokio::test]
     async fn a_valid_pin_resolves_without_touching_the_other_two_routes() {
-        let dir = std::env::temp_dir().join(format!(
-            "chromium_resolve_pin_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let pinned = dir.join("Google Chrome for Testing");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pinned = dir.path().join("Google Chrome for Testing");
         std::fs::write(&pinned, b"not a real binary, just needs to exist").unwrap();
 
         let runtime = BrowserRuntimeConfig {
@@ -548,8 +690,6 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         // The file name matches the Chrome hints — the pin route reports
         // whatever engine_of says, it does not echo back the request.
         assert_eq!(result.engine, Some(BrowserType::Chrome));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A pin that does not exist is `ChromiumUnavailable`, not a fallback to
@@ -577,5 +717,189 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
             }
             other => panic!("expected ChromiumUnavailable, got {other:?}"),
         }
+    }
+
+    /// The System route is the DEFAULT production path
+    /// (`prefer_system_browser` defaults to `true`), and it is fully
+    /// testable without a real browser: `find_chromium_preferred` starts
+    /// with `ALEPH_CHROME_PATH` (`discovery::env_override`), an explicit
+    /// override that always wins. Serialized because it mutates
+    /// process-global environment — same discipline as
+    /// `discovery::tests::test_env_override`.
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn the_system_route_resolves_via_aleph_chrome_path_override() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sentinel = dir.path().join("sentinel-chrome");
+        std::fs::write(&sentinel, b"stand-in binary, never executed").unwrap();
+
+        std::env::set_var("ALEPH_CHROME_PATH", &sentinel);
+        let runtime = BrowserRuntimeConfig::default();
+        let result = resolve_binary(
+            &runtime,
+            &BrowserType::Chromium,
+            Path::new("/nonexistent/playwright-cli-should-never-be-invoked"),
+        )
+        .await;
+        std::env::remove_var("ALEPH_CHROME_PATH");
+
+        let resolved =
+            result.expect("ALEPH_CHROME_PATH override must resolve via the System route");
+        assert_eq!(resolved.path, sentinel);
+        assert_eq!(resolved.source, ChromiumSource::System);
+    }
+
+    /// Build a fake `chromium-<revision>` install directory under `parent`,
+    /// laid out exactly like the real macOS cache (five levels deep,
+    /// matching `EXECUTABLE_LEAVES[0]` — see [`WALK_MAX_DEPTH`]'s doc),
+    /// optionally dropping the `INSTALLATION_COMPLETE` marker at its root.
+    /// Returns the install root.
+    fn fake_install(parent: &Path, revision: u64, marker: bool) -> PathBuf {
+        let root = parent.join(format!("chromium-{revision}"));
+        let exe_dir = root
+            .join("chrome-mac-arm64")
+            .join("Google Chrome for Testing.app")
+            .join("Contents")
+            .join("MacOS");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::write(exe_dir.join("Google Chrome for Testing"), b"fake").unwrap();
+        if marker {
+            std::fs::write(root.join(INSTALLATION_COMPLETE_MARKER), b"").unwrap();
+        }
+        root
+    }
+
+    /// Build a fake `chromium_headless_shell-<revision>` sibling — same
+    /// depth, same recognised leaf name as [`fake_install`], so a scan that
+    /// matched on `starts_with("chromium")` instead of the `chromium-`
+    /// prefix would have a real candidate to wrongly prefer.
+    fn fake_headless_shell(parent: &Path, revision: u64) -> PathBuf {
+        let root = parent.join(format!("chromium_headless_shell-{revision}"));
+        let exe_dir = root
+            .join("chrome-mac-arm64")
+            .join("Google Chrome for Testing.app")
+            .join("Contents")
+            .join("MacOS");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::write(exe_dir.join("Google Chrome for Testing"), b"fake").unwrap();
+        root
+    }
+
+    /// The base fixture the ruling measured: revisions 1208 and 1228 exist
+    /// (both with a usable executable, neither with the marker), a
+    /// headless-shell sibling at 1228 must never be picked, and the dry-run
+    /// itself named 1219, which does not exist on disk.
+    #[test]
+    fn the_newest_installed_sibling_wins_when_the_dry_run_directory_is_absent() {
+        let cache = tempfile::tempdir().expect("tempdir");
+        fake_install(cache.path(), 1208, false);
+        let newest = fake_install(cache.path(), 1228, false);
+        fake_headless_shell(cache.path(), 1228);
+
+        let dry_run_location = cache.path().join("chromium-1219"); // never created
+        let (seen, best) = scan_sibling_installs(&dry_run_location);
+
+        assert_eq!(seen, vec![1208, 1228]);
+        assert_eq!(
+            best,
+            Some(
+                newest
+                    .join("chrome-mac-arm64")
+                    .join("Google Chrome for Testing.app")
+                    .join("Contents")
+                    .join("MacOS")
+                    .join("Google Chrome for Testing")
+            )
+        );
+    }
+
+    /// The marker matters more than the revision number: a half-finished
+    /// install at a HIGHER revision must not beat a finished one at a lower
+    /// revision — "prefer a sibling that has BOTH the marker and an
+    /// executable".
+    #[test]
+    fn a_finished_install_beats_a_newer_half_finished_one() {
+        let cache = tempfile::tempdir().expect("tempdir");
+        let finished = fake_install(cache.path(), 1208, true); // has the marker
+        fake_install(cache.path(), 1228, false); // newer, but no marker
+
+        let dry_run_location = cache.path().join("chromium-1219");
+        let (_, best) = scan_sibling_installs(&dry_run_location);
+
+        assert_eq!(
+            best,
+            Some(
+                finished
+                    .join("chrome-mac-arm64")
+                    .join("Google Chrome for Testing.app")
+                    .join("Contents")
+                    .join("MacOS")
+                    .join("Google Chrome for Testing")
+            )
+        );
+    }
+
+    /// When nothing on disk has a usable executable, the caller still learns
+    /// WHICH revisions were seen — distinguishing "nothing installed" from
+    /// "installed, but not the revision the CLI wants" depends on this.
+    #[test]
+    fn scan_reports_revisions_seen_even_when_none_have_a_usable_executable() {
+        let cache = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(cache.path().join("chromium-1050")).unwrap(); // empty, no exe
+
+        let dry_run_location = cache.path().join("chromium-1219");
+        let (seen, best) = scan_sibling_installs(&dry_run_location);
+
+        assert_eq!(seen, vec![1050]);
+        assert_eq!(best, None);
+    }
+
+    #[test]
+    fn capped_returns_the_whole_string_when_it_is_already_short() {
+        assert_eq!(capped("short", 400), "short");
+    }
+
+    /// 401 lands mid-character for a string made entirely of 2-byte chars
+    /// (valid boundaries are only at even byte offsets) — `capped` must back
+    /// off to the last valid boundary (400) rather than slicing mid-char
+    /// (which would panic) or returning something longer than requested.
+    #[test]
+    fn capped_cuts_at_a_char_boundary_not_mid_character() {
+        let long = "é".repeat(300); // 600 bytes, boundaries only at even offsets
+        let out = capped(&long, 401);
+        assert_eq!(out.len(), 400);
+        assert_eq!(out, "é".repeat(200));
+    }
+
+    /// A fake `playwright-cli` that exits non-zero and writes to stderr,
+    /// proving the exit status is checked and the stderr text reaches the
+    /// error message rather than being silently dropped. Before this fix, a
+    /// non-zero exit collapsed into the same message as "nothing installed"
+    /// — "I could not ask" read as "it is not there".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failing_cli_reports_its_exit_status_and_stderr_not_a_generic_not_found() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = dir.path().join("fake-playwright-cli");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'update required: run npm install -g playwright' >&2\nexit 7\n",
+        )
+        .expect("write fake cli");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+
+        let err = playwright_managed(&script)
+            .await
+            .expect_err("a non-zero exit must not read as \"not installed\"");
+        assert!(err.contains("exited with"), "missing exit status: {err}");
+        assert!(
+            err.contains("update required"),
+            "stderr text was dropped: {err}"
+        );
     }
 }
