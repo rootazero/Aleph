@@ -2,8 +2,16 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum BrowserError {
-    #[error("Failed to launch browser: {0}")]
-    LaunchFailed(String),
+    /// A launch that did not reach a usable browser, tagged with **which
+    /// step** failed. The stage is not decoration: "the binary would not
+    /// spawn", "the process died before it published a port" and "the port
+    /// file never appeared" are three different operator problems, and a
+    /// single opaque string made the tool answer identical for all three.
+    /// `stage` values in use: `"spawn"`, `"chromium-exit"`, `"devtools-port"`
+    /// (this module's Chromium launch) and `"chrome-mcp"` (the existing-session
+    /// driver's Chrome launch).
+    #[error("Failed to launch browser at stage '{stage}': {detail}")]
+    LaunchFailed { stage: &'static str, detail: String },
 
     #[error("Tab not found: {0}")]
     TabNotFound(String),
@@ -19,6 +27,21 @@ pub enum BrowserError {
 
     #[error("Chromium binary not found. Install Chrome/Chromium or specify a binary path.")]
     ChromiumNotFound,
+
+    /// The **managed** driver has no browser to launch: the pin (if any) is
+    /// gone, no system Chromium-family browser was found, and Playwright's own
+    /// Chromium is not installed either. Distinct from [`Self::ChromiumNotFound`]
+    /// on purpose — that one answers "is there a system browser?", which the
+    /// doctor and the existing-session driver ask and this driver does not.
+    /// The message names the command that fixes it, because a fail-closed
+    /// answer that does not say how to open the gate is fail-dead (判据 §14).
+    #[error(
+        "No Chromium for the managed browser driver ({tried}). \
+             Run `playwright-cli install-browser chromium`, ask me to run \
+             `runtime_manage{{action:\"install\", capability:\"chromium\"}}`, \
+             or pin one with [browser.runtime] binary_path."
+    )]
+    ChromiumUnavailable { tried: String },
 
     #[error("Screenshot failed: {0}")]
     ScreenshotFailed(String),
