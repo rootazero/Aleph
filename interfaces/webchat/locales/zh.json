@@ -1590,14 +1590,11 @@
       "select_or_add": "选择规则以编辑或添加新规则",
       "add_routing_rule": "添加路由规则",
       "edit_routing_rule": "编辑路由规则",
-      "configure_rules": "配置 AI 提供商选择的路由规则",
-      "rule_type": "规则类型",
-      "command_type": "命令",
-      "keyword_type": "关键词",
+      "configure_rules": "定义一个自定义斜杠命令",
       "regex_pattern": "正则表达式",
-      "regex_hint": "匹配用户输入的正则表达式",
+      "regex_hint": "必须以 ^/ 开头——其后的词即为斜杠命令名",
       "provider_label": "提供商",
-      "provider_hint": "命令规则必填，关键词规则忽略",
+      "provider_hint": "配置加载所必需；不用于选择模型",
       "system_prompt": "系统提示词"
     },
     "security": {

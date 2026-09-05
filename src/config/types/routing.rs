@@ -1,19 +1,61 @@
 //! Routing configuration types
 //!
 //! Contains routing rule configuration:
-//! - `RoutingRuleConfig`: AI routing rules with command/keyword types
+//! - `RoutingRuleConfig`: custom slash-command rules (`[[rules]]`)
 //!
-//! **Implementation status (audit 2026-08-26):** only the `regex`,
-//! `system_prompt`, and (for command rules) `is_builtin` fields are
-//! currently consumed by the only production reader,
-//! `tool_metadata::registry::registration::register_custom_commands`.
-//! The fields `provider`, `preferred_model`, `strip_prefix`, `intent_type`,
-//! and `icon` parse and round-trip cleanly through serde but are silently
-//! dropped on the registration path. They are kept on the struct so
-//! existing operator TOML files do not break; the runtime contract is
-//! documented honestly here rather than allowed to drift silently. A future
-//! patch that wires these fields must (a) update the registration path to
-//! honor them and (b) keep the field-level doc-comments in sync.
+//! # Keyword rules are retired (2026-09-05)
+//!
+//! `[[rules]]` once documented two kinds, discriminated by whether `regex`
+//! starts with `^/`. Only the command kind was ever wired: the single
+//! production reader,
+//! `tool_metadata::registry::registration::register_custom_commands`, skips
+//! every rule that is not [`is_registered_command`](RoutingRuleConfig::is_registered_command).
+//! The "all keyword rules match, their prompts are combined with `\n\n`"
+//! machinery this file used to describe was never written — a keyword rule's
+//! `system_prompt`, which the old doc called "the main purpose of keyword
+//! rules", reached nothing at all.
+//!
+//! Connecting them was not an option: matching a regex against the user's
+//! message to pick a prompt is intent routing by rule engine, which
+//! `CLAUDE.md`'s Do-NOT list forbids outright (R7/P8). So the concept is cut,
+//! not wired. The cut has three faces, because "keyword rule" is discriminated
+//! by a *value* rather than by a key:
+//!
+//! * **Load — fail-open.** `Config` has no `deny_unknown_fields` and
+//!   `[[rules]]` survives as a section with all its fields, so an existing file
+//!   keeps parsing and the daemon keeps booting. `Config::validate` names each
+//!   retired rule at `warn!` (`Config::retired_keyword_rules`) so the operator
+//!   can find out *why* his rule stopped working. A gate whose subject cannot
+//!   learn why is fail-dead, not fail-closed.
+//! * **Write — fail-closed.** `routing_rules.create` / `.update` refuse a rule
+//!   that would not be registered, so no client can add a new one. Without
+//!   this the retirement would leave a button that writes a rule which
+//!   silently does nothing — worse than before the cut.
+//! * **Panel.** The rule-type selector that offered "keyword" is gone.
+//!
+//! **`config::dead_keys` deliberately carries no entry for this.** That
+//! scanner reports the *key paths* `serde_ignored` discarded; a retired keyword
+//! rule spells every one of its keys exactly like a live command rule and
+//! differs only in the *value* of `regex`. An entry there could never match,
+//! and a tolerated path that cannot fire is a recognizer with no red state.
+//! `dead_keys` covers removed *sections* (at their serde root) and removed
+//! *fields* on surviving structs; this is neither.
+//!
+//! # Fields that parse and are dropped
+//!
+//! `provider`, `preferred_model`, `strip_prefix`, `intent_type` and `icon`
+//! round-trip cleanly through serde but are never read by
+//! `register_custom_commands`; only `regex`, `system_prompt` and `is_builtin`
+//! are. They are kept on the struct so existing operator TOML does not break.
+//!
+//! `provider` is the one that reads like it works, so state it exactly:
+//! `Config::validate` *requires* a command rule to carry a `provider` naming a
+//! configured provider, and the file fails to load without one — but nothing
+//! downstream consumes it. `CommandContext::Custom` carries only
+//! `system_prompt` and `pattern`, and there is no routing pass that turns a
+//! rule's `provider` into a model choice. The gate is real; the effect it
+//! implies is not. A future patch that wires these fields must (a) update the
+//! registration path to honor them and (b) keep these doc-comments in sync.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -24,44 +66,41 @@ use serde::{Deserialize, Serialize};
 
 /// Routing rule configuration for TOML parsing
 ///
-/// Aleph supports two types of routing rules:
+/// One kind of rule is live: a **custom slash command**, whose `regex` starts
+/// with `^/` (see [`is_registered_command`](Self::is_registered_command)).
+/// `register_custom_commands` turns it into a tool named after the command,
+/// using `system_prompt` as both the tool description and the routing prompt.
 ///
-/// ## Command Rules
-/// - Pattern starts with `^/` (e.g., `^/draw`, `^/translate`)
-/// - First-match-stops: only one command rule matches per request
-/// - Requires `provider` field to specify which AI to use
-/// - Command prefix is automatically stripped before sending to AI
+/// - `provider` is required by `Config::validate` and read by nothing. The
+///   module doc explains that split; do not restate it as "specifies which AI
+///   to use", which is what this comment said until 2026-09-05 while the module
+///   doc twelve lines above said the field was dropped.
+/// - The command prefix does not reach the model, but `strip_prefix` is not
+///   why: `CommandParser` splits `/name` from its arguments, and the field is
+///   never read.
 ///
-/// ## Keyword Rules
-/// - Pattern does not start with `/` (e.g., `translate to English`, `code optimization`)
-/// - All-match: multiple keyword rules can match simultaneously
-/// - No `provider` field (uses `default_provider`)
-/// - Multiple matched prompts are combined with `\n\n`
+/// **Keyword rules (a `regex` not starting with `^/`) are retired.** They were
+/// never registered anywhere; see the module doc for the cut and for where an
+/// operator is told about one.
 ///
 /// # Example TOML
 ///
 /// ```toml
-/// # Command rule - specifies provider
 /// [[rules]]
-/// rule_type = "command"
 /// regex = "^/draw\\s+"
 /// provider = "gemini"
 /// system_prompt = "Draw a picture based on the prompt"
-///
-/// # Keyword rule - prompt only, no provider
-/// [[rules]]
-/// rule_type = "keyword"
-/// regex = "translate to English"
-/// system_prompt = "Translate the target language to English"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct RoutingRuleConfig {
-    // ===== Rule Type (refactor-routing-rule-logic) =====
-    /// Rule type: "command" or "keyword"
-    /// - "command": Starts with /, first-match-stops, requires provider
-    /// - "keyword": Non-/ pattern, all-match, prompt only
+    // ===== Rule Type =====
+    /// Operator-declared rule type. Only `"command"` names a live kind;
+    /// `"keyword"` names the retired one and is refused on the write path.
     ///
-    /// Default: auto-detected based on regex pattern
+    /// This field is a *label*, not an authority: whether a rule reaches
+    /// `register_custom_commands` is decided solely by
+    /// [`is_registered_command`](Self::is_registered_command). Kept so existing
+    /// TOML parses, and reported through `get_rule_type` for display.
     #[serde(default)]
     pub rule_type: Option<String>,
 
@@ -78,9 +117,11 @@ pub struct RoutingRuleConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
 
-    /// System prompt to guide AI behavior
-    /// Command rules: optional (uses provider default if not set)
-    /// Keyword rules: required (this is the main purpose of keyword rules)
+    /// System prompt to guide AI behavior.
+    ///
+    /// For a registered command rule this becomes the tool's description
+    /// (truncated to 100 chars) and its `routing_system_prompt`. Optional; a
+    /// generic description is used when it is absent.
     #[serde(default)]
     pub system_prompt: Option<String>,
 
@@ -144,20 +185,20 @@ impl RoutingRuleConfig {
         }
     }
 
-    /// Create a keyword rule config
+    /// Does this rule reach `register_custom_commands`?
+    ///
+    /// **The single derivation of the `^/` boundary.** `registration.rs` used
+    /// to spell the same test inline; two spellings of one fact is how a guard
+    /// ends up reporting on a different set than the one it claims to describe,
+    /// so the registration path calls this and so does the retirement warning
+    /// in `Config::validate` and the refusal in the `routing_rules.*` handlers.
+    ///
+    /// Note it does *not* consult `rule_type`: a rule labelled `"command"`
+    /// whose regex lacks the prefix is skipped by the registrar all the same,
+    /// and a warning keyed on the label would miss it.
     #[must_use]
-    pub fn keyword(regex: &str, system_prompt: &str) -> Self {
-        Self {
-            rule_type: Some("keyword".to_string()),
-            is_builtin: false,
-            regex: regex.to_string(),
-            provider: None,
-            system_prompt: Some(system_prompt.to_string()),
-            strip_prefix: None,
-            intent_type: None,
-            preferred_model: None,
-            icon: None,
-        }
+    pub fn is_registered_command(&self) -> bool {
+        self.regex.starts_with("^/")
     }
 
     /// Get the effective rule type (with auto-detection)
@@ -174,16 +215,17 @@ impl RoutingRuleConfig {
         }
     }
 
-    /// Check if this is a command rule
+    /// Is this rule *declared* a command rule?
+    ///
+    /// Answers a different question from
+    /// [`is_registered_command`](Self::is_registered_command): this one reads
+    /// the operator's label, and its only consumer is `Config::validate`'s
+    /// `provider` requirement. Deliberately left keyed on the label so the cut
+    /// does not change which existing files fail to load — a rule declared
+    /// `"keyword"` with a `^/` regex boots today and must keep booting.
     #[must_use]
     pub fn is_command_rule(&self) -> bool {
         self.get_rule_type() == "command"
-    }
-
-    /// Check if this is a keyword rule
-    #[must_use]
-    pub fn is_keyword_rule(&self) -> bool {
-        self.get_rule_type() == "keyword"
     }
 
     /// Get intent type (with default value).

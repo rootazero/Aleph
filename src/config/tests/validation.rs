@@ -131,6 +131,53 @@ fn test_valid_regex_patterns_pass() {
     }
 }
 
+/// Keyword rules are retired. Two halves, and either alone is a false green:
+/// the daemon must still **boot** (an operator's existing file keeps parsing —
+/// `Config` has no `deny_unknown_fields` and these are declared fields), and
+/// the operator must be **told which rule** stopped working, or the cut is
+/// fail-dead rather than fail-closed.
+///
+/// Note the second rule carries a `system_prompt`. The warning this replaced
+/// fired only when one was *missing*, which read as "a keyword rule with a
+/// prompt is fine" — backwards, since the prompt is the part that reaches
+/// nothing. This rule would have been silent under the old predicate.
+#[test]
+fn a_retired_keyword_rule_is_named_and_still_boots() {
+    let mut config = config_with_openai();
+    config
+        .rules
+        .push(RoutingRuleConfig::command("^/draw", "openai", None));
+    config.rules.push(RoutingRuleConfig {
+        regex: "translate to English".to_string(),
+        system_prompt: Some("Translate the target language to English".to_string()),
+        ..Default::default()
+    });
+
+    assert!(
+        config.validate().is_ok(),
+        "a retired keyword rule must not stop the daemon booting"
+    );
+    assert_eq!(
+        config.retired_keyword_rules(),
+        vec![(2, "translate to English")],
+        "the command rule must not be named, and the keyword rule must be"
+    );
+}
+
+/// The label is not the authority. A rule declared `rule_type = "command"`
+/// whose regex lacks `^/` is skipped by `register_custom_commands` all the
+/// same, so it belongs in the retirement report — a warning keyed on
+/// `rule_type` would miss exactly this rule.
+#[test]
+fn a_rule_labelled_command_without_the_prefix_is_still_retired() {
+    let mut config = config_with_openai();
+    config
+        .rules
+        .push(RoutingRuleConfig::command("translate", "openai", None));
+
+    assert_eq!(config.retired_keyword_rules(), vec![(1, "translate")]);
+}
+
 #[test]
 fn test_invalid_regex_patterns_fail() {
     for pattern in ["[invalid(", "(unclosed", "**", "[z-a]"] {

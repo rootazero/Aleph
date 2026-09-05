@@ -148,10 +148,13 @@ fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
         },
         ToolSource::Custom { .. } => CommandContext::Custom {
             system_prompt: tool.routing_system_prompt,
-            // Provider override for custom `[[rules]]` lives on the rule itself
-            // (`RoutingRuleConfig::provider`); the slash-command fast path
-            // reads no `provider` JSON key, so this struct does not carry it.
-            // Resolution happens in the agent-loop routing pass.
+            // No `provider`: `RoutingRuleConfig::provider` is required by
+            // config validation and read by nothing. There is no agent-loop
+            // routing pass that resolves it — an earlier version of this
+            // comment claimed there was, sourced from a struct doc that
+            // contradicted its own module doc. `register_custom_commands`
+            // settles it: it copies `regex` and `system_prompt` onto the tool
+            // and never touches `provider`.
             pattern: tool.routing_regex.unwrap_or(tool.name),
         },
         ToolSource::Plugin { .. } => CommandContext::Builtin {

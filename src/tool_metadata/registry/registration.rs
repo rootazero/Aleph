@@ -428,7 +428,9 @@ impl ToolRegistrar {
 
     /// Register custom commands from config rules
     ///
-    /// Only rules with ^/ prefix patterns are registered as tools.
+    /// Only rules with `^/` prefix patterns are registered as tools; a rule
+    /// without the prefix is a retired keyword rule and reaches nothing here
+    /// (see `RoutingRuleConfig`'s module doc).
     ///
     /// Routed through `ConflictResolver` so a custom rule whose canonical
     /// name (or any future alias) collides with a higher-priority builtin /
@@ -453,8 +455,12 @@ impl ToolRegistrar {
                 continue;
             }
 
-            // Only register slash commands as tools
-            if !rule.regex.starts_with("^/") {
+            // Only slash commands become tools. The predicate lives on the
+            // config type so that this skip, the load-time retirement warning
+            // and the `routing_rules.*` refusal all describe the same set —
+            // a second spelling here is how the warning would end up naming a
+            // different set of rules than the one actually skipped.
+            if !rule.is_registered_command() {
                 continue;
             }
 

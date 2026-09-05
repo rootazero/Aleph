@@ -254,11 +254,14 @@ temperature = 0.7
 # ============================================================================
 # Routing Rules
 # ============================================================================
-# Define rules to automatically route requests to different providers
-# based on the input content (using regex patterns).
+# Each [[rules]] entry defines a custom slash command. `regex` MUST start with
+# "^/": the word after the slash becomes the command name, and `system_prompt`
+# becomes the command's description and routing prompt.
 #
-# Rules are matched in order from top to bottom.
-# First matching rule wins.
+# A regex that does NOT start with "^/" used to be called a "keyword rule".
+# Those are retired — they were never registered anywhere — and the daemon now
+# warns about them at load. `provider` is required for the file to load but is
+# not read to choose a model.
 
 [[rules]]
 regex = "^/code|rust|python|javascript"  # Code-related requests
@@ -285,10 +288,6 @@ regex = "^/moon"                         # Explicitly use Moonshot
 provider = "moonshot"
 system_prompt = "You are a helpful AI assistant."
 
-[[rules]]
-regex = ".*"                             # Catch-all: matches everything
-provider = "openai"                      # Default to OpenAI
-# No system_prompt = use model's default behavior
 
 # ============================================================================
 # Tool Permission Policy (optional)

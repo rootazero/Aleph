@@ -150,6 +150,78 @@ async fn test_register_custom_commands() {
     ));
 }
 
+/// The half kept by the 2026-09-05 keyword-rule retirement, asserted by
+/// **effect** rather than by "registration was called".
+///
+/// `test_register_custom_commands` above only counts tools and checks the
+/// source tag, so every field `register_custom_commands` actually writes was
+/// uncovered: drop the `system_prompt` -> description mapping, the
+/// `/name` display name, or either routing field, and that test stays green
+/// while every custom slash command loses its description in front of the
+/// model. This is what protects the surviving kind.
+#[tokio::test]
+async fn a_command_rule_registers_with_its_prompt_as_description_and_routing() {
+    let registry = ToolCatalog::new();
+
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/translate\\s+".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: Some("You are a translator.".to_string()),
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    let tool = registry
+        .list_all()
+        .await
+        .into_iter()
+        .find(|t| t.name == "translate")
+        .expect("a ^/ rule must register a tool named after the command");
+
+    assert!(matches!(tool.source, ToolSource::Custom { rule_index: 0 }));
+    assert_eq!(
+        tool.description, "You are a translator.",
+        "system_prompt is the tool description the model reads"
+    );
+    assert_eq!(tool.display_name, "/translate");
+    assert_eq!(
+        tool.routing_system_prompt.as_deref(),
+        Some("You are a translator."),
+        "the prompt must also reach CommandContext::Custom.system_prompt"
+    );
+    assert_eq!(
+        tool.routing_regex.as_deref(),
+        Some("^/translate\\s+"),
+        "the pattern must survive onto the tool, not be re-derived from the name"
+    );
+}
+
+/// A rule with no `system_prompt` still registers; only its description
+/// changes. Pairs with the test above so "description comes from the prompt"
+/// cannot be satisfied by a constant.
+#[tokio::test]
+async fn a_command_rule_without_a_prompt_gets_the_generic_description() {
+    let registry = ToolCatalog::new();
+
+    let rules = vec![RoutingRuleConfig {
+        regex: "^/ping".to_string(),
+        provider: Some("openai".to_string()),
+        system_prompt: None,
+        ..Default::default()
+    }];
+    registry.register_custom_commands(&rules).await;
+
+    let tool = registry
+        .list_all()
+        .await
+        .into_iter()
+        .find(|t| t.name == "ping")
+        .expect("a ^/ rule registers with or without a prompt");
+
+    assert_eq!(tool.description, "Custom command /ping");
+    assert!(tool.routing_system_prompt.is_none());
+}
+
 #[tokio::test]
 async fn test_search() {
     let registry = ToolCatalog::new();

@@ -1590,14 +1590,11 @@
       "select_or_add": "Select a rule to edit or add a new one",
       "add_routing_rule": "Add Routing Rule",
       "edit_routing_rule": "Edit Routing Rule",
-      "configure_rules": "Configure routing rules for AI provider selection",
-      "rule_type": "Rule Type",
-      "command_type": "Command",
-      "keyword_type": "Keyword",
+      "configure_rules": "Define a custom slash command",
       "regex_pattern": "Regex Pattern",
-      "regex_hint": "Regular expression to match user input",
+      "regex_hint": "Must start with ^/ — the word after it becomes the slash command name",
       "provider_label": "Provider",
-      "provider_hint": "Required for command rules, ignored for keyword rules",
+      "provider_hint": "Required for the config to load; not used to choose a model",
       "system_prompt": "System Prompt"
     },
     "security": {
