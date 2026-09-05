@@ -28,15 +28,25 @@ pub(crate) fn is_blocked_hostname(hostname: &str) -> bool {
     if check_blocked(&lower) {
         return true;
     }
-    // If the hostname looks like punycode, decode it and normalize homoglyphs
-    // to catch homograph attacks that bypass the ASCII blocklist.
+    // Homograph defense runs unconditionally, not only on `xn--` input:
+    // a hostname like `localhоst` (Cyrillic U+043E) reaches this function
+    // through config-file-driven allow/deny list entries and log scrapers
+    // — the previous gate let it pass through unchecked. The cost is one
+    // table walk per hostname, which is dwarfed by the DNS resolution that
+    // follows in the SSRF fetch path.
+    let folded = crate::security::content_sanitizer::normalize_homoglyphs(&lower);
+    if check_blocked(&folded) {
+        return true;
+    }
+    // If the hostname looks like punycode, decode it and re-run both forms:
+    // a model that constructed an IDNA-encoded `xn--localhost-xyz` decodes
+    // to a Cyrillic-folded form the bare ASCII check would have missed.
     if lower.contains("xn--") {
         let unicode = url::quirks::domain_to_unicode(&lower);
         let unicode_lower = unicode.to_lowercase();
         if check_blocked(&unicode_lower) {
             return true;
         }
-        // Also normalize homoglyphs (e.g., Cyrillic о → Latin o) and check again
         let normalized = crate::security::content_sanitizer::normalize_homoglyphs(&unicode_lower);
         if check_blocked(&normalized) {
             return true;
@@ -60,9 +70,12 @@ pub(crate) fn is_cloud_metadata_hostname(hostname: &str) -> bool {
     if is_cloud_metadata_name(&lower) {
         return true;
     }
-    // Same punycode/homograph chain as `is_blocked_hostname`, scoped to the
-    // metadata names: an opt-in to private networks must not open a
-    // homograph lane to a metadata service.
+    // Same homograph defense as `is_blocked_hostname`: an opt-in to private
+    // networks must not open a homograph lane to a metadata service.
+    let folded = crate::security::content_sanitizer::normalize_homoglyphs(&lower);
+    if is_cloud_metadata_name(&folded) {
+        return true;
+    }
     if lower.contains("xn--") {
         let unicode = url::quirks::domain_to_unicode(&lower);
         let unicode_lower = unicode.to_lowercase();
@@ -277,6 +290,32 @@ mod tests {
         assert!(
             is_blocked_hostname("xn--localhst-sbh"),
             "punycode form of Cyrillic homograph should be blocked"
+        );
+    }
+
+    /// Regression for `severed-wire-2026-09-05-modules2 security I-5`:
+    /// the homograph defense previously only ran on `xn--`-shaped input,
+    /// letting a literal-Unicode hostname (`localhоst` with Cyrillic U+043E)
+    /// reach a caller that bypassed `Url::parse` (config files, log
+    /// scrapers, A2A tokens stored as Unicode strings). The
+    /// `normalize_homoglyphs` pass now runs unconditionally on the
+    /// lower-cased input.
+    #[test]
+    fn blocks_unicode_homograph_in_non_punycode_input() {
+        // Cyrillic 'о' instead of Latin 'o' — no `xn--` prefix; the previous
+        // gate let this through and check_blocked('localhost') was never
+        // reached.
+        let homograph_localhost = "localh\u{043E}st";
+        assert!(
+            is_blocked_hostname(homograph_localhost),
+            "non-punycode Cyrillic homograph of 'localhost' must be blocked"
+        );
+        // Same shape for the metadata service: a homograph that reaches
+        // the policy floor must NOT open a lane to a metadata endpoint.
+        let homograph_metadata = "metad\u{0430}ta.google.internal";
+        assert!(
+            is_cloud_metadata_hostname(homograph_metadata),
+            "non-punycode Cyrillic homograph of a metadata hostname must be blocked"
         );
     }
 
