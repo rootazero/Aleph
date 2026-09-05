@@ -6,8 +6,35 @@ use super::migration;
 use crate::error::AlephError;
 use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::{params, Connection, OptionalExtension};
-use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
+
+/// Direct extern declaration of the sqlite-vec auto-extension entrypoint.
+///
+/// The upstream `sqlite-vec` crate exposes `sqlite3_vec_init` with an
+/// argument-less stub (`pub fn sqlite3_vec_init();`), but the real C symbol
+/// has the canonical 3-arg SQLite extension signature declared in
+/// `sqlite-vec.h`:
+///
+/// ```c
+/// int sqlite3_vec_init(sqlite3 *db,
+///                      char **pzErrMsg,
+///                      const sqlite3_api_routines *pApi);
+/// ```
+///
+/// Declaring the symbol ourselves with the correct signature makes the
+/// **linker** enforce ABI compatibility: a future sqlite-vec release that
+/// adds attributes, changes arity, or changes the calling convention will
+/// fail to link here instead of silently corrupting the stack on every
+/// extension load. The previous implementation used
+/// `std::mem::transmute(sqlite3_vec_init as *const ())` to bridge the
+/// 0-arg stub and the 3-arg real signature — that erased the contract.
+unsafe extern "C" {
+    fn sqlite3_vec_init(
+        db: *mut rusqlite::ffi::sqlite3,
+        pz_err_msg: *mut *mut std::ffi::c_char,
+        p_api: *const rusqlite::ffi::sqlite3_api_routines,
+    ) -> std::ffi::c_int;
+}
 
 mod schema;
 #[cfg(test)]
@@ -26,19 +53,19 @@ pub struct StateDatabase {
 impl StateDatabase {
     /// Register sqlite-vec extension for all connections
     fn register_sqlite_vec_extension() -> Result<(), AlephError> {
-        // Register sqlite-vec extension before opening any connection
-        // SAFETY: sqlite3_auto_extension expects an extern "C" extension entrypoint;
-        // sqlite3_vec_init is that entrypoint, and transmuting from *const () is the
-        // standard FFI pattern for SQLite auto-extension registration.
+        // Register sqlite-vec extension before opening any connection.
+        //
+        // SAFETY: `sqlite3_auto_extension` stores the entrypoint for later
+        // invocation by SQLite when a new connection is opened. We pass the
+        // FFI symbol with its real signature (declared above), so SQLite's
+        // 3-arg call lands on a function with the matching arity and
+        // calling convention. `sqlite3_auto_extension` is idempotent for a
+        // given pointer, so re-registering from every `new()` /
+        // `in_memory()` is safe — SQLite checks the entrypoint slot before
+        // appending.
         // rust-doctor-disable-next-line unsafe-block-audit
         unsafe {
-            type SqliteVecInit = unsafe extern "C" fn(
-                *mut rusqlite::ffi::sqlite3,
-                *mut *mut std::ffi::c_char,
-                *const rusqlite::ffi::sqlite3_api_routines,
-            ) -> std::ffi::c_int;
-            let init: SqliteVecInit = std::mem::transmute(sqlite3_vec_init as *const ());
-            let rc = rusqlite::ffi::sqlite3_auto_extension(Some(init));
+            let rc = rusqlite::ffi::sqlite3_auto_extension(Some(sqlite3_vec_init));
             if rc != rusqlite::ffi::SQLITE_OK {
                 return Err(AlephError::config(format!(
                     "Failed to register sqlite-vec extension: error code {rc}"
@@ -212,13 +239,25 @@ impl StateDatabase {
     {
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
-            let mut guard = conn.lock().unwrap_or_else(|e| {
-                tracing::warn!(
-                    "StateDatabase: SQLite mutex was poisoned by a prior panic; \
-                     recovering (this should be rare)"
-                );
-                e.into_inner()
-            });
+            // On a poisoned mutex, surface the failure to the caller instead
+            // of silently reusing the connection. A panic inside an earlier
+            // `f` leaves the SQLite handle in an unknown state — possibly
+            // mid-statement, mid-transaction, or with FK constraints
+            // half-checked — so continuing to use it can corrupt subsequent
+            // writes. Returning `AlephError` lets the caller decide whether
+            // to reopen the database, surface a doctor alert, or treat the
+            // database as unhealthy.
+            //
+            // The previous `unwrap_or_else(|e| e.into_inner())` recovery was
+            // louder than helpful: every long-lived daemon re-logged the
+            // warning on every operation after the first panic, flooding the
+            // log without actually preventing the inconsistency.
+            let mut guard = conn.lock().map_err(|e| {
+                AlephError::other(format!(
+                    "StateDatabase SQLite mutex poisoned by a prior panic; \
+                     refusing to reuse the half-broken connection ({e})"
+                ))
+            })?;
             f(&mut guard)
         })
         .await

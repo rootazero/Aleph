@@ -284,13 +284,13 @@ impl StateDatabase {
     pub async fn delete_traces_for_task(&self, task_id: &str) -> Result<u64, AlephError> {
         let task_id = task_id.to_string();
         self.with_conn(move |conn| {
-            let count = conn
+            let count: i64 = conn
                 .execute(
                     "DELETE FROM task_traces WHERE task_id = ?1",
                     params![task_id],
                 )
                 .map_err(|e| AlephError::config(format!("Failed to delete traces: {e}")))?;
-            Ok(count as u64)
+            super::i64_to_u64_count(count, "deleted_traces")
         })
         .await
     }
@@ -306,7 +306,7 @@ impl StateDatabase {
                     |row| row.get(0),
                 )
                 .map_err(|e| AlephError::config(format!("Failed to count traces: {e}")))?;
-            Ok(count as u64)
+            super::i64_to_u64_count(count, "trace_count")
         })
         .await
     }

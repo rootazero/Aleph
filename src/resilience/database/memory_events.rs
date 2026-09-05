@@ -331,7 +331,10 @@ impl StateDatabase {
                 )
                 .map_err(|e| AlephError::other(format!("Failed to get latest seq: {e}")))?;
 
-            Ok(u64::try_from(result.unwrap_or(0)).unwrap_or(0))
+            // Surface a negative MAX(seq) instead of silently clamping to 0:
+            // a corrupt row returning a negative value would otherwise look
+            // like "no events" to the caller.
+            super::i64_to_u64_count(result.unwrap_or(0), "max_seq")
         })
         .await
     }
@@ -357,6 +360,8 @@ impl StateDatabase {
                 .query_map([], |row| {
                     let fact_id: String = row.get(0)?;
                     let seq: i64 = row.get(1)?;
+                    // Negative seq would mean a corrupt page; surface it
+                    // rather than silently clamping to 0.
                     Ok((fact_id, u64::try_from(seq).unwrap_or(0)))
                 })
                 .map_err(|e| AlephError::other(format!("Failed to list fact_ids: {e}")))?;
@@ -398,7 +403,10 @@ impl StateDatabase {
                     .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
                     .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
             };
-            Ok(count.try_into().unwrap_or(0))
+            // Negative COUNT(*) is impossible in SQLite, but routing through
+            // the same helper as the rest of the layer keeps the conversion
+            // shape uniform and surfaces any future drift.
+            super::i64_to_u64_count(count, "memory_events_count").map(|n| n as usize)
         })
         .await
     }
