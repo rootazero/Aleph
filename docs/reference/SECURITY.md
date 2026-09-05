@@ -2985,13 +2985,17 @@ attribution, and a bound workspace as the room's default cwd.
   claim in this document — a gate written as "is operator" and a gate written
   as "is not a member" agree on every human and disagree on every machine
   caller, and only the second one is what the code does.
-- **The workspace binding is a privilege, and it has five writers — four
-  gated, one exempt by invariant.** *(Was "four writers — three gated" until
-  2026-08-30; `project_manage(bind_workspace)` was the addition that made it
-  five, and it calls `ProjectStore::bind_workspace` directly rather than
-  routing through the RPC. A sentence that counts members goes quiet on the
-  day the set grows, which is why the authoritative census is a module doc
-  and not this number.)* Turning `workspace_path` into the room's
+- **The workspace binding is a privilege: every writer of `workspace_path`
+  that CHOOSES a directory is gated, and exactly one is exempt by
+  invariant.** *(This bullet used to carry the count itself, and it went
+  stale exactly the way a count does: it read "four writers — three gated"
+  from P2 until 2026-08-30, silently wrong from the day
+  `project_manage(bind_workspace)` landed calling
+  `ProjectStore::bind_workspace` directly rather than through the RPC. The
+  number is therefore no longer repeated here — the authoritative census is
+  `gateway::handlers::projects`'s module doc, and a copy of a count is a
+  trap whether or not it happens to be right today.)* Turning
+  `workspace_path` into the room's
   runtime cwd (a dormant display field waking up) retroactively made every
   writer of that column a directory-choice authority: `projects.add`,
   `projects.create_blank`, and `projects.bind_workspace` all carry the same
@@ -3021,7 +3025,7 @@ attribution, and a bound workspace as the room's default cwd.
   only when a path is actually NAMED, so **releasing** a binding stays
   reachable from a session that a bad binding broke.
 
-  The fifth writer is
+  The one exempt writer is
   `execution_engine::run_loop::inner`, which auto-registers a run's
   `workspace_override` into the catalogue so a CLI/programmatic cwd appears
   in the picker; it is exempt because it never *introduces* a directory — it
@@ -3038,9 +3042,10 @@ attribution, and a bound workspace as the room's default cwd.
   owner chose the directory through a gated verb; the member only inherits
   that choice. The full census lives in
   `gateway::handlers::projects`'s module doc, with a back-reference at the
-  exempt writer — and that doc now also records that both it and this bullet
-  sat at "four / three gated" for the whole time there were five, because a
-  count of members is prose and prose has no compiler.
+  exempt writer — and that doc also records that both it and this bullet sat
+  at "four / three gated" for the whole time there were five, because a count
+  of members is prose and prose has no compiler. Do not restore a count here:
+  read the census, or grep `workspace_path` and `bind_workspace`.
 - **Author attribution is display-grade, not signature-grade.** The
   `[name]` speaker labels a room prompt carries come from
   `SessionEvent::UserMessage.author_user_id`, stamped server-side from the
@@ -3212,9 +3217,10 @@ attribution, and a bound workspace as the room's default cwd.
      loudly (a human is there). The asymmetry is deliberate and documented
      at both sites.
   4. `[projects] allowed_roots` (the `fs.*` browse fence) is NOT layered
-     onto the three directory-choosing binding writers — the config-tier
-     gate above is the only fence. Layering it on would change existing
-     picker behaviour; a separate product decision.
+     onto the directory-choosing binding writers (whichever ones the census
+     currently lists — this line said "the three" while there were four) —
+     the tier gate above is the only fence. Layering it on would change
+     existing picker behaviour; a separate product decision.
   5. Teams created inside a room BEFORE the `teams.scope_id` column existed
      (2026-08-18, round-5) keep their pre-column semantics: the row cannot
      say whether it was made in a room, so it is not backfilled and stays
