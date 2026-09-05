@@ -255,7 +255,9 @@ fn record_replaces_non_finite_usd_with_unpriced_and_keeps_ceiling_alive() {
     let alice = Principal::User("u-alice".to_string());
 
     ledger.record(&alice, 1_000, Delta::Usd(f64::NAN)).unwrap();
-    ledger.record(&alice, 1_000, Delta::Partial(f64::INFINITY)).unwrap();
+    ledger
+        .record(&alice, 1_000, Delta::Partial(f64::INFINITY))
+        .unwrap();
     ledger
         .record(&alice, 1_000, Delta::Partial(f64::NEG_INFINITY))
         .unwrap();
@@ -383,7 +385,9 @@ fn total_for_after_a_month_to_day_policy_switch_still_counts_the_month_row() {
     let ledger = InMemorySpendLedger::default();
     let alice = Principal::User("u-alice".to_string());
     // Recorded while the policy was Month — keyed at the month boundary.
-    ledger.record(&alice, month_start, Delta::Usd(40.0)).unwrap();
+    ledger
+        .record(&alice, month_start, Delta::Usd(40.0))
+        .unwrap();
 
     let total = ledger.total_for(day_start, month_start).unwrap();
     assert_eq!(
@@ -442,7 +446,9 @@ fn a_month_to_day_policy_switch_keeps_the_total_ceiling_armed() {
     let ledger = InMemorySpendLedger::default();
     let alice = Principal::User("u-alice".to_string());
     // Recorded while the policy was Month.
-    ledger.record(&alice, month_start, Delta::Usd(60.0)).unwrap();
+    ledger
+        .record(&alice, month_start, Delta::Usd(60.0))
+        .unwrap();
 
     let policy = SpendPolicy {
         total_usd: Some(50.0),
@@ -508,9 +514,15 @@ fn the_by_period_index_never_drifts_from_the_rows_across_random_ops() {
                 let period = period_grid[(next() as usize) % period_grid.len()];
                 let usd = (next() % 50) as f64;
                 ledger
-                    .record(&Principal::User(principal.to_string()), period, Delta::Usd(usd))
+                    .record(
+                        &Principal::User(principal.to_string()),
+                        period,
+                        Delta::Usd(usd),
+                    )
                     .unwrap();
-                *reference.entry((principal.to_string(), period)).or_default() += usd;
+                *reference
+                    .entry((principal.to_string(), period))
+                    .or_default() += usd;
             }
         }
 
@@ -935,7 +947,10 @@ fn denied_total_carries_the_principals_own_spend_not_the_machine_total() {
     // alice alone hasn't blown any per-user ceiling (none is configured);
     // alice + bob together blow the $50 machine ceiling.
     assert_eq!(
-        ledger.total_for(period_start_ms, period_start_ms).unwrap().usd,
+        ledger
+            .total_for(period_start_ms, period_start_ms)
+            .unwrap()
+            .usd,
         55.0,
         "test setup: the machine total must differ from alice's own spend \
          (ancestor == window under a Month policy, so the second arm is a no-op)"

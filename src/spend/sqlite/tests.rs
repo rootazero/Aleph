@@ -137,10 +137,12 @@ fn total_for_survives_a_policy_switch_in_both_directions() {
     assert!(month_start < day_start, "test setup: now must be mid-month");
 
     // Day → Month: the day-keyed row lies inside the month window.
-    let ledger = ledger();
+    let day_ledger = ledger();
     let alice = Principal::User("u-alice".to_string());
-    ledger.record(&alice, day_start, Delta::Usd(3.0)).unwrap();
-    let total = ledger.total_for(month_start, month_start).unwrap();
+    day_ledger
+        .record(&alice, day_start, Delta::Usd(3.0))
+        .unwrap();
+    let total = day_ledger.total_for(month_start, month_start).unwrap();
     assert_eq!(
         total.usd, 3.0,
         "after a Day → Month switch the month total must not read zero"
@@ -148,9 +150,11 @@ fn total_for_survives_a_policy_switch_in_both_directions() {
 
     // Month → Day: the month-keyed row is the coarse ancestor of the day
     // window (the deliberate fail-closed over-count).
-    let ledger = ledger();
-    ledger.record(&alice, month_start, Delta::Usd(40.0)).unwrap();
-    let total = ledger.total_for(day_start, month_start).unwrap();
+    let month_ledger = ledger();
+    month_ledger
+        .record(&alice, month_start, Delta::Usd(40.0))
+        .unwrap();
+    let total = month_ledger.total_for(day_start, month_start).unwrap();
     assert_eq!(
         total.usd, 40.0,
         "after a Month → Day switch the day total must keep the month-keyed row"
@@ -159,7 +163,7 @@ fn total_for_survives_a_policy_switch_in_both_directions() {
     // the row's period no longer contains the queried window.
     let next_month_start = crate::spend::period::period_end_ms(now_ms, SpendPeriod::Month);
     let next_day_start = crate::spend::period::period_start_ms(next_month_start, SpendPeriod::Day);
-    let total = ledger
+    let total = month_ledger
         .total_for(next_day_start, next_month_start)
         .unwrap();
     assert_eq!(

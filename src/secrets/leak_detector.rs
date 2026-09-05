@@ -430,9 +430,7 @@ impl LeakDetector {
                 hasher.write(&bytes[start..end]);
                 hasher.write_u8(0xff);
                 let h = hasher.finish();
-                if group
-                    .binary_search_by_key(&h, |&(_l, hash)| hash)
-                    .is_ok()
+                if group.binary_search_by_key(&h, |&(_l, hash)| hash).is_ok()
                     && content.is_char_boundary(start)
                     && content.is_char_boundary(end)
                 {
@@ -696,7 +694,12 @@ mod tests {
         let base = response.as_ptr() as usize;
         let spans: Vec<(usize, usize)> = matches
             .iter()
-            .map(|m| (m.as_ptr() as usize - base, m.as_ptr() as usize - base + m.len()))
+            .map(|m| {
+                (
+                    m.as_ptr() as usize - base,
+                    m.as_ptr() as usize - base + m.len(),
+                )
+            })
             .collect();
         for w in spans.windows(2) {
             assert!(w[0].0 < w[1].0, "matches must be start-sorted");
@@ -730,7 +733,9 @@ mod tests {
 
         // Same-shape multi-byte content without the secret must not
         // false-positive on any mid-codepoint window.
-        assert!(!detector.scan_inbound("结果：值=其他内容，完毕。").is_blocked());
+        assert!(!detector
+            .scan_inbound("结果：值=其他内容，完毕。")
+            .is_blocked());
     }
 
     #[test]
@@ -793,12 +798,12 @@ mod tests {
         let secret = "abcdefghij-fingerprint-only";
         detector.register_injected(&[InjectedSecret::from_value("k", secret)]);
         assert!(!detector.injected.is_empty());
-        let lengths: Vec<usize> = detector
-            .injected
-            .iter()
-            .map(|(&(_h, l), _)| l)
-            .collect();
-        assert_eq!(lengths, vec![secret.len()], "length is kept alongside the hash");
+        let lengths: Vec<usize> = detector.injected.iter().map(|(&(_h, l), _)| l).collect();
+        assert_eq!(
+            lengths,
+            vec![secret.len()],
+            "length is kept alongside the hash"
+        );
     }
 
     /// Regression for `severed-wire-2026-09-05-modules2 secrets I-2`: two

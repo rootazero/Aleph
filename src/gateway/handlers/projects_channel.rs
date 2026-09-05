@@ -395,7 +395,8 @@ pub async fn handle_bind(
                 "projects.channel.bind: {}:{} → {} (rescoped_session={rescoped})",
                 bound.channel_id, bound.peer_id, project.id
             ),
-        )).await;
+        ))
+        .await;
     }
     crate::projects::events::publish_changed(&event_bus, &project.id, ChangeKind::Updated, None);
 
@@ -531,7 +532,8 @@ pub async fn handle_unbind(
                     // just happened.
                     owner.as_deref().unwrap_or("unknown"),
                 ),
-            )).await;
+            ))
+            .await;
         }
         if let Some(pid) = owner.as_deref() {
             crate::projects::events::publish_changed(&event_bus, pid, ChangeKind::Updated, None);

@@ -107,7 +107,8 @@ pub(crate) async fn revoke_device_and_kick(
                     device_id,
                     bound_user.as_deref().unwrap_or("unbound")
                 ),
-            )).await;
+            ))
+            .await;
         }
         let downgraded =
             crate::gateway::server::invalidate_device_sessions(connections, device_id).await;

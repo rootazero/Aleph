@@ -363,7 +363,8 @@ pub async fn handle_list(
                                 tasks.len(),
                                 task.task_id
                             ),
-                        )).await;
+                        ))
+                        .await;
                         break;
                     }
                 }
@@ -494,7 +495,8 @@ pub async fn handle_get(
                 caller,
                 session,
                 format!("trace.get: read {} events of run {task_id}", traces.len()),
-            )).await;
+            ))
+            .await;
         }
     }
 

@@ -402,6 +402,9 @@ mod cross_backend_tests {
                 .execute(rusqlite::params![*label, seq])
                 .expect("insert fixture row");
         }
+        // The prepared statement borrows `conn`; end the borrow before
+        // handing the connection to the caller.
+        drop(insert);
         conn
     }
 

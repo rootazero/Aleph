@@ -287,7 +287,11 @@ mod tests {
         let log = CoOccurrenceLog::new(tmp.path());
         log.record("alpha");
         log.forget("");
-        assert_eq!(log.snapshot().len(), 1, "forget(\"\") must not drop entries");
+        assert_eq!(
+            log.snapshot().len(),
+            1,
+            "forget(\"\") must not drop entries"
+        );
     }
 
     #[test]

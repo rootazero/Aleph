@@ -258,7 +258,8 @@ impl RuntimeSecurityGuard {
                     AuditEventType::ExecBlocked,
                     AuditSeverity::Critical,
                     detail,
-                ).await;
+                )
+                .await;
                 return Ok(GuardResult::Blocked {
                     reason: "Leak detector found sensitive data in outbound content".to_string(),
                 });
@@ -278,7 +279,8 @@ impl RuntimeSecurityGuard {
                     AuditEventType::LeakWarning,
                     AuditSeverity::Warn,
                     "outbound leak detector redacted sensitive token".to_string(),
-                ).await;
+                )
+                .await;
             }
         }
 
@@ -317,7 +319,8 @@ impl RuntimeSecurityGuard {
                             AuditEventType::PiiDetected,
                             AuditSeverity::Critical,
                             format!("PII filter blocked {blocked} detection(s)"),
-                        ).await;
+                        )
+                        .await;
                     }
                     if warned > 0 {
                         self.log_audit(
@@ -325,7 +328,8 @@ impl RuntimeSecurityGuard {
                             AuditEventType::PiiDetected,
                             AuditSeverity::Warn,
                             format!("PII filter warned {warned} detection(s)"),
-                        ).await;
+                        )
+                        .await;
                     }
                 }
             }
@@ -375,7 +379,8 @@ impl RuntimeSecurityGuard {
                     AuditEventType::ExecBlocked,
                     AuditSeverity::Critical,
                     detail,
-                ).await;
+                )
+                .await;
                 return Ok(GuardResult::Blocked {
                     reason: "Leak detector found sensitive data in resolved outbound content"
                         .to_string(),
@@ -395,7 +400,8 @@ impl RuntimeSecurityGuard {
                     AuditEventType::LeakWarning,
                     AuditSeverity::Warn,
                     "outbound leak detector redacted sensitive token post-substitution".to_string(),
-                ).await;
+                )
+                .await;
             }
         }
 
@@ -465,7 +471,8 @@ impl RuntimeSecurityGuard {
                 AuditEventType::EnvInjectionDetected,
                 AuditSeverity::Critical,
                 format!("inbound secret leak blocked: {reason}"),
-            ).await;
+            )
+            .await;
             return Ok(GuardResult::Blocked {
                 reason: format!("Secret leak detector: {reason}"),
             });
@@ -481,7 +488,8 @@ impl RuntimeSecurityGuard {
                 AuditEventType::ExecBlocked,
                 AuditSeverity::Critical,
                 detail,
-            ).await;
+            )
+            .await;
             return Ok(GuardResult::Blocked {
                 reason: "Leak detector found sensitive data in inbound content".to_string(),
             });
@@ -500,7 +508,8 @@ impl RuntimeSecurityGuard {
                 AuditEventType::LeakWarning,
                 AuditSeverity::Warn,
                 "inbound leak detector redacted sensitive token".to_string(),
-            ).await;
+            )
+            .await;
             return Ok(GuardResult::Redacted {
                 text: redacted,
                 reasons: vec!["Inbound leak detector redacted sensitive token".to_string()],
@@ -522,7 +531,8 @@ impl RuntimeSecurityGuard {
                         AuditEventType::PiiDetected,
                         AuditSeverity::Critical,
                         format!("inbound PII redacted; {} blocks", result.blocked_count),
-                    ).await;
+                    )
+                    .await;
                     return Ok(GuardResult::Redacted {
                         text: result.text,
                         reasons: vec![format!(
@@ -536,7 +546,8 @@ impl RuntimeSecurityGuard {
                         AuditEventType::PiiDetected,
                         AuditSeverity::Warn,
                         format!("inbound PII warning; {} warnings", result.warned_count),
-                    ).await;
+                    )
+                    .await;
                     return Ok(GuardResult::Warned {
                         text: result.text,
                         warnings: vec![format!(

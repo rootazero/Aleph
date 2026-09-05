@@ -129,12 +129,12 @@ impl SpendLedger for SqliteSpendLedger {
         // guard: coerce to 0.0 + bump unpriced_calls so the 'this call had
         // a price it couldn't represent' signal is loud and the ceiling
         // continues to evaluate against a real number.
-        let (delta_usd, delta_unpriced, delta_partial): (f64, i64, i64) =
-            if !delta_usd.is_finite() {
-                (0.0, delta_unpriced.saturating_add(1), delta_partial)
-            } else {
-                (delta_usd, delta_unpriced, delta_partial)
-            };
+        let (delta_usd, delta_unpriced, delta_partial): (f64, i64, i64) = if !delta_usd.is_finite()
+        {
+            (0.0, delta_unpriced.saturating_add(1), delta_partial)
+        } else {
+            (delta_usd, delta_unpriced, delta_partial)
+        };
         let key = principal.as_key().to_string();
         let updated_at = chrono::Utc::now().timestamp_millis();
 

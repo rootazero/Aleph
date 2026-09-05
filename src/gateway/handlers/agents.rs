@@ -316,7 +316,8 @@ pub async fn handle_update(
                             users.join(", "),
                             allowed_users_applied_live
                         ),
-                    )).await;
+                    ))
+                    .await;
                 }
             }
 

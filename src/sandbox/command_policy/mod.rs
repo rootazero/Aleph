@@ -489,11 +489,7 @@ impl SandboxBeforeHook for CommandPolicyHook {
 /// the same chain: an operator's own `[security].custom_blocked` refusal is the
 /// same kind of event and belongs in the same column, so it is the same
 /// producer rather than a second one that would drift.
-pub(crate) async fn record_policy_decision(
-    blocked: bool,
-    cmd: &SandboxCommand,
-    rules: &[String],
-) {
+pub(crate) async fn record_policy_decision(blocked: bool, cmd: &SandboxCommand, rules: &[String]) {
     let Some(log) = crate::security::audit::global() else {
         return;
     };
@@ -513,7 +509,8 @@ pub(crate) async fn record_policy_decision(
             program = cmd.program,
             rules = rules.join(", ")
         ),
-    )).await;
+    ))
+    .await;
 }
 
 #[cfg(test)]

@@ -240,6 +240,7 @@ mod tests {
                     engines: None,
                     min_request_interval_ms: None,
                     verified: false,
+                    allow_private_upstream: false,
                 },
             )]),
             ..Default::default()
@@ -284,6 +285,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let mut cfg = Config::default();
@@ -324,6 +326,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let mut cfg = Config::default();

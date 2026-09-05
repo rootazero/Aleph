@@ -91,7 +91,8 @@ pub async fn handle_secrets_set(request: JsonRpcRequest, ctx: Arc<AuthContext>) 
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!("secrets.set: stored key '{key}'"),
-                )).await;
+                ))
+                .await;
             }
             JsonRpcResponse::success(request.id, json!({ "key": key }))
         }
@@ -138,7 +139,8 @@ pub async fn handle_secrets_delete(
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!("secrets.delete: deleted key '{key}'"),
-                )).await;
+                ))
+                .await;
             }
             JsonRpcResponse::success(request.id, json!({ "deleted": true, "key": key }))
         }

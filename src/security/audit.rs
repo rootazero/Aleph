@@ -484,9 +484,7 @@ impl SecurityAuditLog {
     fn note_dropped(&self) {
         let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
         if count == 1 || count.is_multiple_of(100) {
-            error!(
-                "Security audit log channel full, dropping entry (total dropped: {count})"
-            );
+            error!("Security audit log channel full, dropping entry (total dropped: {count})");
         }
     }
 
@@ -734,8 +732,9 @@ mod tests {
         let root = repo_root();
         for path in SSRF_PRODUCERS {
             let full = root.join(path);
-            let src = std::fs::read_to_string(&full)
-                .unwrap_or_else(|e| panic!("{path} (declared SSRF audit producer) unreadable: {e}"));
+            let src = std::fs::read_to_string(&full).unwrap_or_else(|e| {
+                panic!("{path} (declared SSRF audit producer) unreadable: {e}")
+            });
             assert!(
                 code_only(&src).contains("emit_ssrf_blocked("),
                 "{path} is a declared SSRF audit chokepoint and no longer emits. The refusal \n                 still happens — what vanished is the trail of it (audit I-3)."
@@ -803,7 +802,8 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "Blocked request to 10.0.0.1".to_string(),
-        }).await;
+        })
+        .await;
         let entry = rx.recv().await.unwrap();
         assert_eq!(entry.event_type, AuditEventType::ExecBlocked);
         assert_eq!(entry.severity, AuditSeverity::Warn);
@@ -820,7 +820,8 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "first".into(),
-        }).await;
+        })
+        .await;
         log.log(AuditEntry {
             event_type: AuditEventType::AuthFailure,
             severity: AuditSeverity::Critical,
@@ -828,7 +829,8 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "second".into(),
-        }).await;
+        })
+        .await;
         assert_eq!(log.dropped_count.load(Ordering::Acquire), 1);
     }
 
@@ -934,7 +936,8 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: format!("multi\nline\n{}", "x".repeat(8 * 1024)),
-        }).await;
+        })
+        .await;
         let entry = rx.recv().await.unwrap();
         assert!(!entry.detail.contains('\n'));
         assert!(entry.detail.ends_with(TRUNCATION_MARKER));

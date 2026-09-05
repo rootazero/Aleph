@@ -182,8 +182,7 @@ pub type ExtraFrontmatter = std::collections::BTreeMap<String, serde_yml::Value>
 /// sees a native YAML date — a silent behaviour change on the parse path this
 /// module's own regression tests were written to pin.
 fn collect_extra_frontmatter(yaml: &str) -> ExtraFrontmatter {
-    let Ok(serde_yml::Value::Mapping(map)) = serde_yml::from_str::<serde_yml::Value>(yaml)
-    else {
+    let Ok(serde_yml::Value::Mapping(map)) = serde_yml::from_str::<serde_yml::Value>(yaml) else {
         return ExtraFrontmatter::new();
     };
     map.into_iter()

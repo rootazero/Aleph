@@ -70,7 +70,8 @@ pub async fn handle_cluster_enroll(
                             "reused existing enrollment"
                         }
                     ),
-                )).await;
+                ))
+                .await;
             }
             JsonRpcResponse::success(
                 request.id,
@@ -132,7 +133,8 @@ pub async fn handle_cluster_deregister(
                         "cluster.deregister: node '{}' ({}): evicted={}, device_removed={}",
                         params.node, outcome.node_id, outcome.evicted, outcome.device_removed
                     ),
-                )).await;
+                ))
+                .await;
             }
             JsonRpcResponse::success(
                 request.id,

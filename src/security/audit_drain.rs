@@ -1,8 +1,8 @@
 //! Background task that drains `SecurityAuditLog` entries to SQL and applies
 //! the retention policy.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -45,11 +45,7 @@ pub fn spawn_audit_drain(
 /// row if the counter moved since `last_seen`. Best-effort like every insert
 /// here: a failed insert is logged, never retried — the counter is monotone,
 /// so the next check reports the full delta since the last SUCCESSFUL report.
-async fn report_drops(
-    store: &Arc<SecurityStore>,
-    counter: &Arc<AtomicU64>,
-    last_seen: &mut u64,
-) {
+async fn report_drops(store: &Arc<SecurityStore>, counter: &Arc<AtomicU64>, last_seen: &mut u64) {
     let total = counter.load(Ordering::Acquire);
     let delta = total - *last_seen;
     if delta == 0 {
@@ -265,6 +261,9 @@ mod tests {
             .unwrap();
         assert_eq!(event_type, "audit_log_dropped");
         assert_eq!(severity, "critical");
-        assert!(detail.contains('3'), "detail should name the delta: {detail}");
+        assert!(
+            detail.contains('3'),
+            "detail should name the delta: {detail}"
+        );
     }
 }

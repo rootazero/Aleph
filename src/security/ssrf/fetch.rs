@@ -302,8 +302,8 @@ pub async fn safe_fetch(
             status,
             StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
         );
-        let method_becomes_get = drop_body
-            && (current_method == Method::POST || status == StatusCode::SEE_OTHER);
+        let method_becomes_get =
+            drop_body && (current_method == Method::POST || status == StatusCode::SEE_OTHER);
         if method_becomes_get {
             current_method = Method::GET;
         }

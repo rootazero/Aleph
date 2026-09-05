@@ -522,7 +522,8 @@ impl AlephTool for ProjectManageTool {
                     log.log(crate::security::audit::AuditEntry::authority_change(
                         crate::gateway::visibility::ambient_actor(),
                         format!("project_manage.member_add: {user} → {id}"),
-                    )).await;
+                    ))
+                    .await;
                 }
                 // `affected_user` is set ONLY on removal (it is what lets a
                 // just-removed member still receive the frame telling their
@@ -565,7 +566,8 @@ impl AlephTool for ProjectManageTool {
                         log.log(crate::security::audit::AuditEntry::authority_change(
                             crate::gateway::visibility::ambient_actor(),
                             format!("project_manage.member_remove: {user} ← {id}"),
-                        )).await;
+                        ))
+                        .await;
                     }
                 }
                 // Named here, and only here: by the time this frame is

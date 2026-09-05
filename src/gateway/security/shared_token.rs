@@ -331,10 +331,7 @@ impl SharedTokenManager {
         let mut new_entries = HashMap::new();
         for (mut name, plaintext, old_entry) in plaintext_entries {
             let encrypted = new_crypto.encrypt(plaintext.as_str()).map_err(|e| {
-                SharedTokenError::Storage(format!(
-                    "Re-encrypt failed for '{}': {e}",
-                    name.as_str()
-                ))
+                SharedTokenError::Storage(format!("Re-encrypt failed for '{}': {e}", name.as_str()))
             })?;
             // Move the name out of its `Zeroizing` wrapper (leaving an empty
             // string behind to be wiped) so it can key the replacement map —

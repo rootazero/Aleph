@@ -469,7 +469,9 @@ impl SpendLedger for InMemorySpendLedger {
         // The same cutoff on the index, in the same critical section: an
         // index entry left behind for a swept period would keep answering
         // `principals_in`/`total_for` for rows that no longer exist.
-        state.by_period.retain(|period, _| *period >= period_start_ms);
+        state
+            .by_period
+            .retain(|period, _| *period >= period_start_ms);
         Ok(before - state.rows.len())
     }
 
