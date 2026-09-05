@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::runtimes::ledger::{CapabilityLedger, CapabilityStatus};
 use crate::runtimes::specs::EnvFromConfig;
 use crate::runtimes::{ensure_capability, find_spec, supported_on_current_os, SPECS};
+use crate::sandbox::live_tail::LiveTail;
 use crate::sync_primitives::Arc;
 
 /// The one capability this tool installs that the ledger does not model.
@@ -275,7 +276,18 @@ impl RuntimeManageTool {
         }
         match spawner.spawn(name) {
             Ok(job_id) => {
+                // `ok` must come from THIS branch — the spawn succeeded, a job
+                // IS running and holding a registry slot — not from `list`'s
+                // own verdict. `list` builds the snapshot this response reuses
+                // for its `runtimes` field, but if the ledger fails to load
+                // inside it, `list` answers `ok:false` with an unrelated
+                // message about a job that is, right now, actually running.
+                // A caller reading `ok` as the verdict would retry, and now
+                // two installs hold slots — the inverse of 判据 §11's "success
+                // reported for a no-op": here a REAL effect gets reported as a
+                // failure.
                 let mut out = Self::list(locator).await;
+                out.ok = true;
                 out.message = format!(
                     "Installing {name} in the background as job {job_id}. It downloads over the \
                      network and will not finish inside a tool call, so poll it with \
@@ -349,7 +361,14 @@ impl RegistrySpawner {
     /// **And it makes that derivation testable** without running an installer:
     /// a test registers a job that does nothing and resolves it through the
     /// same lookup, so the two halves are proven to agree rather than assumed to.
-    fn register<F>(command: String, job: F) -> Result<u64, String>
+    ///
+    /// **I2:** the twin, `bash_exec::spawn_background`, also attaches a
+    /// [`LiveTail`] before returning so `poll` shows something for a
+    /// still-running job — this tool's own message at [`RuntimeManageTool::install`]
+    /// names exactly that verb. `live` is threaded in here rather than
+    /// created ad hoc so the registry attach and the tee the job writes into
+    /// are provably the same instance.
+    fn register<F>(command: String, live: Arc<LiveTail>, job: F) -> Result<u64, String>
     where
         F: std::future::Future<Output = crate::builtin_tools::code_exec::CodeExecOutput>
             + Send
@@ -376,6 +395,10 @@ impl RegistrySpawner {
 
         match registry.register_running(command, label, join.abort_handle()) {
             RegisterOutcome::Registered(id) => {
+                // Same ordering the twin uses: attach before the task learns
+                // its id, so nothing can complete and report before `poll`
+                // has somewhere to read from.
+                registry.attach_live(id, live);
                 // The task is parked until it learns its id; send it now that
                 // the slot exists.
                 let _ = id_tx.send(id);
@@ -396,18 +419,41 @@ impl RegistrySpawner {
 impl InstallSpawner for RegistrySpawner {
     fn spawn(&self, capability: &str) -> Result<u64, String> {
         let cap = capability.to_string();
-        Self::register(format!("{INSTALL_JOB_PREFIX}{capability}"), async move {
-            run_install(&cap).await
-        })
+        let live = Arc::new(LiveTail::new());
+        let live_for_job = live.clone();
+        Self::register(
+            format!("{INSTALL_JOB_PREFIX}{capability}"),
+            live,
+            async move { run_install(&cap, &live_for_job).await },
+        )
     }
 }
 
 /// The install itself, running detached. Returns the shape the registry stores
 /// for `poll` / `wait` to hand back.
-async fn run_install(capability: &str) -> crate::builtin_tools::code_exec::CodeExecOutput {
+///
+/// `live` is NOT re-entered as a context the way `bash_exec::spawn_background`
+/// re-enters `SESSION_ID` / `EXEC_WORKSPACE` / `CallIdentity` — it is passed
+/// explicitly, because neither branch below runs through the sandboxed
+/// executor those task-locals exist for (verified: zero references to any of
+/// the three anywhere under `src/runtimes/`). Re-entering them here would be
+/// inert scaffolding copied from a caller that does not apply; passing `live`
+/// explicitly is the part that has a real reader.
+async fn run_install(
+    capability: &str,
+    live: &Arc<LiveTail>,
+) -> crate::builtin_tools::code_exec::CodeExecOutput {
     if capability == CHROMIUM {
-        install_chromium().await
+        install_chromium(live).await
     } else {
+        // `ensure_capability`'s subprocesses (curl|sh installers, npm global
+        // installs, each OS's own bootstrap script) live several layers down
+        // in `runtimes::bootstrap`, and none of that call graph accepts a
+        // live tail today. Threading one through it is a larger change than
+        // this fix round — named here rather than silently dropped: `poll`
+        // shows nothing for these while they run, same as before this fix.
+        // `chromium` is the 150 MB download the finding names, and it IS
+        // wired below.
         let ledger = match RuntimeManageTool::ledger().await {
             Ok(l) => l,
             Err(e) => return install_output(false, format!("{e}")),
@@ -472,7 +518,7 @@ async fn chromium_row() -> RuntimeRow {
 
 /// Run the same command the ledger's post-install action runs, with the same
 /// environment.
-async fn install_chromium() -> crate::builtin_tools::code_exec::CodeExecOutput {
+async fn install_chromium(live: &Arc<LiveTail>) -> crate::builtin_tools::code_exec::CodeExecOutput {
     let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
         .await
         .unwrap_or(None);
@@ -488,6 +534,12 @@ async fn install_chromium() -> crate::builtin_tools::code_exec::CodeExecOutput {
     let mut cmd = tokio::process::Command::new(&cli);
     cmd.args(CHROMIUM_INSTALL_ARGS)
         .stdin(std::process::Stdio::null())
+        // Piped rather than inherited: streamed below into `live`, chunk by
+        // chunk, instead of `.output()`'s wait-for-everything. This IS the
+        // 150 MB download `bash{process_action:"poll"}` promises something
+        // for (I2) — without this, `poll` showed nothing at all while it ran.
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     for (key, value) in
         crate::runtimes::post_install::config_env(&[EnvFromConfig::PlaywrightDownloadHost])
@@ -500,14 +552,64 @@ async fn install_chromium() -> crate::builtin_tools::code_exec::CodeExecOutput {
     // backgrounded `cargo build` lives, and for the same reason. A timeout here
     // would be a second, smaller answer to "how long may this run" than the one
     // the caller can already see and cancel through `bash{process_action:…}`.
-    match cmd.no_window().output().await {
-        // Exit 0 is not the claim. The claim is that the NEXT browser call
-        // works, and the resolver is one await away — so ask it (判据 §4:
-        // assert the effect arrived, not that the call happened). This CLI has
-        // produced exit-0-and-nothing-happened before: appendix D.9.11 records
-        // `browser_pdf` answering "Saved PDF to <path>" over a file it had been
-        // refused permission to write.
-        Ok(out) if out.status.success() => match chromium_row().await {
+    let mut child = match cmd.no_window().spawn() {
+        Ok(c) => c,
+        Err(e) => return install_output(false, format!("chromium install could not run: {e}")),
+    };
+
+    // Tee both streams into `live` as they arrive, and keep the bytes whole
+    // too: the failure message below still needs the complete stderr, which a
+    // ring only retains a tail of.
+    // Only stderr is read below (the failure message); stdout is teed into
+    // `live` the same as stderr but not otherwise consumed here.
+    let (_stdout_buf, stderr_buf) = {
+        use crate::sandbox::live_tail::LiveStream;
+        use tokio::io::AsyncReadExt;
+        let mut stdout_pipe = child.stdout.take().expect("stdout was piped above");
+        let mut stderr_pipe = child.stderr.take().expect("stderr was piped above");
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+        let mut out_open = true;
+        let mut err_open = true;
+        let mut out_chunk = [0u8; 8192];
+        let mut err_chunk = [0u8; 8192];
+        while out_open || err_open {
+            tokio::select! {
+                n = stdout_pipe.read(&mut out_chunk), if out_open => {
+                    match n {
+                        Ok(0) | Err(_) => out_open = false,
+                        Ok(n) => {
+                            live.push(LiveStream::Stdout, &out_chunk[..n]);
+                            stdout_buf.extend_from_slice(&out_chunk[..n]);
+                        }
+                    }
+                }
+                n = stderr_pipe.read(&mut err_chunk), if err_open => {
+                    match n {
+                        Ok(0) | Err(_) => err_open = false,
+                        Ok(n) => {
+                            live.push(LiveStream::Stderr, &err_chunk[..n]);
+                            stderr_buf.extend_from_slice(&err_chunk[..n]);
+                        }
+                    }
+                }
+            }
+        }
+        (stdout_buf, stderr_buf)
+    };
+    let status = match child.wait().await {
+        Ok(s) => s,
+        Err(e) => return install_output(false, format!("chromium install could not run: {e}")),
+    };
+
+    // Exit 0 is not the claim. The claim is that the NEXT browser call
+    // works, and the resolver is one await away — so ask it (判据 §4:
+    // assert the effect arrived, not that the call happened). This CLI has
+    // produced exit-0-and-nothing-happened before: appendix D.9.11 records
+    // `browser_pdf` answering "Saved PDF to <path>" over a file it had been
+    // refused permission to write.
+    if status.success() {
+        match chromium_row().await {
             row if row.path.is_some() => install_output(
                 true,
                 format!(
@@ -523,17 +625,17 @@ async fn install_chromium() -> crate::builtin_tools::code_exec::CodeExecOutput {
                     row.status
                 ),
             ),
-        },
-        Ok(out) => install_output(
+        }
+    } else {
+        install_output(
             false,
             format!(
                 "chromium install failed (exit {}): {}. If this network blocks Playwright's \
                  CDN, set [browser.runtime] download_host to a mirror and try again.",
-                out.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&out.stderr).trim()
+                status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&stderr_buf).trim()
             ),
-        ),
-        Err(e) => install_output(false, format!("chromium install could not run: {e}")),
+        )
     }
 }
 
@@ -652,6 +754,31 @@ mod tests {
         );
     }
 
+    /// A locator that actually blocks, standing in for the real one's
+    /// `chromium_resolve::DRY_RUN_TIMEOUT` (≈ 6 s). `install`'s response DOES
+    /// call the locator — it builds on `Self::list`, which appends the
+    /// chromium row — so a stub that resolves instantly cannot tell "the
+    /// response really composed a live row" from "nothing here ever calls the
+    /// locator at all" (判据 §2: a guard that cannot go red for the reason it
+    /// names is not a guard). The delay is well under the real ceiling, so the
+    /// test still runs fast.
+    struct DelayedStubLocator(std::time::Duration);
+
+    #[async_trait]
+    impl ChromiumLocator for DelayedStubLocator {
+        async fn locate(&self) -> RuntimeRow {
+            tokio::time::sleep(self.0).await;
+            RuntimeRow {
+                name: "chromium".into(),
+                status: "Ready (stub)".into(),
+                path: None,
+                version: None,
+                purpose: None,
+                supported_here: true,
+            }
+        }
+    }
+
     /// **The install must not sit on the tool call.** A ~150 MB download cannot
     /// fit the 180 s per-tool budget, and `bash_exec::WAIT_MAX_TIMEOUT_SECS`
     /// (170 s) is the constraint CLAUDE.md forbids extending — the very fact
@@ -659,13 +786,22 @@ mod tests {
     /// `resolve_binary`. So the answer comes back with a job id, immediately,
     /// and names the verb that polls it.
     ///
-    /// The wall-clock bound is the assertion: a stub spawner returns instantly,
-    /// so anything slow here means the tool awaited the installer.
+    /// The locator genuinely sleeps (see [`DelayedStubLocator`]), so the wall
+    /// clock bound proves two things at once: the response really did reach
+    /// the locator (elapsed is at least the delay — a "faster" run would mean
+    /// the locator was silently skipped), and nothing ELSE unbounded is on the
+    /// path (elapsed stays close to the delay rather than ballooning toward
+    /// what awaiting the actual installer would cost).
     #[tokio::test]
     async fn install_returns_a_job_id_immediately_instead_of_awaiting_the_download() {
+        let locator_delay = std::time::Duration::from_millis(200);
         let spawner = StubSpawner::ok(42);
+        let tool = RuntimeManageTool::with_parts(
+            Arc::new(DelayedStubLocator(locator_delay)),
+            spawner.clone(),
+        );
         let started = std::time::Instant::now();
-        let out = tool(spawner.clone())
+        let out = tool
             .call(RuntimeManageArgs {
                 action: RuntimeAction::Install,
                 capability: Some("chromium".into()),
@@ -684,11 +820,137 @@ mod tests {
             "the answer must name the verb that polls it: {}",
             out.message
         );
+        let elapsed = started.elapsed();
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
-            "install blocked for {:?} — it awaited the installer",
-            started.elapsed()
+            elapsed >= locator_delay,
+            "elapsed {elapsed:?} is shorter than the locator's own delay \
+             ({locator_delay:?}) — the response stopped calling the locator"
         );
+        assert!(
+            elapsed < locator_delay * 5,
+            "install blocked for {elapsed:?}, far past the locator's own \
+             {locator_delay:?} delay — it awaited the installer, not just the \
+             locator"
+        );
+    }
+
+    /// I1: `install`'s `ok` must come from the SPAWN outcome, not from
+    /// `list`'s own verdict. Before the fix, a ledger that failed to load
+    /// inside `list` made `install` answer `ok:false` alongside "Installing …
+    /// as job {id}" for a job that is, right now, actually running and
+    /// holding a registry slot — the inverse of 判据 §11 (a REAL effect
+    /// reported as a failure): a caller reading `ok` as the verdict would
+    /// retry, and now two installs hold slots.
+    ///
+    /// `Self::ledger()` only fails when `get_config_dir()` cannot resolve a
+    /// home directory at all — `CapabilityLedger::load_or_create` itself never
+    /// errors; a missing or corrupted file degrades to a fresh in-memory
+    /// ledger. So the failure is reproduced the way `get_config_dir` actually
+    /// produces it: no `$ALEPH_HOME` and no `$HOME`. `HomeEnvGuard` is the
+    /// established, mutex-guarded way this binary's tests touch `$HOME`
+    /// (`runtimes::post_install`) — reused here rather than hand-rolled
+    /// (判据 §16), and only the HOME lock is taken (never nested with
+    /// `AlephHomeEnvGuard`), so this cannot join the ABBA hazard
+    /// `HomeEnvGuards` exists to prevent.
+    #[tokio::test]
+    async fn a_failing_ledger_still_reports_ok_for_a_real_spawn() {
+        let _home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire();
+        assert!(
+            std::env::var_os("ALEPH_HOME").is_none(),
+            "this test needs ALEPH_HOME unset too, or get_config_dir() would \
+             still resolve through it and the ledger would load fine"
+        );
+        std::env::remove_var("HOME");
+
+        let spawner = StubSpawner::ok(99);
+        let out = tool(spawner.clone())
+            .call(RuntimeManageArgs {
+                action: RuntimeAction::Install,
+                capability: Some("chromium".into()),
+            })
+            .await
+            .expect("tool answers");
+
+        assert!(
+            out.ok,
+            "a successful spawn must report ok:true even when list's own \
+             ledger read fails: {}",
+            out.message
+        );
+        assert!(
+            out.message.contains("99"),
+            "the job id must still reach the model: {}",
+            out.message
+        );
+    }
+
+    /// I2: `register` must ATTACH the live tail, not merely hold a clone of
+    /// it. Before the fix, `poll` on a still-running install job answered
+    /// `partial: None` unconditionally — `attach_live` was never called — so
+    /// `bash{process_action:"poll"}`, the verb this tool's own message names,
+    /// showed nothing for a 150 MB download in progress.
+    ///
+    /// The job here pushes into the SAME `Arc<LiveTail>` passed to `register`
+    /// and then blocks on a oneshot this test controls, so "still running"
+    /// is exact rather than a timing guess.
+    #[tokio::test]
+    async fn a_running_install_jobs_partial_output_is_visible_to_poll() {
+        use crate::builtin_tools::process_registry::{process_registry, PollOutcome};
+        use crate::sandbox::context::SESSION_ID;
+        use crate::sandbox::live_tail::LiveStream;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        let session =
+            crate::routing::session_key::SessionKey::ephemeral("runtime-manage-live-tail-rt");
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let live = Arc::new(LiveTail::new());
+        let live_for_job = live.clone();
+
+        let (id, caller) = SESSION_ID
+            .scope(session, async {
+                let id = RegistrySpawner::register(
+                    format!("{INSTALL_JOB_PREFIX}chromium"),
+                    live,
+                    async move {
+                        live_for_job.push(LiveStream::Stdout, b"downloading chromium...");
+                        let _ = release_rx.await;
+                        install_output(true, "stub".into())
+                    },
+                )
+                .expect("the registry had a free slot");
+                let caller = crate::builtin_tools::bash_exec::session_label();
+                (id, caller)
+            })
+            .await;
+
+        // The push happens on a separate tokio task; give it a bounded chance
+        // to run before asserting, rather than a fixed sleep.
+        let mut partial = None;
+        for _ in 0..200 {
+            if let PollOutcome::Running {
+                partial: Some(p), ..
+            } = process_registry().poll(id, caller.as_deref())
+            {
+                if !p.stdout.is_empty() {
+                    partial = Some(p);
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let partial = partial.expect(
+            "poll never saw a non-empty live tail for a job that pushed to it — \
+             attach_live was not called, or the wrong tail was attached",
+        );
+        assert!(
+            String::from_utf8_lossy(&partial.stdout).contains("downloading chromium"),
+            "poll must see the job's own output while it is still running: {partial:?}"
+        );
+
+        let _ = release_tx.send(());
     }
 
     /// The non-chromium branch takes the SAME path. It is the one that used to
@@ -854,11 +1116,12 @@ mod tests {
         let session = crate::routing::session_key::SessionKey::ephemeral("runtime-manage-label-rt");
         let (id, caller) = SESSION_ID
             .scope(session.clone(), async {
-                let id =
-                    RegistrySpawner::register(format!("{INSTALL_JOB_PREFIX}chromium"), async {
-                        install_output(true, "stub".into())
-                    })
-                    .expect("the registry had a free slot");
+                let id = RegistrySpawner::register(
+                    format!("{INSTALL_JOB_PREFIX}chromium"),
+                    Arc::new(LiveTail::new()),
+                    async { install_output(true, "stub".into()) },
+                )
+                .expect("the registry had a free slot");
                 // The EXACT lookup `bash{process_action:"wait"}` performs
                 // (`bash_exec.rs:498` then `:574`), taken inside the SAME
                 // scope the registration ran under.

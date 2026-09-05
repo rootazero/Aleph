@@ -241,6 +241,7 @@ mod tests {
             ("skill_manage", "skills.remove"),
             ("skill_install", "skills.install"),
             ("node_manage", "cluster.enroll"),
+            ("runtime_manage", "runtimes.install"),
         ];
         for (tool, rpc) in TOOL_FACES {
             assert!(
@@ -265,15 +266,6 @@ mod tests {
             unique.len(),
             OPERATOR_TOOLS.len(),
             "OPERATOR_TOOLS must not list a tool twice"
-        );
-    }
-
-    #[test]
-    fn installing_a_runtime_is_operator_only() {
-        assert!(
-            tool_requires_operator("runtime_manage"),
-            "runtime_manage installs software on the host; it sits with \
-             skill_install and hub_install_run, not with the read-only tools"
         );
     }
 
