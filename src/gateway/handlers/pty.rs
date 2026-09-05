@@ -900,17 +900,49 @@ mod tests {
     /// `Some(prog) => (CommandBuilder::new(prog), prog.clone())`, so
     /// whatever string is passed as `command` is exactly what shows up
     /// here. On Unix, `"/bin/sh"` is the same real binary every other
-    /// spawn in this crate reaches via the bare name `"sh"`
-    /// (`session.rs:295`, `manager.rs:331`) or via the omitted-command
-    /// fallback `default_shell_label()` (which reports `$SHELL` — by
-    /// convention a user's interactive login shell such as bash or zsh,
-    /// not `/bin/sh` verbatim) — so the full path is a distinct string
-    /// from every label those two paths produce. On Windows,
-    /// `"powershell.exe"` resolves via `PATH` the same way the bare
-    /// `"cmd.exe"` used by those same two call sites does, and is distinct
-    /// both from that literal and from the omitted-command fallback's
-    /// `%COMSPEC%` (a stock install sets that to a *full path* to
-    /// `cmd.exe`, not the bare name `"powershell.exe"`).
+    /// spawn in this crate reaches via the bare name `"sh"` (the
+    /// explicit-command fixtures in `session.rs` and `manager.rs`, which
+    /// pass `"sh"` / `"cmd.exe"` verbatim — named by shape rather than by
+    /// line number, which an earlier version of this comment gave and
+    /// which had already rotted) or via the omitted-command fallback
+    /// (`session.rs`'s `default_shell_command`, whose Unix arm reports
+    /// `$SHELL` — by convention a user's interactive login shell such as
+    /// bash or zsh, not `/bin/sh` verbatim) — so the full path is a
+    /// distinct string from every label those two paths produce.
+    ///
+    /// On Windows the omitted-command fallback is **no longer `%COMSPEC%`**,
+    /// so the argument an earlier version of this comment made here (that
+    /// a stock `%COMSPEC%` is a full path to `cmd.exe` and therefore never
+    /// the bare `"powershell.exe"`) no longer describes anything real.
+    /// `default_shell_command` now resolves pwsh → Windows PowerShell 5.1
+    /// → cmd.exe through `utils::shell::resolve()`, spawns that module's
+    /// absolute `program`, and labels the session with its `label`. The set
+    /// this probe must stay clear of is therefore that module's label set —
+    /// `"pwsh"`, `"powershell"`, `"cmd"` — and it does, for one reason
+    /// worth stating exactly because the near-miss is a single edit away:
+    /// those labels are program **stems**, extension removed, so the
+    /// closest of them (`"powershell"`, on a host with no pwsh installed)
+    /// differs from this probe by the `.exe` suffix and nothing else.
+    ///
+    /// That distinctness is guarded on the other side rather than merely
+    /// observed here: `utils::shell`'s
+    /// `label_is_the_stem_of_the_resolved_program` asserts `label ==
+    /// program.file_stem()`, so the one edit that would make this test
+    /// silently match the *fallback's* sessions instead of its own probe —
+    /// respelling that label as `"powershell.exe"` — turns that test red
+    /// first. And its coverage lands where it has to: it pins whichever
+    /// shell `resolve()` actually picked on THIS host, so on the only hosts
+    /// where a collision is even conceivable (the ones where `powershell`
+    /// is what resolves) it is `"powershell"`'s own label being pinned. On
+    /// a host resolving `pwsh` or `cmd` the fallback label cannot collide
+    /// with this probe at all.
+    ///
+    /// The probe therefore stays `"powershell.exe"`: the change did not
+    /// make it collide, and it has no free replacement anyway — the obvious
+    /// candidate `"cmd.exe"` is already the label of the sibling test in
+    /// this module (`spawn_with_no_cwd_actually_chdirs_the_child_into_the_first_root`)
+    /// as well as of the `session.rs` / `manager.rs` fixtures, which is
+    /// exactly the property this label must not have.
     ///
     /// The probe must stay alive for this to mean anything: if the jail
     /// were bypassed, the session is inserted synchronously, but
