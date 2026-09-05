@@ -315,8 +315,9 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # that actually differ. A second session emits no OSC 7, so its
                                  # answer can only be the probe's — without it "OSC 7 won" and
                                  # "the probe said nothing" are the same green.
-./qa/terminal/run.sh real        # a REAL agent binary found on PATH, run directly AND behind a
-                                 # real `npx`. `fake-claude` is a bash script NAMED `claude`, so it
+./qa/terminal/run.sh real        # UNIX ONLY (probe_alive.py needs pty.fork; SKIPS loudly elsewhere).
+                                 # A REAL agent binary found on PATH, run directly AND behind a
+                                 # real `npx`. The fake is a Node script NAMED `claude`, so it
                                  # can only ever cover the arm a stand-in covers by construction;
                                  # this covers the ones only a real install has — a node CLI the
                                  # kernel calls `node`, a CLI that rewrites `process.title`, and a
@@ -1030,10 +1031,23 @@ refuses to boot with `invalid type: sequence, expected a map`.
   - `cwd` — 三层来源用**三个真的不同的目录**；第二个会话不发 OSC 7，所以它的答案只可能来自探测。
     只有一个会话时，「OSC 7 赢了」和「探测什么都没说」是同一个绿。**故意不证**的：spawn 目录那一层
     （要让探测**失败**才能到达，从 wire 上安排不出来）、`program: null`、Panel 的渲染、以及另外 20 份 manifest。
-  - 装置的画面**不是手抄的**：`derive_chrome.py` 按 rule id 从 `claude.toml` 里取出字面量、拼成行、
-    再用 manifest 自己的正则回验；它**故意不判定哪条规则胜出**（那要在 Python 里重写一遍 region 与优先级
+  - 装置的画面**不是手抄的**：`derive_chrome.mjs` 按 rule id 从 `claude.toml` 里取出字面量、拼成行、
+    再用 manifest 自己的正则回验；它**故意不判定哪条规则胜出**（那要重写一遍 region 与优先级
     ——第二套引擎，判据 §1），胜者由运行时的 `terminal{explain}` 用**发货的引擎**报出规则 id 来断言。
-  - `real` — **`fake-claude` 只能覆盖一条臂**：它是个**名叫** `claude` 的 bash 脚本，所以"按名字认出来"
+    读 manifest 用的 `toml_min.mjs` 同理**不是 schema 的第二份表述**：它只答「这份文件说了什么」，
+    「这份 manifest 合不合法」由 `agent_detect::manifest::parse_manifest` 在运行时回答。
+  - **平台**（2026-09-05）：`identify` / `wait` / `quiet` / `cwd` 与 `panel` 布板在 **Unix 和 Windows
+    上都跑**。在那之前整套装置在 Windows 上是 UNRUN，原因不是设计而是**语言的意外**——驱动是
+    Python，而这台主机上**没装解释器**（PATH 上的 `python3` 是 WindowsApps 存根、exit 49；
+    `uv` 装着但还没有 managed 解释器）。`run.sh` 的 `PY_CMD` 因此按 Aleph 自己的顺序找
+    （真 `python3` → `uv run`，与 `bootstrap-runtime` 的 `DEFAULT_TARGETS` 一致），
+    **刻意不替操作员 `uv python install`**——一个中途悄悄下载运行时的装置是它自己的隐患。
+    **Windows 恰好是前台探测没有 `tcgetpgrp`、走树是全部答案的那个平台**，所以那是它最不该跑不了的
+    地方。`real` 与 `tui` **没搬**，理由是结构性的：`probe_alive.py` / `drive_tui.py` 用 `pty.fork`
+    驱动程序，Node 没有原生模块就没有 pty ⇒ 它们在跑不了的地方**响亮地 SKIP，不报 pass**（判据 §2）。
+    ⚠️ shell 交互的两种拼写收在 `drive_terminal.mjs` 的**一个** `SHELL` kit 里，不是逐调用点的分支——
+    逐点分支正是「Windows 那条臂安静地不再敲 agent、而阶段照样报出对照会话的行」的形状。
+  - `real` — **假 agent 只能覆盖一条臂**：它是个**名叫** `claude` 的 Node 脚本，所以"按名字认出来"
     这条臂是它按构造必然覆盖的那条，也是唯一一条。真实安装才有的三种形状它碰不到——内核把
     `#!/usr/bin/env node` 的 CLI 报成 `node`；重写了 `process.title` 的 CLI 让标题占了 `argv[0]` 的位置，
     而 macOS 会把**环境变量**渗进它后面的 `cmd()`；包装器自己留在进程组组长的位置、真 agent 是它的孩子。

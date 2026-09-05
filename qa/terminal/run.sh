@@ -23,6 +23,28 @@
 #                                   #        `just wasm` and a Chrome you drive.
 #   ./qa/terminal/run.sh all        # every NON-interactive stage in turn
 #
+# ## Where it runs
+#
+# The four automated stages (identify / wait / quiet / cwd) and the `panel`
+# setup run on Unix AND on Windows. They were Unix-only until 2026-09-05 — not
+# by design but by accident of language: the drivers were Python and this
+# Windows host has no interpreter, so the whole fixture was UNRUN there.
+# Windows is the platform whose foreground probe has no `tcgetpgrp`, i.e. the
+# one where `foreground_fact_for_shell` is the WHOLE answer — so "the fixture
+# cannot run there" was the most expensive place for it not to run.
+#
+# ⚠️ Python — the accurate version, because the first draft of this
+# paragraph got it wrong and a wrong reason in a comment is the expensive kind
+# (判据 §1): this host has NO interpreter installed. `python`/`python3` on
+# PATH are WindowsApps stubs that exit 49 without running, and `uv` — which IS
+# installed, and is what Aleph's own `bootstrap-runtime` provisions — reports
+# none managed yet (`uv python find` exits 2). `uv python install` would fetch
+# one, and it would still not unblock `real`/`tui`: CPython ships `pty` only
+# on Unix.
+#
+# `real` and `tui` are Unix-only for that last reason, structurally and
+# whatever interpreter is around. They SKIP loudly rather than pass.
+#
 #   KEEP=1 ./qa/terminal/run.sh cwd        # keep the scratch dir for post-mortem
 #   SKIP_BUILD=1 ./qa/terminal/run.sh cwd  # reuse the binary already built HERE
 #
@@ -61,8 +83,9 @@
 #
 # ## Why `real` exists beside `identify`
 #
-# `identify` types `claude` into a shell, and that `claude` is `fake-claude` —
-# a bash script whose NAME is the mechanism. It covers exactly one arm of
+# `identify` types `claude` into a shell, and that `claude` is
+# `fake-claude.cjs` installed as an extensionless `claude` — a Node script
+# whose NAME is the mechanism. It covers exactly one arm of
 # `normalized_program_name`, the one a stand-in can cover by construction. The
 # arms it cannot reach belong to real installs: a `#!/usr/bin/env node` CLI
 # the kernel calls `node`, a CLI that rewrites `process.title` (so `argv[0]`
@@ -94,7 +117,110 @@ case "$STAGE" in
   *) echo "unknown stage: $STAGE (identify|wait|quiet|cwd|real|panel|tui|all)" >&2; exit 64 ;;
 esac
 
+# ---------------------------------------------------------------------------
+# Platform, and how this fixture finds a Python
+# ---------------------------------------------------------------------------
+#
+# Everything this fixture drives moved from Python to Node on 2026-09-05,
+# because every stage here was UNRUN on Windows — the platform whose foreground
+# probe has no `tcgetpgrp` and therefore the only platform where
+# `foreground_fact_for_shell` is the WHOLE answer.
+#
+# Two stages did NOT move, and the reason is structural rather than a porting
+# gap: `probe_alive.py` and `drive_tui.py` both drive a program through
+# `pty.fork`, which CPython only has on Unix and which Node has no equivalent
+# for without a native module. So they are Unix-only WHATEVER interpreter is
+# available, and they SKIP loudly where they cannot run — a stage that cannot
+# run must never report a pass (判据 §2).
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT) IS_WINDOWS=1 ;;
+  *) IS_WINDOWS=0 ;;
+esac
+
+# ⚠️ NOT a bare `python3`. This repo's own runtime bootstrap installs `uv`
+# (`aleph-server bootstrap-runtime`'s `DEFAULT_TARGETS`) and the model-facing
+# prompt steers `uv run` over a bare interpreter
+# (`orchestrator/harness_bridge/prompt_build.rs`), so a fixture that assumes a
+# SYSTEM interpreter is assuming something Aleph itself does not.
+#
+# Two traps this resolution exists for:
+#   * `python3` on a Windows PATH is usually the WindowsApps Store stub. It is
+#     on PATH and `command -v` finds it, so presence is not the test — and
+#     ⚠️ **neither is running it**: the stub is an AppExecLink whose entire
+#     behaviour is to OPEN THE MICROSOFT STORE on the Python installer page,
+#     then exit 49. A probe that "just tries it" pops a Store window on every
+#     single invocation of this fixture. Measured 2026-09-05, the hard way.
+#     So the stub is recognised WITHOUT being executed: an AppExecLink is a
+#     zero-byte reparse point under `.../Microsoft/WindowsApps/`, and either
+#     of those two facts is enough to disqualify it.
+#   * a machine can have `uv` and still have no interpreter (`uv python find`
+#     exits 2). `uv run` would then DOWNLOAD one, and a fixture that quietly
+#     fetches a runtime mid-run is its own hazard, so this refuses and prints
+#     the command instead of deciding for the operator.
+#
+# Both traps are the same shape: **the cheap way to ask "can I use this?" has a
+# side effect on the operator's machine.** Ask something inert first.
+real_interpreter() {
+  local p
+  p="$(command -v "$1" 2>/dev/null)" || return 1
+  [ -n "$p" ] || return 1
+  case "$p" in
+    *[Ww]indows[Aa]pps*) return 1 ;;
+  esac
+  # A 0-byte executable is an AppExecLink, not a program.
+  [ -s "$p" ] || return 1
+  "$p" -c "" >/dev/null 2>&1 || return 1
+  printf '%s' "$p"
+}
+
+PY_CMD=()
+if [ -n "${PY:-}" ]; then
+  read -r -a PY_CMD <<<"$PY"
+elif PY_REAL="$(real_interpreter python3)"; then
+  PY_CMD=("$PY_REAL")
+elif PY_REAL="$(real_interpreter python)"; then
+  PY_CMD=("$PY_REAL")
+elif command -v uv >/dev/null 2>&1 && uv python find >/dev/null 2>&1; then
+  PY_CMD=(uv run --no-project python)
+fi
+run_py() {
+  [ "${#PY_CMD[@]}" -gt 0 ] || return 127
+  "${PY_CMD[@]}" "$@"
+}
+
+if [ "$STAGE" = "real" ] || [ "$STAGE" = "tui" ]; then
+  if ! run_py -c "import pty" >/dev/null 2>&1; then
+    echo
+    echo "=== SKIP: $STAGE ==="
+    if [ "${#PY_CMD[@]}" -eq 0 ]; then
+      echo "  No Python interpreter here. \`python3\` on PATH is a WindowsApps"
+      echo "  AppExecLink — a 0-byte stub that opens the Microsoft Store — and"
+      echo "  \`uv python find\` reports none managed. This fixture does NOT run"
+      echo "  either of them to find that out."
+      echo "  Provision one the way Aleph does:  uv python install 3.12"
+    else
+      echo "  \`${PY_CMD[*]} -c 'import pty'\` fails here — CPython only ships"
+      echo "  \`pty\` on Unix."
+    fi
+    echo "  This stage drives a program through a pty (probe_alive.py /"
+    echo "  drive_tui.py); Node has no pty without a native module, so the"
+    echo "  2026-09-05 port could not take these two with it."
+    echo "  THIS STAGE ASSERTED NOTHING. It is not a pass."
+    exit 0
+  fi
+fi
+
+# One field out of the panel board. Was five `python3 -c` one-liners.
+board_field() {
+  node -e 'const fs=require("node:fs");try{const v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))[process.argv[2]];console.log(v==null?"?":v)}catch{console.log("?")}' \
+    "$BOARD" "$1" 2>/dev/null || echo "?"
+}
+
 QA_ROOT="${QA_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/aleph-qa-terminal-XXXXXX")}"
+# Mixed-form root on Windows: the native server reads `C:/…`, not `/c/…`, and
+# HOME / ALEPH_HOME are derived from this below and handed to it as environment.
+# Same line as qa/agents_viz, qa/teamchat_rooms, qa/rooms_channel_bind.
+command -v cygpath >/dev/null 2>&1 && QA_ROOT="$(cygpath -m "$QA_ROOT")"
 KEEP="${KEEP:-0}"
 GATEWAY_PORT="${GATEWAY_PORT:-18841}"
 MOCK_PORT="${MOCK_PORT:-18842}"
@@ -120,7 +246,16 @@ cleanup() {
   # canonicalises that path (`/var` -> `/private/var` on macOS) before handing
   # it to the server, so the literal `$QA_ROOT` spelling appears in no command
   # line and the pkill would silently match nothing.
-  pkill -f "$(basename "$QA_ROOT")/bin/claude" 2>/dev/null
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f "$(basename "$QA_ROOT")/bin/claude" 2>/dev/null
+  elif [ "$IS_WINDOWS" = "1" ]; then
+    # No pkill here. The fake holds for a day, so leaving one per stage would
+    # accumulate; taskkill by image name would take the operator's own node
+    # processes, so match on the command line instead.
+    powershell -NoProfile -Command \
+      "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*$(basename "$QA_ROOT")*claude*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" \
+      >/dev/null 2>&1 || true
+  fi
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
 trap cleanup EXIT
@@ -132,16 +267,50 @@ trap cleanup EXIT
 # uncanonicalised spelling would fail every one of them while the product was
 # right.
 mkdir -p "$QA_ROOT/work" "$QA_ROOT/bin"
-WORK="$(cd "$QA_ROOT/work" && pwd -P)"
-BIN_DIR="$(cd "$QA_ROOT/bin" && pwd -P)"
+# `pwd -P` for the macOS symlink above; then MIXED FORM on Windows, because
+# every use of these two below hands them to the NATIVE server —
+# `pty.spawn`'s `cwd`, `[agents.defaults] workspace_root`, and the three
+# directories the `cwd` stage compares for equality. A `/c/…` spelling is
+# refused by `jail::resolve_spawn_cwd` as "outside every registered
+# workspace", which reads like a fixture path bug and would be one.
+native_dir() {
+  local p
+  p="$(cd "$1" && pwd -P)"
+  command -v cygpath >/dev/null 2>&1 && p="$(cygpath -m "$p")"
+  printf '%s' "$p"
+}
+WORK="$(native_dir "$QA_ROOT/work")"
+BIN_DIR="$(native_dir "$QA_ROOT/bin")"
 mkdir -p "$WORK/spawn" "$WORK/probe" "$WORK/probe2" "$WORK/osc"
 
 say "install the fake agent"
 # The NAME is the mechanism: `agent_detect::lookup_agent` resolves by basename,
-# so this file only identifies as an agent once it is called `claude`.
-cp "$HERE/fake-claude" "$BIN_DIR/claude"
-chmod +x "$BIN_DIR/claude"
-python3 "$HERE/derive_chrome.py" \
+# so this file only identifies as an agent once it is called `claude` — with NO
+# extension, on both platforms, so `program` reads the same on both wires. See
+# the header of fake-claude.cjs.
+cp "$HERE/fake-claude.cjs" "$BIN_DIR/claude"
+chmod +x "$BIN_DIR/claude" 2>/dev/null || true
+# The interpreter is named by ABSOLUTE PATH everywhere below, never as the bare
+# word `node`. Measured 2026-09-05: the shim's first version said `node`, the
+# shim resolved fine, and the PTY child answered
+# `'node' 不是内部或外部命令` — this host's node is an fnm per-shell shim whose
+# directory is not on the PATH the server hands its children. A fixture whose
+# subject is the foreground probe must not also be testing whether the server
+# forwards an environment (判据: one subject per assertion).
+QA_NODE="$(command -v node)" || { echo "no node on PATH" >&2; exit 1; }
+command -v cygpath >/dev/null 2>&1 && QA_NODE="$(cygpath -m "$QA_NODE")"
+export QA_NODE
+echo "  node: $QA_NODE"
+if [ "$IS_WINDOWS" = "1" ]; then
+  # cmd.exe cannot exec a shebang, and PATHEXT is how `claude` typed at a
+  # prompt resolves to anything at all. The shim runs IN cmd.exe (a batch file
+  # gets no process of its own) and starts node as its CHILD — so on Windows
+  # the agent sits one level deeper than on Unix, which is precisely the tree
+  # `foreground::foreground_fact_for_shell` has to walk.
+  printf '@echo off\r\n"%s" "%%~dp0claude" %%*\r\n' "$QA_NODE" >"$BIN_DIR/claude.cmd"
+  echo "  windows shim: $BIN_DIR/claude.cmd"
+fi
+node "$HERE/derive_chrome.mjs" \
   "$REPO/crates/agent-detect/src/manifests/claude.toml" "$BIN_DIR" || exit 1
 echo "  fake agent: $BIN_DIR/claude"
 
@@ -166,9 +335,10 @@ fi
 # is wrong from any of them and the binary sitting there can be from a
 # different tree entirely.
 TARGET_DIR="$(cd "$REPO" && HOME="$REAL_HOME" cargo metadata --format-version 1 --no-deps 2>/dev/null \
-  | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+  | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).target_directory))')"
 BIN="$TARGET_DIR/debug/aleph-server"
-[ -x "$BIN" ] || { echo "no binary at $BIN" >&2; exit 1; }
+[ -x "$BIN" ] || BIN="$TARGET_DIR/debug/aleph-server.exe"
+[ -x "$BIN" ] || { echo "no binary at $TARGET_DIR/debug/aleph-server[.exe]" >&2; exit 1; }
 # The one trace a swallowed build failure leaves behind. See qa/lib/build.sh.
 echo "binary: $BIN ($(date -r "$BIN" '+%Y-%m-%d %H:%M:%S'))"
 # Remember exactly which bytes this run is about to execute. A cargo
@@ -222,9 +392,7 @@ say "patch config"
 # server boots `Mode: Simulated`, where `tools.catalog` answers normally and
 # `tools.invoke` replies "boot phase 2" — which reads like a missing
 # registration and is not.
-python3 "$BUSY/patch_config.py" "$CONFIG" \
-  --gateway-port "$GATEWAY_PORT" --mock-port "$MOCK_PORT" || exit 1
-python3 "$HERE/patch_terminal.py" "$CONFIG" "$WORK" || exit 1
+node "$HERE/patch_config.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" "$WORK" || exit 1
 
 say "start server"
 "$BIN" start >"$QA_ROOT/server.log" 2>&1 &
@@ -253,9 +421,9 @@ if [ "$STAGE" = "real" ] || [ "$STAGE" = "panel" ] || [ "$STAGE" = "tui" ]; then
   # If the derivation itself breaks, the loop below reads nothing and the
   # stage skips with an empty "tried" list — which looks exactly like "no
   # agent is installed" (判据 §8). Say which it is.
-  ROSTER="$(python3 "$HERE/derive_agent_bins.py" "$REPO/crates/agent-detect/src/engine.rs" || true)"
+  ROSTER="$(node "$HERE/derive_agent_bins.mjs" "$REPO/crates/agent-detect/src/engine.rs" || true)"
   if [ -z "$ROSTER" ]; then
-    echo "  derive_agent_bins.py produced NO roster — engine.rs's shape changed." >&2
+    echo "  derive_agent_bins.mjs produced NO roster — engine.rs's shape changed." >&2
     echo "  This is a broken fixture, not a machine without agents." >&2
     exit 1
   fi
@@ -281,7 +449,7 @@ if [ "$STAGE" = "real" ] || [ "$STAGE" = "panel" ] || [ "$STAGE" = "tui" ]; then
     # native binary is missing, so it prints ENOENT and exits inside a
     # second. An agent that is gone before the first probe would fail this
     # stage for a reason that is not the product's.
-    if ! python3 "$HERE/probe_alive.py" "$path" 3; then
+    if ! run_py "$HERE/probe_alive.py" "$path" 3; then
       echo "  $exe found at $path but did not stay alive; skipping it"
       continue
     fi
@@ -328,23 +496,23 @@ export QA_PANEL_BOARD="$BOARD"
 
 say "drive: $STAGE"
 RC=0
-python3 "$HERE/drive_terminal.py" \
+node "$HERE/drive_terminal.mjs" \
   "ws://127.0.0.1:$GATEWAY_PORT/ws" "$STAGE" "$BIN_DIR" "$WORK" "$BIN_DIR/chrome.json" || RC=$?
 
 if [ "$STAGE" = "tui" ] && [ "$RC" = "0" ]; then
   say "drive the real aleph-tui"
-  WANT_PROGRAM="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["expected_program"])' "$BOARD")"
+  WANT_PROGRAM="$(board_field expected_program)"
   echo "  tui: $TUI_BIN   expecting the panel to show: $WANT_PROGRAM"
-  python3 "$HERE/drive_tui.py" "$TUI_BIN" \
+  run_py "$HERE/drive_tui.py" "$TUI_BIN" \
     "ws://127.0.0.1:$GATEWAY_PORT/ws" "$WANT_PROGRAM" || RC=$?
 fi
 
 if [ "$STAGE" = "panel" ] && [ "$RC" = "0" ]; then
-  AGENT_S="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["agent_session"])' "$BOARD" 2>/dev/null || echo '?')"
-  PLAIN_S="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["plain_session"])' "$BOARD" 2>/dev/null || echo '?')"
-  WANT_AGENT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["expected_agent"])' "$BOARD" 2>/dev/null || echo '?')"
-  WANT_PROGRAM="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["expected_program"])' "$BOARD" 2>/dev/null || echo '?')"
-  CTRL_PROGRAM="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["control_program"])' "$BOARD" 2>/dev/null || echo '?')"
+  AGENT_S="$(board_field agent_session)"
+  PLAIN_S="$(board_field plain_session)"
+  WANT_AGENT="$(board_field expected_agent)"
+  WANT_PROGRAM="$(board_field expected_program)"
+  CTRL_PROGRAM="$(board_field control_program)"
 
   cat <<CHECKLIST
 
