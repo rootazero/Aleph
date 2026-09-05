@@ -426,15 +426,23 @@ impl SessionService for InProcessActorSessionService {
         //    rather than failing wake(); the actor will simply come back
         //    with whatever head the store reports.
         let prior_head = self.store.load_head_seq(id).await.ok();
-        // Drop the wake_lock before awaiting spawn_actor; the lock only
-        // protects the shutdown + capture-prior_head critical section.
-        drop(_guard);
 
         // 3. Spawn fresh actor — spawn_actor appends SessionWoken at
         //    `prior_head + 1` atomically with the actor's first command,
         //    closing the race window where a concurrent `emit_event`
-        //    could land between the shutdown and the marker.
+        //    could land between the shutdown and the marker. The
+        //    `wake_lock` MUST be held across `spawn_actor`: previously
+        //    the lock was dropped here, which let `emit_event` observe
+        //    no sender in `self.senders`, fall through to
+        //    `spawn_actor(id, None)`, and create a SECOND actor racing
+        //    this one on `(session_id, seq)` — the documented
+        //    `SessionWoken.seq == prior_head + 1` invariant could then
+        //    be broken by the store's self-heal advancing SessionWoken
+        //    to `prior_head + 2`. Holding the lock makes the whole
+        //    sequence (shutdown → capture → spawn) atomic with respect
+        //    to any concurrent wake/emit on the same session.
         self.spawn_actor(id, prior_head).await?;
+        drop(_guard);
 
         // The new head the caller sees is `prior_head + 1` (SessionWoken
         // appended). If SessionWoken's append failed (store error), the
