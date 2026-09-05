@@ -127,14 +127,14 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
             expected: format!("binary '{name}' on PATH after install"),
         });
     }
-    let bin_path = match probe_result.bin_path.take() {
-        Some(path) => path,
-        None => {
-            return Ok(BootstrapResult::PathNotFound {
-                expected: format!("binary path for '{name}' after successful probe"),
-            });
-        }
-    };
+    // `probe_result.found == true` is the only path that yields a
+    // `bin_path: Some(..)` (see `probe_system_path` / `ProbeResult::not_found`),
+    // so the `None` arm is unreachable. `expect` documents the invariant and
+    // surfaces a panic if a future refactor breaks it.
+    let bin_path = probe_result.bin_path.take().expect(
+        "probe::probe invariant: found=true implies bin_path=Some — \
+         see ProbeResult::not_found for the inverse",
+    );
 
     // 3. Run post-install actions.
     for action in spec.post_install {
@@ -393,13 +393,12 @@ async fn run_npm_global(package: &str) -> Result<CmdOutcome, BootstrapError> {
 }
 
 async fn run_via_parent(parent: &str, subcommand: &[&str]) -> Result<CmdOutcome, BootstrapError> {
+    // Today the only `InstallStrategy::Via` in `SPECS` is the npm-global case,
+    // which routes through `fnm`. The previous `"node"` arm that ran
+    // `fnm exec --using lts -- ...` had no spec exercising it; the defensive
+    // lookup in `enrich_path_for_via_parent` is the right place for that.
     let mut cmd = match parent {
         "fnm" => Command::new("fnm"),
-        "node" => {
-            let mut cmd = Command::new("fnm");
-            cmd.args(["exec", "--using", "lts", "--"]);
-            return run_cmd(cmd.args(subcommand)).await;
-        }
         _ => {
             return Ok(CmdOutcome::Failed {
                 stderr: format!("unknown Via parent: {parent}"),

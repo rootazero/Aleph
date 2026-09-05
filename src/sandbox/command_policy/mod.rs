@@ -110,6 +110,10 @@ pub struct PolicyEvaluation {
 }
 
 impl PolicyEvaluation {
+    /// True when the policy matched no rule — neither a blocking hit nor a
+    /// warning. Marked `#[must_use]` because `let _ = p.is_clean();` is a
+    /// silent semantic reversal (it discards whether the command was allowed).
+    #[must_use]
     const fn is_clean(&self) -> bool {
         self.blocked.is_empty() && self.warned.is_empty()
     }

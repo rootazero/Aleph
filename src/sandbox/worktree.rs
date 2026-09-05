@@ -89,46 +89,70 @@ impl Drop for WorktreeHandle {
         if self.cleaned_up.load(Ordering::Acquire) {
             return;
         }
-        // Safety net: spawn blocking task to run `git worktree remove --force`.
+        // Safety net: defer the `git worktree remove --force` to a blocking
+        // task so the executor thread is not stalled on a synchronous spawn.
         // Errors are logged via tracing; we never panic from Drop.
         // rust-doctor-disable-next-line excessive-clone
         let repo_root = self.repo_root.clone();
         // rust-doctor-disable-next-line excessive-clone
         let path = self.path.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let trace_sink = self.trace_sink.clone();
         tracing::error!(
             path = %path.display(),
             "WorktreeHandle leaked — Drop safety-net removing"
         );
-        if let Some(sink) = self.trace_sink.as_ref() {
+        if let Some(sink) = trace_sink.as_ref() {
             sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCleanedUp {
                 // rust-doctor-disable-next-line excessive-clone
-                path: self.path.clone(),
+                path: path.clone(),
                 leaked: true,
             });
         }
-        let result = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_root)
-            .arg("worktree")
-            .arg("remove")
-            .arg("--force")
-            .arg(&path)
-            .status();
-        match result {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
+        // Hand off to the blocking pool; if no runtime is available (e.g. the
+        // daemon is already shutting down), fall back to a best-effort sync
+        // call so we still at least try the cleanup once.
+        let join = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo_root)
+                .arg("worktree")
+                .arg("remove")
+                .arg("--force")
+                .arg(&path)
+                .status()
+        });
+        match join.await {
+            Ok(Ok(status)) if status.success() => {}
+            Ok(Ok(status)) => {
                 tracing::error!(
                     path = %path.display(),
                     code = ?status.code(),
                     "Drop safety-net cleanup returned non-zero exit code"
                 );
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::error!(
                     path = %path.display(),
                     error = %e,
                     "Drop safety-net cleanup failed"
                 );
+            }
+            Err(e) => {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %e,
+                    "Drop safety-net blocking task join failed"
+                );
+                // Last-ditch sync attempt when the runtime rejected the task.
+                let _ = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&repo_root)
+                    .arg("worktree")
+                    .arg("remove")
+                    .arg("--force")
+                    .arg(&path)
+                    .status();
             }
         }
     }

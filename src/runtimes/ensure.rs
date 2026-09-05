@@ -72,22 +72,36 @@ async fn ensure_capability_recursive(
         ));
     }
 
-    // Fast path: already Ready (use write lock to avoid TOCTOU race)
-    {
-        let mut guard = ledger.write().await;
+    // Fast path: already Ready. Snapshot (status, executable) under a read
+    // lock, then drop the lock and run `path.exists()` outside it. Holding
+    // the write lock across the synchronous `path.exists()` syscall would
+    // block every other ledger reader on slow filesystems (NFS, virus
+    // scanners) for the duration of the stat. The TOCTOU window between
+    // `exists()` and the demotion below is acceptable because the next
+    // caller still observes a coherent state — either Ready+path, or the
+    // newly-Missing entry — and the same race exists in `revalidate_ready`.
+    let snapshot = {
+        let guard = ledger.read().await;
         if guard.status(capability) == CapabilityStatus::Ready {
-            if let Some(path) = guard.executable(capability) {
-                if path.exists() {
-                    return Ok(path.to_path_buf());
-                }
-                // Path gone — mark stale, fall through to re-probe
-                warn!(
-                    "Capability {} path no longer exists, marking stale",
-                    capability
-                );
-                guard.update_status(capability, CapabilityStatus::Stale);
-            }
+            guard.executable(capability).map(Path::to_path_buf)
+        } else {
+            None
         }
+    };
+    if let Some(path) = snapshot {
+        if path.exists() {
+            return Ok(path);
+        }
+        // Path gone — mark missing (clears stale bin_path/version),
+        // matching `revalidate_ready` so a Panel view never shows a
+        // ghost version next to a missing badge. Fall through to
+        // re-probe; the probe either resolves to a fresh Ready entry
+        // or surfaces Missing again below.
+        warn!(
+            "Capability {} path no longer exists, marking missing",
+            capability
+        );
+        ledger.write().await.mark_missing(capability);
     }
 
     // Serialize the probe→bootstrap section per capability. Acquired AFTER the

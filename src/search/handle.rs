@@ -122,6 +122,7 @@ impl SearchHandle {
 /// yields nothing usable, the same fallback the tool face resolves at boot
 /// ([`SearchRegistry::for_tool`] over a bare Tavily key, else an empty
 /// registry) — because that fallback is what a restart would install.
+#[must_use]
 fn rebuild_registry(
     cfg: &Config,
     vault: &SharedTokenManager,

@@ -55,12 +55,11 @@ pub(crate) fn identity(url: &str) -> String {
         return url.trim().to_lowercase();
     };
 
-    let kept: Vec<(String, String)> = parsed
+    let mut kept: Vec<(String, String)> = parsed
         .query_pairs()
         .filter(|(k, _)| !is_tracking(k))
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
-    let mut kept = kept;
     kept.sort();
 
     parsed.set_fragment(None);

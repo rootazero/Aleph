@@ -112,7 +112,7 @@ impl RoutingRecall {
         // race, use that same embedding for recall and recording; silently
         // retaining a different embedding would make the observer persist
         // the run under a key that was not queried.
-        let task_emb = match attribution.task_emb.set(task_emb.clone()) {
+        let task_emb = match attribution.set_task_emb(task_emb.clone()) {
             Ok(()) => task_emb,
             Err(existing) => {
                 tracing::warn!(
@@ -300,12 +300,12 @@ mod tests {
         let avail: ProviderAvailability = Arc::new(|_p: &str| ProviderStatus::Available);
         let recall = RoutingRecall::new(store.clone(), avail);
         let attribution = RoutingAttribution::new("s".into());
-        attribution.task_emb.set(emb(0.1)).unwrap();
+        attribution.set_task_emb(emb(0.1)).unwrap();
         recall
             .build_routing_experience_message("same text", "a", &attribution)
             .await
             .unwrap();
-        let recalled_key = attribution.task_emb.get().cloned().unwrap();
+        let recalled_key = attribution.task_emb().unwrap().to_vec();
         assert_eq!(recalled_key, emb(0.1));
     }
 
@@ -351,7 +351,7 @@ mod tests {
             .await
             .unwrap();
         assert!(msg.is_none());
-        assert!(attribution.task_emb.get().is_some()); // embed still happened
+        assert!(attribution.task_emb().is_some()); // embed still happened
     }
 
     #[tokio::test]

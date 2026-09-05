@@ -328,6 +328,20 @@ impl SearchRegistry {
             }
         }
         if let Some(ref fallbacks) = cfg.fallback_providers {
+            // Validate each name against the post-construction provider map
+            // so an operator typo surfaces as a loud warning rather than
+            // silently disappearing (ordered_candidates drops unknown names
+            // without a peep). The existing set_fallback_providers already
+            // dedups; we only add the diagnostic.
+            for name in fallbacks {
+                if !registry.providers.contains_key(name) {
+                    log::warn!(
+                        "[search] fallback_provider '{}' is not a constructed                          backend (typo or missing config?); it will be ignored                          by the chain. Available backends: {:?}",
+                        name,
+                        registry.providers.keys().collect::<Vec<_>>()
+                    );
+                }
+            }
             // rust-doctor-disable-next-line excessive-clone
             registry.set_fallback_providers(fallbacks.clone());
         }

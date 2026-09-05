@@ -135,7 +135,7 @@ impl TraceSink for OutcomeObserver {
                 | crate::pricing::CostStatus::PartialMissingPrice => Some(est.usd),
                 crate::pricing::CostStatus::Unknown => None,
             };
-            if let Some(task_emb) = self.attribution.task_emb.get().cloned() {
+            if let Some(task_emb) = self.attribution.task_emb() {
                 match self.record_slots.clone().try_acquire_owned() {
                     Ok(permit) => {
                         tracing::debug!(

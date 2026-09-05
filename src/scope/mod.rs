@@ -54,6 +54,7 @@ impl ScopeId {
     /// - `Org` → `"org"`
     /// - `Personal(u)` → `"personal:<u>"`
     /// - `Project(p)` → `"project:<p>"`
+    #[must_use]
     pub fn render(&self) -> String {
         match self {
             ScopeId::Org => wire::ORG.to_string(),
@@ -277,6 +278,7 @@ pub fn ambient_room_author() -> Option<String> {
 /// Requires BOTH `OWNER_META_KEY` and `SCOPE_META_KEY` to be present and
 /// coherent; returns `None` if either is missing or the scope fails to parse
 /// (fail-closed, for legacy compat).
+#[must_use]
 pub fn scope_from_metadata(meta: &HashMap<String, String>) -> Option<ScopeAttribution> {
     let owner_user_id = meta.get(OWNER_META_KEY)?.clone();
     let scope_str = meta.get(SCOPE_META_KEY)?;
