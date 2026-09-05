@@ -77,3 +77,30 @@ pub enum BrowserError {
     #[error("Browser profile not found: {0}")]
     ProfileNotFound(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M1 (task-8 fix round, promoted from Minor): this message names
+    /// `runtime_manage` as the fix for a missing Chromium — a bare literal,
+    /// unpinned against a rename, while `chromium_missing.rs`'s doctor fix
+    /// hint (the other producer of the same fact) was already pinned via
+    /// `missing_finding_for_test`. Derived from the tool's own name constant,
+    /// not a fresh literal: a fresh literal here would only prove the two
+    /// strings agree with each other, not that either still names a real tool
+    /// (判据 §10).
+    #[test]
+    fn the_chromium_unavailable_message_names_a_tool_that_actually_exists() {
+        use crate::builtin_tools::runtime_manage::RuntimeManageTool;
+        use crate::tools::AlephTool;
+
+        let err = BrowserError::ChromiumUnavailable {
+            tried: "no system browser".to_string(),
+        };
+        assert!(
+            err.to_string().contains(RuntimeManageTool::NAME),
+            "the fix hint must name a tool that still exists: {err}"
+        );
+    }
+}
