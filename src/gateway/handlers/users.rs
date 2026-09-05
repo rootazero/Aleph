@@ -2221,36 +2221,63 @@ mod tests {
     /// A retry of an already-deactivated principal burns nothing and records
     /// nothing — the audit line rides on the transition, exactly like
     /// `gateway_devices.rs`'s per-credential rule.
+    ///
+    /// # Why this test owns a principal id nobody else uses
+    ///
+    /// The audit handle is process-global. For as long as this test has one
+    /// installed, EVERY concurrently running test that drives an audited
+    /// production path writes into *this* channel. `AUDIT_TEST_LOCK` does not
+    /// close that window: it serialises the tests that **assert** on audit
+    /// (two of them), not the tests that **emit** — and the emitting set is
+    /// every test that calls a production path, which is not enumerable.
+    /// `a_ticket_minted_before_deactivation_cannot_pair_a_device_after_it` and
+    /// `reactivation_guidance_holds_because_the_old_ticket_is_dead` both used
+    /// to land their own `u-alice` deactivation rows in here.
+    ///
+    /// So the assertion is made immune to foreign entries rather than trying
+    /// to prevent them: this test deactivates a principal whose id appears
+    /// nowhere else in the process, and only entries naming that id are its
+    /// own. A future test that reuses [`RETRY_USER`] — or picks an id that
+    /// contains it as a substring — puts its own writes back inside this
+    /// assertion and makes it flaky again in exactly the old way.
     #[tokio::test]
     async fn a_second_deactivation_burns_zero_tickets_and_writes_no_authority_change() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        /// Process-unique discriminator; see this test's doc comment. Audit
+        /// details interpolate the principal id verbatim, so substring
+        /// matching on this is what separates our rows from a sibling's.
+        const RETRY_USER: &str = "u-alice-retry-audit";
+
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let store = seeded_store();
         store
-            .create_user("u-alice", "Alice", UserRole::Member)
+            .create_user(RETRY_USER, "Alice", UserRole::Member)
             .unwrap();
         let mgr =
             crate::gateway::security::device_token_manager::DeviceTokenManager::new(store.clone());
-        mgr.create_bootstrap_ticket(Some(600_000), Some("u-alice"))
+        mgr.create_bootstrap_ticket(Some(600_000), Some(RETRY_USER))
             .unwrap();
 
         handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": "u-alice", "status": "deactivated"}),
+                json!({"user_id": RETRY_USER, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
         )
         .await;
 
-        // Install the audit handle only for the SECOND write, so anything it
-        // receives came from the retry.
+        // Install the audit handle only for the SECOND write. That rules out
+        // this test's OWN first write and nothing else — a sibling test's
+        // writes land here too, and are filtered by RETRY_USER below.
         let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
         crate::security::audit::replace_global_for_test(&log);
         let resp = handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": "u-alice", "status": "deactivated"}),
+                json!({"user_id": RETRY_USER, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
@@ -2262,14 +2289,17 @@ mod tests {
         }
         crate::security::audit::clear_global_for_test();
 
+        let mine: Vec<&String> = details.iter().filter(|d| d.contains(RETRY_USER)).collect();
+
         assert_eq!(
             response_json(&resp)["revoked_bootstrap_tickets"],
             0,
             "the retry had nothing left to burn"
         );
         assert!(
-            !details.iter().any(|d| d.contains("bootstrap ticket")),
-            "a retry that cut nothing must not write an authority-change row: {details:?}"
+            mine.is_empty(),
+            "a retry that cut nothing must write no authority-change row at all: {mine:?} \
+             (every entry seen in the window, ours and foreign: {details:?})"
         );
     }
 
@@ -2279,7 +2309,9 @@ mod tests {
     /// handle is process-global.
     #[tokio::test]
     async fn authority_changes_are_audited() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
         crate::security::audit::replace_global_for_test(&log);
 

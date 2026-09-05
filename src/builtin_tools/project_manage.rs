@@ -1162,7 +1162,9 @@ mod tests {
     /// face a grant or revocation came through.
     #[tokio::test]
     async fn member_add_and_remove_are_each_audited_once_and_distinguishably() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
         crate::security::audit::replace_global_for_test(&log);
 
@@ -1203,14 +1205,22 @@ mod tests {
         // only what this test produced.
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            assert_eq!(
-                entry.event_type,
-                crate::security::audit::AuditEventType::AuthorityChange
-            );
+            // Type-check only OUR rows: a foreign entry in this window is
+            // some other test's, and its event type is not this test's claim.
             if entry.detail.contains(&project.id) {
+                assert_eq!(
+                    entry.event_type,
+                    crate::security::audit::AuditEventType::AuthorityChange
+                );
                 details.push(entry.detail);
             }
         }
+        // Contract of `replace_global_for_test`: clear before releasing
+        // `_serial`, so a later non-audit test never finds a handle whose
+        // receiver has been dropped. Before the asserts, not after — a
+        // panicking assert would otherwise leave the dangling handle
+        // installed for the rest of the process.
+        crate::security::audit::clear_global_for_test();
         assert_eq!(
             details.len(),
             2,
