@@ -170,6 +170,74 @@ pub fn toggle_task<C: Clock>(
     Ok(task.enabled)
 }
 
+/// Disable every enabled task owned by `user_id`, returning the ids of the
+/// tasks this call actually changed.
+///
+/// The heartbeat half of the deactivation freeze — the fourth leg, mirroring
+/// [`crate::tasks::cron::CronService::pause_all_owned_by`],
+/// `GoalStore::pause_all_owned_by` and `LoopRegistry::pause_all_owned_by`.
+///
+/// Set-to-disabled rather than [`toggle_task`], for the twin's stated reason:
+/// a sweep must be idempotent, and toggling an already-disabled task would
+/// ENABLE it — arming background work during an offboarding.
+///
+/// `next_due_ms` is cleared alongside `enabled`, which is what `toggle_task`
+/// does on its disabling arm. The timer gates on `enabled` (`timer.rs`'s
+/// `if !task.enabled`), so a stale due time cannot fire, but leaving one
+/// behind would make a frozen task and a task disabled by its owner two
+/// different-looking rows for one state.
+///
+/// Legacy rows are never touched: the owner half of the predicate is
+/// [`aleph_protocol::users::owned_by`], shared with the three sibling sweeps
+/// and with [`count_owned_by`], and `owner_user_id: None` matches no
+/// `user_id`, so a task created before P1 stamped owners survives every
+/// deactivation. That is deliberate — an unowned task belongs to nobody, and
+/// freezing it would be this sweep inventing an owner.
+///
+/// The `enabled` half is deliberately NOT shared with the counter — see
+/// [`count_owned_by`].
+///
+/// Returns ids rather than a count so the caller can emit one
+/// `HeartbeatTaskChanged` per changed task; the count is `ids.len()`.
+pub fn pause_all_owned_by(store: &mut HeartbeatStore, user_id: &str) -> Vec<String> {
+    let owned: Vec<String> = store
+        .tasks()
+        .iter()
+        .filter(|t| {
+            t.enabled && aleph_protocol::users::owned_by(t.owner_user_id.as_deref(), user_id)
+        })
+        .map(|t| t.id.clone())
+        .collect();
+    // Read first, mutate second: `tasks_mut()` marks the store dirty on the
+    // spot, so taking it for a sweep that matches nothing would schedule a
+    // write for a call that changed nothing.
+    for id in &owned {
+        if let Some(task) = store.get_task_mut(id) {
+            task.enabled = false;
+            task.state.next_due_ms = None;
+        }
+    }
+    owned
+}
+
+/// How many tasks `user_id` OWNS — the read-only counterpart of
+/// [`pause_all_owned_by`], and the heartbeat leg of `users.get`'s dossier.
+///
+/// Same owner predicate, a **deliberately different** enabled filter: the
+/// sweep counts `enabled && owned` because that is what it disabled; this
+/// counts `owned` so a disabled task the principal still owns shows up in the
+/// preview. Reusing the sweep's `enabled` filter here would under-report.
+///
+/// Read-only — `tasks()`, never `tasks_mut()`, so a count never marks the
+/// store dirty.
+pub fn count_owned_by(store: &HeartbeatStore, user_id: &str) -> usize {
+    store
+        .tasks()
+        .iter()
+        .filter(|t| aleph_protocol::users::owned_by(t.owner_user_id.as_deref(), user_id))
+        .count()
+}
+
 /// Delete a task by ID.
 pub fn delete_task(store: &mut HeartbeatStore, id: &str) -> Result<(), TaskError> {
     store
@@ -238,6 +306,114 @@ mod tests {
         }
     }
 
+    /// The freeze's fourth leg touches only ENABLED tasks OWNED by the
+    /// principal, and returns the ids it actually changed.
+    ///
+    /// Three neighbours are seeded on purpose, because "disable this user's
+    /// tasks" has three ways to over-reach: another owner's task, an
+    /// already-disabled task of the same owner (a sweep that toggled would
+    /// ARM it), and a legacy row with no owner at all.
+    #[test]
+    fn the_freeze_sweep_disables_only_the_owners_enabled_tasks() {
+        let mut store = make_store();
+
+        let mut mine = make_test_task("hb-mine");
+        mine.owner_user_id = Some("u-alice".to_string());
+        mine.state.next_due_ms = Some(1_000_000);
+        store.add_task(mine);
+
+        let mut mine_off = make_test_task("hb-mine-off");
+        mine_off.owner_user_id = Some("u-alice".to_string());
+        mine_off.enabled = false;
+        store.add_task(mine_off);
+
+        let mut theirs = make_test_task("hb-theirs");
+        theirs.owner_user_id = Some("u-bob".to_string());
+        store.add_task(theirs);
+
+        // Legacy: created before `owner_user_id` existed. Belongs to nobody,
+        // so no deactivation may claim it.
+        store.add_task(make_test_task("hb-legacy"));
+
+        let changed = pause_all_owned_by(&mut store, "u-alice");
+        assert_eq!(changed, vec!["hb-mine".to_string()]);
+
+        assert!(!store.get_task("hb-mine").unwrap().enabled);
+        assert_eq!(
+            store.get_task("hb-mine").unwrap().state.next_due_ms,
+            None,
+            "a frozen task must not keep a due time — that is what the \
+             disabling arm of toggle_task does, and one state must not have \
+             two shapes"
+        );
+        assert!(
+            !store.get_task("hb-mine-off").unwrap().enabled,
+            "an already-disabled task of the same owner must stay disabled; a \
+             toggling sweep would have ARMED it mid-offboarding"
+        );
+        assert!(store.get_task("hb-theirs").unwrap().enabled);
+        assert!(
+            store.get_task("hb-legacy").unwrap().enabled,
+            "a task with owner_user_id: None belongs to nobody and must \
+             survive every deactivation"
+        );
+    }
+
+    /// The deliberate asymmetry, pinned with two explicit numbers rather than
+    /// with an equality: a DISABLED task alice owns is 0-changed to the sweep
+    /// and still hers in the dossier.
+    #[test]
+    fn the_count_reports_ownership_not_what_the_sweep_would_change() {
+        let mut store = make_store();
+
+        let mut mine = make_test_task("hb-mine");
+        mine.owner_user_id = Some("u-alice".to_string());
+        store.add_task(mine);
+
+        let mut mine_off = make_test_task("hb-mine-off");
+        mine_off.owner_user_id = Some("u-alice".to_string());
+        mine_off.enabled = false;
+        store.add_task(mine_off);
+
+        let mut theirs = make_test_task("hb-theirs");
+        theirs.owner_user_id = Some("u-bob".to_string());
+        store.add_task(theirs);
+
+        store.add_task(make_test_task("hb-legacy"));
+
+        assert_eq!(
+            count_owned_by(&store, "u-alice"),
+            2,
+            "the read counts what she OWNS, the disabled task included"
+        );
+        assert_eq!(
+            pause_all_owned_by(&mut store, "u-alice").len(),
+            1,
+            "the sweep reports only what it CHANGED — the disabled task is 0-changed"
+        );
+        assert_eq!(
+            count_owned_by(&store, "u-nobody"),
+            0,
+            "a legacy task with no owner appears in no principal's dossier"
+        );
+    }
+
+    /// Idempotence, asserted as an EFFECT: the second sweep reports nothing
+    /// changed, so the caller emits no second change frame for a no-op.
+    #[test]
+    fn a_second_freeze_sweep_reports_nothing_changed() {
+        let mut store = make_store();
+        let mut mine = make_test_task("hb-mine");
+        mine.owner_user_id = Some("u-alice".to_string());
+        store.add_task(mine);
+
+        assert_eq!(pause_all_owned_by(&mut store, "u-alice").len(), 1);
+        assert!(
+            pause_all_owned_by(&mut store, "u-alice").is_empty(),
+            "the sweep is idempotent; a second run must report zero changes"
+        );
+        assert!(!store.get_task("hb-mine").unwrap().enabled);
+    }
     fn make_test_task(id: &str) -> HeartbeatTask {
         let mut task = HeartbeatTask::new(
             id.to_string(),

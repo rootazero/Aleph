@@ -76,6 +76,11 @@ command -v node >/dev/null 2>&1 || { echo "node is required for this fixture" >&
 node -e 'require("node:sqlite")' >/dev/null 2>&1 || {
   echo "this fixture reads the rows on disk and needs node:sqlite (node >= 22)" >&2; exit 1; }
 
+# `qa_build` is called by the hoisted block below, so build.sh has to be sourced
+# above it — not down next to `scratch_home.sh`, where the HOME redirect needs
+# its own helper.
+. "$HERE/../lib/build.sh"
+
 # --- build BEFORE the HOME redirect ----------------------------------------
 # Deliberately ahead of `qa_redirect_home`: the per-command `HOME="$REAL_HOME"
 # cargo …` guard the sibling fixtures use is correct on POSIX, where the pinned
@@ -88,10 +93,8 @@ node -e 'require("node:sqlite")' >/dev/null 2>&1 || {
 # that `aleph projects channel bind` had never spoken to a live gateway.
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   echo "=== build (server + cli) ==="
-  (cd "$REPO" && cargo build --bin aleph-server 2>&1 | tail -3) || {
-    echo "server build failed" >&2; exit 1; }
-  (cd "$REPO" && cargo build -p aleph-cli --bin aleph 2>&1 | tail -3) || {
-    echo "cli build failed" >&2; exit 1; }
+  qa_build --bin aleph-server || { echo "server build failed" >&2; exit 1; }
+  qa_build -p aleph-cli --bin aleph || { echo "cli build failed" >&2; exit 1; }
 fi
 TARGET_DIR="$(cd "$REPO" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
   | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).target_directory))')"

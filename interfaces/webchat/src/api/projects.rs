@@ -13,27 +13,25 @@ use aleph_protocol::projects::{
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 
-/// Mirrors `gateway::handlers::projects::ProjectView`.
+/// The shared wire row, not a weakened local copy of it.
 ///
-/// `workspace_path` is `None` for a project room that is not bound to a folder
-/// — the picker only ever shows bound rows, so it renders those as empty, but
-/// the two states are distinguishable here on purpose (the pre-P2 wire spelled
-/// both `""`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProjectInfo {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub owner_user_id: Option<String>,
-    #[serde(default)]
-    pub workspace_path: Option<String>,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub member_ids: Vec<String>,
-    pub created_at: i64,
-    pub last_used_at: i64,
-}
+/// This was a struct doc'd "mirrors `gateway::handlers::projects::ProjectView`"
+/// — and `ProjectView` is itself only `pub type ProjectView =
+/// aleph_protocol::projects::ProjectRow`, so the sentence was a third
+/// representation of a shape with one author. The mirror was also a strict
+/// subset (no `updated_at`) that put `#[serde(default)]` on `owner_user_id`,
+/// `workspace_path`, `status` and `member_ids`: a server-side rename would have
+/// degraded this client to `""` / `[]` on precisely the fields the ownership
+/// line and the roster list are made of, while the CLI, parsing the same
+/// method into the same shared row, hard-errored. Same remedy the `users` twin
+/// took (`api::users`): one alias, no second declaration, every existing
+/// `ProjectInfo` reference in this crate untouched.
+///
+/// Rendering rule that does not belong to the wire: `workspace_path` is `None`
+/// for a project room bound to no folder. The picker only ever shows bound
+/// rows, so it renders those as empty — but the two states stay distinguishable
+/// here on purpose (the pre-P2 wire spelled both `""`).
+pub use aleph_protocol::projects::ProjectRow as ProjectInfo;
 
 /// One entry in a room workspace listing.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -413,6 +411,48 @@ mod tests {
         let parsed: ChannelListResult = serde_json::from_str(r#"{"bindings":[]}"#)
             .expect("an empty list is a state, not a failure");
         assert!(parsed.bindings.is_empty());
+    }
+
+    /// The server's row, whole. `projects.list` sends every field
+    /// `render_project` builds, and the room header's ownership line and the
+    /// settings roster are made of two of them.
+    #[test]
+    fn a_full_project_row_parses_with_its_owner_and_roster() {
+        let row: ProjectInfo = serde_json::from_str(
+            r#"{"id":"p-1","name":"Rowboat","owner_user_id":"u-1",
+                "workspace_path":"/srv/rowboat","status":"active",
+                "member_ids":["u-1","u-2"],"created_at":1,"updated_at":2,
+                "last_used_at":3}"#,
+        )
+        .expect("the shared row must parse what render_project sends");
+        assert_eq!(row.owner_user_id.as_deref(), Some("u-1"));
+        assert_eq!(row.member_ids, vec!["u-1".to_string(), "u-2".to_string()]);
+        assert_eq!(row.workspace_path.as_deref(), Some("/srv/rowboat"));
+    }
+
+    /// A server-side rename of the roster key is an ERROR here, not an empty
+    /// roster.
+    ///
+    /// The local mirror this alias replaced carried `#[serde(default)]` on
+    /// `owner_user_id` / `workspace_path` / `status` / `member_ids` — exactly
+    /// the four fields the ownership line and the roster list read — so a
+    /// renamed key parsed cleanly and the page rendered a room with no owner
+    /// and no members. That is a claim, not an unknown. The CLI parses the
+    /// same method into this same type and hard-errors; both clients now fail
+    /// the same way, loudly, on the same day.
+    #[test]
+    fn a_renamed_roster_key_is_an_error_not_an_empty_roster() {
+        let parsed = serde_json::from_str::<ProjectInfo>(
+            r#"{"id":"p-1","name":"Rowboat","owner_user_id":"u-1",
+                "workspace_path":"/srv/rowboat","status":"active",
+                "memberIds":["u-1","u-2"],"created_at":1,"updated_at":2,
+                "last_used_at":3}"#,
+        );
+        assert!(
+            parsed.is_err(),
+            "a roster key the server no longer sends must fail the parse, \
+             not default to an empty roster"
+        );
     }
 
     /// Requests are built from the contract type, so their keys are the

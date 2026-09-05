@@ -15,6 +15,7 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // RateLimitScope
@@ -115,6 +116,91 @@ pub struct RateLimitConfig {
 pub const DEFAULT_MAX_ENTRIES: usize = 10_000;
 
 impl RateLimitConfig {}
+
+// ---------------------------------------------------------------------------
+// TOML schema for `[gateway.rate_limit]`
+// ---------------------------------------------------------------------------
+
+/// TOML overrides for one scope's sliding window.
+///
+/// Every key is optional and an absent key keeps the compiled default for
+/// *that scope* — the numbers live in [`RateLimitConfig::default`] and only
+/// there, so a section that names one key does not silently replay (and
+/// freeze) the rest of the table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowTomlConfig {
+    /// Maximum allowed requests within the window.
+    pub max_requests: Option<u32>,
+    /// Window duration in seconds.
+    pub window_secs: Option<u64>,
+    /// Lockout duration in seconds after the limit is exceeded. `0` spells
+    /// "no lockout" (the runtime carries `Option<u64>` and TOML has no null),
+    /// so an operator can remove `auth`'s 5-minute lockout, not only lengthen
+    /// it.
+    pub lockout_secs: Option<u64>,
+}
+
+impl WindowTomlConfig {
+    /// Overlay the configured keys onto a base window.
+    fn apply(&self, base: &WindowConfig) -> WindowConfig {
+        WindowConfig {
+            max_requests: self.max_requests.unwrap_or(base.max_requests),
+            window_secs: self.window_secs.unwrap_or(base.window_secs),
+            lockout_secs: self
+                .lockout_secs
+                .map_or(base.lockout_secs, |secs| (secs > 0).then_some(secs)),
+        }
+    }
+}
+
+/// TOML schema for the `[gateway.rate_limit]` section — the operator handle
+/// on the per-principal RPC ceilings.
+///
+/// RESTART-ONLY. The section is read once, at boot, by
+/// `GatewayServer::with_config`; `[gateway.*]` is not reachable by
+/// `self_config` / `ConfigPatcher`, so changing a ceiling means editing the
+/// file and restarting the server. Nothing re-reads it while the process
+/// lives.
+///
+/// Out of scope on purpose: the two byte-route limiters
+/// (`server/artifact_route.rs` and `server/canvas_asset_route.rs`) each
+/// document themselves as private to their route and are NOT configured from
+/// here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RateLimitTomlConfig {
+    /// `[gateway.rate_limit.auth]` — also governs webhook auth attempts.
+    pub auth: WindowTomlConfig,
+    /// `[gateway.rate_limit.rpc_default]`
+    pub rpc_default: WindowTomlConfig,
+    /// `[gateway.rate_limit.rpc_write]`
+    pub rpc_write: WindowTomlConfig,
+    /// `[gateway.rate_limit.rpc_heavy]`
+    pub rpc_heavy: WindowTomlConfig,
+    /// `[gateway.rate_limit.rpc_realtime]`
+    pub rpc_realtime: WindowTomlConfig,
+    /// Let loopback callers bypass every limit. Absent keeps the default.
+    pub exempt_loopback: Option<bool>,
+    /// Ceiling on distinct tracked `(identity, scope)` entries. Absent keeps
+    /// [`DEFAULT_MAX_ENTRIES`].
+    pub max_entries: Option<usize>,
+}
+
+impl From<RateLimitTomlConfig> for RateLimitConfig {
+    fn from(schema: RateLimitTomlConfig) -> Self {
+        let base = Self::default();
+        Self {
+            auth: schema.auth.apply(&base.auth),
+            rpc_default: schema.rpc_default.apply(&base.rpc_default),
+            rpc_write: schema.rpc_write.apply(&base.rpc_write),
+            rpc_heavy: schema.rpc_heavy.apply(&base.rpc_heavy),
+            rpc_realtime: schema.rpc_realtime.apply(&base.rpc_realtime),
+            exempt_loopback: schema.exempt_loopback.unwrap_or(base.exempt_loopback),
+            max_entries: schema.max_entries.unwrap_or(base.max_entries),
+        }
+    }
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {

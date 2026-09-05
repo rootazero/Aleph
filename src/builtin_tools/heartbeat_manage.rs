@@ -244,6 +244,10 @@ impl AlephTool for HeartbeatCreateTool {
 
         let agent_id = args.agent_id.unwrap_or_else(|| "main".to_string());
         let mut task = HeartbeatTask::new(args.name.clone(), agent_id, args.interval_ms, probe);
+        // Who this monitor belongs to. One of the two creating faces (the
+        // other is `gateway::handlers::heartbeat`), both calling the same
+        // derivation.
+        task.stamp_current_scope();
         task.failure_alert = args.failure_alert;
         // The whole point of a heartbeat is the notification, and
         // `delivery_config` gates it: `None` sends the L2 turn's findings
@@ -602,5 +606,74 @@ impl AlephTool for HeartbeatReportTool {
             message,
             acknowledged: true,
         })
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::heartbeat::config::HeartbeatConfig;
+    use crate::tasks::heartbeat::store::HeartbeatStore;
+    use crate::tasks::heartbeat::HeartbeatService;
+
+    /// `heartbeat_create` — the tool face — must persist the calling user as
+    /// the task's owner.
+    ///
+    /// The twin of `gateway::handlers::heartbeat::tests::
+    /// heartbeat_create_over_the_rpc_face_persists_the_callers_scope`: two
+    /// tests because there are two creating faces, and stamping only one of
+    /// them is precisely the shape cron shipped (T12) — a defect no single
+    /// test can see.
+    #[tokio::test]
+    async fn heartbeat_create_over_the_tool_face_persists_the_callers_scope() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("heartbeat.db");
+        let service =
+            crate::sync_primitives::Arc::new(tokio::sync::Mutex::new(HeartbeatService::new(
+                HeartbeatStore::open(&db_path).unwrap(),
+                HeartbeatConfig::default(),
+            )));
+
+        let tool = HeartbeatCreateTool::new(service);
+        let args = HeartbeatCreateArgs {
+            name: "tool-monitor".to_string(),
+            probe_tool_name: "gmail.unread_count".to_string(),
+            interval_ms: 300_000,
+            probe_trigger_condition: None,
+            agent_id: None,
+            probe_tool_params: None,
+            failure_alert: None,
+            delivery: None,
+            __channel: None,
+            __conversation_id: None,
+        };
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-tool")),
+            tool.call(args),
+        )
+        .await
+        .expect("precondition: create must succeed");
+
+        let reloaded = HeartbeatStore::open(&db_path).unwrap();
+        let task = reloaded
+            .tasks()
+            .iter()
+            .find(|t| t.name == "tool-monitor")
+            .expect("the created task must be on disk");
+        let row = serde_json::to_value(task).unwrap();
+        assert_eq!(
+            row.get("owner_user_id").and_then(serde_json::Value::as_str),
+            Some("u-tool"),
+            "a task created over the tool face must reach the store owned"
+        );
+        assert_eq!(
+            row.get("scope_id").and_then(serde_json::Value::as_str),
+            Some("personal:u-tool"),
+            "and scoped — from_persisted needs the pair, not half of it"
+        );
     }
 }

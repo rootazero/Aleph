@@ -237,10 +237,15 @@ fn request_scope_strings(request: &RunRequest) -> crate::scope::FlowScope {
 /// Establishes this run's scope attribution (owner/scope) and this turn's
 /// speaker as task-locals for `fut`'s duration, both derived from
 /// `request.metadata` — see [`crate::scope::stamp_metadata`] and
-/// [`super::AUTHOR_USER_KEY`] at the two origin sites (`build_run_request`, the
-/// channel inbound router's `execute_for_context_inner`).
+/// [`super::AUTHOR_USER_KEY`]. `author_census::ORIGIN_SITES` (this module's
+/// `author_census` submodule) is the enumerated list of production writers of
+/// that key, kept there rather than repeated here so this doc cannot drift
+/// out of sync with the count the way it once did — a prior revision named
+/// only two producers (`build_run_request`, the channel inbound router's
+/// `execute_for_context_inner`) while two more (the team broadcast and
+/// dispatcher child-run builders) had already existed for over a week.
 ///
-/// The two travel together on purpose. The scope names the ROOM, the author
+/// The scope and author travel together on purpose. The scope names the ROOM, the author
 /// names whoever is typing, and in a project room those genuinely differ; the
 /// main path's user-message writer (`harness_bridge::session_seed`) reaches
 /// neither the request nor `CALLER_USER`, so seeding both here is what keeps
@@ -567,7 +572,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // a run-tree-wide task-local next to `FsScope`/agent-id so the channel
         // approval bridge can stamp it onto a pending record. `None` for
         // non-channel runs — the gate then degrades to the prior behaviour.
-        let originator = request.metadata.get("originator_user_id").cloned();
+        let originator = request.metadata.get(super::ORIGINATOR_USER_KEY).cloned();
         // This run's channel-delivery buffer, published run-tree-wide for the
         // same reason as `originator`: the tool chokepoint that harvests a
         // tool's `_media` sits many frames below here and must not have the

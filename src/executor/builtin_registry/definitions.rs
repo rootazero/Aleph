@@ -2559,8 +2559,48 @@ mod tests {
     /// (3) Both consumers are shipped and dispatched — `wait_for_session` and
     /// `explain_session` in `builtin_tools::terminal`, reached through
     /// `TerminalAction::{Wait, Explain}`, each with tests.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_416;
-
+    /// 2026-09-04 (multi-user round 10, T25): 113_416 -> 113_719 B (+303),
+    /// all `project_manage`, for the sentence that says a roster verb is
+    /// addressable by display name. Measured twice and the two agree, the same
+    /// way the entries above do: the ratchet printed the total on this tree
+    /// (113_719 = 93_882 catalog + 16_613 registry-only + 1_039 injected +
+    /// 1_944 bridge, the last three byte-identical to the terminal round-2
+    /// figures, so nothing outside the catalog moved), and the added segment
+    /// of the literal measures exactly 303 bytes, so nothing else's
+    /// description moved either. This raise is set ON TOP of origin/main's
+    /// 113_416 measurement (terminal round-2 end-state); the two rounds' edits
+    /// are to disjoint DESCRIPTIONs (terminal's two new read-verb sentences vs
+    /// project_manage's `user`-by-display-name clause), so the bytes add
+    /// cleanly. If a future round adds bytes to either DESCRIPTION, re-run the
+    /// ratchet — do not compute from prior deltas.
+    ///
+    /// The three questions, for these bytes:
+    ///
+    /// (1) No schema can carry it. `project_manage` is not in
+    /// `default_core_tools()`, so under progressive disclosure its schema —
+    /// including the `user` field's own description — is not resident: the
+    /// catalog line is the whole of what a model reads when deciding whether
+    /// to fetch the schema at all. An argument the catalog copy never mentions
+    /// is an argument no model sends, which is how `bind_workspace` shipped
+    /// unreachable on this very tool once already (see its module doc). And
+    /// "exactly one of `user_id` or `user`" is a relation BETWEEN two fields,
+    /// which no per-field description states even once the schema is loaded.
+    ///
+    /// (2) A stronger model cannot infer them. That this server has a
+    /// name -> principal resolver at all, that a name nobody active bears or
+    /// that more than one person bears is refused rather than guessed, and
+    /// that the id to quote back is the one `member_list` returns beside each
+    /// name, are facts about this repository. A model assuming the ordinary
+    /// shape would send a display name as `user_id` and seat a
+    /// `project_members` row nobody owns — the exact failure T25 closed.
+    ///
+    /// (3) The consumers are shipped and dispatched: both roster arms accept
+    /// `user` (`builtin_tools::project_manage`, `MemberAdd`/`MemberRemove`),
+    /// `projects::authz::principal_id_for_name` is the single resolver behind
+    /// them and puts its winner to the one active-principal predicate, and
+    /// `the_model_facing_copy_names_the_same_faces` pins this sentence
+    /// verbatim, so the copy and the argument cannot drift apart.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_719;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

@@ -738,27 +738,22 @@ fn exec_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
 /// gated (`update_tool_permissions` is not carved out).
 ///
 /// Built by REMOVAL from [`exec_permissions_value`], with the withheld keys
-/// named once in [`MEMBER_WITHHELD_KEYS`]. The consequence is worth stating
-/// plainly, because an earlier version of this comment claimed the opposite:
+/// named once — in `aleph_protocol::tool_permissions::OPERATOR_ONLY_KEYS`, the
+/// crate both halves of this wire contract depend on, so the removal and the
+/// guards that check the other half cannot drift apart. The consequence is
+/// worth stating plainly, because an earlier version of this comment claimed
+/// the opposite:
 /// **a field added to the full surface joins the member response by default.**
-/// That is the right default for this response — everything in it but those two
-/// keys is dial vocabulary a member needs in order to use writes they are
-/// already allowed to make — but it does mean a genuinely operator-only field
-/// added here has to be added to the withheld list in the same change, and
-/// `member_response_withholds_the_admin_axes` is what asks.
-fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
-    let mut value = exec_permissions_value(cfg)?;
-    if let Some(obj) = value.as_object_mut() {
-        for key in MEMBER_WITHHELD_KEYS {
-            obj.remove(key);
-        }
-    }
-    Ok(value)
-}
-
-/// The keys [`member_visible_permissions_value`] strips — named once so the
-/// removal and the guard that checks the OTHER half of this contract cannot
-/// drift apart.
+/// That is the right default for this response — everything in it but the
+/// withheld keys is dial vocabulary a member needs in order to use writes they
+/// are already allowed to make — but it does mean a genuinely operator-only field
+/// added here has to be named in `OPERATOR_ONLY_KEYS` in the same change.
+/// `the_emitted_key_sets_are_exactly_the_declared_wire_contract` is what asks:
+/// an unclassified new field reaches BOTH role shapes and fails that equality
+/// by name on each. `a_member_does_not_receive_the_server_global_policy_axes`
+/// cannot ask it — it iterates `OPERATOR_ONLY_KEYS` and asserts absence from a
+/// value built by removing exactly those keys, so what it still pins is the
+/// role dispatch: that a `member` caller reaches the narrowed value at all.
 ///
 /// The other half lives in a different crate: `aleph-panel`'s
 /// `api::tool_permissions::ToolPermissionsResponse` is the sole decoder of this
@@ -770,7 +765,15 @@ fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::E
 /// lost both dials it was carved out of the admin family to give them.
 /// `every_key_withheld_from_a_member_is_optional_in_the_panel_decoder` is the
 /// crossing test.
-const MEMBER_WITHHELD_KEYS: [&str; 2] = ["default", "overrides"];
+fn member_visible_permissions_value(cfg: &Config) -> Result<Value, serde_json::Error> {
+    let mut value = exec_permissions_value(cfg)?;
+    if let Some(obj) = value.as_object_mut() {
+        for key in aleph_protocol::tool_permissions::OPERATOR_ONLY_KEYS {
+            obj.remove(*key);
+        }
+    }
+    Ok(value)
+}
 
 /// Handle `config.get_tool_permissions` RPC request
 ///
@@ -970,7 +973,7 @@ mod tests {
             .expect("ToolPermissionsResponse must be a closed struct body")
             .0;
 
-        for key in MEMBER_WITHHELD_KEYS {
+        for key in aleph_protocol::tool_permissions::OPERATOR_ONLY_KEYS {
             let mut defaulted = false;
             let mut found = false;
             for line in body.lines().map(str::trim) {
@@ -999,16 +1002,6 @@ mod tests {
         }
     }
 
-    /// The positive twin of the test above, and the thing "gap 0" actually
-    /// turned out to need.
-    ///
-    /// `MEMBER_WITHHELD_KEYS` is defined by removal, which is the right default
-    /// — a new field arrives withheld and somebody has to rule on it. The cost
-    /// is that the four fields a member's composer pills exist to read are
-    /// protected by nothing but that list staying short. Adding `"tiers"` to it
-    /// would compile, pass every test in this file, and reproduce the exact
-    /// symptom the carve-out was made to fix: a tier popover with one blank
-    /// option and a mode pill that hides itself on an empty `modes`.
     /// The two tier catalogues answer two different questions, and the pill
     /// that reads the wrong one either loses `plan` or offers an install
     /// setting that cannot be honoured. Every id in both must parse.
@@ -1041,6 +1034,33 @@ mod tests {
         }
     }
 
+    /// The positive twin of
+    /// `every_key_withheld_from_a_member_is_optional_in_the_panel_decoder`, and
+    /// the thing "gap 0" actually turned out to need.
+    ///
+    /// The member shape is defined by REMOVAL, so a new field arrives
+    /// member-visible and somebody has to rule on it. What keeps the four
+    /// fields a member's composer pills exist to read on the member side is the
+    /// four literals in the loop below — not the withheld list staying short,
+    /// and not the shared contract either. A genuine MOVE between
+    /// `MEMBER_VISIBLE_KEYS` and `OPERATOR_ONLY_KEYS` is a coherent contract
+    /// edit that `the_emitted_key_sets_are_exactly_the_declared_wire_contract`
+    /// cannot see — both halves move together, which is the whole point of
+    /// naming the withheld keys once — so what catches a reclassification of
+    /// `"tiers"` or `"modes"` specifically is this loop, plus the hard-coded
+    /// `value["tiers"]` / `value["modes"]` unwraps in
+    /// `a_member_receives_both_dials_and_their_selectable_ids`, which panic.
+    ///
+    /// What the shared contract buys instead is the UNCLASSIFIED case: a field
+    /// added to `exec_permissions_value` and named in neither list reaches BOTH
+    /// role responses and fails that equality by name (the member half asserts
+    /// first, so that is the half the failure reports).
+    /// Adding a key to `OPERATOR_ONLY_KEYS` without taking it out of
+    /// `MEMBER_VISIBLE_KEYS` fails `the_two_key_sets_are_disjoint` in the
+    /// protocol crate as well as that equality.
+    ///
+    /// The exact symptom the carve-out was made to fix was a tier popover with
+    /// one blank option and a mode pill that hides itself on an empty `modes`.
     #[test]
     fn a_member_still_receives_both_dials_and_both_catalogues() {
         let cfg = Config::default();

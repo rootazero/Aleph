@@ -3017,6 +3017,80 @@ mod tests {
         );
     }
 
+    /// `cron.create` reached the way a Panel or CLI caller reaches it — a real
+    /// dispatch, not a hand-seeded scope — must leave the caller's identity on
+    /// the row that lands in the store.
+    ///
+    /// The effect asserted is the PERSISTED job, re-read from a freshly loaded
+    /// `CronStore`, not the RPC's own response: the response used to be a
+    /// perfectly successful `{"job": …}` while both columns were NULL.
+    #[tokio::test]
+    async fn cron_create_through_dispatch_persists_the_caller_as_owner() {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+        use crate::tasks::cron::store::CronStore;
+        use crate::tasks::cron::{CronConfig, CronService};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("cron.db");
+        let service = CronService::new(CronConfig {
+            db_path: db_path.to_string_lossy().to_string(),
+            ..CronConfig::default()
+        })
+        .unwrap();
+        let cron = Arc::new(tokio::sync::Mutex::new(service));
+
+        let mut registry = HandlerRegistry::new();
+        let handler_cron = cron.clone();
+        registry.register("cron.create", move |req| {
+            let cron = handler_cron.clone();
+            async move { crate::gateway::handlers::cron::handle_create(req, cron).await }
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"cron.create","params":{
+            "name":"nightly-digest","agent_id":"main","prompt":"digest",
+            "schedule_kind":{"kind":"every","every_ms":60000}}}"#;
+
+        let resp = dispatch_with_caller_context(
+            text,
+            &mc,
+            Some("operator".to_string()),
+            Some("u-x".to_string()),
+            true,
+            None,
+        )
+        .await;
+        assert!(
+            !resp.contains("\"error\""),
+            "precondition: the create itself must succeed: {resp}"
+        );
+
+        let store = CronStore::load(db_path).unwrap();
+        let job = store
+            .jobs()
+            .iter()
+            .find(|j| j.name == "nightly-digest")
+            .expect("the job the RPC reported creating must be on disk");
+        assert_eq!(
+            job.owner_user_id.as_deref(),
+            Some("u-x"),
+            "a job created over the wire belongs to the caller who created it"
+        );
+        assert_eq!(
+            job.scope_id.as_deref(),
+            Some(
+                crate::scope::ScopeId::Personal("u-x".to_string())
+                    .render()
+                    .as_str()
+            ),
+            "the scope column must be the rendered personal boundary, not just \
+             a repeat of the owner id"
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_with_caller_context_leaves_scope_unset_for_no_caller_user() {
         // Loopback / legacy shared-token connections resolve to `caller_user:

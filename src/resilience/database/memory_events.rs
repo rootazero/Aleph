@@ -138,35 +138,36 @@ impl StateDatabase {
 
     /// Get all events for a fact, ordered by seq.
     ///
-    /// PR-9 / BT-D-R4-05: agent-filter the event stream. `agent_id`
-    /// is the caller's actor; an empty string is the wildcard
-    /// (internal system callers -- handler, projector, migration --
-    /// pass "" because they operate across agents on the system
-    /// behalf). The memory_timeline tool layer passes a real actor
-    /// so a fact_id belonging to one agent is not readable from
-    /// another. A future PR can tighten the wildcard to require an
-    /// explicit system capability.
+    /// PR-9 / BT-D-R4-05 attempted an agent filter here (`actor = ?`), but
+    /// `memory_events` has no agent/partition column at all — `actor`
+    /// records *who wrote the event* (`{agent,user,system,decay,migration}`
+    /// from [`crate::memory::events::EventActor`]), not which agent's
+    /// corpus the fact belongs to. Comparing a caller's agent id against
+    /// that column made every scoped call filter on a vocabulary the
+    /// column never contains, so it provided no isolation while quietly
+    /// returning zero rows for legitimate in-turn callers. This returns
+    /// every event for `fact_id` unconditionally; per-agent isolation on
+    /// facts needs a real partition column and is tracked as a separate
+    /// schema change, not a filter on this query.
     pub async fn get_memory_events_for_fact(
         &self,
         fact_id: &str,
-        agent_id: &str,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
         let fact_id = fact_id.to_string();
-        let agent_id = agent_id.to_string();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
                     r#"
                     SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
                     FROM memory_events
-                    WHERE fact_id = ?1 AND (?2 = '' OR actor = ?2)
+                    WHERE fact_id = ?1
                     ORDER BY seq ASC
                     "#,
                 )
                 .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
             let rows = stmt
-                .query_map(params![fact_id, agent_id], MemoryEventRow::from_row)
+                .query_map(params![fact_id], MemoryEventRow::from_row)
                 .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
             let mut envelopes = Vec::new();
@@ -183,30 +184,27 @@ impl StateDatabase {
 
     /// Get events for a fact since a given sequence number.
     ///
-    /// `agent_id` applies the same scoping as [`get_memory_events_for_fact`]:
-    /// an empty string is the wildcard for system callers (handler,
-    /// projector, migration), any other value restricts to events authored
-    /// by that actor. The bounded `limit` prevents unbounded materialisation
-    /// on a hot fact_id with a long history (default 1000; pass `usize::MAX`
-    /// from a system caller to opt out).
+    /// No agent filter: see [`get_memory_events_for_fact`] — `memory_events`
+    /// has no agent/partition column, so there is nothing to scope by here
+    /// either. The bounded `limit` prevents unbounded materialisation on a
+    /// hot fact_id with a long history (default 1000; pass `usize::MAX` to
+    /// opt out).
     pub async fn get_memory_events_since_seq(
         &self,
         fact_id: &str,
         since_seq: u64,
-        agent_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryEventEnvelope>, AlephError> {
         let fact_id = fact_id.to_string();
-        let agent_id = agent_id.to_string();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
                     r#"
                     SELECT id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
                     FROM memory_events
-                    WHERE fact_id = ?1 AND seq > ?2 AND (?3 = '' OR actor = ?3)
+                    WHERE fact_id = ?1 AND seq > ?2
                     ORDER BY seq ASC
-                    LIMIT ?4
+                    LIMIT ?3
                     "#,
                 )
                 .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
@@ -224,7 +222,7 @@ impl StateDatabase {
             })?;
             let rows = stmt
                 .query_map(
-                    params![fact_id, since_seq_i64, agent_id, limit_i64],
+                    params![fact_id, since_seq_i64, limit_i64],
                     MemoryEventRow::from_row,
                 )
                 .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
@@ -525,7 +523,7 @@ mod tests {
         let id = db.append_memory_event(&envelope).await.unwrap();
         assert!(id > 0);
 
-        let events = db.get_memory_events_for_fact("fact-001", "").await.unwrap();
+        let events = db.get_memory_events_for_fact("fact-001").await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].fact_id, "fact-001");
         assert_eq!(events[0].seq, 1);
@@ -555,7 +553,7 @@ mod tests {
 
         db.append_memory_events(&envelopes).await.unwrap();
 
-        let events = db.get_memory_events_for_fact("fact-002", "").await.unwrap();
+        let events = db.get_memory_events_for_fact("fact-002").await.unwrap();
         assert_eq!(events.len(), 5);
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[4].seq, 5);
@@ -576,7 +574,7 @@ mod tests {
         }
 
         let events = db
-            .get_memory_events_since_seq("fact-003", 1, "", 1000)
+            .get_memory_events_since_seq("fact-003", 1, 1000)
             .await
             .unwrap();
         assert_eq!(events.len(), 2); // seq 2 and 3
@@ -730,7 +728,7 @@ mod tests {
 
         // Replay must not error — unknown variant is logged and skipped.
         let events = db
-            .get_memory_events_for_fact("fact-orphan", "")
+            .get_memory_events_for_fact("fact-orphan")
             .await
             .expect("unknown variant must not error replay");
         assert!(
@@ -750,7 +748,7 @@ mod tests {
         db.append_memory_event(&known).await.unwrap();
 
         let events = db
-            .get_memory_events_for_fact("fact-orphan", "")
+            .get_memory_events_for_fact("fact-orphan")
             .await
             .expect("mixed replay must succeed");
         assert_eq!(events.len(), 1, "only the known event should survive");
@@ -787,7 +785,7 @@ mod tests {
         );
         db.append_memory_event(&e2).await.unwrap();
 
-        let events = db.get_memory_events_for_fact("fact-dup", "").await.unwrap();
+        let events = db.get_memory_events_for_fact("fact-dup").await.unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].seq, 1);
         assert_eq!(events[1].seq, 2);
@@ -868,7 +866,7 @@ mod tests {
         );
 
         let events = db
-            .get_memory_events_for_fact("fact-race", "")
+            .get_memory_events_for_fact("fact-race")
             .await
             .unwrap();
         assert_eq!(

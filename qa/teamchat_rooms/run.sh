@@ -65,6 +65,11 @@ MOCK_PORT="${MOCK_PORT:-18915}"
 
 command -v node >/dev/null 2>&1 || { echo "node is required for this fixture" >&2; exit 1; }
 
+# `qa_build` is called by the hoisted block below, so build.sh has to be sourced
+# above it — not down next to `scratch_home.sh`, where the HOME redirect needs
+# its own helper.
+. "$HERE/../lib/build.sh"
+
 # --- build BEFORE the HOME redirect ----------------------------------------
 # Deliberately ahead of `qa_redirect_home`, unlike the sibling fixtures. Their
 # per-command `HOME="$REAL_HOME" cargo …` guard is correct on POSIX, where the
@@ -94,7 +99,6 @@ if [ -z "${QA_ROOT:-}" ]; then
 fi
 
 . "$HERE/../lib/scratch_home.sh"
-. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 export REAL_HOME
 mkdir -p "$ALEPH_HOME"

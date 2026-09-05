@@ -54,7 +54,7 @@ impl UserStatus {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Active => "active",
+            Self::Active => aleph_protocol::users::ACTIVE_STATUS,
             Self::Deactivated => "deactivated",
         }
     }

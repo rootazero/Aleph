@@ -74,6 +74,47 @@ pub async fn flush_agent_memory(
 /// Matched on the `{base}__` prefix, never a bare `starts_with(base)`: agents
 /// `main` and `mainframe` are unrelated corpora.
 ///
+/// **The fan-out across sibling principals is deliberate, and it is scope, not
+/// isolation.** `agent` here is the persona (`main`), not whoever closed the
+/// session, so the `{base}__` sweep also picks up `main__u-<another-member>`
+/// and `main__proj-<hash>` partitions that other principals wrote: closing ONE
+/// member's session can run up to 8 LLM-backed compression rounds (see
+/// `drain_partition`) over rows this session did not produce, with no principal
+/// scope around the spawn — so nothing it costs is attributed to anyone — and
+/// outside the admin gate the identically-named `memory.compress` RPC carries
+/// (`gateway::method_admin::ADMIN_METHODS`). Three things about that, said out
+/// loud so the next audit does not re-file it:
+///
+/// 1. It is what this enumeration is FOR. Commit `6969c5809` added it because
+///    turn rows are filed under `session_write_id` (project- or personal-scoped)
+///    while the SessionEnd digest lands on the bare id, so a flush that drained
+///    only the id it was handed consolidated the digest and none of what the
+///    session actually said. The test
+///    `flush_agent_memory_drains_the_agents_scoped_partitions_too` below pins
+///    exactly this shape — the composed siblings drained, the unrelated
+///    `defaultish` corpus not — so this paragraph and the behaviour cannot
+///    drift apart without that test going red.
+/// 2. What the extra partitions cost is *timing*, not confidentiality. Those
+///    rows were already going to be compressed by the hourly background tick
+///    (`CompressionService::start_background_task`, 3600s, which iterates
+///    `unprocessed_agent_ids` with no filter at all); a flush only front-runs
+///    it. No row crosses a principal boundary and no principal is shown
+///    another's data — a cost/latency effect, not an isolation leak.
+/// 3. A strictly WIDER, equally ungated sweep already sits one layer up: any
+///    member turn reaching `record_turn_and_maybe_compress` in
+///    `gateway::execution_engine::execute` can spawn
+///    `CompressionService::compress()`, which walks every
+///    `unprocessed_agent_ids()` corpus with NO prefix filter whatsoever.
+///    Gating the flush while that stays open would buy nothing.
+///
+/// Do NOT "fix" this by re-deriving the partition with `session_write_id` at
+/// the close site: `gateway::session_manager::ops::modify` recovers only
+/// `owner_user_id` / `scope_id` from the persisted session row and never
+/// `project_root`, so composing there would re-starve the `proj-<hash>` axis
+/// that `6969c5809` fixed. Nor by re-establishing a scope around the flush
+/// spawn — that would charge every sibling partition's drain to whoever
+/// happened to close a session.
+///
 /// A failure to enumerate degrades to the base partition alone — the behaviour
 /// before this existed — rather than skipping the flush.
 async fn flush_partitions(compression: &Arc<CompressionService>, agent: &str) -> Vec<String> {

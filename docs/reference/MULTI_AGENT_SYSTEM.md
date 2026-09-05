@@ -1114,7 +1114,33 @@ also asserts the strict twin still derives `Unsatisfiable`),
 `get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails`
 (`agents/swarm/tasks/store/tests.rs`). The downstream prompt side is
 [WORKFLOW_TEMPLATES.md](WORKFLOW_TEMPLATES.md) *Tolerant fan-in*.
+### Scheduled work runs on somebody's behalf (cron / heartbeat)
 
+The root `CLAUDE.md` routes `src/tasks/cron/` and `src/tasks/heartbeat/` here,
+so the one thing an editor of those two must not re-derive belongs here too —
+**pointing at the owner rather than restating it**, because the full account
+lives in [FEATURE_LOCATOR §5.22](FEATURE_LOCATOR.md) round-10 ⑬⑭⑮ and in
+[SECURITY.md](SECURITY.md)'s deactivation-freeze paragraph.
+
+- **Both carry `(owner_user_id, scope_id)`, stamped at creation by ONE
+  derivation.** `CronJob::stamp_current_scope()` and its heartbeat twin are
+  called from every production construction site — RPC face, tool face, and the
+  governance-job builders — and a source-level census fails by name when a new
+  construction site appears without one. Before 2026-09-03 the cron RPC face
+  stamped neither column and `HeartbeatTask` had neither column at all, and the
+  consequence was never an error: four readers short-circuit on NULL (the
+  deactivation freeze treats the job as owned by nobody, the fire-time
+  `walled_owner_reason` check reads it as legacy, the run executes with no
+  scope, and the spend lands on `@unattributed`). That census is a NAME census,
+  not a dataflow proof — a body that stamps a different job than the one it
+  constructs passes — and its own doc says so.
+- **Heartbeat is the freeze's fourth leg, and the twin is still open.** A
+  deactivated principal's monitors are disabled by
+  `tasks::heartbeat::service::ops::pause_all_owned_by`, alongside goals, loops
+  and crons. Cron additionally has a **fire-time** backstop
+  (`walled_owner_reason` → `disable_walled_owner_job`) that catches a job
+  re-enabled by a second admin after the sweep; **heartbeat has no counterpart**,
+  which is a recorded debt, not an oversight.
 ### Outcomes that are not verdicts (2026-08-08)
 
 `MemberRunStatus` has three non-failure outcomes, and the distinction is a

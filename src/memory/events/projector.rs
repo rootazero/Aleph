@@ -229,7 +229,7 @@ impl EventProjector {
 
     /// Rebuild a fact by loading all events from the store and folding them.
     pub async fn rebuild_fact(&self, fact_id: &str) -> Result<Option<MemoryFact>, AlephError> {
-        let events = self.db.get_memory_events_for_fact(fact_id, "").await?;
+        let events = self.db.get_memory_events_for_fact(fact_id).await?;
         Self::fold_events_to_note(&events)
     }
 

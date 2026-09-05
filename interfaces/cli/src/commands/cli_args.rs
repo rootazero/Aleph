@@ -1030,6 +1030,11 @@ pub enum UsersAction {
         #[arg(long)]
         role: Option<String>,
     },
+    /// Show everything one principal holds — read this BEFORE deactivating them
+    Show {
+        /// The `u-…` id from `aleph users list`
+        user_id: String,
+    },
     /// Rename a principal, change their role, or deactivate them
     Update {
         /// The `u-…` id from `aleph users list`

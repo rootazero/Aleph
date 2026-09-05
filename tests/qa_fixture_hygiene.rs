@@ -1,4 +1,6 @@
-//! Guards the one rule every `qa/` fixture has to obey about the scratch HOME.
+//! Guards the rules every `qa/` fixture has to obey: the scratch-HOME rules
+//! that keep a run from damaging the machine it runs on, and the index rule
+//! that keeps a fixture from being unreachable to the editor who needs it.
 //!
 //! A fixture redirects `HOME` into a throwaway root so the run cannot touch the
 //! operator's real `~/.aleph`. That redirect also, silently, points rustup and
@@ -12,12 +14,12 @@
 //! `qa/lib/scratch_home.sh::qa_redirect_home` performs the redirect and the pin
 //! together, so a caller cannot take the isolation without the protection. The
 //! rules below exist because a fix that must be *remembered* at N sites is the
-//! same defect one level up — which is precisely how the leak happened: all
-//! eleven `HOME="$REAL_HOME" cargo …` guards in these fixtures are individually
-//! correct, and they cover only the lines they are written on.
+//! same defect one level up — which is precisely how the leak happened: every
+//! `HOME="$REAL_HOME" cargo …` guard in these fixtures is individually correct,
+//! and they cover only the lines they are written on.
 //!
 //! Every rule derives its subject list by walking `qa/`, never from a list kept
-//! here — a seventh fixture is judged on its first run rather than whenever
+//! here — a newly added fixture is judged on its first run rather than whenever
 //! someone remembers to add it. For the same reason there is no allowlist: the
 //! rule costs nothing to obey, and an allowlist would be a second source of
 //! truth about who may hand-roll a scratch home.
@@ -201,5 +203,93 @@ fn the_shared_helper_pins_both_toolchain_homes() {
         "{} must capture the real HOME before redirecting it; after the \
          redirect there is no way back to it",
         path.display()
+    );
+}
+
+/// Every `qa/<name>/run.sh` found on disk, as `(fixture name, repo-relative
+/// path)`. Derived by walking `qa/`, like every other rule here — the next
+/// fixture is judged on its first run, not whenever someone remembers it.
+fn fixture_entrypoints() -> Vec<(String, String)> {
+    let root = qa_root();
+    let mut out = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // `lib/` is the shared implementation, not a fixture.
+                if path.file_name().and_then(|n| n.to_str()) != Some("lib") {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if path.file_name().and_then(|n| n.to_str()) != Some("run.sh") {
+                continue;
+            }
+            let Some(name) = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+            else {
+                continue;
+            };
+            let rel = path
+                .strip_prefix(Path::new(env!("CARGO_MANIFEST_DIR")))
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push((name.to_string(), rel));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Rule 4 — every fixture entrypoint is named in `qa/README.md`.
+///
+/// Rules 1–3 keep a fixture from damaging the machine it runs on. This one
+/// keeps a fixture from being *unreachable*: `qa/README.md` is the index an
+/// editor is routed to from the root `CLAUDE.md`, and a fixture absent from it
+/// is a real-machine stage nobody will ever be told to run. That failure is
+/// silent in exactly the way a green test is — the fixture exists, passes when
+/// invoked, and is never invoked.
+///
+/// The predicate is deliberately weak: **named, not necessarily described.** It
+/// models what the reader actually does — grep the fixture's name in the index —
+/// and a mention inside the file's top command block satisfies it, which is how
+/// most fixtures are currently reachable. A stricter "has a prose entry" rule
+/// would have to enumerate which prose counts, and an enumeration of that shape
+/// is the thing this file's module doc refuses to keep.
+#[test]
+fn every_qa_fixture_is_named_in_the_readme() {
+    let readme = qa_root().join("README.md");
+    let index = std::fs::read_to_string(&readme)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", readme.display()));
+
+    let fixtures = fixture_entrypoints();
+    assert!(
+        !fixtures.is_empty(),
+        "the scan found no `run.sh` under {} — it is measuring nothing, which \
+         would make the assertion below vacuously true",
+        qa_root().display()
+    );
+
+    let missing: Vec<String> = fixtures
+        .iter()
+        .filter(|(name, _)| !index.contains(name.as_str()))
+        .map(|(name, rel)| format!("qa/{name} ({rel})"))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "these fixtures are not named anywhere in {} — named, not necessarily \
+         described: a mention in the file's top command block is enough. As it \
+         stands the root CLAUDE.md routes an editor of the code under test to \
+         no fixture at all, so this real-machine stage is never run:\n  {}",
+        readme.display(),
+        missing.join("\n  ")
     );
 }

@@ -100,7 +100,8 @@
 /// (fail-closed for privilege); carve-outs below re-open member-safe reads.
 const ADMIN_PREFIXES: &[&str] = &[
     // --- Gateway trust boundary: tokens, tickets, devices, credentials ---
-    "gateway.", // token.{current,rotate}, ticket.create, devices.{list,revoke},
+    "gateway.", // token.{current,rotate}, ticket.{create,list,revoke},
+    // devices.{list,revoke},
     // identity.get, metrics.*, credentials, flow.reload. One carve-out since
     // 2026-08-07: `gateway.metrics.run_concurrency`, whose response is now
     // narrowed to the caller instead of refused (see MEMBER_CARVE_OUTS).

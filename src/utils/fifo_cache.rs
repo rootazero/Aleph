@@ -54,10 +54,12 @@ pub(crate) fn remember<V>(
 /// insertion slot rather than double-booking the eviction queue. Idempotent:
 /// forgetting an absent key is a no-op.
 ///
-/// Used by `gateway::event_visibility::{forget_session, forget_team}` to
-/// invalidate cached ownership / scope pairs after the source row mutates
-/// — without it the cache keeps serving pre-mutation data until FIFO
-/// eviction, which is exactly the bug the forget arm closes.
+/// Used by `gateway::event_visibility::EventVisibilityIndex::forget_session`
+/// to invalidate a cached ownership / scope pair after the source row
+/// mutates — without it the cache keeps serving pre-mutation data until FIFO
+/// eviction, which is exactly the bug the forget arm closes. There is no
+/// team-cache equivalent: no `TeamStore` verb rewrites a team's stamped
+/// `owner_user_id`/`scope_id`, so that cache has nothing to invalidate.
 pub(crate) fn forget<V>(order: &mut VecDeque<String>, map: &mut HashMap<String, V>, key: &str) {
     if map.remove(key).is_some() {
         // The same key may have been re-inserted multiple times while live

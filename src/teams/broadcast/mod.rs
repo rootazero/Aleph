@@ -180,8 +180,8 @@ fn member_run_metadata(
     // about it from the scope — precisely because in a room those two are
     // different people.
     //
-    // Fourth carrier, same value: `run_loop` reads this exact key at :366 to
-    // seed `TURN_ORIGINATOR` — the approval-originator gate. The human whose
+    // Fourth carrier, same value: `run_loop` reads this exact key to seed
+    // `TURN_ORIGINATOR` — the approval-originator gate. The human whose
     // message woke this member is the one who may answer its approval cards;
     // without this a member's parked tool call is routed by session/owner
     // alone, and in a room that owner is the CREATOR (see above), not the
@@ -198,7 +198,10 @@ fn member_run_metadata(
             crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
             author.clone(),
         );
-        metadata.insert("originator_user_id".to_string(), author);
+        metadata.insert(
+            crate::gateway::execution_engine::ORIGINATOR_USER_KEY.to_string(),
+            author,
+        );
     }
     metadata
 }
@@ -1147,7 +1150,7 @@ mod tests {
         assert_eq!(m.get("chain_depth").map(String::as_str), Some("2"));
     }
 
-    /// Approval-originator gate (`run_loop` reads this exact key at :366): the
+    /// Approval-originator gate (`run_loop` reads this exact key): the
     /// human whose message woke this member must be stamped as the one who
     /// may answer its approval cards. Bound from `scope::current_room_author()`
     /// — the SAME source as `AUTHOR_USER_KEY` — not
@@ -1162,7 +1165,9 @@ mod tests {
         })
         .await;
         assert_eq!(
-            metadata.get("originator_user_id").map(String::as_str),
+            metadata
+                .get(crate::gateway::execution_engine::ORIGINATOR_USER_KEY)
+                .map(String::as_str),
             Some("u-bob"),
             "the room's speaker must be stamped as the approval originator"
         );
@@ -1183,7 +1188,7 @@ mod tests {
     fn member_run_metadata_omits_originator_with_no_ambient_author() {
         let metadata = member_run_metadata("team-1", 0);
         assert!(
-            !metadata.contains_key("originator_user_id"),
+            !metadata.contains_key(crate::gateway::execution_engine::ORIGINATOR_USER_KEY),
             "a bare call with no ambient author must not invent an originator"
         );
         assert!(!metadata.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
@@ -1200,7 +1205,9 @@ mod tests {
         })
         .await;
         assert_eq!(
-            metadata.get("originator_user_id").map(String::as_str),
+            metadata
+                .get(crate::gateway::execution_engine::ORIGINATOR_USER_KEY)
+                .map(String::as_str),
             Some("u-operator")
         );
     }

@@ -177,14 +177,16 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 # Two things hold the five r2 stages themselves honest, because a QA fixture is
 # also code that can stop working without saying so:
 #
-#   * **Every stage has an assertion FLOOR** (`claims` 13, `denied` 5, `rewind` 5,
-#     `knobs` 10, `holes` 12 — measured, not aspirational). Each `drive` call is
-#     its own node process with its own counters, so the last line a green stage
-#     prints is whichever phase ran last; for `claims` that is the cost probe,
-#     which asserts nothing and prints `0 passed, 0 failed`. A phase whose
-#     assertions all vanished prints the SAME line and still exits 0. run.sh sums
-#     the counts and turns a stage RED when it passes while measuring less than
-#     its floor. Adding an assertion raises the floor in the same commit.
+#   * **Every stage has an assertion FLOOR** — the case block at
+#     `qa/resume_boundary/run.sh:234-240` holds the measured counts;
+#     deliberately not copied here — the rewind copy already drifted. Each
+#     `drive` call is its own node process with its own counters, so the last
+#     line a green stage prints is whichever phase ran last; for `claims` that
+#     is the cost probe, which asserts nothing and prints `0 passed, 0 failed`.
+#     A phase whose assertions all vanished prints the SAME line and still
+#     exits 0. run.sh sums the counts and turns a stage RED when it passes
+#     while measuring less than its floor. Adding an assertion raises the floor
+#     in the same commit.
 #   * **The round-1 `crash` / `attribute` stages refuse to run without a real
 #     python3** (exit 78, with the reason named). On this Windows host `python3`
 #     and `python` are both the `WindowsApps` stub — no output, exit 49 — so they
@@ -218,6 +220,42 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # remote-pairing half — a loopback peer is authorised before
                                  # `bootstrap_ticket` is ever read, so a ticket redeemed over
                                  # 127.0.0.1 creates no device row, silently and successfully.
+                                 # Node, not Python, and it shares `teamchat_rooms`'
+                                 # `patch_config.mjs` rather than keeping a patcher of its own.
+                                 # Round-10 added the freeze's fourth leg to the same stage, and
+                                 # specifically its DECLINED arm: the patcher sets
+                                 # `[heartbeat] enabled = false`, so this run proves the receipt
+                                 # says the heartbeat leg did not RUN instead of reporting a zero —
+                                 # a boot-time `decline(because)`, an absent wire field, and a CLI
+                                 # sentence, none of which a unit test reaches together. The same
+                                 # stage also pins the deactivation's bootstrap-ticket leg: the
+                                 # count is zero here (the ticket was redeemed by the pairing
+                                 # driver), and zero is the point — only a deactivation carries
+                                 # that field, so the sentence appearing at all proves the server
+                                 # measured it, it crossed the wire, and the CLI rendered it.
+                                 # Round-10 also added stage 3b, `aleph users show`: the SAME
+                                 # devices/spend/background-work join read while she is still
+                                 # active. Until `users.get` existed the only way to learn what a
+                                 # principal held was to deactivate them and read the receipt, so
+                                 # the pairing between 3b's assertions and the receipt's is the
+                                 # claim. It pins two fail-closed renderings the receipt cannot:
+                                 # an unrecorded spend prints a sentence and never `0.00`, and the
+                                 # declined heartbeat leg prints "NOT counted" and never a number.
+                                 # Its cost warning is asserted family by family (background work,
+                                 # devices, bootstrap tickets, channel senders), because a preview
+                                 # that names two of the four effects the receipt below reports is
+                                 # read by the operator as coverage.
+                                 #
+                                 # FLOOR: run.sh's own `[ "$FAIL" -eq 0 ] || exit 1`
+                                 # — zero failures, and deliberately no number
+                                 # here (the header carries no claim count
+                                 # either, and says so). ⚠️ Like its two room
+                                 # siblings, it enforces no MINIMUM assertion
+                                 # count: a phase whose precondition stopped
+                                 # holding fires nothing, shrinks the total and
+                                 # still exits 0. The only defence is comparing
+                                 # totals across runs, so record what a run
+                                 # printed — 2026-09-04 cold: 38 passed.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation
@@ -230,6 +268,17 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # project-page tab has a server-side effect. Same 0.0.0.0 + LAN-leg
                                  # reason as `multiuser_audit`. Node, not Python — see its run.sh
                                  # header.
+                                 #
+                                 # FLOOR: `drive_rooms.mjs`'s `report()` —
+                                 # `process.exit(FAIL === 0 ? 0 : 1)`. Zero
+                                 # failures, no minimum count; both driver
+                                 # report paths add FAIL+1 on an exception, so
+                                 # an abort is caught, but a phase that quietly
+                                 # never fires is not. This one has a
+                                 # cross-check the other two lack: its run.sh
+                                 # header records the total an earlier
+                                 # measurement saw, and a 2026-09-04 cold run
+                                 # printed exactly that again.
 
 ./qa/agents_viz/run.sh claims    # §4.11 / §5.13 / §3.13 tasks+agents visualization: the two
                                  # severed wires the round fixed, each asserted by effect on a
@@ -322,6 +371,57 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # never a PASS.
 ./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
                                  # that platform's SHELL_MARKER_JS arm is still unrun
+
+./qa/rooms_channel_bind/run.sh   # §5.22 round-9: a channel GROUP conversation bound into a project
+                                 # room. Three real identities, a webhook channel (the binding key is
+                                 # (channel_id, peer_kind, peer_id) and the mechanism does not know
+                                 # which transport it is — webhook is the only kind a fixture can
+                                 # drive with one signed POST). Its three oracles deliberately never
+                                 # ask the server: the memory partition is read out of memory.db, the
+                                 # session row out of sessions.db, and <room_context> plus the speaker
+                                 # prefix out of the mock model's own request log. Carries the three
+                                 # negative arms that make the positive ones mean something (a paired
+                                 # non-member stays personal; an unpaired stranger runs on bare `main`
+                                 # with no room block; a member's projects.channel.bind is refused),
+                                 # and one addendum where a genuine store failure must answer
+                                 # "unknown" rather than "nothing to move".
+                                 #
+                                 # FLOOR: `drive_bind.mjs`'s `report()` —
+                                 # `process.exit(FAIL === 0 ? 0 : 1)`. SKIPPED is counted and printed
+                                 # but NOT gated, so a skipped scenario still exits 0 — read the skip
+                                 # count, it is not part of the floor. 2026-09-04 cold: 52 passed, 0
+                                 # skipped. ⚠️ Its addendum D (does the room-settings channel section
+                                 # survive a narrow viewport) is a BROWSER claim; a shell run neither
+                                 # makes it nor breaks it, and it has not been looked at since the
+                                 # fixture shipped.
+
+./qa/spend_budget/run.sh         # §5.22 round-7's per-principal dollar ceiling. Every assertion reads
+                                 # an EFFECT (a ledger row on disk, a wire error code,
+                                 # a CLI table, a survived restart) rather than counting an RPC's
+                                 # "it returned 200"; two of them read `spend_ledger` with
+                                 # `sqlite3` directly rather than through `spend.query`, which is
+                                 # what makes them evidence about the LEDGER and not about the
+                                 # handler that reads it back. This is the fixture the root
+                                 # CLAUDE.md `src/spend/` row routes to.
+                                 #
+                                 # FLOOR: run.sh's own `[ "$FAIL" -eq 0 ] || exit 1`.
+                                 # Deliberately no count here — an inline number
+                                 # for a set the script itself owns is the shape
+                                 # the five rewind/claims/denied/knobs/holes
+                                 # floors were removed for.
+                                 #
+                                 # NEEDS A REAL python3, and therefore does not run on a
+                                 # Windows host, where the only `python3` on PATH is the
+                                 # WindowsApps stub: it prints nothing and silently does
+                                 # nothing, so a heredoc leg no-ops and the run dies far
+                                 # from its cause. (No exit code is written down here —
+                                 # it is stub-version dependent, and the operative half
+                                 # of the sentence is the silence.) Its sibling
+                                 # `multiuser_audit` was ported to Node; this one was not,
+                                 # deliberately: `spend_rpc.py`, `mock_anthropic.py`, the
+                                 # float comparisons and the `jf` helper are a much larger
+                                 # surface than a port should carry in one round. On such a
+                                 # host it is UNRUN, which is not the same as passing.
 ```
 
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like
@@ -660,8 +760,8 @@ appearing inside your scratch dir.
 pins `RUSTUP_HOME`/`CARGO_HOME` as well.** The paragraph above was true and
 still insufficient, which is the interesting part: it names the exact signature
 (`.rustup/toolchains/` inside the scratch dir) and the fixtures all guarded
-their own cargo lines correctly — eleven `HOME="$REAL_HOME" cargo …` call sites,
-every one right — and the leak happened anyway, three times, 1.3 GB each. A
+their own cargo lines correctly — every `HOME="$REAL_HOME" cargo …` call site
+right — and the leak happened anyway, three times, 1.3 GB each. A
 per-invocation guard covers the line it is written on; `export HOME=` stays in
 force for the whole process, so any *other* rustup-shimmed command (a drive
 script, a `bash`-tool call a scenario makes the agent run, a command typed into
@@ -675,13 +775,32 @@ qa_redirect_home "$QA_ROOT"      # exports HOME, ALEPH_HOME, RUSTUP_HOME, CARGO_
 ```
 
 `tests/qa_fixture_hygiene.rs` enforces it, deriving the fixture list by walking
-`qa/` rather than from a list in the test — a seventh fixture that hand-rolls
-`export HOME=` is named on its first run. There is no allowlist: obeying the
-rule is free, and an allowlist would be a second source of truth about who may
-hand-roll a scratch home. A per-command `HOME=… cmd` prefix is still fine once
-the pins are in the environment (`browser_managed` needs two, for a
-playwright-cli whose session store is HOME-scoped); only the process-wide
-`export HOME=` is refused.
+`qa/` rather than from a list in the test — a newly added fixture that
+hand-rolls `export HOME=` is named on its first run. There is no allowlist:
+obeying the rule is free, and an allowlist would be a second source of truth
+about who may hand-roll a scratch home. A per-command `HOME=… cmd` prefix is
+still fine once the pins are in the environment (`browser_managed` needs two,
+for a playwright-cli whose session store is HOME-scoped); only the
+process-wide `export HOME=` is refused.
+
+**The frame envelope has exactly one reader: `qa/lib/ws.mjs::normalizeFrame`.**
+Four Node drivers each held a byte-identical copy of it, and what had already
+decayed was the *comment*: one carried the three-shape list plus the incident it
+cost, one a two-line abbreviation with both dropped, two nothing at all — a copy
+born as a weakened version of another. The full prose now lives on the shared
+function, which names `src/gateway/server/handler.rs::extract_topic_and_data` as
+the producer-side owner it mirrors, so the two surviving representations are
+*linked*, not merely fewer. `node --test qa/lib/ws.test.mjs` pins all three
+shapes plus a counter of the frames that yielded NO topic, and every fixture
+assertion that reports a missing frame prints its tap through `frameDigest`,
+which renders that count — so a fifth server envelope reads as `unclassified: N`
+in the fixture output instead of as the product-shaped lie ("no frame arrived").
+Deliberately **not** shared: the `Conn` classes around it — their pending maps,
+`attempt()` return shapes and poll budgets differ per fixture, and lifting those
+would change what each one asserts. Deliberately **no** `qa/lib/ws.py`: the
+Python fixtures as a family read only the single-shape `stream.*` JSON-RPC
+notifications and never observe a bus `event` frame at all, so a future Python
+fixture that needs a topic must port `normalizeFrame` first.
 
 **Debug builds need `RUST_MIN_STACK=268435456` (256 MB).** The 32 MB floor in
 `main.rs::worker_stack_size` is not enough for a debug-built agent run with
@@ -942,3 +1061,9 @@ refuses to boot with `invalid type: sequence, expected a map`.
   - ⚠️ 它的**生成配置那一次 boot 带了 `--port`**——2026-09-05 起**每一个有生成 boot 的装置都带了**
     （此前只有它和 `channels`；`webview_compat` 没有生成 boot，不在其列）：那一次 boot 绑的是**内置默认端口**，机器上只要有别的 server 占着，进程在写出 config
     之前就退出了，症状是 `no config generated at …`——读起来像路径或权限问题，原因在日志下一行。
+- **`rooms_channel_bind`** — 把一个通道群会话绑到项目房间（`Real-machine QA for binding a channel
+  group conversation to a project room.`，见其 `run.sh:2`）。改 `projects.channel.*` handler、绑定的
+  CLI 面、Panel 的项目通道段或 `rescope_attribution` 前跑。它挡的那一类假绿写在自己的 header 里：
+  这条链上的每一件事——handler、CLI、Panel 段、arm 2 的名册闸、`rescope_attribution`——此前**全部**
+  只有编译期与单测证据，没有任何一件对活网关说过话。路由入口在 [GATEWAY.md](../docs/reference/GATEWAY.md)，
+  不在根 `CLAUDE.md` 的路由表里。

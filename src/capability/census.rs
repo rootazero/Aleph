@@ -812,13 +812,15 @@ mod tests {
         );
         assert_eq!(
             raw + slots,
-            47,
+            48,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             47. Never assert either side alone: raw shrinks and slots grows as \
+             48. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
-             investigate before editing this number.",
+             investigate before editing this number. Last moved 2026-09-04: \
+             47 -> 48 when `heartbeat/service` was added, so `users.update`'s \
+             deactivation freeze had a fourth subsystem to reach.",
             raw + slots
         );
 
@@ -2279,6 +2281,38 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         declines: bool,
     }
 
+    /// The call site's fully qualified path for `wrapper`, e.g.
+    /// `alephcore::tasks::cron::init_global`, falling back to the bare name
+    /// when the call is written unqualified.
+    ///
+    /// Rule 2 below asks "can THIS handle be declined and then installed in one
+    /// process", and the bare wrapper name cannot answer it: `init_global` is
+    /// five different functions in five modules, so the moment a second one of
+    /// them got a conditional boot site the rule reported a hazard between two
+    /// slots that never touch each other. The qualifier written at the call
+    /// site is the cheapest thing that separates them, and it keeps the two
+    /// genuinely-paired sites together (`config/load.rs`'s two
+    /// `init_defaults_override` calls are both written
+    /// `crate::config::defaults_override::init_defaults_override`).
+    fn qualified_call(line: &str, wrapper: &str) -> String {
+        let bytes = line.as_bytes();
+        let mut from = 0usize;
+        while let Some(rel) = line[from..].find(wrapper) {
+            let at = from + rel;
+            let after = at + wrapper.len();
+            let ok_before = at == 0 || (!is_ident_byte(bytes[at - 1]) && bytes[at - 1] != b'.');
+            if ok_before && line[after..].starts_with('(') {
+                let mut start = at;
+                while start > 0 && (is_ident_byte(bytes[start - 1]) || bytes[start - 1] == b':') {
+                    start -= 1;
+                }
+                return line[start..after].to_string();
+            }
+            from = after;
+        }
+        wrapper.to_string()
+    }
+
     /// Every conditional capability install either says why it was skipped, or
     /// is one of the pairs that structurally cannot.
     ///
@@ -2309,10 +2343,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// * **Multi-CALL, single-site.** Rule 2 approximates reachability by
     ///   counting sites. One conditional site inside a function that runs many
     ///   times per process reaches the same hazard and is not detected.
-    ///   Direction: under-see. Checked 2026-08-25: the 19 sites resolve to 18
-    ///   distinct wrappers, 17 of them single-site (the 18th is
+    ///   Direction: under-see. Re-checked 2026-09-04: the 20 sites resolve to 19
+    ///   distinct wrappers, 18 of them single-site (the 19th is
     ///   `init_defaults_override`, the two-site exempt pair), and none of those
-    ///   17 is multi-call — so the rule holds — but the reason is
+    ///   18 is multi-call — so the rule holds — but the reason is
     ///   per-wrapper, not "boot runs once". An earlier draft justified it with
     ///   "(every conditional install is on a once-per-process boot path)",
     ///   which this guard's own exempt pair falsifies: `config/load.rs:208` and
@@ -2320,6 +2354,23 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     ///   ruling at those two sites rests on `Config::load` running many times
     ///   per process. They are safe because rule 2 already forbids stamping
     ///   them, not because they run once.
+    /// * **One wrapper called under two different spellings.** Sites are
+    ///   grouped by the qualified path written at the call site
+    ///   ([`qualified_call`]), so a wrapper reached once as
+    ///   `crate::x::init_global(..)` and once as a `use`-imported bare
+    ///   `init_global(..)` lands in two groups and rule 2 does not see the
+    ///   pair. Direction: under-see, and it is the price of no longer
+    ///   conflating five different `init_global`s into one handle — which was
+    ///   over-see loud enough to fail on an unrelated slot being added
+    ///   (measured 2026-09-04, when `tasks::heartbeat::init_global` joined
+    ///   `tasks::cron::init_global`). Zero instances in `src/` today, and that
+    ///   is asserted rather than asserted-in-prose: the body below refuses any
+    ///   site whose wrapper is called unqualified, which is the only spelling
+    ///   that can produce the pair. ⚠️ The first draft of this paragraph said
+    ///   "zero instances" as prose and it was FALSE — `start/mod.rs`'s Codex
+    ///   refresher gate called a `use`-imported bare `set_global`, a name two
+    ///   modules own. The assertion found it on its first run; the prose would
+    ///   have gone on being cited.
     /// * **Which slot was declined.** The check is `contains("decline")` over
     ///   the alternative, so an arm that declines a DIFFERENT handle satisfies
     ///   it. Deriving the expected `decline_*` name from the install wrapper's
@@ -2381,7 +2432,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                     continue;
                 }
                 sites.push(CondSite {
-                    wrapper: (*w).clone(),
+                    // The QUALIFIED path, not the bare name — see
+                    // `qualified_call`. Grouping rule 2 on the bare name makes
+                    // two unrelated slots read as one handle.
+                    wrapper: qualified_call(&lines[i], w),
                     at: format!("{rel}:{}", nums[i]),
                     declines: alt.contains("decline"),
                 });
@@ -2389,9 +2443,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert!(
-            sites.len() >= 19,
-            "examined only {} conditional installs; 19 were measured on \
-             2026-08-25, and this floor sits flush against that measurement on \
+            sites.len() >= 20,
+            "examined only {} conditional installs; 20 were measured on \
+             2026-09-04 (19 on 2026-08-25, plus the heartbeat service's boot \
+             gate), and this floor sits flush against that measurement on \
              purpose. An earlier draft left it at 15 — four below — and the \
              slack was not caution, it was already-issued permission: it turned \
              a mutation the guard CAN see (reverting the if-with-no-`else` fix, \
@@ -2426,6 +2481,27 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
              call sites were legitimately deleted, in which case re-measure and \
              lower this to the new count. Measured 2026-08-25: 4 removed, all in \
              plugins/handlers/tests.rs."
+        );
+
+        // The grouping key below is only as good as the spelling at each call
+        // site: two spellings of one wrapper split into two groups and rule 2
+        // stops seeing the pair (named under "What this cannot see"). That
+        // blind spot is empty today, and this is what keeps it empty — a
+        // sentence saying "every site is written fully qualified" is prose,
+        // and prose does not go red.
+        let unqualified: Vec<&str> = sites
+            .iter()
+            .filter(|s| !s.wrapper.contains("::"))
+            .map(|s| s.at.as_str())
+            .collect();
+        assert!(
+            unqualified.is_empty(),
+            "these conditional install sites call their wrapper unqualified, so \
+             the qualified-path grouping below cannot tell them from a \
+             same-named wrapper in another module (`init_global` is five \
+             functions). Write the call as `crate::…::wrapper(..)`, or widen \
+             the grouping key:\n  {}",
+            unqualified.join("\n  ")
         );
 
         let mut per_wrapper: std::collections::BTreeMap<&str, Vec<&CondSite>> =
@@ -2698,13 +2774,15 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         }
 
         assert_eq!(
-            gates, 16,
-            "examined {gates} gated blocks that install a capability; 16 were \
-             measured on 2026-08-25 (15 lexical + the orchestrator gate, which is \
+            gates, 17,
+            "examined {gates} gated blocks that install a capability; 17 were \
+             measured on 2026-09-04 (16 lexical + the orchestrator gate, which is \
              reached only through the one-hop rule). A count that moved without a capability \
              being added or removed means the block reader stopped matching — \
              which is how this guard would report 'all clear' about blocks it \
-             never opened."
+             never opened. Last moved 2026-09-04: 16 -> 17, the `[heartbeat] \
+             enabled` gate at `start/mod.rs` that now installs \
+             `heartbeat/service`."
         );
         assert!(
             offenders.is_empty(),

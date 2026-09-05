@@ -43,6 +43,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 use super::parse_params;
 use super::projects::{gate_project, project_error_response};
 use crate::gateway::event_bus::GatewayEventBus;
+use crate::gateway::event_visibility::EventVisibilityIndex;
 use crate::gateway::events::ChangeKind;
 use crate::gateway::session_store::types::SessionFilter;
 use crate::gateway::session_store::SessionStore;
@@ -138,6 +139,13 @@ fn row(b: ChannelBinding) -> ChannelBindingRow {
 async fn rescope_existing_transcript(
     sessions: &dyn SessionStore,
     bound: &ChannelBinding,
+    // Invalidated per moved key, right after that key's write commits (see
+    // the loop below) — never before it, and never batched to the end of the
+    // scan. A concurrent `session_admits` landing in the gap between a
+    // premature forget and the write actually committing would re-cache the
+    // PRE-bind pair with nothing left to invalidate it again, so the order
+    // is load-bearing, not a convenience.
+    event_visibility: &EventVisibilityIndex,
 ) -> RescopeOutcome {
     // `bound` rather than the raw `ChannelBindParams`: `bind_conversation`
     // already normalized `channel_id` / `peer_id` through
@@ -232,7 +240,16 @@ async fn rescope_existing_transcript(
     let mut moved_by = Vec::new();
     for key in &keys {
         match sessions.rescope_attribution(key, &bound.project_id).await {
-            Ok(true) => moved_by.push(key.agent_id().to_string()),
+            // The write has committed at this point — `rescope_attribution`
+            // returning is the commit — so invalidating THIS key's cached
+            // `(owner_user_id, scope_id)` pair here can only ever throw away
+            // a stale value, never a fresh one. Per key, not once after the
+            // loop: `keys` can name more than one agent's row for the same
+            // conversation, and every one of them just changed scope.
+            Ok(true) => {
+                event_visibility.forget_session(&key.to_key_string()).await;
+                moved_by.push(key.agent_id().to_string());
+            }
             // The row was listed a moment ago and is gone now — a concurrent
             // delete. Not an error, and not something moved.
             Ok(false) => {}
@@ -319,6 +336,7 @@ pub async fn handle_bind(
     store: Arc<ProjectStore>,
     sessions: Arc<dyn SessionStore>,
     event_bus: Arc<GatewayEventBus>,
+    event_visibility: Arc<EventVisibilityIndex>,
 ) -> JsonRpcResponse {
     let params: ChannelBindParams = match parse_params(&request) {
         Ok(p) => p,
@@ -364,7 +382,8 @@ pub async fn handle_bind(
     // The STORED binding, not `params`: its `channel_id` / `peer_id` are
     // already normalized the way a live `SessionKey` normalizes, which is what
     // the scan below compares against.
-    let rescoped = rescope_existing_transcript(sessions.as_ref(), &bound).await;
+    let rescoped =
+        rescope_existing_transcript(sessions.as_ref(), &bound, event_visibility.as_ref()).await;
 
     if let Some(log) = crate::security::audit::global() {
         log.log(crate::security::audit::AuditEntry::authority_change(
@@ -553,6 +572,10 @@ mod tests {
     use crate::gateway::caller_identity::CALLER_USER;
     use crate::gateway::session_store::error::SessionStoreError;
     use crate::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
+    // The whole row vocabulary the `ReadDuringRescope` decorator has to name
+    // in its delegating signatures, kept behind one alias so the delegation is
+    // readable as delegation.
+    use crate::gateway::session_store::types as store_types;
     use crate::projects::roster::TEST_GUARD as ROSTER_TEST_GUARD;
     use crate::routing::session_key::{PeerKind, SessionKey};
     use crate::scope::{with_scope, ScopeAttribution};
@@ -591,6 +614,35 @@ mod tests {
 
     fn bus() -> Arc<GatewayEventBus> {
         Arc::new(GatewayEventBus::new())
+    }
+
+    fn visibility() -> Arc<EventVisibilityIndex> {
+        Arc::new(EventVisibilityIndex::new())
+    }
+
+    /// `event_admits`'s entry point for a plain `BySessionKey` frame — no
+    /// `OrAdmin` shortcut, so this is the honest probe for whether a caller's
+    /// cached `(owner_user_id, scope_id)` verdict for `key` is stale.
+    /// `stream.session_updated` is one of the topics
+    /// `session_identity_of` classifies this way from the frame's own
+    /// `session_key` field.
+    async fn admits(
+        index: &EventVisibilityIndex,
+        key: &SessionKey,
+        caller: &str,
+        caller_is_admin: bool,
+        store: &Arc<dyn SessionStore>,
+    ) -> bool {
+        index
+            .event_admits(
+                "stream.session_updated",
+                Some(&json!({ "session_key": key.to_key_string() })),
+                Some(caller),
+                caller_is_admin,
+                store,
+                None,
+            )
+            .await
     }
 
     fn rpc(method: &str, params: Value) -> JsonRpcRequest {
@@ -693,6 +745,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -719,6 +772,446 @@ mod tests {
         );
     }
 
+    /// The wire T11 exists for, asserted as EFFECT rather than as a call: a
+    /// room-mate who was DENIED this conversation's live frames before the
+    /// bind — and whose denial the ownership cache is now holding — is
+    /// admitted right after it, with nobody touching the cache by hand.
+    ///
+    /// The pre-bind `admits` call is not a courtesy, it is the setup: it is
+    /// what warms `EventVisibilityIndex`'s `(owner_user_id, scope_id)` cache
+    /// with the pre-bind pair, and a real deployment is always in that state
+    /// (`project_for` runs `session_admits` for every running key on the
+    /// Global `running_set_changed` frame, so any group that ran while any
+    /// socket was open is warm). That cache has no TTL and evicts only by
+    /// FIFO at `MAX_CACHED_SESSION_OWNERS`, so without the invalidation the
+    /// final assertion below stays false for the process lifetime.
+    #[tokio::test]
+    async fn a_room_mate_stops_being_denied_the_conversations_frames_after_the_bind() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+        let index = visibility();
+
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !admits(&index, &key, "u-bob", false, &sessions).await,
+            "before the bind the row is personal:u-alice, so u-bob is denied \
+             — and that verdict's two inputs are now in the cache"
+        );
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                    index.clone(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(result.rescoped_session, RescopeOutcome::Moved);
+
+        assert!(
+            admits(&index, &key, "u-bob", false, &sessions).await,
+            "the row now carries the room scope and u-bob is on that roster, \
+             so the delivery plane must admit him. A stale cached pair here is \
+             the whole defect: the binding looks correct on every surface \
+             while every other member's live frames stay silently denied"
+        );
+    }
+
+    /// Per KEY, not per outcome. One conversation can have been served by more
+    /// than one agent over its lifetime — that is exactly why
+    /// `rescope_existing_transcript` enumerates instead of addressing a single
+    /// key (Ruling AM) — and every row it moves has just changed scope, so
+    /// every one of them has a cached pair to drop.
+    ///
+    /// Forgetting only the first key (or only once, after the loop) leaves the
+    /// other agent's frames denied while the receipt says `Moved`.
+    #[tokio::test]
+    async fn every_moved_agent_key_is_invalidated_not_only_the_first() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+        let index = visibility();
+
+        let main = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        let coder = SessionKey::group("coder", "telegram", PeerKind::Group, "C1");
+        for key in [&main, &coder] {
+            with_scope(
+                Some(ScopeAttribution::personal("u-alice")),
+                sessions.get_or_create(key),
+            )
+            .await
+            .unwrap();
+            assert!(
+                !admits(&index, key, "u-bob", false, &sessions).await,
+                "both rows are personal:u-alice pre-bind, and both verdicts \
+                 are now cached"
+            );
+        }
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                    index.clone(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(result.rescoped_session, RescopeOutcome::Moved);
+
+        for key in [&main, &coder] {
+            assert!(
+                admits(&index, key, "u-bob", false, &sessions).await,
+                "{} was moved by this bind, so its cached pair must have been \
+                 dropped too — the loop invalidates per key, and the scan is \
+                 unordered, so 'the first one' is not a key this code may \
+                 privilege",
+                key.to_key_string()
+            );
+        }
+    }
+
+    /// The operator who RAN the bind is not exempt: `stream.session_updated`
+    /// is classified `BySessionKey`, which has no admin short-circuit (only
+    /// `BySessionKeyOrAdmin` does), so an operator's connection warms and
+    /// reads the same cache every member does.
+    ///
+    /// The first speaker here is `u-bob`, not the operator, so the operator's
+    /// pre-bind verdict is a DENIAL — the room owner cannot see a member's
+    /// personal row — and it is that denial the cache holds. Post-bind she is
+    /// admitted through the roster like anyone else. Without the
+    /// invalidation, running the bind blinds the person who ran it.
+    #[tokio::test]
+    async fn the_operator_who_ran_the_bind_sees_the_post_bind_answer_too() {
+        let (store, project, _guard) = room();
+        let (sessions, _dir) = sessions();
+        let index = visibility();
+
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-bob")),
+            sessions.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !admits(&index, &key, "u-alice", true, &sessions).await,
+            "an operator flag does not shortcut a BySessionKey frame, so even \
+             the room owner is denied a member's personal row — and that is \
+             the verdict now cached for her connection"
+        );
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                    index.clone(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(result.rescoped_session, RescopeOutcome::Moved);
+
+        assert!(
+            admits(&index, &key, "u-alice", true, &sessions).await,
+            "the bind moved the row into her own room; if her cached denial \
+             survives it, the operator's reward for binding is silence"
+        );
+    }
+
+    /// A `SessionStore` decorator whose only seam is `rescope_attribution`:
+    /// just BEFORE the inner write commits, it runs the delivery plane's own
+    /// read for `reader`, which re-caches whatever `(owner_user_id, scope_id)`
+    /// pair the row holds at THAT instant — the pre-bind one.
+    ///
+    /// That is the concurrent `session_admits` the forget's placement is
+    /// defending against, run inline so the ordering is observable
+    /// deterministically instead of raced against a second task. Every other
+    /// method delegates, so `handle_bind` still runs against a real backend.
+    struct ReadDuringRescope {
+        inner: Arc<dyn SessionStore>,
+        index: Arc<EventVisibilityIndex>,
+        reader: String,
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl SessionStore for ReadDuringRescope {
+        async fn rescope_attribution(
+            &self,
+            key: &SessionKey,
+            project_id: &str,
+        ) -> Result<bool, SessionStoreError> {
+            // The read lands here: the row still holds the pre-bind pair, so
+            // this re-caches it.
+            let _ = admits(&self.index, key, &self.reader, false, &self.inner).await;
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.rescope_attribution(key, project_id).await
+        }
+
+        async fn get_or_create(
+            &self,
+            key: &SessionKey,
+        ) -> Result<store_types::SessionMetadata, SessionStoreError> {
+            self.inner.get_or_create(key).await
+        }
+        async fn get_metadata(
+            &self,
+            key: &SessionKey,
+        ) -> Result<Option<store_types::SessionMetadata>, SessionStoreError> {
+            self.inner.get_metadata(key).await
+        }
+        async fn list_sessions(
+            &self,
+            filter: SessionFilter,
+        ) -> Result<Vec<store_types::SessionMetadata>, SessionStoreError> {
+            self.inner.list_sessions(filter).await
+        }
+        async fn delete_session(
+            &self,
+            key: &SessionKey,
+        ) -> Result<store_types::DeleteResult, SessionStoreError> {
+            self.inner.delete_session(key).await
+        }
+        async fn reset_session(&self, key: &SessionKey) -> Result<bool, SessionStoreError> {
+            self.inner.reset_session(key).await
+        }
+        async fn append_message(
+            &self,
+            key: &SessionKey,
+            msg: store_types::MessageRecord,
+        ) -> Result<(), SessionStoreError> {
+            self.inner.append_message(key, msg).await
+        }
+        async fn get_history(
+            &self,
+            key: &SessionKey,
+            limit: Option<usize>,
+        ) -> Result<Vec<store_types::MessageRecord>, SessionStoreError> {
+            self.inner.get_history(key, limit).await
+        }
+        async fn search_messages(
+            &self,
+            query: &str,
+            max_results: usize,
+        ) -> Result<Vec<store_types::SearchHit>, SessionStoreError> {
+            self.inner.search_messages(query, max_results).await
+        }
+        async fn list_checkpoints(
+            &self,
+            key: &SessionKey,
+        ) -> Result<Vec<store_types::CheckpointSummary>, SessionStoreError> {
+            self.inner.list_checkpoints(key).await
+        }
+        async fn branch_from_checkpoint(
+            &self,
+            key: &SessionKey,
+            checkpoint_id: &str,
+            new_key: &SessionKey,
+        ) -> Result<store_types::SessionMetadata, SessionStoreError> {
+            self.inner
+                .branch_from_checkpoint(key, checkpoint_id, new_key)
+                .await
+        }
+        async fn restore_checkpoint(
+            &self,
+            key: &SessionKey,
+            checkpoint_id: &str,
+        ) -> Result<store_types::SessionMetadata, SessionStoreError> {
+            self.inner.restore_checkpoint(key, checkpoint_id).await
+        }
+        async fn close_session(
+            &self,
+            key: &SessionKey,
+            topic: Option<&str>,
+        ) -> Result<(), SessionStoreError> {
+            self.inner.close_session(key, topic).await
+        }
+        async fn set_topic(&self, key: &SessionKey, topic: &str) -> Result<(), SessionStoreError> {
+            self.inner.set_topic(key, topic).await
+        }
+        async fn set_state(
+            &self,
+            key: &SessionKey,
+            state: crate::gateway::session_manager::SessionState,
+        ) -> Result<(), SessionStoreError> {
+            self.inner.set_state(key, state).await
+        }
+        async fn get_state(
+            &self,
+            key: &SessionKey,
+        ) -> Result<crate::gateway::session_manager::SessionState, SessionStoreError> {
+            self.inner.get_state(key).await
+        }
+        async fn get_identity_context(
+            &self,
+            session_key: &str,
+            source_channel: &str,
+        ) -> Result<aleph_protocol::IdentityContext, SessionStoreError> {
+            self.inner
+                .get_identity_context(session_key, source_channel)
+                .await
+        }
+        async fn get_current_epoch(
+            &self,
+            base_key_pattern: &str,
+        ) -> Result<u32, SessionStoreError> {
+            self.inner.get_current_epoch(base_key_pattern).await
+        }
+        async fn get_session_topic(
+            &self,
+            key: &SessionKey,
+        ) -> Result<Option<String>, SessionStoreError> {
+            self.inner.get_session_topic(key).await
+        }
+        async fn cleanup_expired(&self) -> Result<usize, SessionStoreError> {
+            self.inner.cleanup_expired().await
+        }
+        async fn patch_session(
+            &self,
+            key: &SessionKey,
+            patch: &store_types::SessionPatch,
+        ) -> Result<bool, SessionStoreError> {
+            self.inner.patch_session(key, patch).await
+        }
+        async fn update_session_usage(
+            &self,
+            key: &SessionKey,
+            input_tokens: i64,
+            output_tokens: i64,
+            cost_usd: f64,
+            model: Option<&str>,
+            model_provider: Option<&str>,
+        ) -> Result<(), SessionStoreError> {
+            self.inner
+                .update_session_usage(
+                    key,
+                    input_tokens,
+                    output_tokens,
+                    cost_usd,
+                    model,
+                    model_provider,
+                )
+                .await
+        }
+        async fn get_session_preview(
+            &self,
+            key: &SessionKey,
+            message_limit: usize,
+        ) -> Result<store_types::SessionPreview, SessionStoreError> {
+            self.inner.get_session_preview(key, message_limit).await
+        }
+        async fn count_by_state(
+            &self,
+            state: crate::gateway::session_manager::SessionState,
+        ) -> Result<usize, SessionStoreError> {
+            self.inner.count_by_state(state).await
+        }
+        async fn list_by_state(
+            &self,
+            state: crate::gateway::session_manager::SessionState,
+        ) -> Result<Vec<store_types::SessionMetadata>, SessionStoreError> {
+            self.inner.list_by_state(state).await
+        }
+        async fn set_error(
+            &self,
+            key: &SessionKey,
+            error_msg: Option<&str>,
+        ) -> Result<(), SessionStoreError> {
+            self.inner.set_error(key, error_msg).await
+        }
+        async fn stop(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
+            self.inner.stop(key).await
+        }
+        async fn set_idle(&self, key: &SessionKey) -> Result<(), SessionStoreError> {
+            self.inner.set_idle(key).await
+        }
+    }
+
+    /// Ordering: the forget must come AFTER the write commits.
+    ///
+    /// A forget issued before it has nothing left to protect — the read
+    /// [`ReadDuringRescope`] lands a moment later re-caches the pre-bind pair,
+    /// and nothing invalidates it a second time — so the room-mate stays
+    /// denied even though the row moved. Moving the `forget_session` call
+    /// above `rescope_attribution` reddens this test and leaves the plain
+    /// effect test green, which is why the two are not one test.
+    #[tokio::test]
+    async fn a_read_landing_inside_the_rescope_write_cannot_leave_the_stale_pair_cached() {
+        let (store, project, _guard) = room();
+        let (inner, _dir) = sessions();
+        let index = visibility();
+
+        let key = SessionKey::group("main", "telegram", PeerKind::Group, "C1");
+        with_scope(
+            Some(ScopeAttribution::personal("u-alice")),
+            inner.get_or_create(&key),
+        )
+        .await
+        .unwrap();
+
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sessions: Arc<dyn SessionStore> = Arc::new(ReadDuringRescope {
+            inner: inner.clone(),
+            index: index.clone(),
+            reader: "u-bob".to_string(),
+            reads: reads.clone(),
+        });
+
+        let resp = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_bind(
+                    rpc("projects.channel.bind", bind_params(&project.id, "C1")),
+                    store.clone(),
+                    sessions.clone(),
+                    bus(),
+                    index.clone(),
+                ),
+            )
+            .await;
+        let result: ChannelBindResult =
+            serde_json::from_value(resp.result.expect("bind succeeds")).expect("bind result");
+        assert_eq!(result.rescoped_session, RescopeOutcome::Moved);
+        assert_eq!(
+            reads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the probe must actually have run inside the write — a decorator \
+             the bind path stopped calling would make the assertion below pass \
+             for the wrong reason"
+        );
+
+        assert!(
+            admits(&index, &key, "u-bob", false, &inner).await,
+            "a read that landed while the write was in flight re-cached the \
+             PRE-bind pair; only a forget that happens after the write can \
+             throw it away"
+        );
+    }
+
     /// The common case for a freshly bound group, and the one the `Unknown`
     /// arm must stay distinguishable from.
     #[tokio::test]
@@ -737,6 +1230,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -868,6 +1362,7 @@ mod tests {
                     store.clone(),
                     sessions,
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -911,6 +1406,7 @@ mod tests {
                     store.clone(),
                     sessions,
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -977,6 +1473,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1027,6 +1524,7 @@ mod tests {
                     store.clone(),
                     sessions,
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1066,6 +1564,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1121,6 +1620,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1192,6 +1692,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1245,6 +1746,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1318,6 +1820,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1406,6 +1909,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1568,6 +2072,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;
@@ -1631,6 +2136,7 @@ mod tests {
                     store.clone(),
                     sessions.clone(),
                     bus(),
+                    visibility(),
                 ),
             )
             .await;

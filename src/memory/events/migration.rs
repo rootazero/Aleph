@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(report.skipped, 0);
 
         // Verify events were stored
-        let events = db.get_memory_events_for_fact("f1", "").await.unwrap();
+        let events = db.get_memory_events_for_fact("f1").await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.event_type_tag(), "NoteMigrated");
         assert_eq!(events[0].timestamp, 1000); // preserved original
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(r2.skipped, 1);
 
         // Still only 1 event
-        let events = db.get_memory_events_for_fact("f1", "").await.unwrap();
+        let events = db.get_memory_events_for_fact("f1").await.unwrap();
         assert_eq!(events.len(), 1);
     }
 
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(report.migrated, 1);
 
         // Verify the snapshot preserves is_valid = false
-        let events = db.get_memory_events_for_fact("inv1", "").await.unwrap();
+        let events = db.get_memory_events_for_fact("inv1").await.unwrap();
         if let MemoryEvent::NoteMigrated { snapshot, .. } = &events[0].event {
             assert_eq!(snapshot["is_valid"], false);
         } else {
@@ -262,7 +262,7 @@ mod tests {
             .await
             .unwrap();
 
-        let events = db.get_memory_events_for_fact("rt1", "").await.unwrap();
+        let events = db.get_memory_events_for_fact("rt1").await.unwrap();
         let rebuilt = super::super::projector::EventProjector::fold_events_to_note(&events)
             .unwrap()
             .unwrap();

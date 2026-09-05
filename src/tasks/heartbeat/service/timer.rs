@@ -330,7 +330,13 @@ async fn execute_heartbeat_tick(
             let prompt = build_heartbeat_prompt(task, &r, wake_reason);
             let l2_result = ctx
                 .adapter
-                .execute_heartbeat(&task.agent_id, &prompt, ctx.job_timeout_secs)
+                .execute_heartbeat(
+                    &task.agent_id,
+                    &prompt,
+                    ctx.job_timeout_secs,
+                    task.owner_user_id.as_deref(),
+                    task.scope_id.as_deref(),
+                )
                 .await;
 
             match l2_result {
@@ -703,6 +709,30 @@ mod tests {
     // Mock L2 adapter
     struct MockAdapter {
         status: &'static str, // "silent" or "delivery" or "error"
+        /// The attribution pair the tick actually handed down, recorded so a
+        /// test can tell "the timer forwarded the persisted task's columns"
+        /// apart from "the timer passed `None, None`". Both ends of that wire
+        /// were already defended — the creation faces write the columns and
+        /// the executor turns a pair into run metadata — but a mock that binds
+        /// these two parameters to `_` cannot see the segment between them
+        /// (criteria #4 and #7).
+        seen_attribution: std::sync::Mutex<Option<(Option<String>, Option<String>)>>,
+    }
+
+    impl MockAdapter {
+        fn new(status: &'static str) -> Arc<Self> {
+            Arc::new(MockAdapter {
+                status,
+                seen_attribution: std::sync::Mutex::new(None),
+            })
+        }
+
+        fn seen(&self) -> Option<(Option<String>, Option<String>)> {
+            self.seen_attribution
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        }
     }
 
     #[async_trait::async_trait]
@@ -712,7 +742,16 @@ mod tests {
             _agent_id: &str,
             _prompt: &str,
             _timeout_secs: u64,
+            owner_user_id: Option<&str>,
+            scope_id: Option<&str>,
         ) -> Result<HeartbeatL2Result, String> {
+            *self
+                .seen_attribution
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some((
+                owner_user_id.map(str::to_string),
+                scope_id.map(str::to_string),
+            ));
             let status = match self.status {
                 "silent" => HeartbeatL2Status::Silent,
                 "delivery" => HeartbeatL2Status::NeedsDelivery("Test output".into()),
@@ -740,16 +779,58 @@ mod tests {
     }
 
     fn make_ctx(adapter_mode: &'static str) -> Arc<TickContext> {
+        make_ctx_with(MockAdapter::new(adapter_mode))
+    }
+
+    /// Same context, but the caller keeps a handle on the adapter so it can
+    /// inspect what the tick handed it.
+    fn make_ctx_with(adapter: Arc<MockAdapter>) -> Arc<TickContext> {
         Arc::new(TickContext {
             probe_executor: Arc::new(MockProbe { result: json!(42) }),
-            adapter: Arc::new(MockAdapter {
-                status: adapter_mode,
-            }),
+            adapter,
             delivery: Arc::new(DeliveryEngine::new()),
             dedup: Arc::new(DedupEngine::noop(DedupConfig::default())),
             job_timeout_secs: 120,
             change_emitter: None,
         })
+    }
+
+    /// The middle segment of the attribution wire: a beat must carry the
+    /// attribution of the task it beats for. The face tests only prove the two
+    /// columns are WRITTEN, and the executor tests call the adapter directly
+    /// with literals — nothing asserted that the timer reads the persisted
+    /// task and forwards it. Replace the two arguments at the single
+    /// production call site with `None, None` and this is the test that goes
+    /// red, while every beat in production silently returns to unscoped and
+    /// `@unattributed` spend.
+    #[tokio::test]
+    async fn a_tick_hands_the_persisted_tasks_attribution_to_the_adapter() {
+        let mut task = make_task();
+        crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-owner")),
+            async {
+                task.stamp_current_scope();
+            },
+        )
+        .await;
+
+        let adapter = MockAdapter::new("silent");
+        let ctx = make_ctx_with(Arc::clone(&adapter));
+        let result = execute_heartbeat_tick(&task, None, &ctx).await;
+
+        assert_eq!(
+            result.l2_status.as_deref(),
+            Some("Silent"),
+            "the L2 must actually have run for the adapter to have seen anything"
+        );
+        assert_eq!(
+            adapter.seen(),
+            Some((
+                Some("u-owner".to_string()),
+                Some("personal:u-owner".to_string())
+            )),
+            "the beat must carry the owner and scope persisted on the task"
+        );
     }
 
     #[tokio::test]

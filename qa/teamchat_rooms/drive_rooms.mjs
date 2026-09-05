@@ -22,6 +22,7 @@
 // the assertions pick.
 import fs from "node:fs";
 import os from "node:os";
+import { frameDigest, normalizeFrame } from "../lib/ws.mjs";
 
 const [portArg, WORKSPACE, REQUEST_LOG, DELETE_PATH] = process.argv.slice(2);
 const PORT = Number(portArg);
@@ -110,24 +111,7 @@ class Conn {
         this.pendingReplies.delete(msg.id);
         return;
       }
-      // `topic` is overloaded on this wire, in THREE shapes, and reading only
-      // one of them makes the tap blind to exactly the frames a scenario is
-      // chasing (this fixture reported "no team.<id>.message ever arrived"
-      // for a whole round because of it):
-      //
-      //   {method:"event", params:{topic, data}}  bus events, as delivered
-      //   {topic, data}                            the same, un-enveloped
-      //   {method:"stream.x", params:{…}}          JSON-RPC notifications
-      let topic = null;
-      let data = null;
-      if (msg.method === "event" && msg.params) {
-        topic = msg.params.topic ?? null;
-        data = msg.params.data ?? msg.params;
-      } else {
-        topic = msg.topic ?? msg.method ?? null;
-        data = msg.data ?? msg.params ?? null;
-      }
-      this.frames.push({ topic, data, raw: msg });
+      this.frames.push(normalizeFrame(msg));
     });
     return this.rpc("connect", connectParams);
   }
@@ -454,7 +438,7 @@ async function main() {
     check(
       Boolean(frame),
       `${who}'s socket receives Alice's message frame, attributed to her`,
-      conns[who].seen((f) => String(f.topic || "").startsWith("team.")).map((f) => f.topic).join("\n"),
+      frameDigest(conns[who].seen((f) => String(f.topic || "").startsWith("team."))),
     );
     if (frame) {
       check(
@@ -493,7 +477,7 @@ async function main() {
   check(
     Boolean(bobBubble),
     "an OBSERVED message is still broadcast live to the other human",
-    "no team.<id>.message frame with Bob as author reached Alice",
+    `no team.<id>.message frame with Bob as author reached Alice — ${frameDigest(conns.alice.frames)}`,
   );
 
   // ===== Phase 4: @-mention re-activates, and raises a card ==============
@@ -749,7 +733,7 @@ async function main() {
     check(
       Boolean(frame),
       `projects.changed: the rename reaches ${who}'s socket live`,
-      conns[who].frames.map((f) => f.topic).join(", ").slice(0, 400),
+      frameDigest(conns[who].frames).slice(0, 400),
     );
   }
 
