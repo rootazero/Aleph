@@ -277,15 +277,13 @@ impl ToolRegistrar {
             // Generate routing regex for flat namespace
             .with_routing_regex(format!(r"^/{}\s*", regex::escape(&skill.id)))
             .with_routing_intent_type("skills")
-            // `routing_system_prompt` carries the skill's description onto
-            // `CommandContext::Skill.instructions`. Nothing injects that
-            // string into a prompt — the description already reaches the model
-            // through the `<available_skills>` block
-            // (`thinker::layers::skill_instructions`) and the body only through
-            // the `skill_read` tool. It is kept because the field is part of
-            // the slash-command envelope's shape, not because a consumer reads
-            // it back.
-            .with_routing_system_prompt(&skill.description)
+            // No `routing_system_prompt` here: it used to carry the skill's
+            // description onto `CommandContext::Skill.instructions` and out
+            // through the slash-command envelope, where nothing ever read it
+            // back. The description already reaches the model through the
+            // `<available_skills>` block (`thinker::layers::skill_instructions`)
+            // and the body only through the `skill_read` tool, so the copy was
+            // a second, reader-less expression of the same string.
             // The validated `allowed-tools:` scope. `None` here is "the skill
             // declared nothing" and must stay distinguishable from
             // `Some(vec![])`, "the skill declared nothing is allowed" — see

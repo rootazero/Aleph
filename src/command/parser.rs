@@ -59,8 +59,6 @@ pub enum CommandContext {
     Skill {
         /// Skill ID
         skill_id: String,
-        /// Skill instructions to inject
-        instructions: String,
         /// Skill name for display
         display_name: String,
         /// The skill's declared tool scope, validated at registration.
@@ -139,9 +137,12 @@ fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
         ToolSource::Mcp { server } => CommandContext::Mcp {
             server_name: server,
         },
+        // No `instructions` field: skill registration deliberately leaves
+        // `routing_system_prompt` unset. The skill's description reaches the
+        // model through the `<available_skills>` block and its body only
+        // through `skill_read`; carrying a third copy here had no reader.
         ToolSource::Skill { id } => CommandContext::Skill {
             skill_id: id,
-            instructions: tool.routing_system_prompt.unwrap_or_default(),
             display_name: tool.display_name,
             allowed_tools: tool.routing_capabilities,
         },

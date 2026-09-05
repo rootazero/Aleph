@@ -97,6 +97,16 @@ async fn test_register_skills() {
     assert!(tool.is_some());
     let tool = tool.unwrap();
     assert!(matches!(tool.source, ToolSource::Skill { .. }));
+    // The skill path must NOT copy `description` into `routing_system_prompt`:
+    // that copy only ever reached `CommandContext::Skill.instructions` and the
+    // slash-command envelope, where nothing read it back. The description is
+    // already in front of the model via `<available_skills>`. Re-adding the
+    // builder call turns this red.
+    assert!(
+        tool.routing_system_prompt.is_none(),
+        "skills must leave routing_system_prompt unset; got {:?}",
+        tool.routing_system_prompt
+    );
 }
 
 #[tokio::test]

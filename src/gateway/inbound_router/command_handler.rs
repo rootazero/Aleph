@@ -123,7 +123,7 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// Serialize a `ParsedCommand` directly into the slash-command mode JSON used
 /// by `ExecutionEngine` fast path. Preserves source-specific fields per
 /// command kind:
-/// * `Skill` — `skill_id`, `instructions`, `allowed_tools`, `display_name`
+/// * `Skill` — `skill_id`, `allowed_tools`, `display_name`
 /// * `Custom` — `system_prompt`, `pattern`, `tool_id`
 /// * `Mcp`   — `server_name`, `tool_name`
 ///
@@ -157,14 +157,12 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
     let value = match &parsed.context {
         CommandContext::Skill {
             skill_id,
-            instructions,
             display_name,
             allowed_tools,
         } => serde_json::json!({
             "type": "skill",
             "skill_id": skill_id,
             "display_name": display_name,
-            "instructions": instructions,
             "allowed_tools": allowed_tools,
             "args": args,
             "source": "skill",

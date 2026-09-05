@@ -121,8 +121,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// only ever emit `type: "direct_tool"`, while the router emitted four
     /// kinds. Any surface that fell back to it therefore lost skills, MCP
     /// tools and custom commands *silently*: `/my-skill` resolved to nothing,
-    /// so it reached the model as literal text with no instructions overlay,
-    /// no `allowed_tools` narrowing, and no recorded use. `agent.run` — i.e.
+    /// so it reached the model as literal text with no `allowed_tools`
+    /// narrowing and no recorded use. `agent.run` — i.e.
     /// the TUI — was that surface.
     ///
     /// Returns `None` when the parser cell is still empty — a

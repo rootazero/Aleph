@@ -142,7 +142,16 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_regex: Option<String>,
 
-    /// System prompt to inject for this command
+    /// System prompt declared by a custom `[[rules]]` entry.
+    ///
+    /// Written only by `register_custom_commands`; skills deliberately leave
+    /// it unset. Its single reader is `CommandContext::Custom.system_prompt`,
+    /// which reaches the slash-command envelope's `system_prompt` key — and
+    /// the envelope's `"custom"` arm falls through to the agent loop without
+    /// reading it, so nothing injects this string into a prompt today. The
+    /// same text does reach the model as the tool's `description`
+    /// (`registration.rs` truncates it to 100 chars). Do not describe this as
+    /// an injected prompt until a consumer actually injects it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_system_prompt: Option<String>,
 
