@@ -806,17 +806,36 @@ mod tests {
         );
     }
 
-    /// Regression for `severed-wire-2026-09-05-modules2 secrets I-2`: two
-    /// independent LRU caches could half-evict (hash gone, len survives —
-    /// or vice versa). The combined `(hash, len)` keyed cache holds them
-    /// together, so a single combined-LRU-bound fingerprint must remain
-    /// atomically co-resident with its length.
+    /// Regression for `severed-wire-2026-09-05-modules2 secrets I-2`.
+    ///
+    /// The predecessor design held two independent `LruCache`s (hashes in
+    /// one, lengths in the other) and could half-evict. The current design
+    /// stores a *single* map keyed on the `(hash, len)` tuple, which makes
+    /// half-eviction structurally unrepresentable — there is one entry and
+    /// one eviction, so no runtime assertion can distinguish "atomic" from
+    /// "non-atomic" here. What remains at risk, and is what this test
+    /// actually guards, is the observable contract that survives the fix:
+    ///
+    /// 1. the key carries **both** components (a regression that dropped
+    ///    `len` from the key, or derived it from anything other than the
+    ///    registered secret, is invisible to a length-only probe);
+    /// 2. overflow evicts the **least-recently-registered whole key**, and
+    ///    the map stays pinned at [`INJECTED_LRU_CAP`].
+    ///
+    /// Note the deliberate `same_len_survivors` assertion: every value in
+    /// this fixture is zero-padded to an identical byte length, so a probe
+    /// that looks at `len` alone can never observe the eviction. That is
+    /// exactly the bug this test used to have (the discriminator did not
+    /// discriminate); the assertion nails the fixture property that made it
+    /// undetectable, so re-weakening the checks below to `len`-only fails
+    /// loudly instead of passing vacuously.
     #[test]
     fn test_register_injected_evicts_hash_and_length_atomically() {
         let mut detector = LeakDetector::new();
-        // Push two full caches of fingerprints with overlapping (h, l)
-        // coverage, then re-register a fresh secret and assert the oldest
-        // entry was evicted as a unit, not orphaned across two caches.
+        // Fill the cache to capacity with distinct values that all share one
+        // byte length, then register one more and assert the oldest *key*
+        // (not merely its length) is gone.
+        let oldest_value = format!("older-secret-{:04}-padding-to-make-it-long-enough", 0);
         let older: Vec<InjectedSecret> = (0..INJECTED_LRU_CAP)
             .map(|i| {
                 let val = format!("older-secret-{i:04}-padding-to-make-it-long-enough");
@@ -826,25 +845,45 @@ mod tests {
         detector.register_injected(&older);
         assert_eq!(detector.injected.len(), INJECTED_LRU_CAP);
 
-        // The first secret to register must no longer be present after the
-        // (hash, len) tuple is evicted for a new registration; if half-
-        // eviction had returned, the (hash) entry would still match while
-        // (len) was gone, or vice versa.
-        let newest = InjectedSecret::from_value("newest", "newest-secret-padding");
-        detector.register_injected(&[newest]);
-        assert_eq!(detector.injected.len(), INJECTED_LRU_CAP);
-        let contains_newest = detector
-            .injected
-            .iter()
-            .any(|(&(_h, l), _)| l == "newest-secret-padding".len());
-        assert!(contains_newest, "newest fingerprint must be present");
-        let contains_oldest = detector
-            .injected
-            .iter()
-            .any(|(&(_h, l), _)| l == "older-secret-0000-padding-to-make-it-long-enough".len());
+        // Keys computed exactly the way production computes them.
+        let oldest_probe = InjectedSecret::from_value("k0", &oldest_value);
+        let oldest_key = (oldest_probe.value_hash, oldest_probe.value_len);
         assert!(
-            !contains_oldest,
-            "oldest (hash, len) pair must have been evicted atomically"
+            detector.injected.iter().any(|(&k, _)| k == oldest_key),
+            "fixture precondition: the oldest key must be resident before overflow"
+        );
+
+        let newest_value = "newest-secret-padding";
+        let newest = InjectedSecret::from_value("newest", newest_value);
+        let newest_key = (newest.value_hash, newest.value_len);
+        detector.register_injected(&[newest]);
+        assert_eq!(
+            detector.injected.len(),
+            INJECTED_LRU_CAP,
+            "cache must stay pinned at capacity"
+        );
+
+        assert!(
+            detector.injected.iter().any(|(&k, _)| k == newest_key),
+            "newest (hash, len) key must be present"
+        );
+        assert!(
+            !detector.injected.iter().any(|(&k, _)| k == oldest_key),
+            "oldest (hash, len) key must have been evicted as a unit"
+        );
+
+        // The fixture's values are all the same byte length, so `len` alone
+        // cannot witness the eviction: 1023 same-length keys survive. This
+        // is why the assertions above must compare the full tuple.
+        let same_len_survivors = detector
+            .injected
+            .iter()
+            .filter(|(&(_h, l), _)| l == oldest_key.1)
+            .count();
+        assert_eq!(
+            same_len_survivors,
+            INJECTED_LRU_CAP - 1,
+            "length alone must not be treated as a discriminator"
         );
     }
 
