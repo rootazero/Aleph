@@ -259,33 +259,40 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     parse_agent_label(process_name)
 }
 
-/// Identify the agent running as ONE probed process, from the three facts a
-/// process table supplies.
+/// Identify the agent running as ONE probed process, from the two facts a
+/// process table supplies: the kernel's name for it, and its argv vector.
 ///
 /// Restores the part of upstream's process identification this crate had cut
 /// (see this file's header). Upstream's entry is `identify_agent_in_job`
 /// (herdr 0.8.2 `src/detect/mod.rs:243-271`), which ranks the processes of a
 /// whole foreground JOB; its first act is to look for the process whose pid
 /// IS the group leader and, if that one identifies, return it without
-/// scoring. Aleph probes exactly that one process — `tcgetpgrp` gives the
-/// leader's pid and nothing else — so this is upstream's early return, and
-/// the scoring half (`process_priority`, `:685-694`) is deliberately NOT
-/// ported: with one candidate there is nothing to rank, and a scoring
-/// function with no caller is the zero-consumer abstraction R10 says to cut.
-/// The ordering below is what that scoring encodes for a single process
-/// anyway — the more specific candidate wins, name before argv before
-/// command line.
+/// scoring. This function is that early return: it answers for one process
+/// and ranks nothing.
 ///
-/// The name -> argv0 -> cmdline order is upstream's `normalized_process_name`
-/// (`:359-395`), narrowed the same way: upstream's runtime-specific argv
-/// walkers each existed for a shape Aleph had no producer for.
+/// ⚠️ The ranking half is NOT absent, and the note that used to stand here
+/// ("with one candidate there is nothing to rank") stopped being true on
+/// 2026-09-05. Windows has no `tcgetpgrp`, so the caller walks the process
+/// tree and arrives holding SEVERAL candidates;
+/// `gateway::pty::foreground::pick_foreground` ranks them and calls THIS
+/// function as its predicate. Upstream's `process_priority` (`:685-694`) is
+/// still not ported, but the reason is now a different one: Aleph ranks by
+/// tree DEPTH plus "does it identify", which a pgrp-shaped per-process score
+/// cannot express, so porting it would be a second derivation of a decision
+/// that already has one (判据 §1 / §9).
 ///
-/// ⚠️ That premise EXPIRED for two of them on 2026-09-05, when the embedded
-/// terminal's Windows default became `pwsh` and the shell tool's became
-/// `pwsh` / `cmd` (`utils::shell`): Aleph now produces the `cmd /c` and
-/// PowerShell hand-off shapes itself, so [`windows_shell`] reads them and the
-/// walkers are no longer "upstream only". Cursor's bundled-node layout still
-/// has no producer here and is still left upstream.
+/// The name -> argv[0] -> argv-token order is upstream's
+/// `normalized_process_name` (`:359-395`), narrowed the same way: upstream's
+/// runtime-specific argv walkers each existed for a shape Aleph had no
+/// producer for.
+///
+/// ⚠️ That premise EXPIRED for two of the three, in the SAME round that
+/// retired the ranking note above. The embedded terminal's Windows default
+/// became `pwsh` and the shell tool's became `pwsh` / `cmd` (`utils::shell`),
+/// so Aleph now produces the `cmd /c` and PowerShell hand-off shapes itself:
+/// [`windows_shell`] reads them and they are no longer "upstream only".
+/// Cursor's bundled-node layout still has no producer here and is still left
+/// upstream — the sentence survives for exactly one of its original three.
 #[must_use]
 pub fn identify_agent_from_process<S: AsRef<str>>(name: &str, argv: &[S]) -> Option<Agent> {
     identify_agent(&normalized_program_name(name, argv))
@@ -431,7 +438,7 @@ fn argv_tokens<'a>(argv: &[&'a str]) -> Vec<&'a str> {
 /// answer them. It is not ported because every wrapper measured names its
 /// operand in the LEADER's own command line, and a descendant walk costs a
 /// full process-table refresh on every probe of every idle shell —
-/// `gateway::pty::foreground::deepest_newest_descendant` says why that is
+/// `gateway::pty::foreground::foreground_fact_for_shell` says why that is
 /// second choice. A wrapper that hides its operand would need it; none does.
 fn agent_token_in_argv<'a>(tokens: &[&'a str]) -> Option<&'a str> {
     let mut cursor = 0usize;

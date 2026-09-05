@@ -122,7 +122,7 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
 探不到说的是「**我没能看**」，不是「那里什么都没跑」（判据 §8）。
 
 **锁纪律**：一次探测是**三个函数**，不是一个——`leader_from_terminal`（唯一碰 master 的，一次 `tcgetpgrp` ioctl，
-在锁内）、`deepest_newest_descendant`（非 Unix 兜底，全表刷新，在**所有锁外**）、`fact_for_pid`（单 pid，
+在锁内）、`foreground_fact_for_shell`（非 Unix 兜底，全表刷新，在**所有锁外**）、`fact_for_pid`（单 pid，
 在所有锁外）。它们曾被合成一个 `foreground_leader(master, shell_pid)`，那会逼调用方在 Windows 上**每次探测**
 都把 master 锁跨过整次全表刷新，而两条 doc 同时断言相反的事。守卫
 `no_process_table_read_happens_under_the_master_lock` 钉住这条边界。
@@ -136,7 +136,7 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
 `RuntimeAgents::sample` 的输入是 `SampleInput`（结构体而非九个位置参数——其中四个是相邻的
 `Option<&str>`/`&str`，正是「换一对也能编译然后开始说谎」的形状）。
 
-- **一次推导两个字段**：`agent_detect::normalized_program_name(name, argv0, cmdline)` 的答案同时铸出
+- **一次推导两个字段**：`agent_detect::normalized_program_name(name, argv)` 的答案同时铸出
   `program`（叫它什么）与 `agent`（它是哪个 agent），所以两者不可能描述不同的 token（判据 §1）。
   内核的原始 name **不能单独发布**——macOS 把一个叫 `claude` 的 `#!/bin/sh` 脚本报成 `bash`；
   而 `claude` 本身是 Node 脚本，进程名是 `node`，只有命令行认得出它。
@@ -155,7 +155,8 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
 
 下表每一行都是 **2026-09-05 在真机上量出来的**，不是推的：用 `pty.fork` 起进程、`tcgetpgrp` 取前台
 进程组组长、再对那个 pid 读 `sysinfo` 的 `name` / `cmd[0]` / `cmd.join(" ")`——正是
-`foreground::fact_for_pid` 收集的同三个事实。
+`foreground::fact_for_pid` **当时**收集的同三个事实（它现在收集**两个**——`name` 与 argv
+向量本身，那次 `join` 是第二轮拆掉的缺陷，见 §3.2.4）。
 
 | 起法 | 组长的 `name` / `argv0` / `cmdline` | 修前 | 修后 |
 |---|---|---|---|
@@ -175,12 +176,12 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
    「Aleph 只探一个进程，`tcgetpgrp` 只给组长的 pid」**作为不移植 herdr `identify_agent_in_job`
    打分半边的理由是假的**（判据 §1：一句承重的注释错了）。仍然不移植，但理由换了：**量到的每一个
    包装器都把自己的 operand 写在组长自己的命令行里**，而后代遍历要付一次**全量进程表刷新**——
-   每一次探测、每一个闲置 shell 都要付（`deepest_newest_descendant` 的文档说了这就是它是第二选择的
+   每一次探测、每一个闲置 shell 都要付（`foreground_fact_for_shell` 的文档说了这就是它是第二选择的
    原因）。哪天出现一个把 operand 藏起来的包装器，那时候才需要它。
 3. **macOS 的 `cmd()` 会把环境变量渗进 argv。** 一个重写了标题的进程（每个 Node CLI 都会）让
    `sysinfo` 从 argv 区读进 env 区，所以真实读数是 `pi TERM_PROGRAM=Apple_Terminal` 和
    `npm exec claude TERM_PROGRAM=… SHELL=…`。因此 (a) `VAR=value` 形状的 token 没有资格被当成
-   程序名，(b) `normalized_program_name` 的兜底取 `argv[0]` 的**第一个空白分隔词**——程序名不含空格，
+   程序名，(b) `normalized_program_name` 的兜底要从 `argv[0]` 里取出一个**不含空格的词**（取法第二轮改过：先 basename 再取首词，见 §3.2.4）——程序名不含空格，
    把整条标题（或粘着环境变量的标题）交给面板是**一个具体的谎**（判据 §17）。
 
    ⚠️ 渗进来的**不总是**规规矩矩的 `VAR=value`。`exec npx pi` 在本机的逐字读数是
@@ -201,7 +202,7 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
 
 上表整张是 **macOS** 的读数：那条路走 `tcgetpgrp`。Windows 走的是**另一半代码**——
 `leader_from_terminal` 在 `cfg(not(unix))` 下按构造恒 `None`，所以每一次探测都落到
-`deepest_newest_descendant`。**这一半在 2026-09-05 之前从没在 Windows 硬件上执行过一次**：
+`deepest_newest_descendant`（**这个名字只在本节的历史里有效**——第二轮把走树拆成了纯函数 `descendants_of` + 入口 `foreground_fact_for_shell`，见 §3.2.4 与 §7.3；本节其余处同）。**这一半在 2026-09-05 之前从没在 Windows 硬件上执行过一次**：
 实现刻意做成平台无关（见该函数的文档），而它的三条 exerciser 全都戴着 `#[cfg(unix)]`，
 被门在了**不需要它的那个平台**上。三条现已平台无关，读数如下。
 
