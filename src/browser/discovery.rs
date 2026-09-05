@@ -10,7 +10,7 @@
 //! standard order — a profile that asks for Brave should not silently launch
 //! Chrome when Brave is installed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::profile::BrowserType;
 use super::BrowserError;
@@ -95,6 +95,45 @@ fn engine_hints(browser: &BrowserType) -> (&'static [&'static str], &'static [&'
             &["microsoft-edge-stable", "microsoft-edge"],
         ),
     }
+}
+
+/// Which engine a resolved binary IS, read off its path with the same table
+/// [`engine_hints`] orders candidates by.
+///
+/// This exists so the substitution a launch performs can be reported. The old
+/// boot warning (`manager::unhonored_managed_fields`) covered exactly one case
+/// — a managed Brave profile, which `playwright-cli open --browser` had no
+/// value for. Aleph launches the browser itself now, so that case is honoured
+/// when Brave is installed; but [`find_chromium_preferred`] **degrades
+/// silently** when it is not ([`prefer_paths`] merely reorders and the fallback
+/// is only `debug!`), so "asked for Brave, got Chrome" would go unreported at
+/// every level. Deriving both the ordering and the identification from one
+/// table is what keeps the warning about the same notion of "which browser
+/// is this" that the search used (判据 §1).
+///
+/// `None` means *unidentifiable*, and callers must not spend it as "the
+/// requested engine was honoured".
+pub(super) fn engine_of(path: &Path) -> Option<BrowserType> {
+    let s = path.to_string_lossy();
+    // Most specific first: "Google Chrome" contains "Chrome", and a Brave or
+    // Edge path must not be answered as Chrome.
+    for browser in [
+        BrowserType::Brave,
+        BrowserType::Edge,
+        BrowserType::Chrome,
+        BrowserType::Chromium,
+    ] {
+        let (path_substrings, names) = engine_hints(&browser);
+        if path_substrings.iter().any(|sub| s.contains(sub))
+            || names.iter().any(|n| {
+                path.file_name()
+                    .is_some_and(|f| f.to_string_lossy().starts_with(n))
+            })
+        {
+            return Some(browser);
+        }
+    }
+    None
 }
 
 /// Partition `paths` into preferred-first order: entries whose string form
