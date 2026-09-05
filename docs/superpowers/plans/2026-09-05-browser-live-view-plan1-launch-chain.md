@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 `BrowserDriver::Managed` 的启动链翻转过来——Aleph 自己 spawn Chromium（`--remote-debugging-port=0`），从 `<user_data_dir>/DevToolsActivePort` 读出 CDP 端点，`playwright-cli` 只以 `attach --cdp <http-url>` 接入（永不 `open`）；浏览器进程的生命周期归 Aleph，`playwright-cli close` 退化成断开，惰性 `open` 变成惰性 `attach`。同时把 Chromium 作为外部运行时供给（配置钉住 > 系统浏览器 > Playwright 自带），补 fail-closed 文案、doctor 哨兵与 R8 安装工具面，并给现有真机装置 `qa/browser_managed/run.sh` 加一个 `attach` 阶段。**本计划不做视图**：只交付 §3.2 的 `live_endpoint(profile)` 访问器，`src/browser/live/`、`qa/browser_live/`、`browser_control` 工具都不在范围内。
+**Goal（评审后修订版，2026-09-05）：** 把 `BrowserDriver::Managed` 的启动链翻转过来——Aleph 自己 spawn Chromium（`--remote-debugging-port=0`），从 `<user_data_dir>/DevToolsActivePort` 读出 CDP 端点，`playwright-cli` 只以 `attach --cdp <http-url>` 接入（永不 `open`）；浏览器进程的生命周期归 Aleph，`playwright-cli close` 退化成断开，惰性 `open` 变成惰性 `attach`。同时把 Chromium 作为外部运行时供给（配置钉住 > 系统浏览器 > Playwright 自带），补 fail-closed 文案、doctor 哨兵与 R8 安装工具面，并给现有真机装置 `qa/browser_managed/run.sh` 加一个 `attach` 阶段。**本计划不做视图**：只交付 §3.2 的 `live_endpoint(profile)` 访问器，`src/browser/live/`、`qa/browser_live/`、`browser_control` 工具都不在范围内。
 
 **Architecture:** `ChromiumLaunchSpec` → `ChromiumChild`（`std::process::Child` + `CdpEndpoint` + sidecar 文件）住在 `PlaywrightCliDriver` 的 per-session 映射里，与惰性启动咽喉、per-session 锁同处一地；`ProfileManager` 只多三个转发访问器（`live_endpoint` / `session_active` / `reap_idle` 的 Managed 臂）。二进制解析走 `chromium_resolve`：配置钉住 > `discovery::find_chromium_preferred` > 问 `playwright-cli install-browser <b> --dry-run` 要 `Install location:` 再在那一个目录里找可执行文件。运行时供给复用台账**已有的** `playwright-cli` post-install 动作（`install-browser chromium`），只加 `PLAYWRIGHT_DOWNLOAD_HOST` 透传；新增 doctor 哨兵 `browser/chromium-missing` 与 R8 工具 `runtime_manage{list,install}`。
 
-**Tech Stack:** Rust (alephcore) · tokio · serde / schemars · `std::process::Command`（子进程，`NoWindow` 扩展）· `sysinfo`（经 `utils::process_alive::with_process_specifics` 与 `gateway::pty::foreground::fact_for_pid`，唯一 sysinfo 惯用法所有者）· bash + python3（`qa/browser_managed/`）。**零新 crate**。
+**Tech Stack:** Rust (alephcore) · tokio · serde / schemars · `std::process::Command`（子进程，`NoWindow` 扩展）· `sysinfo`（只经 `utils::process_alive::with_process_specifics`，本仓单 pid `sysinfo` 惯用法的唯一所有者；**不经** `gateway::pty::foreground::fact_for_pid`，理由见 Task 1）· bash + python3（`qa/browser_managed/`）。**零新 crate**。
 
 **Spec:** docs/superpowers/specs/2026-09-05-browser-live-view-design.md (§3.1, §3.2 accessor only, §6.1–§6.5)
 
@@ -31,7 +31,7 @@
 
 ---
 
-## 前言：与提议结构的九处偏离（每一处都是代码逼出来的）
+## 前言：与提议结构的十一处偏离（每一处都是代码逼出来的）
 
 1. **`ProfileManager` 构造点不是 `builder/subsystems.rs`**，是 `src/bin/aleph-server/commands/start/builder/agent_init/mod.rs:509-513`。而「每个被服务的 manager 恰好跑一次」的 boot 钩子是 `spawn_idle_reaper`，唯一生产调用点在 `src/executor/builtin_registry/builder/constructor/mod.rs:639`。所以 boot 时的孤儿回收挂进 `spawn_idle_reaper`（Task 6），不挂在 builder 里——那一处的论证（manager.rs:202-207）逐字说了为什么它是那个钩子。
 2. **macOS 的 Playwright 浏览器缓存不是 `~/.cache/ms-playwright/`**，是 `~/Library/Caches/ms-playwright/`；而且可执行文件不是 `Chromium.app/Contents/MacOS/Chromium`，本机实测是 `chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`。**所以 `chromium_resolve` 不硬编码缓存路径**，改为问装它的那个 CLI：`playwright-cli install-browser chromium --dry-run` 逐行打印 `Install location:`（本机实测输出逐字抄在 Task 2 里）。同一个二进制既装它又说它在哪，这是判据 §1 要的单一推导；硬编码三条平台路径则是三份会腐烂的表述。
@@ -39,9 +39,11 @@
 4. **`playwright-cli attach` 接受 `--config`——已实测，不是两个分支。** 本机 0.1.8 的 `attach --help` 逐字列出 `--config  path to the configuration file, defaults to .playwright/cli.config.json`。spec §9 那条未验证项就此关闭，Task 4 只写一个分支。
 5. **不新增 `chromium` 台账 capability。** `RuntimeSpec` 的探测是 PATH-only（`src/runtimes/probe.rs:65-83` 只走 `find_on_path`），而 Playwright 的 Chromium 永远不在 PATH 上——加一条 spec 只会得到一个**永远 Missing** 的条目，每次 `ensure_capability` 都重装。而供给本来就已经在了：`src/runtimes/specs.rs:173-176` 的 `PostInstallAction::RunSubcommand { args: &["install-browser", "chromium"] }` 是 `playwright-cli` 的 post-install。所以 Task 7 做的是**给这条已有动作加 `PLAYWRIGHT_DOWNLOAD_HOST` 透传** + doctor 哨兵 + fail-closed 文案，Task 8 做 R8 工具面。这同时回答了 spec §9 的第二条未验证项：**台账已经会装 Chromium**，只是叫 `install-browser` 不叫 `install`（v0.1.14 改的名，specs.rs:166-172 记着）。
 6. **提议的 Task 7 拆成两个任务（7 与 8）。** 注册一个新工具要动六处（`definitions.rs` 的条目 + `REGISTRY_SCHEMA_BASELINE` 行 + `standalone` 的 `=> None` 臂、`groups.rs`、`registry/struct_def.rs`、`builder/constructor/mod.rs`、`registry/tool_registry_impl.rs`、`builder/core_tools.rs`）外加一条描述字节棘轮（`CATALOG_DESCRIPTION_CEILING_BYTES = 113_719`）。塞进供给任务里会让「哪一步红了」不可归因。**全计划共 10 个任务。**
-7. **三处代码在翻转后成为死码或恒真谓词，本计划 CUT 它们**：`playwright_launch::open_argv`（:220-234）、`playwright_launch::browser_flag_value`（:118-121，`attach` 不收 `--browser`/`--headed`，引擎选择改由 `chromium_resolve` 承担）、`manager::unhonored_managed_fields`（:580-591，它唯一的返回条件是 `browser_flag_value(..).is_none()`，删掉后它恒空——判据 §2「恒真的谓词等于没判」）。连同它们的测试一起删（P6：废弃代码删除不注释）。
-8. **`session_active` 与 `idle_managed_profiles` 从 `TabRegistry::has_tabs` 改成子进程活性。** 现状两处都用 `has_tabs`，且 manager.rs:355-357 逐字承认那是「近似」。翻转后「有没有浏览器」有了一个确切答案（我们自己的 `Child`），留着近似就是同一个问题的第二个答案（判据 §1）。`reap_idle_tabs` 的候选筛选**继续**用 `has_tabs`——那问的是 tab 不是浏览器。
-9. **现有 `open` 场景的预言机会失效，Task 9 负责搬家。** `qa/browser_managed/drive_browser.py` 用 `playwright-cli list` 打印的 `user-data-dir` 证明「Aleph 生成的 `--config` 真的到了浏览器」。`attach` 之后 CLI 不再拥有 profile 目录，那一行不可能再报出我们的 udd。新的预言机是 `<udd>/DevToolsActivePort` 存在 + `curl http://127.0.0.1:<port>/json/version` 200——**更强**，因为它证明的是浏览器确实被我们用那个 udd 起起来了，而不是 CLI 转述了一遍我们写给它的配置。
+7. **三处代码在翻转后失去被引用者，本计划 CUT 它们，但第三处的理由不是「恒真」**：`playwright_launch::open_argv`（:207-234）与 `playwright_launch::browser_flag_value`（:106-123；`attach` 不收 `--browser`/`--headed`，引擎选择改由 `chromium_resolve` 承担）确实成了死码。`manager::unhonored_managed_fields`（:580-591）**不是**恒空——它的真实谓词是 `browser_flag_value(&cfg.browser).is_none() && cfg.browser != BrowserType::default()`（`manager.rs:585-587`），也就是**恰好 Brave**，删掉 `browser_flag_value` 之后这个条件仍然表达得出来。它被删是因为它保护的那件事**换了地方**：那条启动告警存在的意义是「一个 managed Brave profile 不要静默拿到 Chromium」，而翻转之后引擎由 `chromium_resolve` 兑现。⚠️ 只说「我们自己起 Brave 所以 honor 了」是**半个替换**：`find_chromium_preferred`（`discovery.rs:125-150`）在首选引擎不存在时**静默降级**（`prefer_paths` 只是重排，回落只打 `debug!`）。所以本轮把告警搬进解析器本身——`resolve_binary` 返回**实际解析出的引擎**，与 profile 请求的引擎不一致时 `warn!`（判据 §1：一份推导；判据 §16：修在一边的判据要主动搬过去）。
+8. **STRUCTURAL：sidecar 不放在各自的 user-data-dir 里，放在一个注册表目录。** 初稿把 `aleph-chromium.json` 写进每个 profile 的 udd，于是 boot 清扫只能扫「派生出来的那个根」，而配了 `user_data_dir` 的 profile（本仓 QA 自己就配，`qa/browser_managed/run.sh:85`）的 sidecar 落在根之外，**永远扫不到**。改为一个注册表：`browser_state_dir("chromium")/<sanitize_session_key(profile)>.json`，每份记 `{pid, http_url, user_data_dir, aleph_version}`。清扫只走那一个目录，「有哪些浏览器要收」这件事就只有一个推导点（判据 §12）。
+9. **STRUCTURAL：守护进程优雅退出时要杀掉自己的 Chromium（spec §3.6「退出时杀」）。** `std::process::Child` 不在 drop 时 kill，初稿也没有任何 shutdown 钩子——每次重启都留一个浏览器，等下一次 boot 清扫。本轮在 `src/bin/aleph-server/commands/start/mod.rs:3642` 之后的有序停机段落里加一次 `browser::manager::shutdown_browsers_global()`，与同段 `:3658` 的 `bash_exec::kill_all_running_background()` **同形同理由**（那一行的注释逐字写着为什么 `kill_on_drop` 不够、为什么必须显式调用、为什么放在这里而不是信号处理器里）。
+10. **`session_active` 与 `idle_managed_profiles` 从 `TabRegistry::has_tabs` 改成子进程活性。** 现状两处都用 `has_tabs`，且 manager.rs:355-357 逐字承认那是「近似」。翻转后「有没有浏览器」有了一个确切答案（我们自己的 `Child`），留着近似就是同一个问题的第二个答案（判据 §1）。`reap_idle_tabs` 的候选筛选**继续**用 `has_tabs`——那问的是 tab 不是浏览器。
+11. **现有 `open` 场景的预言机会失效，Task 9 负责搬家。** `qa/browser_managed/drive_browser.py` 用 `playwright-cli list` 打印的 `user-data-dir` 证明「Aleph 生成的 `--config` 真的到了浏览器」。`attach` 之后 CLI 不再拥有 profile 目录，那一行不可能再报出我们的 udd。新的预言机是 `<udd>/DevToolsActivePort` 存在 + `curl http://127.0.0.1:<port>/json/version` 200——**更强**，因为它证明的是浏览器确实被我们用那个 udd 起起来了，而不是 CLI 转述了一遍我们写给它的配置。
 
 ---
 
@@ -53,11 +55,12 @@
 - Modify `src/browser/error.rs:5-6`（`LaunchFailed(String)` → 带 `stage` 的结构变体）与它现存的四个构造点 `src/browser/chrome_mcp.rs:135, 578, 603, 609`、一个测试点 `src/diagnostics/checks/browser_runtime.rs:480`
 
 **Interfaces:**
-- Consumes: `crate::utils::no_window::NoWindow`（`src/utils/no_window.rs:32-51`，`std::process::Command` 与 `tokio::process::Command` 都实现了）· `crate::security::secret_env::is_secret_env`（`playwright_cli.rs:19` 已在用）· `crate::utils::process_alive::with_process_specifics`（`src/utils/process_alive.rs:126-131`，`pub(crate)`）· `crate::gateway::pty::foreground::fact_for_pid`（`src/gateway/pty/foreground.rs:263`，`pub`，返回带 `cmdline: Option<String>` 的 `ForegroundFact`）
+- Consumes: `crate::utils::no_window::NoWindow`（`src/utils/no_window.rs:32-51`，`std::process::Command` 与 `tokio::process::Command` 都实现了）· `crate::security::secret_env::is_secret_env`（`playwright_cli.rs:19` 已在用）· `crate::utils::process_alive::with_process_specifics`（`src/utils/process_alive.rs:126-131`，`pub(crate)`，本仓**唯一**的单 pid `sysinfo` 惯用法所有者）
+- **不消费** `gateway::pty::foreground::fact_for_pid`。它是 pty 侧的类型，契约不同：`ForegroundFact::cmdline` 的 doc 逐字写着「The whole command line, **space-joined**」（`src/gateway/pty/foreground.rs:142-143`），由 `cmd.iter().map(to_string_lossy).collect::<Vec<_>>().join(" ")` 造出（`:266-273`）。在那个字符串上做匹配只能是 `str::contains`——一次子串扫描，而这里的动作是 SIGKILL。见下方「为什么读 argv 向量而不是那一行字符串」。
 - Produces:
   ```rust
   pub(crate) const DEVTOOLS_PORT_DEADLINE: std::time::Duration;
-  pub(crate) const SIDECAR_FILE: &str;                       // "aleph-chromium.json"
+  pub(crate) const SIDECAR_EXT: &str;                        // "json"
   pub(crate) struct ChromiumLaunchSpec { pub binary: PathBuf, pub user_data_dir: PathBuf,
                                           pub headless: bool, pub proxy: Option<String>,
                                           pub extra_args: Vec<String> }
@@ -65,18 +68,25 @@
   pub(crate) struct CdpEndpoint { pub http_url: String, pub ws_url: String, pub pid: u32 }
   pub(crate) fn parse_devtools_active_port(text: &str) -> Option<(u16, String)>;
   pub(crate) fn endpoint_from_port_file(text: &str, pid: u32) -> Option<CdpEndpoint>;
-  pub(crate) struct ChromiumSidecar { pub pid: u32, pub http_url: String, pub aleph_version: String }
-  pub(crate) struct ChromiumChild;
+  pub(crate) struct ChromiumSidecar { pub pid: u32, pub http_url: String,
+                                      pub user_data_dir: PathBuf, pub aleph_version: String }
+  pub(crate) fn sidecar_registry_dir() -> Result<PathBuf, BrowserError>;
+  pub(crate) fn sidecar_path(session_key: &str) -> Result<PathBuf, BrowserError>;
+  pub(crate) struct ChromiumChild { /* child: Child, endpoint: CdpEndpoint,
+                                       user_data_dir: PathBuf, session_key: String */ }
   impl ChromiumChild {
-      pub(crate) async fn spawn(spec: &ChromiumLaunchSpec, deadline: Duration) -> Result<Self, BrowserError>;
+      pub(crate) async fn spawn(spec: &ChromiumLaunchSpec, session_key: &str, deadline: Duration)
+          -> Result<Self, BrowserError>;
       pub(crate) const fn endpoint(&self) -> &CdpEndpoint;
       pub(crate) fn alive(&mut self) -> bool;
       pub(crate) fn shutdown(self);
   }
-  pub(crate) fn reap_orphans(root: &Path,
-                             argv_of: &dyn Fn(u32) -> Option<String>,
+  pub(crate) enum ArgvProbe { Absent, Unreadable, Argv(Vec<String>) }
+  pub(crate) fn argv_names_dir(argv: &[String], dir: &Path) -> bool;
+  pub(crate) fn reap_orphans(registry: &Path,
+                             argv_of: &dyn Fn(u32) -> ArgvProbe,
                              kill: &dyn Fn(u32)) -> usize;
-  pub(crate) fn reap_orphans_now(root: &Path) -> usize;
+  pub(crate) fn reap_orphans_now() -> usize;
   // error.rs
   BrowserError::LaunchFailed { stage: &'static str, detail: String }
   ```
@@ -182,87 +192,233 @@ mod tests {
     }
 
     #[test]
-    fn the_sidecar_round_trips_and_carries_the_running_version() {
+    fn the_sidecar_round_trips_and_records_the_dir_it_is_not_stored_in() {
         let json = serde_json::to_string(&ChromiumSidecar {
             pid: 4242,
             http_url: "http://127.0.0.1:58363".into(),
+            user_data_dir: PathBuf::from("/tmp/explicit-udd"),
             aleph_version: env!("ALEPH_VERSION").to_string(),
         })
         .expect("serialize");
         let back: ChromiumSidecar = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.pid, 4242);
         assert_eq!(back.http_url, "http://127.0.0.1:58363");
+        // The whole point of the registry: the record lives in ONE directory
+        // and names the udd, instead of living IN the udd where a profile that
+        // configures its own path puts it outside anything a sweep walks.
+        assert_eq!(back.user_data_dir, PathBuf::from("/tmp/explicit-udd"));
         assert_eq!(back.aleph_version, env!("ALEPH_VERSION"));
     }
 
-    /// The whole point of reading argv before killing: a pid recorded hours ago
-    /// may belong to somebody else's process now. "The sidecar named this pid"
-    /// is not evidence; "the process still carries OUR user-data-dir" is.
+    /// The containment property the registry inherits from `config_path_for`:
+    /// one component under the state dir, whatever the profile is called.
     #[test]
-    fn reap_orphans_kills_the_match_and_spares_a_recycled_pid() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let ours = root.path().join("default");
-        let recycled = root.path().join("other");
-        for (dir, pid) in [(&ours, 111_u32), (&recycled, 222_u32)] {
-            std::fs::create_dir_all(dir).expect("mkdir");
+    fn a_sidecar_path_is_one_component_under_the_registry() {
+        let dir = sidecar_registry_dir().expect("home resolves");
+        for hostile in ["default", "../../etc/passwd", "/etc/passwd", "..", "", "a/b"] {
+            let p = sidecar_path(hostile).expect("home resolves");
+            assert_eq!(p.parent(), Some(dir.as_path()), "escaped with {hostile:?}");
+            assert_eq!(
+                p.components().count(),
+                dir.components().count() + 1,
+                "not a single component for {hostile:?}"
+            );
+        }
+    }
+
+    /// Convenience: the argv vector a real process table yields.
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| (*w).to_string()).collect()
+    }
+
+    /// The match is **token equality over the argv vector**, never a substring
+    /// scan over a joined line, and both halves of that sentence are load-bearing
+    /// because the action this predicate authorises is SIGKILL.
+    ///
+    /// The junk in these vectors is not invented. `crates/agent-detect/src/engine.rs:938-957`
+    /// pins a VERBATIM reading from this machine in which an exported variable
+    /// whose value contains spaces scattered the bare words `prefer`, `modern`
+    /// and `like` into `sysinfo::cmd()` — macOS lets a process that rewrites
+    /// its title (every Node CLI does) leak past the argv region into the
+    /// environment (`:427-431`). That module's defence is tokenize-and-skip
+    /// assignments; this one is the same shape, and 判据 §16 says the twin's
+    /// answer gets carried over rather than rediscovered.
+    #[test]
+    fn the_udd_match_is_token_equality_over_argv() {
+        let dir = Path::new("/tmp/udd/default");
+
+        // (1) The real flag, with a macOS env bleed sitting beside it.
+        assert!(argv_names_dir(
+            &argv(&[
+                "/x/chrome",
+                "--user-data-dir=/tmp/udd/default",
+                "--headless=new",
+                "about:blank",
+                "ZSH_AI_PROMPT_EXTEND=Always",
+                "prefer",
+                "modern",
+                "CLI",
+                "tools",
+                "like",
+                "ripgrep,",
+                "fd,",
+                "and",
+                "bat.",
+            ]),
+            dir
+        ));
+
+        // Chrome accepts the two-token form too, so a browser someone launched
+        // that way is still ours.
+        assert!(argv_names_dir(
+            &argv(&["/x/chrome", "--user-data-dir", "/tmp/udd/default"]),
+            dir
+        ));
+
+        // (2) THE SIBLING PREFIX. `reap_orphans` walks profiles under one root,
+        // so the flags it builds are prefixes of one another — and
+        // `sanitize_session_key` produces prefix-related names routinely
+        // (`work` / `work-archive`). A substring test kills the neighbour's
+        // live browser, which is precisely the case the argv check exists to
+        // prevent, failing on its most likely neighbour.
+        assert!(!argv_names_dir(
+            &argv(&["/x/chrome", "--user-data-dir=/tmp/udd/default-2"]),
+            dir
+        ));
+        // …and the two-token form of the same trap.
+        assert!(!argv_names_dir(
+            &argv(&["/x/chrome", "--user-data-dir", "/tmp/udd/default-2"]),
+            dir
+        ));
+
+        // (3) The whole flag string appearing INSIDE a bled-in env value.
+        assert!(!argv_names_dir(
+            &argv(&[
+                "/usr/bin/vim",
+                "notes.txt",
+                "LAST_CMD=chrome --user-data-dir=/tmp/udd/default",
+            ]),
+            dir
+        ));
+
+        // The path as some other flag's value; a recycled pid; nothing at all.
+        assert!(!argv_names_dir(
+            &argv(&["/x/chrome", "--crash-dumps-dir=/tmp/udd/default"]),
+            dir
+        ));
+        assert!(!argv_names_dir(&argv(&["/usr/bin/vim", "/tmp/udd/default/notes.txt"]), dir));
+        assert!(!argv_names_dir(&[], dir));
+    }
+
+    /// Fixture: a registry directory holding one sidecar per profile.
+    fn registry_with(entries: &[(&str, u32, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for (profile, pid, udd) in entries {
             std::fs::write(
-                dir.join(SIDECAR_FILE),
+                dir.path().join(format!("{profile}.json")),
                 serde_json::to_string(&ChromiumSidecar {
-                    pid,
+                    pid: *pid,
                     http_url: "http://127.0.0.1:1".into(),
+                    user_data_dir: PathBuf::from(udd),
                     aleph_version: env!("ALEPH_VERSION").to_string(),
                 })
                 .expect("serialize"),
             )
             .expect("write");
         }
-        let ours_flag = format!("--user-data-dir={}", ours.display());
+        dir
+    }
+
+    /// The whole point of reading argv before killing: a pid recorded hours ago
+    /// may belong to somebody else's process now. "The sidecar named this pid"
+    /// is not evidence; "the process still carries OUR user-data-dir" is.
+    ///
+    /// Four sidecars, four outcomes, one sweep. The SIBLING PREFIX
+    /// (`recycled` vs `recycled-2`) is the one a substring test gets wrong:
+    /// `reap_orphans` walks profiles under one root, so the flags it builds are
+    /// prefixes of one another by construction, and `sanitize_session_key`
+    /// produces prefix-related names routinely (`work` / `work-archive`).
+    #[test]
+    fn reap_orphans_kills_only_the_process_that_carries_our_own_flag() {
+        let reg = registry_with(&[
+            ("default", 111, "/tmp/udd/default"),
+            ("recycled", 222, "/tmp/udd/recycled"),
+            ("gone", 333, "/tmp/udd/gone"),
+            ("opaque", 444, "/tmp/udd/opaque"),
+        ]);
         let killed = std::cell::RefCell::new(Vec::new());
         let n = reap_orphans(
-            root.path(),
+            reg.path(),
             &|pid| match pid {
-                111 => Some(format!("/x/chrome {ours_flag} --headless=new")),
-                // A recycled pid: alive, but it is somebody else's process.
-                222 => Some("/usr/bin/vim notes.txt".to_string()),
-                _ => None,
+                // Ours, with a macOS env bleed sitting in the argv.
+                111 => ArgvProbe::Argv(argv(&[
+                    "/x/chrome",
+                    "--user-data-dir=/tmp/udd/default",
+                    "--headless=new",
+                    "ZSH_AI_PROMPT_EXTEND=Always",
+                    "prefer",
+                    "modern",
+                    "CLI",
+                    "tools",
+                    "like",
+                    "ripgrep",
+                ])),
+                // A recycled pid: alive, and it is the NEIGHBOURING profile's
+                // browser. A substring test would kill it.
+                222 => ArgvProbe::Argv(argv(&[
+                    "/x/chrome",
+                    "--user-data-dir=/tmp/udd/recycled-2",
+                ])),
+                333 => ArgvProbe::Absent,
+                444 => ArgvProbe::Unreadable,
+                _ => ArgvProbe::Absent,
             },
             &|pid| killed.borrow_mut().push(pid),
         );
         assert_eq!(n, 1, "exactly the matching pid is reaped");
         assert_eq!(*killed.borrow(), vec![111]);
-        // Both sidecars are cleared: a stale one that survives would be read
-        // again on every boot forever.
-        assert!(!ours.join(SIDECAR_FILE).exists());
-        assert!(!recycled.join(SIDECAR_FILE).exists());
+
+        // Killed -> record gone.
+        assert!(!reg.path().join("default.json").exists());
+        // Provably somebody else's -> record gone, process untouched.
+        assert!(!reg.path().join("recycled.json").exists());
+        // Absent from the process table -> nothing to kill, record stale, gone.
+        assert!(!reg.path().join("gone.json").exists());
+        // Argv unreadable -> we learned NOTHING. Keep the record.
+        assert!(
+            reg.path().join("opaque.json").exists(),
+            "the record must survive an unreadable argv: it is the only way \
+             this browser can ever be reaped"
+        );
     }
 
-    /// A dead pid answers `None`, which means "no such process" — nothing to
-    /// kill, and the sidecar is stale. It must not be spent as "it matched".
+    /// The case the first two drafts of this function got backwards, kept as
+    /// its own test because it is the expensive one.
+    ///
+    /// `Unreadable` is routine on Windows, where `sysinfo` often cannot read
+    /// another process's command line — i.e. the platform spec §3.6 already
+    /// flags as unexercised is exactly the one where the wrong answer would be
+    /// permanent. Deleting the record there is irreversible: the browser stays
+    /// alive and the only thing that could ever find it again is gone
+    /// (判据 §8 crossed with §15 — a one-shot latch missed once is missed
+    /// forever). It is also why the probe has THREE states and not `Option`:
+    /// an `Option` cannot tell "no such process" from "I could not look", and
+    /// collapsing those two IS the defect.
     #[test]
-    fn reap_orphans_treats_an_unreadable_process_as_nothing_to_kill() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let dir = root.path().join("default");
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(
-            dir.join(SIDECAR_FILE),
-            serde_json::to_string(&ChromiumSidecar {
-                pid: 333,
-                http_url: "http://127.0.0.1:1".into(),
-                aleph_version: env!("ALEPH_VERSION").to_string(),
-            })
-            .expect("serialize"),
-        )
-        .expect("write");
+    fn an_unreadable_argv_kills_nothing_and_keeps_everything() {
+        let reg = registry_with(&[("default", 444, "/tmp/udd/default")]);
         let killed = std::cell::RefCell::new(Vec::new());
-        let n = reap_orphans(root.path(), &|_| None, &|pid| killed.borrow_mut().push(pid));
+        let n = reap_orphans(reg.path(), &|_| ArgvProbe::Unreadable, &|pid| {
+            killed.borrow_mut().push(pid)
+        });
         assert_eq!(n, 0);
         assert!(killed.borrow().is_empty());
-        assert!(!dir.join(SIDECAR_FILE).exists());
+        assert!(reg.path().join("default.json").exists());
     }
 }
 ```
 
-- [ ] **跑它，看红。** `cargo test -p alephcore --lib browser::chromium_launch` → 期望 `error[E0433]: failed to resolve: use of undeclared type ChromiumLaunchSpec`（以及同类的 `parse_devtools_active_port` / `reap_orphans` / `SIDECAR_FILE` 未解析）。⚠️ 在把 `pub(crate) mod chromium_launch;` 加进 `src/browser/mod.rs` 之前，这个文件根本不参与编译，`cargo test` 会直接绿——所以**先**在 `src/browser/mod.rs` 第 3 行之后（按字母序）插入一行：
+- [ ] **跑它，看红。** `cargo test -p alephcore --lib browser::chromium_launch` → 期望 `error[E0433]: failed to resolve: use of undeclared type ChromiumLaunchSpec`（以及同类的 `parse_devtools_active_port` / `reap_orphans` / `sidecar_path` / `argv_names_dir` 未解析）。⚠️ 在把 `pub(crate) mod chromium_launch;` 加进 `src/browser/mod.rs` 之前，这个文件根本不参与编译，`cargo test` 会直接绿——所以**先**在 `src/browser/mod.rs` 第 3 行之后（按字母序）插入一行：
   ```rust
   pub(crate) mod chromium_launch;
   ```
@@ -353,10 +509,17 @@ const PORT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Chrome's own file, written into the user-data-dir. Name fixed by Chrome.
 const DEVTOOLS_PORT_FILE: &str = "DevToolsActivePort";
 
-/// Our sidecar next to it: what Aleph needs to recognise its own orphan after a
-/// crash. Chrome does not remove `DevToolsActivePort` on exit, so that file
-/// cannot answer "is this browser mine and still running".
-pub(crate) const SIDECAR_FILE: &str = "aleph-chromium.json";
+/// Our own record of a launched browser: what Aleph needs to recognise its own
+/// orphan after a crash. Chrome does not remove `DevToolsActivePort` on exit,
+/// so that file cannot answer "is this browser mine and still running".
+///
+/// These live in ONE registry directory, not beside each browser's profile.
+/// A profile may configure `user_data_dir` to anywhere on disk (the repo's own
+/// QA does), so a per-udd record puts itself outside anything a boot sweep can
+/// walk — and the sweep would then miss exactly the case the fixture
+/// exercises. One directory means "which browsers are there to reclaim" has a
+/// single derivation (判据 §12).
+pub(crate) const SIDECAR_EXT: &str = "json";
 
 /// Everything the Chromium process needs at launch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,20 +604,88 @@ pub(crate) fn endpoint_from_port_file(text: &str, pid: u32) -> Option<CdpEndpoin
     })
 }
 
-/// What Aleph writes beside the port file so it can recognise its own orphan.
+/// What Aleph records about a browser it launched.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ChromiumSidecar {
     pub pid: u32,
     pub http_url: String,
+    /// The profile directory that process was launched with. Recorded rather
+    /// than implied by the file's location, because the file is not stored
+    /// there — and this is the value the orphan sweep matches against argv.
+    pub user_data_dir: PathBuf,
     /// The build that launched it. Not used as a gate — recorded because an
     /// orphan from a different version is exactly the case a reader will want
     /// named when this goes wrong.
     pub aleph_version: String,
 }
 
-/// Where the sidecar lives for a given user-data-dir.
-pub(crate) fn sidecar_path(user_data_dir: &Path) -> PathBuf {
-    user_data_dir.join(SIDECAR_FILE)
+/// The one directory every sidecar lives in.
+pub(crate) fn sidecar_registry_dir() -> Result<PathBuf, BrowserError> {
+    super::playwright_launch::browser_state_dir("chromium")
+}
+
+/// This profile's record. Sanitized through the same helper the launch config
+/// and the derived udd use, so a profile name can never escape the registry.
+pub(crate) fn sidecar_path(session_key: &str) -> Result<PathBuf, BrowserError> {
+    Ok(sidecar_registry_dir()?.join(format!(
+        "{}.{SIDECAR_EXT}",
+        super::playwright_launch::sanitize_session_key(session_key)
+    )))
+}
+
+/// What a process's argv turned out to be — three states, not two.
+///
+/// `Option` cannot carry this, and collapsing it IS the defect this enum
+/// exists to prevent: a reader that answers `None` for both "no such process"
+/// and "I could not read its command line" makes the sweep spend an unknown as
+/// a certainty, and the action on the other side is SIGKILL plus an
+/// irreversible record deletion (判据 §8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ArgvProbe {
+    /// The pid is not in the process table. It is gone.
+    Absent,
+    /// The pid is there and its command line could not be read. Routine on
+    /// Windows. We have learned nothing.
+    Unreadable,
+    /// The process's argv, one element per word as the kernel reports it.
+    Argv(Vec<String>),
+}
+
+/// Whether `argv` names `dir` as the browser's profile directory.
+///
+/// **Token equality over the argv vector — never a substring scan over a
+/// joined command line.** Both halves matter, because the action this
+/// predicate authorises is a kill:
+///
+/// * **Prefix collision, no bleed required.** The sweep walks profiles that sit
+///   under one root, so the flags it builds are prefixes of one another:
+///   `--user-data-dir=<root>/default` is a substring of a live browser's
+///   `--user-data-dir=<root>/default-2`. `sanitize_session_key` produces
+///   prefix-related names routinely (`work` / `work-archive`). A substring test
+///   therefore kills the neighbouring profile's browser — the exact case the
+///   argv check was added to prevent, failing on its most likely neighbour.
+/// * **The macOS argv/env bleed, already measured and pinned in this repo.**
+///   `crates/agent-detect/src/engine.rs:427-431` records it verbatim: a process
+///   that rewrites its title (every Node CLI does) leaves `sysinfo::cmd()`
+///   reading past the argv region into the environment, and `:938-957` pins a
+///   real reading in which an exported variable whose value contained spaces
+///   scattered the bare words `prefer`, `modern`, `like` into the command line.
+///   That module's defence is to tokenize and skip `VAR=value` words rather
+///   than scan a joined string; 判据 §16 says the twin's answer gets carried
+///   over rather than rediscovered.
+///
+/// Both spellings Chrome accepts are matched: `--user-data-dir=<path>` and the
+/// two-token `--user-data-dir <path>`. Missing the second would let a browser
+/// launched that way become unreapable.
+#[must_use]
+pub(crate) fn argv_names_dir(argv: &[String], dir: &Path) -> bool {
+    let joined = format!("--user-data-dir={}", dir.display());
+    let value = dir.to_string_lossy();
+    argv.iter().enumerate().any(|(i, word)| {
+        word == &joined
+            || (word == "--user-data-dir"
+                && argv.get(i + 1).is_some_and(|v| v.as_str() == value))
+    })
 }
 
 /// One Chromium process owned by this Aleph.
@@ -462,12 +693,18 @@ pub(crate) struct ChromiumChild {
     child: Child,
     endpoint: CdpEndpoint,
     user_data_dir: PathBuf,
+    session_key: String,
 }
 
 impl ChromiumChild {
     /// Launch Chromium and wait for it to publish its debug port.
+    ///
+    /// `session_key` is the profile name, and it is taken here rather than
+    /// derived, because it is what names this browser's record in the sidecar
+    /// registry — the only thing that can find the process again after a crash.
     pub(crate) async fn spawn(
         spec: &ChromiumLaunchSpec,
+        session_key: &str,
         deadline: Duration,
     ) -> Result<Self, BrowserError> {
         tokio::fs::create_dir_all(&spec.user_data_dir)
@@ -511,6 +748,7 @@ impl ChromiumChild {
                         child,
                         endpoint,
                         user_data_dir: spec.user_data_dir.clone(),
+                        session_key: session_key.to_string(),
                     };
                     me.write_sidecar().await;
                     tracing::info!(pid, endpoint = %me.endpoint.http_url, "chromium launched");
@@ -562,19 +800,51 @@ impl ChromiumChild {
         }
     }
 
-    /// Kill the browser and clear the sidecar.
+    /// Kill the browser and clear its registry record.
+    ///
+    /// `wait()` runs **only after a successful `kill()`**. It is a blocking
+    /// call and every production caller is inside async code: after a kill the
+    /// reap is immediate, but `kill()` can fail (EPERM, or the child was
+    /// already reaped) and then `wait()` would park a tokio worker until the
+    /// process happened to exit on its own.
     pub(crate) fn shutdown(mut self) {
         let pid = self.endpoint.pid;
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(sidecar_path(&self.user_data_dir));
-        tracing::info!(pid, "chromium shut down");
+        match self.child.kill() {
+            Ok(()) => {
+                let _ = self.child.wait();
+                tracing::info!(pid, "chromium shut down");
+            }
+            // Say which of the two happened rather than logging "shut down"
+            // over a process that may still be running: an untrue log line is
+            // the thing a reader would spend as evidence.
+            Err(e) => tracing::warn!(pid, error = %e, "could not kill chromium; leaving it"),
+        }
+        match sidecar_path(&self.session_key) {
+            Ok(path) => {
+                let _ = std::fs::remove_file(path);
+            }
+            Err(e) => tracing::warn!(error = %e, "cannot resolve the chromium sidecar to remove"),
+        }
     }
 
     async fn write_sidecar(&self) {
+        let path = match sidecar_path(&self.session_key) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot resolve the chromium sidecar path");
+                return;
+            }
+        };
+        if let Some(dir) = path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(dir).await {
+                tracing::warn!(error = %e, "cannot create the chromium sidecar registry");
+                return;
+            }
+        }
         let body = match serde_json::to_string(&ChromiumSidecar {
             pid: self.endpoint.pid,
             http_url: self.endpoint.http_url.clone(),
+            user_data_dir: self.user_data_dir.clone(),
             aleph_version: env!("ALEPH_VERSION").to_string(),
         }) {
             Ok(b) => b,
@@ -583,88 +853,171 @@ impl ChromiumChild {
                 return;
             }
         };
-        if let Err(e) = tokio::fs::write(sidecar_path(&self.user_data_dir), body).await {
-            // Best-effort: a missing sidecar costs an orphan across a crash, it
-            // does not break this launch. Saying so is the point — a silent
-            // failure here is invisible until the next boot leaks a browser.
-            tracing::warn!(error = %e, "cannot write the chromium sidecar");
+        if let Err(e) = tokio::fs::write(&path, body).await {
+            // Best-effort here, but NOT unobserved: a missing sidecar costs an
+            // orphan across a crash. The QA `attach` stage asserts the file
+            // exists and that its pid matches a live process (Task 9 step 6),
+            // because no unit test can see this.
+            tracing::warn!(error = %e, path = %path.display(), "cannot write the chromium sidecar");
         }
     }
 }
 
 /// Kill Chromium processes left behind by a previous Aleph.
 ///
-/// `root` is the parent of the per-profile user-data-dirs. For each sidecar
-/// found, the recorded pid is killed **only if the process still carries our
-/// `--user-data-dir`** — a pid recorded before a crash may belong to somebody
-/// else's program now, and "the sidecar named this pid" is not evidence that
-/// the process is ours. The sidecar is removed either way: a stale one that
-/// survives would be re-read on every boot forever.
+/// `registry` is [`sidecar_registry_dir`] — one directory holding one record
+/// per profile, whatever each profile's `user_data_dir` happens to be. That is
+/// why the sweep can be a single walk (判据 §12: the set has one derivation).
 ///
-/// The two effects are injected so the decision is testable without a browser;
+/// Four outcomes per record, and they are deliberately NOT collapsed:
+///
+/// * [`ArgvProbe::Argv`] naming our directory → it is ours: kill it, drop the
+///   record;
+/// * [`ArgvProbe::Argv`] naming something else → the pid was recycled and now
+///   belongs to somebody else's program: kill nothing, drop the record (this
+///   answer is determinate);
+/// * [`ArgvProbe::Absent`] → the process is gone: nothing to kill, the record
+///   is stale, drop it;
+/// * [`ArgvProbe::Unreadable`] → we have learned **nothing**. Kill nothing, and
+///   **keep the record**. Deleting it here is irreversible: the browser stays
+///   alive and the only thing that could ever find it again is gone (判据 §8
+///   crossed with §15). Routine on Windows, where `sysinfo` often cannot read
+///   another process's command line — i.e. the platform spec §3.6 already flags
+///   as unexercised is exactly the one where the wrong answer would be permanent.
+///
+/// Both effects are injected so the decision is testable without a browser;
 /// [`reap_orphans_now`] is the production wiring.
 pub(crate) fn reap_orphans(
-    root: &Path,
-    argv_of: &dyn Fn(u32) -> Option<String>,
+    registry: &Path,
+    argv_of: &dyn Fn(u32) -> ArgvProbe,
     kill: &dyn Fn(u32),
 ) -> usize {
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = std::fs::read_dir(registry) else {
         // The dir not existing is the normal first-boot state, not a failure.
         return 0;
     };
     let mut reaped = 0;
     for entry in entries.flatten() {
-        let dir = entry.path();
-        let sidecar = sidecar_path(&dir);
-        let Ok(body) = std::fs::read_to_string(&sidecar) else {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != SIDECAR_EXT) {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if let Ok(rec) = serde_json::from_str::<ChromiumSidecar>(&body) {
-            let flag = format!("--user-data-dir={}", dir.display());
-            if argv_of(rec.pid).is_some_and(|argv| argv.contains(&flag)) {
-                tracing::info!(pid = rec.pid, dir = %dir.display(), "reaping orphaned chromium");
+        let Ok(rec) = serde_json::from_str::<ChromiumSidecar>(&body) else {
+            // A record we cannot parse names no pid, so it can never be acted
+            // on; dropping it is the only way it stops being read every boot.
+            tracing::warn!(path = %path.display(), "unparseable chromium sidecar; dropping it");
+            let _ = std::fs::remove_file(&path);
+            continue;
+        };
+        match argv_of(rec.pid) {
+            ArgvProbe::Argv(argv) if argv_names_dir(&argv, &rec.user_data_dir) => {
+                tracing::info!(
+                    pid = rec.pid,
+                    dir = %rec.user_data_dir.display(),
+                    "reaping orphaned chromium"
+                );
                 kill(rec.pid);
                 reaped += 1;
+                let _ = std::fs::remove_file(&path);
             }
+            // A pid that resolved to somebody ELSE's argv is provably not ours:
+            // determinate, so the record goes and the process is left alone.
+            ArgvProbe::Argv(_) => {
+                let _ = std::fs::remove_file(&path);
+            }
+            ArgvProbe::Absent => {
+                let _ = std::fs::remove_file(&path);
+            }
+            // Present, argv unreadable: keep it. See the doc above.
+            ArgvProbe::Unreadable => tracing::warn!(
+                pid = rec.pid,
+                "chromium sidecar kept: the process exists but its argv is unreadable"
+            ),
         }
-        let _ = std::fs::remove_file(&sidecar);
     }
     reaped
 }
 
-/// [`reap_orphans`] wired to the real process table.
+/// The real process-table reader.
 ///
-/// Reads argv through `gateway::pty::foreground::fact_for_pid`, the one place
-/// in this repo that owns the single-pid `sysinfo` idiom — a second copy of
-/// that dance would be the same fact written twice, and the two would drift on
-/// which fields get refreshed.
+/// Goes to `sysinfo::Process::cmd()`, which is a `Vec<OsString>` — **the argv
+/// vector, not a joined line**. That is the whole point:
+/// `gateway::pty::foreground::fact_for_pid` is the obvious-looking source and
+/// it is the wrong one, because `ForegroundFact::cmdline` is documented as
+/// "The whole command line, space-joined" (`src/gateway/pty/foreground.rs:142-143`,
+/// built by `cmd.iter().map(to_string_lossy).collect::<Vec<_>>().join(" ")` at
+/// `:266-273`). Matching on that string can only ever be `str::contains`, and
+/// token equality is **not expressible** through it. `ForegroundFact` is also a
+/// pty-side type with a different contract; borrowing it here would couple two
+/// subsystems through a projection neither of them wants.
 ///
-/// ⚠️ On macOS `sysinfo` can bleed environment variables into the reported
-/// argv. The predicate here is *containment of `--user-data-dir=<dir>`*, and a
-/// bleed can only ADD text, so the failure mode would need an env var holding
-/// that exact flag-and-value string. Recorded rather than assumed away.
-pub(crate) fn reap_orphans_now(root: &Path) -> usize {
-    reap_orphans(
-        root,
-        &|pid| crate::gateway::pty::foreground::fact_for_pid(pid).and_then(|f| f.cmdline),
-        &|pid| {
-            let killed = crate::utils::process_alive::with_process_specifics(
-                pid,
-                sysinfo::ProcessRefreshKind::nothing(),
-                sysinfo::Process::kill,
-            );
-            if killed != Some(true) {
-                tracing::warn!(pid, "orphaned chromium did not accept the kill");
-            }
+/// The `None` / `Some(empty)` split is what gives the three states: the helper
+/// answers `None` only when the pid is not in the process table, and an empty
+/// `cmd()` for a pid that IS there means the command line could not be read.
+///
+/// Built on `utils::process_alive::with_process_specifics` rather than a fresh
+/// `System::new_with_specifics(...)`: that helper is this repo's single owner of
+/// the single-pid `sysinfo` idiom and its own doc says so — "A second copy of
+/// the `System::new()` + `refresh_processes_specifics` dance would be the same
+/// fact written twice (判据 §1), and the two would drift on exactly the axis
+/// that matters, which fields get refreshed." It also scopes the refresh to one
+/// pid instead of walking every process on the machine.
+fn argv_probe(pid: u32) -> ArgvProbe {
+    let cmd = crate::utils::process_alive::with_process_specifics(
+        pid,
+        sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::Always),
+        |p| {
+            p.cmd()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<String>>()
         },
-    )
+    );
+    match cmd {
+        None => ArgvProbe::Absent,
+        Some(v) if v.is_empty() => ArgvProbe::Unreadable,
+        Some(v) => ArgvProbe::Argv(v),
+    }
+}
+
+/// [`reap_orphans`] wired to the real process table.
+pub(crate) fn reap_orphans_now() -> usize {
+    let registry = match sidecar_registry_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot sweep orphaned chromium processes");
+            return 0;
+        }
+    };
+    reap_orphans(&registry, &argv_probe, &|pid| {
+        let killed = crate::utils::process_alive::with_process_specifics(
+            pid,
+            sysinfo::ProcessRefreshKind::nothing(),
+            sysinfo::Process::kill,
+        );
+        if killed != Some(true) {
+            tracing::warn!(pid, "orphaned chromium did not accept the kill");
+        }
+    })
 }
 ```
 
-- [ ] **跑到绿。** `cargo test -p alephcore --lib browser::chromium_launch` → 9 个测试全过。若 `sysinfo::Process::kill` 的签名在 0.39 上不是 `fn kill(&self) -> bool`，按编译器提示改闭包（`|p| p.kill()`），不要改判据。
-- [ ] **证伪一次守卫。** 把 `parse_devtools_active_port` 里 `if !path.starts_with('/') { return None; }` 注释掉，重跑 → `every_partial_or_malformed_port_file_reads_as_not_yet` 必须变红（`58363\ndevtools/browser/x` 那一条）。再把 `reap_orphans` 里的 `argv_of(...).is_some_and(...)` 改成 `true`，重跑 → `reap_orphans_kills_the_match_and_spares_a_recycled_pid` 必须变红。两次都确认之后**恢复原样**。
-- [ ] `rustfmt src/browser/chromium_launch.rs src/browser/error.rs src/browser/chrome_mcp.rs src/diagnostics/checks/browser_runtime.rs`
-- [ ] `cargo test -p alephcore --lib browser:: diagnostics::checks::browser_runtime` 全绿。
+- [ ] **跑到绿。** `cargo test -p alephcore --lib browser::chromium_launch` → 全过。若 `sysinfo::Process::kill` / `ProcessRefreshKind::with_cmd` 的签名在 0.39 上与这里写的不同，按编译器提示改（`|p| p.kill()`、`UpdateKind` 的路径），**不要改判据**。
+- [ ] **证伪四次守卫。**
+  1. 把 `parse_devtools_active_port` 里 `if !path.starts_with('/') { return None; }` 注释掉 → `every_partial_or_malformed_port_file_reads_as_not_yet` 必须变红（`58363\ndevtools/browser/x` 那一条）。
+  2. **把 `argv_names_dir` 改回子串扫描**：`argv.join(" ").contains(&joined)` → `the_udd_match_is_token_equality_over_argv` 与 `reap_orphans_kills_only_the_process_that_carries_our_own_flag` 必须**同时**变红（前者的 sibling-prefix 与 env-value 两条，后者的 `recycled` 那一条会被误杀）。**这就是本轮 addendum 修的那个缺陷**——变异回去必须立刻可见。
+  3. 把 `argv_names_dir` 的两 token 形式那一支删掉 → `the_udd_match_is_token_equality_over_argv` 必须变红（`["--user-data-dir", "/tmp/udd/default"]` 那一条）。
+  4. 把 `reap_orphans` 的 `ArgvProbe::Unreadable` 臂改成也 `remove_file` → `an_unreadable_argv_kills_nothing_and_keeps_everything` 与 `reap_orphans_kills_only_the_process_that_carries_our_own_flag` 的 `opaque.json` 断言必须变红。**这一条是本任务最贵的守卫**：它守的是「不知道」不许当成「已经没了」花掉。
+  四次都确认之后**恢复原样**。
+- [ ] `rustfmt src/browser/chromium_launch.rs src/browser/error.rs src/browser/chrome_mcp.rs src/diagnostics/checks/browser_runtime.rs`（四个都是叶子文件，不声明子模块 —— ⚠️ `src/browser/mod.rs` 这一笔只加了一行 `pub(crate) mod chromium_launch;`，**不要**把它交给 `rustfmt`：它声明 18 个子模块，`rustfmt` 会递归进去重排整个 `src/browser/`。那一行手写即可，没有可格式化的东西。）
+- [ ] 两条命令，**不要合并**（`cargo test` 只收一个 TESTNAME，第二个位置参数会被拒：`error: unexpected argument 'bbb' found`）：
+  ```
+  cargo test -p alephcore --lib browser::
+  cargo test -p alephcore --lib diagnostics::checks::browser_runtime
+  ```
 - [ ] **提交。**
   ```
   git add src/browser/chromium_launch.rs src/browser/mod.rs src/browser/error.rs \
@@ -672,9 +1025,17 @@ pub(crate) fn reap_orphans_now(root: &Path) -> usize {
   git commit -m "browser: launch chromium and read its DevToolsActivePort
 
   Aleph spawns Chromium with --remote-debugging-port=0, polls the port file
-  with a deadline, and writes a sidecar so a crashed daemon's orphan can be
-  recognised by argv rather than by pid alone. LaunchFailed gains a stage so
-  \"would not spawn\", \"died early\" and \"no port file\" stop reading alike.
+  with a deadline, and records the launch in one sidecar registry under
+  ~/.aleph/data/browser/chromium so a crashed daemon's orphan can be found
+  whatever user_data_dir the profile configured. The sweep reads the argv
+  VECTOR from sysinfo and matches --user-data-dir as a whole token: a
+  space-joined command line only supports substring matching, which would kill
+  a sibling profile's browser (default is a substring of default-2) and is read
+  on macOS past the argv region into the environment, as agent-detect already
+  measured and pinned. The probe has three states, so a process whose argv is
+  merely unreadable keeps its record instead of being spent as gone. LaunchFailed
+  gains a stage so \"would not spawn\", \"died early\" and \"no port file\" stop
+  reading alike.
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01TKV5PtutzoBvbT4yTpsyRY"
@@ -746,6 +1107,10 @@ download_host = "   "
         .expect("parse");
         assert_eq!(cleared.runtime.pinned_binary(), None, "empty pin is unset");
         assert_eq!(cleared.runtime.download_host(), None, "blank host is unset");
+        // The `[runtime]` table is PRESENT here and the key is absent, so this
+        // exercises serde's field-level `default = "default_true"` — which is a
+        // different mechanism from `Default::default()` and the one that would
+        // silently flip to `false` if the attribute were dropped.
         assert!(
             cleared.runtime.prefer_system_browser,
             "a system browser is preferred unless the operator says otherwise: \
@@ -764,12 +1129,6 @@ download_host = "   "
         assert!(cfg.runtime.prefer_system_browser);
         assert_eq!(cfg.runtime.pinned_binary(), None);
         assert_eq!(cfg.runtime.download_host(), None);
-        assert_eq!(
-            BrowserRuntimeConfig::default().prefer_system_browser,
-            cfg.runtime.prefer_system_browser,
-            "serde's default and Default::default must agree — two answers to \
-             one question is how a default drifts"
-        );
     }
 ```
 
@@ -874,21 +1233,27 @@ impl Default for BrowserRuntimeConfig {
 
 **Files:**
 - Create `src/browser/chromium_resolve.rs`
-- Modify `src/browser/mod.rs`（模块声明，紧跟 Task 1 加的那一行）
-- Modify `src/browser/discovery.rs:125`（`find_chromium_preferred` 现在被本模块调用；`mod.rs:4` 的 `mod discovery;` 是私有的，同 crate 内 `super::discovery::` 可达，**无需**改可见性——先确认，若编译器要求再改成 `pub(super)`）
+- Modify `src/browser/mod.rs`（模块声明，紧跟 Task 1 加的那一行；只加一行，**不交给 `rustfmt`**）
+- Modify `src/browser/discovery.rs`：`find_chromium_preferred`（:125）现在被本模块调用（`mod.rs:4` 的 `mod discovery;` 是私有的，同 crate 内 `super::discovery::` 可达，**无需**改可见性——先确认，若编译器要求再改成 `pub(super)`）；新增 `engine_of`，就写在 `engine_hints`（:85-98）下方，与它共用那张表
 
 **Interfaces:**
 - Consumes: `super::profile::{BrowserRuntimeConfig, BrowserType}`（Task 2）· `super::discovery::find_chromium_preferred`（`discovery.rs:125`）· `super::error::BrowserError::{ChromiumUnavailable, PlaywrightCliError}`（Task 1）· `crate::utils::no_window::NoWindow`
 - Produces:
   ```rust
   pub(crate) enum ChromiumSource { Pinned, System, PlaywrightManaged }
+  pub(crate) struct ResolvedChromium { pub path: PathBuf,
+                                       pub source: ChromiumSource,
+                                       pub engine: Option<BrowserType> }
   pub(crate) fn parse_install_location(dry_run_stdout: &str) -> Option<PathBuf>;
   pub(crate) fn executable_among(files: &[PathBuf]) -> Option<PathBuf>;
   pub(crate) async fn resolve_binary(runtime: &BrowserRuntimeConfig,
                                      browser: &BrowserType,
                                      cli_binary: &Path)
-      -> Result<(PathBuf, ChromiumSource), BrowserError>;
+      -> Result<ResolvedChromium, BrowserError>;
+  // discovery.rs
+  pub(super) fn engine_of(path: &Path) -> Option<BrowserType>;
   ```
+  ⚠️ `resolve_binary` 返回的是 `ResolvedChromium`，**不是** `(PathBuf, ChromiumSource)`：`engine` 那一栏是替代被删掉的启动告警的东西（前言 §7），调用方比对「请求的引擎」与「解析出的引擎」并在不一致时 `warn!`。三个消费者（Task 5 / 7 / 8）都读这个结构。
 
 **本机实测的两条读数（本任务的全部依据，`playwright-cli` 0.1.8 / macOS arm64）：**
 
@@ -913,7 +1278,54 @@ Google Chrome for Testing
 
 两条合起来说明：① 缓存根在 macOS 上是 `~/Library/Caches/ms-playwright/`（**不是** `~/.cache/`），② 可执行文件叫 `Google Chrome for Testing`（**不是** `Chromium`），③ 但**都不用硬编码**——装它的那个 CLI 会说出安装目录，我们只在那一个目录里找可执行文件。Linux 的 `chrome-linux/chrome` 与 Windows 的 `chrome-win/chrome.exe` 本机**未验证**，作为候选名一并列入（找不到就 fail-closed，不会认错）。
 
+**关于 spec §6.1「首次用到 Managed profile 时再试一次[安装]」——本计划刻意不做，理由写在这里而不是省略：** 那一次尝试要下载约 150 MB，而它会落在**第一次浏览器工具调用**的路径上，那条路径的硬预算是 180 s 的工具预算（`WAIT_MAX_TIMEOUT_SECS=170`，CLAUDE.md 明写不许扩展）。所以本计划的 `resolve_binary` 从「三条路线都没给出文件」直接走到 `ChromiumUnavailable`，而安装留给三个显式入口：台账在装 `playwright-cli` 时的 post-install（Task 7）、doctor 的 fix hint、以及模型自己调 `runtime_manage{install}`（Task 8）。**代价说清楚**：一台干净的 Linux 服务器上，第一次浏览器调用会失败一次，模型读到那句话之后再装。这比一个会卡满工具预算然后超时的「自动」路径诚实。
+
 #### Steps
+
+- [ ] **先加 `engine_of`（一份推导的来源）。** 在 `src/browser/discovery.rs` 的 `engine_hints`（:85-98）之后插入：
+
+```rust
+/// Which engine a resolved binary IS, read off its path with the same table
+/// [`engine_hints`] orders candidates by.
+///
+/// This exists so the substitution a launch performs can be reported. The old
+/// boot warning (`manager::unhonored_managed_fields`) covered exactly one case
+/// — a managed Brave profile, which `playwright-cli open --browser` had no
+/// value for. Aleph launches the browser itself now, so that case is honoured
+/// when Brave is installed; but [`find_chromium_preferred`] **degrades
+/// silently** when it is not ([`prefer_paths`] merely reorders and the fallback
+/// is only `debug!`), so "asked for Brave, got Chrome" would go unreported at
+/// every level. Deriving both the ordering and the identification from one
+/// table is what keeps the warning about the same notion of "which browser
+/// is this" that the search used (判据 §1).
+///
+/// `None` means *unidentifiable*, and callers must not spend it as "the
+/// requested engine was honoured".
+pub(super) fn engine_of(path: &Path) -> Option<BrowserType> {
+    let s = path.to_string_lossy();
+    // Most specific first: "Google Chrome" contains "Chrome", and a Brave or
+    // Edge path must not be answered as Chrome.
+    for browser in [
+        BrowserType::Brave,
+        BrowserType::Edge,
+        BrowserType::Chrome,
+        BrowserType::Chromium,
+    ] {
+        let (path_substrings, names) = engine_hints(&browser);
+        if path_substrings.iter().any(|sub| s.contains(sub))
+            || names.iter().any(|n| {
+                path.file_name()
+                    .is_some_and(|f| f.to_string_lossy().starts_with(n))
+            })
+        {
+            return Some(browser);
+        }
+    }
+    None
+}
+```
+
+  并在 `discovery.rs` 的 `use std::path::PathBuf;`（:13）改为 `use std::path::{Path, PathBuf};`。
 
 - [ ] **写失败测试。** 新建 `src/browser/chromium_resolve.rs`，先只写 `#[cfg(test)] mod tests`，并在 `src/browser/mod.rs` 里加 `pub(crate) mod chromium_resolve;`（否则它不参与编译，红是假的）：
 
@@ -980,6 +1392,13 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
     /// candidates and nothing more. Whatever the layout, the answer must be a
     /// FILE inside the directory the CLI named — never a guess assembled from
     /// a platform constant.
+    ///
+    /// ⚠️ Every path here uses `/`. A backslash Windows path (`C:\…\chrome.exe`)
+    /// written as a literal would make this test RED on macOS and Linux, where
+    /// `\` is not a separator and `Path::file_name` therefore returns the whole
+    /// string — and the RED→GREEN loop would push the executor to "fix" a
+    /// correct implementation. `file_name()` handles forward slashes on every
+    /// target, and Windows accepts them too.
     #[test]
     fn the_executable_is_found_in_each_known_layout() {
         let mac = vec![
@@ -1001,12 +1420,12 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         );
 
         let windows = vec![
-            PathBuf::from(r"C:\c\chromium-1219\chrome-win\chrome.dll"),
-            PathBuf::from(r"C:\c\chromium-1219\chrome-win\chrome.exe"),
+            PathBuf::from("C:/c/chromium-1219/chrome-win/chrome.dll"),
+            PathBuf::from("C:/c/chromium-1219/chrome-win/chrome.exe"),
         ];
         assert_eq!(
             executable_among(&windows),
-            Some(PathBuf::from(r"C:\c\chromium-1219\chrome-win\chrome.exe"))
+            Some(PathBuf::from("C:/c/chromium-1219/chrome-win/chrome.exe"))
         );
     }
 
@@ -1024,18 +1443,58 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         assert_eq!(executable_among(&files), None);
     }
 
-    /// `chrome-headless-shell` is a real Chromium binary, but it is only ever
-    /// the DEGRADED option (§6.1: no-root Linux). It must never win over a full
-    /// browser that is sitting in the same listing.
+    /// `chrome-headless-shell` is a real Chromium binary and spec §6.1 names it
+    /// as the no-root Linux degrade — and it is deliberately NOT a candidate
+    /// here. Taking it silently would give a `headless = false` profile a
+    /// browser that can never show a window. A route that reports success and
+    /// delivers less is worse than one that refuses, so the shell must not be
+    /// picked even when it is the ONLY thing in the directory.
     #[test]
-    fn a_full_browser_beats_the_headless_shell_in_the_same_directory() {
-        let files = vec![
+    fn the_headless_shell_is_never_picked_even_when_it_is_the_only_binary() {
+        let both = vec![
             PathBuf::from("/c/x/chrome-headless-shell-linux/chrome-headless-shell"),
             PathBuf::from("/c/x/chrome-linux/chrome"),
         ];
         assert_eq!(
-            executable_among(&files),
+            executable_among(&both),
             Some(PathBuf::from("/c/x/chrome-linux/chrome"))
+        );
+        let shell_only =
+            vec![PathBuf::from("/c/x/chrome-headless-shell-linux/chrome-headless-shell")];
+        assert_eq!(executable_among(&shell_only), None);
+    }
+
+    /// The engine identifier the substitution warning is derived from. It must
+    /// answer from the SAME table `find_chromium_preferred` orders by, or the
+    /// warning would be about a different notion of "which browser is this".
+    #[test]
+    fn the_resolved_engine_is_read_off_the_path_by_the_discovery_table() {
+        use crate::browser::profile::BrowserType;
+        assert_eq!(
+            crate::browser::discovery::engine_of(std::path::Path::new(
+                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+            )),
+            Some(BrowserType::Brave)
+        );
+        assert_eq!(
+            crate::browser::discovery::engine_of(std::path::Path::new("/usr/bin/google-chrome")),
+            Some(BrowserType::Chrome)
+        );
+        // Playwright's own build is Chromium, whatever its file is called.
+        assert_eq!(
+            crate::browser::discovery::engine_of(std::path::Path::new(
+                "/c/chromium-1219/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+            )),
+            Some(BrowserType::Chrome),
+            "'Google Chrome for Testing' matches the Chrome hints; the caller \
+             compares against what it ASKED for, and the Playwright route \
+             already logs its own substitution"
+        );
+        assert_eq!(
+            crate::browser::discovery::engine_of(std::path::Path::new("/opt/weird/browser")),
+            None,
+            "unidentifiable must be None, not a guess — an unknown engine is \
+             not evidence that the requested one was honoured"
         );
     }
 }
@@ -1077,9 +1536,20 @@ use crate::utils::no_window::NoWindow;
 use super::error::BrowserError;
 use super::profile::{BrowserRuntimeConfig, BrowserType};
 
-/// How long the `--dry-run` probe may take. It performs no download; a slower
-/// answer than this means something is wrong with the CLI, not with the network.
-const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long the `--dry-run` probe may take.
+///
+/// It performs **no download** — it prints a table and exits (measured: it
+/// answered instantly on the machine this plan was written on). Six seconds is
+/// therefore generous, and the ceiling matters upward as well as downward: the
+/// doctor check that calls this (`diagnostics::checks::chromium_missing`)
+/// bounds the whole resolution at 8 s so that ITS own "could not verify" answer
+/// fires, and that 8 s sits under the engine's `DEFAULT_CHECK_TIMEOUT` of 20 s
+/// (`src/diagnostics/check.rs:27`), past which the engine abandons the check
+/// and emits a `Warning` of its own. Three budgets, strictly nested: 6 < 8 < 20,
+/// and the nesting is asserted by
+/// `diagnostics::checks::chromium_missing::the_check_answers_before_the_engine_abandons_it`
+/// rather than restated as prose — which is why this is `pub(crate)`.
+pub(crate) const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// The header anchor of the browser block in `--dry-run` output.
 ///
@@ -1094,20 +1564,29 @@ const CHROMIUM_BLOCK: &str = "(playwright chromium v";
 /// layout therefore yields `None` and a fail-closed error naming the install
 /// command — never a wrong file.
 ///
-/// `chrome-headless-shell` is last on purpose: it is a real Chromium binary but
-/// only ever the degraded, headless-only option (§6.1), so it must not win over
-/// a full browser sitting in the same tree.
+/// **`chrome-headless-shell` is deliberately NOT here.** It is a real Chromium
+/// binary and spec §6.1 names it as the no-root Linux degrade, but taking it
+/// would be a silent capability cut: it cannot run headed, so a
+/// `headless = false` profile that resolved to it would launch a browser that
+/// can never show a window, and nothing in this plan forces `headless` off the
+/// resolution. Wiring that degrade properly (a source variant the launch reads,
+/// plus an install path for the shell) is a separate piece of work; listing the
+/// binary without it would be a route that reports success and delivers less.
 const EXECUTABLE_LEAVES: &[&str] = &[
     "Google Chrome for Testing",
     "Chromium",
     "chrome",
     "chrome.exe",
-    "chrome-headless-shell",
-    "chrome-headless-shell.exe",
 ];
 
 /// How deep the install directory is walked looking for the executable.
-/// macOS needs four (`chrome-mac-arm64/X.app/Contents/MacOS/X`); the others two.
+///
+/// macOS is the deepest known layout and needs five levels below the install
+/// dir (`chrome-mac-arm64` / `X.app` / `Contents` / `MacOS` / `X`); Linux and
+/// Windows need two. ⚠️ The walk enumerates the whole `.app` bundle, which is
+/// thousands of entries — acceptable because it runs only on the
+/// Playwright-managed route, i.e. only when no pin and no system browser
+/// answered, and the result is cached by the caller.
 const WALK_MAX_DEPTH: usize = 5;
 
 /// Where the resolved binary came from. Carried so the log line and the doctor
@@ -1127,6 +1606,22 @@ impl ChromiumSource {
             Self::PlaywrightManaged => "Playwright's managed Chromium",
         }
     }
+}
+
+/// What a resolution answered: the file, which route found it, and **which
+/// engine it turned out to be**.
+///
+/// The third field is the replacement for the boot warning this round deletes
+/// (`manager::unhonored_managed_fields`). `find_chromium_preferred` degrades
+/// silently when the requested engine is absent, so without this the
+/// substitution "asked for Brave, got Chrome" would be reported nowhere.
+/// `None` means the path matched no engine hint — unidentifiable, which is
+/// **not** evidence that the request was honoured.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedChromium {
+    pub path: PathBuf,
+    pub source: ChromiumSource,
+    pub engine: Option<BrowserType>,
 }
 
 /// The browser block's `Install location:` out of `--dry-run` output.
@@ -1197,17 +1692,24 @@ fn files_under(dir: &Path, depth: usize) -> Vec<PathBuf> {
 /// exist is that error too, and deliberately not a fallback: launching a
 /// different browser than the one the operator named would be a silent
 /// substitution of exactly the thing they pinned to prevent.
+///
+/// **This function never installs anything.** Spec §6.1's "try once more at
+/// first use" is deliberately not done here: the download is ~150 MB and this
+/// runs on the first browser tool call, whose hard budget is 180 s. Installing
+/// has three explicit entrances instead — the ledger's post-install, the
+/// doctor's fix hint, and `runtime_manage{install}`.
 pub(crate) async fn resolve_binary(
     runtime: &BrowserRuntimeConfig,
     browser: &BrowserType,
     cli_binary: &Path,
-) -> Result<(PathBuf, ChromiumSource), BrowserError> {
+) -> Result<ResolvedChromium, BrowserError> {
     let mut tried: Vec<String> = Vec::new();
 
     if let Some(pin) = runtime.pinned_binary() {
         let path = PathBuf::from(pin);
         if path.is_file() {
-            return Ok((path, ChromiumSource::Pinned));
+            let engine = super::discovery::engine_of(&path);
+            return Ok(ResolvedChromium { path, source: ChromiumSource::Pinned, engine });
         }
         return Err(BrowserError::ChromiumUnavailable {
             tried: format!("[browser.runtime] binary_path = {pin:?} does not exist"),
@@ -1216,7 +1718,10 @@ pub(crate) async fn resolve_binary(
 
     if runtime.prefer_system_browser {
         match super::discovery::find_chromium_preferred(browser) {
-            Ok(path) => return Ok((path, ChromiumSource::System)),
+            Ok(path) => {
+                let engine = super::discovery::engine_of(&path);
+                return Ok(ResolvedChromium { path, source: ChromiumSource::System, engine });
+            }
             Err(e) => tried.push(format!("no system browser ({e})")),
         }
     } else {
@@ -1228,14 +1733,18 @@ pub(crate) async fn resolve_binary(
             if *browser != BrowserType::Chromium {
                 // Naming the substitution rather than performing it silently:
                 // Playwright manages Chromium and nothing else, so a profile
-                // asking for Brave gets Chromium here.
+                // asking for Brave gets Chromium here. The caller's own
+                // requested-vs-resolved check covers the OTHER silent
+                // substitution (`find_chromium_preferred` degrading to whatever
+                // is installed); this arm covers the one that route cannot see.
                 tracing::warn!(
                     requested = ?browser,
                     "no system browser for the requested engine; falling back to \
                      Playwright's managed Chromium"
                 );
             }
-            Ok((path, ChromiumSource::PlaywrightManaged))
+            let engine = super::discovery::engine_of(&path);
+            Ok(ResolvedChromium { path, source: ChromiumSource::PlaywrightManaged, engine })
         }
         Err(why) => {
             tried.push(why);
@@ -1280,21 +1789,29 @@ async fn playwright_managed(cli_binary: &Path) -> Result<PathBuf, String> {
 }
 ```
 
-- [ ] **跑到绿。** `cargo test -p alephcore --lib browser::chromium_resolve` → 6 个测试全过。
-- [ ] **手工核对解析器打在真输出上。** 本机跑一次 `playwright-cli install-browser chromium --dry-run`，把 stdout 存进 `/tmp/dry.txt`，然后确认第一个 `Install location:` 属于 `(playwright chromium v` 那一块（肉眼即可；上面 `DRY_RUN` 常量就是本机这一次的逐字副本）。**如果本机 playwright-core 版本换了、块头措辞变了**，把 `CHROMIUM_BLOCK` 与 `DRY_RUN` 一起更新，并在 Task 10 的 FEATURE_LOCATOR 条目里记下新旧措辞——这正是判据 §5「列举法只覆盖立法当天的世界」的那一类。
-- [ ] **证伪一次。** 把 `CHROMIUM_BLOCK` 改成 `"(playwright chromium"`（去掉尾部的 ` v`）→ `the_headless_shell_block_is_not_mistaken_for_the_browser` 必须变红。恢复。
-- [ ] `rustfmt src/browser/chromium_resolve.rs`
+- [ ] **跑到绿。** `cargo test -p alephcore --lib browser::chromium_resolve` 与 `cargo test -p alephcore --lib browser::discovery`（两条命令，别合并）→ 全过。
+- [ ] **手工核对解析器打在真输出上，并且带一条断言。** 本机跑
+  ```
+  playwright-cli install-browser chromium --dry-run > /tmp/dry.txt
+  grep -n "playwright chromium v" -A 1 /tmp/dry.txt
+  ```
+  期望第一块的 `Install location:` 紧跟在 `(playwright chromium v…)` 那一行之后（上面的 `DRY_RUN` 常量就是本机这一次的逐字副本）。**如果措辞变了**：把 `/tmp/dry.txt` 的内容整段替换进 `DRY_RUN` 常量、按新措辞改 `CHROMIUM_BLOCK`，**再把两条解析测试重跑一遍**（不是只改常量就算完——测试是对新转录的断言，判据 §5），并在 Task 10 的 FEATURE_LOCATOR 条目里记下新旧措辞。
+- [ ] **证伪两次。** ① 把 `CHROMIUM_BLOCK` 改成 `"(playwright chromium"`（去掉尾部的 ` v`）→ `the_headless_shell_block_is_not_mistaken_for_the_browser` 必须变红。② 把 `EXECUTABLE_LEAVES` 加回 `"chrome-headless-shell"` → `the_headless_shell_is_never_picked_even_when_it_is_the_only_binary` 必须变红。两次都恢复。
+- [ ] `rustfmt src/browser/chromium_resolve.rs src/browser/discovery.rs`（两个都是叶子文件）
 - [ ] `cargo test -p alephcore --lib browser::` 全绿。
 - [ ] **提交。**
   ```
-  git add src/browser/chromium_resolve.rs src/browser/mod.rs
+  git add src/browser/chromium_resolve.rs src/browser/discovery.rs src/browser/mod.rs
   git commit -m "browser: resolve chromium as pin > system > playwright-managed
 
   The playwright-managed route asks the CLI that installs it
   (install-browser chromium --dry-run prints Install location:) instead of
   hard-coding three platform cache paths and a revision guess. On macOS the
   cache is ~/Library/Caches/ms-playwright and the binary is 'Google Chrome for
-  Testing', neither of which the guessed layout would have found.
+  Testing', neither of which the guessed layout would have found. The
+  resolution also reports which engine it actually found, so the substitution
+  the deleted boot warning used to cover is still reported — this time on the
+  path that performs it rather than at boot.
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01TKV5PtutzoBvbT4yTpsyRY"
@@ -1302,13 +1819,13 @@ async fn playwright_managed(cli_binary: &Path) -> Result<PathBuf, String> {
 
 ---
 
-### Task 4: `playwright_launch` —— `open_argv` → `attach_argv`，配置只剩两键
+### Task 4: `playwright_launch` —— 新增 `attach_argv`，配置只剩两键
+
+> **偏离（review 采纳）**：初稿把 `open_argv` / `browser_flag_value` / `unhonored_managed_fields` 的删除也放在本任务，于是本任务结束时 crate **编译不过**（`playwright_cli.rs:24` 还 `use open_argv`），「跑到绿」那一步根本跑不起来，红也就不可归因——而 Task 4/5 拆开的唯一理由就是可归因。现在本任务只做**加法与改签名**，并顺手改掉 `playwright_cli.rs` 里那一处机械的调用点，因此**本任务自己是绿的、自己提交**；三处删除随翻转一起进 Task 5。
 
 **Files:**
-- Modify `src/browser/playwright_launch.rs`：模块 doc（:1-21）· 删 `browser_flag_value`（:110-121）· `launch_config_json`（:123-200）改签名 · 删 `open_argv`（:207-234）· 新增 `attach_argv` · `write_launch_config`（:294-329）改签名 · 测试（:331-495）增删
-- Modify `src/browser/manager.rs`：删 `unhonored_managed_fields`（:580-591）与 `ProfileManager::new` 里调用它的循环（:153-163），以及它的测试（`:838-875` 所在的那个 `#[test]`）
-- Modify `src/browser/profile.rs:36-42`（`ProfileConfig::browser` 的 doc 现在引用一个不再存在的机制）
-- Modify `src/browser/playwright_cli_backend.rs:170-173`（注释引用 `playwright_launch::open_argv`）
+- Modify `src/browser/playwright_launch.rs`：模块 doc（:1-21）· `launch_config_json`（:123-200）改签名 · 新增 `attach_argv`（写在 `open_argv` 之后、`config_path_for` 之前）· `write_launch_config`（:294-329）改签名 · 测试：改写 `:335-388` 的三条键集测试为一条、改写 `:407-425` 的 `every_launch_carries_an_explicit_config`、**改写 `:458-475` 的 `browsed_page_content_is_contained_under_aleph_home`**（它是 `launch_config_json` 的**第二个**调用点，初稿漏了它，Task 4 会编译不过）
+- Modify `src/browser/playwright_cli.rs:235`（`write_launch_config(session_key, launch)` 的实参少一个——一行机械修改，放在这里是为了让本任务有一个绿）
 
 **`attach --config` 已实测被接受**（本机 playwright-cli 0.1.8，逐字）：
 
@@ -1337,7 +1854,7 @@ Options:
 
 #### Steps
 
-- [ ] **写失败测试。** 在 `src/browser/playwright_launch.rs` 的 `mod tests` 里，**删除** 这四个（它们测的东西本任务正在删）：`headed_puts_the_flag_on_open_where_the_cli_accepts_it`（:389-400）、`headless_omits_the_headed_flag`（:400-408）、`browser_flag_only_carries_values_the_cli_accepts`（:426-457），并把 `every_launch_carries_an_explicit_config`（:407-425）改写成 attach 版；同时把 `a_configuring_launch_maps_onto_the_documented_schema`（:335-366）、`a_default_launch_still_produces_a_config_to_displace_the_ambient_one`（:365-379）、`launch_options_is_omitted_rather_than_emitted_empty`（:379-388）三条合并成一条新的键集测试。新增/改写后的测试：
+- [ ] **写失败测试。** 在 `src/browser/playwright_launch.rs` 的 `mod tests` 里：把 `a_configuring_launch_maps_onto_the_documented_schema`（:336-366）、`a_default_launch_still_produces_a_config_to_displace_the_ambient_one`（:367-379）、`launch_options_is_omitted_rather_than_emitted_empty`（:380-388）三条**合并成一条**新的键集测试；把 `every_launch_carries_an_explicit_config`（:409-425）改写成 attach 版；并把 `browsed_page_content_is_contained_under_aleph_home`（:458-475）里那一行 `launch_config_json(&SessionLaunch::headless_default(), &out)` 改成一个实参（其余断言原样保留）。新增/改写后的测试：
 
 ```rust
     /// The config file's key set, exactly. Everything that used to live under
@@ -1383,6 +1900,28 @@ Options:
         );
     }
 
+    /// The OTHER caller of `launch_config_json`, which the arity change would
+    /// otherwise leave uncompilable. Its containment assertions are about
+    /// `output_dir_for` and are unaffected — only the call loses an argument.
+    #[test]
+    fn browsed_page_content_is_contained_under_aleph_home() {
+        let out = output_dir_for("default").expect("home resolves");
+        let json = launch_config_json(&out);
+        assert_eq!(json["outputDir"], json!(out.to_string_lossy()));
+        assert!(
+            out.to_string_lossy().contains("browser"),
+            "expected a path under the browser state dir, got {}",
+            out.display()
+        );
+        // Same containment property as the config file: one component, under
+        // the state dir, whatever the session key looks like.
+        let dir = out.parent().expect("has a parent").to_path_buf();
+        for hostile in ["../../etc", "/etc", "..", "", "a/b"] {
+            let p = output_dir_for(hostile).expect("home resolves");
+            assert_eq!(p.parent(), Some(dir.as_path()), "escaped with {hostile:?}");
+        }
+    }
+
     /// `open` is destructive to a browser handed over this way: it issues
     /// `page.goto('about:blank')` on the page it reuses, silently clobbering
     /// whatever was displayed (measured, spike STEP 3). `attach` left the page
@@ -1404,7 +1943,7 @@ Options:
     }
 ```
 
-- [ ] **跑它，看红。** `cargo test -p alephcore --lib browser::playwright_launch` → 期望 `error[E0425]: cannot find function attach_argv` 与 `error[E0061]: this function takes 1 argument but 2 arguments were supplied`（旧的 `launch_config_json` 调用点）。
+- [ ] **跑它，看红。** `cargo test -p alephcore --lib browser::playwright_launch` → 期望 `error[E0425]: cannot find function attach_argv` 与 `error[E0061]: this function takes 1 argument but 2 arguments were supplied`（旧的 `launch_config_json` 调用点**两处**：`write_launch_config` 里一处，`browsed_page_content_is_contained_under_aleph_home` 里一处）。
 
 - [ ] **最小实现（playwright_launch.rs）。**
   1. 把模块 doc（:1-21）第 3-21 行整段替换成：
@@ -1433,8 +1972,7 @@ Options:
 //! other key it used to write moved onto the Chrome argv Aleph now builds.
 ```
 
-  2. **删除** `browser_flag_value` 及其上方 doc（:103-121 整块）。
-  3. `launch_config_json`（:123-200）：doc 中删掉 `proxy`/`extra_args`/`userDataDir` 那两段（它们描述的键不再存在），保留 `outputDir` 与 `allowUnrestrictedFileAccess` 两段；函数体改为：
+  2. `launch_config_json`（:123-200）：doc 中删掉 `proxy`/`extra_args`/`userDataDir` 那两段（它们描述的键不再存在），保留 `outputDir` 与 `allowUnrestrictedFileAccess` 两段；函数体改为：
 
 ```rust
 #[must_use]
@@ -1446,7 +1984,7 @@ pub fn launch_config_json(output_dir: &Path) -> Value {
 }
 ```
 
-  4. **删除** `open_argv` 及其 doc（:207-234 整块），在原位写入：
+  3. 在 `open_argv`（:207-234，本任务**不动它**，Task 5 才删）之后、`config_path_for` 的 doc（:236 起）之前写入：
 
 ```rust
 /// The `attach` argv (after the `-s=<session>` flag the driver always prepends).
@@ -1473,7 +2011,7 @@ pub fn attach_argv(endpoint: &super::chromium_launch::CdpEndpoint, config_path: 
 }
 ```
 
-  5. `write_launch_config`（:294-329）：签名去掉 `launch` 参数，doc 的最后一段（「Rewritten on every launch rather than written once: the profile's proxy / user-data-dir / extra args can change…」）替换成：
+  4. `write_launch_config`（:294-329）：签名去掉 `launch` 参数，doc 的最后一段（「Rewritten on every launch rather than written once: the profile's proxy / user-data-dir / extra args can change…」）替换成：
 
 ```rust
 /// Rewritten on every attach rather than written once: `outputDir` is derived
@@ -1484,24 +2022,36 @@ pub fn attach_argv(endpoint: &super::chromium_launch::CdpEndpoint, config_path: 
 
   函数体里删掉 `let body = launch_config_json(launch, &output_dir).to_string();` 的 `launch` 实参，改为 `launch_config_json(&output_dir)`。
 
-- [ ] **最小实现（三个引用点）。**
-  - `src/browser/manager.rs`：删掉 `:153-163` 的 `for (name, p) in &profiles { for field in unhonored_managed_fields(&p.config) { tracing::warn!(...) } }` 整块（保留它前后的代码），删掉 `:575-591` 的 `unhonored_managed_fields` 函数及其 doc，删掉测试模块里那个断言它的 `#[test]`（包含 `:845` 的 `assert_eq!(unhonored_managed_fields(&cfg), vec!["browser"]);` 的整个函数）。**理由写进删除处不留注释**——函数删了就没地方留注释了，理由进 Task 10 的 FEATURE_LOCATOR 条目：它唯一的返回条件是 `browser_flag_value(..).is_none()`，而 `browser_flag_value` 没了；留着它就是一个恒空的清单，判据 §2 的第二张脸（恒绿）。
-  - `src/browser/profile.rs:36-42`：`ProfileConfig::browser` 的 doc 改为：
-    ```rust
-    /// Which browser engine to use.
-    ///
-    /// Honored by both drivers. The managed driver no longer passes the engine
-    /// to `playwright-cli` (it launches the browser itself); the value steers
-    /// `discovery::find_chromium_preferred`, so a profile asking for Brave gets
-    /// Brave when Brave is installed. When no system browser matches, the
-    /// fallback is Playwright's Chromium and the substitution is logged by
-    /// `chromium_resolve::resolve_binary` rather than left silent.
-    ```
-  - `src/browser/playwright_cli_backend.rs:170-173`：把注释里的 `playwright_launch::open_argv` 改成 `chromium_launch::ChromiumLaunchSpec::argv`（headedness 现在住在那里）。
+- [ ] **最小实现（唯一的外部调用点）。** `src/browser/playwright_cli.rs:235` 改为
+  ```rust
+  let config_path = write_launch_config(session_key).await?;
+  ```
+  `open_session` 的其余部分、`open_argv` 的 import（:24）与调用（:236）**都不动**——Task 5 才翻转它们。这一行让本任务留下一个能编译、能跑测试的树。
 
-- [ ] **跑到绿。** `cargo test -p alephcore --lib browser::playwright_launch browser::manager` — 此时 `playwright_cli.rs:24` 还 `use ... open_argv` 会编译失败，这是 Task 5 的入口；**允许**本步以 `playwright_cli.rs` 的两个编译错结束，Task 5 第一步就修它。若希望每一步都能编译，把 Task 4 与 Task 5 合成一次提交——推荐**不要**，两者的红各自可归因。
-- [ ] `rustfmt src/browser/playwright_launch.rs src/browser/manager.rs src/browser/profile.rs src/browser/playwright_cli_backend.rs`
-- [ ] **提交（与 Task 5 一起，见 Task 5 的最后一步）。** 本任务单独不产生可编译状态，所以不单独提交——这一点写在这里而不是留给执行者发现。
+- [ ] **跑到绿（两条命令，别合并——`cargo test` 只收一个 TESTNAME，第二个位置参数会被拒）。**
+  ```
+  cargo test -p alephcore --lib browser::playwright_launch
+  cargo test -p alephcore --lib browser::playwright_cli
+  ```
+- [ ] **证伪两次。** 本任务新增三条守卫，而一条没被证伪过的守卫不算守卫（判据 §3）：
+  1. 把 `attach_argv` 的第一个元素改成 `"open".to_string()` → `the_launch_verb_is_attach_and_never_open` 与 `attach_argv_names_the_endpoint_and_always_carries_an_explicit_config` 必须**同时**变红。
+  2. 在 `launch_config_json` 的 `json!` 里加回 `"browser": {"userDataDir": "/x"}` → `the_attach_config_carries_exactly_the_two_keys_the_cli_still_owns` 必须变红（那条测试对**不该存在的键**逐个断言，所以这次变异打得中）。
+  两次都恢复。
+- [ ] `rustfmt src/browser/playwright_launch.rs src/browser/playwright_cli.rs`（两个都是叶子文件，不声明子模块）
+- [ ] **提交。**
+  ```
+  git add src/browser/playwright_launch.rs src/browser/playwright_cli.rs
+  git commit -m "browser: add attach_argv and slim the CLI launch config to two keys
+
+  attach --cdp takes --config (verified against playwright-cli 0.1.8's own
+  --help), so the outputDir containment survives the flip. Everything else the
+  config carried - userDataDir, proxy, args - describes launching a browser,
+  which the CLI is about to stop doing. open_argv stays for one more commit so
+  this one leaves a tree that compiles.
+
+  Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01TKV5PtutzoBvbT4yTpsyRY"
+  ```
 
 ---
 
@@ -1509,9 +2059,13 @@ pub fn attach_argv(endpoint: &super::chromium_launch::CdpEndpoint, config_path: 
 
 **Files:**
 - Modify `src/browser/playwright_cli.rs`：imports（:6-25）· `PlaywrightCliDriver` 结构（:51-56）与 `new`（:59-67）· `run`（:177-221）· `open_session`（:223-249）→ `attach_session` · 新增 `ensure_chromium` / `forget_chromium` / `endpoint` / `chromium_alive` / `shutdown_chromium` · `classify_failure`（:331-389）加锚点 · 测试模块（文件尾）
+- Modify `src/browser/playwright_launch.rs`：**删** `browser_flag_value` 及其 doc（:106-123 整块 —— ⚠️ 不是 `:110-121`，那个范围会把 doc 的头四行和函数尾巴留在原地）· **删** `open_argv` 及其 doc（:207-234 整块）· 删它们的三条测试 `headed_puts_the_flag_on_open_where_the_cli_accepts_it`（:389-400）、`headless_omits_the_headed_flag`（:401-408）、`browser_flag_only_carries_values_the_cli_accepts`（:431-457）
+- Modify `src/browser/manager.rs`：删 `unhonored_managed_fields`（:575-591 的 doc + fn）与 `ProfileManager::new` 里调用它的循环（:153-163），以及它的测试 `managed_profiles_name_the_fields_their_driver_drops`（**`:830-875` 整个函数**，`#[test]` 在 :830、`fn` 在 :831 —— ⚠️ 不是 `:838-875`，那是函数体中段）
+- Modify `src/browser/profile.rs:36-42`（`ProfileConfig::browser` 的 doc 引用一个不再存在的机制）
+- Modify `src/browser/playwright_cli_backend.rs:170-173`（注释引用 `playwright_launch::open_argv`）
 
 **Interfaces:**
-- Consumes: `super::chromium_launch::{ChromiumChild, ChromiumLaunchSpec, CdpEndpoint, DEVTOOLS_PORT_DEADLINE}`（Task 1）· `super::chromium_resolve::resolve_binary`（Task 3）· `super::playwright_launch::{attach_argv, write_launch_config, browser_state_dir, sanitize_session_key}`（Task 4；后两个是 `pub(super)`，同 `browser` 模块内可达）· `super::profile::BrowserRuntimeConfig`（Task 2）
+- Consumes: `super::chromium_launch::{ChromiumChild, ChromiumLaunchSpec, CdpEndpoint, DEVTOOLS_PORT_DEADLINE}`（Task 1）· `super::chromium_resolve::{resolve_binary, ResolvedChromium}`（Task 3）· `super::playwright_launch::{attach_argv, write_launch_config, browser_state_dir, sanitize_session_key}`（Task 4；后两个是 `pub(super)`，同 `browser` 模块内可达）· `super::profile::BrowserRuntimeConfig`（Task 2）
 - Produces:
   ```rust
   impl PlaywrightCliDriver {
@@ -1522,6 +2076,8 @@ pub fn attach_argv(endpoint: &super::chromium_launch::CdpEndpoint, config_path: 
   }
   pub(crate) fn chromium_user_data_dir(launch: &SessionLaunch, session_key: &str)
       -> Result<PathBuf, BrowserError>;
+  // DELETED this task: playwright_launch::{open_argv, browser_flag_value},
+  //                    manager::unhonored_managed_fields
   ```
 
 **真实的 attach 失败转录**（本机，scratch HOME，`playwright-cli -s=alephplanprobe attach --cdp http://127.0.0.1:1`）：
@@ -1576,6 +2132,27 @@ Call log:
         );
     }
 
+    /// The anchor is the **pair**, not either phrase alone, and that is not
+    /// fussiness: `classify_failure` runs on output that can contain page text
+    /// (its own doc says so, and `snapshot`/`console` echo the page under
+    /// `### Result`). A developer's own error page carrying the word
+    /// `ECONNREFUSED` must not be able to talk the driver into relaunching a
+    /// browser. Requiring both the node error AND playwright's call-log line is
+    /// what a page cannot supply by accident.
+    #[test]
+    fn one_half_of_the_attach_signature_is_not_enough() {
+        for half in [
+            "Error: connect ECONNREFUSED 127.0.0.1:8080",
+            "  - <ws preparing> retrieving websocket url from http://127.0.0.1:1",
+        ] {
+            let err = classify_failure(half, "", 1, "default", 10_000);
+            assert!(
+                !matches!(err, BrowserError::AttachFailed(_)),
+                "half the signature was enough: {half:?} -> {err:?}"
+            );
+        }
+    }
+
     /// The two "not open" phrasings (appendix D.9.13) must keep producing
     /// `NoSession` — that is what makes the lazy attach fire at all. Adding the
     /// attach anchors must not shadow either of them.
@@ -1595,10 +2172,7 @@ Call log:
         }
     }
 
-    /// Page text must not be able to talk the classifier into a relaunch. The
-    /// anchors are the CLI's own phrasings, and a page echoing them under
-    /// `### Result` reaches this function only via `parse_error_section`, which
-    /// already requires `### Error` to be the FIRST section.
+    /// An ordinary Playwright failure keeps its own class.
     #[test]
     fn an_unrelated_failure_is_not_read_as_a_refused_attach() {
         let err = classify_failure("", "Error: strict mode violation: locator resolved to 3 elements", 1, "default", 10_000);
@@ -1638,6 +2212,55 @@ Call log:
                 "not a single component for {hostile:?}"
             );
         }
+    }
+
+    /// spec §6.2 row "Chrome 中途死 → 下次工具调用惰性重启" — and the two ways it
+    /// can present, which the first draft covered only one of.
+    ///
+    /// `NoSession` is the CLI saying it has no session: attach, whatever the
+    /// browser is doing. `AttachFailed` is the endpoint refusing a connection,
+    /// and it must trigger a relaunch **only when the browser is not alive**.
+    /// Relaunching over a live browser is the D.9.10 hazard in a new costume:
+    /// the old one was a second `open` dropping every tab, the new one is a
+    /// second Chromium writing the same `DevToolsActivePort`. Everything else
+    /// is the model's error to read, not the driver's to route (R10 第 5 不).
+    #[test]
+    fn only_a_dead_browser_earns_a_relaunch() {
+        // The CLI has no session: attach regardless of the browser's state.
+        assert!(needs_relaunch(&BrowserError::NoSession("d".into()), true));
+        assert!(needs_relaunch(&BrowserError::NoSession("d".into()), false));
+        // A refused endpoint with the browser gone: relaunch.
+        assert!(needs_relaunch(&BrowserError::AttachFailed("econnrefused".into()), false));
+        // A refused endpoint while the browser is ALIVE: do not. Something else
+        // is wrong and a second Chromium would make it worse.
+        assert!(!needs_relaunch(&BrowserError::AttachFailed("econnrefused".into()), true));
+        // Ordinary failures are the model's to read.
+        for other in [
+            BrowserError::ActionFailed("element not found".into()),
+            BrowserError::Timeout(1000),
+            BrowserError::PlaywrightCliError("exit 1: boom".into()),
+        ] {
+            assert!(!needs_relaunch(&other, false), "{other:?} must not relaunch");
+            assert!(!needs_relaunch(&other, true), "{other:?} must not relaunch");
+        }
+    }
+
+    /// The cheap pre-verb check. `chromium_alive` is a `try_wait` on a child we
+    /// own — no syscall storm, no process-table scan — so asking before every
+    /// verb costs nothing and closes the gap where the CLI's error text does
+    /// not happen to be one of the phrasings above.
+    ///
+    /// With no child recorded it must answer `false`: "there is no browser" is
+    /// not "the browser is dead", and the lazy attach already handles the
+    /// first case.
+    #[tokio::test]
+    async fn a_profile_with_no_child_is_not_reported_as_a_dead_one() {
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig::default(),
+            crate::browser::profile::BrowserRuntimeConfig::default(),
+        );
+        assert!(!driver.chromium_alive("default"));
+        assert!(!driver.chromium_died("default"));
     }
 
     /// The sealed test twin must stay sealed: a unit test may not install a
@@ -1705,21 +2328,65 @@ impl PlaywrightCliDriver {
     }
 ```
 
-  3. `run`（:197-221）的 `NoSession` 臂改为调 `attach_session`：
+  3. `run`（:197-221）：加一道**动词前的活性检查**，并把重启臂从「只认 NoSession」放宽到「NoSession，或浏览器已死时的 AttachFailed」：
 ```rust
-        match self.spawn(&bin, session_key, args, timeout).await {
-            Err(BrowserError::NoSession(key)) => {
-                let Some(launch) = policy.launch() else {
-                    return Err(BrowserError::NoSession(key));
-                };
+        let bin = self.resolve_binary().await?;
+        let lock = self.session_lock(session_key);
+        let _guard = lock.lock().await;
+
+        // Before the verb: if this profile HAD a browser and it has since
+        // exited, no CLI subcommand can succeed and the error it returns is
+        // not guaranteed to be one of the phrasings below. `chromium_died` is
+        // a `try_wait` on a child we own — cheap enough to ask every time, and
+        // it is the only thing that closes spec §6.2's "Chrome 中途死" row for
+        // the verbs whose failure text says something else entirely.
+        if self.chromium_died(session_key) {
+            if let Some(launch) = policy.launch() {
+                tracing::info!(session = %session_key, "chromium exited; relaunching before the verb");
+                self.forget_chromium(session_key);
                 self.attach_session(&bin, session_key, launch).await?;
-                // One retry only. If the session still reports "not open"
-                // after a successful attach, that is a real failure and must
-                // surface rather than loop.
-                self.spawn(&bin, session_key, args, timeout).await
             }
-            other => other,
         }
+
+        let first = self.spawn(&bin, session_key, args, timeout).await;
+        let Err(err) = first else {
+            return first;
+        };
+        if !needs_relaunch(&err, self.chromium_alive(session_key)) {
+            return Err(err);
+        }
+        let Some(launch) = policy.launch() else {
+            return Err(err);
+        };
+        self.forget_chromium(session_key);
+        self.attach_session(&bin, session_key, launch).await?;
+        // One retry only. If the verb still fails after a successful attach,
+        // that is a real failure and must surface rather than loop.
+        self.spawn(&bin, session_key, args, timeout).await
+```
+  以及一个纯判定函数，写在 `classify_failure` 旁边（它是这条规则的**唯一**推导点，两个调用点——`run` 与将来的任何面——都读它）：
+```rust
+/// Whether this failure means "the browser needs relaunching", given whether
+/// the browser is currently alive.
+///
+/// * [`BrowserError::NoSession`] — the CLI has no session for this key. Attach,
+///   whatever the browser is doing; that is the lazy launch this driver has
+///   always had.
+/// * [`BrowserError::AttachFailed`] — the endpoint refused a connection. Only a
+///   reason to relaunch when the browser is **not** alive. Relaunching over a
+///   live browser is appendix D.9.10's hazard in a new costume: there it was a
+///   second `open` dropping every tab, here it is a second Chromium writing the
+///   same `DevToolsActivePort`.
+/// * everything else — the model's error to read. The harness does not pick a
+///   recovery strategy on its behalf (R10 第 5 不).
+#[must_use]
+fn needs_relaunch(err: &BrowserError, chromium_alive: bool) -> bool {
+    match err {
+        BrowserError::NoSession(_) => true,
+        BrowserError::AttachFailed(_) => !chromium_alive,
+        _ => false,
+    }
+}
 ```
   同时把 `run` 的 doc（:177-196）里 "**Why lazily, off the CLI's own refusal, rather than eagerly at construction:**" 那一段替换为：
 ```rust
@@ -1772,7 +2439,7 @@ impl PlaywrightCliDriver {
         session_key: &str,
         launch: &SessionLaunch,
     ) -> Result<(), BrowserError> {
-        let endpoint = self.ensure_chromium(session_key, launch).await?;
+        let endpoint = self.ensure_chromium(bin, session_key, launch).await?;
         let config_path = write_launch_config(session_key).await?;
         let argv = attach_argv(&endpoint, &config_path);
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -1795,8 +2462,13 @@ impl PlaywrightCliDriver {
     /// Safe without its own lock because every caller holds the per-session
     /// lock from [`Self::run`]. The `chromium` mutex is taken twice, briefly,
     /// and never across the `await`s in between.
+    ///
+    /// `bin` is passed in rather than re-resolved: `run` already resolved it
+    /// three lines up, and a second call site for the same fact is how two
+    /// answers get created even when both are cached.
     async fn ensure_chromium(
         &self,
+        bin: &Path,
         session_key: &str,
         launch: &SessionLaunch,
     ) -> Result<CdpEndpoint, BrowserError> {
@@ -1814,12 +2486,26 @@ impl PlaywrightCliDriver {
             }
         }
 
-        let bin = self.resolve_binary().await?;
-        let (binary, source) =
-            super::chromium_resolve::resolve_binary(&self.runtime, &launch.browser, &bin).await?;
+        let resolved =
+            super::chromium_resolve::resolve_binary(&self.runtime, &launch.browser, bin).await?;
+        // The replacement for the boot-time `unhonored_managed_fields` warning
+        // this round deletes. `find_chromium_preferred` degrades SILENTLY when
+        // the requested engine is not installed — it merely reorders candidates
+        // and logs the fallback at `debug!` — so without this line "asked for
+        // Brave, got Chrome" is reported nowhere. `None` is an unidentifiable
+        // path, which is not evidence that the request was honoured, so it
+        // warns too rather than being read as agreement (判据 §8).
+        if resolved.engine.as_ref() != Some(&launch.browser) {
+            tracing::warn!(
+                requested = ?launch.browser,
+                resolved = ?resolved.engine,
+                path = %resolved.path.display(),
+                "the managed profile asked for one engine and got another"
+            );
+        }
         let user_data_dir = chromium_user_data_dir(launch, session_key)?;
         let spec = ChromiumLaunchSpec {
-            binary,
+            binary: resolved.path,
             user_data_dir,
             headless: launch.headless,
             proxy: launch.proxy.clone(),
@@ -1828,10 +2514,10 @@ impl PlaywrightCliDriver {
         tracing::info!(
             session = %session_key,
             binary = %spec.binary.display(),
-            source = source.label(),
+            source = resolved.source.label(),
             "launching chromium for the managed profile"
         );
-        let child = ChromiumChild::spawn(&spec, DEVTOOLS_PORT_DEADLINE).await?;
+        let child = ChromiumChild::spawn(&spec, session_key, DEVTOOLS_PORT_DEADLINE).await?;
         let endpoint = child.endpoint().clone();
         let mut map = self.chromium.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(previous) = map.insert(session_key.to_string(), child) {
@@ -1879,6 +2565,17 @@ impl PlaywrightCliDriver {
             .is_some_and(ChromiumChild::alive)
     }
 
+    /// Whether this session HAD a browser and it has since exited.
+    ///
+    /// Deliberately not `!chromium_alive`: "there is no browser" and "the
+    /// browser died" are different facts and only the second one is a reason to
+    /// tear down and relaunch before a verb. Reading the first as the second
+    /// would make the pre-verb check fire on every cold profile.
+    pub(crate) fn chromium_died(&self, session_key: &str) -> bool {
+        let mut map = self.chromium.lock().unwrap_or_else(|e| e.into_inner());
+        map.get_mut(session_key).is_some_and(|c| !c.alive())
+    }
+
     /// Public face of [`Self::forget_chromium`], for the idle reaper.
     pub(crate) fn shutdown_chromium(&self, session_key: &str) -> bool {
         self.forget_chromium(session_key)
@@ -1889,10 +2586,16 @@ impl PlaywrightCliDriver {
 ```rust
     // A refused attach, before the not-open anchors: it is neither "no browser
     // for this session" (which would attach again against the same dead
-    // endpoint) nor a page-level failure. Anchored on the two phrases the real
-    // transcript carries — the node error and playwright's own call log — so a
-    // future rewording of one still matches the other.
-    if s.contains("econnrefused") || s.contains("retrieving websocket url from") {
+    // endpoint) nor a page-level failure.
+    //
+    // BOTH phrases are required, and that is the point. This function runs on
+    // output that can contain page text — its own doc says so, and
+    // `snapshot`/`console` echo the page under `### Result` — so a single
+    // anchor on `econnrefused` would let a developer's own error page talk the
+    // driver into relaunching a browser. The node error and playwright's own
+    // call-log line appear together in the real transcript and not, by
+    // accident, in a page.
+    if s.contains("econnrefused") && s.contains("retrieving websocket url from") {
         return BrowserError::AttachFailed(detail.trim().to_string());
     }
 ```
@@ -1904,8 +2607,15 @@ impl PlaywrightCliDriver {
 /// stdout and a node exception on stderr (`Error: connect ECONNREFUSED …` plus
 /// a `Call log:` line `- <ws preparing> retrieving websocket url from …`). It
 /// shares no substring with either not-open phrase, so the anchors do not
-/// interact; both of its own phrases are kept for the reason the not-open ones
-/// were (a fourth wording will resemble one of them rather than a prediction).
+/// interact.
+///
+/// Unlike the not-open anchors, this one is a **conjunction**. The not-open
+/// pair could each stand alone because both are sentences only this CLI writes;
+/// `ECONNREFUSED` is a sentence any program writes, and this function is
+/// documented as running on output that can include page text. Requiring
+/// playwright's own call-log line beside it is what a page cannot supply by
+/// accident. A fourth wording is handled the same way it always was: add it,
+/// do not widen an existing anchor.
 ```
   ⚠️ 因为新分支在函数最前面 `return`，原有的 `if s.contains(...) { ... } else if ...` 链**不动**。
 
@@ -1934,10 +2644,37 @@ pub(crate) fn chromium_user_data_dir(
 }
 ```
 
-- [ ] **跑到绿。** `cargo test -p alephcore --lib browser::` — 此时 `manager.rs` 的 `PlaywrightCliDriver::new(...)` 调用点（:96-97）少一个参数，Task 6 修它；本步允许以那一个编译错结束，或者直接把 Task 6 的第一处改动一起做掉再跑。**推荐**：先只把 `manager.rs:96-97` 改成 `PlaywrightCliDriver::new(config.playwright_cli.clone(), config.runtime.clone())`，其余留给 Task 6。
-- [ ] **证伪两次。** ① 把新加的 attach 分支注释掉 → `a_refused_attach_classifies_as_attach_failed` 必须变红。② 把它的条件改成 `s.contains("error")` → `an_unrelated_failure_is_not_read_as_a_refused_attach` 与 `both_not_open_phrasings_still_produce_no_session` 必须变红（第二条会红是因为 not-open 的 stderr 那句以 `Error:` 开头——这正是为什么锚点必须窄）。两次都恢复。
-- [ ] `rustfmt src/browser/playwright_cli.rs`
-- [ ] `cargo test -p alephcore --lib browser::` 全绿；`cargo test -p alephcore --lib --no-run` 编译通过。
+- [ ] **删掉现在没有引用者的三处（Task 4 推迟到这里的部分）。**
+  - `src/browser/playwright_launch.rs`：删 `browser_flag_value` 及其上方 doc（**:106-123 整块**——doc 从 :106 起，函数体到 :123 止；用 `:110-121` 会留下四行悬空代码）；删 `open_argv` 及其 doc（:207-234 整块）；删三条只测它们的测试 `headed_puts_the_flag_on_open_where_the_cli_accepts_it`（:389-400）、`headless_omits_the_headed_flag`（:401-408）、`browser_flag_only_carries_values_the_cli_accepts`（:431-457）。
+  - `src/browser/playwright_cli.rs`：删 imports 里的 `open_argv`，删 `open_session` 剩下的躯壳（它已被 `attach_session` / `attach_once` 取代）。
+  - `src/browser/manager.rs`：删 `:153-163` 那个 `for … unhonored_managed_fields(…)` 的告警循环（保留它前后的代码），删 `:575-591` 的函数及其 doc，删测试 `managed_profiles_name_the_fields_their_driver_drops`（**`:830-875` 整个函数**，`#[test]` 属性在 :830）。
+  ⚠️ **删除理由不是「它恒空」**——它的真实条件是 `browser_flag_value(&cfg.browser).is_none() && cfg.browser != BrowserType::default()`（:585-587），即恰好 Brave，删掉 `browser_flag_value` 之后仍表达得出来。删它是因为它保护的事换了位置：那条替代告警现在在 `ensure_chromium` 里，由**执行替换的那一段代码**发出，并且覆盖 `find_chromium_preferred` 静默降级这条它原本够不着的路径。这句话要进 Task 10 的 FEATURE_LOCATOR 条目。
+  - `src/browser/profile.rs:36-42`：`ProfileConfig::browser` 的 doc 改为：
+    ```rust
+    /// Which browser engine to use.
+    ///
+    /// Honored by both drivers. The managed driver no longer passes the engine
+    /// to `playwright-cli` (it launches the browser itself); the value steers
+    /// `discovery::find_chromium_preferred`. When the requested engine is not
+    /// installed the search degrades to whatever is, and
+    /// `PlaywrightCliDriver::ensure_chromium` warns with the engine it actually
+    /// resolved — the substitution is reported by the code that performs it,
+    /// which is why the old boot-time warning is gone.
+    ```
+  - `src/browser/playwright_cli_backend.rs:170-173`：注释里的 `playwright_launch::open_argv` 改成 `chromium_launch::ChromiumLaunchSpec::argv`（headedness 现在住在那里）。
+
+- [ ] **跑到绿。** 本任务里 `manager.rs:96-97` 的 `PlaywrightCliDriver::new(...)` 少一个参数，**先把它改掉**（`PlaywrightCliDriver::new(config.playwright_cli.clone(), config.runtime.clone())`），其余 manager 改动留给 Task 6。然后：
+  ```
+  cargo test -p alephcore --lib browser::
+  cargo test -p alephcore --lib --no-run
+  ```
+- [ ] **证伪四次。**
+  1. 把新加的 attach 分支注释掉 → `a_refused_attach_classifies_as_attach_failed` 必须变红。
+  2. 把它的 `&&` 改成 `||` → `one_half_of_the_attach_signature_is_not_enough` 必须变红。
+  3. 把它的条件改成 `s.contains("error")` → `an_unrelated_failure_is_not_read_as_a_refused_attach` 与 `both_not_open_phrasings_still_produce_no_session` 必须变红（第二条会红是因为 not-open 的 stderr 那句以 `Error:` 开头——这正是为什么锚点必须窄）。
+  4. 把 `needs_relaunch` 的 `AttachFailed` 臂改成 `true`（不看 `chromium_alive`）→ `only_a_dead_browser_earns_a_relaunch` 必须变红。**这一条守的是 D.9.10**：一个活着的浏览器不许被第二次启动。
+  四次都恢复。
+- [ ] `rustfmt src/browser/playwright_cli.rs src/browser/playwright_launch.rs src/browser/manager.rs src/browser/profile.rs src/browser/playwright_cli_backend.rs`（五个都是叶子文件；⚠️ 仍然**不要**碰 `src/browser/mod.rs`）
 - [ ] **提交（Task 4 + Task 5 一起）。**
   ```
   git add src/browser/playwright_launch.rs src/browser/playwright_cli.rs \
@@ -1946,12 +2683,15 @@ pub(crate) fn chromium_user_data_dir(
 
   The lazy launch now ensures Aleph's own Chromium is alive and runs
   'attach --cdp <http-url>' instead of 'open'. open is never emitted again: it
-  issues goto('about:blank') on the page it reuses. The attach config keeps
-  only outputDir and allowUnrestrictedFileAccess; every other key moved onto
-  the Chrome argv. A refused attach is classified from the real transcript
-  (ECONNREFUSED + 'retrieving websocket url from') and relaunches once.
-  browser_flag_value, open_argv and unhonored_managed_fields are cut: with no
-  --browser flag left to pass, the last one could only ever return empty.
+  issues goto('about:blank') on the page it reuses. A dead browser is caught
+  two ways - a cheap try_wait before every verb, and an AttachFailed
+  classification afterwards - and only a dead one earns a relaunch, because a
+  second Chromium on a live profile is D.9.10's double-open in a new costume.
+  The attach-refused anchor is a conjunction: this classifier runs on output
+  that can carry page text, and ECONNREFUSED alone is a sentence any program
+  writes. browser_flag_value and open_argv are cut as dead code;
+  unhonored_managed_fields goes because the substitution it warned about is
+  now reported by the resolver that performs it, not because it was empty.
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01TKV5PtutzoBvbT4yTpsyRY"
@@ -1962,19 +2702,41 @@ pub(crate) fn chromium_user_data_dir(
 ### Task 6: `ProfileManager` —— `live_endpoint`、收割器杀浏览器、boot 收孤儿
 
 **Files:**
-- Modify `src/browser/manager.rs`：`new`（:96-97，Task 5 已改一行）· `spawn_idle_reaper`（:208-263）· `reap_idle`（:306-350）· `idle_managed_profiles`（:352-370）· `session_active`（:372-384）· 新增 `live_endpoint` · 测试模块
-- Modify `src/browser/mod.rs:20-21`（把 `CdpEndpoint` 挂进 crate 内的重导出，`live_endpoint` 的返回类型要能被 `src/gateway/` 里的未来调用者命名）
+- Modify `src/browser/manager.rs`：`new`（:96-97，Task 5 已改一行）· `spawn_idle_reaper`（:208-263）· `reap_idle`（:306-350）· `idle_managed_profiles`（:352-370）· `session_active`（:372-384）· 新增 `live_endpoint` / `shutdown_browsers` / `shutdown_browsers_global` · **改写现有测试 `test_get_profile_state_removed_in_favor_of_session_active`（:631-643）** · 测试模块新增三条
+- Modify `src/browser/mod.rs`（一行 `pub(crate) use chromium_launch::CdpEndpoint;`，crate 内可见即可——`live_endpoint` 本身也是 `pub(crate)`，Plan 2 的视图与它同 crate；**手写，不交给 `rustfmt`**）
+- Modify `src/bin/aleph-server/commands/start/mod.rs`：有序停机段落（`:3642` 的 `run_until_shutdown` 之后、`:3658` 的 `kill_all_running_background()` 旁边）加一次浏览器停机
 
 **Interfaces:**
-- Consumes: `PlaywrightCliDriver::{endpoint, chromium_alive, shutdown_chromium}`（Task 5）· `chromium_launch::reap_orphans_now`（Task 1）· `playwright_launch::browser_state_dir`（`playwright_launch.rs:256`）
+- Consumes: `PlaywrightCliDriver::{endpoint, chromium_alive, shutdown_chromium}`（Task 5）· `chromium_launch::reap_orphans_now`（Task 1，**不再取参数**——它自己解析注册表目录）
 - Produces:
   ```rust
   impl ProfileManager {
       pub(crate) fn live_endpoint(&self, profile: &str) -> Option<CdpEndpoint>;
+      pub fn shutdown_browsers(&self) -> usize;
   }
+  pub fn shutdown_browsers_global() -> usize;   // free fn, mirrors bash_exec::kill_all_running_background
   ```
 
 #### Steps
+
+- [ ] **先改掉本任务会弄红的那条既有测试。** `src/browser/manager.rs:631-643` 的 `test_get_profile_state_removed_in_favor_of_session_active` 最后两行逐字是
+  ```rust
+        // Managed approximation: tracked tabs imply a live session.
+        manager.touch_tab("default", "1");
+        assert!(manager.session_active("default"));
+  ```
+  也就是本任务要反转的那一句。**保留它前面的三条断言**（三个 profile 在没有浏览器时都报 inactive），把最后三行换成：
+  ```rust
+        // Not an approximation any more: Aleph owns the browser process, so
+        // `session_active` asks it. A tracked tab says a tab was USED, which is
+        // a different fact and no longer stands in for a live browser.
+        manager.touch_tab("default", "1");
+        assert!(
+            !manager.session_active("default"),
+            "a tracked tab must not imply a browser that was never launched"
+        );
+  ```
+  ⚠️ 这条改动**必须和实现同一笔**：不改它，Task 6 的实现会让一条既有测试变红，而红的原因写在另一个文件里。
 
 - [ ] **写失败测试。** 在 `src/browser/manager.rs` 的 `mod tests` 里追加：
 
@@ -2040,31 +2802,92 @@ pub(crate) fn chromium_user_data_dir(
         assert_eq!(manager.reap_idle().await, 0);
         assert!(manager.live_endpoint("default").is_none());
     }
+
+    /// spec §3.6 「退出时杀」. `std::process::Child` does NOT kill on drop, and
+    /// under `attach --cdp` the CLI was never the browser's parent — so without
+    /// an explicit stop every restart leaves a browser behind until the next
+    /// boot sweep finds it.
+    ///
+    /// The fake browser is a real `sleep` subprocess, because the thing being
+    /// tested is that a live pid stops being live. A mock child would assert
+    /// that a method was called (判据 §4: assert the effect arrived, not that
+    /// the call happened).
+    #[tokio::test]
+    async fn shutdown_browsers_kills_what_it_launched_and_says_how_many() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+
+        // Nothing launched → nothing to stop, and it must not pretend otherwise.
+        assert_eq!(manager.shutdown_browsers(), 0);
+
+        // A stand-in browser: long-lived, harmless, and observable by pid.
+        let child = std::process::Command::new("sleep")
+            .arg("120")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        let pid = child.id();
+        manager.insert_test_child("default", child);
+        assert!(
+            crate::utils::process_alive::is_process_alive(pid as i32),
+            "precondition: the stand-in is running"
+        );
+
+        assert_eq!(manager.shutdown_browsers(), 1);
+        // Give the OS a moment to reap; `shutdown` already waited, so this is
+        // belt and braces rather than a race the assertion depends on.
+        assert!(
+            !crate::utils::process_alive::is_process_alive(pid as i32),
+            "the stand-in browser is still running after shutdown_browsers"
+        );
+        // Idempotent: a second stop finds nothing and says so.
+        assert_eq!(manager.shutdown_browsers(), 0);
+    }
 ```
+
+  ⚠️ `insert_test_child` 是一个 `#[cfg(test)]` 的注入口，写在 `PlaywrightCliDriver` 上（`ChromiumChild` 的字段是私有的，测试要能放进去一个）。它与 `has_tracked_tabs`（`manager.rs:544-547`）同性质、同门控：
+```rust
+    /// Test-only: hand the driver a browser it did not launch, so the stop path
+    /// can be exercised against a REAL pid without a real Chromium.
+    #[cfg(test)]
+    pub(crate) fn insert_test_child(&self, session_key: &str, child: std::process::Child) {
+        let endpoint = CdpEndpoint {
+            http_url: "http://127.0.0.1:1".into(),
+            ws_url: "ws://127.0.0.1:1/devtools/browser/test".into(),
+            pid: child.id(),
+        };
+        self.chromium.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            session_key.to_string(),
+            ChromiumChild::from_parts(child, endpoint, std::path::PathBuf::from("/tmp/test-udd"), session_key),
+        );
+    }
+```
+  配一个同样 `#[cfg(test)]` 的构造器 `ChromiumChild::from_parts(child, endpoint, user_data_dir, session_key)`（Task 1 的模块里加），以及 `ProfileManager::insert_test_child` 转发一行。**不要**把这两个做成 `pub`：一个能从外面塞进浏览器的口子，就是一个能绕开启动链的口子。
 
   ⚠️ `AlephHomeEnvGuard` 的真实路径是 `crate::utils::paths::AlephHomeEnvGuard`（`src/tasks/cron/mod.rs:819`、`src/config/save.rs:17` 都这样引用，它本身是 `#[cfg(test)]` 的）。`manager.rs` 的测试模块里加 `use crate::utils::paths::AlephHomeEnvGuard;`。
 
 - [ ] **跑它，看红。** `cargo test -p alephcore --lib browser::manager` → `live_endpoint` 未解析；`a_tracked_tab_no_longer_fakes_a_live_managed_session` 断言失败（现状 `session_active` 就是 `has_tabs`）。
 
 - [ ] **最小实现。**
-  1. `spawn_idle_reaper`（:208-263）：在 `*slot = Some(Arc::downgrade(self));`（:243）**之前**插入 boot 孤儿回收：
+  1. `spawn_idle_reaper`（:208-263）：在 `*slot = Some(Arc::downgrade(self));`（:243）**之前**插入 boot 孤儿回收。它走**注册表目录**，所以配了自己 `user_data_dir` 的 profile 也在覆盖范围内（初稿只扫派生根，本仓 QA 自己配的 udd 就在根之外，会被整个漏掉）：
 ```rust
         // Boot hook, and the only one that runs exactly once per SERVED
         // manager (a `ProfileManager` built by a test or a CLI never claims the
         // slot above). Anything Aleph launched before a crash is still running:
         // Chrome does not exit when its parent does, and under `attach` the CLI
         // was never its parent anyway.
-        match super::playwright_launch::browser_state_dir("chromium-udd") {
-            Ok(root) => {
-                let reaped = super::chromium_launch::reap_orphans_now(&root);
-                if reaped > 0 {
-                    tracing::info!("reaped {reaped} orphaned chromium process(es) from a previous run");
-                }
+        //
+        // Off the async worker: the sweep does a `read_dir`, a `sysinfo`
+        // refresh per record and possibly a kill, and `with_process_specifics`
+        // is documented as syscall-heavy. Detached because boot must not wait
+        // for it — nothing downstream reads the count.
+        tokio::spawn(async {
+            match tokio::task::spawn_blocking(super::chromium_launch::reap_orphans_now).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("reaped {n} orphaned chromium process(es) from a previous run"),
+                Err(e) => tracing::warn!(error = %e, "the orphaned-chromium sweep did not complete"),
             }
-            // Cannot resolve the home dir: say so. Silently skipping would leak
-            // a browser per crash with nothing in the log to point at it.
-            Err(e) => tracing::warn!(error = %e, "cannot sweep orphaned chromium processes"),
-        }
+        });
 ```
   并在该函数 doc 的第一段之后补一句：
 ```rust
@@ -2077,8 +2900,13 @@ pub(crate) fn chromium_user_data_dir(
 ```rust
             // `close` under `attach --cdp` is a DISCONNECT: the browser, its
             // pages and their state all survive it (measured). So the reaper's
-            // second half is the one that actually reclaims anything.
-            self.playwright_cli_driver.shutdown_chromium(&name);
+            // second half is the one that actually reclaims anything — and the
+            // count below is only earned if it did something. Reporting a
+            // reaped profile over a browser that never went away is the
+            // "success reported for a no-op" shape (判据 §11).
+            if !self.playwright_cli_driver.shutdown_chromium(&name) {
+                tracing::warn!(profile = %name, "reap_idle: no chromium to stop for an idle managed profile");
+            }
             self.tab_registry.clear_profile(&name);
 ```
   doc（:306-319）里 `- `Managed` → `playwright-cli close`.` 那一段替换为：
@@ -2123,25 +2951,101 @@ pub(crate) fn chromium_user_data_dir(
     }
 ```
 
-  6. `src/browser/mod.rs`：在 `pub use error::BrowserError;`（:21）之后加
+  6. `src/browser/mod.rs`：在 `pub use error::BrowserError;`（:21）之后加一行（**手写**，这个文件声明 18 个子模块，`rustfmt` 会递归进去）：
 ```rust
+// Crate-internal: `live_endpoint` is `pub(crate)` too, and its first real
+// consumer (the live view, Plan 2) lives in this crate.
 pub(crate) use chromium_launch::CdpEndpoint;
 ```
 
-- [ ] **跑到绿。** `cargo test -p alephcore --lib browser::manager`
-- [ ] **证伪两次。** ① 把 `session_active` 的 Managed 臂改回 `self.tab_registry.has_tabs(name)` → `a_tracked_tab_no_longer_fakes_a_live_managed_session` 必须变红。② 把 `live_endpoint` 的 `ExistingSession` 臂改成也去问 driver → `live_endpoint_is_none_without_a_browser_and_never_answers_for_existing_session` 仍会绿（因为没有浏览器）——**这说明第二条守卫此刻是空的**。把它补强：在那条测试里额外断言 `manager.get_driver("user") == Some(BrowserDriver::ExistingSession)`，让「问的是哪个 driver」成为断言的一部分，然后重做这次变异并确认变红。（判据 §3：一条没被证伪过的守卫不算守卫。）
-- [ ] `rustfmt src/browser/manager.rs`
-- [ ] `cargo test -p alephcore --lib browser::` 与 `cargo test -p alephcore --lib gateway::handlers::browser_config` 全绿。
+  7. 停机路径。先在 `manager.rs` 加两个函数（`shutdown_browsers` 放在 `live_endpoint` 之后，自由函数放在文件里 `apply_policy_live` 旁边——它们是同一族：一个进程级句柄，从别处戳一下，没有 manager 时诚实地说 no-op）：
+```rust
+    /// Kill every browser this manager launched. Returns how many were stopped.
+    ///
+    /// spec §3.6「退出时杀」. `std::process::Child` does not kill on drop, and
+    /// under `attach --cdp` the CLI was never the browser's parent — so without
+    /// this every restart leaves a Chromium running until the next boot sweep.
+    pub fn shutdown_browsers(&self) -> usize {
+        self.playwright_cli_driver.shutdown_all_chromium()
+    }
+```
+```rust
+/// Stop the browsers of the manager the running daemon serves.
+///
+/// Shaped exactly like [`crate::builtin_tools::bash_exec::kill_all_running_background`],
+/// for the same reason its comment gives at the shutdown call site: an
+/// automatic teardown is best-effort once the runtime itself is being torn
+/// down, so the daemon calls this explicitly. Returns 0 — honestly — when no
+/// manager is published (a CLI process, a test, or before boot wired one up).
+pub fn shutdown_browsers_global() -> usize {
+    let handle = LIVE_MANAGER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    handle
+        .as_ref()
+        .and_then(Weak::upgrade)
+        .map_or(0, |mgr| mgr.shutdown_browsers())
+}
+```
+  以及 `PlaywrightCliDriver::shutdown_all_chromium`（Task 5 的模块里加，与 `shutdown_chromium` 并列）：
+```rust
+    /// Kill and forget every Chromium this driver launched.
+    pub(crate) fn shutdown_all_chromium(&self) -> usize {
+        let taken: Vec<ChromiumChild> = std::mem::take(
+            &mut *self.chromium.lock().unwrap_or_else(|e| e.into_inner()),
+        )
+        .into_values()
+        .collect();
+        let n = taken.len();
+        for child in taken {
+            child.shutdown();
+        }
+        n
+    }
+```
+  然后在 `src/bin/aleph-server/commands/start/mod.rs` 的有序停机段落里，紧跟 `:3658` 的 `kill_all_running_background()` 那一段之后加：
+```rust
+    // Same shape and the same reason as the background-bash reap above: the
+    // browsers are OUR child processes, `Child` does not kill on drop, and
+    // under `attach --cdp` playwright-cli was never their parent. Reached by
+    // both signal paths and by a fatal `run_until_shutdown` error. Without it
+    // every restart leaves a Chromium behind for the next boot's sweep to
+    // find — and on a host where argv is unreadable that sweep declines to
+    // act, by design, so the leak would be permanent.
+    let browsers = alephcore::browser::manager::shutdown_browsers_global();
+    if browsers > 0 {
+        tracing::info!(count = browsers, "stopped managed browsers on shutdown");
+    }
+```
+
+- [ ] **跑到绿（分开跑）。**
+  ```
+  cargo test -p alephcore --lib browser::manager
+  cargo test -p alephcore --lib gateway::handlers::browser_config
+  cargo check --bin aleph-server
+  ```
+- [ ] **证伪三次。**
+  1. 把 `session_active` 的 Managed 臂改回 `self.tab_registry.has_tabs(name)` → `a_tracked_tab_no_longer_fakes_a_live_managed_session` **和**改写后的 `test_get_profile_state_removed_in_favor_of_session_active` 必须同时变红。
+  2. 把 `live_endpoint` 的 `ExistingSession` 臂改成也去问 driver → `live_endpoint_is_none_without_a_browser_and_never_answers_for_existing_session` 仍会绿（因为没有浏览器）——**这说明第二条守卫此刻是空的**。把它补强：在那条测试里额外断言 `manager.get_driver("user") == Some(BrowserDriver::ExistingSession)`，让「问的是哪个 driver」成为断言的一部分，然后重做这次变异并确认变红。（判据 §3：一条没被证伪过的守卫不算守卫。）
+  3. 把 `shutdown_all_chromium` 的 `child.shutdown()` 换成只 `drop(child)` → `shutdown_browsers_kills_what_it_launched_and_says_how_many` 必须变红。**这一条守的正是 `Child` 不在 drop 时 kill 这件事**，也就是这个函数存在的全部理由。
+  三次都恢复。
+- [ ] `rustfmt src/browser/manager.rs src/browser/playwright_cli.rs src/bin/aleph-server/commands/start/mod.rs`（三个都是叶子文件——`start/mod.rs` 虽然叫 `mod.rs`，`grep -n "^pub mod\|^mod " src/bin/aleph-server/commands/start/mod.rs` 确认它是否声明子模块；**若声明了就不要格式化它**，那一笔只加了五行，手写即可）
 - [ ] **提交。**
   ```
-  git add src/browser/manager.rs src/browser/mod.rs
+  git add src/browser/manager.rs src/browser/mod.rs src/browser/playwright_cli.rs \
+          src/bin/aleph-server/commands/start/mod.rs
   git commit -m "browser: the manager owns chromium's lifetime, not the CLI
 
-  reap_idle kills Aleph's Chromium after the close that now only disconnects;
+  reap_idle kills Aleph's Chromium after the close that now only disconnects,
+  and stops counting a profile reaped when there was nothing to stop.
   session_active and the reap candidates ask the child process instead of the
-  tab registry's self-described approximation; spawn_idle_reaper sweeps the
-  previous run's orphans by argv; live_endpoint is the accessor the live view
-  will consume, and answers None for existing-session profiles by construction.
+  tab registry's self-described approximation. spawn_idle_reaper sweeps the
+  previous run's orphans out of the one sidecar registry, so a profile with a
+  configured user_data_dir is covered by construction. The daemon now stops its
+  browsers on the way out, beside the background-bash reap and for the same
+  reason: Child does not kill on drop. live_endpoint is the accessor the live
+  view will consume, and answers None for existing-session profiles.
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01TKV5PtutzoBvbT4yTpsyRY"
@@ -2155,7 +3059,7 @@ pub(crate) use chromium_launch::CdpEndpoint;
 
 **Files:**
 - Modify `src/runtimes/specs.rs:47-59`（`PostInstallAction`）与 `:173-176`（playwright-cli 的 post_install）· `:460-490` 附近的那条断言 post-install 形状的测试（先 `grep -n "install-browser" src/runtimes/specs.rs` 定位，本计划读到的是 `:464` 与 `:480-485`）
-- Modify `src/runtimes/post_install.rs:47-59`（`run` 的分派）· `:80-107`（`run_subcommand`）· 新增 `config_env` / `config_env_from` 与测试
+- Modify `src/runtimes/post_install.rs:68-78`（`run` 的分派——⚠️ 不是 `:47-59`，那里是 `POST_INSTALL_TIMEOUT_SECS` 与 `run_cmd_with_timeout`）· `:80-107`（`run_subcommand`）· 新增 `config_env` / `config_env_from` 与测试
 - Create `src/diagnostics/checks/chromium_missing.rs`
 - Modify `src/diagnostics/checks/mod.rs:17-52`（`pub mod` + `pub use`）
 - Modify `src/diagnostics/mod.rs:80-95`（`default_registry` 的 `checks` 向量）
@@ -2377,6 +3281,22 @@ mod tests {
         assert!(f.detail.contains("Google Chrome"), "{}", f.detail);
         assert!(f.detail.contains("system Chromium-family browser"), "{}", f.detail);
     }
+
+    /// The three budgets that must stay nested, asserted rather than described.
+    /// If any one of them moves, this test names which invariant broke instead
+    /// of leaving an unreachable arm and an amber doctor to be discovered.
+    #[test]
+    fn the_check_answers_before_the_engine_abandons_it() {
+        assert!(
+            crate::browser::chromium_resolve::DRY_RUN_TIMEOUT < RESOLVE_TIMEOUT,
+            "the inner probe must finish before this check's own deadline"
+        );
+        assert!(
+            RESOLVE_TIMEOUT < crate::diagnostics::check::DEFAULT_CHECK_TIMEOUT,
+            "this check must answer before the engine abandons it and emits its \
+             own Warning — otherwise the timeout arm here is unreachable"
+        );
+    }
 }
 ```
 
@@ -2399,8 +3319,12 @@ mod tests {
 //!
 //! That means this check DOES spawn a process (`playwright-cli install-browser
 //! chromium --dry-run`), unlike its sibling. It is bounded by
-//! [`RESOLVE_TIMEOUT`] and a probe that does not answer in time produces the
-//! `unknown` finding, never "not installed".
+//! [`RESOLVE_TIMEOUT`], and a probe that does not answer in time produces
+//! [`crate::diagnostics::check::unknown_finding`] — the house style for "this
+//! check could not determine its own subject" (`src/diagnostics/check.rs:205-225`:
+//! `Severity::Warning`, titled `"<subject> unknown"`, spelled once so unknown
+//! keeps meaning the same severity everywhere). Never "not installed": unknown
+//! is neither healthy nor failed (判据 §8).
 
 use async_trait::async_trait;
 
@@ -2412,10 +3336,19 @@ use crate::diagnostics::finding::Finding;
 const ID: &str = "browser/chromium-missing";
 const SUBJECT: &str = "Managed browser";
 
-/// The resolver spawns one short-lived CLI probe. Twenty seconds is its own
-/// internal budget; this is the outer bound so a wedged CLI cannot hold
-/// `aleph doctor` open.
-const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+/// The outer bound on the whole resolution, and the number is chosen by two
+/// constraints, not by taste.
+///
+/// **Below** it: `chromium_resolve::DRY_RUN_TIMEOUT` is 6 s, the only thing in
+/// the resolution that can block. **Above** it: `check::DEFAULT_CHECK_TIMEOUT`
+/// is 20 s (`src/diagnostics/check.rs:27`), and past that the ENGINE abandons
+/// the check and emits a `Warning` of its own. A check whose inner deadline
+/// sits at or above the engine's is a 恒假 arm (判据 §2) plus an amber
+/// `doctor` on every slow probe — and `src/diagnostics/checks/mod.rs:6-10`
+/// names exactly that as the way this command's exit code becomes a constant.
+/// Three budgets, strictly nested: 6 < 8 < 20, so this check always gets to
+/// answer for itself and never needs a `HealthCheck::timeout()` override.
+const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// The finding for "there is no browser", spelled once so the doctor, the tool
 /// error and the QA fixture can all be checked against the same sentence.
@@ -2446,6 +3379,14 @@ fn found_finding(path: &std::path::Path, source: ChromiumSource) -> Finding {
     )
 }
 
+/// The fix-hint sentence, reachable from `builtin_tools::runtime_manage`'s test
+/// so the tool it names can be pinned to a tool that exists. Exposing the
+/// finding rather than the string keeps one author for the sentence.
+#[cfg(test)]
+pub(crate) fn missing_finding_for_test() -> Finding {
+    missing_finding("no system browser")
+}
+
 #[derive(Default)]
 pub struct ChromiumMissingCheck;
 
@@ -2471,7 +3412,25 @@ impl HealthCheck for ChromiumMissingCheck {
         // the install. Without it there is nothing to ask and nothing to fix
         // here — `browser/runtime`'s managed probe owns that sentence, so this
         // check defers to it rather than printing a second copy.
-        let Some(cli) = crate::tools::probes::browser::managed_cli_path() else {
+        // Off the async worker, mirroring the twin probe at
+        // `browser_runtime.rs:230-236`, which wraps the identical call for the
+        // identical reason: it does a `which` PATH walk plus a JSON file read
+        // (判据 §16 — fix it on both sides).
+        let cli = match tokio::task::spawn_blocking(
+            crate::tools::probes::browser::managed_cli_path,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                return vec![unknown_finding(
+                    ID,
+                    SUBJECT,
+                    format!("the playwright-cli lookup did not come back: {e}"),
+                )]
+            }
+        };
+        let Some(cli) = cli else {
             return vec![Finding::ok(
                 ID,
                 "Managed browser not checked (no playwright-cli)",
@@ -2498,16 +3457,25 @@ impl HealthCheck for ChromiumMissingCheck {
         )
         .await;
         vec![match probe {
-            Ok(Ok((path, source))) => found_finding(&path, source),
+            Ok(Ok(r)) => found_finding(&r.path, r.source),
             Ok(Err(crate::browser::BrowserError::ChromiumUnavailable { tried })) => {
                 missing_finding(tried)
             }
             // Any other error is the resolver failing to look, not a verdict.
             Ok(Err(e)) => unknown_finding(ID, SUBJECT, format!("the lookup failed: {e}")),
+            // The check's OWN "could not verify" answer, which is why
+            // RESOLVE_TIMEOUT sits under the engine's ceiling: if the engine
+            // got here first, this arm would be unreachable and the operator
+            // would read the engine's abandonment Warning instead of a sentence
+            // naming what was being probed.
             Err(_) => unknown_finding(
                 ID,
                 SUBJECT,
-                format!("the lookup did not answer within {}s", RESOLVE_TIMEOUT.as_secs()),
+                format!(
+                    "the chromium lookup did not answer within {}s (engine ceiling is {}s)",
+                    RESOLVE_TIMEOUT.as_secs(),
+                    crate::diagnostics::check::DEFAULT_CHECK_TIMEOUT.as_secs()
+                ),
             ),
         }]
     }
@@ -2520,10 +3488,15 @@ impl HealthCheck for ChromiumMissingCheck {
 ```
   `BrowserRuntimeConfig` 的 `use` 若被 clippy 判为未使用则删掉——上面的 `run` 用的是 `cfg.general.browser.runtime.clone()`，类型由推断得出。
 
-- [ ] **跑到绿。** `cargo test -p alephcore --lib diagnostics::` 与 `cargo test -p alephcore --lib runtimes::`
-- [ ] **证伪一次。** 把 `missing_finding` 的 `fix_hint` 删掉 → `the_missing_finding_names_every_way_out` 必须变红。恢复。
+- [ ] **跑到绿（分开跑）。**
+  ```
+  cargo test -p alephcore --lib diagnostics::
+  cargo test -p alephcore --lib runtimes::
+  ```
+- [ ] **证伪两次。** ① 把 `missing_finding` 的 `fix_hint` 删掉 → `the_missing_finding_names_every_way_out` 必须变红。② 把 `RESOLVE_TIMEOUT` 改回 25 s → `the_check_answers_before_the_engine_abandons_it` 必须变红。两次都恢复。
 - [ ] **手工跑一次真 doctor。** `cargo run --bin aleph-server -- doctor 2>&1 | grep -A 3 -i chromium`。本机预期：`playwright-cli` 在 PATH 上、系统 Chrome 在 `/Applications` 下 ⇒ `Managed browser available … a system Chromium-family browser`。把这一行原样贴进 Task 10 的 FEATURE_LOCATOR 条目。⚠️ `aleph-server doctor` 是冷进程，`default_registry` 里任何恒红的检查都会把它的退出码变成常数——本检查的两条 Info 与一条 Warning（unknown）里，只有 unknown 是 Warning，且它只在「读不到配置 / 探针不答」时出现。**跑一次确认退出码仍是 0。**
-- [ ] `rustfmt src/runtimes/specs.rs src/runtimes/post_install.rs src/diagnostics/checks/chromium_missing.rs src/diagnostics/checks/mod.rs src/diagnostics/mod.rs`
+- [ ] `rustfmt src/runtimes/specs.rs src/runtimes/post_install.rs src/diagnostics/checks/chromium_missing.rs`
+  ⚠️ **`src/diagnostics/checks/mod.rs` 与 `src/diagnostics/mod.rs` 不在这一行里，也不许加进来。** 两者都声明子模块（`checks/mod.rs:16-33` 一口气 18 个 `pub mod`），而 `rustfmt <file>` 会**递归进它声明的每一个子模块**，把整棵 `src/diagnostics/` 重排进本次提交——正是本计划 Global Constraints 那条禁令要防的事。这一笔对它们只加了三行（一个 `pub mod`、一个 `pub use`、一个注册向量条目），**手写**，没有可格式化的东西。
 - [ ] `cargo test -p alephcore --lib --no-run` 与 `cargo test -p alephcore --bins` 全绿。
 - [ ] **提交。**
   ```
@@ -2551,9 +3524,10 @@ impl HealthCheck for ChromiumMissingCheck {
 
 **Files:**
 - Create `src/builtin_tools/runtime_manage.rs`
-- Modify `src/builtin_tools/mod.rs`（`pub mod` 按字母序插在 `remember` 与 `scratchpad` 之间；若同文件有对应的 `pub use` 区块，一并加）
+- Modify `src/builtin_tools/mod.rs`（`pub mod` 按字母序插在 `remember` 与 `scratchpad` 之间；若同文件有对应的 `pub use` 区块，一并加）—— **手写，不交给 `rustfmt`**：这个文件声明每一个 builtin-tool 模块，`rustfmt` 会递归重排整棵 `src/builtin_tools/`
+- Modify `src/gateway/method_authz.rs:31-…`（`OPERATOR_TOOLS`）与它的测试（`:251-260` 的 `operator_tools_has_no_duplicates`、`:261-290` 的 `chat_safe_tools_stay_open`）
 - Modify `src/executor/builtin_registry/definitions.rs`：`BUILTIN_TOOL_DEFINITIONS` 加条目（照 `:248-252` 的 `list_models` 形状）· `standalone` 的 `=> None` 臂区（`:1170-1186` 一带）· `REGISTRY_SCHEMA_BASELINE`（`:3027+`）加一行 · 必要时抬 `CATALOG_DESCRIPTION_CEILING_BYTES`（`:2603`）与 `REGISTRY_SCHEMA_CEILING_BYTES`（`:2999`）
-- Modify `src/executor/builtin_registry/groups.rs`（`:100-137` 的自管理组，`"doctor"` 附近）
+- Modify `src/executor/builtin_registry/groups.rs`（`:100-137` 的自管理组，`"doctor"` 附近 —— ⚠️ 这张表**只用于展示**，加进去不构成任何授权判断；授权在 `method_authz.rs`，见下）
 - Modify `src/executor/builtin_registry/registry/struct_def.rs`（`:72-82` 一带）
 - Modify `src/executor/builtin_registry/builder/constructor/mod.rs`（照 `:200-203` 的 `list_models_tool` 构造形状；注册结构体字面量里也要加一行，照 `:1157`）
 - Modify `src/executor/builtin_registry/registry/tool_registry_impl.rs`（照 `:175-177` 的分派臂）
@@ -2568,6 +3542,8 @@ impl HealthCheck for ChromiumMissingCheck {
   pub enum RuntimeAction { List, Install }
   pub struct RuntimeManageOutput { pub ok: bool, pub message: String, pub runtimes: Vec<RuntimeRow> }
   ```
+
+**授权裁定（review 采纳，初稿答错了表）：`runtime_manage` 进 `method_authz::OPERATOR_TOOLS`。** 初稿只说了 `groups.rs`「按它自己的模块 doc 只用于展示，不带授权含义」——那句话是真的，但它不是这个问题的答案。真正的闸是 `src/gateway/method_authz.rs:31` 的 `OPERATOR_TOOLS`（chat-tier 通道在工具派发处被拒），而这个工具最近的三个兄弟 `skill_install` / `skill_manage` / `hub_install_run` 全在里面。`runtime_manage{install}` 会跑 `ensure_capability`，也就是台账的 bootstrap 安装器（npm 全局安装、`curl | sh` 脚本）与 post-install 子命令——一次调用在宿主机上装软件。所以它进 `OPERATOR_TOOLS`。⚠️ 不按动作拆（`list` 开放、`install` 收紧）：那张表按**工具名**判定，拆开要动判定机制本身，而 `list` 的价值不足以换那个改动；chat tier 想知道装了什么，`doctor` 仍然开放。
 
 #### Steps
 
@@ -2627,12 +3603,36 @@ mod tests {
         assert!(!is_installable("chrmium"));
     }
 
+    /// A locator that answers from memory. The production one shells out to
+    /// `playwright-cli install-browser --dry-run`, and a unit test that reached
+    /// it would spawn a real node subprocess inside `cargo test --lib` — the
+    /// exact discipline `src/browser/playwright_cli.rs:150-165` seals its own
+    /// `provision_binary` to enforce, in its own words "so no future test can
+    /// forget to seal itself", because otherwise "their green was a property of
+    /// the environment, not of the code". It would also pass on a machine with
+    /// no `playwright-cli` for a different reason than on one with it.
+    struct StubLocator(&'static str);
+
+    #[async_trait]
+    impl ChromiumLocator for StubLocator {
+        async fn locate(&self) -> RuntimeRow {
+            RuntimeRow {
+                name: "chromium".into(),
+                status: self.0.into(),
+                path: None,
+                version: None,
+                purpose: None,
+                supported_here: true,
+            }
+        }
+    }
+
     /// The catalogue face and the RPC face answer from the same table. A tool
     /// that listed a different set than `runtimes.list` would be the second
     /// answer to "what runtimes are there" (判据 §9).
     #[tokio::test]
     async fn list_answers_from_the_same_spec_table_as_the_rpc() {
-        let out = RuntimeManageTool::new()
+        let out = RuntimeManageTool::with_locator(Arc::new(StubLocator("Ready (stub)")))
             .call(RuntimeManageArgs {
                 action: RuntimeAction::List,
                 capability: None,
@@ -2645,6 +3645,24 @@ mod tests {
             assert!(names.contains(&spec.name), "{} missing from the tool face", spec.name);
         }
         assert!(names.contains(&"chromium"), "chromium is installable, so it must be listable");
+    }
+
+    /// The doctor's fix hint (Task 7) names this tool by string. Nothing
+    /// otherwise ties the two together, so a rename would quietly turn that
+    /// hint into a lie — the "same fact, two expressions" shape, with the
+    /// expensive copy in the text a human is told to act on (判据 §1).
+    #[test]
+    fn the_doctor_fix_hint_names_a_tool_that_actually_exists() {
+        let hint = crate::diagnostics::checks::chromium_missing::missing_finding_for_test()
+            .fix_hint
+            .expect("the missing finding carries a fix hint");
+        assert!(hint.contains(<RuntimeManageTool as AlephTool>::NAME), "{hint}");
+        assert!(
+            crate::executor::BUILTIN_TOOL_DEFINITIONS
+                .iter()
+                .any(|d| d.name == <RuntimeManageTool as AlephTool>::NAME),
+            "the tool the doctor points at must be in the catalogue"
+        );
     }
 }
 ```
@@ -2744,13 +3762,51 @@ fn installable_names() -> Vec<&'static str> {
         .collect()
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeManageTool;
+/// Where the tool learns about Chromium.
+///
+/// Injected because the production answer shells out to `playwright-cli
+/// install-browser --dry-run`, and `cargo test --lib` must not spawn node.
+#[async_trait]
+pub(crate) trait ChromiumLocator: Send + Sync {
+    async fn locate(&self) -> RuntimeRow;
+}
+
+/// The production locator: the resolver the browser driver itself uses.
+pub(crate) struct RealChromiumLocator;
+
+#[async_trait]
+impl ChromiumLocator for RealChromiumLocator {
+    async fn locate(&self) -> RuntimeRow {
+        chromium_row().await
+    }
+}
+
+#[derive(Clone)]
+pub struct RuntimeManageTool {
+    locator: Arc<dyn ChromiumLocator>,
+}
+
+impl Default for RuntimeManageTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for RuntimeManageTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimeManageTool").finish_non_exhaustive()
+    }
+}
 
 impl RuntimeManageTool {
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self { locator: Arc::new(RealChromiumLocator) }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_locator(locator: Arc<dyn ChromiumLocator>) -> Self {
+        Self { locator }
     }
 
     async fn ledger() -> Result<Arc<tokio::sync::RwLock<CapabilityLedger>>> {
@@ -2763,7 +3819,7 @@ impl RuntimeManageTool {
         Ok(Arc::new(tokio::sync::RwLock::new(ledger)))
     }
 
-    async fn list() -> RuntimeManageOutput {
+    async fn list(locator: &Arc<dyn ChromiumLocator>) -> RuntimeManageOutput {
         let ledger = match Self::ledger().await {
             Ok(l) => l,
             Err(e) => {
@@ -2795,7 +3851,7 @@ impl RuntimeManageTool {
         // derived from the resolver the browser driver itself uses. A row that
         // said "Missing" while a system Chrome sat in /Applications would be a
         // lie the model would act on.
-        runtimes.push(chromium_row().await);
+        runtimes.push(locator.locate().await);
         RuntimeManageOutput {
             ok: true,
             message: format!("{} runtime(s).", runtimes.len()),
@@ -2803,7 +3859,10 @@ impl RuntimeManageTool {
         }
     }
 
-    async fn install(capability: Option<String>) -> RuntimeManageOutput {
+    async fn install(
+        capability: Option<String>,
+        locator: &Arc<dyn ChromiumLocator>,
+    ) -> RuntimeManageOutput {
         let Some(name) = capability.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
             return RuntimeManageOutput {
                 ok: false,
@@ -2836,7 +3895,7 @@ impl RuntimeManageTool {
                 Err(e) => return RuntimeManageOutput { ok: false, message: format!("{name} install failed: {e}"), runtimes: Vec::new() },
             }
         };
-        let mut out = Self::list().await;
+        let mut out = Self::list(locator).await;
         out.message = message;
         out
     }
@@ -2844,23 +3903,36 @@ impl RuntimeManageTool {
 
 /// The chromium row, derived from the driver's own resolver.
 async fn chromium_row() -> RuntimeRow {
-    let (status, path) = match crate::tools::probes::browser::managed_cli_path() {
+    // Off the async worker, same as the doctor's twin probe: a `which` PATH
+    // walk plus a JSON read (判据 §16).
+    let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
+        .await
+        .unwrap_or(None);
+    let (status, path) = match cli {
         None => ("Unknown (no playwright-cli)".to_string(), None),
-        Some(cli) => {
-            let runtime = crate::config::Config::load()
-                .map(|c| c.general.browser.runtime.clone())
-                .unwrap_or_default();
-            match crate::browser::chromium_resolve::resolve_binary(
-                &runtime,
-                &crate::browser::profile::BrowserType::default(),
-                &cli,
-            )
-            .await
-            {
-                Ok((p, source)) => (format!("Ready ({})", source.label()), Some(p.display().to_string())),
-                Err(e) => (format!("Missing ({e})"), None),
+        Some(cli) => match crate::config::Config::load() {
+            // A config we cannot read is NOT a config with default settings: a
+            // pinned `binary_path` we failed to see would make this row say
+            // "Missing" on a host that has a browser. The doctor answers this
+            // condition with `unknown`; the tool must say the same thing, or
+            // the two faces disagree about the same fact (判据 §16).
+            Err(e) => (format!("Unknown (the config could not be read: {e})"), None),
+            Ok(cfg) => {
+                match crate::browser::chromium_resolve::resolve_binary(
+                    &cfg.general.browser.runtime,
+                    &crate::browser::profile::BrowserType::default(),
+                    &cli,
+                )
+                .await
+                {
+                    Ok(r) => (
+                        format!("Ready ({})", r.source.label()),
+                        Some(r.path.display().to_string()),
+                    ),
+                    Err(e) => (format!("Missing ({e})"), None),
+                }
             }
-        }
+        },
     };
     RuntimeRow {
         name: CHROMIUM.to_string(),
@@ -2897,7 +3969,23 @@ async fn install_chromium() -> String {
     }
     use crate::utils::no_window::NoWindow;
     match tokio::time::timeout(CHROMIUM_INSTALL_TIMEOUT, cmd.no_window().output()).await {
-        Ok(Ok(out)) if out.status.success() => "chromium installed.".to_string(),
+        // Exit 0 is not the claim. The claim is that the NEXT browser call
+        // works, and the resolver is one await away — so ask it (判据 §4:
+        // assert the effect arrived, not that the call happened). This CLI has
+        // produced exit-0-and-nothing-happened before: appendix D.9.11 records
+        // `browser_pdf` answering "Saved PDF to <path>" over a file it had been
+        // refused permission to write.
+        Ok(Ok(out)) if out.status.success() => match chromium_row().await {
+            row if row.path.is_some() => format!(
+                "chromium installed and resolves at {}.",
+                row.path.unwrap_or_default()
+            ),
+            row => format!(
+                "`install-browser chromium` exited 0 but no browser resolves afterwards ({}). \
+                 Check [browser.runtime] binary_path and download_host.",
+                row.status
+            ),
+        },
         Ok(Ok(out)) => format!(
             "chromium install failed (exit {}): {}",
             out.status.code().unwrap_or(-1),
@@ -2927,8 +4015,8 @@ impl crate::tools::AlephTool for RuntimeManageTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         Ok(match args.action {
-            RuntimeAction::List => Self::list().await,
-            RuntimeAction::Install => Self::install(args.capability).await,
+            RuntimeAction::List => Self::list(&self.locator).await,
+            RuntimeAction::Install => Self::install(args.capability, &self.locator).await,
         })
     }
 }
@@ -2951,7 +4039,30 @@ impl crate::tools::AlephTool for RuntimeManageTool {
      ) as Box<dyn AlephToolDyn>),
      ```
      （放在同一个 `match` 里，位置按邻近的字母顺序；若该 `match` 有 catch-all 分支，插在它之前。）
-  3. `groups.rs`：把 `"runtime_manage"` 加进含 `"doctor"` / `"tool_usage"` 的那一组（`:100-137`）——它是自管理面，且**不**在 `method_authz::OPERATOR_TOOLS` 里（这张表按它自己的模块 doc 只用于展示，不带授权含义）。
+  3. `groups.rs`：把 `"runtime_manage"` 加进含 `"doctor"` / `"tool_usage"` 的那一组（`:100-137`）。这张表按它自己的模块 doc **只用于展示**，所以这一步不回答任何授权问题——授权在下一步。
+  3b. `src/gateway/method_authz.rs`：把 `"runtime_manage"` 加进 `OPERATOR_TOOLS`（:31 起），紧挨 `"skill_install"` / `"skill_manage"` / `"hub_install_run"`，并按那张表的行文写下理由：
+```rust
+    // `runtime_manage{install}` runs `ensure_capability`, i.e. the ledger's
+    // bootstrap installers — an npm global install, a `curl … | sh` script, a
+    // winget invocation — plus their post-install subcommands. One call
+    // installs software on the host. Its three nearest siblings
+    // (`skill_install`, `skill_manage`, `hub_install_run`) are already here for
+    // the same reason. Deliberately NOT split so `list` stays open: this table
+    // matches on the tool NAME, and a chat-tier run that wants to know what is
+    // installed has `doctor`, which is open.
+    "runtime_manage",
+```
+  该文件已有的两条测试（`operator_tools_has_no_duplicates` :251-260、`chat_safe_tools_stay_open` :261-290）会自动覆盖新成员；再加一条断言它确实被闸住：
+```rust
+    #[test]
+    fn installing_a_runtime_is_operator_only() {
+        assert!(
+            tool_requires_operator("runtime_manage"),
+            "runtime_manage installs software on the host; it sits with \
+             skill_install and hub_install_run, not with the read-only tools"
+        );
+    }
+```
   4. `registry/struct_def.rs`：
      ```rust
      /// Runtime-manage tool instance (external runtime ledger: list + install)
@@ -2974,14 +4085,30 @@ impl crate::tools::AlephTool for RuntimeManageTool {
      );
      ```
 
+- [ ] **先量一次每请求字节，再动棘轮。** R9 点名的量具是 `aleph-server prompt-size`，所以在加工具**之前**与**之后**各跑一次并记下两个数：
+  ```
+  cargo run --bin aleph-server -- prompt-size
+  ```
+  没有这两个数，一个手打错的 ceiling 与一个实测出来的 ceiling 在提交里长得一模一样（判据 §18）。
 - [ ] **跑两条棘轮，按它们印出来的数字改。** `cargo test -p alephcore --lib executor::builtin_registry::definitions` → 预期 `catalog_description_bytes_ratchet` 与 `registry_schema_bytes_ratchet` 双红。**先按 R9 的两把尺量这段 `DESCRIPTION`**：① 这是模型做不到的运行时事实吗？——是：「哪些运行时存在、`install` 要一个 `capability`、chromium 是那个浏览器」在 schema 的枚举里看不出来。② 有没有别的工具拥有这句话？——没有：`doctor` 报告健康但不装东西。**先修剪再抬**：如果实测增量超过 400 B，把描述里能由 `RuntimeAction` 枚举 doc 说出来的部分删掉再量一次。然后把两个 ceiling 常量改成测试**打印出来的**那个数（flush，不留 headroom——那条常量的 doc `:2369-2384` 逐字论证过为什么 headroom 是已经发出去的额度），并在常量 doc 里追加一行注明本轮增量与归因。同样把 `REGISTRY_SCHEMA_BASELINE`（`:3027+`）加一行 `("runtime_manage", <测出来的数>)` —— **不要手编这一行**，用测试打印的值。
-- [ ] **跑到绿。** `cargo test -p alephcore --lib builtin_tools::runtime_manage executor::builtin_registry`
-- [ ] **证伪一次。** 把 `is_installable` 改成只 `find_spec(name).is_some()` → `chromium_is_installable_and_is_deliberately_not_a_ledger_spec` 必须变红。恢复。
-- [ ] `rustfmt src/builtin_tools/runtime_manage.rs src/builtin_tools/mod.rs src/executor/builtin_registry/definitions.rs src/executor/builtin_registry/groups.rs src/executor/builtin_registry/registry/struct_def.rs src/executor/builtin_registry/registry/tool_registry_impl.rs src/executor/builtin_registry/builder/core_tools.rs src/executor/builtin_registry/builder/constructor/mod.rs`
+- [ ] **跑到绿（三条命令，别合并——`cargo test` 只收一个 TESTNAME）。**
+  ```
+  cargo test -p alephcore --lib builtin_tools::runtime_manage
+  cargo test -p alephcore --lib executor::builtin_registry
+  cargo test -p alephcore --lib gateway::method_authz
+  ```
+- [ ] **证伪三次。**
+  1. 把 `is_installable` 改成只 `find_spec(name).is_some()` → `chromium_is_installable_and_is_deliberately_not_a_ledger_spec` 必须变红。
+  2. 把 `OPERATOR_TOOLS` 里那一行删掉 → `installing_a_runtime_is_operator_only` 必须变红。
+  3. 把 `RuntimeManageTool` 的 `NAME` 改成 `"runtimes_manage"` → `the_doctor_fix_hint_names_a_tool_that_actually_exists` 必须变红。**这条守的是 doctor 那句 fix hint 不许变成谎话。**
+  三次都恢复。
+- [ ] `rustfmt src/builtin_tools/runtime_manage.rs src/executor/builtin_registry/definitions.rs src/executor/builtin_registry/groups.rs src/executor/builtin_registry/registry/struct_def.rs src/executor/builtin_registry/registry/tool_registry_impl.rs src/executor/builtin_registry/builder/core_tools.rs src/gateway/method_authz.rs`
+  ⚠️ **`src/builtin_tools/mod.rs` 与 `src/executor/builtin_registry/builder/constructor/mod.rs` 不在这一行里。** 前者声明每一个 builtin-tool 模块，`rustfmt <file>` 会递归重排整棵 `src/builtin_tools/`；后者先 `grep -n "^pub mod\|^mod " src/executor/builtin_registry/builder/constructor/mod.rs` 确认，**声明了子模块就手写那两行**（一个 `let` 与结构体字面量里的一行），它们没有可格式化的东西。
 - [ ] `cargo test -p alephcore --lib --no-run` · `cargo test -p alephcore --bins` · `cargo test -p alephcore --features test-helpers --test '*' --no-run` 全绿。
 - [ ] **提交。**
   ```
-  git add src/builtin_tools/runtime_manage.rs src/builtin_tools/mod.rs src/executor/builtin_registry
+  git add src/builtin_tools/runtime_manage.rs src/builtin_tools/mod.rs \
+          src/executor/builtin_registry src/gateway/method_authz.rs
   git commit -m "tools: runtime_manage puts the runtime ledger in the conversation
 
   The runtimes.* family had a Panel face and no tool face, so 'chromium is not
@@ -2989,7 +4116,11 @@ impl crate::tools::AlephTool for RuntimeManageTool {
   table the RPC lists and installs by name. chromium is installable without
   being a RuntimeSpec: the ledger probes PATH and Playwright's browser is never
   on it, so a spec would sit at Missing forever; the install re-runs the very
-  argv the playwright-cli post-install already uses, with the same mirror env.
+  argv the playwright-cli post-install already uses, with the same mirror env,
+  and reports whether a browser resolves afterwards rather than trusting exit 0.
+  It joins OPERATOR_TOOLS beside skill_install and hub_install_run: one call
+  installs software on the host. The Chromium lookup is injected so no unit
+  test spawns node.
 
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01TKV5PtutzoBvbT4yTpsyRY"
@@ -2997,11 +4128,11 @@ impl crate::tools::AlephTool for RuntimeManageTool {
 
 ---
 
-### Task 9: 真机 QA —— `qa/browser_managed/run.sh attach` + 八场景回归
+### Task 9: 真机 QA —— `qa/browser_managed/run.sh attach` + 既有九场景回归
 
 **Files:**
 - Modify `qa/browser_managed/run.sh`：用法头（:1-25）· 场景白名单（:29-32）· `add_browser_config.py` 参数装配（:207-261）· 驱动分派（:350-400）
-- Modify `qa/browser_managed/add_browser_config.py`：新增 `--runtime-binary-path` / `--prefer-system-browser` / `--chromium-udd-root` 三个参数与对应 `[general.browser.runtime]` 写入（照 `:126-136` 的 `set_key` 列表）
+- Modify `qa/browser_managed/add_browser_config.py`：新增 `--runtime-binary-path` / `--prefer-system-browser` **两个**参数与对应 `[general.browser.runtime]` 写入（照 `:126-135` 的 `set_key` 列表）。⚠️ 初稿在这里还写过一个 `--chromium-udd-root`，**它不存在也不需要**：`attach` 场景的 udd 就是 `run.sh:85` 的 `UDD="$QA_ROOT/browser-profile"`，经既有的 `--user-data-dir` 传下去；sidecar 注册表在 `$ALEPH_HOME/data/browser/chromium/`，由 scratch HOME 决定。这一行已删。
 - Create `qa/browser_managed/drive_attach.py`
 - Modify `qa/browser_managed/drive_browser.py`：`open` / `ambient` / `headed` 三个场景的 `user-data-dir` 预言机搬家（见下）
 
@@ -3057,6 +4188,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 import urllib.request
@@ -3073,6 +4205,8 @@ ap.add_argument("--home", required=True, help="scratch HOME, for the CLI oracle"
 ap.add_argument("--cli", required=True)
 ap.add_argument("--expect-user-data-dir", required=True,
                 help="where DevToolsActivePort must appear — Aleph's choice, not the CLI's")
+ap.add_argument("--server-pid", type=int, required=True,
+                help="the aleph-server to stop, so the exit-time browser kill can be observed")
 args = ap.parse_args()
 
 _led = Ledger()
@@ -3080,6 +4214,12 @@ log = Ledger.log
 check = _led.check
 
 PORT_FILE = os.path.join(args.expect_user_data_dir, "DevToolsActivePort")
+# The registry, NOT a file inside the udd: a profile may point its
+# `user_data_dir` anywhere, so the record that lets a boot sweep find the
+# browser lives in one place derived from ALEPH_HOME.
+SIDECAR = os.path.join(
+    os.environ["ALEPH_HOME"], "data", "browser", "chromium", "default.json"
+)
 
 
 def read_endpoint():
@@ -3121,8 +4261,18 @@ async def main():
         # CONTROL. A non-launching verb must FAIL first, or every claim below is
         # satisfied just as well by a browser that was already running.
         ok, body = await rpc.invoke("browser_navigate", {"profile": "default", "url": args.page_url})
-        check("a non-launching verb fails on a fresh profile (control)", not ok, json.dumps(body)[:200])
+        # Attributable, not merely failing: the refusal has to be ABOUT the
+        # missing browser. `browser_navigate` on a fresh profile would fail for
+        # want of a tab too, and a control that passes for the wrong reason is
+        # not a control.
+        text = json.dumps(body)
+        check(
+            "a non-launching verb fails on a fresh profile, and says the browser is not open (control)",
+            (not ok) and ("not open" in text.lower() or "no tabs" in text.lower()),
+            text[:200],
+        )
         check("no port file before anything launched (control)", read_endpoint() is None, PORT_FILE)
+        check("no sidecar before anything launched (control)", not os.path.exists(SIDECAR), SIDECAR)
 
         # 1. Aleph starts Chrome.
         ok, body = await rpc.invoke("browser_open", {"profile": "default", "url": args.page_url})
@@ -3161,6 +4311,28 @@ async def main():
         pids = chrome_pids(args.expect_user_data_dir)
         check("a Chrome process carries Aleph's --user-data-dir", len(pids) > 0, " ".join(pids))
 
+        # 5b. The record that makes an orphan reclaimable. No unit test can see
+        #     this: `write_sidecar` is best-effort and a launch that skipped it
+        #     still reports success, so the only place the omission shows up is
+        #     here (the plan's Task 1 says so, and this is that claim).
+        sidecar = {}
+        try:
+            with open(SIDECAR) as fh:
+                sidecar = json.load(fh)
+        except OSError as e:
+            log("  sidecar unreadable:", e)
+        check("the sidecar registry holds this profile's record", bool(sidecar), SIDECAR)
+        check(
+            "its pid is one of the live Chrome processes",
+            str(sidecar.get("pid")) in pids,
+            f"sidecar pid={sidecar.get('pid')} pgrep={pids}",
+        )
+        check(
+            "it records the user-data-dir, which is how the boot sweep matches argv",
+            sidecar.get("user_data_dir") == args.expect_user_data_dir,
+            str(sidecar.get("user_data_dir")),
+        )
+
         # 6. `close` is a DISCONNECT under attach --cdp.
         #    Driven OUT OF BAND, with the scenario's scratch HOME, because that
         #    is the same command `ProfileManager::reap_idle` runs — and because
@@ -3192,6 +4364,26 @@ async def main():
         log("\n  playwright-cli list (recorded, not asserted — the attach-session shape is a new reading):")
         log(cli_sessions(args.cli, args.home))
 
+    # 8. spec §3.6 「退出时杀」. The websocket is closed by now; stop the daemon
+    #    the way an operator does and require the browser to go with it.
+    #    `Child` does not kill on drop, so without the explicit shutdown hook
+    #    this claim fails and the browser survives every restart.
+    os.kill(args.server_pid, signal.SIGTERM)
+    for _ in range(60):
+        if not chrome_pids(args.expect_user_data_dir):
+            break
+        await asyncio.sleep(0.5)
+    check(
+        "SIGTERM to aleph-server leaves no Chrome carrying its user-data-dir",
+        not chrome_pids(args.expect_user_data_dir),
+        " ".join(chrome_pids(args.expect_user_data_dir)),
+    )
+    check(
+        "and the sidecar record is gone with it",
+        not os.path.exists(SIDECAR),
+        SIDECAR,
+    )
+
     return _led.verdict()
 
 
@@ -3207,11 +4399,19 @@ sys.exit(asyncio.run(main()))
     ```bash
     if [ "$SCENARIO" = "attach" ]; then
       # Pin the browser so the run does not depend on which browsers this
-      # machine happens to have, and so the RED control below has one thing to
-      # break. `find_chromium`'s own first macOS path; on Linux/Windows set
+      # machine happens to have, and so the RED control has one thing to break.
+      # `find_chromium`'s own first macOS path; on Linux/Windows set
       # ALEPH_QA_CHROME to override.
       CHROME_BIN="${ALEPH_QA_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
-      [ -x "$CHROME_BIN" ] || { echo "no browser at $CHROME_BIN; set ALEPH_QA_CHROME" >&2; exit 69; }
+      # The precheck is skippable BY A DOCUMENTED FLAG, not by editing this
+      # file. The RED control needs to reach the fail-closed message with a
+      # deliberately broken pin, and a control that only exists while a file is
+      # locally modified is not repeatable and will not exist next round.
+      if [ ! -x "$CHROME_BIN" ] && [ -z "${ALEPH_QA_ALLOW_MISSING_CHROME:-}" ]; then
+        echo "no browser at $CHROME_BIN; set ALEPH_QA_CHROME, or set" >&2
+        echo "ALEPH_QA_ALLOW_MISSING_CHROME=1 to drive the fail-closed path on purpose" >&2
+        exit 69
+      fi
       BROWSER_CFG_ARGS+=(--runtime-binary-path "$CHROME_BIN" --prefer-system-browser false)
       echo "chromium pinned: $CHROME_BIN"
     fi
@@ -3225,7 +4425,12 @@ sys.exit(asyncio.run(main()))
           --marker "$MARKER" \
           --home "$QA_ROOT/home" \
           --cli "$CLI" \
-          --expect-user-data-dir "$UDD" || RC=$?
+          --expect-user-data-dir "$UDD" \
+          --server-pid "$SERVER_PID" || RC=$?
+        # The driver SIGTERMs the server as its last claim, so the trap's own
+        # kill would report a dead pid. Clear it rather than let cleanup print
+        # a confusing failure.
+        SERVER_PID=""
         ;;
     ```
 
@@ -3235,16 +4440,19 @@ sys.exit(asyncio.run(main()))
   ```bash
   ./qa/browser_managed/run.sh attach
   ```
-  预期 `VERDICT: PASS`，13 条 claim 全 PASS。
-- [ ] **跑红（控制组）。** 把 pin 指到一个不存在的文件：
+  预期 `VERDICT: PASS`。**claim 的条数由脚本自己数**——不要在这里写死一个数字然后照抄（判据 §18：数字要带着它测的谓词和它测于哪个 commit）。把实际条数记进 Task 10 的验证行。
+- [ ] **跑红（控制组，一条可重复的命令，不要改文件）。**
   ```bash
-  ALEPH_QA_CHROME=/nonexistent/chrome ./qa/browser_managed/run.sh attach
+  ALEPH_QA_CHROME=/nonexistent/chrome ALEPH_QA_ALLOW_MISSING_CHROME=1 ./qa/browser_managed/run.sh attach
   ```
-  这会在 `[ -x "$CHROME_BIN" ]` 就退出 69——**那不是控制组，那是前置检查**。真正的控制组要绕过它：临时把 `run.sh` 里的 `[ -x ... ] || exit 69` 注释掉再跑一次，期望 `browser_open` 失败且**错误文本里出现 `playwright-cli install-browser chromium`**（`ChromiumUnavailable` 的 fail-closed 文案）。把那一行错误原样记进 Task 10。跑完恢复。
-- [ ] **变异验证（两处，spec §6.4 的纪律）。**
-  1. 去掉 `chromium_launch.rs` 里 `write_sidecar` 的调用 → `cargo test -p alephcore --lib browser::chromium_launch` 的 `reap_orphans_*` 两条**不会**红（它们自己写 sidecar）。**这说明单测覆盖不到那条线**——所以改为：在 `ChromiumChild::spawn` 成功返回前断言 sidecar 存在的一条新单测，或者在 `attach` 场景里加一条 claim「`<udd>/aleph-chromium.json` 存在且 pid 与 `pgrep` 的一致」。**选后者**（真机能证，单测不能），加完再做这次变异，确认 `attach` 变红。
-  2. 把 `reap_idle` 里新加的 `shutdown_chromium(&name)` 去掉 → 用 `./qa/browser_managed/run.sh reap` 验证：期望在 `reap` 场景末尾新增一条 claim「被收割的 profile 的 udd 下已无 Chrome 进程」变红。**这条 claim 现在不存在**，所以本步先把它加进 `drive_tools.py` 的 `reap` 分支（复用 `chrome_pids`），再做变异。
-- [ ] **八场景回归，逐个跑，逐个记结果。**
+  期望 `browser_open` 失败，且错误文本里出现 `playwright-cli install-browser chromium`（`ChromiumUnavailable` 的 fail-closed 文案），`VERDICT: FAIL`。把那一行错误原样记进 Task 10。
+- [ ] **给 `reap` 场景补一条 claim（它现在没有）。** 在 `drive_tools.py` 的 `reap` 分支末尾加：收割之后，`pgrep -f "--user-data-dir=<被收割 profile 的 udd>"` 必须为空。没有这一条，「收割器杀掉了浏览器」在真机上无人证明——而 `close` 在 attach 之下只是断开，所以这正是那半个新行为。
+- [ ] **变异验证（三处，spec §6.4 的纪律）。**
+  1. 去掉 `chromium_launch.rs` 里 `me.write_sidecar().await;` → `run.sh attach` 的 claim 5b 三条必须变红。（单测覆盖不到这条线：`reap_orphans_*` 自己写 sidecar，`write_sidecar` 是 best-effort 且失败时启动照样成功。这就是为什么这条断言在真机上。）
+  2. 去掉 `reap_idle` 里的 `shutdown_chromium(&name)` → `run.sh reap` 上一步新加的那条 claim 必须变红。
+  3. 去掉 `start/mod.rs` 里新加的 `shutdown_browsers_global()` → `run.sh attach` 的第 8 组两条 claim 必须变红。**这一条是 spec §3.6 唯一的真机证据。**
+  三处都恢复。
+- [ ] **既有场景回归（九个，`run.sh:30` 的白名单逐字数过——spec §6.4 写「八场景」，实际是九个，判据 §6「先数一遍」），逐个跑，逐个记结果。**
   ```bash
   for s in open ambient headed tools frames reap pdf existing exec-offload; do
     echo "=== $s ==="; ./qa/browser_managed/run.sh "$s"; echo "rc=$?"
@@ -3290,12 +4498,18 @@ sys.exit(asyncio.run(main()))
   - **② `open` 会 clobber 它复用的页面，`attach` 不会。** `open --config {"browser":{"cdpEndpoint":…}}` 被接受、复用现有页面，然后对它 `goto('about:blank')`——静默清掉页面上的一切。`attach --cdp`（http 与 ws 两种形式都接受）原样保留。所以 `open_argv` 整块删除，本仓从此不对一个交接过来的浏览器发 `open`。
   - **③ 生命周期跟着**「谁 spawn 的」**走。** CLI 自启时 `close` 让 `pgrep "Google Chrome"` 归零；`cdpEndpoint` 下 `close` 之后九个 Chrome 进程原样、端点仍服务、页面仍停在原 URL。于是 `reap_idle` 的 Managed 臂**长出第二半**：`close` 之后还要杀 Aleph 自己的子进程，只到 `close` 为止的收割器会**报告收割成功而浏览器永远不走**（判据 §11「报成功的 no-op」）。
   - **④ 一个近似值在有了精确答案之后必须删掉。** `session_active` / `idle_managed_profiles` 原本都用 `TabRegistry::has_tabs`，其 doc 自己写着「Approximation」。浏览器成了我们的子进程之后「有没有浏览器」有了确切答案；留着近似就是同一个问题的两个答案（判据 §1）。`reap_idle_tabs` 的候选筛选**继续**用 `has_tabs`——那问的是 tab 不是浏览器。
-  - **⑤ 一个恒空的清单。** `unhonored_managed_fields` 唯一的返回条件是 `browser_flag_value(&cfg.browser).is_none()`；`attach` 不收 `--browser`，`browser_flag_value` 随之删除，于是那个函数恒返回空 —— 判据 §2 的第二张脸（恒绿）。连同 `browser_flag_value`、`open_argv` 与它们的四条测试一起 CUT。引擎偏好没有丢：它现在喂给 `discovery::find_chromium_preferred`，而 Brave **从此是被honor的**（我们自己起它），不再需要那条启动告警。
+  - **⑤ 一条告警搬家，而不是一条恒空的谓词——本轮自查里改掉的一个错判。** 初稿把 `unhonored_managed_fields` 的删除写成「它恒空了」，那是错的：它的真实条件是 `browser_flag_value(&cfg.browser).is_none() && cfg.browser != BrowserType::default()`（`manager.rs:585-587`），即**恰好 Brave**，删掉 `browser_flag_value` 之后这个条件仍表达得出来。删它的真理由是它保护的事换了位置。而且「我们自己起 Brave 所以 honor 了」只是**半个替换**：`find_chromium_preferred` 在首选引擎不存在时**静默降级**（`prefer_paths` 只重排，回落只打 `debug!`），那条路径原本就没人报。现在 `chromium_resolve::resolve_binary` 返回**实际解析出的引擎**（`discovery::engine_of`，与排序共用同一张 `engine_hints` 表），`ensure_chromium` 在与请求不一致时 `warn!`——告警由**执行替换的那一段代码**发出，并且覆盖了旧告警够不着的那条路径。`browser_flag_value` / `open_argv` 与它们的三条测试一起 CUT（纯死码）。判据：**删一个东西之前先说出它的谓词，再说出谁接手它保护的那件事**。
   - **⑥ 第三种「拒绝」的措辞（接 附录 D.9.13）。** 惰性启动的触发从两句「没开」变成三句：新增的一句是 attach 被拒。实测（0.1.8 / node 24.14.1）：退出 1、**stdout 空**、stderr 是 node 异常 `Error: connect ECONNREFUSED 127.0.0.1:1` 加一行 `- <ws preparing> retrieving websocket url from http://127.0.0.1:1`。它与两句旧锚点**零公共子串**，所以分类器新增一支不会遮蔽旧的；两条新锚点都留着，因为第四种措辞更可能像其中之一。分类结果**不是** `NoSession`（那会朝同一个死端点再 attach 一次），是 `AttachFailed` → 忘掉子进程 → 重启一次 → 再 attach，界限恰好一次。
   - **⑦ 一个平台路径表，问装它的人比自己猜便宜。** 提议里的解析器要硬编码 `~/.cache/ms-playwright/chromium-*/`。本机实测两处都是错的：macOS 的缓存根是 `~/Library/Caches/ms-playwright/`，可执行文件叫 `chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`（不是 `Chromium.app`）。改为跑 `playwright-cli install-browser chromium --dry-run`，它逐行打印 `Install location:`；再在那**一个**目录里按候选名找可执行文件。判据 §1：装它的那个二进制既装它又说它在哪，只有一份推导；三张平台表会各自腐烂。⚠️ 解析要锚在段头 `(playwright chromium v`——`chromium-headless-shell` 以 `chromium` 开头，子串匹配会选中一个没有浏览器的目录。
   - **⑧ 台账早就在装 Chromium，只是名字变过。** spec §9 曾把「现有运行时台账是否已经会跑 `playwright install`」列为未验证。答案是**会**：`src/runtimes/specs.rs` 里 `playwright-cli` 的 post-install 就是 `install-browser chromium`（v0.1.14 改的名）。所以本轮**没有**新增 `chromium` capability——`runtimes::probe` 只走 PATH，而 Playwright 的浏览器永远不在 PATH 上，加一条 spec 只会得到一个恒 `Missing` 的条目（判据 §2 第四张脸：没装上）。做的是给那条已有动作加 `PLAYWRIGHT_DOWNLOAD_HOST` 透传（空串读作「没有镜像」，不是「镜像是空主机」）、一个 doctor 哨兵 `browser/chromium-missing`（**跑与启动路径同一个解析器**，判据 §9），与一个 R8 工具面 `runtime_manage{list,install}`（`runtimes.*` RPC 家族此前只有 Panel 一张脸）。
-  - **⑨ 一个行为变更，写下来而不是留给人发现：Managed profile 不能再「在内存里」。** `DevToolsActivePort` 写在 user-data-dir 里，没有 profile 目录就没有可发现的端点。所以没配 `user_data_dir` 的 profile 现在拿到一个派生目录 `~/.aleph/data/browser/chromium-udd/<key>`，浏览状态（cookie / localStorage）从此对**每个** Managed profile 跨重启存活，而不只是主动要求过的那些。
-  - **⑩ [装置] `qa/browser_managed/run.sh attach`，以及一条必须搬家的预言机。** 新阶段证明 §6.4 的 `launch` 一句。同时 `open`/`ambient`/`headed` 三个场景原来的预言机——`playwright-cli list` 打印出我们的 `user-data-dir`——在 attach 之后不可能再成立（CLI 不拥有那个目录）。搬到 `<udd>/DevToolsActivePort` + `curl /json/version`，**更强**：旧的证明「CLI 转述了我们写给它的配置」，新的证明「浏览器确实是用那个目录被我们起起来的」。
+  - **⑨ 一个行为变更，写下来而不是留给人发现：Managed profile 不能再「在内存里」。** `DevToolsActivePort` 写在 user-data-dir 里，没有 profile 目录就没有可发现的端点。所以没配 `user_data_dir` 的 profile 现在拿到一个派生目录 `~/.aleph/data/browser/chromium-udd/<key>`，浏览状态（cookie / localStorage）从此对**每个** Managed profile 跨重启存活，而不只是主动要求过的那些。⚠️ **连带后果**：`Child::kill()` 在 unix 上是 SIGKILL，被 SIGKILL 的 Chrome 一定在 profile 目录里留下 `SingletonLock` / `SingletonSocket` / `SingletonCookie` 与一个「did not shut down correctly」标记，下次启动可能弹恢复提示。本轮**没有**做 SIGTERM-然后-SIGKILL 的宽限，也没有清理陈旧 singleton 锁——记在这里，因为它现在会发生在**每一个** Managed profile 上，而不再只是配过目录的那几个。
+  - **⑩ sidecar 放一个注册表目录，不是放各自的 udd 里。** 初稿把记录写进每个 profile 的 user-data-dir，于是 boot 清扫只能扫「派生出来的那个根」，而配了 `user_data_dir` 的 profile（本仓 QA 自己就配）的记录落在根之外、**永远扫不到**。改为 `~/.aleph/data/browser/chromium/<profile>.json`，每份记 `{pid, http_url, user_data_dir, aleph_version}`；清扫只走那一个目录。判据 §12：「有哪些浏览器要收」这件事只能有一个推导点。
+  - **⑪ 拿来比对的那个东西本身就选错了——「读哪一份 argv」比「怎么比对」更靠前。** 孤儿清扫要按 pid 读 argv 再比对我们的 `--user-data-dir`。最顺手的读法是 `gateway::pty::foreground::fact_for_pid(pid).cmdline`，而它的 doc 逐字写着「The whole command line, **space-joined**」（`foreground.rs:142-143`）——在那个字符串上比对**只能**是 `str::contains`，token 相等在那条路上根本表达不出来。而这条谓词授权的动作是 SIGKILL。两条假阳性，都不需要什么巧合：① **前缀撞车**，清扫遍历同一个根下的各个 profile，它构造的 flag 天然互为前缀，`--user-data-dir=<root>/default` 是活着的 `--user-data-dir=<root>/default-2` 的子串，于是**邻居 profile 的浏览器被杀**——正是这条检查要防的事，栽在它最可能的邻居上（`sanitize_session_key` 产出 `work` / `work-archive` 这类名字是常态）；② **macOS 的 argv/env 渗漏**，本仓早已实测并钉住：`crates/agent-detect/src/engine.rs:427-431` 逐字记着「改写 process.title 的进程（每个 Node CLI 都改）会让 `sysinfo::cmd()` 读过 argv 区进环境」，`:938-957` 钉着一条真实读数，一个值里带空格的环境变量把 `prefer` / `modern` / `like` 几个裸词撒进了命令行。那个模块的防御是**分词 + 跳过 `VAR=value` + 取第一个操作数而不是扫描**（`:944-948` 写明「argv 在环境之前，所以第一个操作数总是先到；扫描会找到运维随手写进 prompt 的某个词」）。判据 §16：孪生子系统已经回答过这个问题，答案要搬过来。
+    修法是**换读者**，一次修好两个：读 `sysinfo::Process::cmd()`（`Vec<OsString>`，就是 argv 向量本身）而不是那一行拼好的字符串，比对用整 token 相等（并且两种写法都认——`--user-data-dir=<path>` 与两 token 的 `--user-data-dir <path>`，Chrome 两种都收）。顺带把状态从 `Option` 变成三态 `ArgvProbe{Absent, Unreadable, Argv}`：`Option` 分不出「没有这个进程」与「有但读不出 argv」（Windows 上后者是常态），而初稿两种都删记录——第二种下浏览器还活着而唯一能再找到它的东西没了，判据 §8 撞上 §15（一次性的闩漏一次就是永远）。现在四条臂：匹配 → 杀并删记录；`Argv` 但不匹配（pid 被回收）→ 不杀、删记录；`Absent` → 删记录；`Unreadable` → **什么都不做，记录留着**。⚠️ 读者建在 `utils::process_alive::with_process_specifics` 之上而不是自己新起一个 `System`——那个 helper 的 doc 自己写着它是本仓单 pid `sysinfo` 惯用法的唯一所有者。
+  - **⑫ 「Chrome 中途死」有两种说法，初稿只接住一种。** `run()` 原本只在 `NoSession` 上重启；但浏览器死掉时 CLI 报的可能是 `ECONNREFUSED`（分类为 `AttachFailed`），那就一路透传给模型，浏览器**这个进程生命周期内再也起不来**。现在两道：每个动词**之前**一次 `try_wait`（我们自己的子进程，便宜），以及事后 `needs_relaunch(err, alive)` —— `NoSession` 恒重启，`AttachFailed` **只在浏览器已死时**重启。后半句是 D.9.10 换了身衣服：当年是第二次 `open` 丢掉全部 tab，现在是第二个 Chromium 写同一个 `DevToolsActivePort`。
+  - **⑬ 退出时杀，与 `bash {background}` 同形。** `std::process::Child` 不在 drop 时 kill，而 `attach --cdp` 之下 playwright-cli 从来不是浏览器的父进程——所以没有显式停机钩子的话，每次重启都留一个浏览器。`shutdown_browsers_global()` 挂在 `start/mod.rs` 有序停机段落里 `kill_all_running_background()` 旁边，那一行的注释逐字论证过为什么自动机制不够、为什么必须显式、为什么放在这个位置（两条信号路径都经过它，致命错误退出也经过它）。
+  - **⑭ 三个超时必须严格嵌套，否则最里面那条臂恒假。** doctor 的 `browser/chromium-missing` 跑的是启动路径同一个解析器，而 `DiagnosticEngine` 在 `DEFAULT_CHECK_TIMEOUT = 20s`（`check.rs:27`）就**放弃这个检查并发它自己的 `Warning`**。初稿把检查内部预算设成 25 s，于是它自己那条「could not verify」永远跑不到，而任何慢探针都把 `aleph-server doctor` 变成琥珀色——正是 `diagnostics/checks/mod.rs:6-10` 点名的「退出码变成常数」。现在 6 s（`--dry-run`）< 8 s（检查自己）< 20 s（引擎），并且这个嵌套关系由一条测试断言，不是由注释描述。
+  - **⑮ [装置] `qa/browser_managed/run.sh attach`，以及一条必须搬家的预言机。** 新阶段证明 §6.4 的 `launch` 一句。同时 `open`/`ambient`/`headed` 三个场景原来的预言机——`playwright-cli list` 打印出我们的 `user-data-dir`——在 attach 之后不可能再成立（CLI 不拥有那个目录）。搬到 `<udd>/DevToolsActivePort` + `curl /json/version`，**更强**：旧的证明「CLI 转述了我们写给它的配置」，新的证明「浏览器确实是用那个目录被我们起起来的」。
   - **验证**：<在此逐字填入本轮实测：`cargo test -p alephcore --lib` 的 passed/failed 数与失败项的 HEAD 复验结论；`aleph-server doctor` 里 chromium 那一行的原文；`run.sh attach` 的 claim 数；八场景逐个的 rc 与不能跑的那些的理由；两条 ceiling 常量的新旧值与逐工具归因>。
 ```
 
@@ -3326,16 +4540,18 @@ Aleph's trust model.
 
 What follows from that, and is therefore NOT attempted: no per-connection auth
 on the debug port (CDP has none), no binding it to a unix socket (Chrome does
-not offer one), and no attempt to hide the port — the sidecar file
-`<user_data_dir>/aleph-chromium.json` records it on purpose, because a browser
-Aleph cannot find after a crash is a browser Aleph cannot kill.
+not offer one), and no attempt to hide the port — Aleph records it on purpose,
+in `~/.aleph/data/browser/chromium/<profile>.json`, because a browser Aleph
+cannot find after a crash is a browser Aleph cannot kill. That file is
+readable by the same local user who could already drive the port, so it widens
+nothing.
 ```
 
 - [ ] **qa/README.md**：`:19-27` 的清单里，在 `open` 那一行**之前**插入
   ```
-  ./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP
+  ./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP (unix only: pgrep)
   ```
-  并在 `:1005` 的「`browser_managed` — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑」那一行后面补：「**改启动链（`chromium_launch` / `chromium_resolve` / `playwright_launch` / `playwright_cli`）必须跑 `attach`**——它是唯一证明「Aleph 起的浏览器」而不是「某个浏览器」的阶段。」
+  并在 `:1005` 的「`browser_managed` — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑」那一行后面补：「**改启动链（`chromium_launch` / `chromium_resolve` / `playwright_launch` / `playwright_cli`）必须跑 `attach`**——它是唯一证明「Aleph 起的浏览器」而不是「某个浏览器」的阶段。它用 `pgrep -f`，所以和这个目录里其它场景一样**只在 unix 上跑得动**；Windows 上它不是坏了，是没覆盖。」
 - [ ] **最终验证集全跑一遍**（CLAUDE.md 六条）：
   ```bash
   cargo test -p alephcore --lib --no-run
@@ -3363,10 +4579,24 @@ Aleph cannot find after a crash is a browser Aleph cannot kill.
 
 ## Self-review notes
 
-按要求做了四轮自查，改掉的东西：
+按要求做了四轮自查（覆盖 / 占位符 / 跨任务签名 / 锚点），并在 2026-09-05 的评审之后重做了一遍。
 
-1. **Spec 覆盖对照。** §3.1 → Task 1/4/5（spawn + 端口文件 + `attach --cdp` 永不 `open` + 生命周期归 Aleph + 惰性 re-attach）与 Task 6（收割器杀浏览器）。§3.2 的访问器 → Task 5 的 `PlaywrightCliDriver::endpoint` + Task 6 的 `ProfileManager::live_endpoint`（**只有访问器，没有视图**）。§6.1 → Task 2（三个配置键）+ Task 3（解析顺序 + fail-closed 文案）+ Task 7（`download_host` 透传 + doctor 哨兵）+ Task 8（R8 工具）。§6.2 的四行 → 端口超时 = Task 1 的 `LaunchFailed{stage:"devtools-port"}`；Chrome 中途死 = Task 5 `ensure_chromium` 的 `alive()` 分支惰性重启；CLI 崩/被收割 = Task 5 的 `AttachFailed` → 重启一次 → 再 attach；Chromium 未装 = `ChromiumUnavailable` + doctor + 工具。§6.3 → Task 2（`[browser.live]` 三键属于 Plan 2，本计划不加）。§6.4 的 `launch` 一句 → Task 9。§6.5 第 1 步的「八场景回归」→ Task 9 最后一步。
-2. **占位符扫描。** 全文无 `TBD` / 「类似 Task N」/「加上错误处理」。仅有的两个尖括号占位在 Task 10 的「验证」行与两条 ceiling 数值，都**必须由实测填入**，并各自带了一句「不许抄，要测」的说明——这是判据 §18 要的形状，不是占位符。
-3. **跨任务签名一致性（改过三处）。** ① 初稿 Task 5 写 `PlaywrightCliDriver::new(config)` 不变、把 runtime config 从 `SessionLaunch` 取——但 `SessionLaunch`（`playwright_launch.rs:35-41`）只有五个字段且是 per-profile 的，`BrowserRuntimeConfig` 是全局的，改成构造参数。② 初稿 Task 6 让 `ProfileManager` 自己持有 `HashMap<String, ChromiumChild>`，与 Task 5 的 per-session 锁重复，改为 driver 持有 + manager 转发（前言 §3）。③ 初稿 Task 3 的 `resolve_binary` 返回 `PathBuf`，而 Task 7 的 doctor finding 要说出「哪条路线赢了」，改成返回 `(PathBuf, ChromiumSource)` 并加 `ChromiumSource::label()`，Task 5 的日志与 Task 8 的 `chromium_row` 都用它。
-4. **锚点复核。** 全文引用的 `path:line` 都在本次会话里读过：`playwright_launch.rs` 与 `playwright_cli.rs` 的行号是 `grep -n` 逐符号取的；`manager.rs` / `profile.rs` / `error.rs` / `discovery.rs` / `specs.rs` / `post_install.rs` / `probe.rs` / `ensure.rs` / `browser_runtime.rs` / `definitions.rs` / `groups.rs` / `struct_def.rs` / `tool_registry_impl.rs` / `core_tools.rs` / `constructor/mod.rs` / `run.sh` / `add_browser_config.py` / `qa_rpc.py` / `drive_browser.py` / `FEATURE_LOCATOR.md` / `SECURITY.md` / `qa/README.md` 都是带行号读过的。自查中发现的**两处待确认符号都在保存前解决了**：`AlephHomeEnvGuard` 的真实路径是 `crate::utils::paths::AlephHomeEnvGuard`（`src/tasks/cron/mod.rs:819`）；`BrowserProfileTool` 的 `ProfileAction`（`profile_tool.rs:26-34`）**没有** close 动词，只有 `List` 与 `GetState`，所以 Task 9 的「close 只是断开」改由 out-of-band `playwright-cli -s=default close` 驱动——正是 `reap_idle` 自己发的那条命令。引用一个我没读过的符号，会把「没测过的断言」写成计划。
-5. **两条我改掉的判据错误。** ① 初稿让 `ChromiumChild::alive` 把 `try_wait` 的 `Err` 读成「死了」，那是把「我不知道」当值花掉（判据 §8），且方向是杀掉一个活着的浏览器；改成读成「活着」，由随后的 attach 结算。② 初稿的 doctor 检查在读不到配置时回落到 `BrowserRuntimeConfig::default()`，那会让一个配了 `binary_path` 的主机被报成「没有浏览器」；改成 `unknown_finding`。
+1. **Spec 覆盖对照。** §3.1 → Task 1/4/5（spawn + 端口文件 + `attach --cdp` 永不 `open` + 生命周期归 Aleph + 惰性 re-attach）与 Task 6（收割器杀浏览器、退出时杀）。§3.2 的访问器 → Task 5 的 `PlaywrightCliDriver::endpoint` + Task 6 的 `ProfileManager::live_endpoint`（**只有访问器，没有视图**）。§3.6 「退出时杀 / 崩溃后按 udd 收孤儿 / boot 清上次残留」→ Task 6 的 `shutdown_browsers_global` + Task 1 的注册表清扫 + Task 9 的两条真机 claim。§6.1 → Task 2（三个配置键）+ Task 3（解析顺序、fail-closed 文案、**明写不在首次使用时安装**、明写不取 headless-shell）+ Task 7（`download_host` 透传 + doctor 哨兵）+ Task 8（R8 工具 + 授权）。§6.2 的四行 → 端口超时 = `LaunchFailed{stage:"devtools-port"}`；Chrome 中途死 = Task 5 的**两道**（动词前 `try_wait` + 事后 `needs_relaunch`）；CLI 崩/被收割 = `AttachFailed` → 重启一次 → 再 attach；Chromium 未装 = `ChromiumUnavailable` + doctor + 工具。§6.3 → Task 2（`[browser.live]` 三键属于 Plan 2）。§6.4 的 `launch` 一句 → Task 9。§6.5 第 1 步的既有场景回归 → Task 9 最后一步（**九个**，不是八个，白名单数过）。
+2. **占位符扫描。** 全文无 `TBD` / 「类似 Task N」/「加上错误处理」。仅有的尖括号占位在 Task 10 的「验证」行与两条 ceiling 数值，都**必须由实测填入**，并各自带一句「不许抄，要测」的说明——这是判据 §18 要的形状，不是占位符。Task 9 的 claim 条数也刻意不写死。
+3. **跨任务签名一致性（评审前改过三处，评审后又改三处）。** 评审前：`PlaywrightCliDriver::new` 加 runtime 参数；子进程映射从 manager 挪到 driver；`resolve_binary` 带上来源。评审后：① `resolve_binary` 从 `(PathBuf, ChromiumSource)` 变成 `ResolvedChromium{path, source, engine}`，三个消费者（Task 5/7/8）同批更新；② `ChromiumChild::spawn` 多收一个 `session_key`（sidecar 进注册表，不再由 udd 定位）；③ `reap_orphans` 的注入效果先变成三个（argv / present / kill）、再随 addendum 收回两个（`ArgvProbe` 三态自带 present），`reap_orphans_now` 不再取参数；`argv_names_dir` 的入参从 `&str` 变成 `&[String]`。
+4. **锚点复核。** 评审逐条核过 24 个锚点：20 个精确、4 个差一两行、2 个真错。本轮全部修正 —— `post_install.rs` 的 `run` 分派改 `:68-78`；`browser_flag_value` 改 `:106-123`（`:110-121` 会留下四行悬空）；`managed_profiles_name_the_fields_their_driver_drops` 改 `:830-875`（`:838` 在函数体中段）；Task 9 的 `--chromium-udd-root` 整个删掉（它从未被定义过）。新引入的锚点（`method_authz.rs:31`、`check.rs:27` / `:205-225`、`manager.rs:631-643` / `:585-587`、`start/mod.rs:3642` / `:3658`、`discovery.rs:85-98`、`playwright_launch.rs:458-475`、`bash_exec.rs:476`）全部在本次会话里带行号读过。
+5. **评审 addendum（5b）落实。** 孤儿清扫的**读者**换了：从 `fact_for_pid(pid).cmdline`（space-joined 字符串，只支持子串扫描，且是 pty 侧类型的另一种契约）换成直接读 `sysinfo::Process::cmd()` 的 argv 向量，比对改为整 token 相等并同时认 `--user-data-dir=<path>` 与两 token 写法；`Option` 换成三态 `ArgvProbe{Absent, Unreadable, Argv}`，`present` 闭包随之取消（三态自带那个答案）。测试注入了 addendum 点名的五组向量：带 env 渗漏的真匹配、`default` vs `default-2` 的前缀兄弟、`Unreadable` 保留记录、`Absent` 删记录、被回收的 pid 不杀不留；外加 flag 整串出现在某个 env 值里的那一条。证伪清单里加了「改回子串扫描 → 两条测试同时红」。⚠️ 读者建在 `utils::process_alive::with_process_specifics` 之上，而不是 addendum 字面写的 `System::new_with_specifics(...)`——后者会在 `chromium_launch.rs` 造出本仓第二份 `sysinfo` 惯用法，而 `process_alive.rs:118-127` 的 doc 明写它是唯一所有者、第二份会在「刷新哪些字段」上漂移；那个 helper 的 `Option` 返回恰好就是 `Absent` 与「在表里」的分界，所以三态照样拿得到，而且刷新只作用于一个 pid 而不是全表。
+6. **本轮修掉的判据错误（自查 + 评审各一半）。** ① `ChromiumChild::alive` 把 `try_wait` 的 `Err` 读成「死了」——把「我不知道」当值花掉（§8），已改成读成「活着」，由随后的 attach 结算。② doctor 读不到配置时回落 `Default::default()`——已改成 `unknown_finding`，**并且同一笔把 `runtime_manage` 的 `chromium_row` 也改了**（评审指出孪生没跟上，§16）。③ `reap_orphans` 把「argv 读不出」当「进程没了」删记录——不可逆，§8×§15，已三态分开。④ attach 锚点从 `||` 改成 `&&`：`classify_failure` 跑在可能含页面文本的输出上，`ECONNREFUSED` 是任何程序都会写的句子。⑤ `unhonored_managed_fields` 的「恒空」论断是错的，已改写并把它保护的事真正接管。⑥ 三个超时不嵌套导致 doctor 的超时臂恒假，已改成 6 < 8 < 20 并**用测试断言这个嵌套**。⑦ Task 8 的 `list` 测试会在 `cargo test --lib` 里 spawn node，违反 `playwright_cli.rs:150-165` 那条封印纪律，已改为注入 locator。
+
+---
+
+## Review disposition
+
+评审给出 46 条（HIGH 12 / MEDIUM 19 / LOW 15）。12 条 HIGH 与两条 STRUCTURAL 裁定全部落实（见上）。以下是**被驳回**的 MEDIUM/LOW，每条一句理由：
+
+- **MEDIUM「`resolve_binary` 应在首次使用时尝试安装（spec §6.1）」——不做，但已明写。** 150 MB 下载落在第一次浏览器工具调用上，而那条路径的硬预算是 180 s（`WAIT_MAX_TIMEOUT_SECS=170`，CLAUDE.md 明写不许扩展）。Task 3 的函数 doc 与本计划都写下了这个取舍与它的代价（干净 Linux 上第一次调用会失败一次）。
+- **MEDIUM「Linux 无 root 时接 `chromium-headless-shell` 降级」——本轮不做，改为明确不取它。** 半接的代价比不接大：`headless=false` 的 profile 解析到它就得到一个永远开不出窗口的浏览器。Task 3 把它从候选表里拿掉并配了一条「即使它是目录里唯一的二进制也不取」的测试。
+- **MEDIUM「doctor 与 `runtime_manage{list}` 的解析结果应当 memoize」——不做。** 缓存要有失效条件（配置换了、浏览器被删了），而这一轮没有任何一处能说出那个条件；一个不会失效的缓存会把「Chromium 装好了」这件事按住不放。两个面的成本各是一次 6 s 上限的 `--dry-run` 加一次目录走，且都只在没有 pin、没有系统浏览器时才走到。留给 Plan 2 与视图一起决定。
+- **MEDIUM「`shutdown` 应先 SIGTERM 再 SIGKILL，或走 CDP `Browser.close`」——不做，但后果已记录。** 优雅关闭要引入一个宽限计时器与一条 CDP 调用，而本计划刻意不引入 CDP 客户端（那是 Plan 2 的 `src/browser/live/cdp.rs`）。代价（singleton 锁残留、恢复提示）写进了 FEATURE_LOCATOR ⑨。
+- **LOW「两个 profile 配同一个 `user_data_dir` 会在端口文件上撞车」——只记录，不修。** 这是既有形状（旧的 `--config userDataDir` 同样共享），修它要给 profile 之间加一条互斥规则，超出本轮范围。sidecar 已按 profile 键控，所以清扫不会互相误伤。
+- **LOW「`ChromiumSource` 应参与 `--headless=new` 还是 `--headless` 的选择」——不做。** 取掉 headless-shell 之后候选只剩 Chrome / Chromium / Edge / Brave，`--headless=new` 对 112 以上全部正确；一个只有一种取值的开关不该先有分支。
