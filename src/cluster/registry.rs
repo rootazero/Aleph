@@ -154,61 +154,81 @@ impl NodeRegistry {
     /// Register a node session. Reconnect with the same `node_id` → overwrites
     /// the old session, clears the old conn mapping, **and asks the old session's
     /// connection to close** (B1-01). Reusing the same `conn_id` under a
-    /// different `node_id` also evicts the colliding session for the same reason
-    /// (B1-03).
+    /// different `node_id` drops the orphaned session's map entries but closes
+    /// nothing (B1-03 — that session's channel is this very connection's).
+    ///
+    /// **The whole read-modify-write of both maps runs under ONE write guard.**
+    /// It used to drop the guard mid-function to fire `close_connection()` and
+    /// then re-acquire, which let two connections registering the same `node_id`
+    /// concurrently (every WS connection is its own task; a network flap makes a
+    /// node redial while its old socket is still live) both read the *same*
+    /// previous session and both insert their own `conn_id`. The loser was
+    /// neither closed nor overwritten, yet still resolved through
+    /// [`node_identity_by_conn`](Self::node_identity_by_conn) — the anti-spoof
+    /// stamp on every inbound node frame — under the winner's identity. The same
+    /// window also let a concurrent [`forget`](Self::forget) report "evicted" and
+    /// then be silently undone by the re-insert.
+    ///
+    /// Closes are collected and fired *after* the guard drops, the shape
+    /// [`forget`](Self::forget) uses: not to avoid a deadlock —
+    /// [`ReverseRpcChannel::close_connection`] is a non-blocking
+    /// `Notify::notify_one` that touches no registry state — but to keep the
+    /// critical section free of wakeup side effects.
     pub fn register(&self, session: NodeSession) {
-        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let node_id = session.node_id.clone();
         let conn_id = session.conn_id.clone();
-        // (B1-03) If this `conn_id` is already mapped to a *different* node_id,
-        // that older session is orphaned by the new mapping; drop it the same
-        // way `forget` does — close its connection and remove both tables'
-        // entries. Same-eviction costs a no-op (we'd be removing the slot we
-        // are about to overwrite).
-        if let Some(prev_node_id) = inner.nodes_by_conn.get(&conn_id).cloned() {
-            if prev_node_id != node_id {
-                if let Some(prev) = inner.nodes_by_id.remove(&prev_node_id) {
-                    let prev_conn = prev.conn_id.clone();
-                    let prev_channel = prev.channel.clone();
-                    drop(prev);
-                    inner.nodes_by_conn.remove(&prev_conn);
-                    // Drop the write lock before signalling: the notified
-                    // connection task re-enters the registry via `deregister`.
-                    drop(inner);
-                    prev_channel.close_connection();
-                    tracing::info!(
-                        old_node_id = %prev_node_id,
-                        new_node_id = %node_id,
-                        conn_id = %conn_id,
-                        "cluster node connection reused under a different node_id; evicting old session"
-                    );
-                    inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let mut to_close: Vec<ReverseRpcChannel> = Vec::new();
+        {
+            let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            // (B1-03) If this `conn_id` is already mapped to a *different*
+            // node_id, that older session is orphaned by the new mapping; drop
+            // its entries from both tables.
+            //
+            // **Its channel is NOT closed**: `nodes_by_conn[conn_id] ==
+            // prev_node_id` implies `prev.conn_id == conn_id`, so the orphaned
+            // session's channel is *this* connection's channel (the center binds
+            // one `with_close` channel per connection and stores clones of it —
+            // they share one `Arc<Notify>`). Closing it would tear down the very
+            // session the lines below register. Only the stale map entries go.
+            if let Some(prev_node_id) = inner.nodes_by_conn.get(&conn_id).cloned() {
+                if prev_node_id != node_id {
+                    if let Some(prev) = inner.nodes_by_id.remove(&prev_node_id) {
+                        inner.nodes_by_conn.remove(&prev.conn_id);
+                        tracing::info!(
+                            old_node_id = %prev_node_id,
+                            new_node_id = %node_id,
+                            conn_id = %conn_id,
+                            "cluster node connection re-announced under a different node_id; \
+                             dropping the old session's registry entries (its connection is this one)"
+                        );
+                    }
                 }
             }
-        }
-        // (B1-01) Reconnect with the same node_id: drop the old session's
-        // conn→node mapping AND signal its connection to close. Without the
-        // close signal, the dropped session's connection task keeps running,
-        // and any `channel.clone()` still alive in another part of the program
-        // can still `call()` a session the registry no longer knows about.
-        if let Some(prev) = inner.nodes_by_id.get(&node_id) {
-            if prev.conn_id != conn_id {
-                let prev_conn = prev.conn_id.clone();
-                let prev_channel = prev.channel.clone();
-                inner.nodes_by_conn.remove(&prev_conn);
-                drop(inner);
-                tracing::info!(
-                    node_id = %node_id,
-                    old_conn_id = %prev_conn,
-                    new_conn_id = %conn_id,
-                    "cluster node reconnected under a fresh connection; closing old"
-                );
-                prev_channel.close_connection();
-                inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+            // (B1-01) Reconnect with the same node_id: drop the old session's
+            // conn→node mapping AND signal its connection to close. Without the
+            // close signal, the dropped session's connection task keeps running,
+            // and any `channel.clone()` still alive in another part of the program
+            // can still `call()` a session the registry no longer knows about.
+            // `remove` rather than `get`: the stale session must not be observable
+            // for even an instant of this critical section.
+            if let Some(prev) = inner.nodes_by_id.remove(&node_id) {
+                if prev.conn_id != conn_id {
+                    inner.nodes_by_conn.remove(&prev.conn_id);
+                    tracing::info!(
+                        node_id = %node_id,
+                        old_conn_id = %prev.conn_id,
+                        new_conn_id = %conn_id,
+                        "cluster node reconnected under a fresh connection; closing old"
+                    );
+                    to_close.push(prev.channel.clone());
+                }
             }
+            inner.nodes_by_conn.insert(conn_id.clone(), node_id.clone());
+            inner.nodes_by_id.insert(node_id.clone(), session);
         }
-        inner.nodes_by_conn.insert(conn_id.clone(), node_id.clone());
-        inner.nodes_by_id.insert(node_id.clone(), session);
+        for channel in to_close {
+            channel.close_connection();
+        }
         tracing::debug!(node_id = %node_id, conn_id = %conn_id, "cluster node registered");
     }
 
@@ -383,7 +403,10 @@ impl NodeRegistry {
 
     /// Actively evict a session by `node_id` (used by operator deregister).
     /// Removes from both tables **and asks the node's connection to close**.
-    /// Returns whether a session was actually removed. Orthogonal to
+    /// Returns the evicted session, or `None` if no live session held that
+    /// `node_id` (the caller uses the returned session's `device_name` /
+    /// `conn_id` to publish `node.disconnected` without a second lookup).
+    /// Orthogonal to
     /// [`deregister`](Self::deregister) (disconnect reconciliation by `conn_id`).
     ///
     /// **Why the close signal**: eviction alone only stops *new* dispatches
@@ -399,8 +422,12 @@ impl NodeRegistry {
     /// No-op for channels built with [`ReverseRpcChannel::new`] (node side,
     /// tests).
     pub fn forget(&self, node_id: &str) -> Option<NodeSession> {
-        // Drop the write lock before signalling: the notified connection task
-        // runs cleanup that re-enters the registry (`deregister`).
+        // Both tables are mutated under ONE guard, and the close fires after it
+        // drops. Not for deadlock reasons — `close_connection` is a
+        // non-blocking `Notify::notify_one` that takes no lock and re-enters
+        // nothing; the connection task's `deregister` runs later, on its own
+        // task. The point is that the eviction is atomic (see `register`) and
+        // the critical section carries no wakeup side effects.
         let removed = {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             let session = inner.nodes_by_id.remove(node_id);
@@ -484,9 +511,10 @@ pub(crate) fn normalize_node_key(value: &str) -> String {
 /// (extracts `device_name` + commands). Returns whether registration occurred.
 /// Extracted as a pure function for unit testing and to keep `handler.rs` thin.
 ///
-/// The `role` gate is currently dead in production: the single live caller
-/// (`gateway/server/handler.rs:1344`) passes a hardcoded `Some("node")` after
-/// upstream shape detection. The gate is kept as a defensive parameter so
+/// The `role` gate is currently dead in production: the single live caller —
+/// the `connect` frame's `NodeAdmission::Admitted` arm in
+/// `gateway::server::handler::handle_connection` — passes a hardcoded
+/// `Some("node")` after upstream shape detection. The gate is kept so
 /// future call sites cannot register a non-node connection by accident; the
 /// contract is "call this only for `role == Some("node")`", and the unit
 /// test `maybe_register_node_registers_only_for_node_role` enforces it.
@@ -634,6 +662,65 @@ mod tests {
             tags: vec![],
             version: None,
             connected_at: 1,
+        }
+    }
+
+    /// Two connections racing to register the SAME `node_id` must not both end
+    /// up in `nodes_by_conn`.
+    ///
+    /// Reachable in production: every WS connection is its own tokio task and
+    /// `maybe_register_node` is called from each, so a network flap that makes a
+    /// node redial while its old socket is still live runs two `register` calls
+    /// for one `node_id` concurrently. While `register` dropped its write guard
+    /// mid-function, both calls could read the SAME previous session, both
+    /// remove its conn mapping, and then both insert their own — leaving a
+    /// connection that the registry never closed and never overwrote, yet which
+    /// still resolves through [`NodeRegistry::node_identity_by_conn`]. That
+    /// function is the anti-spoof stamp for every inbound node frame, so the
+    /// orphan speaks as the node under the winning session's identity.
+    #[test]
+    fn concurrent_register_same_node_leaves_no_orphan_conn_mapping() {
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 4;
+        const ROUNDS: usize = 500;
+
+        for round in 0..ROUNDS {
+            let reg = Arc::new(NodeRegistry::new());
+            let barrier = Arc::new(Barrier::new(THREADS));
+            let conns: Vec<String> = (0..THREADS).map(|i| format!("conn-{i}")).collect();
+            let handles: Vec<_> = conns
+                .iter()
+                .cloned()
+                .map(|conn| {
+                    let reg = Arc::clone(&reg);
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        std::thread::yield_now();
+                        reg.register(session("node-a", &conn));
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().expect("a register thread panicked");
+            }
+
+            // Public-API assertion, on the security-relevant consumer: exactly
+            // one conn_id may carry the node's identity — the one whose session
+            // `nodes_by_id` actually holds.
+            let resolving: Vec<(&String, (String, String))> = conns
+                .iter()
+                .filter_map(|c| reg.node_identity_by_conn(c).map(|id| (c, id)))
+                .collect();
+            assert_eq!(
+                resolving.len(),
+                1,
+                "round {round}: {} connections resolve as node-a ({resolving:?}); every \
+                 loser must be evicted from nodes_by_conn, otherwise it keeps speaking as \
+                 the node under another session's identity",
+                resolving.len()
+            );
         }
     }
 

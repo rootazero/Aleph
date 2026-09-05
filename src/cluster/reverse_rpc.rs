@@ -218,18 +218,25 @@ impl ReverseRpcChannel {
     /// close signal ([`with_close`](Self::with_close)); a no-op otherwise
     /// (node-side channels / tests).
     ///
-    /// Two producers fire this, for the same reason — the connection must go
-    /// away **now**, not at the next idle-watchdog expiry:
-    /// * [`call`](Self::call) on an outbound wedge (slow consumer, see
-    ///   [`OutboundWedged`](ReverseRpcError::OutboundWedged));
-    /// * [`NodeRegistry::forget`](crate::cluster::NodeRegistry::forget) on an
-    ///   operator deregister — evicting the session from the registry only stops
-    ///   *new* dispatches; without this the revoked node keeps its socket (and
-    ///   with it the still-live `node.approval.request` path back to the
-    ///   operator) until the ≤90s inbound watchdog fires.
+    /// Every producer fires it for the same reason — this connection must go
+    /// away **now**, not at the next idle-watchdog expiry, because the registry
+    /// has stopped addressing it while the socket is still live: an outbound
+    /// wedge in [`call`](Self::call) (slow consumer, see
+    /// [`OutboundWedged`](ReverseRpcError::OutboundWedged)); an operator
+    /// deregister via [`NodeRegistry::forget`](crate::cluster::NodeRegistry::forget);
+    /// a same-node reconnect superseding this session in
+    /// [`NodeRegistry::register`](crate::cluster::NodeRegistry::register).
+    /// Eviction alone only stops *new* dispatches — without this the orphaned
+    /// node keeps its socket, and with it the still-live
+    /// `node.approval.request` path back to the operator, until the ≤90s
+    /// inbound watchdog fires. (Deliberately not enumerating a count: a comment
+    /// carrying one is a list that rots.)
     ///
-    /// `notify_one` stores a permit when nobody is waiting yet, so the
-    /// connection's `select!` arm cannot miss the wakeup.
+    /// Non-blocking: it takes no lock and awaits nothing, so a caller may hold
+    /// registry state across it. `notify_one` stores a permit when nobody is
+    /// waiting yet, so the connection's `select!` arm cannot miss the wakeup;
+    /// the notified connection runs its cleanup (`deregister` included) later,
+    /// on its own task.
     pub fn close_connection(&self) {
         if let Some(close) = &self.close {
             close.notify_one();
