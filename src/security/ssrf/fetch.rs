@@ -106,6 +106,21 @@ async fn validate_url_full(
     url_str: &str,
     policy: &SsrfPolicy,
 ) -> Result<(Url, std::net::SocketAddr), SsrfError> {
+    let result = validate_url_full_inner(url_str, policy).await;
+    // Audit chokepoint (audit I-3): `safe_fetch`'s every BlockedAddress —
+    // including each redirect hop, which re-validates through here — leaves
+    // a trail entry. See the sibling chokepoint on the public
+    // `validate_url_with_pinned`.
+    if let Err(SsrfError::BlockedAddress(reason)) = &result {
+        crate::security::audit::emit_ssrf_blocked(url_str, reason).await;
+    }
+    result
+}
+
+async fn validate_url_full_inner(
+    url_str: &str,
+    policy: &SsrfPolicy,
+) -> Result<(Url, std::net::SocketAddr), SsrfError> {
     let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
 
     validate_scheme(&url)?;

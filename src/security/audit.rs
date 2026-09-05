@@ -73,6 +73,24 @@ pub enum AuditEventType {
     /// Severity is `Critical`: an incomplete audit log is the one fact an
     /// operator must never have to infer from absence.
     AuditLogDropped,
+    /// The SSRF guard refused an outbound fetch — a URL the model (or an MCP
+    /// server, or an operator config) asked for resolved to a blocked
+    /// address: loopback, link-local, cloud metadata, a blocklisted host, a
+    /// legacy IP literal.
+    ///
+    /// Emitted at the two validator chokepoints
+    /// ([`crate::security::ssrf::validate_url_with_pinned`] and
+    /// `safe_fetch`'s internal `validate_url_full`) — every `BlockedAddress`
+    /// decision funnels through one of them, so the trail cannot be bypassed
+    /// by taking a different entry point. Until this variant the refusal was
+    /// a `tracing` line and a returned error: the fetcher saw the "no", but
+    /// the post-incident question "did anything TRY to reach the metadata
+    /// endpoint, and when" had no answer (audit I-3).
+    ///
+    /// `detail` names the host and the refusal reason, never the full URL —
+    /// the query string is exactly where an exfiltrating URL would carry the
+    /// loot. Severity is `Critical`: the request was an attack shape, stopped.
+    SsrfBlocked,
 }
 
 impl fmt::Display for AuditEventType {
@@ -88,6 +106,7 @@ impl fmt::Display for AuditEventType {
             Self::ScopedContentRead => "scoped_content_read",
             Self::CommandPolicy => "command_policy",
             Self::AuditLogDropped => "audit_log_dropped",
+            Self::SsrfBlocked => "ssrf_blocked",
         };
         write!(f, "{s}")
     }
@@ -228,6 +247,28 @@ impl AuditEntry {
         }
     }
 
+    /// The SSRF guard refused an outbound fetch — see
+    /// [`AuditEventType::SsrfBlocked`]. `host` only, never the full URL; the
+    /// reason comes from the validator (`SsrfError::BlockedAddress`).
+    /// `session_id` stays `None`: the validators run without one, and the
+    /// host is the join column an investigator actually needs.
+    #[must_use]
+    pub fn ssrf_blocked(host: impl Into<String>, reason: impl Into<String>) -> Self {
+        let host = host.into();
+        let reason = reason.into();
+        Self {
+            event_type: AuditEventType::SsrfBlocked,
+            severity: AuditSeverity::Critical,
+            source_ip: None,
+            session_id: None,
+            // Same task-local the runtime guard reads: the fetch tool runs on
+            // the spawned run task where CALLER_USER is dead, but the
+            // run-start seeding nest makes the room author visible here.
+            actor_user: crate::scope::current_room_author(),
+            detail: format!("blocked fetch: host={host} reason={reason}"),
+        }
+    }
+
     /// A remote connection failed the Gateway-token login wall at `connect`.
     /// `source_ip` is the socket peer; `detail` names the rejected path.
     #[must_use]
@@ -305,6 +346,25 @@ pub fn global() -> Option<SecurityAuditLog> {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
+}
+
+/// Record an SSRF refusal on the process-wide trail, if one is installed.
+///
+/// Called by the two SSRF validator chokepoints on every
+/// [`crate::security::ssrf::SsrfError::BlockedAddress`]. `url_str` is the URL
+/// the fetcher asked for; only its host reaches the log (see
+/// [`AuditEventType::SsrfBlocked`] — the query string is where exfiltrated
+/// data would ride). A host that does not parse is reported as
+/// `"<unparseable>"`, which is itself the interesting fact.
+pub async fn emit_ssrf_blocked(url_str: &str, reason: &str) {
+    let Some(log) = global() else {
+        return;
+    };
+    let host = url::Url::parse(url_str)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "<unparseable>".to_string());
+    log.log(AuditEntry::ssrf_blocked(host, reason)).await;
 }
 
 /// Serialises the audit-asserting tests: each swaps in its own log, so two
@@ -662,6 +722,77 @@ mod tests {
         );
     }
 
+    /// Every file expected to emit an SSRF-block audit entry. Much smaller
+    /// than [`AUTHORITY_PRODUCERS`] because the design is a chokepoint, not a
+    /// census of call sites: every `SsrfError::BlockedAddress` funnels through
+    /// one of these two validators, so two files cover every refusal path
+    /// (direct fetch, redirect hop, MCP SSE transport).
+    const SSRF_PRODUCERS: &[&str] = &["src/security/ssrf/mod.rs", "src/security/ssrf/fetch.rs"];
+
+    #[test]
+    fn every_declared_ssrf_producer_still_emits() {
+        let root = repo_root();
+        for path in SSRF_PRODUCERS {
+            let full = root.join(path);
+            let src = std::fs::read_to_string(&full)
+                .unwrap_or_else(|e| panic!("{path} (declared SSRF audit producer) unreadable: {e}"));
+            assert!(
+                code_only(&src).contains("emit_ssrf_blocked("),
+                "{path} is a declared SSRF audit chokepoint and no longer emits. The refusal \n                 still happens — what vanished is the trail of it (audit I-3)."
+            );
+        }
+    }
+
+    #[test]
+    fn no_ssrf_producer_exists_outside_the_chokepoints() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = repo_root();
+        let mut files = Vec::new();
+        walk(&root.join("src"), &mut files);
+
+        // This file defines the emitter; it is not a producer.
+        let this_file = root.join("src/security/audit.rs");
+        let declared: std::collections::HashSet<_> =
+            SSRF_PRODUCERS.iter().map(|p| root.join(p)).collect();
+
+        let mut undeclared = Vec::new();
+        for file in files {
+            if file == this_file || declared.contains(&file) {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            if code_only(&src).contains("emit_ssrf_blocked(") {
+                undeclared.push(
+                    file.strip_prefix(&root)
+                        .unwrap_or(&file)
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+        assert!(
+            undeclared.is_empty(),
+            "these files emit SSRF audit entries outside the validator chokepoints: {undeclared:?}. \
+             Route the refusal through validate_url_with_pinned / validate_url_full instead — \
+             a second emission path is how the trail forks."
+        );
+    }
+
     #[tokio::test]
     async fn test_audit_log_send_receive() {
         let (log, mut rx) = SecurityAuditLog::new(100);
@@ -750,6 +881,16 @@ mod tests {
         assert_eq!(e.event_type, AuditEventType::RateLimited);
         assert_eq!(e.severity, AuditSeverity::Warn);
         assert_eq!(e.source_ip.as_deref(), Some("10.0.0.6"));
+    }
+
+    #[test]
+    fn ssrf_blocked_entry_names_host_and_reason_never_the_url() {
+        let e = AuditEntry::ssrf_blocked("169.254.169.254", "blocked by policy");
+        assert_eq!(e.event_type, AuditEventType::SsrfBlocked);
+        assert_eq!(e.severity, AuditSeverity::Critical);
+        assert_eq!(e.event_type.to_string(), "ssrf_blocked");
+        assert!(e.detail.contains("169.254.169.254"));
+        assert!(e.detail.contains("blocked by policy"));
     }
 
     #[test]
