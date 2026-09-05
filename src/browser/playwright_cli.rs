@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -569,15 +569,24 @@ impl PlaywrightCliDriver {
             _ => BrowserError::Io(e),
         })?;
 
+        let started = Instant::now();
         let output_fut = child.wait_with_output();
         let output = match tokio::time::timeout(timeout, output_fut).await {
             Ok(res) => res.map_err(BrowserError::Io)?,
             Err(_) => {
                 // `output_fut` (owning `child`) is dropped here; `kill_on_drop`
-                // set above terminates the process on timeout.
+                // set above terminates the process on timeout. This IS the
+                // ceiling firing, so this is the one site entitled to name it.
                 return Err(BrowserError::Timeout(timeout.as_millis() as u64));
             }
         };
+        // The CLI exited on its own — Aleph's ceiling above never fired. What
+        // is reported below must be what actually elapsed, not the ceiling:
+        // the CLI can exit rc=0 with a timeout phrase in its output well
+        // before the ceiling (its own internal action/nav timeout), and a
+        // classifier that named the ceiling anyway reports a duration nothing
+        // in this process measured (see `classify_failure`'s doc).
+        let elapsed_ms = started.elapsed().as_millis() as u64;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -589,7 +598,7 @@ impl PlaywrightCliDriver {
                 &stderr,
                 exit_code,
                 session_key,
-                timeout.as_millis() as u64,
+                elapsed_ms,
             ));
         }
         // A clean exit status is not a success claim on this CLI — see
@@ -603,7 +612,7 @@ impl PlaywrightCliDriver {
                 &err,
                 exit_code,
                 session_key,
-                timeout.as_millis() as u64,
+                elapsed_ms,
             ));
         }
 
@@ -662,12 +671,22 @@ impl PlaywrightCliDriver {
 ///
 /// `detail` is the CLI's own account of the failure: stderr on a non-zero exit,
 /// the `### Error` body when the exit status was clean.
+///
+/// `elapsed_ms` is what the CALLER measured — wall-clock time from spawn to
+/// this exit — **not** the caller's configured timeout ceiling. Those are two
+/// different facts: a CLI that reports its own internal timeout can exit
+/// cleanly well inside Aleph's ceiling (measured: a `nav_timeout_secs = 120`
+/// ceiling, an action that failed at ~60 s, `tokio::time::timeout` never
+/// fired). The ceiling-firing branch is `spawn`'s own timeout arm, which
+/// already names the ceiling because it is the only site entitled to — this
+/// function only ever sees a process that already exited, so a duration is
+/// available and it is the one to report.
 fn classify_failure(
     stdout: &str,
     detail: &str,
     exit_code: i32,
     session_key: &str,
-    timeout_ms: u64,
+    elapsed_ms: u64,
 ) -> BrowserError {
     let s = format!("{stdout}\n{detail}").to_lowercase();
     // A refused attach, before the not-open anchors: it is neither "no browser
@@ -691,7 +710,7 @@ fn classify_failure(
     {
         BrowserError::NoSession(session_key.to_string())
     } else if contains_timeout_phrase(&s) {
-        BrowserError::Timeout(timeout_ms)
+        BrowserError::Timeout(elapsed_ms)
     } else if s.contains("element not found")
         || s.contains("no element")
         || s.contains("does not match any elements")
@@ -1079,6 +1098,22 @@ mod tests {
         assert!(matches!(err, BrowserError::Timeout(5000)));
     }
 
+    /// The hang-rootcause report's own guard: this function must report
+    /// whatever the caller measured, never a configured ceiling it was not
+    /// given. Passing a value that is deliberately NOT a round ceiling number
+    /// (a real ceiling here is 120_000, from `qa/browser_managed`'s own
+    /// `nav_timeout_secs`) proves the number in `BrowserError::Timeout` is the
+    /// argument, not something the function invents or a stale ceiling from
+    /// elsewhere in the call graph.
+    #[test]
+    fn the_reported_duration_is_whatever_the_caller_measured() {
+        let err = classify_failure("", "Error: Timeout 60000ms exceeded", 1, "default", 60_031);
+        assert!(
+            matches!(err, BrowserError::Timeout(60_031)),
+            "expected the caller's measured duration (60031), got {err:?}"
+        );
+    }
+
     #[test]
     fn test_classify_stderr_element_not_found() {
         let err = classify_failure("", "element not found: #missing", 1, "foo", 5000);
@@ -1422,6 +1457,64 @@ Call log:
             super::super::playwright_launch::output_dir_for(session).expect("home resolves"),
         )
         .await;
+    }
+
+    /// The hang-rootcause report's integration-level guard: the number in
+    /// `BrowserError::Timeout` must be what `spawn` actually measured, never
+    /// the caller's configured ceiling. Before the fix, `spawn` reported
+    /// `timeout.as_millis()` (the CEILING) on every classified failure —
+    /// including this one, where the CLI exits on ITS OWN, rc=1, carrying a
+    /// timeout phrase, well before Aleph's `tokio::time::timeout` ever fires.
+    /// That is exactly the shape the hang-rootcause investigation hit: a
+    /// `nav_timeout_secs = 120` ceiling and an error reading "timed out after
+    /// 120000ms" when nothing had waited anywhere near that long.
+    ///
+    /// The fake CLI here exits immediately with a timeout phrase, and `run` is
+    /// given a MUCH LARGER ceiling (120 s, `qa/browser_managed`'s own
+    /// `nav_timeout_secs`). If the reported number were the ceiling it would
+    /// read 120_000; the correct number is however long the (near-instant)
+    /// fake CLI actually took.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cli_that_reports_its_own_timeout_gets_its_elapsed_time_not_the_ceiling() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cli = tmp.path().join("fake-playwright-cli");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\necho 'Error: Timeout 60000ms exceeded' >&2\nexit 1\n",
+        )
+        .expect("write fake cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake cli");
+
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig {
+                binary_path: Some(cli.to_string_lossy().into_owned()),
+                ..PlaywrightCliConfig::default()
+            },
+            BrowserRuntimeConfig::default(),
+        );
+
+        let err = driver
+            .run(
+                "aleph-unit-elapsed-guard",
+                LaunchPolicy::Refuse,
+                &["tab-list"],
+                Duration::from_secs(120), // the ceiling this call must NOT report
+            )
+            .await
+            .expect_err("the fake CLI always fails");
+
+        match err {
+            BrowserError::Timeout(ms) => assert!(
+                ms < 5_000,
+                "reported {ms}ms — looks like the 120_000ms ceiling was echoed \
+                 instead of the (near-instant) elapsed time"
+            ),
+            other => panic!("expected Timeout, got {other:?}"),
+        }
     }
 
     /// The sealed test twin must stay sealed: a unit test may not install a

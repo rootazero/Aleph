@@ -147,6 +147,29 @@ async def main():
         pids = chrome_pids(args.expect_user_data_dir)
         check("a Chrome process carries Aleph's --user-data-dir", len(pids) > 0, " ".join(pids))
 
+        # 5a. `--use-mock-keychain` is really in that process's argv — not just
+        #     "a Chrome process exists" (5), which a stalled, half-navigated
+        #     Chrome satisfies exactly as well as a healthy one (the whole
+        #     shape of the hang: it keeps answering `/json/version` while the
+        #     first navigation in every page never dispatches). This is the
+        #     hang-rootcause report's own falsifier for `ChromiumLaunchSpec`'s
+        #     argv fix: revert the two-line fix and this goes red on a scratch
+        #     HOME while checks 1-5 above stay green, because the missing flag
+        #     does not stop the process from existing — only from ever
+        #     answering `Page.navigate`.
+        argv_text = ""
+        if pids:
+            argv_proc = subprocess.run(
+                ["ps", "-p", pids[0], "-o", "command="],
+                capture_output=True, text=True,
+            )
+            argv_text = argv_proc.stdout
+        check(
+            "Aleph's chromium argv carries --use-mock-keychain",
+            "--use-mock-keychain" in argv_text,
+            argv_text.strip()[:300],
+        )
+
         # 5b. The record that makes an orphan reclaimable. No unit test can see
         #     this: `write_sidecar` is best-effort and a launch that skipped it
         #     still reports success, so the only place the omission shows up is

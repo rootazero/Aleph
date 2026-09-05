@@ -69,6 +69,26 @@ impl ChromiumLaunchSpec {
         let mut argv = self.extra_args.clone();
         argv.push("--no-first-run".to_string());
         argv.push("--no-default-browser-check".to_string());
+        // Chrome asks the OS credential store for the key that encrypts its
+        // profile, and on macOS that call NEVER RETURNS when HOME has no
+        // usable login Keychain (a launchd service, a service account, a
+        // sandboxed host, this repo's own scratch-HOME QA). The browser still
+        // answers /json/version, so it looks healthy; what dies is the first
+        // navigation in each page — Chrome emits requestWillBeSent, the origin
+        // server never sees the request, and Page.navigate is never answered.
+        //
+        // These are not a preference: while `playwright-cli` launched the
+        // browser its own launcher always passed them, so moving the launch
+        // here (4c208760a) silently dropped them. Measured on macOS: the mock
+        // keychain is the load-bearing one, `--password-store=basic` alone
+        // changes nothing. The latter is kept for the Linux twin, where the
+        // blocking store is gnome-keyring/kwallet rather than the Keychain.
+        //
+        // AFTER `extra_args`, like every other switch this launch depends on:
+        // Chrome resolves a duplicated switch to its last occurrence, so an
+        // operator cannot displace it.
+        argv.push("--use-mock-keychain".to_string());
+        argv.push("--password-store=basic".to_string());
         if self.headless {
             argv.push("--headless=new".to_string());
         }
@@ -754,12 +774,48 @@ mod tests {
                 "--disable-gpu",
                 "--no-first-run",
                 "--no-default-browser-check",
+                "--use-mock-keychain",
+                "--password-store=basic",
                 "--headless=new",
                 "--proxy-server=socks5://127.0.0.1:1080",
                 "--user-data-dir=/tmp/udd",
                 "--remote-debugging-port=0",
                 "about:blank",
             ]
+        );
+    }
+
+    /// The hang-rootcause report's own falsifier: `--use-mock-keychain` is
+    /// what stops Chrome's first navigation in every page from hanging
+    /// forever on a HOME with no usable login Keychain (measured: 60 s vs
+    /// 0.6 s with the flag). Presence alone is not the whole contract —
+    /// **position** is, because Chrome resolves a duplicated switch to its
+    /// LAST occurrence, so an assertion on presence alone would stay green if
+    /// someone moved the push to the front, where an operator's `extra_args`
+    /// could displace it and silently reproduce the hang.
+    #[test]
+    fn the_keychain_switches_sit_after_extra_args_so_an_operator_cannot_displace_them() {
+        let with_extra = ChromiumLaunchSpec {
+            extra_args: vec!["--a".into(), "--b".into(), "--c".into()],
+            ..spec()
+        };
+        let extra_len = with_extra.extra_args.len();
+        let argv = with_extra.argv();
+        let keychain_idx = argv
+            .iter()
+            .position(|a| a == "--use-mock-keychain")
+            .expect("--use-mock-keychain must be present");
+        let store_idx = argv
+            .iter()
+            .position(|a| a == "--password-store=basic")
+            .expect("--password-store=basic must be present");
+        assert!(
+            keychain_idx >= extra_len,
+            "--use-mock-keychain came before extra_args ended: {argv:?}"
+        );
+        assert!(
+            store_idx >= extra_len,
+            "--password-store=basic came before extra_args ended: {argv:?}"
         );
     }
 
