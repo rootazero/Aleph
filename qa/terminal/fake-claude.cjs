@@ -1,4 +1,12 @@
+#!/usr/bin/env node
 // A stand-in for `claude`, for `qa/terminal/run.sh`.
+//
+// ⚠️ The shebang is load-bearing on UNIX and inert on Windows, and it has to be
+// here rather than in the installer: `run.sh` copies this file to
+// `$QA_ROOT/bin/claude` and Unix stages exec that path directly (the `cwd`
+// stage spawns it as the pty child; `identify` types `claude` into `sh`).
+// Without it the kernel answers ENOEXEC. Node ignores a shebang in any file it
+// runs, so the Windows shim (`node "%~dp0claude"`) does not care.
 //
 // `run.sh` copies this file to `$QA_ROOT/bin/claude` — WITHOUT an extension,
 // and the name is the point twice over:
