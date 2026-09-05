@@ -2216,20 +2216,28 @@ mod tests {
     /// `gateway_devices.rs`'s per-credential rule.
     #[tokio::test]
     async fn a_second_deactivation_burns_zero_tickets_and_writes_no_authority_change() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // ⚠️ A UNIQUE principal, not the literal `u-alice`. The audit sink is
+        // process-global and the lock only serialises the tests that ASSERT on
+        // it, so sibling tests deactivating THEIR `u-alice` wrote rows this
+        // test could not tell from its own -- measured 2026-09-05, it read
+        // "burned 1 bootstrap ticket(s) for u-alice" from a test that had
+        // nothing to do with it. The other audit tests already key off a fresh
+        // uuid; this is that fix carried across (判据 §16).
+        let uid = format!("u-{}", uuid::Uuid::new_v4());
         let store = seeded_store();
-        store
-            .create_user("u-alice", "Alice", UserRole::Member)
-            .unwrap();
+        store.create_user(&uid, "Alice", UserRole::Member).unwrap();
         let mgr =
             crate::gateway::security::device_token_manager::DeviceTokenManager::new(store.clone());
-        mgr.create_bootstrap_ticket(Some(600_000), Some("u-alice"))
+        mgr.create_bootstrap_ticket(Some(600_000), Some(&uid))
             .unwrap();
 
         handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": "u-alice", "status": "deactivated"}),
+                json!({"user_id": uid, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
@@ -2238,12 +2246,13 @@ mod tests {
 
         // Install the audit handle only for the SECOND write, so anything it
         // receives came from the retry.
-        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        let (log, mut rx) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
         let resp = handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": "u-alice", "status": "deactivated"}),
+                json!({"user_id": uid, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
@@ -2251,7 +2260,11 @@ mod tests {
         .await;
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            details.push(entry.detail);
+            // Only this test's principal: everything else in the channel was
+            // written by whatever else the binary is running right now.
+            if entry.detail.contains(&uid) {
+                details.push(entry.detail);
+            }
         }
         crate::security::audit::clear_global_for_test();
 
@@ -2272,8 +2285,11 @@ mod tests {
     /// handle is process-global.
     #[tokio::test]
     async fn authority_changes_are_audited() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
-        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (log, mut rx) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
 
         let store = seeded_store();
@@ -2307,11 +2323,11 @@ mod tests {
 
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            assert_eq!(
-                entry.event_type,
-                crate::security::audit::AuditEventType::AuthorityChange
-            );
-            details.push((entry.actor_user, entry.detail));
+            // NOT asserting the event type here: the channel also carries rows
+            // written by whatever else the binary is running, and their type is
+            // none of this test's business. The assertion moved below the
+            // filter, where every row is this test's own.
+            details.push((entry.event_type, entry.actor_user, entry.detail));
         }
         crate::security::audit::clear_global_for_test();
 
@@ -2322,8 +2338,12 @@ mod tests {
         // entries carry this test's scoped caller.
         let mine: Vec<String> = details
             .into_iter()
-            .filter(|(_, d)| d.contains(&new_id))
-            .map(|(actor, d)| {
+            .filter(|(_, _, d)| d.contains(&new_id))
+            .map(|(event_type, actor, d)| {
+                assert_eq!(
+                    event_type,
+                    crate::security::audit::AuditEventType::AuthorityChange
+                );
                 assert_eq!(actor.as_deref(), Some("u-owner"));
                 d
             })

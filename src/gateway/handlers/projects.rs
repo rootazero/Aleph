@@ -1521,8 +1521,11 @@ mod tests {
     /// push frame names nobody, because nobody was actually dropped.
     #[tokio::test]
     async fn removing_a_non_member_writes_no_audit_row_and_names_nobody() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
-        let (log, mut rx_audit) = crate::security::audit::SecurityAuditLog::new(16);
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (log, mut rx_audit) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
 
         let (store, users, project, _guard) = room();
@@ -1559,6 +1562,11 @@ mod tests {
                 leaked.push(entry.detail);
             }
         }
+        // `replace_global_for_test`'s contract: clear before releasing the
+        // lock, so a later non-audit test never writes into a handle whose
+        // receiver is gone. Before the assertion, so a failing one still
+        // leaves the process clean.
+        crate::security::audit::clear_global_for_test();
         assert!(
             leaked.is_empty(),
             "no member was actually dropped — this must not write an AuthorityChange row, got: {leaked:?}"
