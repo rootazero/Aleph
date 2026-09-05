@@ -21,9 +21,10 @@
 
 use async_trait::async_trait;
 
-use crate::browser::chromium_resolve::{resolve_binary, ChromiumSource};
+use crate::browser::chromium_resolve::{resolve_binary, ChromiumSource, ResolvedChromium};
 use crate::browser::profile::BrowserType;
-use crate::diagnostics::check::{unknown_finding, HealthCheck, Posture};
+use crate::browser::BrowserError;
+use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::Finding;
 
 const ID: &str = "browser/chromium-missing";
@@ -80,6 +81,22 @@ pub(crate) fn missing_finding_for_test() -> Finding {
     missing_finding("no system browser")
 }
 
+/// Maps a completed resolution onto the doctor's three-way answer — the ONLY
+/// decision this check makes. Pure and synchronous on purpose: `run()`'s
+/// async body is just wiring (probe the CLI, load the config, call the real
+/// resolver under a timeout) around this one match, so the decision itself
+/// can be exercised with a hand-built [`ResolvedChromium`] / [`BrowserError`]
+/// instead of needing a real Chromium, a real `playwright-cli`, or a
+/// particular machine's install state to reach every arm in a test.
+fn classify_resolution(probe: Result<ResolvedChromium, BrowserError>) -> Finding {
+    match probe {
+        Ok(r) => found_finding(&r.path, r.source),
+        Err(BrowserError::ChromiumUnavailable { tried }) => missing_finding(tried),
+        // Any other error is the resolver failing to look, not a verdict.
+        Err(e) => unknown_finding(ID, SUBJECT, format!("the lookup failed: {e}")),
+    }
+}
+
 #[derive(Default)]
 pub struct ChromiumMissingCheck;
 
@@ -108,18 +125,18 @@ impl HealthCheck for ChromiumMissingCheck {
         // Off the async worker, mirroring the twin probe at
         // `browser_runtime.rs:230-236`, which wraps the identical call for the
         // identical reason: it does a `which` PATH walk plus a JSON file read
-        // (判据 §16 — fix it on both sides).
-        let cli = match tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
-            .await
-        {
+        // (判据 §16 — fix it on both sides). The `JoinError` → `Finding` mapping
+        // is `check::settle_probe`'s job, not a second copy of it (M1 in the
+        // Task 7 review): a panicked probe must produce the same "<subject>
+        // unknown" sentence every check in this directory produces, with one
+        // author.
+        let cli = match settle_probe(
+            ID,
+            SUBJECT,
+            tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path).await,
+        ) {
             Ok(v) => v,
-            Err(e) => {
-                return vec![unknown_finding(
-                    ID,
-                    SUBJECT,
-                    format!("the playwright-cli lookup did not come back: {e}"),
-                )]
-            }
+            Err(finding) => return vec![finding],
         };
         let Some(cli) = cli else {
             return vec![Finding::ok(
@@ -148,12 +165,7 @@ impl HealthCheck for ChromiumMissingCheck {
         )
         .await;
         vec![match probe {
-            Ok(Ok(r)) => found_finding(&r.path, r.source),
-            Ok(Err(crate::browser::BrowserError::ChromiumUnavailable { tried })) => {
-                missing_finding(tried)
-            }
-            // Any other error is the resolver failing to look, not a verdict.
-            Ok(Err(e)) => unknown_finding(ID, SUBJECT, format!("the lookup failed: {e}")),
+            Ok(resolution) => classify_resolution(resolution),
             // The check's OWN "could not verify" answer, which is why
             // RESOLVE_TIMEOUT sits under the engine's ceiling: if the engine
             // got here first, this arm would be unreachable and the operator
@@ -213,6 +225,71 @@ mod tests {
             "{}",
             f.detail
         );
+    }
+
+    /// The arm mapping `run()` delegates to `classify_resolution` — the only
+    /// production logic this check owns, and (before this test) the only
+    /// piece of it nothing ever executed. Swapping the `Ok(r) =>` and
+    /// `Err(ChromiumUnavailable{..}) =>` arms in `classify_resolution` still
+    /// compiles and every other test in this file still passes; this is the
+    /// one that must go red for it (verified by hand while writing this test:
+    /// swapping the two arms turned this test red with the found/missing
+    /// titles exchanged, then reverted).
+    #[test]
+    fn classify_resolution_maps_found_to_the_ok_finding_and_unavailable_to_the_gap_finding() {
+        let found = classify_resolution(Ok(ResolvedChromium {
+            path: std::path::PathBuf::from("/opt/chromium/chrome"),
+            source: ChromiumSource::System,
+            engine: None,
+        }));
+        assert_eq!(found.check_id, ID);
+        assert_eq!(found.title, "Managed browser available");
+        assert_eq!(found.severity, crate::diagnostics::finding::Severity::Info);
+
+        let missing = classify_resolution(Err(BrowserError::ChromiumUnavailable {
+            tried: "pin: none; system: none; playwright: not installed".into(),
+        }));
+        assert_eq!(missing.check_id, ID);
+        assert_eq!(missing.title, "No Chromium for the managed browser driver");
+        assert_eq!(
+            missing.severity,
+            crate::diagnostics::finding::Severity::Info
+        );
+    }
+
+    /// Only `ChromiumUnavailable` is the resolver's considered "I looked
+    /// everywhere and there is nothing" answer. Any other `BrowserError` means
+    /// the resolver failed to look (a launch-stage error, a timeout inside the
+    /// dry-run, …) and must render as `unknown`, never as `missing` — the same
+    /// fail-closed reading `browser/runtime`'s probes use for a `JoinError`.
+    #[test]
+    fn classify_resolution_reports_any_other_error_as_unknown_not_a_verdict() {
+        let f = classify_resolution(Err(BrowserError::ChromiumNotFound));
+        assert_eq!(f.check_id, ID);
+        assert_eq!(f.severity, crate::diagnostics::finding::Severity::Warning);
+        assert!(f.title.ends_with("unknown"), "{}", f.title);
+    }
+
+    /// The defect `browser/runtime`'s twin probes were converted to remove: a
+    /// probe task that never came back rendered as a confident "not present".
+    /// Uses a real `JoinError` from a real panicked task, exercising the exact
+    /// `settle_probe` call `run()` makes, rather than a hand-built error.
+    #[tokio::test]
+    async fn a_probe_that_could_not_run_is_never_reported_as_missing() {
+        let joined: Result<Option<std::path::PathBuf>, tokio::task::JoinError> =
+            tokio::task::spawn_blocking(|| panic!("probe blew up")).await;
+        assert!(joined.is_err(), "precondition: the task must have failed");
+
+        let finding = settle_probe(ID, SUBJECT, joined)
+            .err()
+            .expect("a task that did not complete must not be settled into a probe outcome");
+        assert_eq!(finding.check_id, ID);
+        assert_eq!(
+            finding.severity,
+            crate::diagnostics::finding::Severity::Warning
+        );
+        assert!(finding.title.ends_with("unknown"), "{}", finding.title);
+        assert_ne!(finding.title, "No Chromium for the managed browser driver");
     }
 
     /// The three budgets that must stay nested, asserted rather than described.

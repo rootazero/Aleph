@@ -51,6 +51,16 @@ impl DiagnosticEngine {
         Self { checks }
     }
 
+    /// How many checks this engine holds — what `run_with_filter(_, None,
+    /// &[])`'s `checks_run` will be. Test-only: exists so a battery consumer
+    /// (`builtin_tools::doctor`'s tests) can derive the expected count from
+    /// the exact construction that wires up its engine, instead of restating
+    /// the total as a literal that rots every time a check is added.
+    #[cfg(test)]
+    pub(crate) fn check_count(&self) -> usize {
+        self.checks.len()
+    }
+
     /// Build the production registry against the real `~/.aleph` paths.
     ///
     /// **Offline and path-only.** This is the registry the cold
