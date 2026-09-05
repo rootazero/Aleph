@@ -41,11 +41,20 @@ impl OpenAiProtocol {
         // preset must not smuggle `file://`, `javascript:`, etc. into the URL
         // parser. Host-level filtering (loopback / RFC1918 / cloud metadata)
         // is intentionally left to the operator's network policy.
+        //
+        // Match the sibling adapter behaviour (anthropic, gemini,
+        // openai_responses, configurable): log the validation failure and
+        // fall through to the same normalisation path. The earlier return of
+        // the *unvalidated* raw_base_url let a tampered preset smuggle
+        // non-HTTP schemes into the URL parser for this protocol alone.
         if let Err(e) =
             crate::providers::protocols::http_client::validate_provider_base_url(&raw_base_url)
         {
-            tracing::error!(error = %e, "OpenAI provider base_url failed validation");
-            return raw_base_url;
+            tracing::error!(error = %e, "OpenAI Chat base_url failed validation");
+            tracing::error!(
+                raw_base_url = %raw_base_url,
+                "Falling through to normalisation; reqwest will reject non-HTTP schemes at request time"
+            );
         }
 
         // Detect API version from the URL (v1 or v3)

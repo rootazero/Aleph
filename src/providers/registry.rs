@@ -5,7 +5,7 @@
 use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
-use std::collections::HashMap;
+use dashmap::DashMap;
 
 /// Registry for managing AI providers
 ///
@@ -33,7 +33,7 @@ use std::collections::HashMap;
 /// assert_eq!(names, vec!["openai"]);
 /// ```
 pub struct ProviderRegistry {
-    providers: HashMap<String, Arc<dyn AiProvider>>,
+    providers: DashMap<String, Arc<dyn AiProvider>>,
 }
 
 impl ProviderRegistry {
@@ -50,7 +50,7 @@ impl ProviderRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            providers: HashMap::new(),
+            providers: DashMap::new(),
         }
     }
 
@@ -82,14 +82,26 @@ impl ProviderRegistry {
     /// let result = registry.register("openai".to_string(), provider);
     /// assert!(result.is_err());
     /// ```
-    pub fn register(&mut self, name: String, provider: Arc<dyn AiProvider>) -> Result<()> {
-        if self.providers.contains_key(&name) {
-            return Err(AlephError::invalid_config(format!(
+    /// Register a provider with a unique name.
+    ///
+    /// Concurrent-safe: takes `&self` because the underlying DashMap handles
+    /// the write-locking internally. The previous `&mut self + HashMap` form
+    /// panicked (or silently corrupted, depending on the compiler) under
+    /// concurrent `register` calls — two threads racing the same name could
+    /// both observe `contains_key == false` and overwrite each other's
+    /// entries. The `entry().try_insert` pattern guarantees per-name atomic
+    /// duplicate detection across worker threads.
+    pub fn register(&self, name: String, provider: Arc<dyn AiProvider>) -> Result<()> {
+        use dashmap::mapref::entry::Entry;
+        match self.providers.entry(name.clone()) {
+            Entry::Vacant(slot) => {
+                slot.insert(provider);
+                Ok(())
+            }
+            Entry::Occupied(_) => Err(AlephError::invalid_config(format!(
                 "Provider '{name}' is already registered"
-            )));
+            ))),
         }
-        self.providers.insert(name, provider);
-        Ok(())
     }
 
     /// Get a provider by name
@@ -122,7 +134,10 @@ impl ProviderRegistry {
     /// ```
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
-        self.providers.get(name).cloned()
+        // DashMap::get returns a `Ref<>` that borrows the shard; clone the
+        // inner `Arc` out so we don't hold a shard lock across the caller's
+        // downstream `process()` (which may itself touch the registry).
+        self.providers.get(name).map(|r| Arc::clone(&r))
     }
 
     /// Get all registered provider names in sorted order
@@ -146,7 +161,7 @@ impl ProviderRegistry {
     /// ```
     #[must_use]
     pub fn names(&self) -> Vec<String> {
-        let mut names: Vec<_> = self.providers.keys().cloned().collect();
+        let mut names: Vec<_> = self.providers.iter().map(|r| r.key().clone()).collect();
         names.sort();
         names
     }

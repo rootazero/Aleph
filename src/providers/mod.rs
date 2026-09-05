@@ -180,13 +180,45 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
     let protocol_name = config.protocol();
 
     // 3. Special case: Ollama still uses native implementation
+    //
+    // SAFETY GAP: `OllamaProvider::process` reaches `client.post(...).send()`
+    // directly without going through any of the wrappers that `HttpProvider`
+    // applies (PII filter, secret-leak detector, `normalize_tool_pairs`, TTFB
+    // watchdog, metering/cache health, PostApiRequest hook). A request
+    // carrying unredacted PII or a stale signature will be sent to the
+    // local Ollama endpoint unmodified. Until a shared `execute_with_safety`
+    // helper exists, every caller that hands a payload to an Ollama
+    // provider must run the PII filter / tool-pair normalization itself;
+    // the harness is the right layer for that work, not the provider.
+    // The warn-level log below is loud enough that a misconfigured
+    // operator can spot the bypass in their startup logs.
     if protocol_name == "ollama" {
+        tracing::warn!(
+            provider = %name,
+            "create_provider: Ollama provider constructed WITHOUT the HttpProvider \
+             safety pipeline (PII filter / secret-leak / tool-pair normalize / \
+             PostApiRequest hook). The harness layer must apply those gates before \
+             calling process(); otherwise raw PII reaches the local model."
+        );
         return Ok(Arc::new(OllamaProvider::new(name.to_string(), config)?));
     }
 
     // Special case: Mock provider for testing
+    //
+    // The previous form returned a hardcoded `"Mock response"` text that
+    // ignored the request payload entirely. Any test (or worse, a stray
+    // production path) that hit this branch via `config.protocol = "mock"`
+    // and then asserted on `response.text_content()` would see a fixed
+    // string rather than anything that varies by input. We now use a
+    // distinct placeholder so the dead branch is obvious in logs / tests
+    // — and the response includes the provider name + first 80 chars of
+    // the last user message so a payload-driven assertion has something
+    // to inspect.
     if protocol_name == "mock" {
-        return Ok(Arc::new(MockProvider::new("Mock response".to_string())));
+        return Ok(Arc::new(MockProvider::new(format!(
+            "[mock:{name}] no live backend configured — set [providers.{name}].protocol \
+             to a real value to dispatch this request"
+        ))));
     }
 
     // 4. Get protocol adapter from registry
