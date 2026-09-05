@@ -7,7 +7,7 @@
 //!    performed over `(hash, length)` fingerprints so no plaintext secret is
 //!    ever retained by the detector (see [`LeakDetector::scan_inbound`]).
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -359,42 +359,83 @@ impl LeakDetector {
     ///
     /// Two distinct injected secrets (or one echoed twice) must both surface
     /// to the caller; a single-match API would let the second pass through
-    /// silently. The matcher walks each `(start, len)` pair exactly once
-    /// across all registered lengths, then collapses overlapping windows by
-    /// *extending* the kept range rather than dropping the later match — a
-    /// later match that starts inside a kept range and ends past it is the
-    /// same secret value with a longer hash-window, and dropping it would
-    /// leave the tail of the longer secret visible in the redacted output.
+    /// silently.
+    ///
+    /// ## Algorithm (audit secrets I-4)
+    ///
+    /// Fingerprints are grouped by byte length first, so the content is
+    /// walked **once per distinct length** rather than once per `(hash,
+    /// len)` pair — with up to [`INJECTED_LRU_CAP`] registrations the old
+    /// per-pair `char_indices` re-walk degenerated to ~100M window hashes on
+    /// a 100 KB response on the `runtime_guard` hot path. Same-length
+    /// secrets share the walk; a window hit is resolved by binary search
+    /// over the group's sorted hashes, and lengths longer than the content
+    /// are skipped outright. SipHash is not a rolling hash, so each window
+    /// is hashed independently: per length the pass is O(content × len),
+    /// the same per-window cost as before, minus the per-pair re-walk and
+    /// per-window boundary checks.
+    ///
+    /// Windows are taken over **raw bytes**. That preserves the match set
+    /// exactly: the fingerprint at registration
+    /// ([`InjectedSecret::from_value`]) is `str::hash` over the raw secret
+    /// bytes, and a byte-equal match of a valid-UTF-8 needle inside a
+    /// valid-UTF-8 haystack is necessarily char-boundary aligned (a needle
+    /// can never begin or end with a continuation byte). A defensive
+    /// boundary check still runs on hash hits, so a theoretical SipHash
+    /// collision on an unaligned window degrades to a missed redaction
+    /// instead of panicking on an invalid slice.
+    ///
+    /// Overlapping windows are collapsed by *extending* the kept range
+    /// rather than dropping the later match — a later match that starts
+    /// inside a kept range and ends past it is the same secret value with a
+    /// longer hash-window, and dropping it would leave the tail of the
+    /// longer secret visible in the redacted output.
     fn find_all_injected_substrings<'c>(&self, content: &'c str) -> Vec<&'c str> {
         if self.injected.is_empty() {
             return Vec::new();
         }
-        // Collect candidate (hash, len) pairs once and sort by length
-        // ascending so iteration is deterministic and matches come out in
-        // left-to-right order regardless of LRU insertion order. Length is
-        // ascending so longer windows shrink the available suffix rather
-        // than expanding it.
-        let mut pairs: Vec<(u64, usize)> =
-            self.injected.iter().map(|(&(h, l), _)| (h, l)).collect();
-        pairs.sort_unstable_by_key(|&(_h, l)| l);
+        // Group fingerprint hashes by byte length. Sorting by `(len, hash)`
+        // makes each length group contiguous AND sorted-by-hash within the
+        // group, so a window hit is a binary search with no auxiliary map.
+        // LRU iteration order is deliberately discarded — output order must
+        // not depend on registration order.
+        let mut pairs: Vec<(usize, u64)> =
+            self.injected.iter().map(|(&(h, l), _)| (l, h)).collect();
+        pairs.sort_unstable();
+        pairs.dedup();
 
+        let bytes = content.as_bytes();
         let mut matches: Vec<(usize, usize)> = Vec::new();
-        for (hash, len) in pairs {
-            if len > content.len() {
+        let mut i = 0;
+        while i < pairs.len() {
+            let len = pairs[i].0;
+            let group_start = i;
+            while i < pairs.len() && pairs[i].0 == len {
+                i += 1;
+            }
+            let group = &pairs[group_start..i];
+            if len > bytes.len() {
                 continue;
             }
-            for (start, _) in content.char_indices() {
+            // One pass over the content per distinct length: every secret of
+            // this length shares the walk.
+            for start in 0..=(bytes.len() - len) {
                 let end = start + len;
-                if end > content.len() || !content.is_char_boundary(end) {
-                    continue;
-                }
-                let window = &content[start..end];
+                // Must reproduce the exact fingerprint `str::hash` yields at
+                // registration: raw bytes followed by a 0xff terminator.
                 let mut hasher = siphasher::sip::SipHasher::new_with_keys(
                     INJECTED_HASH_KEY0,
                     INJECTED_HASH_KEY1,
                 );
-                window.hash(&mut hasher);
-                if hasher.finish() == hash {
+                hasher.write(&bytes[start..end]);
+                hasher.write_u8(0xff);
+                let h = hasher.finish();
+                if group
+                    .binary_search_by_key(&h, |&(_l, hash)| hash)
+                    .is_ok()
+                    && content.is_char_boundary(start)
+                    && content.is_char_boundary(end)
+                {
                     matches.push((start, end));
                 }
             }
@@ -617,6 +658,79 @@ mod tests {
         assert!(detector
             .scan_inbound(&format!("密钥是{secret}，已保存"))
             .is_blocked());
+    }
+
+    /// 50 secrets with 50 distinct byte lengths must all be found with a
+    /// single content walk per length (audit secrets I-4 regression). The
+    /// assertion is on the match SET (sorted) plus the start-sorted,
+    /// non-overlapping contract `redact_all_matches` relies on — not on any
+    /// registration/iteration order.
+    #[test]
+    fn test_many_distinct_lengths_all_matched() {
+        let mut detector = LeakDetector::new();
+        let mut secrets: Vec<String> = Vec::new();
+        let mut records: Vec<InjectedSecret> = Vec::new();
+        for i in 0..50usize {
+            // Lengths 8..58, all distinct, all >= MIN_INJECTED_MATCH_LEN.
+            let secret = format!("s{i:02}-{}", "x".repeat(4 + i));
+            records.push(InjectedSecret::from_value(&format!("k{i}"), &secret));
+            secrets.push(secret);
+        }
+        detector.register_injected(&records);
+
+        let mut response = String::from("start ");
+        for s in &secrets {
+            response.push_str(s);
+            response.push_str(" | ");
+        }
+        response.push_str("end");
+
+        let matches = detector.find_all_injected_substrings(&response);
+        let mut got: Vec<&str> = matches.clone();
+        got.sort_unstable();
+        let mut want: Vec<&str> = secrets.iter().map(String::as_str).collect();
+        want.sort_unstable();
+        assert_eq!(got, want, "match set must be exactly the injected secrets");
+
+        // Start-sorted, non-overlapping — the redaction contract.
+        let base = response.as_ptr() as usize;
+        let spans: Vec<(usize, usize)> = matches
+            .iter()
+            .map(|m| (m.as_ptr() as usize - base, m.as_ptr() as usize - base + m.len()))
+            .collect();
+        for w in spans.windows(2) {
+            assert!(w[0].0 < w[1].0, "matches must be start-sorted");
+            assert!(w[0].1 <= w[1].0, "matches must be non-overlapping");
+        }
+    }
+
+    /// A secret containing multi-byte UTF-8, embedded in CJK prose: the
+    /// byte-window scan must find exactly the secret and must not
+    /// false-positive on byte-shifted windows of the surrounding multi-byte
+    /// text (audit secrets I-4 regression for the byte-slice switch).
+    #[test]
+    fn test_multibyte_secret_in_multibyte_content() {
+        let mut detector = LeakDetector::new();
+        let secret = "tok-密钥-9f3a"; // 4 + 6 + 5 = 15 bytes >= MIN_INJECTED_MATCH_LEN
+        detector.register_injected(&[InjectedSecret::from_value("k", secret)]);
+
+        let response = format!("结果：值={secret}，完毕。密钥🔑不应误报。");
+        let matches = detector.find_all_injected_substrings(&response);
+        assert_eq!(matches, vec![secret], "exactly the secret must match");
+
+        let decision = detector.scan_inbound(&response);
+        assert!(decision.is_blocked());
+        if let LeakDecision::Block {
+            redacted_content, ..
+        } = decision
+        {
+            assert!(!redacted_content.contains(secret));
+            assert!(redacted_content.contains(REDACTED_INJECTED));
+        }
+
+        // Same-shape multi-byte content without the secret must not
+        // false-positive on any mid-codepoint window.
+        assert!(!detector.scan_inbound("结果：值=其他内容，完毕。").is_blocked());
     }
 
     #[test]
