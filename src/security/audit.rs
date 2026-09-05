@@ -895,11 +895,38 @@ mod tests {
         assert!(e.detail.contains("blocked by policy"));
     }
 
+    /// The fold's contract is three properties, not one exact output string.
+    /// This guard originally asserted the string `"... three end"` and so also
+    /// demanded a trailing trim that [`sanitize_detail`] never promised — its
+    /// doc says each control *run* becomes one space, and a trailing `\u{7}`
+    /// is such a run. It was therefore red from the commit that introduced it
+    /// (`a2d83f830`): a guard coupled to incidental whitespace instead of to
+    /// the thing it protects. Leading/trailing whitespace is deliberately not
+    /// asserted here; `sanitize_detail_leaves_clean_short_detail_untouched`
+    /// pins the matching promise that clean text is not whitespace-normalised.
     #[test]
     fn sanitize_detail_collapses_control_runs() {
-        let mut d = "line one\n\nline two\r\nline three\tend\u{7}".to_string();
+        // The space before `\r\n` is the case the original input never had:
+        // the fold must carry "already sitting on whitespace" across a
+        // *non-control* space, or the run that follows emits a second one.
+        let mut d = "line one\n\nline two \r\nline three\tend\u{7}".to_string();
         sanitize_detail(&mut d);
-        assert_eq!(d, "line one line two line three end");
+
+        // 1. Nothing that can break the one-row-one-event shape, or drive the
+        //    terminal that later prints this row, survives.
+        assert!(
+            !d.chars().any(char::is_control),
+            "control char survived the fold: {d:?}"
+        );
+        // 2. A run collapses to exactly one space — including a run that
+        //    starts where the input already had a space.
+        assert!(!d.contains("  "), "control run did not collapse: {d:?}");
+        // 3. Non-control content survives verbatim and in order.
+        assert_eq!(
+            d.split_whitespace().collect::<Vec<_>>(),
+            ["line", "one", "line", "two", "line", "three", "end"],
+            "fold altered non-control content: {d:?}"
+        );
     }
 
     #[test]
@@ -910,17 +937,37 @@ mod tests {
         assert!(d.ends_with(TRUNCATION_MARKER));
         assert_eq!(d.len(), MAX_DETAIL_LEN + TRUNCATION_MARKER.len());
 
-        // Multi-byte content straddling the cap: the cut must land on a char
-        // boundary (no panic, no invalid UTF-8).
-        let mut d = "é".repeat(3 * 1024); // 6 KiB of two-byte chars
+        // Multi-byte content *straddling* the cap. The original form used
+        // `é` (2 bytes), which never straddles: MAX_DETAIL_LEN is even, so
+        // the cut is already on a boundary and the boundary walk never runs —
+        // the assertion could not tell the walk apart from a bare `truncate`.
+        // `€` is 3 bytes and MAX_DETAIL_LEN % 3 == 1, so the cut must walk back.
+        let mut d = "€".repeat(2 * 1024); // 6 KiB of three-byte chars
         sanitize_detail(&mut d);
+        let body_len = MAX_DETAIL_LEN - MAX_DETAIL_LEN % "€".len();
         assert!(d.ends_with(TRUNCATION_MARKER));
-        assert!(d.len() <= MAX_DETAIL_LEN + TRUNCATION_MARKER.len());
+        assert_eq!(
+            d.len(),
+            body_len + TRUNCATION_MARKER.len(),
+            "cut did not land on the largest char boundary at or below the cap"
+        );
+        assert!(
+            d.trim_end_matches(TRUNCATION_MARKER)
+                .chars()
+                .all(|c| c == '€'),
+            "cut mangled a char instead of walking back to its boundary"
+        );
     }
 
+    /// The other half of the fold's contract: control chars are folded, plain
+    /// whitespace is *not* normalised. The doubled and trailing spaces below
+    /// are the falsifiable part — they go red if a future edit adds a global
+    /// `trim`/whitespace-squash, which is the change that would silently make
+    /// [`sanitize_detail`] lossy for details that never contained a control
+    /// char in the first place.
     #[test]
     fn sanitize_detail_leaves_clean_short_detail_untouched() {
-        let mut d = "blocked fetch: host=example.com reason=loopback".to_string();
+        let mut d = "blocked fetch:  host=example.com  reason=loopback ".to_string();
         let before = d.clone();
         sanitize_detail(&mut d);
         assert_eq!(d, before);
