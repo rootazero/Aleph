@@ -32,6 +32,7 @@ mod session_run_registry;
 mod settle;
 mod simple;
 mod slash_command;
+pub(crate) mod slash_skill_scope;
 mod steering;
 mod tool_refresh;
 pub(crate) mod tool_service_builder;

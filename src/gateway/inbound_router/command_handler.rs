@@ -128,8 +128,13 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// * `Mcp`   — `server_name`, `tool_name`
 ///
 /// Without this, the fast-path's `match mode_type { "skill" => ... }` branch
-/// was dead code: every slash command was misclassified as `direct_tool` and
-/// skill instructions were silently dropped.
+/// was dead code: every slash command was misclassified as `direct_tool`.
+///
+/// `Skill.allowed_tools` is an `Option` and serialises as `null` (the skill
+/// declared nothing → the run keeps the full tool surface) or as an array,
+/// possibly empty (`allowed-tools: []` → deny-all). The two are read back
+/// apart in `execution_engine::slash_skill_scope`, so this must stay a JSON
+/// value rather than being flattened to a list on the way out.
 #[must_use]
 pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Option<String> {
     use crate::command::CommandContext;

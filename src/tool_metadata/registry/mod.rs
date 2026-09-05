@@ -139,11 +139,17 @@ impl ToolCatalog {
     }
 
     /// Register skills from `SkillInfo` list (Flat Namespace Mode)
-    pub async fn register_skills(&self, skills: &[SkillInfo]) {
-        self.registrar
+    ///
+    /// Returns the ids of skills refused because their `allowed-tools:`
+    /// declaration named tools that do not exist. A refused skill gets no
+    /// slash command — see [`ToolRegistrar::register_skills`].
+    pub async fn register_skills(&self, skills: &[SkillInfo]) -> Vec<String> {
+        let rejected = self
+            .registrar
             .register_skills(skills, &self.conflict_resolver)
             .await;
         self.health.invalidate_all();
+        rejected
     }
 
     /// Register plugin tools from manifests (Flat Namespace Mode)

@@ -128,12 +128,77 @@ struct RawFrontmatter {
     when_to_use: Option<String>,
     #[serde(default)]
     version: Option<String>,
+    /// Frontmatter `allowed-tools:` — the tool names this skill declares it
+    /// needs. `None` (key absent) means no declaration; an empty list means
+    /// the author wants nothing. Both reach the run loop distinctly — see
+    /// `SkillManifest::allowed_tools`.
+    #[serde(default)]
+    allowed_tools: Option<serde_yml::Value>,
     /// Declared scheduled automation (the hermes "blueprint" pattern).
     /// Deserialised leniently as raw YAML so a malformed block degrades to a
     /// parse WARNING (typos must surface — hermes lesson) instead of failing
     /// the whole skill.
     #[serde(default)]
     automation: Option<serde_yml::Value>,
+}
+
+/// Normalise the `allowed-tools:` frontmatter block into a name list.
+///
+/// Two shapes exist in the wild and both must work. Aleph's own convention is
+/// a YAML sequence, but every skill authored for upstream Claude Code writes a
+/// single comma-separated scalar (`allowed-tools: Read, Grep, Bash(cargo *)`).
+/// Deserialising into a strict `Vec<String>` would make `serde_yml` reject the
+/// frontmatter outright, and that does **not** degrade to "the declaration was
+/// ignored": it fails the whole `parse_skill_file`, and `scan_directory` then
+/// drops the SKILL.md. A skill would vanish because of a key it does not even
+/// need. So the field is taken as raw YAML — the same leniency `automation:`
+/// already uses, and for the same reason.
+///
+/// The *shape* is lenient; the *names* are strict. An unusable name is caught
+/// at registration, where a real tool registry can say so, and costs the
+/// author their slash command rather than their whole skill.
+///
+/// Returns `None` when the key is absent or null (no declaration → allow-all),
+/// and `Some(names)` otherwise, possibly empty (explicit deny-all).
+///
+/// A shape that is neither a sequence nor a scalar (a mapping, say) warns and
+/// resolves to `None`. That is the one fail-open in this chain and it is
+/// deliberate: at parse time there is no registry to refuse against, the
+/// alternative punishes a YAML typo by silently disarming a skill, and `None`
+/// is byte-for-byte the behaviour every skill has today. The warn is the
+/// visibility the decision rests on.
+fn normalize_allowed_tools(
+    raw: Option<&serde_yml::Value>,
+    skill_name: &str,
+) -> Option<Vec<String>> {
+    let value = raw?;
+    let names: Vec<String> = match value {
+        serde_yml::Value::Null => return None,
+        serde_yml::Value::Sequence(items) => items
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        serde_yml::Value::String(s) => s.split(',').map(str::to_string).collect(),
+        other => {
+            tracing::warn!(
+                skill = %skill_name,
+                shape = ?other,
+                "skill declares `allowed-tools:` in a shape that is neither a list nor a \
+                 comma-separated string — ignored, the skill keeps the full tool surface"
+            );
+            return None;
+        }
+    };
+    // Empty entries are dropped rather than forwarded as unknown names: a
+    // trailing comma is a typo, and costing the author their slash command
+    // over one would be a worse answer than they asked for.
+    Some(
+        names
+            .into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
+    )
 }
 
 /// The strict shape of the `automation:` frontmatter block.
@@ -573,6 +638,15 @@ fn apply_metadata(manifest: &mut SkillManifest, raw: &RawFrontmatter) {
     if let Some(version) = raw.version.clone() {
         manifest.set_version(version);
     }
+    // `allowed-tools:` — pass the whole `Option` through. `if let Some(..)`
+    // here would still be correct, but writing it as an unconditional move
+    // makes it structurally impossible to reintroduce the "empty list looks
+    // like an absent key" collapse: there is no branch that can drop a
+    // `Some(vec![])` on the floor. Name validation happens later, at
+    // registration, where the tool registry is the one that knows which names
+    // exist.
+    let allowed_tools = normalize_allowed_tools(raw.allowed_tools.as_ref(), &raw.name);
+    manifest.set_allowed_tools(allowed_tools);
     // Automation block: present-but-malformed WARNS instead of silently
     // no-op'ing (a typo'd schedule key would otherwise install a skill whose
     // automation never fires and nobody says why) — but never fails the
@@ -1039,6 +1113,129 @@ Review instructions."#;
         assert_eq!(
             manifest.when_to_use(),
             Some("When code has been written or modified and needs quality review")
+        );
+    }
+
+    /// `allowed-tools:` reaches the manifest at all. Before this it was
+    /// dropped by serde: `RawFrontmatter` is `rename_all = "kebab-case"` with
+    /// no such field and no `deny_unknown_fields`, so an author's declaration
+    /// vanished without a word.
+    #[test]
+    fn parse_allowed_tools_from_frontmatter() {
+        let content = r#"---
+name: Scoped Skill
+description: Narrows its own toolbelt
+allowed-tools:
+  - grep
+  - file_read
+---
+Scoped instructions."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert_eq!(
+            manifest.allowed_tools(),
+            Some(["grep".to_string(), "file_read".to_string()].as_slice())
+        );
+    }
+
+    /// The distinction the whole `Option` exists for: an author who writes an
+    /// empty list is saying "no tools", not "I said nothing". Collapsing the
+    /// two here would hand the run every tool, because an empty allow-set
+    /// means allow-all by the time it reaches `ScopedToolService`.
+    #[test]
+    fn parse_allowed_tools_empty_list_is_not_the_same_as_absent() {
+        let declared_empty = r#"---
+name: Locked Down
+description: Wants nothing
+allowed-tools: []
+---
+Body."#;
+        let manifest = parse_skill_content(declared_empty, SkillSource::Bundled).unwrap();
+        assert_eq!(
+            manifest.allowed_tools(),
+            Some([].as_slice()),
+            "an explicit empty list must survive as `Some(empty)`"
+        );
+
+        let absent = r#"---
+name: Says Nothing
+description: No declaration
+---
+Body."#;
+        let manifest = parse_skill_content(absent, SkillSource::Bundled).unwrap();
+        assert!(
+            manifest.allowed_tools().is_none(),
+            "an absent key must stay `None`"
+        );
+    }
+
+    /// The shape every real upstream skill actually ships — a single
+    /// comma-separated scalar, not a YAML sequence. Taken verbatim from an
+    /// installed `rust-doctor/SKILL.md`.
+    ///
+    /// The assertion that matters is that the skill *parses at all*: a strict
+    /// `Vec<String>` field makes `serde_yml` reject the frontmatter, and a
+    /// rejected frontmatter is a skill that no longer exists. The names being
+    /// unusable is the registrar's problem, not the parser's.
+    #[test]
+    fn parse_allowed_tools_accepts_the_upstream_comma_separated_scalar() {
+        let content = r#"---
+name: Rust Doctor
+description: Deep analysis of Rust projects
+allowed-tools: Read, Grep, Glob, Bash(cargo run -- *)
+---
+Body."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Global)
+            .expect("an upstream-shaped declaration must not kill the whole skill");
+        assert_eq!(
+            manifest.allowed_tools(),
+            Some(
+                [
+                    "Read".to_string(),
+                    "Grep".to_string(),
+                    "Glob".to_string(),
+                    "Bash(cargo run -- *)".to_string(),
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    /// A shape that is neither list nor scalar must not fail the skill, and
+    /// must not silently become a restriction either.
+    #[test]
+    fn parse_allowed_tools_unusable_shape_falls_back_to_no_declaration() {
+        let content = r#"---
+name: Weird Shape
+description: Declares a mapping
+allowed-tools:
+  read: yes
+---
+Body."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Global)
+            .expect("an unusable shape must not fail the skill");
+        assert!(
+            manifest.allowed_tools().is_none(),
+            "an unusable shape must read as `no declaration`, not as a restriction"
+        );
+    }
+
+    /// A trailing comma is a typo, not a request to lose a tool.
+    #[test]
+    fn parse_allowed_tools_drops_empty_entries() {
+        let content = r#"---
+name: Trailing Comma
+description: Sloppy but harmless
+allowed-tools: grep, bash,
+---
+Body."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Global).unwrap();
+        assert_eq!(
+            manifest.allowed_tools(),
+            Some(["grep".to_string(), "bash".to_string()].as_slice())
         );
     }
 

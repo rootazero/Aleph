@@ -146,10 +146,17 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_system_prompt: Option<String>,
 
-    /// Capabilities to enable for this command
-    /// e.g., ["search"], ["memory", "skills"]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routing_capabilities: Vec<String>,
+    /// Tool names this command narrows the run's tool surface to.
+    ///
+    /// Only skills populate this today (from their frontmatter
+    /// `allowed-tools:`). `None` = the command declares nothing, so the run
+    /// keeps the agent's full tool surface; `Some(vec![])` = an explicit
+    /// deny-all. The `Option` is not decoration: it is the only thing that
+    /// keeps "deny everything" distinguishable from "said nothing" by the time
+    /// the value reaches `ScopedToolService`, which reads an empty allow-set
+    /// as allow-all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_capabilities: Option<Vec<String>>,
 
     /// Intent type for classification
     /// e.g., "`builtin_search`", "`general_chat`"
@@ -224,7 +231,7 @@ impl UnifiedTool {
             // Routing config defaults (only set for builtins)
             routing_regex: None,
             routing_system_prompt: None,
-            routing_capabilities: Vec::new(),
+            routing_capabilities: None,
             routing_intent_type: None,
             routing_strip_prefix: false,
             routing_context_format: None,

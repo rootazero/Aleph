@@ -77,6 +77,7 @@ async fn test_register_skills() {
             description: "Improve and polish writing".to_string(),
             scope: crate::domain::skill::PromptScope::System,
             version: None,
+            allowed_tools: None,
         },
         SkillInfo {
             id: "code-review".to_string(),
@@ -84,6 +85,7 @@ async fn test_register_skills() {
             description: "Review code for issues".to_string(),
             scope: crate::domain::skill::PromptScope::System,
             version: None,
+            allowed_tools: None,
         },
     ];
 

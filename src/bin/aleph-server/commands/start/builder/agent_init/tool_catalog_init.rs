@@ -164,14 +164,33 @@ pub(super) async fn init_tool_catalog(
                         description: s.description().to_string(),
                         scope: s.scope().clone(),
                         version: s.version().map(str::to_string),
+                        // `allowed-tools:` frontmatter, projected verbatim.
+                        // `None` (key absent) and `Some(vec![])` (explicit
+                        // deny-all) mean different things all the way down to
+                        // the run loop, so this must not be flattened.
+                        allowed_tools: s
+                            .allowed_tools()
+                            .map(|tools| tools.iter().map(String::clone).collect()),
                     })
                     .collect();
-                tool_catalog.register_skills(&skill_infos).await;
+                let rejected = tool_catalog.register_skills(&skill_infos).await;
                 if !daemon {
                     println!(
                         "  Dispatch registry: {} skills registered",
-                        skill_infos.len()
+                        skill_infos.len() - rejected.len()
                     );
+                    // A skill refused for an unresolvable `allowed-tools:` is
+                    // simply absent from the catalog afterwards, which reads
+                    // identically to "never installed". Name it here so the
+                    // author sees the boundary they crossed.
+                    if !rejected.is_empty() {
+                        println!(
+                            "  Dispatch registry: {} skill(s) NOT registered — unknown \
+                             `allowed-tools:` names: {}",
+                            rejected.len(),
+                            rejected.join(", ")
+                        );
+                    }
                 }
             }
 
@@ -197,11 +216,16 @@ pub(super) async fn init_tool_catalog(
                         // other slash command behaves. No version to project.
                         scope: alephcore::domain::skill::PromptScope::System,
                         version: None,
+                        // Plugin commands carry no SkillManifest, so there is
+                        // no `allowed-tools:` to project. `None` = declares
+                        // nothing = keeps the agent's full tool surface, which
+                        // is what plugin commands have always done.
+                        allowed_tools: None,
                     })
                     .collect();
 
                 if !command_skill_infos.is_empty() {
-                    tool_catalog.register_skills(&command_skill_infos).await;
+                    let _ = tool_catalog.register_skills(&command_skill_infos).await;
                     if !daemon {
                         println!(
                             "  Dispatch registry: {} plugin commands registered",

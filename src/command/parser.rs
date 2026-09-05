@@ -63,8 +63,11 @@ pub enum CommandContext {
         instructions: String,
         /// Skill name for display
         display_name: String,
-        /// Allowed tools for this skill
-        allowed_tools: Vec<String>,
+        /// The skill's declared tool scope, validated at registration.
+        /// `None` = the skill declared nothing (allow-all, the behaviour every
+        /// skill shipped with); `Some(vec![])` = explicit deny-all. Do not
+        /// flatten: an empty allow-set means allow-all downstream.
+        allowed_tools: Option<Vec<String>>,
     },
     /// Custom command context
     Custom {

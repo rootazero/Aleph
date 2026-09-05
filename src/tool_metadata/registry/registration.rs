@@ -218,13 +218,50 @@ impl ToolRegistrar {
     /// conflict with any other tool type.
     ///
     /// Priority: Builtin > Native > Custom > MCP > Plugin > Skill
+    ///
+    /// # Returns
+    ///
+    /// The ids of skills that were **not** registered because their declared
+    /// `allowed-tools:` named tools that do not exist. Returned rather than
+    /// only logged so the boot path can say it out loud: a skill silently
+    /// missing from the slash catalog reads exactly like a skill that was
+    /// never installed.
     pub async fn register_skills(
         &self,
         skills: &[SkillInfo],
         conflict_resolver: &ConflictResolver,
-    ) {
+    ) -> Vec<String> {
+        let mut rejected: Vec<String> = Vec::new();
         for skill in skills {
             let id = format!("skill:{}", skill.id);
+
+            // Resolve the skill's declared tool scope BEFORE building the
+            // tool: an unresolvable declaration means this skill does not get
+            // a slash command at all. That matches what the skill system
+            // already does with a skill it cannot parse (`skill::scan_directory`
+            // skips it with a warn); the alternative — register it with the
+            // declaration dropped — hands the model a `/skill` that runs with
+            // the full toolbelt the author explicitly tried to shrink.
+            let routing_capabilities = match Self::resolve_skill_tool_scope(
+                skill.allowed_tools.as_deref(),
+                conflict_resolver,
+            )
+            .await
+            {
+                Ok(caps) => caps,
+                Err(unknown) => {
+                    warn!(
+                        skill = %skill.id,
+                        unknown_tools = ?unknown,
+                        "skill declares `allowed-tools:` naming tools that do not exist; \
+                         its slash command is NOT registered. Use Aleph tool names \
+                         (`file_read`, `bash`, `grep`), not upstream Claude Code names \
+                         (`Read`, `Bash`, `Grep`)"
+                    );
+                    rejected.push(skill.id.clone());
+                    continue;
+                }
+            };
 
             let tool = UnifiedTool::new(
                 &id,
@@ -240,16 +277,20 @@ impl ToolRegistrar {
             // Generate routing regex for flat namespace
             .with_routing_regex(format!(r"^/{}\s*", regex::escape(&skill.id)))
             .with_routing_intent_type("skills")
-            // Surface the skill body as the routing-system-prompt so the
-            // `CommandContext::Skill.instructions` field actually carries
-            // something the harness can inject. `description` is the closest
-            // proxy we have on the legacy `SkillInfo` shape — `SkillInfo`
-            // carries no separate `instructions` field. The downstream
-            // `parse.rs:139` reader uses this as the slash-mode skill body;
-            // leaving it empty made every `/<skill>` invocation silently
-            // run with no system guidance, which is a wiring gap, not a
-            // feature.
+            // `routing_system_prompt` carries the skill's description onto
+            // `CommandContext::Skill.instructions`. Nothing injects that
+            // string into a prompt — the description already reaches the model
+            // through the `<available_skills>` block
+            // (`thinker::layers::skill_instructions`) and the body only through
+            // the `skill_read` tool. It is kept because the field is part of
+            // the slash-command envelope's shape, not because a consumer reads
+            // it back.
             .with_routing_system_prompt(&skill.description)
+            // The validated `allowed-tools:` scope. `None` here is "the skill
+            // declared nothing" and must stay distinguishable from
+            // `Some(vec![])`, "the skill declared nothing is allowed" — see
+            // `UnifiedTool::routing_capabilities`.
+            .with_routing_capabilities(routing_capabilities)
             .with_routing_strip_prefix(true);
 
             // Register with automatic conflict resolution. Channel visibility is
@@ -259,7 +300,86 @@ impl ToolRegistrar {
                 .await;
         }
 
-        debug!("Registered {} skills (flat namespace)", skills.len());
+        debug!(
+            "Registered {} skills (flat namespace), {} rejected",
+            skills.len() - rejected.len(),
+            rejected.len()
+        );
+        rejected
+    }
+
+    /// Validate a skill's declared `allowed-tools:` against the tool names
+    /// that actually exist.
+    ///
+    /// `Ok(None)` — the skill declared nothing; the run keeps the agent's full
+    /// tool surface. `Ok(Some(names))` — every declared name resolves (an
+    /// empty `Some` is a legitimate, explicit deny-all). `Err(unknown)` — at
+    /// least one name names nothing, and the caller must refuse the skill.
+    ///
+    /// Two sources are unioned to answer "does this name exist":
+    /// * [`crate::executor::BUILTIN_TOOL_DEFINITIONS`] — the executor's own
+    ///   static list, and the same one the `ExecutionEngine` seeds its tool
+    ///   list from. Consulting it means this answer does not depend on how
+    ///   much of the catalog happens to be populated when skills register. A
+    ///   guard whose known-set is "whatever registered first" starts rejecting
+    ///   valid skills the day boot order changes, and a guard that rejects
+    ///   everything looks exactly like a guard that works.
+    /// * the catalog as it stands, **restricted to sources that are also LLM
+    ///   tool names**. This is not fussiness: the catalog is a *slash-command*
+    ///   index, and `Skill` / `Custom` entries live only there. Admitting them
+    ///   would let a declaration pass validation and then match nothing in the
+    ///   run loop, whose candidate list is built from the executor's tools —
+    ///   a silent deny-all, which is the exact failure this change exists to
+    ///   remove.
+    ///
+    /// Known boundary: plugin tools and MCP tools register into the catalog
+    /// *after* skills do (MCP joins per request at run time), so a skill that
+    /// names one is refused even though the run loop could have honoured it.
+    /// That is a loud false negative — the author is named in a warn and in
+    /// the boot output — chosen over the silent false positive above. There is
+    /// no Claude-Code-name translation table on purpose: a table only covers
+    /// the names that existed the day it was written, and matching upstream's
+    /// `Read`/`Bash`/`Grep` literally would retain zero tools while reporting
+    /// success.
+    async fn resolve_skill_tool_scope(
+        declared: Option<&[String]>,
+        conflict_resolver: &ConflictResolver,
+    ) -> Result<Option<Vec<String>>, Vec<String>> {
+        let Some(names) = declared else {
+            return Ok(None);
+        };
+
+        let mut unknown: Vec<String> = Vec::new();
+        for name in names {
+            if crate::executor::BUILTIN_TOOL_DEFINITIONS
+                .iter()
+                .any(|def| def.name == name.as_str())
+            {
+                continue;
+            }
+            if conflict_resolver
+                .check_conflict(name)
+                .await
+                .is_some_and(|c| {
+                    matches!(
+                        c.existing_source,
+                        ToolSource::Builtin
+                            | ToolSource::Native
+                            | ToolSource::Mcp { .. }
+                            | ToolSource::Plugin { .. }
+                    )
+                })
+            {
+                continue;
+            }
+            unknown.push(name.clone());
+        }
+
+        if unknown.is_empty() {
+            Ok(Some(names.to_vec()))
+        } else {
+            Err(unknown)
+        }
     }
 
     /// Register plugin tools from plugin manifests (Flat Namespace Mode)
