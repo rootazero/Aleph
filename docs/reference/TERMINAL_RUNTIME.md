@@ -148,7 +148,7 @@ agent 退出后 shell 回到前台且什么都不画，只看帧的闸再也不�
 
 #### 3.2.1 包装器：一条 launcher 链，不是一次进程树遍历
 
-一条命令行是**一串 launcher 最后落到一个程序**。`agent_token_in_cmdline` 按这条链走：每一步要么
+一条命令行是**一串 launcher 最后落到一个程序**。`agent_token_in_argv` 按这条链走：每一步要么
 自己就是 agent（结束），要么把活交给下一个 launcher（`sudo` / `npx` / `uv tool run` …），要么是个
 通用运行时、它的脚本就是那个程序（`node …/cli.js`）。链**有界**（`MAX_LAUNCHER_LAYERS = 3`），
 越界答 `None`。
@@ -366,6 +366,63 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 ⚠️ **Windows 上 shell 交互是另一种拼写，这一点没有被藏进各调用点的分支**：`drive_terminal.mjs`
 把它收成一个 `SHELL` kit（`cmd.exe` / `\r\n` / `set "PATH=…"` / `set K=V` 各自成句）。
 逐站点写 `cfg` 分支正是「Windows 那条臂安静地不再敲 agent、而阶段照样报出对照会话的行」的形状。
+
+#### 3.2.5 Windows shell 交接：默认换成 pwsh，识别跟着换（2026-09-05，随 FEATURE_LOCATOR §3.7 那轮）
+
+**PTY 那半。** `pty.spawn` 不带 `command` 时，Windows 此前落到 `CommandBuilder::new_default_prog()`
+＝ `%COMSPEC%` ＝ `cmd.exe`。现在走 `utils::shell::resolve()` 的 `pwsh` → Windows PowerShell 5.1
+→ `cmd.exe` 阶梯（绝对路径），加 `-NoLogo`。**两条平台臂刻意不对称**：Unix 那条**不许**改走同一个
+函数——`resolve()` 答的是「**agent** 拿哪个 shell 跑脚本」，在 Unix 上恒为 `bash`；而这里开的是
+**人**的交互终端，把 zsh / fish 用户的终端开成 bash 是拿另一个问题的答案回答这一个。这句话住在
+`default_shell_command` 的注释里，因为「看见两个 shell 解析器就以为有一个是多余的」会删错那一个。
+
+同一笔并掉一处判据 §1：spawn 走 `new_default_prog()`，而标签由另一个 `default_shell_label()`
+**再猜一遍**它会挑中什么（那个函数的 doc 自陈「仅供显示」）。没有任何东西强制两者一致——所以
+**Windows 默认换掉的那天，标签会继续把一个 pwsh 会话报成 `cmd.exe`**。`PtySession::shell` 不是
+装饰：`pty.list` 显示它、`RuntimeAgentEntry` 读它、§3.2 的「探测答不出时退回 shell 标签」拿它当
+那个更弱的答案。现在 `(command, label)` 由一处同时铸出。
+
+**识别那半。** `agent_token_in_argv` 的 launcher 表原本刻意不移植 herdr 的 `cmd /c` 与 PowerShell
+走查，理由写在注释里：**Aleph 没有产出那种形状的生产者**。上面这段和 shell 工具改成 PowerShell
+之后，**那个前提当天就到期了**（Cursor 的 bundled-node 布局仍然没有生产者，仍然留在上游）。
+
+新臂与既有 launcher **形状不同，这才是它不能挂进同一条规则的原因**：
+
+| | 程序名在哪 | 例子 | 位置规则会答 |
+|---|---|---|---|
+| `sudo` / `npx` / `uv tool run` | **下一个位置** | `npx claude` | `claude` ✅ |
+| `cmd.exe` | `/c` 或 `/k` **后面** | `cmd /D /S /C claude` | `/D` ❌ |
+| `pwsh` / `powershell` | `-File` / `-Command` **后面** | `pwsh -ExecutionPolicy Bypass -File …\claude.ps1` | `Bypass` ❌ |
+
+所以 `cmd` / `powershell` / `pwsh` **从 `is_generic_runtime_or_shell` 里移出**（那张表的成员资格
+条件就是「位置规则对它成立」），改由 `windows_shell` 这条臂**独占**回答——**包括回答 `None`**。
+留一条更弱的位置规则在后面兜底不是保守而是有害：`cmd /q claude` 没有 `/c`，它启动一个提示符、
+从不运行 `claude`，而兜底会报出一个没在跑的 agent（判据 §17：错的标签比缺的贵）。
+
+三条定下来的纪律：
+
+1. **`None` 是真答案，不是耸肩。** 裸 `pwsh` 是个交互提示符，里面没有 agent 可命名。
+2. **吃值的参数用 fail-closed 的默认，不用名单。** 一张「这些参数吃掉后一个 token」的名单**改不了
+   任何一个默认已经给出的答案**，那就不是规则（判据 §2）；而它预测不了缩写——`-ep` / `-ec` /
+   `-if` / `-of` 都是 pwsh 7.6.5 上实测存在的，**没有一个是长名的前缀**。唯一的正名单是
+   `PS_SWITCH_PARAMS`，它买的是相反的方向：没有 `noprofile` 在里面，`pwsh -NoProfile claude.ps1`
+   会把脚本当成 `-NoProfile` 的值吃掉。而 `-i` / `-in` / `-s` 这三个歧义缩写解析成 switch 是
+   **实测的不是选的**（`pwsh -nop -in -c 'Write-Output OK'` 打印 `OK`；`-in Text` 答
+   "the argument 'Text' is not recognized as the name of a script file"——同一条读数顺带量到了
+   这条走查依赖的裸 operand 规则）。真正对 PowerShell 自己都有歧义的缩写不需要破：`pwsh -no …`
+   答 "Invalid argument '-no'" 并且什么都不跑，**那样的命令行不会有进程存在**。
+3. **取 stem。** npm 把 Windows shim 装成 `claude.ps1` / `claude.cmd`，面板印 `claude.ps1` 是在给
+   shim 命名而不是给 agent 命名；`program_stem` 与 `normalized_agent_lookup_name` 共用
+   `SCRIPT_SUFFIXES`，两者对同一件事分歧就是判据 §1。
+
+⚠️ **这批测试刻意不带 `#[cfg(windows)]`**：每一个被测函数都是合成 argv 的纯函数，而这个 crate
+已经为相反的安排付过一次账——一个平台无关的实现，三条 exerciser 全被 `cfg` 门在了不需要它的
+平台上（§3.2.2）。**一条跑不到的测试和一条不会红的测试藏起来的是同一样东西。**
+
+⚠️ **覆盖边界**：`qa/terminal/run.sh` 的 Windows 臂显式 spawn `cmd.exe`（`drive_terminal.mjs` 的
+`SHELL` kit），所以真机装置**验的不是新的默认那条路**。不是缺陷，是一句要说出口的话。
+
+---
 
 ### 3.3 工具面等待（`src/builtin_tools/terminal.rs`）
 
