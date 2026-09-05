@@ -16,7 +16,7 @@ mod spec;
 mod tool_adapter;
 mod watcher;
 
-pub use loader::{load_skills_from_dir, SkillLoader};
+pub use loader::{load_skills_from_dir, SkillLoadReport, SkillLoader};
 pub use spec::{
     AlephExtensions, AlephSkillSpec, ConfirmationMode, DockerConfig, EvolutionMeta, InputHint,
     NetworkMode, RequiresSpec, SandboxMode, SecuritySpec, SkillMetadata,

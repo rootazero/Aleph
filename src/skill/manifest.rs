@@ -6,6 +6,7 @@ use crate::domain::skill::{
     EligibilitySpec, InstallKind, InstallSpec, InvocationPolicy, Os, PromptScope, SkillContent,
     SkillId, SkillManifest, SkillSource,
 };
+use crate::skill::frontmatter::normalize_allowed_tools;
 use crate::skill::guard::{
     install_allowed, scan_content, Finding, ScanVerdict, ThreatLevel, TrustLevel, MAX_SCAN_BYTES,
 };
@@ -131,7 +132,17 @@ struct RawFrontmatter {
     /// Frontmatter `allowed-tools:` — the tool names this skill declares it
     /// needs. `None` (key absent) means no declaration; an empty list means
     /// the author wants nothing. Both reach the run loop distinctly — see
-    /// `SkillManifest::allowed_tools`.
+    /// `SkillManifest::allowed_tools`. Taken as raw YAML and normalised by
+    /// [`crate::skill::frontmatter::normalize_allowed_tools`] — a strict
+    /// `Vec<String>` here would make serde reject the whole frontmatter for
+    /// the comma-scalar form upstream skills actually ship, and a rejected
+    /// frontmatter is a skill that no longer exists.
+    ///
+    /// The wire key is `allowed-tools`, produced by the container's
+    /// `rename_all = "kebab-case"` above; the canonical spelling is
+    /// [`crate::skill::frontmatter::ALLOWED_TOOLS_KEY`], and
+    /// `the_kebab_key_matches_this_structs_wire_key` below pins the two
+    /// together.
     #[serde(default)]
     allowed_tools: Option<serde_yml::Value>,
     /// Declared scheduled automation (the hermes "blueprint" pattern).
@@ -140,65 +151,6 @@ struct RawFrontmatter {
     /// the whole skill.
     #[serde(default)]
     automation: Option<serde_yml::Value>,
-}
-
-/// Normalise the `allowed-tools:` frontmatter block into a name list.
-///
-/// Two shapes exist in the wild and both must work. Aleph's own convention is
-/// a YAML sequence, but every skill authored for upstream Claude Code writes a
-/// single comma-separated scalar (`allowed-tools: Read, Grep, Bash(cargo *)`).
-/// Deserialising into a strict `Vec<String>` would make `serde_yml` reject the
-/// frontmatter outright, and that does **not** degrade to "the declaration was
-/// ignored": it fails the whole `parse_skill_file`, and `scan_directory` then
-/// drops the SKILL.md. A skill would vanish because of a key it does not even
-/// need. So the field is taken as raw YAML — the same leniency `automation:`
-/// already uses, and for the same reason.
-///
-/// The *shape* is lenient; the *names* are strict. An unusable name is caught
-/// at registration, where a real tool registry can say so, and costs the
-/// author their slash command rather than their whole skill.
-///
-/// Returns `None` when the key is absent or null (no declaration → allow-all),
-/// and `Some(names)` otherwise, possibly empty (explicit deny-all).
-///
-/// A shape that is neither a sequence nor a scalar (a mapping, say) warns and
-/// resolves to `None`. That is the one fail-open in this chain and it is
-/// deliberate: at parse time there is no registry to refuse against, the
-/// alternative punishes a YAML typo by silently disarming a skill, and `None`
-/// is byte-for-byte the behaviour every skill has today. The warn is the
-/// visibility the decision rests on.
-fn normalize_allowed_tools(
-    raw: Option<&serde_yml::Value>,
-    skill_name: &str,
-) -> Option<Vec<String>> {
-    let value = raw?;
-    let names: Vec<String> = match value {
-        serde_yml::Value::Null => return None,
-        serde_yml::Value::Sequence(items) => items
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_string))
-            .collect(),
-        serde_yml::Value::String(s) => s.split(',').map(str::to_string).collect(),
-        other => {
-            tracing::warn!(
-                skill = %skill_name,
-                shape = ?other,
-                "skill declares `allowed-tools:` in a shape that is neither a list nor a \
-                 comma-separated string — ignored, the skill keeps the full tool surface"
-            );
-            return None;
-        }
-    };
-    // Empty entries are dropped rather than forwarded as unknown names: a
-    // trailing comma is a typo, and costing the author their slash command
-    // over one would be a worse answer than they asked for.
-    Some(
-        names
-            .into_iter()
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect(),
-    )
 }
 
 /// The strict shape of the `automation:` frontmatter block.
@@ -730,53 +682,17 @@ pub fn automation_notice(skill_dir: &Path) -> Option<String> {
 
 /// Split content into (`yaml_frontmatter`, body).
 ///
-/// Expects the content to start with `---\n` and contain a closing `---\n`
-/// (or `---` at end of string).
+/// Thin adapter over [`crate::skill::frontmatter::split`] — the
+/// implementation moved there so the three SKILL.md ingestion paths stop
+/// disagreeing about where the `---` fence ends. Kept as a `pub` function
+/// because `skill::preprocess` calls it and wants the `SkillParseError`
+/// flavour of the failure.
+///
+/// # Errors
+///
+/// [`SkillParseError::NoFrontmatter`] when there is no `---` fenced block.
 pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseError> {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return Err(SkillParseError::NoFrontmatter);
-    }
-
-    // Find the end of the opening `---` line
-    let after_opening = match trimmed[3..].find('\n') {
-        Some(pos) => 3 + pos + 1,
-        None => return Err(SkillParseError::NoFrontmatter),
-    };
-
-    // Find the closing `---` that appears on its own line (allowing \r for CRLF).
-    // We iterate lines so that a `---` inside a YAML value does not falsely
-    // terminate the frontmatter.
-    let rest = &trimmed[after_opening..];
-    let closing_pos = rest
-        .lines()
-        .enumerate()
-        .skip(1) // first line is part of the YAML, not a delimiter
-        .find(|(_, line)| line.trim() == "---")
-        .map(|(idx, _)| rest.split_inclusive('\n').take(idx).map(|s| s.len()).sum())
-        .or_else(|| {
-            // Handle case where --- is at very start of rest (empty frontmatter)
-            if rest.starts_with("---") {
-                Some(0)
-            } else {
-                None
-            }
-        })
-        .ok_or(SkillParseError::NoFrontmatter)?;
-
-    let yaml_str = &rest[..closing_pos];
-    // The closing line may carry leading whitespace (matched via `line.trim()`),
-    // so skip to the end of the whole delimiter line rather than a fixed `+3`.
-    let closing_line = &rest[closing_pos..];
-    let body = match closing_line.find('\n') {
-        Some(nl) => &closing_line[nl + 1..],
-        None => "", // closing `---` is the final line; no body follows
-    };
-
-    let yaml_normalized = yaml_str.replace("\r\n", "\n").replace('\r', "\n");
-    let body_normalized = body.replace("\r\n", "\n").replace('\r', "\n");
-
-    Ok((yaml_normalized, body_normalized))
+    crate::skill::frontmatter::split(content).map_err(|_| SkillParseError::NoFrontmatter)
 }
 
 #[cfg(test)]
@@ -1219,6 +1135,30 @@ Body."#;
         assert!(
             manifest.allowed_tools().is_none(),
             "an unusable shape must read as `no declaration`, not as a restriction"
+        );
+    }
+
+    /// Two shapes of one fact: `ALLOWED_TOOLS_KEY` names the wire key, and
+    /// `RawFrontmatter`'s `rename_all = "kebab-case"` *produces* it. Nothing
+    /// makes them agree except this assertion — the const carries no `#[serde]`
+    /// power, so a rename of the field (or a change of the container's
+    /// `rename_all`) would leave the const describing a key that no longer
+    /// exists, and the census in `skill::frontmatter` would keep passing while
+    /// pointing at the wrong string.
+    ///
+    /// The YAML here is *built from the const*, not typed out, which is the
+    /// whole point: a literal would only prove serde round-trips a literal.
+    #[test]
+    fn the_kebab_key_matches_this_structs_wire_key() {
+        use crate::skill::frontmatter::ALLOWED_TOOLS_KEY;
+
+        let content =
+            format!("---\nname: Keyed\ndescription: d\n{ALLOWED_TOOLS_KEY}: grep\n---\nBody.");
+        let manifest = parse_skill_content(&content, SkillSource::Bundled).unwrap();
+        assert_eq!(
+            manifest.allowed_tools(),
+            Some(["grep".to_string()].as_slice()),
+            "`{ALLOWED_TOOLS_KEY}` must be the key RawFrontmatter actually deserialises"
         );
     }
 

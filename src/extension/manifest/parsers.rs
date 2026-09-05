@@ -19,7 +19,34 @@ use crate::extension::types::{HookEvent, McpServerConfig};
 // Frontmatter types (for parsing SKILL.md / command.md / agent.md)
 // ============================================================================
 
-/// Frontmatter for SKILL.md files, targeting `SkillRegistration` output
+/// Frontmatter for SKILL.md files, targeting `SkillRegistration` output.
+///
+/// # Why there is no `allowed-tools` field here
+///
+/// There used to be: `#[serde(rename = "allowed-tools")] Option<Vec<String>>`,
+/// `unwrap_or_default()`ed into `SkillRegistration.allowed_tools`, which had
+/// zero readers outside two test literals. It was cut on 2026-09-05, for two
+/// reasons that reinforce each other:
+///
+/// 1. **It could not be enforced from here.** A plugin skill parsed on this
+///    path becomes a `SkillRegistration`. The `allowed-tools` declaration is
+///    enforced at `tool_metadata::registry::registration::register_skills`,
+///    which is fed from `SkillInfo` — i.e. from `SkillManifest`, i.e. from
+///    `skill::manifest`. Nothing on this path reaches that gate. Honouring the
+///    key here would have been a parse that reports success and changes
+///    nothing.
+/// 2. **The same file is already parsed by the path that can enforce it.**
+///    `ExtensionManager::republish_plugin_projections` feeds every active
+///    plugin's `<root>/skills` into `SkillSystem::init`, so
+///    `{plugin_dir}/skills/*/SKILL.md` is scanned by `skill::manifest` too —
+///    and *that* reading honours `allowed-tools`, including the comma-scalar
+///    shape.
+///
+/// The strict `Vec<String>` was also actively harmful: an upstream skill
+/// writing `allowed-tools: Read, Grep, Bash(cargo *)` made `serde_yml` reject
+/// the whole frontmatter, so the skill was dropped from the plugin over a key
+/// this path never read. Removing the field removes that failure mode outright
+/// — the container has no `deny_unknown_fields`, so the key is now ignored.
 #[derive(Debug, Default, Deserialize)]
 struct SkillFm {
     #[serde(default)]
@@ -28,8 +55,6 @@ struct SkillFm {
     description: Option<String>,
     #[serde(default)]
     triggers: Option<Vec<String>>,
-    #[serde(rename = "allowed-tools", default)]
-    allowed_tools: Option<Vec<String>>,
     #[serde(default)]
     category: Option<String>,
 }
@@ -101,37 +126,65 @@ struct McpServerEntry {
 /// Parse YAML frontmatter from markdown content.
 ///
 /// Returns (parsed frontmatter, body text). If no frontmatter delimiters are
-/// found, returns default frontmatter and the full content as body.
+/// found, returns default frontmatter and the full content as body — this
+/// path is tolerant by design (a plugin's `commands/*.md` is often a bare
+/// prompt with no frontmatter at all), which is why the "no fence" case is not
+/// an error here even though it is one for `skill::manifest`.
+///
+/// The *splitting* is not this module's business any more: it delegates to
+/// [`crate::skill::frontmatter::split`]. The local implementation cut at the
+/// first `\n---` **substring**, so a `---` inside a YAML block scalar (or the
+/// first horizontal rule of the body, when the real fence was missing)
+/// truncated the frontmatter mid-value and the YAML parse then failed, taking
+/// the skill with it.
 fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
     content: &str,
 ) -> Result<(T, String)> {
     let content = content.trim();
-    if !content.starts_with("---") {
+    let Ok((fm_raw, body_raw)) = crate::skill::frontmatter::split(content) else {
         return Ok((T::default(), content.to_string()));
+    };
+
+    let fm_str = fm_raw.trim();
+    let body = body_raw.trim().to_string();
+
+    if fm_str.is_empty() {
+        return Ok((T::default(), body));
     }
 
-    // Safe: "---" is ASCII so byte offset 3 is always a valid char boundary.
-    // Using .get() for defensive consistency per project UTF-8 convention.
-    let rest = content.get(3..).unwrap_or("");
-    // Note: "\n---" matches inside "\r\n---" too, so no separate \r\n branch needed.
-    // The trailing \r (if any) is stripped by trim() on fm_str.
-    let end_pos = rest.find("\n---");
+    let fm: T = serde_yml::from_str(fm_str)
+        .with_context(|| "Failed to parse YAML frontmatter".to_string())?;
+    Ok((fm, body))
+}
 
-    match end_pos {
-        Some(pos) => {
-            let fm_str = rest.get(..pos).unwrap_or("").trim();
-            let body_start = pos + 4; // skip "\n---"
-            let body = rest.get(body_start..).unwrap_or("").trim().to_string();
-
-            if fm_str.is_empty() {
-                return Ok((T::default(), body));
-            }
-
-            let fm: T = serde_yml::from_str(fm_str)
-                .with_context(|| "Failed to parse YAML frontmatter".to_string())?;
-            Ok((fm, body))
-        }
-        None => Ok((T::default(), content.to_string())),
+/// Fold a component-scan result into `caps`, surfacing a failure instead of
+/// swallowing it.
+///
+/// Every adapter used to write `if let Ok(s) = parsers::parse_skills_dir(..)`,
+/// which reads a fail-closed answer ("I could not read this directory") as a
+/// value ("there is nothing here") — and does so with not even a warn, so a
+/// plugin whose whole `skills/` tree was unreadable loaded looking healthy.
+/// The fix belongs on the consumer side, once, rather than on each of the
+/// twenty-two call sites individually: this is that one place.
+///
+/// The failure stays non-fatal (an unreadable `agents/` must not take the
+/// plugin's `skills/` down with it) — what changes is that it is now said out
+/// loud.
+pub(crate) fn extend_scanned(
+    caps: &mut Vec<CapabilityDeclaration>,
+    component: &str,
+    dir: &Path,
+    scanned: Result<Vec<CapabilityDeclaration>>,
+) {
+    match scanned {
+        Ok(found) => caps.extend(found),
+        Err(e) => warn!(
+            component,
+            dir = %dir.display(),
+            error = %e,
+            "component scan failed; this plugin contributes no {component} — \
+             NOT the same as declaring none"
+        ),
     }
 }
 
@@ -280,7 +333,6 @@ fn parse_skill_registration(
         description: fm.description.unwrap_or_default(),
         content: body,
         triggers: fm.triggers.unwrap_or_default(),
-        allowed_tools: fm.allowed_tools.unwrap_or_default(),
         category: fm.category,
         plugin_id: plugin_id.to_string(),
         skill_type,
@@ -815,7 +867,6 @@ mod tests {
                 assert_eq!(s.name, "hello");
                 assert_eq!(s.description, "Say hello");
                 assert_eq!(s.triggers, vec!["greet"]);
-                assert_eq!(s.allowed_tools, vec!["Read"]);
                 assert_eq!(s.category, Some("general".to_string()));
                 assert_eq!(s.content, "Hello world!");
                 assert_eq!(s.plugin_id, "test-plugin");
@@ -872,6 +923,115 @@ mod tests {
             }
             other => panic!("Expected Skill, got {:?}", other),
         }
+    }
+
+    /// The shape every real upstream skill actually ships — a single
+    /// comma-separated scalar, not a YAML sequence.
+    ///
+    /// `SkillFm` used to carry `#[serde(rename = "allowed-tools")]
+    /// Option<Vec<String>>`. A scalar there makes `serde_yml` reject the whole
+    /// frontmatter, `parse_skill_registration` returns `Err`, and
+    /// `scan_component_dir` drops the file with a warn — the skill vanishes
+    /// because of a key this path never read. Its sibling in the same
+    /// directory was unaffected, which is precisely what made it invisible:
+    /// the plugin still loaded, just one skill lighter.
+    ///
+    /// The assertion that matters is that BOTH skills arrive. `allowed-tools`
+    /// is not asserted because this path no longer carries it — the same file
+    /// is scanned by `skill::manifest` (plugin skill dirs are published into
+    /// `SkillSystem`), which is where the declaration is honoured.
+    #[test]
+    fn an_upstream_comma_scalar_allowed_tools_does_not_delete_the_skill() {
+        let dir = tempdir().unwrap();
+        let skills = dir.path().join("skills");
+
+        let upstream = skills.join("rust-doctor");
+        fs::create_dir_all(&upstream).unwrap();
+        fs::write(
+            upstream.join("SKILL.md"),
+            "---\nname: rust-doctor\ndescription: Deep analysis\n\
+             allowed-tools: Read, Grep, Glob, Bash(cargo run -- *)\n---\nBody.",
+        )
+        .unwrap();
+
+        let sibling = skills.join("plain");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(
+            sibling.join("SKILL.md"),
+            "---\nname: plain\ndescription: no declaration\n---\nBody.",
+        )
+        .unwrap();
+
+        let caps = parse_skills_dir(dir.path(), "skills", "p").unwrap();
+        let names: Vec<&str> = caps
+            .iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Skill(s) => Some(s.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            names.contains(&"rust-doctor"),
+            "a skill declaring the upstream comma-scalar `allowed-tools:` must survive \
+             the scan; got {names:?}"
+        );
+        assert!(
+            names.contains(&"plain"),
+            "the sibling must survive too; got {names:?}"
+        );
+    }
+
+    /// Census: a scan result is a fail-closed answer ("I could not read this
+    /// directory"), and `if let Ok(..)` reads it as a value ("there is nothing
+    /// here") — silently, with not even a warn. Every adapter must fold the
+    /// result through [`extend_scanned`] instead.
+    ///
+    /// A source scan rather than a runtime test because the only way to make
+    /// `scan_component_dir` return `Err` at runtime is an unreadable directory,
+    /// which is not reproducible for a test that may run as root. What *is*
+    /// checkable, and is the thing that regresses, is the call shape.
+    #[test]
+    fn adapters_never_swallow_a_scan_result_with_if_let_ok() {
+        let adapters = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/extension/manifest/adapters");
+        let mut offenders: Vec<String> = Vec::new();
+        let mut scanned = 0usize;
+
+        let entries = std::fs::read_dir(&adapters).expect("adapters dir must exist");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            scanned += 1;
+            for (idx, line) in content.lines().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with("//") {
+                    continue;
+                }
+                if code.contains("if let Ok(") && code.contains("parsers::parse_") {
+                    offenders.push(format!(
+                        "{}:{}: {}",
+                        path.file_name().unwrap_or_default().to_string_lossy(),
+                        idx + 1,
+                        code.trim()
+                    ));
+                }
+            }
+        }
+        assert!(
+            scanned >= 4,
+            "census scanned only {scanned} adapter files — the walk is broken, not the tree"
+        );
+        assert!(
+            offenders.is_empty(),
+            "a parser result is swallowed by `if let Ok(..)`; use extend_scanned so the \
+             failure is at least logged:\n{}",
+            offenders.join("\n")
+        );
     }
 
     #[test]

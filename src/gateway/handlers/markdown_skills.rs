@@ -347,15 +347,27 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
-    // Load skills from the directory
-    let tools = load_skills_from_dir(load_path.clone()).await;
+    // Load skills from the directory.
+    //
+    // The report carries the per-file failures as well as the tools. It used
+    // to carry only the tools, so a bundle whose every SKILL.md was malformed
+    // came back as "No skills found in <path>" — the same sentence a genuinely
+    // empty directory produces. "I could not parse what is there" is not
+    // "there is nothing there", and the author needs the difference to fix it.
+    let report = load_skills_from_dir(load_path.clone()).await;
 
-    if tools.is_empty() {
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("No skills found in {}", load_path.display()),
-        );
+    if report.tools.is_empty() {
+        let message = if report.errors.is_empty() {
+            format!("No skills found in {}", load_path.display())
+        } else {
+            format!(
+                "No skills could be loaded from {}: {} file(s) failed to parse — {}",
+                load_path.display(),
+                report.errors.len(),
+                report.failure_summary()
+            )
+        };
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, message);
     }
 
     // Add tools to server and track paths
@@ -363,7 +375,14 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
     let mut paths = SKILL_PATHS.write().await;
     let mut loaded_skills = Vec::new();
 
-    for tool in tools {
+    // Computed before the loop consumes `report.tools`: a partially-failed
+    // install must not report as a clean success either. The RPC result names
+    // what did not make it, so the caller can say so instead of the model
+    // discovering later that a skill it was told about does not exist.
+    let failed_count = report.errors.len();
+    let failure_summary = report.failure_summary();
+
+    for tool in report.tools {
         let tool_name = tool.spec.name.clone();
         let skill_info = MarkdownSkillInfo {
             source_path: Some(load_path.to_string_lossy().to_string()),
@@ -386,7 +405,9 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         request.id,
         json!({
             "skills": loaded_skills,
-            "count": loaded_skills.len()
+            "count": loaded_skills.len(),
+            "failed_count": failed_count,
+            "failed": failure_summary,
         }),
     )
 }

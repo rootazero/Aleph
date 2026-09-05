@@ -197,8 +197,51 @@ impl SkillLoader {
     }
 }
 
-/// Helper function for convenient loading
-pub async fn load_skills_from_dir(dir: impl Into<PathBuf>) -> Vec<MarkdownCliTool> {
+/// What a directory scan produced: the tools that loaded, and the files that
+/// did not.
+///
+/// The errors used to be counted into a `warn!` and then dropped on the floor
+/// by `load_skills_from_dir`, which returned only the tools. That turned a
+/// fail-closed answer ("I could not parse these files") into a value ("there
+/// is nothing here") — and the caller that consumed it,
+/// `gateway::handlers::markdown_skills::handle_install`, reported exactly
+/// that: a bundle whose every SKILL.md was malformed came back as
+/// `No skills found in <path>`, which is what the user also sees for a
+/// directory that genuinely contains no skills.
+///
+/// Returning a struct rather than a bare tuple so a caller that only wants the
+/// tools has to name `.tools` — i.e. discarding the failures is now a thing
+/// someone typed, not the default.
+/// (No `Debug`: `MarkdownCliTool` is `Clone`-only, and a report is inspected
+/// through `failure_summary()` rather than printed whole.)
+#[derive(Default)]
+pub struct SkillLoadReport {
+    /// Skills that parsed and are ready to register.
+    pub tools: Vec<MarkdownCliTool>,
+    /// Per-file failures, in scan order. Non-empty means "some of what is on
+    /// disk is not represented in `tools`" — never read an empty `tools` as
+    /// "the directory is empty" without checking this.
+    pub errors: Vec<(PathBuf, anyhow::Error)>,
+}
+
+impl SkillLoadReport {
+    /// One-line summary of the failures, for an operator-facing message.
+    /// Empty string when nothing failed.
+    #[must_use]
+    pub fn failure_summary(&self) -> String {
+        self.errors
+            .iter()
+            .map(|(path, e)| format!("{}: {e}", path.display()))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
+/// Helper function for convenient loading.
+///
+/// Returns both halves — see [`SkillLoadReport`] for why the errors are no
+/// longer swallowed here.
+pub async fn load_skills_from_dir(dir: impl Into<PathBuf>) -> SkillLoadReport {
     let loader = SkillLoader::new(dir);
     let (tools, errors) = loader.load_all().await;
 
@@ -209,7 +252,7 @@ pub async fn load_skills_from_dir(dir: impl Into<PathBuf>) -> Vec<MarkdownCliToo
         );
     }
 
-    tools
+    SkillLoadReport { tools, errors }
 }
 
 #[cfg(test)]
@@ -224,16 +267,16 @@ mod tests {
         fs::create_dir_all(skill_path.parent().unwrap())
             .await
             .unwrap();
+        // NOTE: written as one literal on purpose. The previous form used
+        // `\`-continuations, and a `\<newline>` in a Rust string eats the
+        // newline *and the next line's leading whitespace* — so the fixture's
+        // YAML arrived as `metadata:` (null) with `requires:` / `bins:`
+        // promoted to top level, `serde_yml` refused it, and this test was red
+        // on main before the frontmatter unification touched anything. The
+        // splitter, old and new, produces the same (broken) YAML from it.
         fs::write(
             &skill_path,
-            "---\n\
-name: test-tool\n\
-description: A test\n\
-metadata:\n\
-  requires:\n\
-    bins: [\"echo\"]\n\
----\n\
-Test content\n",
+            "---\nname: test-tool\ndescription: A test\nmetadata:\n  requires:\n    bins: [\"echo\"]\n---\nTest content\n",
         )
         .await
         .unwrap();
@@ -272,5 +315,112 @@ Test content\n",
 
         assert_eq!(tools.len(), 1); // Valid one loaded
         assert_eq!(errors.len(), 1); // Invalid one failed
+    }
+
+    /// `load_all` always knew which files failed; `load_skills_from_dir` — the
+    /// only entry point any caller uses — threw that list away and returned
+    /// the tools alone. So a bundle whose every SKILL.md was malformed was
+    /// indistinguishable, at the call site, from an empty directory.
+    ///
+    /// The assertion is on the *effect*: the failing path must be nameable by
+    /// the caller. Asserting only `tools.len() == 0` would pass just as well
+    /// against the old, lossy signature.
+    #[tokio::test]
+    async fn a_directory_whose_skills_all_failed_is_not_reported_as_empty() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let broken = temp_dir.path().join("broken/SKILL.md");
+        fs::create_dir_all(broken.parent().unwrap()).await.unwrap();
+        fs::write(&broken, "---\n{{{invalid yaml\n---\n")
+            .await
+            .unwrap();
+
+        let report = load_skills_from_dir(temp_dir.path()).await;
+        assert!(report.tools.is_empty(), "nothing parsed");
+        assert_eq!(
+            report.errors.len(),
+            1,
+            "the caller must be able to tell `all of them failed` from `there were none`"
+        );
+        assert!(
+            report.failure_summary().contains("broken"),
+            "the summary must name the offending file, got {:?}",
+            report.failure_summary()
+        );
+
+        // The contrast that gives the assertion above its meaning.
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty = load_skills_from_dir(empty_dir.path()).await;
+        assert!(empty.tools.is_empty() && empty.errors.is_empty());
+    }
+
+    /// The upstream comma-separated `allowed-tools:` scalar must not fail this
+    /// path either. `AlephSkillSpec` has no such field and does not
+    /// `deny_unknown_fields`, so the key is ignored — deliberately: a
+    /// markdown-CLI skill becomes a *tool*, never a slash command, so it never
+    /// reaches `ToolRegistrar::register_skills` where the declaration is
+    /// enforced. Honouring the key here would be a parse that reports success
+    /// and changes nothing. The requirement is only that it does no harm.
+    #[tokio::test]
+    async fn an_upstream_allowed_tools_declaration_does_not_break_this_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("scoped/SKILL.md");
+        fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        fs::write(
+            &path,
+            "---\nname: scoped\ndescription: declares a scope\n\
+             allowed-tools: Read, Grep, Bash(cargo *)\n---\nBody",
+        )
+        .await
+        .unwrap();
+
+        let report = load_skills_from_dir(temp_dir.path()).await;
+        assert_eq!(
+            report.tools.len(),
+            1,
+            "an `allowed-tools:` key must not delete the skill; errors: {}",
+            report.failure_summary()
+        );
+        assert_eq!(report.tools[0].spec.name, "scoped");
+    }
+
+    /// A `---`-prefixed line inside a YAML block scalar used to terminate the
+    /// frontmatter early (`find("\n---\n")` matched the substring anywhere),
+    /// leaving the rest of the frontmatter to be parsed as markdown body — or,
+    /// more often, failing the YAML parse and dropping the skill. The shared
+    /// splitter matches only a whole line that *is* the fence.
+    ///
+    /// The boundary this does NOT cross is recorded in
+    /// `skill::frontmatter::split`'s docs and in
+    /// `an_indented_bare_fence_still_terminates_documents_a_known_boundary`
+    /// there: a line whose entire content is `---`, indented or not, is still
+    /// read as the fence. That leniency is pre-existing `skill::manifest`
+    /// behaviour and tightening it would start dropping any SKILL.md that
+    /// indents its closing fence — which is the failure class this whole
+    /// change exists to remove, so it is left alone and stated instead.
+    #[tokio::test]
+    async fn a_dashed_line_inside_a_yaml_value_does_not_end_the_frontmatter() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("fenced/SKILL.md");
+        fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        fs::write(
+            &path,
+            "---\nname: fenced\ndescription: |\n  intro\n  --- not a fence\n  outro\n---\nReal body",
+        )
+        .await
+        .unwrap();
+
+        let report = load_skills_from_dir(temp_dir.path()).await;
+        assert_eq!(
+            report.tools.len(),
+            1,
+            "errors: {}",
+            report.failure_summary()
+        );
+        let description = &report.tools[0].spec.description;
+        assert!(
+            description.contains("not a fence") && description.contains("outro"),
+            "the whole block scalar belongs to the frontmatter, got {description:?}"
+        );
+        assert_eq!(report.tools[0].spec.markdown_content, "Real body");
     }
 }

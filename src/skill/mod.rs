@@ -8,6 +8,7 @@ pub mod compat;
 pub mod config;
 pub mod cooccurrence;
 pub mod eligibility;
+pub mod frontmatter;
 pub mod guard;
 pub mod installer;
 pub mod manifest;
@@ -23,6 +24,7 @@ pub use compat::SkillInfo;
 pub use config::{InstallPreferences, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
 pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
+pub use frontmatter::{normalize_allowed_tools, ALLOWED_TOOLS_KEY};
 pub use guard::{
     install_allowed, merge_verdicts, scan_content, scan_skill_directory, ScanVerdict, ThreatLevel,
     TrustLevel,

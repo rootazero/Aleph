@@ -5,19 +5,31 @@
 use super::spec::AlephSkillSpec;
 use anyhow::{Context, Result};
 
-/// Parse a SKILL.md file into `AlephSkillSpec`
+/// Parse a SKILL.md file into `AlephSkillSpec`.
+///
+/// Note the deliberate absence of `allowed-tools:` handling. This path
+/// produces a `MarkdownCliTool` — a *tool*, registered into the markdown-skill
+/// tool server — never a slash command. It therefore never reaches
+/// `tool_metadata::registry::registration::register_skills`, which is the only
+/// place a declared tool scope is resolved and enforced. Parsing the key here
+/// would be a parse that reports success and restricts nothing; the key is
+/// ignored instead (`AlephSkillSpec` has no `deny_unknown_fields`, so an
+/// upstream skill carrying it still loads).
+///
+/// # Errors
+///
+/// When the content has no `---` fence, the YAML does not deserialise, or
+/// [`validate_spec`] rejects the result.
 pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
-    // Normalize Windows line endings so "\n---\n" delimiter matching works
-    let content = content.replace("\r\n", "\n");
-    // 1. Split frontmatter and content
-    let (frontmatter, markdown) = extract_frontmatter(&content)?;
+    // 1. Split frontmatter and content (CRLF is normalised by the splitter)
+    let (frontmatter, markdown) = extract_frontmatter(content)?;
 
     // 2. Parse YAML frontmatter
     let mut spec: AlephSkillSpec =
-        serde_yml::from_str(frontmatter).context("Failed to parse skill frontmatter")?;
+        serde_yml::from_str(&frontmatter).context("Failed to parse skill frontmatter")?;
 
     // 3. Attach markdown content
-    spec.markdown_content = markdown.to_string();
+    spec.markdown_content = markdown;
 
     // 4. Validate required fields
     validate_spec(&spec)?;
@@ -25,46 +37,25 @@ pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
     Ok(spec)
 }
 
-/// Extract YAML frontmatter and markdown body
-fn extract_frontmatter(content: &str) -> Result<(&str, &str)> {
-    let content = content.trim_start();
-
-    // Check for frontmatter delimiter
-    if !content.starts_with("---") {
-        anyhow::bail!("Skill file must start with YAML frontmatter (---)");
-    }
-
-    // Find closing delimiter ("---" is ASCII, so byte offset 3 is always a char boundary)
-    let after_first = content
-        .get(3..)
-        .ok_or_else(|| anyhow::anyhow!("Frontmatter too short"))?;
-
-    // Try "\n---\n" first, then "\n---" at end-of-string (no trailing newline)
-    let end_pos = after_first
-        .find("\n---\n")
-        .or_else(|| {
-            let suffix = "\n---";
-            if after_first.ends_with(suffix) {
-                Some(after_first.len() - suffix.len())
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| anyhow::anyhow!("Frontmatter must be closed with --- on a new line"))?;
-
-    let frontmatter = after_first
-        .get(..end_pos)
-        .ok_or_else(|| anyhow::anyhow!("Invalid frontmatter boundary"))?
-        .trim();
-    // After "\n---\n" there are 5 bytes; after "\n---" at EOF there may be nothing
-    let markdown_start = end_pos + 4; // skip "\n---"
-    let markdown_start = if after_first.get(markdown_start..markdown_start + 1) == Some("\n") {
-        markdown_start + 1
-    } else {
-        markdown_start
-    };
-    let markdown = after_first.get(markdown_start..).unwrap_or("").trim();
-    Ok((frontmatter, markdown))
+/// Extract YAML frontmatter and markdown body.
+///
+/// Delegates the fence detection to [`crate::skill::frontmatter::split`], the
+/// one implementation shared by all three SKILL.md readers. The local version
+/// cut at the first `\n---\n` **substring**, so a `---` line inside a YAML
+/// block scalar ended the frontmatter early — the remaining keys became body
+/// and the truncated YAML usually failed to parse, dropping the skill.
+///
+/// Both halves are trimmed here, which is this path's own convention (the
+/// splitter returns them verbatim because `skill::manifest` wants the raw
+/// body).
+fn extract_frontmatter(content: &str) -> Result<(String, String)> {
+    let (frontmatter, markdown) = crate::skill::frontmatter::split(content).map_err(|_| {
+        anyhow::anyhow!(
+            "Skill file must start with YAML frontmatter (---) and must be closed with --- \
+             on a line of its own"
+        )
+    })?;
+    Ok((frontmatter.trim().to_string(), markdown.trim().to_string()))
 }
 
 /// Validate spec has required fields

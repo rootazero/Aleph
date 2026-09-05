@@ -37,34 +37,59 @@ impl ManifestAdapter for AutoDiscoverAdapter {
         let mut caps = vec![];
 
         if dir.join("skills").is_dir() {
-            if let Ok(s) = parsers::parse_skills_dir(dir, "skills", &plugin_id) {
-                caps.extend(s);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "skills",
+                dir,
+                parsers::parse_skills_dir(dir, "skills", &plugin_id),
+            );
         }
         // Commands are merged into skills following OpenClaw convention
         if dir.join("commands").is_dir() {
-            if let Ok(c) = parsers::parse_commands_dir(dir, "commands", &plugin_id) {
-                caps.extend(c);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "commands",
+                dir,
+                parsers::parse_commands_dir(dir, "commands", &plugin_id),
+            );
         }
         if dir.join("agents").is_dir() {
-            if let Ok(a) = parsers::parse_agents_dir(dir, "agents", &plugin_id) {
-                caps.extend(a);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "agents",
+                dir,
+                parsers::parse_agents_dir(dir, "agents", &plugin_id),
+            );
         }
-        // hooks can be hooks/hooks.json or hooks.json
+        // hooks can be hooks/hooks.json or hooks.json — first one that parses
+        // wins. The fallback to the second path on a failed parse is kept
+        // deliberately, but a failure is now logged: "hooks/hooks.json is
+        // malformed" and "there is no hooks/hooks.json" produced the same
+        // silence before, and only one of them is the author's fault.
         for hooks_path in &["hooks/hooks.json", "hooks.json"] {
-            if dir.join(hooks_path).exists() {
-                if let Ok(h) = parsers::parse_hooks_file(dir, hooks_path, &plugin_id) {
+            if !dir.join(hooks_path).exists() {
+                continue;
+            }
+            match parsers::parse_hooks_file(dir, hooks_path, &plugin_id) {
+                Ok(h) => {
                     caps.extend(h);
                     break;
                 }
+                Err(e) => tracing::warn!(
+                    dir = %dir.display(),
+                    hooks_path = %hooks_path,
+                    error = %e,
+                    "hooks file failed to parse; trying the next candidate path"
+                ),
             }
         }
         if dir.join(".mcp.json").exists() {
-            if let Ok(m) = parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id) {
-                caps.extend(m);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "mcp",
+                dir,
+                parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id),
+            );
         }
 
         Ok(AdapterOutput {
