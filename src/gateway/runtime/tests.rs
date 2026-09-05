@@ -29,8 +29,7 @@ fn sample_shell(
         session_id,
         shell,
         program: None,
-        argv0: None,
-        cmdline: None,
+        argv: &[],
         cwd,
         screen,
         process_exited,
@@ -388,6 +387,32 @@ fn is_agents_changed(raw: &str) -> bool {
 /// screen content" (`agent_detect`'s own doc, judgment §8) — so
 /// differing visible text is exactly the case that must NOT count as a
 /// change here.
+///
+/// ⚠️ **The Windows command uses ONLY `cmd` builtins (`echo`, `set /p`,
+/// `pause`), and that is load-bearing — do not put an external command in
+/// it.** From 2026-09-05 this test was RED on Windows at `changed2`, and it
+/// was a true positive: `changed` covers state / agent / **program** / label
+/// / cwd, there is no `tcgetpgrp` on Windows, and the earlier command's
+/// second half ran `ping`, so the foreground answer moved from `cmd.exe` (a
+/// builtin has no child) to `PING.EXE`. Measured with an independent
+/// `Win32_Process` walk, so the event this asserts must not fire was
+/// CORRECTLY fired.
+///
+/// It was correctly fired about the FIXTURE, though, not about a defect. An
+/// interactive Unix shell running `ping` answers `ping` too; this test is
+/// green on Unix only because a non-interactive `sh -c` never creates a job
+/// and `tcgetpgrp` keeps naming `sh`. Asserting on that difference made this
+/// test's subject the platform's process model rather than "different text,
+/// same detected state, no event".
+///
+/// The defect it pointed at is REAL and is fixed elsewhere: the walk now
+/// prefers an agent-identifying candidate over the deepest one, so an agent
+/// keeps `program` while its tools run
+/// (`foreground::pick_foreground`, and
+/// `foreground::tests::an_agent_outranks_the_tool_it_spawned_and_only_an_agent_does`
+/// is the guard — it goes red if that preference is removed). Removing the
+/// confound HERE is only legitimate because that guard exists; without it,
+/// this would be retuning a command to hide a finding.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_changed_sample_reaches_the_bus_an_unchanged_one_does_not_and_exit_publishes_once() {
     let id = "t-runtime-event-wire";
@@ -399,16 +424,27 @@ async fn a_changed_sample_reaches_the_bus_an_unchanged_one_does_not_and_exit_pub
     let opts = SpawnOptions {
         command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
         args: if cfg!(windows) {
-            // `pause` waits for exactly one keystroke on stdin — the
-            // Windows analogue of `read x` below.
+            // `set /p` reads a LINE from stdin — the Windows analogue of
+            // `read x` below — and the trailing `pause` keeps the process
+            // alive for the second observation. Both are `cmd` builtins, so
+            // this whole command runs in ONE process and the foreground
+            // answer is `cmd.exe` at both observation points. See the ⚠️
+            // above for why that matters.
             vec![
                 "/C".into(),
-                "echo first & pause & echo second & ping -n 30 127.0.0.1 >nul".into(),
+                // The OSC is ECHOED, not set with cmd's `title`: `title` calls
+                // `SetConsoleTitle`, and whether ConPTY forwards that as an
+                // OSC is the pseudoconsole's business, not this fixture's.
+                // Measured — echoing the bytes reaches the screen; `title` did
+                // not, within 2 s.
+                "echo \x1b]0;qa-fixture\x07& echo first & set /p x= & echo second & pause".into(),
             ]
         } else {
             vec![
                 "-c".into(),
-                "printf 'first'; read x; printf 'second'; sleep 30".into(),
+                "printf '\\033]0;qa-fixture\\a'; printf 'first'; read x; \
+                 printf 'second'; sleep 30"
+                    .into(),
             ]
         },
         rows: 6,
@@ -448,6 +484,35 @@ async fn a_changed_sample_reaches_the_bus_an_unchanged_one_does_not_and_exit_pub
     assert!(
         rx.try_recv().is_err(),
         "exactly one event for frame 1 — no more"
+    );
+
+    // Settle the LABEL before the second observation, and wait for the
+    // fixture's OWN title rather than for a delay.
+    //
+    // `label` is the OSC title when there is one and the spawn label
+    // otherwise, so anything that sets a title moves it — and on Windows
+    // `cmd.exe` sets the console title to its own image path a moment after
+    // start. Measured: frame 1 carried `label: "cmd.exe"` (no title yet) and
+    // frame 2 `label: "C:\\WINDOWS\\system32\\cmd.exe"`, so the row changed for
+    // a reason that is CORRECT and is not this test's subject. Both commands
+    // therefore claim the title as their first act, and the second observation
+    // does not begin until that title is the one on the row: a settle written
+    // as "flush until nothing changes" would have exited on the first tick
+    // that produced no frame, which is a predicate that cannot fail (判据 §2).
+    let mut labelled = false;
+    for _ in 0..100 {
+        let now = chrono::Utc::now().timestamp_millis();
+        crate::gateway::pty::manager::flush_session(&session, now);
+        if agents().entry(id).is_some_and(|e| e.label == "qa-fixture") {
+            labelled = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        labelled,
+        "the child never claimed the OSC title, so the label is still whatever \
+         the platform put there and frame 2 would be judged against a moving row"
     );
 
     // Unblock the child's `read`/`pause` so it writes its second,
@@ -581,6 +646,17 @@ async fn a_row_reaches_the_caller_through_the_list_rpc_filtered_by_owner() {
 /// Spec §5: PTY 会话消失 ⇒ 条目消失. Asserts presence FIRST — otherwise a
 /// child that exits before the first flush would let this test pass by
 /// observing an absence that was never a presence (判据 §2).
+///
+/// ⚠️ **This was RED ON WINDOWS until 2026-09-05, and it was a true positive
+/// about the product.** The entry never left because the whole settle —
+/// `pty.exit`, `manager().remove`, `agents().remove` — hung off
+/// `spawn_reader`'s read loop breaking on `Ok(0)`, and ConPTY does not close
+/// the pseudoconsole's output pipe when the child exits, so on Windows that
+/// break never came: measured `pty.exit` **never**, not late, for a child
+/// that exits in ~2 s. Fixed by deriving "the child exited" from the child
+/// rather than from the terminal — see `pty/session.rs::settle_exit` and its
+/// own guard `a_child_that_exits_settles_the_session_without_needing_terminal_eof`,
+/// which pins the mechanism this test only observes the effect of.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_that_exits_leaves_the_table() {
     let id = "t-runtime-exit";
@@ -1106,8 +1182,7 @@ fn sample_program(
         session_id,
         shell: "zsh",
         program: Some(program),
-        argv0: None,
-        cmdline: None,
+        argv: &[],
         cwd: "",
         screen,
         process_exited: false,
@@ -1142,29 +1217,23 @@ const CLAUDE_WORKING_LINE: &str = "\u{23F5} pretending to work esc to interrupt"
 /// out the line in `manager::flush_session` that feeds `foreground_fact()`
 /// into `SampleInput::program`, and this goes red while every other test in
 /// the file stays green.
-#[cfg(unix)]
+///
+/// ⚠️ It carried `#[cfg(unix)]` until 2026-09-05, and Windows is the platform
+/// that needs it MOST: there is no `tcgetpgrp` there, so the identification
+/// this asserts can only arrive through
+/// `foreground::deepest_newest_descendant`, the one branch no developer or CI
+/// job had ever executed. The per-platform halves are in [`fake_claude_on_path`],
+/// which also says which single assertion Windows skips and why.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_real_agent_started_after_spawn_is_identified() {
     let id = "t-runtime-foreground-identify";
     agents().remove(id);
 
-    // A fake `claude` on PATH that paints Claude's working chrome and then
-    // stays alive, so the probe has something to find.
     let dir = tempfile::tempdir().expect("tempdir");
-    let fake = dir.path().join("claude");
-    std::fs::write(
-        &fake,
-        format!("#!/bin/sh\nprintf '%s\\n' '{CLAUDE_WORKING_LINE}'\nsleep 30\n"),
-    )
-    .expect("write fake claude");
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod fake claude");
-    }
+    let fake = fake_claude_on_path(dir.path());
 
     let opts = SpawnOptions {
-        command: Some("sh".to_string()),
+        command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
         rows: 6,
         cols: 60,
         ..Default::default()
@@ -1184,7 +1253,7 @@ async fn a_real_agent_started_after_spawn_is_identified() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     session
-        .write_input(format!("export PATH={}:$PATH; claude\n", dir.path().display()).as_bytes())
+        .write_input(fake.command_line.as_bytes())
         .expect("write the command");
 
     let mut identified = None;
@@ -1204,8 +1273,8 @@ async fn a_real_agent_started_after_spawn_is_identified() {
             // A break condition weaker than the assertion is the assertion
             // racing itself.
             let hit = e.agent.as_deref() == Some("claude")
-                && e.program.as_deref() == Some("claude")
-                && e.state == RuntimeAgentState::Working;
+                && e.program.as_deref() == Some(fake.expected_program)
+                && (!fake.paints_chrome || e.state == RuntimeAgentState::Working);
             identified = Some(e);
             if hit {
                 break;
@@ -1232,16 +1301,99 @@ async fn a_real_agent_started_after_spawn_is_identified() {
     );
     assert_eq!(
         entry.program.as_deref(),
-        Some("claude"),
+        Some(fake.expected_program),
         "the probed program must reach the wire, not just the identification. \
          Probe saw: {observed:?}"
     );
-    assert_eq!(
-        entry.state,
-        RuntimeAgentState::Working,
-        "the screen paints claude.toml's live_turn_working chrome, which is \
-         only reachable once the agent is identified"
-    );
+    if fake.paints_chrome {
+        assert_eq!(
+            entry.state,
+            RuntimeAgentState::Working,
+            "the screen paints claude.toml's live_turn_working chrome, which is \
+             only reachable once the agent is identified"
+        );
+    }
+}
+
+/// The fake agent this guard plants on `PATH`, and the two things about it
+/// the assertions have to know.
+struct FakeClaude {
+    /// What to type at the shell's prompt to put it in the foreground.
+    command_line: String,
+    /// What `program` must come back as. NOT the same string on both
+    /// platforms, and that is a measured fact rather than a concession:
+    /// `sysinfo` reports `claude.exe` on Windows, `normalized_agent_lookup_name`
+    /// strips the extension to identify the AGENT, and
+    /// `normalized_program_name` returns the token it looked at — so the
+    /// panel prints `claude` on macOS and `claude.exe` on Windows. Written
+    /// down here rather than normalised away because normalising it is a
+    /// change to what every platform prints, which is a product call and not
+    /// a test's to make.
+    expected_program: &'static str,
+    /// Whether the fake paints Claude's `live_turn_working` chrome, so the
+    /// `state` assertion is reachable. See [`fake_claude_on_path`].
+    paints_chrome: bool,
+}
+
+/// Plant a fake `claude` in `dir` and say how to run it.
+///
+/// Unix: a `#!/bin/sh` script that prints the working chrome and sleeps. The
+/// process is a shell whose `argv[0]` is the script, which is the shape
+/// `identify_agent_from_process` was written against.
+///
+/// Windows: a COPY of `ping.exe` named `claude.exe`. It has to be a real
+/// image and not a `.cmd` shim, because a shim runs as a second `cmd.exe`
+/// whose own child is the long-lived process — and the walk answers with the
+/// DEEPEST descendant, so the fact would name the shim's child and never the
+/// agent. A native `claude.exe` is also the shape this machine actually has
+/// (`C:\Users\…\.local\bin\claude.exe`, measured 2026-09-05).
+///
+/// ⚠️ The Windows fake deliberately paints NO chrome, so the `state`
+/// assertion is skipped there. `cmd.exe` echoes in the console output
+/// codepage, so an `echo ⏸ … esc to interrupt` typed as UTF-8 arrives
+/// mangled and the rule would not match — a guard that failed for that
+/// reason would be reporting an encoding accident as a detection defect.
+/// Screen-derived state is covered platform-independently by the dozen tests
+/// in this file that feed the screen directly; what THIS guard owns is the
+/// foreground-probe wire, and that half is asserted on both platforms.
+fn fake_claude_on_path(dir: &std::path::Path) -> FakeClaude {
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let ping = std::path::Path::new(&system_root)
+            .join("System32")
+            .join("PING.EXE");
+        let fake = dir.join("claude.exe");
+        std::fs::copy(&ping, &fake)
+            .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", ping.display(), fake.display()));
+        FakeClaude {
+            // `>nul` keeps ping's own output off the screen; the assertions
+            // here are about the process table, not about what it painted.
+            command_line: format!(
+                "set \"PATH={};%PATH%\" && claude -n 31 127.0.0.1 >nul\r\n",
+                dir.display()
+            ),
+            expected_program: "claude.exe",
+            paints_chrome: false,
+        }
+    }
+    #[cfg(unix)]
+    {
+        let fake = dir.join("claude");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\nprintf '%s\\n' '{CLAUDE_WORKING_LINE}'\nsleep 30\n"),
+        )
+        .expect("write fake claude");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake claude");
+        FakeClaude {
+            command_line: format!("export PATH={}:$PATH; claude\n", dir.display()),
+            expected_program: "claude",
+            paints_chrome: true,
+        }
+    }
 }
 
 /// Silence is a fact about OUTPUT, not a state (spec R2-3). A working agent
@@ -1490,8 +1642,7 @@ fn sample_program_without_a_frame(
         session_id,
         shell: "zsh",
         program: Some(program),
-        argv0: None,
-        cmdline: None,
+        argv: &[],
         cwd,
         screen,
         process_exited: false,
@@ -1688,9 +1839,22 @@ async fn cwd_prefers_osc7_then_foreground_then_spawn() {
         command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
         args: if cfg!(windows) {
             vec![
-                "/C".into(),
-                // `prompt` is cmd.exe's only way to emit a raw ESC.
-                format!("prompt $E]7;file://{osc_dir}$E\\$_ & ping -n 30 127.0.0.1 >nul"),
+                // `/K`, NOT `/C`, and that is the whole Windows branch.
+                // `prompt` is cmd.exe's only way to emit a raw ESC, but it
+                // only sets the FORMAT — the bytes are written when cmd next
+                // DISPLAYS a prompt, and `/C` never displays one. So the
+                // `/C` version set a format nobody ever rendered and the
+                // sequence was never emitted at all: the test failed on
+                // Windows with "the child's OSC 7 never reached the screen",
+                // which reads like a terminal defect and was a shell-flag
+                // one. `/K` prints the prompt immediately and then blocks
+                // reading stdin, which is also what keeps the child alive —
+                // so the trailing `ping` the `/C` version needed for that is
+                // gone. Verified outside Rust before being written here:
+                // `cmd /K 'prompt $E]7;file:///tmp/x$E\$_'` emits
+                // `ESC ] 7 ; file:///tmp/x ESC \` (2026-09-05, this machine).
+                "/K".into(),
+                format!("prompt $E]7;file://{osc_dir}$E\\$_"),
             ]
         } else {
             vec![
