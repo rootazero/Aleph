@@ -611,7 +611,7 @@ mod tests {
     ///   worktree B.
     #[test]
     fn every_in_daemon_engine_also_attaches_the_capability_wiring_check() {
-        use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let sources = rust_sources_under(&root);
@@ -631,7 +631,10 @@ mod tests {
         let mut daemon_callers = Vec::new();
         let mut offenders = Vec::new();
         for (rel, text) in &sources {
-            let prod = code_text(&production_prefix(text));
+            // See `production_text`: a whole-file test module reads as pure
+            // production to the per-file cut, so this walk was scanning test
+            // code as if it shipped.
+            let prod = code_text(&production_text(std::path::Path::new(rel), text));
             if !prod.contains(".with_runtime_checks(") {
                 continue;
             }

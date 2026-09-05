@@ -41,7 +41,7 @@ mod provider;
 mod types;
 
 // Re-export public API
-pub use builder::OpenAiCompatProviderBuilder;
+pub(crate) use builder::OpenAiCompatProviderBuilder;
 pub use provider::OpenAiCompatProvider;
 
 // Re-export constants used in tests

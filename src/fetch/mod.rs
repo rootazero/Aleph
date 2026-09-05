@@ -1,9 +1,9 @@
 //! Fetch (URL→markdown) provider category — parallel to `crate::search`.
 //!
 //! - [`FetchProvider`]: capability contract (URL → markdown)
-//! - [`FetchRegistry`]: active providers + selection/fallback (Task 5)
-//! - `factory`: `FetchProviderFactory` / `FetchProviderFactoryRegistry` for construction (Task 4)
-//! - `providers/`: crawl4ai, firecrawl (Task 6)
+//! - [`FetchRegistry`]: active providers + selection/fallback
+//! - `factory`: `FetchProviderFactory` / `FetchProviderFactoryRegistry` for construction
+//! - `providers/`: concrete `Crawl4aiFetchProvider` + `FirecrawlFetchProvider`
 
 pub mod factory;
 pub mod provider;

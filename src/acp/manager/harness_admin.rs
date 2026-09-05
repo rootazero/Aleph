@@ -448,10 +448,26 @@ impl AcpAdapterManager {
             }
 
             info!(harness_id = %entry.harness_id, "Restored ACP session");
-            self.sessions
-                .write()
-                .await
-                .insert(key, SessionEntry::new(session));
+            // Double-check under the sessions write lock: a concurrent user-facing
+            // `prompt_named` may have already populated this slot while we were
+            // spawning outside any lock. Mirror the acquire_live_entry pattern:
+            // if a different live entry is present, drop the freshly-spawned one
+            // rather than overwriting (which would kill the live subprocess via
+            // the overwritten SessionEntry's Drop). See ACP-R4-01.
+            {
+                let mut sessions = self.sessions.write().await;
+                if sessions.contains_key(&key) {
+                    warn!(
+                        harness_id = %entry.harness_id,
+                        cwd = ?entry.cwd,
+                        "Restored session slot already populated by a live entry; \
+                         discarding freshly-spawned restore"
+                    );
+                    session.kill().await;
+                    continue;
+                }
+                sessions.insert(key, SessionEntry::new(session));
+            }
             restored.push(entry.harness_id);
         }
         restored

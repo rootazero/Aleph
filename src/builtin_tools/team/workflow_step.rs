@@ -147,6 +147,38 @@ fn settled_echo(status: CoordTaskStatus, verdict: &WorkflowStepReviewArgs) -> Op
     }
 }
 
+/// What the pre-flight guard decides for `action='skip'`, given the step's
+/// current status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkipGuard {
+    /// Already skipped — echo the state (a double-click is a no-op).
+    AlreadySkipped,
+    /// Settled: skipping would relabel a step that finished as "never run".
+    RefuseSettled,
+    /// Nothing in the way.
+    Proceed,
+}
+
+/// Classify a skip against the step's status.
+///
+/// The refusal derives from [`CoordTaskStatus::satisfies_dependency`] rather
+/// than a hand-listed `Completed | …`: skipping a step that already satisfies
+/// its dependents tells every downstream reader the opposite of the truth
+/// ("deliberately not run"), and that is true of any status in that set — the
+/// set is owned by the predicate, and a future member of it must inherit the
+/// refusal instead of falling through the `_` arm into a silent relabel
+/// (criterion 3). `Cancelled` does not satisfy dependents but is an explicit
+/// abort, so it is refused on its own terms.
+const fn skip_guard(current: CoordTaskStatus) -> SkipGuard {
+    if matches!(current, CoordTaskStatus::Skipped) {
+        return SkipGuard::AlreadySkipped;
+    }
+    if current.satisfies_dependency() || matches!(current, CoordTaskStatus::Cancelled) {
+        return SkipGuard::RefuseSettled;
+    }
+    SkipGuard::Proceed
+}
+
 #[derive(Clone)]
 pub struct WorkflowStepReviewTool {
     coord_store: Arc<dyn CoordTaskStore>,
@@ -294,8 +326,8 @@ impl AlephTool for WorkflowStepReviewTool {
                         ));
                     }
                 }
-                WorkflowStepReviewArgs::Skip { task_id, .. } => match current {
-                    CoordTaskStatus::Skipped => {
+                WorkflowStepReviewArgs::Skip { task_id, .. } => match skip_guard(current) {
+                    SkipGuard::AlreadySkipped => {
                         return Ok(WorkflowStepReviewOutput {
                             task_id: task_id.clone(),
                             status: "skipped".into(),
@@ -303,16 +335,13 @@ impl AlephTool for WorkflowStepReviewTool {
                             now_stale: Vec::new(),
                         });
                     }
-                    // Completed already satisfies dependents (skip would only
-                    // relabel it, and downstream would then be told the step
-                    // was never run); Cancelled was an explicit abort.
-                    CoordTaskStatus::Completed | CoordTaskStatus::Cancelled => {
+                    SkipGuard::RefuseSettled => {
                         return Err(AlephError::invalid_input(format!(
                             "cannot skip a step in status '{current}' — it already settled \
                              (use action='retry' for a fresh attempt)"
                         )));
                     }
-                    _ => {}
+                    SkipGuard::Proceed => {}
                 },
             }
         }
@@ -549,6 +578,48 @@ mod tests {
                 !verdict_admissible(already_settled),
                 "{already_settled:?} is settled — a re-verdict is retry/skip territory"
             );
+        }
+    }
+
+    /// Drift guard over the WHOLE status vocabulary: a skip must be refused
+    /// for every status that already satisfies dependents (relabelling one as
+    /// "deliberately not run" tells downstream the opposite of the truth) plus
+    /// the explicit abort, echoed for an already-skipped step, and admitted
+    /// otherwise.
+    ///
+    /// What makes it red: a new `CoordTaskStatus` variant (the wildcard-free
+    /// match compile-fails first), or a `skip_guard` that stops deriving its
+    /// refusal from `satisfies_dependency` and starts hand-listing again.
+    #[test]
+    fn skip_is_refused_for_every_status_that_already_satisfies_dependents() {
+        use CoordTaskStatus::*;
+        for status in [
+            Pending,
+            Blocked,
+            InProgress,
+            WaitingReview,
+            Completed,
+            Failed,
+            Cancelled,
+            Skipped,
+            Paused,
+            Unsatisfiable,
+        ] {
+            // Wildcard-free: a new variant must be classified consciously.
+            let expected = match status {
+                Skipped => SkipGuard::AlreadySkipped,
+                Completed | Cancelled => SkipGuard::RefuseSettled,
+                Pending | Blocked | InProgress | WaitingReview | Failed | Paused
+                | Unsatisfiable => SkipGuard::Proceed,
+            };
+            assert_eq!(skip_guard(status), expected, "skip guard for {status}");
+            if status.satisfies_dependency() {
+                assert_ne!(
+                    skip_guard(status),
+                    SkipGuard::Proceed,
+                    "{status} satisfies dependents — a skip would relabel work that landed"
+                );
+            }
         }
     }
 

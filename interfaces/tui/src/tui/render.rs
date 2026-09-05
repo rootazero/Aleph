@@ -10,6 +10,7 @@ use tui_textarea::TextArea;
 
 use crate::tui::app::{AppState, Focus};
 use crate::tui::widgets::{
+    agent_panel::{render_agent_panel, AGENT_PANEL_WIDTH},
     agents_overlay::render_agents_overlay,
     agents_panel::{agents_panel_height, render_agents_panel},
     btw_panel::render_btw_panel,
@@ -25,8 +26,36 @@ use crate::tui::widgets::{
 
 /// Render the full TUI layout: chat area, docked tasks/agents panels, input
 /// area, status bar, and overlays.
+///
+/// When `state.agent_panel_visible`, an outer horizontal split reserves
+/// [`AGENT_PANEL_WIDTH`] cells on the left for the agent panel and lays out
+/// everything else in the remaining chunk. When hidden, `main_area` is
+/// `frame.area()` itself — no `Layout::horizontal` call happens at all, so
+/// the hidden path is exactly the computation this function ran before the
+/// agent panel existed (R8-9: not even a nominally zero-width chunk, which
+/// 判据 §2 calls a different bug class from an absent split).
 pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     let input_h = input_height(textarea, 3, 8);
+    let full_area = frame.area();
+
+    let main_area = if state.agent_panel_visible {
+        let cols = Layout::horizontal([Constraint::Length(AGENT_PANEL_WIDTH), Constraint::Min(0)])
+            .split(full_area);
+        let agent_area = cols.first().copied().unwrap_or_default();
+        // The clock is read HERE, at the one place that draws, rather than
+        // inside the widget: the widget stays a pure function of its inputs
+        // and its tests stay independent of the machine they run on.
+        render_agent_panel(
+            frame,
+            agent_area,
+            &state.runtime_agents,
+            chrono::Utc::now().timestamp_millis(),
+        );
+        cols.get(1).copied().unwrap_or(full_area)
+    } else {
+        full_area
+    };
+
     let tasks_h = tasks_panel_height(state.plan.as_ref(), state.tasks_panel_visible);
     let agents_h = agents_panel_height(&state.agents);
 
@@ -37,7 +66,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
         Constraint::Length(input_h),  // Input area
         Constraint::Length(1),        // Status bar
     ])
-    .split(frame.area());
+    .split(main_area);
 
     let chat_area = chunks.first().copied().unwrap_or_default();
     let tasks_area = chunks.get(1).copied().unwrap_or_default();
@@ -117,5 +146,145 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     // Approval overlay renders above everything — a parked run is waiting on it.
     if let Some(approval) = &state.approval {
         render_approval(frame, approval, frame.area());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn new_state() -> AppState {
+        AppState::new("s".to_string(), "m".to_string())
+    }
+
+    /// R8-9: when the panel is hidden, `render()` must take the exact path
+    /// it took before the agent-panel column existed — observed through the
+    /// input box's border, which `InputWidget` draws with `Borders::ALL`
+    /// (a standard `Block`, box-drawing corners at the exact edges of the
+    /// `Rect` it is given). With a 40x10 backend and the default (single
+    /// line) textarea, `input_height` is 3 and chat gets `Min(5)` = 6 rows,
+    /// so the input box's top row is y=6 — its top-LEFT corner sits at
+    /// column 0 only if `main_area` is the untouched full frame.
+    ///
+    /// Reddens if `agent_panel_visible` is ignored so the layout keeps
+    /// reserving space for the panel regardless of the flag, or if the
+    /// split math shifts `main_area`'s origin some other way while hidden.
+    ///
+    /// Does NOT, by itself, distinguish "skip the horizontal split
+    /// entirely" from "always split, with a nominally zero-width chunk
+    /// when hidden" — checked by hand: swapping in the latter shape left
+    /// this test green, because ratatui's constraint solver resolves
+    /// `Length(0)` next to `Min(0)` to the exact same `main_area` in this
+    /// version. R8-9's structural requirement (no `Layout::horizontal`
+    /// call at all on the hidden path) is pinned separately, at the source
+    /// level, by `the_hidden_branch_never_computes_a_horizontal_split`
+    /// below — the content-based test here still earns its place: it is
+    /// the one that would catch a REAL width regression a reader could see.
+    #[test]
+    fn hidden_agent_panel_uses_the_full_frame_width() {
+        let backend = TestBackend::new(40, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        let mut state = new_state();
+        state.agent_panel_visible = false;
+        let textarea = TextArea::default();
+
+        term.draw(|f| render(f, &mut state, &textarea)).unwrap();
+
+        let buf = term.backend().buffer();
+        assert_eq!(
+            buf.cell((0, 6)).map(|c| c.symbol()),
+            Some("\u{250c}"),
+            "input box's top-left border corner must sit at column 0 when the agent panel is hidden"
+        );
+    }
+
+    /// The visible counterpart: the same border corner shifts to
+    /// `AGENT_PANEL_WIDTH`, and column 0 (now the agent panel's header row)
+    /// is no longer the input box's border.
+    ///
+    /// Reddens if `agent_panel_visible` stops reserving space (the layout
+    /// silently ignores the flag), or if the reserved width drifts from
+    /// `AGENT_PANEL_WIDTH`. Verified by mutation: swapping `cols.first()`/
+    /// `cols.get(1)` (an inverted index — the panel and the main chunk
+    /// trade places) reddens this test's `assert_ne!` at column 0 with
+    /// `left: Some("┌") right: Some("┌")`, since the input box's border then
+    /// lands back at column 0 instead of `AGENT_PANEL_WIDTH`.
+    #[test]
+    fn visible_agent_panel_reserves_a_left_column() {
+        let backend = TestBackend::new(40, 10);
+        let mut term = Terminal::new(backend).unwrap();
+        let mut state = new_state();
+        state.agent_panel_visible = true;
+        let textarea = TextArea::default();
+
+        term.draw(|f| render(f, &mut state, &textarea)).unwrap();
+
+        let buf = term.backend().buffer();
+        assert_ne!(
+            buf.cell((0, 6)).map(|c| c.symbol()),
+            Some("\u{250c}"),
+            "column 0 must belong to the agent panel, not the input box border, once visible"
+        );
+        assert_eq!(
+            buf.cell((AGENT_PANEL_WIDTH, 6)).map(|c| c.symbol()),
+            Some("\u{250c}"),
+            "input box's border must shift to AGENT_PANEL_WIDTH when the panel is visible"
+        );
+    }
+
+    /// R8-9's structural requirement, source-level, for the reason the test
+    /// above cannot carry it alone: the hidden (`else`) branch must not
+    /// compute ANY layout split — not `Layout::horizontal`, not even with a
+    /// nominally zero-width chunk. Same technique as
+    /// `tui::a_runtime_agents_refetch_flag_is_wired_to_the_refetch_call`
+    /// (`mod.rs`): read this file's own production source (the `#[cfg(test)]`
+    /// module sliced off first, comment lines stripped), bound to the
+    /// `else` arm specifically so a call sitting anywhere ELSE in the file
+    /// cannot satisfy this by accident.
+    #[test]
+    fn the_hidden_branch_never_computes_a_horizontal_split() {
+        let src = include_str!("render.rs").replace('\r', "");
+        let production = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split yields one")
+            .to_string();
+        let code: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let if_start = code
+            .find("if state.agent_panel_visible {")
+            .expect("the visibility branch must still exist");
+        let else_marker = "} else {";
+        let else_at = code[if_start..]
+            .find(else_marker)
+            .map(|i| if_start + i)
+            .expect("an `else` arm must still follow the visibility check");
+        let if_body = &code[if_start..else_at];
+
+        let else_body_start = else_at + else_marker.len();
+        let close_marker = "\n    };";
+        let else_end = code[else_body_start..]
+            .find(close_marker)
+            .map(|i| else_body_start + i)
+            .expect("the hidden branch must close with the `let main_area = if …;` statement");
+        let else_body = &code[else_body_start..else_end];
+
+        assert!(
+            if_body.contains("Layout::horizontal"),
+            "sanity check: the visible branch should still compute the split \
+             (this assertion failing means the bounding above is wrong, not \
+             that R8-9 holds)"
+        );
+        assert!(
+            !else_body.contains("Layout::"),
+            "the hidden branch must not compute any layout split at all — R8-9: \
+             not even a nominally zero-width chunk. Found in: {else_body:?}"
+        );
     }
 }

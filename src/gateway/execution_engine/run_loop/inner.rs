@@ -1155,6 +1155,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 if let Some(cheap) = orchestrator.harness.cheap_summary_provider() {
                     t = t.with_cheap_summary_provider(cheap);
                 }
+                // AGENTS-R4-01 — wire the parent runner's verifier chain so the
+                // child gets the same ToolLoopVerifier / StopHookVerifier /
+                // ScratchpadGoalVerifier / MutationEvidenceVerifier protection.
+                // The whole plumbing (SubagentTool → AgentRuntime → SpawnerBase
+                // → HarnessDeps) existed on the main path but this construction
+                // site never called `with_verifier_chain`, so every spawned
+                // subagent silently ran with `verifier_chain: None`. `None`
+                // here (mocks / simple engine with no chain) keeps the legacy
+                // no-verifier behaviour, but explicitly opted-in.
+                if let Some(vc) = orchestrator.harness.verifier_chain() {
+                    t = t.with_verifier_chain(vc);
+                }
                 // P3 Stage I — hand subagents the shared plugin-registry handle
                 // so a role declaring `mcp_servers:` frontmatter can provision
                 // its per-agent MCP scope (reference validation + referenced-tool

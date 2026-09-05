@@ -166,6 +166,13 @@ pub struct SubagentTool {
     /// rather than the main reasoning model. `None` (the `new()` default, or no
     /// cheap tier resolved) summarizes on the main LLM, as before.
     pub(super) cheap_summary_provider: Option<Arc<dyn AiProvider>>,
+    /// The parent runner's verifier chain, inherited so spawned subagents
+    /// are caught by the same structural watchdogs (ToolLoopVerifier,
+    /// StopHookVerifier, ScratchpadGoalVerifier, MutationEvidenceVerifier)
+    /// as the parent run. `None` (the `new()` default) leaves the child on
+    /// the no-verifier path — the legacy behaviour, but explicitly opted-in
+    /// rather than the silent default that AGENTS-R4-01 fixed.
+    pub(super) verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
 }
 
 impl SubagentTool {
@@ -221,6 +228,7 @@ impl SubagentTool {
             context_budget_refiner: None,
             primary_context_window: None,
             cheap_summary_provider: None,
+            verifier_chain: None,
         }
     }
 
@@ -260,6 +268,20 @@ impl SubagentTool {
     #[must_use]
     pub fn with_cheap_summary_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
         self.cheap_summary_provider = Some(provider);
+        self
+    }
+
+    /// Wire the parent runner's verifier chain so the spawned subagent is
+    /// caught by the same structural watchdogs (ToolLoopVerifier,
+    /// StopHookVerifier, ScratchpadGoalVerifier, MutationEvidenceVerifier)
+    /// as the main run. Without this, every spawned child silently ran with
+    /// `verifier_chain: None` and was unprotected against death loops
+    /// (AGENTS-R4-01). `None` (no chain on the main harness, or mocks /
+    /// simple engine) leaves the child on the legacy no-verifier path —
+    /// matching pre-2026-09 behaviour but explicitly opted-in.
+    #[must_use]
+    pub fn with_verifier_chain(mut self, chain: Arc<crate::verification::VerifierChain>) -> Self {
+        self.verifier_chain = Some(chain);
         self
     }
 

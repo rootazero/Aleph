@@ -1,0 +1,110 @@
+{
+  "audit": "severed-wire-audit + static review",
+  "date": "2026-09-04",
+  "modules": ["src/gateway", "src/generation", "src/goal", "src/group_chat", "src/guardrails"],
+  "branch": "audit/g5g-2026-09-04",
+  "method": "In-session static review (5 subagent fan-out failed with 429 rate limit; consolidated work proceeded in main session). 7-lens scan per module: registration parity, call-vs-handler, classifier-vs-handler, event emit-vs-subscribe, config-reader parity, path/route parity, stub far-end sweep. Read-only — no edits made during review phase.",
+  "summary": {
+    "total_findings": 22,
+    "by_module": {
+      "src/gateway": 8,
+      "src/generation": 4,
+      "src/goal": 0,
+      "src/group_chat": 5,
+      "src/guardrails": 3
+    },
+    "by_decision": {
+      "CUT": 14,
+      "CUT-or-defer": 4,
+      "DECIDE": 4,
+      "CONNECT": 0,
+      "REVIEWED_NO_CHANGE": 0
+    }
+  },
+  "fix_plan": [
+    {
+      "module": "src/gateway",
+      "action": "CUT",
+      "files": [
+        "src/gateway/handlers/agent.rs",
+        "src/gateway/handlers/debug.rs",
+        "src/gateway/handlers/events.rs",
+        "src/gateway/event_bus.rs",
+        "src/gateway/handlers/wizard.rs"
+      ],
+      "findings": ["sw-gateway-1-1", "sw-gateway-1-2", "sw-gateway-1-3", "sw-gateway-2-1", "sw-gateway-2-2", "sw-gateway-2-3", "sw-gateway-3-1"],
+      "summary": "Drop 7 dead pub fns + 1 dead enum variant across gateway core: AgentInstance::list_runs (no callers), debug::parse_tool_call_params (no callers), SubscriptionManager::{get_filter,set_filter} (no callers; live path uses granular add_patterns/get_patterns), TopicFilter::with_subscriptions (test-only), GatewayEventBus::with_capacity (test-only), GatewayEvent::RuntimeInstallProgress (struct published via TopicEvent directly, not via enum), wizard::{handle_answer,handle_next} demoted to private (only used in same-file wrap closure)"
+    },
+    {
+      "module": "src/gateway",
+      "action": "CUT-or-defer",
+      "files": ["src/gateway/channel_registry.rs"],
+      "findings": ["sw-gateway-4-1"],
+      "summary": "channel_registry::{register_factory,create_channel} are dead per documented design (production routes via config-driven create_channel_from_config). CUT pending: confirm no in-flight branch adds dynamic factory registration."
+    },
+    {
+      "module": "src/generation",
+      "action": "CUT",
+      "files": [
+        "src/generation/registry.rs",
+        "src/generation/response_parser.rs",
+        "src/generation/providers/fal/mod.rs",
+        "src/generation/providers/midjourney/builder.rs",
+        "src/generation/providers/openai_compat/builder.rs",
+        "src/generation/providers/replicate/builder.rs"
+      ],
+      "findings": ["sw-generation-1-1", "sw-generation-1-2", "sw-generation-2-1", "sw-generation-3-1"],
+      "summary": "Drop 8 dead pub APIs: GenerationProviderRegistry::{config_name_for_canonical,get_or_err} (test-only / no callers), parse_generation_requests/has_generation_requests (test-only; the [GENERATE:...] syntax is not wired), and demote 4 Builder types (FalProviderBuilder, MidjourneyProviderBuilder, OpenAiCompatProviderBuilder, ReplicateProviderBuilder) to pub(crate) — used internally by the factory but exposed needlessly."
+    },
+    {
+      "module": "src/group_chat",
+      "action": "CUT-or-defer",
+      "files": [
+        "src/group_chat/executor.rs",
+        "src/group_chat/orchestrator.rs",
+        "src/resilience/database/group_chat.rs"
+      ],
+      "findings": ["sw-group_chat-1-1", "sw-group_chat-2-1", "sw-group_chat-3-1", "sw-group_chat-4-1", "sw-group_chat-5-1"],
+      "summary": "DECIDE/CUT-or-defer on 5 wiring gaps. Two real dormant features: (a) per-persona provider override — PersonaConfig.provider field honored by executor.rs:107-108 but with_provider_registry is never wired at startup (src/bin/aleph-server/commands/start/mod.rs:3033 only calls .with_coordinator_visible + .with_history_window). (b) StateDatabase turn persistence — both with_database builders never invoked, persist_turn silently no-ops via self.db.clone(). Three smaller dead APIs: GroupChatOrchestrator::all_sessions (test-only), GroupChatSession::build_history_text (helper-of-helper), StateDatabase::{get_group_chat_session_owner, list_active_group_chats} (zero callers). Recommend CUT for the DB methods + all_sessions + build_history_text; DECIDE for the two dormant features (per-persona provider + DB persistence)."
+    },
+    {
+      "module": "src/guardrails",
+      "action": "DECIDE + CUT",
+      "files": [
+        "src/guardrails/registry.rs",
+        "src/guardrails/decision.rs"
+      ],
+      "findings": ["sw-guardrails-1-1", "sw-guardrails-2-1", "sw-guardrails-3-1"],
+      "summary": "DECIDE on GuardrailRegistry::{disable_all,enable_all} runtime kill-switch — designed but no admin RPC exists to invoke it. CUT the four is_* accessors on GuardrailDecision (test-only pub API) by demoting to pub(crate). CUT one stale doc-comment TODO in decision.rs:34."
+    }
+  ],
+  "deferred_decisions": [
+    {
+      "id": "sw-group_chat-1-1",
+      "decision": "DEFER (CUT recommended)",
+      "reason": "GroupChatExecutor::with_database + GroupChatOrchestrator::with_database are pub builders never invoked at startup. persist_turn silently no-ops via self.db.clone(). Without CONNECT (wire StateDatabase at startup), these are dead scaffolding. Recommend CUT but defer to confirm no turn-persistence roadmap."
+    },
+    {
+      "id": "sw-group_chat-2-1",
+      "decision": "DEFER (CUT recommended)",
+      "reason": "Persona::provider field honored by GroupChatExecutor::resolve_provider only if with_provider_registry is called at startup — it isn't, so per-persona provider override is dead. The painless-wire heuristic argues CUT (no example config uses it), but removing the persona field would be a breaking change to the public config schema."
+    },
+    {
+      "id": "sw-guardrails-1-1",
+      "decision": "DEFER",
+      "reason": "GuardrailRegistry::{disable_all,enable_all} are real designed runtime kill-switches (master spec §Stage 5) with no admin RPC. CUT = delete both methods + AtomicBool + the four short-circuit checks; CONNECT = add a `gateway.guardrails.disable` admin RPC + Panel toggle. Product call."
+    },
+    {
+      "id": "sw-gateway-4-1",
+      "decision": "DEFER (CUT recommended)",
+      "reason": "channel_registry::{register_factory,create_channel} are documented as 'internal code reaches factories through handlers::channel::create_channel_from_config'. The factories pattern is a future plugin-extensibility hook. Confirm no in-flight branch adds dynamic factory registration before CUT."
+    }
+  ],
+  "wiring_health": {
+    "src/goal": "CLEAN — all 23 GoalStore methods + all pursuit.rs fns + all types.rs public types have live consumers. Module is the canonical backing store for goal state and is fully wired.",
+    "src/generation": "CLEAN — factory at providers/factory.rs covers 22 distinct provider_type strings, all 20 provider types are reachable via config. 4 dead pub APIs and 2 test-only fns are the only findings.",
+    "src/guardrails": "CLEAN — three trait surfaces (Input/Output/ToolCall) all consumed at documented harness callsites (think.rs:349/850/1294, act.rs:38/813, think.rs:1212). The build_guardrail_registry at orchestrator_init.rs:518 wires the registry via [guardrails].enabled OR [secrets_config].{virtual_keys, custom_leak_patterns}.",
+    "src/group_chat": "TWO-WIRE-CUT — the system is fully functional for the LLM-facing path (parser → handler → executor → response) but has two dormant features: per-persona provider override and DB turn persistence. Both were designed but never wired at startup. Recommend DECIDE: either wire them at startup or cut the scaffolding.",
+    "src/gateway": "STRONGEST-DISCIPLINE — method_census.rs mechanically enforces registration-vs-classification parity at test time (the audit playbook's recommended compile-time-equivalent guard). Every registered RPC has a Class::Admin / Class::Open ruling; the census sweeps .register(\"...\" and register_handler!(server, \"...\" patterns and fails if any new RPC is registered without a census entry or vice versa. The 8 findings are off the RPC boundary (dead struct methods, dead enum variants, test-only pub APIs)."
+  }
+}

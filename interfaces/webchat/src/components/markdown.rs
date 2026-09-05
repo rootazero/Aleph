@@ -444,8 +444,13 @@ pub fn TypewriterRenderer(message: Memo<Option<ChatMessage>>) -> impl IntoView {
     // and the predecessor paid it at every re-invocation.
     let snap = Memo::new(move |_| {
         message.with(|m| {
-            m.as_ref()
-                .map(|m| (timeline::reveal_key(m), m.content.chars().count(), m.is_streaming))
+            m.as_ref().map(|m| {
+                (
+                    timeline::reveal_key(m),
+                    m.content.chars().count(),
+                    m.is_streaming,
+                )
+            })
         })
     });
 
@@ -529,8 +534,13 @@ pub fn TypewriterRenderer(message: Memo<Option<ChatMessage>>) -> impl IntoView {
     // Full markdown for the Static branch, recomputed only when the message
     // changes while the branch is mounted (a finished bubble's content is
     // final, so this settles immediately).
-    let full_html =
-        move || message.with(|m| m.as_ref().map(|m| render_markdown(&m.content)).unwrap_or_default());
+    let full_html = move || {
+        message.with(|m| {
+            m.as_ref()
+                .map(|m| render_markdown(&m.content))
+                .unwrap_or_default()
+        })
+    };
 
     // Stable zone: the DOM write is gated on `(id, safe_offset)`, so the
     // frozen prefix's HTML is re-read (and re-parsed by the browser) only
@@ -554,10 +564,13 @@ pub fn TypewriterRenderer(message: Memo<Option<ChatMessage>>) -> impl IntoView {
     // caught up mid-stream the frame value is stable and this stays quiet.
     let tail_html = move || {
         let (revealed_bytes, safe_offset) = match frame.get() {
-            Some((_, Frame::Live {
-                revealed_bytes,
-                safe_offset,
-            })) => (revealed_bytes, safe_offset),
+            Some((
+                _,
+                Frame::Live {
+                    revealed_bytes,
+                    safe_offset,
+                },
+            )) => (revealed_bytes, safe_offset),
             _ => return String::new(),
         };
         message.with_untracked(|m| {
@@ -721,8 +734,10 @@ mod tests {
         // panel origin.
         assert!(sanitize_link_url("javascript:alert(1)").starts_with("#disallowed-"));
         // `data:` can carry an inline HTML body that XSS-pivots on click.
-        assert!(sanitize_link_url("data:text/html,<script>alert(1)</script>")
-            .starts_with("#disallowed-"));
+        assert!(
+            sanitize_link_url("data:text/html,<script>alert(1)</script>")
+                .starts_with("#disallowed-")
+        );
         // Protocol-relative URLs contain no colon, so a naïve
         // `split_once(':')` lets them through — yet the browser still
         // navigates them, inheriting the panel's scheme. Reject up-front.
@@ -731,8 +746,14 @@ mod tests {
 
     #[test]
     fn sanitize_link_keeps_allowed_schemes() {
-        assert_eq!(sanitize_link_url("https://example.com"), "https://example.com");
-        assert_eq!(sanitize_link_url("http://example.com"), "http://example.com");
+        assert_eq!(
+            sanitize_link_url("https://example.com"),
+            "https://example.com"
+        );
+        assert_eq!(
+            sanitize_link_url("http://example.com"),
+            "http://example.com"
+        );
         assert_eq!(sanitize_link_url("mailto:a@b"), "mailto:a@b");
         // Relative links must survive — they only resolve once the panel
         // routes them.
@@ -743,7 +764,11 @@ mod tests {
     fn extend_stable_prefix_appends_only_the_new_safe_delta() {
         let mut html = String::new();
         let mut offset = 0;
-        assert!(extend_stable_prefix(&mut html, &mut offset, "line one\nline two\n"));
+        assert!(extend_stable_prefix(
+            &mut html,
+            &mut offset,
+            "line one\nline two\n"
+        ));
         assert_eq!(offset, "line one\nline two\n".len());
         assert!(html.contains("line one"));
         assert!(html.contains("line two"));

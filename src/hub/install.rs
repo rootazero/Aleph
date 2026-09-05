@@ -22,7 +22,7 @@ use crate::mcp::manager::{McpManagerConfig, McpManagerHandle};
 /// name to the user-submitted value. Per field, precedence is: secret reference
 /// (`{{secret:NAME}}`) → submitted plain value → declared `default`. Plaintext
 /// secrets never enter the config.
-pub fn mcp_config_from_spec(
+pub(crate) fn mcp_config_from_spec(
     id: &str,
     name: &str,
     spec: &InstallSpec,
@@ -139,7 +139,7 @@ fn command_available(command: &str) -> bool {
 /// digest mismatch aborts with nothing installed. The trust disclosure shows the
 /// user this `sha256` and the install response echoes it as `pin.sha256`, so it
 /// has to mean something.
-pub fn install_git_skill(
+pub(crate) fn install_git_skill(
     entry: &crate::hub::types::ExtensionEntry,
     spec: &InstallSpec,
     skills_dir: &std::path::Path,
@@ -253,7 +253,6 @@ pub fn install_git_skill(
             source: crate::bundled::manifest::SkillOrigin::Github,
             version: entry.version.clone(),
             url: Some(git_url.clone()),
-            installed_at: None,
         },
     );
     // Best-effort persistence of the install registry: the skill is already

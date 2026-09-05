@@ -307,10 +307,19 @@ pub fn parse_skill_content(
         })
         .collect::<String>();
     // An all-punctuation / whitespace-only `name:` frontmatter field would
-    // collapse to an empty or single-dot id and silently become a registry
-    // key that breaks path joins (`.join(".").join("SKILL.md")` matches the
-    // dir-root SKILL.md). Reject at the trust boundary instead.
-    if id_str.is_empty() || id_str == "." || id_str == ".." {
+    // collapse to an id that is either unusable or actively dangerous: `.`
+    // and `..` break path joins (`.join(".").join("SKILL.md")` matches the
+    // dir-root SKILL.md), and `--` is a registry key no author meant to
+    // write. Reject at the trust boundary instead.
+    //
+    // The test is "does one alphanumeric survive the sanitiser", not a list
+    // of the three spellings that were thought of first. The sanitiser above
+    // maps every non-`[a-z0-9._]` character to `-`, so `name: --` arrives
+    // here as `--`, which an `is_empty() || "." || ".."` check waves through
+    // — the comment already promised to reject all-punctuation and the code
+    // rejected three spellings of it (判据 §1, and §5: a spelling list only
+    // covers the day it was written).
+    if !id_str.chars().any(|c| c.is_ascii_alphanumeric()) {
         return Err(SkillParseError::EmptyName);
     }
     let id = SkillId::new(id_str);

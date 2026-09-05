@@ -398,7 +398,7 @@ impl NodeRegistry {
     /// [`NodeAdmission::Deregistered`](crate::cluster::NodeAdmission) and exits.
     /// No-op for channels built with [`ReverseRpcChannel::new`] (node side,
     /// tests).
-    pub fn forget(&self, node_id: &str) -> bool {
+    pub fn forget(&self, node_id: &str) -> Option<NodeSession> {
         // Drop the write lock before signalling: the notified connection task
         // runs cleanup that re-enters the registry (`deregister`).
         let removed = {
@@ -409,14 +409,11 @@ impl NodeRegistry {
             }
             session
         };
-        match removed {
-            Some(s) => {
-                tracing::info!(node_id = %node_id, name = %s.device_name, "cluster node session evicted (operator forgot/forget)");
-                s.channel.close_connection();
-                true
-            }
-            None => false,
+        if let Some(s) = &removed {
+            tracing::info!(node_id = %node_id, name = %s.device_name, "cluster node session evicted (operator forgot/forget)");
+            s.channel.close_connection();
         }
+        removed
     }
 }
 
@@ -912,7 +909,7 @@ mod tests {
             version: None,
             connected_at: 1,
         });
-        assert!(reg.forget("n-1"));
+        assert!(reg.forget("n-1").is_some());
         tokio::time::timeout(std::time::Duration::from_secs(1), close.notified())
             .await
             .expect("forget must fire the connection's close signal");
@@ -958,13 +955,13 @@ mod tests {
     fn forget_evicts_by_node_id_from_both_maps() {
         let reg = NodeRegistry::new();
         reg.register(session("node-a", "conn-1"));
-        assert!(reg.forget("node-a"));
+        assert!(reg.forget("node-a").is_some());
         assert!(reg.list_environments().is_empty());
         assert!(reg.resolve("node-a").is_err());
         // A stale conn cleanup after forget is a harmless no-op.
         assert!(!reg.deregister("conn-1"));
         // Forgetting an unknown id reports nothing removed.
-        assert!(!reg.forget("ghost"));
+        assert!(reg.forget("ghost").is_none());
     }
 
     #[test]

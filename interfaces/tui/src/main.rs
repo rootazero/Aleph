@@ -75,10 +75,7 @@ async fn main() -> CliResult<()> {
 
     info!("Aleph TUI v{}", env!("CARGO_PKG_VERSION"));
 
-    let server_url = args
-        .server
-        .clone()
-        .unwrap_or_else(|| config.server.clone());
+    let server_url = args.server.clone().unwrap_or_else(|| config.server.clone());
 
     aleph_tui::run(
         &server_url,

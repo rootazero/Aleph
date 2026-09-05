@@ -1437,7 +1437,10 @@ mod tests {
         );
         // The reconcile that queued it recorded an ATTEMPT, not a delivery.
         assert_eq!(
-            lookup(21, Some(OWNER)).expect("row").record.announce_attempts,
+            lookup(21, Some(OWNER))
+                .expect("row")
+                .record
+                .announce_attempts,
             1,
             "queueing a handback is an attempt"
         );
@@ -1494,7 +1497,10 @@ mod tests {
         init_and_reconcile(tmp.path().to_path_buf());
         assert_eq!(take_undelivered_settled().len(), 1);
         assert_eq!(
-            lookup(26, Some(OWNER)).expect("row").record.announce_attempts,
+            lookup(26, Some(OWNER))
+                .expect("row")
+                .record
+                .announce_attempts,
             MAX_ANNOUNCE_ATTEMPTS
         );
         disable_for_test();

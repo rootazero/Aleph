@@ -171,9 +171,15 @@ impl GroupChatSession {
 
     /// Build a human-readable conversation history string.
     ///
-    /// Format: `[SpeakerName]: content\n\n` for each turn.
+    /// Format: `[SpeakerName]: content\n\n` for each turn. Helper of
+    /// [`Self::build_history_text_windowed`] — the live caller is the
+    /// windowed variant (which falls through to this when `window_rounds == 0`)
+    /// plus the `#[cfg(test)]` block at the bottom of this file. Production
+    /// code goes through `build_history_text_windowed`. Demoted to `pub(crate)`
+    /// so external crates cannot call the helper-of-helper. (severed-wire audit
+    /// 2026-09-04, sw-group_chat-4-1.)
     #[must_use]
-    pub fn build_history_text(&self) -> String {
+    pub(crate) fn build_history_text(&self) -> String {
         let mut text = String::new();
         for turn in &self.history {
             let _ = writeln!(text, "[{}]: {}\n", turn.speaker.name(), turn.content);

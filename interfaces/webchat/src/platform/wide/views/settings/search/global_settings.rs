@@ -7,7 +7,10 @@ use leptos::prelude::*;
 // ============================================================================
 
 #[component]
-pub(super) fn GlobalSettings(config: RwSignal<SearchConfig>, loading: RwSignal<bool>) -> impl IntoView {
+pub(super) fn GlobalSettings(
+    config: RwSignal<SearchConfig>,
+    loading: RwSignal<bool>,
+) -> impl IntoView {
     let i18n = use_i18n();
     view! {
         <div>
@@ -58,4 +61,3 @@ pub(super) fn GlobalSettings(config: RwSignal<SearchConfig>, loading: RwSignal<b
         </div>
     }
 }
-

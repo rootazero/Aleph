@@ -420,7 +420,10 @@ mod tests {
         // return `Some("http://localhost:8080")` because the algorithm
         // accepts any colon-separated token whose left side has a `/` and
         // whose right side starts with digits.
-        assert_eq!(extract_path("see https://example.com:8080/api for details"), None);
+        assert_eq!(
+            extract_path("see https://example.com:8080/api for details"),
+            None
+        );
         assert_eq!(extract_path("curl http://localhost:8080/api"), None);
     }
 

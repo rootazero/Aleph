@@ -114,43 +114,15 @@ impl SubscriptionId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
-
-    /// Get the inner string reference
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Convert into inner String
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
 }
 
-impl From<String> for SubscriptionId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for SubscriptionId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
+// NOTE: `as_str` / `into_inner` / `Deref` / `From<String>` / `From<&str>`
+// were removed in the 2026-09 severed-wire review — zero callers anywhere in
+// the workspace. `Display` is the only accessor left because the tracing
+// macros render the id via `%id`.
 impl std::fmt::Display for SubscriptionId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl std::ops::Deref for SubscriptionId {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -160,19 +132,19 @@ impl std::ops::Deref for SubscriptionId {
 
 /// A subscription to global events with filtering.
 ///
-/// Field visibility matches [`crate::event::Subscription`] (also re-exported
-/// as `pub Subscription`): callbacks and filters are currently inspected
-/// only inside this module, but the struct is also returned from public
-/// APIs that downstream code may pattern-match on. Keep the fields `pub`
-/// until either an explicit inspector API is added or the visibility is
-/// tightened in one patch.
-pub struct Subscription {
+/// Private to `global_bus`: no public API exposes a `Subscription` (only
+/// [`SubscriptionId`] crosses the module boundary), so the previous
+/// `pub`-with-`pub`-fields shape — kept, per its own comment, "until the
+/// visibility is tightened in one patch" — is tightened here (2026-09
+/// severed-wire review). The struct was also re-exported as
+/// `crate::event::Subscription` with zero callers; that re-export is gone.
+struct Subscription {
     /// Unique identifier for this subscription
-    pub id: SubscriptionId,
+    id: SubscriptionId,
     /// Filter to match events
-    pub filter: EventFilter,
+    filter: EventFilter,
     /// Callback to invoke when matching events arrive
-    pub callback: Arc<dyn Fn(GlobalEvent) + Send + Sync>,
+    callback: Arc<dyn Fn(GlobalEvent) + Send + Sync>,
 }
 
 impl std::fmt::Debug for Subscription {

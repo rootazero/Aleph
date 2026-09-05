@@ -173,4 +173,25 @@ pub struct SearchBackendConfig {
     /// Whether this backend has been verified via a successful test connection
     #[serde(default)]
     pub verified: bool,
+
+    /// Allow this backend's `base_url` to point at loopback / RFC1918 /
+    /// link-local infrastructure. Default `false`, which refuses it.
+    ///
+    /// This exists because the refusal has a legitimate victim and no other
+    /// way past it. SearXNG's normal deployment IS self-hosted — the
+    /// project's own instructions are `docker run -p 8080:8080` — so
+    /// `base_url = "http://127.0.0.1:8080"` is the common case, not the
+    /// attack. Without an opener, `reject_ssrf_target_host` dropped that
+    /// backend at boot with one WARN line, and `SearchRegistry::from_config`
+    /// then reported "no provider was constructable"; the operator sees
+    /// search stop working and a log line that reads like a missing
+    /// credential. A gate whose negative half has no exit, and whose refusal
+    /// is consumed as "there is no such backend", is 判据 §14 + §8.
+    ///
+    /// The default stays closed, so the value of the boot check is kept: an
+    /// operator has to say this out loud, in their own config, per backend.
+    /// It only lifts the BOOT-time check on an operator-written URL — the
+    /// outbound SSRF guard on every request is untouched.
+    #[serde(default)]
+    pub allow_private_upstream: bool,
 }

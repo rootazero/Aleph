@@ -58,6 +58,14 @@ pub struct RuntimeInstallProgressEvent {
 }
 
 /// Gateway Event types
+///
+/// Only one variant exists: [`Self::ConfigChanged`]. An earlier
+/// `RuntimeInstallProgress(RuntimeInstallProgressEvent)` variant was
+/// removed (severed-wire audit 2026-09-04, sw-gateway-2-3) because the
+/// runtime install progress events go out via `TopicEvent` (topic
+/// `"runtimes.install.progress"`) rather than the `GatewayEvent` enum —
+/// the variant had no producer and `publish_gateway_event`'s match arm
+/// was unreachable.
 #[derive(Debug, Clone)]
 pub enum GatewayEvent {
     ConfigChanged(ConfigChangedEvent),
@@ -112,7 +120,7 @@ impl TopicEvent {
     pub fn to_notification(&self) -> Value {
         serde_json::json!({
             "jsonrpc": "2.0",
-            "method": "event",
+            "method": aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD,
             "params": {
                 "topic": self.topic,
                 "data": self.data,
@@ -272,7 +280,7 @@ impl TopicFilter {
     /// Create a filter with full subscription entries (patterns + optional
     /// `where_clause` predicates).
     #[must_use]
-    pub const fn with_subscriptions(subscriptions: Vec<TopicSubscription>) -> Self {
+    pub(crate) const fn with_subscriptions(subscriptions: Vec<TopicSubscription>) -> Self {
         Self { subscriptions }
     }
 
@@ -357,8 +365,14 @@ impl GatewayEventBus {
     }
 
     /// Create a new event bus with custom channel size
+    ///
+    /// `pub(crate)` because every production construction uses the default
+    /// `new()` constructor — this knob is dormant. Kept (vs. deleted) so the
+    /// `#[cfg(test)]` blocks that exercise capacity-bound paths still compile,
+    /// and so the future tuning knob has a ready home. (severed-wire audit
+    /// 2026-09-04, sw-gateway-2-2.)
     #[must_use]
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         let (typed_sender, _) = broadcast::channel(capacity);
         Self {

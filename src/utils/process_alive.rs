@@ -96,11 +96,45 @@ pub fn process_matches(pid: i32, expected_start: Option<u64>) -> bool {
 /// it isn't running. Centralizes the `sysinfo` boilerplate (mirrors the 0.39
 /// idiom in `gateway::memory_monitor`).
 fn with_process<T>(pid: u32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T> {
+    with_process_specifics(pid, default_refresh_kind(), f)
+}
+
+/// What [`with_process`] asks `sysinfo` for. `sysinfo::System::refresh_processes`
+/// picks this set itself; it is spelled out here because
+/// [`with_process_specifics`] takes the kind as an argument, and a second
+/// caller passing a NARROWER set must not silently change what this one gets.
+fn default_refresh_kind() -> sysinfo::ProcessRefreshKind {
+    use sysinfo::{ProcessRefreshKind, UpdateKind};
+    ProcessRefreshKind::nothing()
+        .with_memory()
+        .with_cpu()
+        .with_disk_usage()
+        .with_exe(UpdateKind::OnlyIfNotSet)
+        .with_tasks()
+}
+
+/// [`with_process`], but the caller says which fields it needs.
+///
+/// One implementation, two callers: this module wants a start time, and
+/// `gateway::pty::foreground` wants name/cmd/exe/cwd for the terminal's
+/// foreground process. A second copy of the `System::new()` +
+/// `refresh_processes_specifics` dance would be the same fact written twice
+/// (判据 §1) — and the two would drift on exactly the axis that matters,
+/// which fields get refreshed.
+///
+/// The refresh is scoped to ONE pid. That scoping is the cost story: a full
+/// `ProcessesToUpdate::All` scan walks every process on the machine, which is
+/// what the PTY probe's rate gate exists to avoid paying at 60 Hz.
+pub(crate) fn with_process_specifics<T>(
+    pid: u32,
+    refresh_kind: sysinfo::ProcessRefreshKind,
+    f: impl FnOnce(&sysinfo::Process) -> T,
+) -> Option<T> {
     use sysinfo::{Pid, ProcessesToUpdate, System};
     let pid = Pid::from_u32(pid);
     let mut sys = System::new();
     // Refresh just this PID — far cheaper than a full process scan.
-    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, refresh_kind);
     sys.process(pid).map(f)
 }
 

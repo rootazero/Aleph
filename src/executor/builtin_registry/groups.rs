@@ -108,6 +108,19 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             // `verify` agent denies that whole family, and denying a pure read
             // to an agent whose job is reading would be backwards.
             "tool_usage",
+            // Read-only agent panel over PTY sessions the caller owns on
+            // this server — no PTY-ish group exists yet (herdr runtime port
+            // is phase 1), so it is filed under this heading for lack of a
+            // group of its own. This category list is display-only and
+            // carries no authorization meaning (see this file's module
+            // doc): `doctor` and `config_audit` are NOT in
+            // `method_authz::OPERATOR_TOOLS` (`config_audit` is named there
+            // as deliberately absent — "read-only self-management tools …
+            // deliberately absent, chat tier keeps them"), and
+            // `agent_identity` IS operator-gated but lives in the
+            // `agent_mgmt` group below, not here. `terminal` does not "sit
+            // with" any of the three; it is simply grouped here.
+            "terminal",
             "select_model",
             "list_models",
             "moa",

@@ -15,8 +15,10 @@ use aleph_protocol::{
 /// it lives in one function rather than at each render site; `AgentTraceListRow`
 /// states it, and this is the only reader.
 fn format_epoch_secs(secs: i64) -> String {
-    chrono::DateTime::from_timestamp(secs, 0)
-        .map_or_else(|| secs.to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+    chrono::DateTime::from_timestamp(secs, 0).map_or_else(
+        || secs.to_string(),
+        |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+    )
 }
 
 /// UTF-8-safe truncation — `&s[..n]` panics mid-codepoint on CJK prompts.
@@ -59,7 +61,8 @@ pub async fn list(server_url: &str, config: &CliConfig, limit: usize, json: bool
                 .map(|item| {
                     vec![
                         item.task_id.clone(),
-                        item.started_at.map_or_else(|| "-".to_string(), format_epoch_secs),
+                        item.started_at
+                            .map_or_else(|| "-".to_string(), format_epoch_secs),
                         item.status.clone(),
                         item.event_count.to_string(),
                         truncate_chars(&item.prompt_preview, 48),

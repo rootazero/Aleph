@@ -262,10 +262,6 @@ impl Config {
                 crate::config::presets_override::load_presets_override(&presets_path);
         }
 
-        // Assign defaults override to config (already installed above)
-        config.defaults_override =
-            crate::config::defaults_override::get_defaults_override().clone();
-
         debug!(
             path = %path.display(),
             rules_count = config.rules.len(),
@@ -342,9 +338,6 @@ impl Config {
                 crate::config::defaults_override::init_defaults_override(defaults);
             }
             let mut config = Self::default();
-            // Assign defaults override to config
-            config.defaults_override =
-                crate::config::defaults_override::get_defaults_override().clone();
             // Load presets override even when no config.toml exists
             if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
                 let presets_path = config_dir.join("presets.toml");

@@ -275,11 +275,7 @@ impl Board {
 /// the table `aleph exec` and the TUI read; `locale` is a value rather than an
 /// environment read so this stays pure and its test stays independent of the
 /// developer's shell.
-fn render_settled_line(
-    summary: &RunSummary,
-    total_duration_ms: u64,
-    locale: UiLocale,
-) -> String {
+fn render_settled_line(summary: &RunSummary, total_duration_ms: u64, locale: UiLocale) -> String {
     let token = terminate::effective_token(
         summary.terminate_reason.as_deref(),
         summary.terminate_detail.as_deref(),

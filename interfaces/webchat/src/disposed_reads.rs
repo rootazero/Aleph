@@ -1,4 +1,8 @@
-//! Guard: no plain `get_untracked()` past an `.await` inside `spawn_local`.
+//! Guard: no plain unwrapping read past an `.await` inside `spawn_local`.
+//!
+//! Two of them today — `RwSignal::get_untracked` and `StoredValue::get_value`
+//! ([`PANICKING_READS`]). They are one hazard, not two: both unwrap, both panic
+//! on a disposed owner, and both have a `try_` sibling that answers `None`.
 //!
 //! `RwSignal::get_untracked` unwraps — reading a **disposed** signal panics, and
 //! a panic in the panel takes the whole page to the recovery overlay. Every
@@ -120,15 +124,40 @@ fn awaiting_blocks(src: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// `(line_number, text)` for every plain `get_untracked()` that a suspending
-/// block reaches *after* its first `.await`. Line numbers are 1-based.
+/// The unwrapping reads. Each has a `try_`-prefixed sibling that answers
+/// `None` instead of panicking, which is what the rule asks for.
 ///
-/// `try_get_untracked()` is the sanctioned form and is not reported — the
-/// `try_` prefix is part of the matched token, so it cannot be confused with the
-/// bare call.
+/// `.get_value()` joined `.get_untracked()` on 2026-09-04. The scanner matched
+/// the signal accessor and nothing else, so `StoredValue::get_value` — which
+/// unwraps and panics on a disposed owner exactly the same way — was
+/// STRUCTURALLY invisible to a guard whose module doc says the rule admits no
+/// exceptions (判据 §3: a guard's green covers only the shapes it recognises).
+/// The final review of the terminal round found a fresh instance of it and the
+/// guard had nothing to say.
+const PANICKING_READS: [&str; 2] = [".get_untracked()", ".get_value()"];
+
+/// `(line_number, text)` for every plain [`PANICKING_READS`] call that a
+/// suspending block reaches *after* its first `.await`. Line numbers are
+/// 1-based.
+///
+/// The `try_` form is the sanctioned one and is not reported — the prefix is
+/// checked against the text immediately before the match, so it cannot be
+/// confused with the bare call.
 ///
 /// Findings are deduplicated by line: `spawn_local(async move {` matches two
 /// openers at once, and one offending read must not be reported twice.
+///
+/// # What this shape cannot see (判据 §3 — name it, do not imply it is closed)
+///
+/// The scan is a LINE RANGE: a read is only examined if its own line sits
+/// inside a block that suspends. A helper defined at component scope and
+/// CALLED from a continuation is therefore invisible, however dead the owner is
+/// by the time it runs — and that is the exact shape of the instance that
+/// motivated widening this list (`views/terminal/mod.rs`'s `attach_to`, called
+/// from two `spawn_local` continuations and from an event callback). Closing it
+/// needs a call graph, which a textual scanner does not have. Until then, a
+/// helper reachable from a continuation carries the rule in its own doc, the
+/// way `publish_selection` and `canvas_ctx` in that file do.
 fn late_untracked_reads(src: &str) -> Vec<(usize, String)> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out: Vec<(usize, String)> = Vec::new();
@@ -141,15 +170,14 @@ fn late_untracked_reads(src: &str) -> Vec<(usize, String)> {
             if !seen_await {
                 continue;
             }
-            // `rfind`-free membership test: any `.get_untracked()` not preceded
-            // by `try_`.
-            for (idx, _) in line.match_indices(".get_untracked()") {
-                if !line[..idx].ends_with("try") {
-                    if !out.iter().any(|(seen, _)| *seen == n + 1) {
-                        out.push((n + 1, (*line).trim().to_string()));
-                    }
-                    break;
-                }
+            // `rfind`-free membership test: any panicking read not preceded by
+            // `try_`.
+            let offends = PANICKING_READS.iter().any(|token| {
+                line.match_indices(token)
+                    .any(|(idx, _)| !line[..idx].ends_with("try"))
+            });
+            if offends && !out.iter().any(|(seen, _)| *seen == n + 1) {
+                out.push((n + 1, (*line).trim().to_string()));
             }
         }
     }
@@ -228,6 +256,43 @@ mod tests {
                     }
                 }
             }
+        "#;
+        assert!(late_untracked_reads(after).is_empty());
+    }
+
+    /// RED proof for the token the scanner was blind to until 2026-09-04:
+    /// `StoredValue::get_value`, which unwraps just like `get_untracked` and
+    /// panics on a disposed owner just the same. Before the widening this
+    /// fixture was GREEN — the guard reported nothing at all for it.
+    #[test]
+    fn the_check_rejects_a_stored_value_read_after_an_await() {
+        let before = r#"
+            spawn_local(async move {
+                let resp = state.rpc_call("pty.list", params).await;
+                if session_id.get_value().as_deref() == Some(&sid) {
+                    render(resp);
+                }
+            });
+        "#;
+        let found = late_untracked_reads(before);
+        assert_eq!(
+            found.len(),
+            1,
+            "expected exactly one finding, got {found:?}"
+        );
+        assert!(found[0].1.contains("session_id"));
+    }
+
+    /// …and the sanctioned `try_get_value()` in the same position is silent,
+    /// so the widening did not simply outlaw `StoredValue` after an await.
+    #[test]
+    fn the_check_accepts_try_get_value() {
+        let after = r#"
+            spawn_local(async move {
+                let resp = state.rpc_call("pty.list", params).await;
+                let Some(current) = session_id.try_get_value() else { return; };
+                if current.as_deref() == Some(&sid) { render(resp); }
+            });
         "#;
         assert!(late_untracked_reads(after).is_empty());
     }

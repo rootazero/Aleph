@@ -18,6 +18,8 @@ members = [
     "interfaces/cli",
     "interfaces/tui",
     "interfaces/webchat",
+
+    "crates/agent-detect",
 ]
 
 [workspace.package]
@@ -160,6 +162,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_ignored = "0.1"
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
+# Screen-text agent-state detection (ported from herdr, Apache-2.0). Consumed
+# by `gateway::runtime`, which samples PTY screens on the diff-frame cadence.
+agent-detect = { path = "crates/agent-detect" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 uuid = { version = "1.7", features = ["v4", "serde"] }

@@ -364,6 +364,7 @@ mod tests {
     fn an_orphan_paused_mid_run_parks_instead_of_redispatching() {
         use crate::agents::swarm::tasks::{
             merge_metadata_patch, PAUSED_FROM_IN_PROGRESS, PAUSED_FROM_KEY,
+            PAUSED_FROM_WAITING_REVIEW,
         };
 
         let plain = task(
@@ -392,7 +393,7 @@ mod tests {
         let mut review_stamped = plain;
         review_stamped.metadata = merge_metadata_patch(
             &review_stamped.metadata,
-            serde_json::json!({ PAUSED_FROM_KEY: "waiting_review" }),
+            serde_json::json!({ PAUSED_FROM_KEY: PAUSED_FROM_WAITING_REVIEW }),
         );
         assert_eq!(
             orphan_reset_status(&review_stamped),

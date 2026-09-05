@@ -1,4 +1,5 @@
 use super::*;
+use aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC;
 use aleph_protocol::terminate::{self, UiLocale};
 use aleph_protocol::{
     AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind,
@@ -74,10 +75,10 @@ fn a_clean_run_leaves_no_halt_line() {
         total_duration_ms: 10,
     });
     assert!(
-        !state.messages[before..]
-            .iter()
-            .any(|m| matches!(m, ChatMessage::System { content } if content.contains("stopped")
-                || content.contains("已停止"))),
+        !state.messages[before..].iter().any(
+            |m| matches!(m, ChatMessage::System { content } if content.contains("stopped")
+                || content.contains("已停止"))
+        ),
         "a clean finish must not be badged",
     );
 }
@@ -146,6 +147,21 @@ fn toggle_verbose() {
 
     state.toggle_verbose();
     assert!(!state.verbose);
+}
+
+/// R8-9: the agent panel starts hidden — it is a new, opt-in surface, not
+/// on screen until `/agents` asks for it — and `toggle_agent_panel` flips
+/// exactly that one flag.
+#[test]
+fn agent_panel_starts_hidden_and_toggles() {
+    let mut state = AppState::new("s".into(), "m".into());
+    assert!(!state.agent_panel_visible);
+
+    state.toggle_agent_panel();
+    assert!(state.agent_panel_visible);
+
+    state.toggle_agent_panel();
+    assert!(!state.agent_panel_visible);
 }
 
 #[test]
@@ -2831,6 +2847,55 @@ fn beginning_a_reattach_keeps_the_side_question() {
     );
 }
 
+/// `handle_topic_event` is the sync half of Task 8a's wire: it recognises
+/// `runtime.agents.changed` and sets `runtime_agents_refetch_due` for the
+/// main loop to act on, but does not itself touch `runtime_agents` — a
+/// change notification carries no agent data, only word that a re-fetch is
+/// due, and clobbering still-valid data with `Loading` on every
+/// notification would flash the panel for no reason.
+///
+/// Fix round 1: this is a `bool` on `AppState`, not a returned `Action` —
+/// see `AppState::runtime_agents_refetch_due`'s doc for why a returned
+/// `Action` here was a defect (the main loop's burst-coalescing drain keeps
+/// only the LAST non-`None` action, so an `Action` naming this re-fetch
+/// could be silently overwritten and lost).
+#[test]
+fn a_runtime_agents_changed_topic_sets_the_refetch_flag_without_touching_state() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.runtime_agents = AgentPanelData::Ready(vec![]);
+
+    state.handle_topic_event(RUNTIME_AGENTS_CHANGED_TOPIC, serde_json::json!({}));
+
+    assert!(
+        state.runtime_agents_refetch_due,
+        "the one topic this phase understands must set the re-fetch flag"
+    );
+    assert!(
+        matches!(state.runtime_agents, AgentPanelData::Ready(ref v) if v.is_empty()),
+        "a change notification must not overwrite still-valid data before the \
+         re-fetch answers"
+    );
+}
+
+/// A topic this client did not subscribe to (or does not yet understand)
+/// must be a no-op, not a wildcard trigger — proves this is a recognised
+/// topic, not a catch-all that sets the re-fetch flag for anything.
+#[test]
+fn an_unrelated_topic_is_a_no_op() {
+    let mut state = AppState::new("s".into(), "m".into());
+
+    state.handle_topic_event("connection.warning", serde_json::json!({}));
+
+    assert!(
+        !state.runtime_agents_refetch_due,
+        "an unrelated topic must not set the agent-panel re-fetch flag"
+    );
+    assert!(
+        matches!(state.runtime_agents, AgentPanelData::Loading),
+        "an unrelated topic must not touch runtime_agents at all"
+    );
+}
+
 /// The live plan projection against the PRODUCTION shape of a tool result:
 /// the scratchpad's JSON re-encoded as a `Value::String`, which is what both
 /// `agent_trace.tool_call_completed` and `tool_end` carry. A reader keyed on
@@ -2855,7 +2920,10 @@ fn a_live_scratchpad_result_in_the_wire_string_shape_updates_the_plan() {
 
     state.maybe_apply_plan_from_tool("scratchpad", &wire);
 
-    let plan = state.plan.as_ref().expect("the live frame updates the plan");
+    let plan = state
+        .plan
+        .as_ref()
+        .expect("the live frame updates the plan");
     assert_eq!(plan.total(), 2);
     assert_eq!(plan.current_step(), Some("Build"));
 

@@ -30,12 +30,10 @@ use aleph_client::{CliConfig, CliResult};
 
 use commands::cli_args::{
     CallsAction, ChannelAction, ChannelsAction, ChatControlAction, Commands, ConfigAction,
-    CronAction,
-    DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction, LogsAction,
-    MarketplaceAction, McpAction, MemoryAction, PluginAction, ProjectsAction, ProvidersAction,
-    ProxyAction,
-    SandboxAction, SecretAction, ServicesAction, SessionAction, SkillsAction, ToolsAction,
-    TraceAction, UsersAction, WebhookAction, WorkspaceAction,
+    CronAction, DaemonAction, GatewayAction, HeartbeatAction, HooksAction, IdentityAction,
+    LogsAction, MarketplaceAction, McpAction, MemoryAction, PluginAction, ProjectsAction,
+    ProvidersAction, ProxyAction, SandboxAction, SecretAction, ServicesAction, SessionAction,
+    SkillsAction, ToolsAction, TraceAction, UsersAction, WebhookAction, WorkspaceAction,
 };
 
 /// Aleph CLI - Personal AI Assistant Client
@@ -1294,7 +1292,9 @@ mod tests {
         for argv in [
             vec!["aleph", "projects", "list"],
             vec!["aleph", "projects", "channel", "list", "p-1"],
-            vec!["aleph", "projects", "channel", "bind", "p-1", "telegram", "C1"],
+            vec![
+                "aleph", "projects", "channel", "bind", "p-1", "telegram", "C1",
+            ],
             vec!["aleph", "projects", "channel", "unbind", "telegram", "C1"],
         ] {
             assert!(

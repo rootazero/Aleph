@@ -1,0 +1,15 @@
+[package]
+name = "agent-detect"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+description = "Agent state detection from terminal screen text. Ported from herdr."
+license = "Apache-2.0"
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+# Required by `manifest::parse_manifest` (`toml::from_str::<AgentManifest>`).
+# The plan's "regex + serde only" list was one short. Version matches the
+# workspace's own `toml` so the workspace resolves a single copy.
+toml = "0.8"

@@ -221,13 +221,6 @@ impl ExecApprovalRecord {
         let now = now_ms_or_warn();
         now > self.expires_at_ms
     }
-
-    /// Check if resolved
-    #[must_use]
-    #[allow(dead_code)]
-    const fn is_resolved(&self) -> bool {
-        self.decision.is_some()
-    }
 }
 
 /// What [`ExecApprovalManager::await_registered`] resolves to: the decision

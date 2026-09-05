@@ -1400,7 +1400,7 @@ mod caller_census {
     //! call site must fail by name rather than quietly widen a verb whose
     //! whole justification was that it is unreachable from anywhere else.
 
-    use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
+    use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
 
     /// (verb, the one file allowed to call it).
     const SOLE_CALLERS: &[(&str, &str)] = &[
@@ -1430,7 +1430,13 @@ mod caller_census {
     fn production_sources() -> Vec<(String, String)> {
         rust_sources_under(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
             .into_iter()
-            .map(|(path, raw)| (path, code_text(&production_prefix(&raw))))
+            // `production_text` so a whole-file test module contributes no
+            // "caller" — the per-file cut cannot see that its parent declared
+            // it under `#[cfg(test)]`.
+            .map(|(path, raw)| {
+                let prod = production_text(std::path::Path::new(&path), &raw);
+                (path, code_text(&prod))
+            })
             .collect()
     }
 

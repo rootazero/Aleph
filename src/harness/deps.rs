@@ -186,14 +186,14 @@ impl StallConfig {
 }
 
 #[derive(Debug)]
-pub struct StallTracker {
+pub(crate) struct StallTracker {
     last_activity: Arc<Mutex<Instant>>,
     config: StallConfig,
 }
 
 impl StallTracker {
     #[must_use]
-    pub fn new(config: StallConfig) -> Self {
+    pub(crate) fn new(config: StallConfig) -> Self {
         Self {
             last_activity: Arc::new(Mutex::new(Instant::now())),
             config,
@@ -201,12 +201,12 @@ impl StallTracker {
     }
 
     /// Record activity (async, for use in async context)
-    pub async fn record_activity(&self) {
+    pub(crate) async fn record_activity(&self) {
         *self.last_activity.lock().await = Instant::now();
     }
 
     /// Get elapsed time since last activity (async)
-    pub async fn elapsed(&self) -> Duration {
+    pub(crate) async fn elapsed(&self) -> Duration {
         self.last_activity.lock().await.elapsed()
     }
 
@@ -215,7 +215,7 @@ impl StallTracker {
     /// `tokio::sync::Mutex` as `record_activity` / `elapsed`: under lock
     /// contention it waits for the lock rather than reporting a false
     /// "not stalled".
-    pub async fn is_stalled(&self) -> bool {
+    pub(crate) async fn is_stalled(&self) -> bool {
         self.last_activity.lock().await.elapsed() > self.config.timeout
     }
 }

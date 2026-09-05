@@ -700,7 +700,9 @@ mod tests {
             CatalogView::Configured
         );
         assert_eq!(
-            CatalogParams::for_view(CatalogView::Available).view().unwrap(),
+            CatalogParams::for_view(CatalogView::Available)
+                .view()
+                .unwrap(),
             CatalogView::Available
         );
         // Unknown values are now a parse error, NOT silently widened to `All`:

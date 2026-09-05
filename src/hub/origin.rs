@@ -49,7 +49,7 @@ pub struct InstallOrigin {
 /// Stable digest of an install spec. Both sides of every comparison are produced
 /// by this same serializer, so it only has to be deterministic in-process.
 #[must_use]
-pub fn spec_digest(spec: &InstallSpec) -> String {
+fn spec_digest(spec: &InstallSpec) -> String {
     use sha2::{Digest, Sha256};
     let json = serde_json::to_string(spec).unwrap_or_default();
     let mut h = Sha256::new();
@@ -129,7 +129,7 @@ pub fn update_available(origin: &InstallOrigin, entry: &ExtensionEntry) -> bool 
         .is_some_and(|s| spec_digest(s) != origin.spec_digest)
 }
 
-pub fn init_origin_schema(conn: &Connection) -> rusqlite::Result<()> {
+pub(super) fn init_origin_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS install_origin (
             entry_id     TEXT PRIMARY KEY,
@@ -145,7 +145,7 @@ pub fn init_origin_schema(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Record (or re-record, on reinstall) one install. Idempotent by `entry_id`.
-pub fn upsert_origin(conn: &Connection, o: &InstallOrigin) -> rusqlite::Result<()> {
+pub(super) fn upsert_origin(conn: &Connection, o: &InstallOrigin) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO install_origin
             (entry_id, kind, source_id, via, version, spec_digest, local_ref, installed_at)
@@ -196,13 +196,6 @@ pub fn all_origins(conn: &Connection) -> rusqlite::Result<Vec<InstallOrigin>> {
     rows.collect()
 }
 
-pub fn origin_for(conn: &Connection, entry_id: &str) -> rusqlite::Result<Option<InstallOrigin>> {
-    let sql = format!("SELECT {SELECT_COLS} FROM install_origin WHERE entry_id = ?1");
-    let mut stmt = conn.prepare(&sql)?;
-    let mut rows = stmt.query_map(params![entry_id], row_to_origin)?;
-    rows.next().transpose()
-}
-
 pub fn delete_origin(conn: &Connection, entry_id: &str) -> rusqlite::Result<usize> {
     conn.execute(
         "DELETE FROM install_origin WHERE entry_id = ?1",
@@ -217,7 +210,7 @@ pub fn delete_origin(conn: &Connection, entry_id: &str) -> rusqlite::Result<usiz
 /// version in the ledger and light a false update badge. Matching is exact for
 /// MCP (`local_ref` *is* the server id) and by trailing path segment for
 /// plugin/skill, whose `local_ref` is the install directory.
-pub fn forget_installed(
+pub(super) fn forget_installed(
     conn: &Connection,
     kind: ExtensionKind,
     backend: &str,
@@ -339,11 +332,9 @@ mod tests {
         let spec = e.install_spec.clone().unwrap();
         let o = InstallOrigin::record(&e, &spec, "aleph-hub_x", 1_700_000_000);
         upsert_origin(&conn, &o).unwrap();
-        assert_eq!(origin_for(&conn, "aleph-hub:x").unwrap().as_ref(), Some(&o));
         assert_eq!(all_origins(&conn).unwrap(), vec![o.clone()]);
-        assert_eq!(origin_for(&conn, "nope").unwrap(), None);
         assert_eq!(delete_origin(&conn, "aleph-hub:x").unwrap(), 1);
-        assert_eq!(origin_for(&conn, "aleph-hub:x").unwrap(), None);
+        assert!(all_origins(&conn).unwrap().is_empty());
     }
 
     #[test]

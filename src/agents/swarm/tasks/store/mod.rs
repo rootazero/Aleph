@@ -233,11 +233,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         deps::get_dependents(self, id).await
     }
 
-    async fn get_newly_unblocked(
-        &self,
-        completed_id: &str,
-    ) -> crate::error::Result<Vec<CoordTask>> {
-        deps::get_newly_unblocked(self, completed_id).await
+    async fn get_newly_unblocked(&self, settled_id: &str) -> crate::error::Result<Vec<CoordTask>> {
+        deps::get_newly_unblocked(self, settled_id).await
     }
 
     // --- Task locking ---
@@ -694,7 +691,10 @@ mod abandoned_summary_tests {
             .stamp_abandoned_run_summary(&task.id, "a fragment")
             .await
             .unwrap();
-        assert!(!stamped, "there is no crashed attempt waiting for a summary");
+        assert!(
+            !stamped,
+            "there is no crashed attempt waiting for a summary"
+        );
         let runs = store.list_task_runs(&task.id).await.unwrap();
         assert_eq!(runs[0].summary.as_deref(), Some("the real answer"));
     }

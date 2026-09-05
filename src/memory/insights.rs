@@ -754,7 +754,13 @@ mod tests {
         // Six successful tools, five calls each — they own the usage top-5.
         for t in 0..6 {
             for i in 0..5 {
-                rows.push(tool_row(&format!("s{t}-{i}"), &format!("hot{t}"), true, 5, 100));
+                rows.push(tool_row(
+                    &format!("s{t}-{i}"),
+                    &format!("hot{t}"),
+                    true,
+                    5,
+                    100,
+                ));
             }
         }
         // A cold tool that only ever failed, three times.

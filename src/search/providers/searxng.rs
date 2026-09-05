@@ -105,6 +105,7 @@ impl SearxngProvider {
         base_url: impl Into<String>,
         engines: Option<String>,
         min_request_interval_ms: Option<u64>,
+        allow_private_upstream: bool,
     ) -> Result<Self> {
         let base_url = base_url.into();
         if base_url.is_empty() {
@@ -120,15 +121,20 @@ impl SearxngProvider {
         }
 
         // Refuse IP-literal hosts (loopback / RFC1918 / link-local) and the
-        // blocked-hostname list. The SearXNG base URL is operator-configured,
-        // so accepting `http://127.0.0.1:8080` or `http://10.0.0.5` would turn
-        // every search through this backend into a way to query internal HTTP
-        // services. Hostnames pass through normally; the SSRF guard on outbound
-        // fetch (see `security/ssrf`) gives a second-layer check at request
-        // time for any operator who actually needs an internal SearXNG.
+        // blocked-hostname list, UNLESS the operator opted this backend in.
+        // The SearXNG base URL is operator-configured, so accepting
+        // `http://10.0.0.5` by default would turn every search through this
+        // backend into a way to query internal HTTP services.
+        //
+        // The opt-in is not a loophole, it is the gate's missing exit. A
+        // self-hosted SearXNG on `127.0.0.1:8080` is the project's OWN
+        // documented deployment, and this check used to have no way past it
+        // — the comment here claimed the outbound guard served "any operator
+        // who actually needs an internal SearXNG" while this line had already
+        // made that operator impossible (判据 §14).
         if let Ok(parsed) = url::Url::parse(&trimmed) {
             if let Some(host) = parsed.host_str() {
-                reject_ssrf_target_host("SearXNG", host)?;
+                reject_ssrf_target_host("SearXNG", host, allow_private_upstream)?;
             }
         }
 
@@ -291,6 +297,7 @@ impl crate::search::ProviderFactory for SearxngFactory {
             base.to_string(),
             backend.engines.clone(),
             backend.min_request_interval_ms,
+            backend.allow_private_upstream,
         ) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
@@ -308,27 +315,27 @@ mod tests {
     #[test]
     fn test_searxng_provider_creation() {
         let provider =
-            SearxngProvider::new("http://localhost:8080".to_string(), None, None).unwrap();
+            SearxngProvider::new("http://localhost:8080".to_string(), None, None, true).unwrap();
         assert_eq!(provider.name(), "searxng");
         assert!(provider.is_available());
     }
 
     #[test]
     fn test_searxng_provider_rejects_empty_url() {
-        let result = SearxngProvider::new("".to_string(), None, None);
+        let result = SearxngProvider::new("".to_string(), None, None, true);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_searxng_provider_trims_trailing_slash() {
         let provider =
-            SearxngProvider::new("http://localhost:8080/".to_string(), None, None).unwrap();
+            SearxngProvider::new("http://localhost:8080/".to_string(), None, None, true).unwrap();
         assert_eq!(provider.base_url, "http://localhost:8080");
     }
 
     #[test]
     fn test_searxng_provider_rejects_invalid_scheme() {
-        let result = SearxngProvider::new("ftp://localhost:8080".to_string(), None, None);
+        let result = SearxngProvider::new("ftp://localhost:8080".to_string(), None, None, true);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("must use http:// or https://"));
@@ -337,7 +344,8 @@ mod tests {
     #[test]
     fn test_searxng_provider_accepts_https() {
         let provider =
-            SearxngProvider::new("https://searx.example.com".to_string(), None, None).unwrap();
+            SearxngProvider::new("https://searx.example.com".to_string(), None, None, false)
+                .unwrap();
         assert_eq!(provider.base_url, "https://searx.example.com");
     }
 
@@ -358,7 +366,8 @@ mod tests {
     /// the provider treats `Some(0)` as "throttle off".
     #[test]
     fn provider_zero_interval_disables_throttle() {
-        let p = SearxngProvider::new("http://localhost:8080".to_string(), None, Some(0)).unwrap();
+        let p =
+            SearxngProvider::new("http://localhost:8080".to_string(), None, Some(0), true).unwrap();
         assert!(p.min_interval.is_zero());
     }
 
@@ -395,6 +404,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             Some(String::new()),
             None,
+            true,
         )
         .unwrap();
         assert!(p.engines.is_none());
@@ -402,6 +412,7 @@ mod tests {
             "http://localhost:8080".to_string(),
             Some("bing".to_string()),
             None,
+            true,
         )
         .unwrap();
         assert_eq!(p2.engines.as_deref(), Some("bing"));

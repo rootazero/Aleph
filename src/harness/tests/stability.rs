@@ -3,7 +3,8 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+
+use crate::sync_primitives::{Arc, Mutex};
 
 use crate::error::Result as AlephResult;
 use crate::harness::callback::NoopHarnessCallback;

@@ -2,10 +2,9 @@
 //! cap-grace + empty-then-text + later regressions. Shares mock types
 //! with [`super`] via `use super::*;`.
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, AtomicUsize, Ordering};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex as AsyncMutex;

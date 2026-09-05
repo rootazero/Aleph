@@ -2134,6 +2134,18 @@
       "members": "成员"
     }
   },
+  "agent_panel": {
+    "title": "运行中的智能体",
+    "state_blocked": "阻塞",
+    "state_working": "运行中",
+    "state_idle": "空闲",
+    "state_unknown": "未知",
+    "empty": "没有正在运行的智能体",
+    "quiet_seconds": "静默 {{ n }} 秒",
+    "quiet_minutes": "静默 {{ n }} 分钟",
+    "quiet_hours": "静默 {{ n }} 小时",
+    "quiet_days": "静默 {{ n }} 天"
+  },
   "cron": {
     "title": "定时任务",
     "description": "管理定时任务和自动化调度",
@@ -2779,5 +2791,9 @@
     "phase_speaking": "正在说话 · 开口即可打断",
     "repeated_misses": "连续没听清——可以 esc 退出用文字",
     "reply_failed": "回复出错了，稍等再说一次？"
+  },
+  "terminal": {
+    "new_tab": "新建终端",
+    "close_tab": "关闭终端"
   }
 }

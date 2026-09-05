@@ -1,0 +1,95 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/canvas",
+  "files_scanned": [
+    "src/canvas/assets.rs",
+    "src/canvas/doc_io.rs",
+    "src/canvas/mod.rs",
+    "src/canvas/selection.rs",
+    "src/canvas/store.rs",
+    "src/canvas/validate.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, interfaces/, shared/), read-before-write triage. bin/ not present in this worktree so the equivalent production boots are reachable via src/bin/aleph-server/.",
+  "findings": [
+    {
+      "id": "sw-canvas-1",
+      "module": "src/canvas",
+      "files": [
+        "src/canvas/assets.rs:234",
+        "src/canvas/assets.rs:14",
+        "src/canvas/assets.rs:252"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub async fn CanvasStore::sweep_orphan_assets(&self, id: &str) -> Result<usize, CanvasError>",
+      "produced_location": "src/canvas/assets.rs:234",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "Zero production callers. Orphan-sweep logic is fully exercised in production via the in-apply sweep at src/canvas/store.rs:284 (which calls the pub(super) sweep_assets_with while still inside the per-canvas critical section). The public standalone method is documented and tested but dormant — likely a future hook for a periodic cron / CLI sweep. CUT is painless, CONNECT requires adding a real wire (cron task, CLI subcommand).",
+      "proposed_change": "CUT path: drop the method at src/canvas/assets.rs:234-247 plus its 5 tests in #[cfg(test)] (sweep_spares_young_orphans_and_reaps_old_ones, sweep_never_touches_a_referenced_asset_however_old, a_dedup_re_put_renews_the_grace_window, apply_sweeps_old_orphans_in_passing, a_stray_file_in_the_assets_dir_is_left_alone, sweep_on_a_missing_canvas_is_not_found). CONNECT path: register a canvas.sweep_assets CLI subcommand or wire into tasks/cron.",
+      "risk": "low. The 5 tests pin the orphan-grace contract and can be re-derived if a real consumer is added later.",
+      "verification": "rg -n \"sweep_orphan_assets\" src/ interfaces/ shared/ should return 0 matches after CUT. rg -n \"sweep_assets_with\" should still show src/canvas/store.rs:284 (the in-apply sweep survives). cargo test -p alephcore --lib canvas:: should pass.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-canvas-2",
+      "module": "src/canvas",
+      "files": [
+        "src/canvas/store.rs:164"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub async fn CanvasStore::list(&self) -> Vec<CanvasRow>",
+      "produced_location": "src/canvas/store.rs:164",
+      "consumer_location": "none found in production",
+      "decision": "DECIDE",
+      "rationale": "Zero production callers. Both production paths that list canvases (gateway/handlers/canvas.rs:171 for canvas.list RPC and builtin_tools/canvas.rs:785 for the canvas tool List action) use list_entries() because they need to filter on owner_user_id. The list() method drops owner attribution, which the doc comment itself says is the wrong shape for callers that must visibility-filter. Dormant but correctly designed for a future 'admin sees all' caller.",
+      "proposed_change": "CUT path: drop the method at src/canvas/store.rs:159-167 and the 2 test sites that call it (store.rs:719 inside a_corrupt_doc_json_is_skipped_loudly_by_list_but_errors_on_get and store.rs:1027 inside delete_removes_the_directory_and_every_surface_agrees). KEEP path: leave dormant.",
+      "risk": "low. CUT removes a public method with zero callers; the two affected tests have direct list_entries() equivalents.",
+      "verification": "rg -n \"CanvasStore::list\\b\" src/ interfaces/ shared/ should return 0 matches after CUT. cargo test -p alephcore --lib canvas:: should pass.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-canvas-3",
+      "module": "src/canvas",
+      "files": [
+        "src/canvas/mod.rs:18",
+        "src/canvas/store.rs:63",
+        "src/canvas/store.rs:174",
+        "src/canvas/store.rs:207"
+      ],
+      "severity": "low",
+      "form": 6,
+      "produced": "pub struct CanvasListing { pub owner_user_id: Option<String>, pub row: CanvasRow } + pub use store::CanvasListing",
+      "produced_location": "src/canvas/mod.rs:18 (re-export), src/canvas/store.rs:63 (definition)",
+      "consumer_location": "consumed via struct-field access through the iterator returned by list_entries() — no name-import",
+      "decision": "KEEP",
+      "rationale": "Not a severed wire. CanvasListing must be pub because the pub method list_entries() returns Vec<CanvasListing>. mod store is private, so the re-export through mod.rs is the only way external code can reference the type. The two production callers (gateway/handlers/canvas.rs:171, builtin_tools/canvas.rs:785) read entry.owner_user_id.as_deref() and entry.row.project_id.as_deref() after .into_iter() — they consume the struct, just not by name. Cosmetic only.",
+      "proposed_change": "none",
+      "risk": "none",
+      "verification": "n/a",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-canvas-4",
+      "module": "src/canvas",
+      "files": [
+        "src/canvas/doc_io.rs:33",
+        "src/gateway/btw/seed/gate.rs:50",
+        "src/gateway/session_store/file_backend/meta.rs:62"
+      ],
+      "severity": "low",
+      "form": 5,
+      "produced": "const PRUNE_AT: usize = 128; (duplicated across 3 lock tables)",
+      "produced_location": "src/canvas/doc_io.rs:33",
+      "consumer_location": "each file's own slot() and per-file test (doc_io.rs:62,213,217; btw/seed/gate.rs:69,142,146; session_store/file_backend/meta.rs:85,330,334)",
+      "decision": "DECIDE",
+      "rationale": "Three locks tables (DocLocks in canvas/doc_io, Gate in btw/seed, MetaLocks in session_store/file_backend) are modeled on the same pattern; the canvas doc explicitly cites gateway/session_store/file_backend/meta.rs as the 'twin' (src/canvas/doc_io.rs:1-19). PRUNE_AT = 128 is hand-copied into all three. Per-site tests pin the local constant, so accidental drift does not break tests, just behavior. Classic name-drift residue / shape duplication.",
+      "proposed_change": "If the team agrees the three locks tables should agree, hoist PRUNE_AT to crate::sync_primitives or make canvas::doc_io::PRUNE_AT canonical and have the other two re-export from it. Out of scope for this audit's cut list.",
+      "risk": "low. Centralization is a trivial const-hygiene change.",
+      "verification": "rg -n \"PRUNE_AT\" should be reduced to a single source-of-truth definition plus re-exports/imports.",
+      "existing_review_ref": null
+    }
+  ]
+}

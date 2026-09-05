@@ -138,8 +138,7 @@ impl SkillSystem {
     pub async fn init(&self, dirs: Vec<PathBuf>) {
         {
             let mut skill_dirs = self.inner.skill_dirs.write().await;
-            let existing: std::collections::HashSet<PathBuf> =
-                skill_dirs.iter().cloned().collect();
+            let existing: std::collections::HashSet<PathBuf> = skill_dirs.iter().cloned().collect();
             for d in dirs {
                 if !existing.contains(&d) {
                     skill_dirs.push(d);

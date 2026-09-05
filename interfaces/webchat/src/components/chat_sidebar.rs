@@ -34,6 +34,7 @@ use web_sys::HtmlInputElement;
 /// carried no dials, so tapping a row there restored the folder and dropped the
 /// tier and the mode while the server kept enforcing them.
 use crate::api::sessions::{SessionListRow as SessionEntry, SessionRowKnobs};
+use crate::components::sidebar::AgentPanel;
 use crate::components::team_chat_entry::{enter_team_chat, AgentEntry};
 
 /// Should a `run.session_updated` frame re-hydrate the open transcript from
@@ -383,9 +384,9 @@ pub(crate) fn last_run_notice(
             .to_string(),
         ),
         D::Clean | D::NeverRan => match dangling {
-            Some(n) if n > 0 => Some(
-                td_string!(locale, narration.last_run_dangling, count = n as i64).to_string(),
-            ),
+            Some(n) if n > 0 => {
+                Some(td_string!(locale, narration.last_run_dangling, count = n as i64).to_string())
+            }
             _ => None,
         },
     }
@@ -1397,8 +1398,13 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }}
 
+            // Agent panel (Task 9) + session list share the remaining
+            // vertical space; the divider between them lives inside
+            // `<AgentPanel />` itself (`components/sidebar/agent_panel.rs`).
+            <div class="flex-1 flex flex-col min-h-0">
+            <AgentPanel />
             // Session list + group section (single scroll container)
-            <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+            <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1 min-h-0">
 
                 // ── Group Chat collapsible section ────────────────────
                 {move || {
@@ -1967,6 +1973,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     .into_any()
                 }}
             </div>
+            </div>
 
             // Bottom status bar — gateway state + active run count.
             <crate::components::sidebar::SessionStatusBar />
@@ -2230,8 +2237,7 @@ mod last_run_face_tests {
             inspected: true,
             ..LastRunState::default()
         };
-        let notice =
-            last_run_notice(&refused, Locale::default()).expect("a refused log is news");
+        let notice = last_run_notice(&refused, Locale::default()).expect("a refused log is news");
         assert!(
             notice.contains("session-log-duplicate-dispatch") && notice.contains("doctor"),
             "{notice}"
@@ -2299,8 +2305,7 @@ mod last_run_face_tests {
             inspected: true,
             ..LastRunState::default()
         };
-        assert!(last_run_notice(&odd, Locale::default())
-            .is_some_and(|n| n.contains("quarantined")));
+        assert!(last_run_notice(&odd, Locale::default()).is_some_and(|n| n.contains("quarantined")));
         let row = SessionEntry {
             key: "agent:main:main:s4".into(),
             last_run: Some(odd),

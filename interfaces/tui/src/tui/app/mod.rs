@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use aleph_protocol::plan::PlanSnapshot;
 use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
+use aleph_protocol::runtime::RuntimeAgentEntry;
 use aleph_protocol::subagent_tree::{self, NodeLifecycle, SubagentNode};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
@@ -674,6 +675,49 @@ pub struct ActiveRunJoin {
     pub elapsed_ms: Option<u64>,
 }
 
+/// The agent panel's data, as [`AppState::runtime_agents`] holds it.
+///
+/// Deliberately not a bare `Vec<RuntimeAgentEntry>` and not a
+/// `Result<Vec<_>, String>` either: the latter conflates "no answer yet"
+/// with "an empty list", and a `runtime.agents.list` refusal is not an
+/// absence — [`AgentPanelData::Refused`] and [`AgentPanelData::Ready`]
+/// holding an empty `Vec` must render differently, or a non-operator's
+/// screen looks identical to an operator's install with nothing running
+/// (判据 §8: a refusal must not be read as "there is nothing").
+#[derive(Debug, Clone)]
+pub enum AgentPanelData {
+    /// Asked (or about to be asked), no answer yet. NOT "no agents" — the
+    /// initial state before the first `runtime.agents.list` reply, and
+    /// while a re-fetch triggered by [`AppState::runtime_agents_refetch_due`]
+    /// is in flight the field keeps its PREVIOUS value rather than reverting
+    /// to this, so a change notification does not flash the panel to
+    /// "loading" over data that is still valid.
+    Loading,
+    /// A `runtime.agents.list` reply. An empty `Vec` here really does mean
+    /// "no agents running" — nothing upstream needs to guess.
+    #[allow(
+        dead_code,
+        reason = "the entries are the whole point of this variant and are read by Task 8b's widget, not by anything in Task 8a's scope (mod.rs/app/mod.rs/app/events.rs) — see R8-3's scope fence"
+    )]
+    Ready(Vec<RuntimeAgentEntry>),
+    /// The operator gate said no (`runtime.agents.list` returned
+    /// [`aleph_protocol::jsonrpc::AUTH_REQUIRED`]) — distinguished from
+    /// [`Self::Unavailable`] by the JSON-RPC error CODE, never by matching
+    /// words in the message (P8).
+    #[allow(
+        dead_code,
+        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
+    )]
+    Refused(String),
+    /// Every other failure: transport, timeout, decode. Not the operator
+    /// gate specifically — see [`Self::Refused`].
+    #[allow(
+        dead_code,
+        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
+    )]
+    Unavailable(String),
+}
+
 /// Read a transcript row's RFC3339 stamp, falling back to now.
 ///
 /// One parser for both producers of that stamp, and they are the same value:
@@ -912,6 +956,42 @@ pub struct AppState {
     /// `widgets::chat_area::LineCache`. Not part of any serialized/exported
     /// state; purely a render-time optimization.
     pub chat_line_cache: crate::tui::widgets::chat_area::LineCache,
+
+    /// The agent panel's data (Task 8b renders it; Task 8a wires it).
+    /// Populated by a startup fetch and re-fetched on every
+    /// `runtime.agents.changed` topic event — see [`AgentPanelData`].
+    pub runtime_agents: AgentPanelData,
+    /// Whether the agent-panel column is shown in the sidebar.
+    ///
+    /// Starts `false`: this is a new, opt-in surface, not a replacement for
+    /// any existing screen real estate — `/agentpanel`
+    /// (`LocalCommand::AgentPanel`) flips it. The SOLE visibility gate `render.rs`'s layout reads; when
+    /// `false` the layout takes the exact path it took before this column
+    /// existed (R8-9 — no horizontal split, not even one with a nominally
+    /// zero-width chunk).
+    ///
+    /// Deliberately NOT `shared_ui_logic::state::agent_panel::AgentPanelState`
+    /// (or its `collapsed` field): that struct's `split_ratio` is the
+    /// Panel's draggable-divider ratio (R7-2 names Task 9's drag handle as
+    /// its driver), and R8-0 scopes drag-to-resize to the Panel only this
+    /// phase — the TUI has no divider to drive it, so holding that struct
+    /// here would be a field with no writer. A plain `bool` is the whole of
+    /// what this screen's toggle needs.
+    pub agent_panel_visible: bool,
+    /// Set by [`AppState::handle_topic_event`], cleared by the main loop once
+    /// it has performed the re-fetch.
+    ///
+    /// STATE, not an `Action` — the main loop's gateway-event branch keeps
+    /// only the LAST non-`None` action out of a drained burst (see its own
+    /// comment at `mod.rs`'s `select!` arm), so an `Action` that named "go
+    /// re-fetch the agent table" could be silently overwritten by a later
+    /// frame in the same burst and never happen — and `runtime.agents.changed`
+    /// fires exactly when `stream.*` chunks are also flying, so that burst is
+    /// not a rare shape. A `bool` on `AppState` cannot be coalesced away by a
+    /// later frame the way a returned `Action` could: the main loop checks and
+    /// clears it itself, once per iteration, after the `select!` — see
+    /// `mod.rs::main_loop`.
+    pub runtime_agents_refetch_due: bool,
 }
 
 impl AppState {
@@ -981,6 +1061,10 @@ impl AppState {
             should_quit: false,
 
             chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
+
+            runtime_agents: AgentPanelData::Loading,
+            agent_panel_visible: false,
+            runtime_agents_refetch_due: false,
         }
     }
 
@@ -1247,11 +1331,27 @@ impl AppState {
 
     /// Apply one gateway topic notification. Unknown topics are ignored —
     /// this client consumes exactly the planes it renders.
+    ///
+    /// Two planes are understood today: `run.subagent_tree` (the agents
+    /// panel/overlay) and `runtime.agents.changed` (the agent-panel sidebar).
+    /// The latter records a re-fetch as STATE
+    /// (`AppState::runtime_agents_refetch_due`), not an `Action` — see that
+    /// field's own doc for why an `Action` here would be unsafe to coalesce
+    /// away in the main loop's burst-drain.
     pub fn handle_topic_event(&mut self, topic: &str, data: serde_json::Value) {
         if topic == subagent_tree::TOPIC {
             if let Ok(ev) = serde_json::from_value::<subagent_tree::SubagentTreeEvent>(data) {
                 self.apply_subagent_tree_event(ev);
             }
+        } else if topic == aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC {
+            // Deliberately does NOT reset `self.runtime_agents` to `Loading`
+            // here: the notification carries no agent data, only word that
+            // the table changed, and clobbering still-valid data on every
+            // notification would flash the panel to "loading" over data
+            // that has not actually gone stale from the viewer's
+            // perspective. The re-fetch this triggers replaces it once the
+            // answer is in hand.
+            self.runtime_agents_refetch_due = true;
         }
     }
 
@@ -1815,6 +1915,11 @@ impl AppState {
     /// Toggle verbose/debug output mode.
     pub const fn toggle_verbose(&mut self) {
         self.verbose = !self.verbose;
+    }
+
+    /// Toggle the agent-panel column's visibility (`/agents`).
+    pub const fn toggle_agent_panel(&mut self) {
+        self.agent_panel_visible = !self.agent_panel_visible;
     }
 
     /// Clear the chat screen (keep session state).

@@ -650,32 +650,34 @@ const BUDGETED: [&str; 12] = [
 ///     and not fourteen; (3) **consumers** — the error counter feeds the
 ///     consecutive-failure guardrail, and `tool_use_blocks` is the only writer
 ///     of the `thought_signature` field `parse_tool_use_block` reads back.
-/// +4 (5237 → 5241, 2026-09-03): a de-duplication in `agent/think.rs`, and the
-///     four lines rustfmt charged for it.
+/// +2 (5237 → 5239, 2026-09-03): the harness reads `STOP_REASON_END_TURN`
+///     instead of spelling `"end_turn"` a second time, and the two lines are
+///     the formatter's price for that name — not new cognition.
 ///
-///     Upstream 782f67ad7 replaced the bare literal `"end_turn"` with
-///     `crate::verification::STOP_REASON_END_TURN` — the constant the verifier
-///     compares against. The literal was a second, hand-written copy of a fact
-///     the verification layer owns: the two could drift and the loop would
-///     silently stop reporting end-of-turn, with nothing red. No branch, no
-///     decision, and no prose were added; the whole +4 is formatting:
+///     Raw growth measured 5241 (+4), every line of it wrapping. The constant
+///     is 10 chars longer than the literal it replaces, which is enough to
+///     cross two different rustfmt limits: the `crate::verification` import
+///     list reaches 115 chars (a second item line, +1) and the receiver chain
+///     `response.tool_calls.is_empty().then_some(…)` reaches 62, past
+///     `chain_width` 60, which explodes one line into four (+3).
 ///
-///     +1 in the `use crate::verification::{…}` block — the added name pushes
-///     the list past `max_width`, so it takes a fourth line.
-///     +3 at the call site — `response.tool_calls.is_empty()
-///     .then_some(STOP_REASON_END_TURN)` is a 63-character chain, over
-///     rustfmt's default `chain_width` of 60, so a one-line statement becomes
-///     four. Rejoining it is not rustfmt-stable, and introducing a local
-///     binding to get back under the count would be cosmetic churn in the one
-///     directory R10 protects — paying a number instead of a cost.
+///     Two of those four are recovered here: binding
+///     `let no_tool_calls = response.tool_calls.is_empty();` first drops the
+///     chain to 45 and puts `stop_reason` back on one line. The other two are
+///     irreducible — the import list does not fit one 100-char line, and the
+///     receiver binding is itself a line. Inlining the single-use local into
+///     the `run_verifiers` argument was *measured*, not assumed: `chain_width`
+///     splits it into four there too, so it buys nothing.
 ///
-///     Three questions: (1) **neither** — the change *removes* a fact rather
-///     than adding one; judgment §1, two representations of the same thing;
-///     (2) **yes** — a stronger model does not make a duplicated wire literal
-///     safe; the constant is a verification key, not guidance to the model;
-///     (3) **two ends, one constant** — `run_verifiers` reads it, `think.rs`
-///     produces it, and agreeing by hand is exactly what drifted.
-const CEILING: usize = 5241;
+///     Three questions: (1) **neither scaffolding nor cognition** — a shared
+///     constant is a name, and it decides nothing about the turn; (2) **yes** —
+///     a stronger model does not keep two modules from drifting on the same
+///     wire string, which is the entire job of having one spelling; (3) **two
+///     consumers** — this site and `verification`'s stop-hook verifier, which
+///     compares the turn's stop reason against the same constant. Spelling
+///     `"end_turn"` here again would be 判据 §1「同一事实的两份表述」, and the
+///     ratchet is not allowed to price that shape back in.
+const CEILING: usize = 5239;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

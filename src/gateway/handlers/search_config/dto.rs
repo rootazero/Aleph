@@ -19,6 +19,16 @@ pub struct SearchBackendDto {
     pub has_api_key: bool,
     #[serde(default)]
     pub verified: bool,
+    /// Mirrors [`crate::config::types::SearchBackendConfig::allow_private_upstream`].
+    ///
+    /// On this face because this face is where `base_url` is SET, and for
+    /// SearXNG it is required. Without it, a self-hosted instance added
+    /// through the Panel would be accepted, silently dropped at boot by the
+    /// SSRF host check, and unfixable from the interface that created it —
+    /// the gate would have an opener that only `config.toml` could reach
+    /// (判据 §9: one verb, two faces, one derivation).
+    #[serde(default)]
+    pub allow_private_upstream: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

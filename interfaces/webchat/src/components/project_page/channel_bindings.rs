@@ -462,7 +462,11 @@ mod tests {
     #[test]
     fn the_unknown_outcome_does_not_claim_the_store_answered() {
         let unknown = sentence(EN, "channel_unknown_rescope").to_lowercase();
-        for forbidden in ["no session was found", "nothing was moved", "nobody has spoken"] {
+        for forbidden in [
+            "no session was found",
+            "nothing was moved",
+            "nobody has spoken",
+        ] {
             assert!(
                 !unknown.contains(forbidden),
                 "the Unknown sentence says {forbidden:?}, which asserts the store \

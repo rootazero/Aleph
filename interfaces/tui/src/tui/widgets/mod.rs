@@ -1,3 +1,4 @@
+pub mod agent_panel;
 pub mod agents_overlay;
 pub mod agents_panel;
 pub mod btw_panel;

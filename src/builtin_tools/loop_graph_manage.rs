@@ -739,6 +739,22 @@ impl AlephTool for LoopGraphTool {
             }
 
             LoopGraphAction::Gc => {
+                // Snapshot before the destructive op so an audit can answer
+                // "what did the graph look like before this gc?" — same
+                // shape `enable_audit` uses for its destructive action.
+                // Best-effort: a snapshot-store failure is logged but does
+                // not block the gc itself (the audit gap is recoverable from
+                // the events stream + the gc's own report).
+                if let Some(snapshots) = &self.snapshots {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    let pre_label = format!("pre-gc-{now}");
+                    if let Err(e) = snapshots.capture(&self.store, &agent_id, &pre_label) {
+                        tracing::warn!(agent_id = %agent_id, error = %e,
+                            "loop_graph gc: pre-action snapshot failed (continuing)");
+                    }
+                }
                 let report = match self.store.gc(&agent_id) {
                     Ok(r) => r,
                     Err((report, err)) => {

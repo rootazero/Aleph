@@ -138,16 +138,30 @@ impl OperatorApprovalRequester {
     ) {
         for delay in schedule {
             tokio::time::sleep(delay).await;
-            if let Err(e) = event_bus.publish_frame(&GatewayEventFrame::ApprovalReminder {
+            match event_bus.publish_frame(&GatewayEventFrame::ApprovalReminder {
                 approval_id: approval_id.to_string(),
                 session_key: frame_session_key.to_string(),
             }) {
-                tracing::debug!(error = %e, id = %approval_id, "approval reminder publish failed");
-            } else {
-                tracing::info!(
-                    id = %approval_id,
-                    "re-raised the operator interrupt for a still-parked approval"
-                );
+                Ok(0) => {
+                    // No subscriber received the reminder; do not log a misleading
+                    // "re-raised" success line. The initial publish already
+                    // proved fatal for the same case (see APPROVAL-R4-01); on the
+                    // reminder path we just stay quiet.
+                    tracing::debug!(
+                        id = %approval_id,
+                        "approval reminder reached no subscribers; skipping log"
+                    );
+                }
+                Ok(n) => {
+                    tracing::info!(
+                        id = %approval_id,
+                        delivered_to = n,
+                        "re-raised the operator interrupt for a still-parked approval"
+                    );
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, id = %approval_id, "approval reminder publish failed");
+                }
             }
         }
         // `reminder_schedule` yields an endless iterator, so this is dead code
@@ -230,7 +244,19 @@ impl ApprovalRequester for OperatorApprovalRequester {
         // moment `register_pending` returns.
         let (approval_id, rx, timeout) = self.manager.register_pending(record);
 
-        if let Err(e) = self
+        // Initial publish failure is fatal for this approval: the operator
+        // was never notified, so a "waiting" card never appeared in their
+        // surface. Mirror the channel-bridge contract (`exec/approval/
+        // channel_bridge.rs`) — wake the waiter with `Deny` so the caller
+        // learns the user was not reached, and remove the pending entry.
+        // See APPROVAL-R3-003.
+        //
+        // `publish_frame` returns `Ok(0)` when there are zero subscribers (or
+        // every subscriber lagged behind the broadcast ring). The previous fix
+        // only handled `Err(e)`, so an operator surface that was momentarily
+        // disconnected at the moment of publish would silently park the
+        // approval indefinitely. Treat `Ok(0)` as fatal too — APPROVAL-R4-01.
+        match self
             .event_bus
             .publish_frame(&GatewayEventFrame::ApprovalRequested {
                 approval_id: approval_id.clone(),
@@ -238,27 +264,41 @@ impl ApprovalRequester for OperatorApprovalRequester {
                 channel_id,
                 conversation_id,
                 tool_call_id,
-            })
-        {
-            // Initial publish failure is fatal for this approval: the operator
-            // was never notified, so a "waiting" card never appeared in their
-            // surface. Mirror the channel-bridge contract (`exec/approval/
-            // channel_bridge.rs`) — wake the waiter with `Deny` so the caller
-            // learns the user was not reached, and remove the pending entry.
-            // See APPROVAL-R3-003.
-            tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
-            self.manager.resolve(
-                &approval_id,
-                ApprovalDecisionType::Deny,
-                Some("unavailable".to_string()),
-            );
-            return ApprovalResponse {
-                outcome: ApprovalOutcome::Denied,
-                deny_reason: Some(
-                    "approval notification could not be delivered to the operator surface"
-                        .to_string(),
-                ),
-            };
+            }) {
+            Ok(0) => {
+                tracing::warn!(
+                    id = %approval_id,
+                    "ApprovalRequested reached no subscribers (Ok(0)); denying so caller is not stranded"
+                );
+                self.manager.resolve(
+                    &approval_id,
+                    ApprovalDecisionType::Deny,
+                    Some("unavailable".to_string()),
+                );
+                return ApprovalResponse {
+                    outcome: ApprovalOutcome::Denied,
+                    deny_reason: Some(
+                        "approval notification could not be delivered to the operator surface"
+                            .to_string(),
+                    ),
+                };
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
+                self.manager.resolve(
+                    &approval_id,
+                    ApprovalDecisionType::Deny,
+                    Some("unavailable".to_string()),
+                );
+                return ApprovalResponse {
+                    outcome: ApprovalOutcome::Denied,
+                    deny_reason: Some(
+                        "approval notification could not be delivered to the operator surface"
+                            .to_string(),
+                    ),
+                };
+            }
         }
 
         // Phase 3b-2b: surface an in-band "waiting for operator approval" notice

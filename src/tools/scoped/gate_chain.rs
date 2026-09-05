@@ -312,10 +312,27 @@ impl GateRule<'_> {
                  call `scratchpad` with `action='request_approval'`. If the user approves, \
                  planning ends immediately and `{tool}` runs on your next call."
             ),
-            Self::OperatorRequired => format!(
-                "A chat-tier device asked to run `{tool}`, which changes Aleph's own \
-                 configuration. Approve to allow this change."
-            ),
+            // Two sentences, not one, because this card is where a HUMAN
+            // gives consent — and consent to "a configuration change" is not
+            // consent to "someone reading my terminal screen". Every operator
+            // tool used to get the config sentence; `terminal` was the first
+            // read-only tool to reach this gate, and it would have asked for
+            // permission to do a thing it does not do. Derived from
+            // `READ_ONLY_TOOLS` rather than a second list, so a tool cannot be
+            // read-only for the concurrency claim and config-changing here.
+            Self::OperatorRequired => {
+                if crate::tools::adapters::registry_adapter::READ_ONLY_TOOLS.contains(&tool) {
+                    format!(
+                        "A chat-tier device asked to run `{tool}`, which reads data this \
+                         device is not authorized to see. Approve to allow this read."
+                    )
+                } else {
+                    format!(
+                        "A chat-tier device asked to run `{tool}`, which changes Aleph's own \
+                         configuration. Approve to allow this change."
+                    )
+                }
+            }
             // The only rule whose sentence is not authored here: a hook's
             // `Ask` carries the plugin author's own words, and replacing them
             // with a generic line would throw away the only thing that says

@@ -510,10 +510,7 @@ pub async fn execute_member_task(
             // member-side logs. A short grace window lets the task unwind
             // before the directory disappears. The window is bounded so a
             // misbehaving member cannot indefinitely block the dispatcher.
-            tokio::time::sleep(std::time::Duration::from_millis(
-                WORKTREE_CLEANUP_GRACE_MS,
-            ))
-            .await;
+            tokio::time::sleep(std::time::Duration::from_millis(WORKTREE_CLEANUP_GRACE_MS)).await;
             // Keep what it produced. The per-task session is durable and the
             // messages are already written, so the same one-line read the
             // success arm uses works here too — and the NEXT attempt's

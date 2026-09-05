@@ -146,11 +146,13 @@ pub async fn handle_update(
                         engines: None,
                         min_request_interval_ms: None,
                         verified: false,
+                        allow_private_upstream: false,
                     });
 
                 // api_key stays None in config — vault is the source
                 entry.api_key = None;
                 entry.base_url = backend_dto.base_url.clone();
+                entry.allow_private_upstream = backend_dto.allow_private_upstream;
                 entry.engine_id = backend_dto.engine_id.clone();
                 entry.engines = backend_dto.engines.clone();
                 entry.verified = false; // Config change resets verified

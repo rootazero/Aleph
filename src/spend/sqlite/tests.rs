@@ -313,7 +313,10 @@ fn record_upsert_succeeds_and_cache_populated_via_returning() {
     // First write: cache miss before, populated from RETURNING after.
     ledger.record(&alice, 1_000, Delta::Usd(1.0)).unwrap();
     let spent = ledger.spent_for(&alice, 1_000).unwrap();
-    assert_eq!(spent.usd, 1.0, "cache populated from RETURNING on first write");
+    assert_eq!(
+        spent.usd, 1.0,
+        "cache populated from RETURNING on first write"
+    );
     assert_eq!(spent.unpriced_calls, 0);
     assert_eq!(spent.partial_calls, 0);
 
@@ -332,12 +335,8 @@ fn record_upsert_succeeds_and_cache_populated_via_returning() {
 
     // A different Delta dimension also accumulates correctly — same
     // RETURNING contract covers all three `Delta` arms.
-    ledger
-        .record(&alice, 1_000, Delta::Partial(0.25))
-        .unwrap();
-    ledger
-        .record(&alice, 1_000, Delta::Unpriced)
-        .unwrap();
+    ledger.record(&alice, 1_000, Delta::Partial(0.25)).unwrap();
+    ledger.record(&alice, 1_000, Delta::Unpriced).unwrap();
     let spent = ledger.spent_for(&alice, 1_000).unwrap();
     assert_eq!(spent.usd, 3.75);
     assert_eq!(spent.unpriced_calls, 1);

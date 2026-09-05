@@ -184,7 +184,9 @@ impl AlephTool for TeamTaskControlTool {
                 // Restore the pause-origin status (see the pause arm) and
                 // clear the stamp in the same atomic write.
                 let restore = match crate::agents::swarm::tasks::paused_from(&task.metadata) {
-                    Some("waiting_review") => CoordTaskStatus::WaitingReview,
+                    Some(crate::agents::swarm::tasks::PAUSED_FROM_WAITING_REVIEW) => {
+                        CoordTaskStatus::WaitingReview
+                    }
                     _ => CoordTaskStatus::Pending,
                 };
                 let cleared = crate::agents::swarm::tasks::merge_metadata_patch(

@@ -1013,9 +1013,10 @@ fn MessageBubble(message: Memo<Option<ChatMessage>>, clock: String) -> impl Into
             // wire value, not copy, the same rule `RunHalt::label`'s
             // fall-through applies. Only the client's own "core said nothing"
             // word is ours to translate.
-            let raw = cost.status.clone().unwrap_or_else(|| {
-                t_string!(i18n, chat.cost_status_unknown).to_string()
-            });
+            let raw = cost
+                .status
+                .clone()
+                .unwrap_or_else(|| t_string!(i18n, chat.cost_status_unknown).to_string());
             t_string!(i18n, chat.cost_status_fragment, status = raw).to_string()
         };
         let title = t_string!(

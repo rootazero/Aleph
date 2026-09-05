@@ -22,12 +22,12 @@ pub mod store;
 pub mod tool_trace;
 
 pub use actor::{ActorCommand, SessionActor};
+pub use boundary_repair::{
+    boundary_repair_text, repair_boundary, repairs_for, DegradeNote, RepairReport,
+};
 pub use events::{
     ApprovalSource, ErrorKind, EventSeq, MessageContent, SessionEvent, SessionEventRecord,
     Timestamp, ToolOutput, TurnId, TurnTrigger,
-};
-pub use boundary_repair::{
-    boundary_repair_text, repair_boundary, repairs_for, DegradeNote, RepairReport,
 };
 pub use in_process::InProcessActorSessionService;
 pub use marker_balance::close_open_run_after_retire;

@@ -645,9 +645,12 @@ mod tests {
         .with_agent("main");
         new_hit.created_at = 2000;
 
-        let miss = RawMemory::new("[user]: unrelated topic".to_string(), RawMemorySource::Transcript)
-            .with_path("aleph://transcript/s1/2")
-            .with_agent("main");
+        let miss = RawMemory::new(
+            "[user]: unrelated topic".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s1/2")
+        .with_agent("main");
 
         let other_agent_hit = RawMemory::new(
             "[user]: quantum sprocket but not yours".to_string(),
@@ -692,9 +695,12 @@ mod tests {
         )
         .with_path("aleph://transcript/s1/0")
         .with_agent("main");
-        let decoy = RawMemory::new("progress is 100x done".to_string(), RawMemorySource::Transcript)
-            .with_path("aleph://transcript/s1/1")
-            .with_agent("main");
+        let decoy = RawMemory::new(
+            "progress is 100x done".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s1/1")
+        .with_agent("main");
 
         backend.insert_raw_memory(&literal).await.unwrap();
         backend.insert_raw_memory(&decoy).await.unwrap();

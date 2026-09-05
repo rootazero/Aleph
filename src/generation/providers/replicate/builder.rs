@@ -31,7 +31,7 @@ use super::constants::DEFAULT_TIMEOUT_SECS;
 ///     .build();
 /// ```
 #[derive(Debug)]
-pub struct ReplicateProviderBuilder {
+pub(crate) struct ReplicateProviderBuilder {
     pub(crate) api_key: String,
     pub(crate) endpoint: String,
     pub(crate) model_mappings: HashMap<String, String>,

@@ -837,7 +837,10 @@ mod history_window_tests {
     /// The shape the guess gets wrong: a page that is full AND complete.
     #[test]
     fn a_full_page_that_is_the_whole_session_is_complete() {
-        let w = HistoryWindow { count: 200, total: Some(200) };
+        let w = HistoryWindow {
+            count: 200,
+            total: Some(200),
+        };
         assert_eq!(w.above(), Some(0));
         assert_eq!(w.is_complete(), Some(true));
     }
@@ -857,8 +860,10 @@ mod history_window_tests {
             assert_eq!(w.is_complete(), None);
         }
         assert!(
-            serde_json::from_value::<HistoryWindow>(serde_json::json!({ "count": 20, "total": "many" }))
-                .is_err(),
+            serde_json::from_value::<HistoryWindow>(
+                serde_json::json!({ "count": 20, "total": "many" })
+            )
+            .is_err(),
             "a shape change must fail loudly here rather than decay to a number"
         );
     }
@@ -867,14 +872,19 @@ mod history_window_tests {
     /// as an empty transcript.
     #[test]
     fn a_renamed_count_fails_rather_than_reading_as_empty() {
-        assert!(serde_json::from_value::<HistoryWindow>(serde_json::json!({ "total": 5 })).is_err());
+        assert!(
+            serde_json::from_value::<HistoryWindow>(serde_json::json!({ "total": 5 })).is_err()
+        );
     }
 
     /// Two reads of a growing store: the window can come back LONGER than the
     /// count taken just before it. Saturating, not wrapping.
     #[test]
     fn a_window_longer_than_the_count_reads_as_nothing_above() {
-        let w = HistoryWindow { count: 5, total: Some(4) };
+        let w = HistoryWindow {
+            count: 5,
+            total: Some(4),
+        };
         assert_eq!(w.above(), Some(0));
         assert_eq!(w.is_complete(), Some(true));
     }

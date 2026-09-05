@@ -29,7 +29,7 @@ use crate::generation::{GenerationError, GenerationResult};
 ///     .build();
 /// ```
 #[derive(Debug)]
-pub struct MidjourneyProviderBuilder {
+pub(crate) struct MidjourneyProviderBuilder {
     /// API key for authentication
     pub(crate) api_key: String,
     /// API endpoint

@@ -331,6 +331,20 @@ pub const PAUSED_FROM_KEY: &str = "paused_from";
 /// which is the exact bug the stamp exists to fix.
 pub const PAUSED_FROM_IN_PROGRESS: &str = "in_progress";
 
+/// [`PAUSED_FROM_KEY`] value meaning "the pause parked this step out of
+/// `WaitingReview`" — the one status a plain `Resume → Pending` reset would
+/// corrupt, because the step already RAN.
+///
+/// The twin of [`PAUSED_FROM_IN_PROGRESS`], and it needs a constant for the
+/// same reason: writer (`builtin_tools::workflow_tool` pause) and readers
+/// (`workflow_tool` resume, `builtin_tools::team::task_control`, the Panel's
+/// `gateway::handlers::teams::workflow` resume) sit in three subsystems, and a
+/// typo on any of them fails **silently** — the step just quietly restores to
+/// Pending and re-executes finished work. It happens to spell the same word as
+/// `CoordTaskStatus::WaitingReview.as_str()`, but the two are not the same
+/// fact: this is a pause-origin vocabulary, not a status.
+pub const PAUSED_FROM_WAITING_REVIEW: &str = "waiting_review";
+
 /// Read the pause-origin stamp, if present. Tolerant: missing / non-string
 /// reads as `None` (legacy rows paused before the stamp existed restore to
 /// the Pending default).
@@ -581,9 +595,11 @@ pub trait CoordTaskStore: Send + Sync {
 
     async fn get_dependencies(&self, id: &str) -> crate::error::Result<Vec<CoordTaskId>>;
     async fn get_dependents(&self, id: &str) -> crate::error::Result<Vec<CoordTaskId>>;
-    /// Returns tasks whose ALL dependencies are now Completed after completing `completed_id`
-    async fn get_newly_unblocked(&self, completed_id: &str)
-        -> crate::error::Result<Vec<CoordTask>>;
+    /// Dependents of `settled_id` that have nothing left to wait for after that
+    /// task settled: every dependency satisfied, or — for a dependent stamped
+    /// [`acceptance::TOLERATE_FAILED_DEPS_METADATA_KEY`] — every remaining one
+    /// terminally dead, which a failure of `settled_id` itself can bring about.
+    async fn get_newly_unblocked(&self, settled_id: &str) -> crate::error::Result<Vec<CoordTask>>;
 
     // --- Task locking ---
 
@@ -800,12 +816,26 @@ mod tests {
     ///
     /// "A `blocked_by` dep is satisfied iff its status ∈ {completed, skipped}"
     /// is expressed as [`CoordTaskStatus::satisfies_dependency`] AND hand-copied
-    /// as raw SQL `status (NOT) IN ('completed', 'skipped')` in three store sites
+    /// as raw SQL `status (NOT) IN ('completed', 'skipped')` in four store sites
     /// (`store/crud.rs` unresolved_parents, `store/deps.rs` get_newly_unblocked,
-    /// `store/row_decode.rs` has_unresolved_deps). Its terminal-dead twin
-    /// "{failed, cancelled} → Unsatisfiable" is copied as `IN ('failed',
-    /// 'cancelled')` in two sites (`store/crud.rs` dead_parents,
-    /// `store/row_decode.rs` has_dead_deps).
+    /// `store/row_decode.rs` has_unresolved_deps and has_live_unresolved_deps).
+    /// Its terminal-dead twin "{failed, cancelled} → Unsatisfiable" is copied as
+    /// `IN ('failed', 'cancelled')` in four sites (`store/crud.rs` dead_parents,
+    /// `store/deps.rs` get_newly_unblocked, `store/row_decode.rs` has_dead_deps
+    /// and has_live_unresolved_deps).
+    ///
+    /// **Metadata-gated exception.** A task stamped
+    /// [`acceptance::TOLERATE_FAILED_DEPS_METADATA_KEY`] opts out of the
+    /// terminal-dead half only: a `failed`/`cancelled` dep stops blocking it and
+    /// can never make it `Unsatisfiable`, while the satisfying set above is
+    /// unchanged. The exception lives entirely in the three derivation sites
+    /// (`row_decode::derive_status`, `crud::list_tasks`,
+    /// `deps::get_newly_unblocked`) reading that stamp off the task's own
+    /// metadata — deliberately NOT in
+    /// [`CoordTaskStatus::satisfies_dependency`], because a failed producer
+    /// still does not satisfy anything: the consumer merely decides to stop
+    /// waiting. Keep it that way, or the classification below starts depending
+    /// on who is asking.
     ///
     /// The inner **wildcard-free match** makes this compile-fail the moment a new
     /// `CoordTaskStatus` variant is added, forcing a conscious classification here

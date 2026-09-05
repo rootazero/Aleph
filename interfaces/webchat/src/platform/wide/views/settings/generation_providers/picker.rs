@@ -232,7 +232,12 @@ mod tests {
             "stability-ai",
         );
         assert_eq!(
-            ids(&offerable(&catalog(), &providers, GenerationType::Image, "")),
+            ids(&offerable(
+                &catalog(),
+                &providers,
+                GenerationType::Image,
+                ""
+            )),
             ["openai-dalle", "stability-ai"],
             "configuring one preset must not drop its siblings from the offer"
         );

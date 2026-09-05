@@ -68,8 +68,7 @@ pub struct RepairReport {
 
 /// The instruction every arm ends with. Shared so the three sentences cannot
 /// drift apart on the one point that tells the model what to *do*.
-const VERIFY_CLOSE: &str =
-    "Verify the current state before deciding whether to repeat it.";
+const VERIFY_CLOSE: &str = "Verify the current state before deciding whether to repeat it.";
 
 /// The sentence a dangling call is answered with.
 ///
@@ -256,15 +255,12 @@ pub async fn repair_and_close_abandoned(
         closed_run_id = Some(open.run_id.clone());
     }
 
-    let last_assistant = events
-        .iter()
-        .rev()
-        .find_map(|record| match &record.event {
-            SessionEvent::AssistantMessage { content, .. } if !content.text.trim().is_empty() => {
-                Some(content.text.chars().take(LAST_ASSISTANT_CHARS).collect())
-            }
-            _ => None,
-        });
+    let last_assistant = events.iter().rev().find_map(|record| match &record.event {
+        SessionEvent::AssistantMessage { content, .. } if !content.text.trim().is_empty() => {
+            Some(content.text.chars().take(LAST_ASSISTANT_CHARS).collect())
+        }
+        _ => None,
+    });
 
     Ok(AbandonReport {
         appended: repaired.appended,
@@ -345,8 +341,10 @@ mod tests {
 
     #[test]
     fn the_three_arms_are_three_different_sentences() {
-        let restart = boundary_repair_text("bash_exec", DanglingProvenance::ThisRestart, false, None);
-        let earlier = boundary_repair_text("bash_exec", DanglingProvenance::EarlierRun, false, None);
+        let restart =
+            boundary_repair_text("bash_exec", DanglingProvenance::ThisRestart, false, None);
+        let earlier =
+            boundary_repair_text("bash_exec", DanglingProvenance::EarlierRun, false, None);
         let denied = boundary_repair_text("bash_exec", DanglingProvenance::ThisRestart, true, None);
 
         for text in [&restart, &earlier, &denied] {
@@ -460,16 +458,14 @@ mod tests {
 
     #[tokio::test]
     async fn repairing_twice_over_a_re_read_log_appends_nothing_the_second_time() {
-        let store: std::sync::Arc<dyn SessionEventStore> = std::sync::Arc::new(
-            crate::session::store::SqliteEventStore::new({
+        let store: std::sync::Arc<dyn SessionEventStore> =
+            std::sync::Arc::new(crate::session::store::SqliteEventStore::new({
                 let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
                 crate::session::store::migrate_add_session_events(&conn).expect("migrate");
                 conn
-            }),
-        );
-        let sid: SessionId = crate::routing::session_key::SessionKey::ephemeral(
-            "boundary-repair-idempotence",
-        );
+            }));
+        let sid: SessionId =
+            crate::routing::session_key::SessionKey::ephemeral("boundary-repair-idempotence");
         for (seq, ev) in [(1, run_started(10)), (2, tool_requested("c1"))] {
             store.append(&sid, seq, &ev, 10).await.expect("append");
         }
@@ -511,13 +507,12 @@ mod tests {
     }
 
     fn abandon_store() -> (std::sync::Arc<dyn SessionEventStore>, SessionId) {
-        let store: std::sync::Arc<dyn SessionEventStore> = std::sync::Arc::new(
-            crate::session::store::SqliteEventStore::new({
+        let store: std::sync::Arc<dyn SessionEventStore> =
+            std::sync::Arc::new(crate::session::store::SqliteEventStore::new({
                 let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
                 crate::session::store::migrate_add_session_events(&conn).expect("migrate");
                 conn
-            }),
-        );
+            }));
         let sid: SessionId = crate::routing::session_key::SessionKey::ephemeral(format!(
             "abandon-{}",
             uuid::Uuid::new_v4()
@@ -525,7 +520,11 @@ mod tests {
         (store, sid)
     }
 
-    async fn seed(store: &std::sync::Arc<dyn SessionEventStore>, sid: &SessionId, evs: &[SessionEvent]) {
+    async fn seed(
+        store: &std::sync::Arc<dyn SessionEventStore>,
+        sid: &SessionId,
+        evs: &[SessionEvent],
+    ) {
         for (i, ev) in evs.iter().enumerate() {
             store
                 .append(sid, (i + 1) as EventSeq, ev, 10 * (i as i64 + 1))

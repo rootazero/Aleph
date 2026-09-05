@@ -225,7 +225,13 @@ impl ExtensionManager {
 
     /// Get the count of running services.
     pub async fn running_service_count(&self) -> usize {
-        self.service_manager.read().await.running_count()
+        self.service_manager
+            .read()
+            .await
+            .list_services()
+            .into_iter()
+            .filter(|info| info.state == crate::extension::types::ServiceState::Running)
+            .count()
     }
 
     /// Get the service manager (read access).

@@ -120,7 +120,19 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
             };
             tokio::spawn(async move {
                 if let Err(e) = tokio::task::spawn_blocking(move || {
-                    save_persisted_sessions(&store_clone);
+                    // Serialise concurrent writers via an advisory fs2 lock on a
+                    // sidecar `acp_sessions.json.lock`. Without this, two writers
+                    // spawned from rapid Created/Removed events race to write
+                    // their respective tmp files and rename over the destination
+                    // in arbitrary order — last rename wins, so an older
+                    // snapshot can clobber a newer one and silently lose a
+                    // Created/Removed event (ACP-R4-03).
+                    let lock_path = crate::acp::manager::persistence::acp_sessions_path()
+                        .with_extension("json.lock");
+                    crate::utils::atomic_io::with_file_lock(&lock_path, |_guard| {
+                        save_persisted_sessions(&store_clone);
+                        Ok(())
+                    })
                 })
                 .await
                 {

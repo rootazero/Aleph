@@ -31,13 +31,6 @@ pub struct SecurityKernel {
 }
 
 impl SecurityKernel {
-    /// Create a new security kernel with no custom patterns.
-    #[must_use]
-    #[allow(dead_code)]
-    fn new() -> Self {
-        Self::default()
-    }
-
     /// Create a security kernel from configuration, compiling the custom
     /// blocked / danger patterns when `enable_custom_patterns` is set.
     ///
@@ -107,7 +100,7 @@ mod tests {
 
     #[test]
     fn no_custom_patterns_matches_nothing() {
-        let kernel = SecurityKernel::new();
+        let kernel = SecurityKernel::default();
         assert!(kernel.assess_custom("rm -rf /").is_none());
         assert!(kernel.assess_custom("ls -la").is_none());
     }

@@ -40,6 +40,7 @@ pub mod pty;
 pub mod queue;
 pub mod receipt;
 pub mod resume;
+pub mod runtime;
 pub mod scope;
 pub mod search;
 pub mod session_thread;

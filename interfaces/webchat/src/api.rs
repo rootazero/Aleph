@@ -39,6 +39,7 @@ pub mod moa;
 pub mod projects;
 pub mod providers;
 pub mod routing;
+pub mod runtime_agents;
 pub mod runtimes;
 pub mod search;
 pub mod security;

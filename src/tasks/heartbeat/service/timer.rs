@@ -643,12 +643,7 @@ async fn deliver_alert(
     alert: PendingHeartbeatAlert,
     ctx: &TickContext,
 ) {
-    let payload = failure_alert_payload(
-        "heartbeat",
-        &alert.task_name,
-        task_id,
-        &alert.message,
-    );
+    let payload = failure_alert_payload("heartbeat", &alert.task_name, task_id, &alert.message);
     let config = crate::tasks::shared::delivery::DeliveryConfig {
         mode: crate::tasks::shared::delivery::DeliveryMode::Primary,
         targets: vec![alert.target],

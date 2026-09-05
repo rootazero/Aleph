@@ -247,6 +247,44 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # the one-line `delegate` / `plan` commands — the tree is a LIVE
                                  # projection, attach the browser BEFORE triggering.
 
+./qa/terminal/run.sh identify    # §6.11/§6.12 the embedded terminal's agent panel. A session
+                                 # spawned as `sh` with `claude` TYPED INTO IT afterwards reaches
+                                 # the wire as program+agent+state — the shape phase 1 could not
+                                 # produce, because it read the spawn label. A control session
+                                 # that ran no agent is the falsifying arm, and a fourth check
+                                 # ("the probe answered") keeps that arm from being green because
+                                 # nothing ever looked.
+./qa/terminal/run.sh wait        # terminal{wait} blocks on the table's watch and answers
+                                 # `reached`; a state the session never enters answers `timeout`
+                                 # with the CURRENT entry. Both arms carry a DURATION check — a
+                                 # wait that never waited answers `timeout` too.
+./qa/terminal/run.sh quiet       # ~90 s. 30 s of silence publishes `quiet_since` and does NOT
+                                 # move `state` (spec R2-3). Checks the row is not-quiet first,
+                                 # that the mark lands on the clock rather than instantly, and
+                                 # that a later frame CLEARS it — a sticky flag reads the same.
+./qa/terminal/run.sh cwd         # OSC 7 › foreground probe › spawn dir, over three directories
+                                 # that actually differ. A second session emits no OSC 7, so its
+                                 # answer can only be the probe's — without it "OSC 7 won" and
+                                 # "the probe said nothing" are the same green.
+./qa/terminal/run.sh real        # a REAL agent binary found on PATH, run directly AND behind a
+                                 # real `npx`. `fake-claude` is a bash script NAMED `claude`, so it
+                                 # can only ever cover the arm a stand-in covers by construction;
+                                 # this covers the ones only a real install has — a node CLI the
+                                 # kernel calls `node`, a CLI that rewrites `process.title`, and a
+                                 # launcher that stays the pgrp leader with the agent as its child.
+                                 # SKIPS loudly (asserting nothing) when no agent is installed.
+./qa/terminal/run.sh tui         # the REAL `aleph-tui` binary in a pty against this server.
+                                 # Three observations, two flips: the program name is absent, then
+                                 # `/agentpanel` puts it AND the header on screen, then toggling
+                                 # again removes it. One observation could not tell "the panel
+                                 # works" from "that text was on screen anyway".
+./qa/terminal/run.sh panel       # boots, sets the board and WAITS for a browser. Tabs, agent-panel
+                                 # row click, paste and cursor visibility are not reachable from the
+                                 # wire — a tab title is a rendering, "Cmd+V is left to the browser"
+                                 # is a claim about the browser, and the cursor is a rect on a
+                                 # <canvas>. Needs `just wasm`; probes in `panel_probe.js`.
+./qa/terminal/run.sh all         # the six non-interactive stages, one server each (not `panel`)
+
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
 ./qa/channels/run.sh errors      # Lark throttle / refusal, via mock_lark.py's /__inject queue
@@ -855,3 +893,52 @@ refuses to boot with `invalid type: sequence, expected a map`.
 - **`picker_nav`** — 改 `interfaces/webchat/` 的键盘导航/渐隐前跑：键盘 walk · 条件渐隐 · 手机端加 provider，
   三档宽度各带效果断言。
 - **`canvas`** — 改 `src/canvas/` 或 Panel canvas 视图前跑：九项清单每条带效果断言。
+- **`terminal`** — 改 `src/gateway/pty/foreground.rs`、`src/gateway/runtime/`、`crates/agent-detect/`
+  或 `src/builtin_tools/terminal.rs` 前跑 `{identify,wait,quiet,cwd,real,tui}`；动 Panel 终端视图或
+  `components/sidebar/agent_panel.rs` 时另跑 `panel`（需要浏览器）。
+  - `identify` — **本轮存在的理由**。第 1 期的面板在生产上从未识别过一个 agent：采样器拿到的是
+    `PtySession::shell`（**spawn 时刻**的标签），而 Panel 的终端只发 `{rows, cols}`，所以标签恒为
+    `zsh`，`identify_agent` 答 `None`，检测引擎在读第一条规则**之前**就早返回 `Unknown`——21 份
+    manifest 与它们的单测全绿，因为**每一条都自己把 agent 名字递进去**（判据 §2：问的不是"规则对不对"，
+    是"它什么时候会红"）。这里 spawn 的是 `sh`，agent 是**事后敲进去的**，唯一能把它变成
+    `agent: "claude"` 的只有前台探测。负向臂是同一台服务器上一个没跑 agent 的 shell；
+    第四条断言「**探测确实答了**」把那条臂从「什么都没看」里救出来——`program: null` 会让另外
+    三条同样为真（判据 §8）。
+  - `wait` — `reached` 与 `timeout` 两臂**各带一个耗时断言**：一个从不等待的 `wait` 同样会答
+    `timeout`，光看 outcome 的绿和瞎的绿长得一样（M4 变异实测：outcome 那条仍绿，耗时那条红）。
+  - `quiet` — 三次观测两次翻转：先证明它**当时不是 quiet**，再证明标记落在 **30 s 的钟上**而非立刻，
+    最后证明**一帧能把它清掉**。少了任何一条，一个永不复位的黏滞标志都读起来一样。
+  - `cwd` — 三层来源用**三个真的不同的目录**；第二个会话不发 OSC 7，所以它的答案只可能来自探测。
+    只有一个会话时，「OSC 7 赢了」和「探测什么都没说」是同一个绿。**故意不证**的：spawn 目录那一层
+    （要让探测**失败**才能到达，从 wire 上安排不出来）、`program: null`、Panel 的渲染、以及另外 20 份 manifest。
+  - 装置的画面**不是手抄的**：`derive_chrome.py` 按 rule id 从 `claude.toml` 里取出字面量、拼成行、
+    再用 manifest 自己的正则回验；它**故意不判定哪条规则胜出**（那要在 Python 里重写一遍 region 与优先级
+    ——第二套引擎，判据 §1），胜者由运行时的 `terminal{explain}` 用**发货的引擎**报出规则 id 来断言。
+  - `real` — **`fake-claude` 只能覆盖一条臂**：它是个**名叫** `claude` 的 bash 脚本，所以"按名字认出来"
+    这条臂是它按构造必然覆盖的那条，也是唯一一条。真实安装才有的三种形状它碰不到——内核把
+    `#!/usr/bin/env node` 的 CLI 报成 `node`；重写了 `process.title` 的 CLI 让标题占了 `argv[0]` 的位置，
+    而 macOS 会把**环境变量**渗进它后面的 `cmd()`；包装器自己留在进程组组长的位置、真 agent 是它的孩子。
+    2026-09-05 在本机量到：`npx pi` 的组长是 `npm exec pi …`，真 `pi` 是它的孩子；而一个值里带空格的
+    导出变量会把**裸词**（`prefer` / `modern` / `like`）撒进命令行里程序名该在的位置。
+    候选名单**从 `engine.rs` 派生**（`agent_label` 与 `interactive_agent_executable` 对四个 agent
+    答案不同：`agy` / `copilot` / `cursor-agent` / `kiro-cli`，手写一份当天就是错的，判据 §1）；
+    "装了"不等于"能跑"，所以每个候选先在 pty 里活 3 秒（本机的 `codex` 缺 vendored 二进制，一秒内就退）；
+    排序**偏好带 shebang 的**，因为那才是替身伪造不了的形状。一台没装 agent 的机器上它**响亮地 SKIP**
+    并明说自己什么都没断言——静默通过的绿是那种唯一没有意义的绿（判据 §2）。
+  - `tui` — `interfaces/tui/` **从来没有对着活服务器跑过**。它的 agent 面板渲染
+    `shared_ui_logic::entry_name`（`program ?? agent ?? label`），数据来自实时的
+    `runtime.agents.list` + `events.subscribe`，而它现有的每一条测试都是把**手搓的**
+    `AgentPanelData` 渲进测试 backend——渲染器永远是对的，没有任何东西检查送进去的值来自 wire，
+    这正是第 1 期缺陷藏身的形状。这里跑的是**真的 `aleph-tui` 二进制**（在 pty 里，120x40）：
+    三次观测两次翻转——先证明程序名**不在**屏幕上，再 `/agentpanel` 让它和表头一起出现，
+    再切一次让它消失。只观测一次的话，「面板工作了」和「那行字本来就在屏幕上」是同一个绿（判据 §2）。
+  - `panel` — 唯一一个**boot 完就等**的阶段（和 `canvas` 同形）。标签页 / agent 面板行点击 / 粘贴 /
+    光标可见性四件事**从 wire 上够不到**：标签标题是一次渲染，"Cmd+V 交给浏览器"是一句**关于浏览器**的断言
+    （没有任何单测有浏览器），光标是画在 `<canvas>` 上的一个矩形。装置把局面摆好——一个 spawn 成 `sh`
+    然后跑起 agent 的会话，加一个什么都没跑的对照会话——再打印带效果断言的清单；探针在
+    `panel_probe.js`（`qaTerm.tabs()` / `.route()` / `.inkCount()`），光标那条比**三次读数彼此之间**的
+    差，不比字面量（判据 §18）。需要先 `just wasm`：debug server 从磁盘读 `dist/`，空 dist 会让每一条都
+    "失败"在错误的原因上。
+  - ⚠️ 它的**生成配置那一次 boot 带了 `--port`**——2026-09-05 起**每一个有生成 boot 的装置都带了**
+    （此前只有它和 `channels`；`webview_compat` 没有生成 boot，不在其列）：那一次 boot 绑的是**内置默认端口**，机器上只要有别的 server 占着，进程在写出 config
+    之前就退出了，症状是 `no config generated at …`——读起来像路径或权限问题，原因在日志下一行。

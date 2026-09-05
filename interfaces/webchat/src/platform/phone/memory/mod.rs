@@ -111,12 +111,13 @@ pub fn PhoneMemory() -> impl IntoView {
                     }
                     Err(e) => {
                         if mem.agent_id.try_get_untracked() == Some(agent.clone()) {
-                            st.error
-                                .set(Some(crate::components::admin_refusal::settings_load_error(
+                            st.error.set(Some(
+                                crate::components::admin_refusal::settings_load_error(
                                     i18n,
                                     &e,
                                     |e| e.to_string(),
-                                )))
+                                ),
+                            ))
                         }
                     }
                 }

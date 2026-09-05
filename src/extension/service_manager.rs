@@ -484,31 +484,6 @@ impl ServiceManager {
         }
         results
     }
-
-    /// Get the count of running services.
-    #[must_use]
-    pub fn running_count(&self) -> usize {
-        self.services
-            .values()
-            .filter(|info| info.state == ServiceState::Running)
-            .count()
-    }
-
-    /// Get the total count of tracked services.
-    #[must_use]
-    pub fn total_count(&self) -> usize {
-        self.services.len()
-    }
-
-    /// Clear all service tracking (does not stop services).
-    ///
-    /// This method should only be used during shutdown or testing.
-    /// For normal operation, use `stop_plugin_services` to properly
-    /// stop services before clearing.
-    pub fn clear(&mut self) {
-        self.services.clear();
-        self.registrations.clear();
-    }
 }
 
 impl Default for ServiceManager {
@@ -539,15 +514,14 @@ mod tests {
     #[test]
     fn test_service_manager_new() {
         let manager = ServiceManager::new();
-        assert_eq!(manager.total_count(), 0);
-        assert_eq!(manager.running_count(), 0);
+        assert!(manager.services.is_empty());
         assert!(manager.list_services().is_empty());
     }
 
     #[test]
     fn test_service_manager_default() {
         let manager = ServiceManager::default();
-        assert_eq!(manager.total_count(), 0);
+        assert!(manager.services.is_empty());
     }
 
     #[test]
@@ -578,73 +552,6 @@ mod tests {
     fn test_list_plugin_services_empty() {
         let manager = ServiceManager::new();
         assert!(manager.list_plugin_services("my-plugin").is_empty());
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut manager = ServiceManager::new();
-
-        // Manually insert a service for testing
-        let key = ServiceManager::make_key("test-plugin", "test-service");
-        manager.services.insert(
-            key,
-            ServiceInfo {
-                id: "test-service".to_string(),
-                plugin_id: "test-plugin".to_string(),
-                name: "Test Service".to_string(),
-                state: ServiceState::Running,
-                started_at: Some(Utc::now()),
-                error: None,
-            },
-        );
-
-        assert_eq!(manager.total_count(), 1);
-        assert_eq!(manager.running_count(), 1);
-
-        manager.clear();
-
-        assert_eq!(manager.total_count(), 0);
-        assert_eq!(manager.running_count(), 0);
-    }
-
-    #[test]
-    fn test_running_count_with_different_states() {
-        let mut manager = ServiceManager::new();
-
-        // Add services in different states
-        let states = [
-            ("plugin", "s1", ServiceState::Running),
-            ("plugin", "s2", ServiceState::Running),
-            ("plugin", "s3", ServiceState::Stopped),
-            ("plugin", "s4", ServiceState::Failed),
-            ("plugin", "s5", ServiceState::Starting),
-        ];
-
-        for (plugin_id, service_id, state) in states {
-            let key = ServiceManager::make_key(plugin_id, service_id);
-            manager.services.insert(
-                key,
-                ServiceInfo {
-                    id: service_id.to_string(),
-                    plugin_id: plugin_id.to_string(),
-                    name: format!("Service {}", service_id),
-                    state,
-                    started_at: if state == ServiceState::Running {
-                        Some(Utc::now())
-                    } else {
-                        None
-                    },
-                    error: if state == ServiceState::Failed {
-                        Some("Test error".to_string())
-                    } else {
-                        None
-                    },
-                },
-            );
-        }
-
-        assert_eq!(manager.total_count(), 5);
-        assert_eq!(manager.running_count(), 2);
     }
 
     #[test]
@@ -769,13 +676,27 @@ mod tests {
 
         insert_running(&mut manager, "plugin-a", "s1");
         insert_running(&mut manager, "plugin-b", "s1");
-        assert_eq!(manager.running_count(), 2);
+        assert_eq!(
+            manager
+                .services
+                .values()
+                .filter(|info| info.state == ServiceState::Running)
+                .count(),
+            2
+        );
 
         // Plugins aren't loaded, so stop handlers hit PluginNotFound and the
         // services are marked Stopped — exactly the shutdown semantics we want.
         let results = manager.stop_all(&loader);
         assert_eq!(results.len(), 2);
-        assert_eq!(manager.running_count(), 0);
+        assert_eq!(
+            manager
+                .services
+                .values()
+                .filter(|info| info.state == ServiceState::Running)
+                .count(),
+            0
+        );
     }
 
     #[test]

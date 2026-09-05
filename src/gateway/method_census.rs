@@ -13,9 +13,16 @@
 //!
 //! The rules that keep the scraper honest (each earned, not imagined):
 //! - comment lines and the `#[cfg(test)]` half are dropped BEFORE scraping
-//!   (`source_census::production_prefix`), so a doc comment naming a method
-//!   can neither satisfy nor break the census, and a CRLF checkout scans
-//!   identically to LF;
+//!   (`utils::source_scan::production_text` + `strip_comment_lines`), so a
+//!   doc comment naming a method can neither satisfy nor break the census,
+//!   and a CRLF checkout scans identically to LF. `production_text`, not
+//!   `production_prefix`: a WHOLE-FILE test module carries no `#[cfg(test)]`
+//!   of its own — its parent applies one — so the per-file cut hands the
+//!   scraper 100% of it. This used to be handled by skipping
+//!   `rel.ends_with("/tests.rs")`, which sees 77 of the 107 whole-file test
+//!   modules under `src/` and misses the other 30 (判据 §5) — the count and
+//!   its predicate live with the guard, in
+//!   `utils::source_scan::production_text_empties_whole_file_test_modules_and_only_those`;
 //! - a `.register(` call is an RPC registration iff its receiver is
 //!   `handlers_mut()` or a `registry: &mut HandlerRegistry` — every other
 //!   receiver must be named in [`KNOWN_NON_RPC_REGISTRIES`] with its reason,
@@ -29,7 +36,7 @@
 #[cfg(test)]
 mod tests {
     use super::super::method_admin;
-    use crate::gateway::source_census;
+
     use std::collections::{BTreeMap, BTreeSet};
 
     /// The ruling a method currently holds: admin-gated or member-open.
@@ -370,6 +377,7 @@ mod tests {
         ("routing_rules.list", Class::Admin),
         ("routing_rules.move", Class::Admin),
         ("routing_rules.update", Class::Admin),
+        ("runtime.agents.list", Class::Admin),
         ("runtimes.install", Class::Admin),
         ("runtimes.list", Class::Admin),
         ("runtimes.refresh", Class::Admin),
@@ -515,14 +523,18 @@ mod tests {
                 .unwrap_or(&file)
                 .to_string_lossy()
                 .replace('\\', "/");
-            // Test-only files register freely; they are not producers.
-            if rel.ends_with("/tests.rs") {
-                continue;
-            }
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            let prod = source_census::production_prefix(&text);
+            // Test-only files register freely; they are not producers. This
+            // used to be `rel.ends_with("/tests.rs")`, which at `f84ad424a`
+            // recognised 85 of the 104 file-backed `#[cfg(test)] mod X;`
+            // declarations in the repo and missed `guard_tests.rs`,
+            // `drift_tests.rs`, `dispatchable.rs` and 16 more (判据 §5).
+            // `production_text` asks the parent instead, which is the fact.
+            let prod = crate::utils::source_scan::strip_comment_lines(
+                &crate::utils::source_scan::production_text(&file, &text),
+            );
             let is_handler_registry_file =
                 prod.contains("&mut HandlerRegistry") || rel == "src/gateway/handlers/mod.rs";
 

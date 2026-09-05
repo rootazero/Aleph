@@ -235,8 +235,7 @@ pub struct ExtensionManager {
 
     /// Counts how many times `reload()` has executed since construction.
     /// Exposed via [`Self::reload_count`] — used by integration tests to
-    /// assert at-most-once reload behaviour on adjacent watcher events,
-    /// and available for future runtime observability.
+    /// assert at-most-once reload behaviour on adjacent watcher events.
     reload_count: AtomicU64,
 }
 
@@ -361,21 +360,6 @@ impl ExtensionManager {
     /// Create with default configuration
     pub async fn with_defaults() -> ExtensionResult<Self> {
         Self::new(ExtensionConfig::default()).await
-    }
-
-    /// Builder-style setter for the memory extension registry (Spec 4 Task 11).
-    ///
-    /// For use before the manager is shared behind an `Arc`. If you already have
-    /// `Arc<ExtensionManager>`, use `set_memory_registry` instead.
-    pub fn with_memory_registry(
-        self,
-        registry: crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>,
-    ) -> Self {
-        *self
-            .memory_registry
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = Some(registry);
-        self
     }
 
     /// Inject the memory extension registry after construction (Spec 4 Task 11).
@@ -864,7 +848,8 @@ impl ExtensionManager {
     }
 
     /// Returns the total number of times [`Self::reload`] has executed.
-    /// Used by integration tests and (in future) runtime observability.
+    /// Used by integration tests to assert at-most-once reload behaviour
+    /// on adjacent watcher events.
     pub fn reload_count(&self) -> u64 {
         self.reload_count.load(Ordering::SeqCst)
     }
@@ -1304,11 +1289,6 @@ impl ExtensionManager {
     /// Check if extensions have been loaded
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
-    }
-
-    /// Get a reference to the adapter registry for capability-driven parsing.
-    pub const fn adapter_registry(&self) -> &AdapterRegistry {
-        &self.adapter_registry
     }
 
     /// Hot-reload a single plugin by ID.
@@ -1765,8 +1745,7 @@ mod tests {
     async fn test_extension_manager_has_service_manager() {
         let manager = ExtensionManager::with_defaults().await.unwrap();
         let service_manager = manager.get_service_manager().await;
-        assert_eq!(service_manager.running_count(), 0);
-        assert_eq!(service_manager.total_count(), 0);
+        assert!(service_manager.list_services().is_empty());
     }
 
     #[tokio::test]

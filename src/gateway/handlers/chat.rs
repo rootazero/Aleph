@@ -628,9 +628,9 @@ pub async fn handle_history(
             // (criterion #8).
             session_snapshot.last_run = match crate::session::store::global_session_event_store() {
                 Some(events_store) => match events_store.load_all_events(&session_key).await {
-                    Ok(events) => Some(
-                        crate::gateway::session_snapshot::last_run_from_events(&events),
-                    ),
+                    Ok(events) => Some(crate::gateway::session_snapshot::last_run_from_events(
+                        &events,
+                    )),
                     Err(e) => {
                         tracing::warn!(
                             session = %canonical,

@@ -324,7 +324,7 @@ pub(super) async fn ws_upgrade_handler(
 /// before the connection is closed with WS code 1008.
 fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
     serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
-        "event",
+        aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD,
         Some(serde_json::json!({
             "topic": "connection.warning",
             "data": {
@@ -475,7 +475,9 @@ fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>
 ///   skipped owner-scoping entirely (found in review, fix round 1 — see
 ///   `run.subagent_tree`'s entry in `event_visibility::session_identity_of`).
 fn extract_topic_and_data(event_obj: &serde_json::Value) -> (&str, Option<&serde_json::Value>) {
-    if event_obj.get("method").and_then(serde_json::Value::as_str) == Some("event") {
+    if event_obj.get("method").and_then(serde_json::Value::as_str)
+        == Some(aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD)
+    {
         if let Some(params) = event_obj.get("params") {
             let topic = params
                 .get("topic")
@@ -527,7 +529,7 @@ fn event_wire_form(
         // like every other notification on the wire — see
         // `event_bus.rs::publish_frame` for what a hand-built one cost.
         serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
-            "event",
+            aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD,
             Some(event_obj),
         ))
         .unwrap_or_else(|_| String::new())

@@ -1,0 +1,164 @@
+{
+  "module": "src/executor",
+  "files_scanned": [
+    "src/executor/mod.rs",
+    "src/executor/tool_registry.rs",
+    "src/executor/builtin_registry/mod.rs",
+    "src/executor/builtin_registry/config.rs",
+    "src/executor/builtin_registry/definitions.rs",
+    "src/executor/builtin_registry/dispatchable.rs",
+    "src/executor/builtin_registry/groups.rs",
+    "src/executor/builtin_registry/builder/mod.rs",
+    "src/executor/builtin_registry/builder/core_tools.rs",
+    "src/executor/builtin_registry/builder/optional_tools.rs",
+    "src/executor/builtin_registry/builder/constructor/mod.rs",
+    "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs",
+    "src/executor/builtin_registry/builder/constructor/collab_session_tools.rs",
+    "src/executor/builtin_registry/builder/constructor/agent_acp_tools.rs",
+    "src/executor/builtin_registry/registry/mod.rs",
+    "src/executor/builtin_registry/registry/struct_def.rs",
+    "src/executor/builtin_registry/registry/inherent.rs",
+    "src/executor/builtin_registry/registry/tool_registry_impl.rs",
+    "src/executor/builtin_registry/registry/free_fns.rs",
+    "src/executor/builtin_registry/builder/tests.rs",
+    "src/executor/builtin_registry/registry/tests.rs"
+  ],
+  "method": "rg-based PRODUCED/CONSUMED parity scan at each seam; code-smell sweep across stale comments, unused imports, no-op returns, public re-exports; each candidate triaged via CONNECT/CUT/DECIDE per the skill.",
+  "findings": [
+    {
+      "id": "sw-executor-1-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool}",
+      "produced_location": "src/executor/builtin_registry/registry/inherent.rs:12 (also struct_def.rs:11)",
+      "consumer_location": "none within inherent.rs or struct_def.rs; actual consumers are tool_registry_impl.rs:17,514,522 and optional_tools.rs:5,535,541",
+      "decision": "CUT",
+      "rationale": "Both files declare `#![allow(unused_imports)]` at the top, so the dead import ships silently. The same `use` line is duplicated in three other files where the symbols are actually referenced, so the two redundant imports add nothing — only the lint suppression. Removing them would surface a future genuine dead import immediately.",
+      "fix_commit": null,
+      "residual_risk": "If a future contributor adds a `SessionsListTool` / `SessionsSendTool` reference in inherent.rs or struct_def.rs they will have to add the import again — harmless."
+    },
+    {
+      "id": "sw-executor-1-2",
+      "severity": "trivial",
+      "form": 1,
+      "produced": "pub struct ToolCategory",
+      "produced_location": "src/executor/builtin_registry/groups.rs:10",
+      "consumer_location": "none outside the defining module (only TOOL_CATEGORIES slice consumers iterate &ToolCategory anonymously)",
+      "decision": "CONNECT",
+      "rationale": "The struct MUST be `pub` because `pub static TOOL_CATEGORIES: &[ToolCategory]` exposes it in the static's type signature (Rust privacy rules). Not a real severed wire — leave as is.",
+      "fix_commit": null,
+      "residual_risk": "If the static's element type ever drifts, the type is reachable but unused and could rot; not currently."
+    },
+    {
+      "id": "sw-executor-1-3",
+      "severity": "trivial",
+      "form": 1,
+      "produced": "pub struct BuiltinToolDefinition",
+      "produced_location": "src/executor/builtin_registry/definitions.rs:68",
+      "consumer_location": "none by name outside the defining file; consumers iterate the slice BUILTIN_TOOL_DEFINITIONS anonymously",
+      "decision": "CONNECT",
+      "rationale": "Same reachability constraint: the public slice `&[BuiltinToolDefinition]` requires the element type to be public. Keep.",
+      "fix_commit": null,
+      "residual_risk": "If a tool entry is ever written via a literal that does not match the field order, this type can drift silently. Field order is currently preserved by the in-file tests."
+    },
+    {
+      "id": "sw-executor-3-1",
+      "severity": "low",
+      "form": 3,
+      "produced": "BuiltinToolConfig.tool_catalog (referenced in doc comment only)",
+      "produced_location": "src/builtin_tools/meta_tools.rs:5 (doc comment; the field was deleted)",
+      "consumer_location": "none — `BuiltinToolConfig::tool_catalog` does not exist in src/executor/builtin_registry/config.rs",
+      "decision": "DECIDE",
+      "rationale": "The module-doc on `builtin_tools::meta_tools` describes the historical deletion of the meta tools, and references `BuiltinToolConfig.tool_catalog` as the gate that was never set. The field was removed from the config struct but the explanatory doc still names it. Two reasonable moves: (a) rewrite the doc to say \"the host wiring that production never completed\" so it doesn't dangle on a non-existent field, or (b) leave it as written historical evidence. The intent is clearly historical, not a live reference; the doc is misleading but not load-bearing.",
+      "fix_commit": null,
+      "residual_risk": "A reader hunting for `BuiltinToolConfig.tool_catalog` will not find it; mild documentation drift only."
+    },
+    {
+      "id": "sw-executor-5-1",
+      "severity": "medium",
+      "form": 5,
+      "produced": "struct field `session_set_topic_tool: Option<SessionSetTopicTool>` (impl-struct-named)",
+      "produced_location": "src/executor/builtin_registry/registry/struct_def.rs:162 (built at builder/constructor/mod.rs:1238)",
+      "consumer_location": "src/executor/builtin_registry/registry/tool_registry_impl.rs:743 — read inside the `\"session_rename\" =>` arm",
+      "decision": "CONNECT",
+      "rationale": "Wired, but with an internal name drift: the field is named for the implementation type (`SessionSetTopicTool`), while the wire name (catalog + dispatch + SHORTHAND_ALIASES `(\"rename\", \"session_rename\")`) is `session_rename`. The catalog deliberately excludes `session_set_topic` to avoid an alias race (`tool_metadata/aliases.rs::rename_alias_targets_real_session_rename_tool`). Not severed — but a reader grepping for `session_set_topic` finds only the struct field, not the catalog entry. The aliases.rs F1 regression test catches this and is passing.",
+      "fix_commit": null,
+      "residual_risk": "A new contributor adding the alias `(\"rename\", \"session_set_topic\")` will fail `rename_alias_targets_real_session_rename_tool` loudly. The drift is documented but easy to miss."
+    },
+    {
+      "id": "sw-executor-2-1",
+      "severity": "low",
+      "form": 2,
+      "produced": "ToolRegistry trait default methods workspace_handle / smart_recall_config_handle / session_context_handle / session_key_handle",
+      "produced_location": "src/executor/tool_registry.rs:55,69,84,95",
+      "consumer_location": "src/gateway/execution_engine/execute.rs:699,725,741,744 (all four read and write the shared handle); override at src/executor/builtin_registry/registry/tool_registry_impl.rs:34,43,49,53",
+      "decision": "CONNECT",
+      "rationale": "All four trait default methods return `None`. `BuiltinToolRegistry` overrides each one to expose a shared handle, and `ExecutionEngine::execute` writes the per-turn session/workspace/smart-recall profile into them before dispatch. The two-layer design (race-free per-turn `TURN_CONTEXT` task-local preferred, mutable handle as fallback) is explicit in the inline comments at tool_registry_impl.rs:43-44 and execute.rs:709-744. No severed wire.",
+      "fix_commit": null,
+      "residual_risk": "A new `ToolRegistry` implementor that forgets to override any of the four will silently fall through to `None`, and the dependent tools (memory_search / session-binding) will miss their per-turn scope. Not currently a bug; documented behavior."
+    },
+    {
+      "id": "sw-executor-7-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs / collab_session_tools.rs / agent_acp_tools.rs (entire modules)",
+      "produced_location": "src/executor/builtin_registry/builder/constructor/coord_team_tools.rs:22; collab_session_tools.rs:21; agent_acp_tools.rs:29",
+      "consumer_location": "src/executor/builtin_registry/builder/constructor/mod.rs:1075,1105,1130 (the only caller, inside `with_config`)",
+      "decision": "CONNECT",
+      "rationale": "Each extracted submodule defines exactly one `pub(crate) fn build_*` and is invoked exactly once from the parent `with_config` constructor. This is internal structure — `pub(crate)` is intentional. No severed wire.",
+      "fix_commit": null,
+      "residual_risk": "Submodule growth is bounded by `with_config`'s responsibility; a future added extractor without a call site would be the real warning sign."
+    },
+    {
+      "id": "sw-executor-7-2",
+      "severity": "medium",
+      "form": 4,
+      "produced": "ToolRegistry trait — `execute_tool` is the indivisible dispatch match",
+      "produced_location": "src/executor/builtin_registry/registry/tool_registry_impl.rs:60-1771 (single match block)",
+      "consumer_location": "every ToolRegistry consumer: registry_adapter.rs:372,532,564; gateway/execution_engine/turn_permissions.rs:250; tests/memory_modes_integration.rs (via execute_tool calls); plus dispatchable.rs census every_advertised_builtin_tool_is_dispatchable at lines183-204",
+      "decision": "CONNECT",
+      "rationale": "The wire is guarded by `every_advertised_builtin_tool_is_dispatchable` (dispatchable.rs:183): it scans both `BUILTIN_TOOL_DEFINITIONS` and `builder/core_tools.rs::reg(` sites, recovers the dispatch arms from `tool_registry_impl.rs::=>`, and fails the build if any advertised name lacks an arm. Proven to fail by name on `plugin_manage` (see dispatchable.rs:179-180). The fix-on-2026-08-19 for `plugin_manage` is the documented case this guard caught. Mechanically complete.",
+      "fix_commit": null,
+      "residual_risk": "Future registration shapes (e.g. a new constructor-direct `tools.insert(\"foo\", …)` call outside the two scanned files) would not be picked up. `every_registered_core_tool_is_accounted` (definitions.rs:1989+) and `REG_INSERTED_NAMES` (definitions.rs:1521+) try to keep that honest."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "id": "sw-executor-0-1",
+      "topic": "Catalog → dispatch parity is enforced by a compile-time census (dispatchable.rs:177 every_advertised_builtin_tool_is_dispatchable).",
+      "evidence": "Test scans BUILTIN_TOOL_DEFINITIONS + builder/core_tools.rs reg sites vs the match arms in tool_registry_impl.rs; fails the build with named tools if any advertised name lacks a dispatch arm."
+    },
+    {
+      "id": "sw-executor-0-2",
+      "topic": "All deferred-injection setters are called from the bootpath.",
+      "evidence": "set_config_patcher (commands/start/mod.rs:1880), set_config_broadcaster (commands/start/mod.rs:1886), set_node_registry (commands/start/builder/agent_init/mod.rs:771), set_node_security_store (commands/start/builder/agent_init/mod.rs:775), set_gateway_event_bus (commands/start/builder/agent_init/mod.rs:781), set_memory_reflector (commands/start/builder/agent_init/mod.rs:716), set_query_filer (commands/start/builder/agent_init/mod.rs:751). Each setter exists because a real consumer depends on it (documented in inherent.rs)."
+    },
+    {
+      "id": "sw-executor-0-3",
+      "topic": "TOOL_CATEGORIES consumption (tool_metadata/aliases.rs::every_shorthand_target_is_executable, groups.rs::every_accounted_tool_appears_in_some_group, agents/registry.rs::verify_denies_every_hub_tool, gateway/handlers/agents.rs::handle_tools_schema) is real and in-sync.",
+      "evidence": "Four live consumers; three compile-time assertions; one runtime RPC handler."
+    },
+    {
+      "id": "sw-executor-0-4",
+      "topic": "create_tool_boxed has exactly one runtime consumer (tests/canvas_wire.rs and gateway/execution_engine/slash_command.rs::every_shorthand_payload_satisfies_its_targets_required_fields).",
+      "evidence": "The test-only call path derives the guard from create_tool_boxed's return value rather than an allowlist, which is the right pattern (slash_command.rs:774-784). No production runtime caller — that's by design: AlephToolServer paths construct tools differently."
+    },
+    {
+      "id": "sw-executor-0-5",
+      "topic": "BuiltinToolConfig field coverage: every public field on config is read at least once in the constructor or builder submodules.",
+      "evidence": "rg on every config.<field> across src/executor/builtin_registry/{builder,registry} found live reads for all 25+ fields (search_registry, tavily_api_key, generation_registry, memory_db, embedder, gateway_context, session_manager, agent_registry, workspace_manager, canvas_store, ssrf_policy, event_bus, agent_manager, browser_profile_manager, media_pipeline, extension_manager, acp_manager, a2a_tool_handle, cron_service, heartbeat_service, tool_context, shared_token_manager, coord_task_store, snapshot_store, dispatch_signal, team_store, artifact_store, channel_registry, event_store, message_router, inbox, session_coordinator, session_store, message_store, state_db, injection_mode, capture_registry, orientation, note_memory_dir, profile_synthesizer, sandbox, google_meet_bridge, memory_project_scoped, planner_provider, catalog_cache, hub_marketplace_configs, hub_mcp_handle). Form 3 (inert config) does not apply."
+    },
+    {
+      "id": "sw-executor-0-6",
+      "topic": "No-op success returns in the dispatch match: all `Box::pin(async move { tool.call_json(arguments).await })` arms delegate to real `AlephTool::call_json` implementations. The unknown-tool fallback at tool_registry_impl.rs:1756 explicitly errors (AlephError::tool(\"Unknown tool: …\")), it does not silently return success. Form 5 does not apply.",
+      "evidence": "Dispatch match is a flat `tool.call_json(arguments).await` per arm; the only synthetic arm is the `_ =>` plugin-handler / unknown-tool fallback at tool_registry_impl.rs:1737-1770, which either invokes `extension_manager.call_plugin_tool` or returns `Err(AlephError::tool(...))`."
+    },
+    {
+      "id": "sw-executor-0-7",
+      "topic": "Public re-exports in executor/mod.rs:9-11 and builtin_registry/mod.rs:28-39 all have live external consumers.",
+      "evidence": "create_tool_boxed (slash_command test), BuiltinToolConfig (tests + agent_init + builder), BuiltinToolRegistry (commands/start + many), BUILTIN_TOOL_DEFINITIONS (15+ consumers across src/, tests/, bin/), TOOL_CATEGORIES (3+ consumers), ToolRegistry trait (12+ consumers including the gateway engine)."
+    }
+  ],
+  "verification": "Static only per instructions — cargo check/test intentionally NOT run. All public symbols verified by rg scan across src/, tests/, bin/ (substitute paths: src/bin/aleph-server), interfaces/, crates/, desktop/, bindings/ excluding review-results/, graphify-out/, .worktrees/.",
+  "notes": "Module is small but very dense —21 files including the 195k-line definitions.rs catalog. The interesting findings are 1) two redundant use-imports allowed by `#![allow(unused_imports)]` in inherent.rs/struct_def.rs, and 2) a stale doc reference in builtin_tools/meta_tools.rs to a deleted BuiltinToolConfig.tool_catalog field. The catalog → dispatch parity is unusually well guarded by a source-level census (dispatchable.rs), which fails the build on a missing arm. The intrinsic name drift between struct field `session_set_topic_tool` and wire name `session_rename` is documented and tested. No severed wires of forms1, 2, 4, or 5 were found; no inert BuiltinToolConfig fields were found. The audit identified8 findings, well under the 10 cap; the `reviewed_no_change` block documents the 7 surfaces I scanned and found intact."
+}

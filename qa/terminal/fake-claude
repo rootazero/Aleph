@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# A stand-in for `claude`, for `qa/terminal/run.sh`.
+#
+# `run.sh` copies this file to `$QA_ROOT/bin/claude` — the NAME is the point.
+# `agent_detect::identify_agent` resolves a program to an agent by basename
+# (`crates/agent-detect/src/engine.rs::lookup_agent`), so a script called
+# `fake-claude` identifies as nothing at all. Nothing else about this file is
+# claude-shaped: it paints three screens and sleeps.
+#
+# ## Where its screen text comes from
+#
+# NOT from here. `chrome.env`, generated beside this file by
+# `derive_chrome.py`, carries `QA_CLAUDE_IDLE` / `_WORKING` / `_BLOCKED`, each
+# built from a named rule in `crates/agent-detect/src/manifests/claude.toml`
+# and checked against that rule's own regex before it is written. A manifest
+# whose wording moved fails there, loudly, instead of leaving this script
+# painting chrome no rule matches — which on the wire is indistinguishable
+# from detection being broken.
+#
+# ## Knobs (all optional)
+#
+#   PHASE_SECS     seconds each screen stays up before the next (default 2)
+#   QUIET=1        after the working screen, emit NOTHING for QUIET_SECS
+#                  before moving on — the 30 s `quiet_since` clock in
+#                  `gateway::runtime::QUIET_AFTER_MS` needs a real silence,
+#                  and 35 s is that clock plus margin
+#   QUIET_SECS     length of that silence (default 35)
+#   QA_FAKE_CD     `cd` here first, so the foreground probe's cwd is a
+#                  directory neither the spawn dir nor the OSC 7 one
+#   QA_FAKE_OSC7   emit `OSC 7` naming this directory
+#
+# The screen is cleared between phases (ED 2 + ED 3 + CUP home). Without that
+# the earlier chrome stays visible and the HIGHEST-priority rule still on the
+# grid wins: `live_turn_working` (970) would outrank the `live_prompt_box`
+# (950) painted after it, and the fixture would assert a state the screen no
+# longer shows.
+set -u
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CHROME="${QA_CHROME:-$HERE/chrome.env}"
+if [ ! -f "$CHROME" ]; then
+  echo "fake-claude: no chrome at $CHROME (run derive_chrome.py first)" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+. "$CHROME"
+
+PHASE_SECS="${PHASE_SECS:-2}"
+QUIET_SECS="${QUIET_SECS:-35}"
+
+paint() {
+  # ED 2 (whole screen) + ED 3 (scrollback) + cursor home, then the chrome.
+  printf '\033[2J\033[3J\033[H%s' "$1"
+}
+
+if [ -n "${QA_FAKE_CD:-}" ]; then
+  cd "$QA_FAKE_CD" || { echo "fake-claude: cannot cd to $QA_FAKE_CD" >&2; exit 1; }
+fi
+
+if [ -n "${QA_FAKE_OSC7:-}" ]; then
+  # `file://` + an EMPTY-or-`localhost` host is the only form
+  # `screen::perform::osc::parse_osc7_cwd` accepts; anything else names
+  # another machine's filesystem and is dropped.
+  printf '\033]7;file://localhost%s\a' "$QA_FAKE_OSC7"
+fi
+
+paint "$QA_CLAUDE_IDLE"
+sleep "$PHASE_SECS"
+
+paint "$QA_CLAUDE_WORKING"
+sleep "$PHASE_SECS"
+
+if [ "${QUIET:-0}" = "1" ]; then
+  # Not a `paint` — the point is that NOTHING reaches the screen, so the
+  # session's last frame recedes past QUIET_AFTER_MS while its state stays
+  # exactly where the working screen put it (spec R2-3).
+  sleep "$QUIET_SECS"
+fi
+
+paint "$QA_CLAUDE_BLOCKED"
+
+# Hold. An exited child is reported `visible_idle` by
+# `detection_update_for_publish_with_osc`, which would release the working ->
+# idle hold and turn the last screen into an Idle row — so the process has to
+# outlive every stage that reads it.
+sleep 86400

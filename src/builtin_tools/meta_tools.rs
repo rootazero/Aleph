@@ -1,11 +1,11 @@
 //! Fuzzy name matching shared by the tool / slash-command "did you mean" paths.
 //!
 //! This module used to host the `list_tools` / `search_tools` / `get_tool_schema`
-//! meta tools — a two-stage tool-discovery pattern that was only ever registered
-//! when `BuiltinToolConfig.tool_catalog` was `Some`, which production never set.
-//! Progressive disclosure is served instead by [`crate::tools::tool_search`] and
-//! [`crate::tools::schema_lookup`], both registered per-request by the gateway
-//! execution engine, so the meta tools were deleted.
+//! meta tools — a two-stage tool-discovery pattern that was never registered in
+//! production. Progressive disclosure is served instead by
+//! [`crate::tools::tool_search`] and [`crate::tools::schema_lookup`], both
+//! registered per-request by the gateway execution engine, so the meta tools
+//! were deleted.
 //!
 //! What survives is the Levenshtein helper they carried, which has real
 //! consumers: [`crate::tools::name_repair`] (tool-name repair + the `ToolNotFound`

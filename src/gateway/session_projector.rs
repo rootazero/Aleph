@@ -1261,11 +1261,7 @@ mod tests {
         ) -> Result<usize, SessionError> {
             Ok(0)
         }
-        async fn is_retired(
-            &self,
-            _id: &SessionId,
-            _seq: EventSeq,
-        ) -> Result<bool, SessionError> {
+        async fn is_retired(&self, _id: &SessionId, _seq: EventSeq) -> Result<bool, SessionError> {
             Err(SessionError::Storage("event log unreadable".into()))
         }
         async fn load_run_markers(
@@ -1695,8 +1691,7 @@ mod tests {
     /// un-clearing itself in the transcript milliseconds later.
     #[tokio::test]
     async fn clear_before_the_drain_lands_writes_no_rows() {
-        let events: Arc<dyn SessionEventStore> =
-            crate::session::store::install_test_event_store();
+        let events: Arc<dyn SessionEventStore> = crate::session::store::install_test_event_store();
         let temp = tempdir().unwrap();
         let store = sqlite_store(temp.path(), "clear_race.db");
         let id = SessionId::ephemeral("clear-race");
@@ -1999,7 +1994,10 @@ mod tests {
 
         let projector = MessageProjector::new(store.clone(), None);
         let report = projector.request_repair(&id).await;
-        assert!(report.legacy, "a seq-less transcript must be named: {report:?}");
+        assert!(
+            report.legacy,
+            "a seq-less transcript must be named: {report:?}"
+        );
         assert_eq!(report.holes_filled, 0);
         assert_eq!(store.get_history(&id, None).await.unwrap().len(), 1);
     }

@@ -91,6 +91,8 @@ pub enum LocalCommand {
     /// Browse providers and their models (opens the provider picker).
     /// `query` pre-filters both levels through the shared ranker.
     Providers { query: String },
+    /// Toggle the agent-panel column (live `runtime.agents.list` sidebar).
+    AgentPanel,
     /// Browse this session's background sub-agents (opens the agents overlay;
     /// Enter opens one agent's run view).
     Agents,
@@ -212,6 +214,10 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "Browse providers & models and pick one (/providers [query])",
     ),
     (
+        "/agentpanel",
+        "Toggle the agent panel (live runtime agents sidebar)",
+    ),
+    (
         "/agents",
         "Browse this session's sub-agents; Enter opens an agent's run view",
     ),
@@ -307,6 +313,7 @@ pub fn parse_input(input: &str) -> ParsedInput {
         // (`shadowed_gateway_commands`) is the guard if that ever changes.
         "/agents" => ParsedInput::Local(LocalCommand::Agents),
         "/todo" => ParsedInput::Local(LocalCommand::Todo),
+        "/agentpanel" => ParsedInput::Local(LocalCommand::AgentPanel),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
         "/replay" => {
             if args.is_empty() {
@@ -464,10 +471,17 @@ mod tests {
         // to the local agents overlay (agents-viz round) — before that the word
         // simply fell through to the model as chat text; the visual overlay is
         // what the word means in a terminal now, and the model path keeps its
-        // real `/agent …` namespace.
+        // real `/agent …` namespace. The agent-panel sidebar toggle lives on
+        // `/agentpanel` so the two features don't share one word.
         assert_eq!(
             parse_input("/agents"),
             ParsedInput::Local(LocalCommand::Agents)
+        );
+        // `/skills` is a command this crate does not claim: it falls through
+        // to the gateway.
+        assert_eq!(
+            parse_input("/skills"),
+            ParsedInput::Gateway("/skills".to_string())
         );
         assert_eq!(parse_input("/todo"), ParsedInput::Local(LocalCommand::Todo));
         assert_eq!(
@@ -614,7 +628,7 @@ mod tests {
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 20);
+        assert_eq!(cmds.len(), 21);
         assert!(cmds.iter().any(|(name, _)| *name == "/providers"));
         assert!(cmds.iter().any(|(name, _)| *name == "/agents"));
         assert!(cmds.iter().any(|(name, _)| *name == "/todo"));
@@ -630,6 +644,25 @@ mod tests {
         assert!(cmds.iter().any(|(name, _)| *name == "/tools"));
         assert!(cmds.iter().any(|(name, _)| *name == "/replays"));
         assert!(cmds.iter().any(|(name, _)| *name == "/replay"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/agents"));
+    }
+
+    /// `/agents` must both parse to the toggle AND appear in the palette
+    /// catalog — R8-8: "a command that parses but is absent from the
+    /// palette is invisible". No crate-wide test ties `LOCAL_COMMAND_CATALOG`
+    /// to `parse_input` generically (checked before adding this), so this
+    /// pins the pair for the one command this task adds.
+    #[test]
+    fn parse_agents_toggle_and_its_catalog_row_agree() {
+        assert_eq!(
+            parse_input("/agents"),
+            ParsedInput::Local(LocalCommand::Agents)
+        );
+        assert_eq!(
+            parse_input("/AGENTS"),
+            ParsedInput::Local(LocalCommand::Agents)
+        );
+        assert!(local_commands().iter().any(|(name, _)| *name == "/agents"));
     }
 
     #[test]

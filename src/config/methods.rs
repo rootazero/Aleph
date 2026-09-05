@@ -32,23 +32,6 @@ impl Config {
     // Provider Management Methods
     // =============================================================================
 
-    /// Get the default provider if it exists and is enabled
-    ///
-    /// Returns None if:
-    /// - No default provider is configured
-    /// - Default provider does not exist in providers map
-    /// - Default provider is disabled
-    ///
-    /// # Returns
-    /// * `Some(String)` - The name of the enabled default provider
-    /// * `None` - No valid default provider
-    #[must_use]
-    pub fn get_default_provider(&self) -> Option<String> {
-        let name = self.general.default_provider.as_deref()?;
-        let config = self.providers.get(name)?;
-        config.enabled.then(|| name.to_string())
-    }
-
     /// Set the default provider with validation
     ///
     /// Validates that:

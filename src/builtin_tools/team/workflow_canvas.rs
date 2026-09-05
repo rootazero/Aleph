@@ -116,8 +116,8 @@ impl AlephTool for TeamWorkflowCanvasTool {
     const NAME: &'static str = "team_workflow_canvas";
     const DESCRIPTION: &'static str =
         "Convert between a team's CoordTask DAG and an Obsidian-compatible JSON Canvas \
-        document. action='export' renders the team's tasks (optionally filtered by status / \
-        owner) as a canvas — useful for showing a plan, generating diagrams, or exporting to \
+        document. action='export' renders the team's tasks (optionally filtered by status) \
+        as a canvas — useful for showing a plan, generating diagrams, or exporting to \
         an .canvas file. action='import' takes a canvas document and creates coord-tasks \
         under team_id: each text node becomes a task; each edge becomes a `blocked_by` \
         dependency. Pass dry_run=true to preview the planned tasks without writing.";
@@ -287,6 +287,43 @@ mod tests {
         assert_eq!(args.team_id, "t1");
         assert!(args.canvas.is_none());
         assert!(!args.dry_run);
+    }
+
+    /// The DESCRIPTION is the copy of a fact the MODEL reads, and this args
+    /// type has no `deny_unknown_fields` — so a filter dimension advertised
+    /// here but absent from the args is a reported-success no-op: the model
+    /// sends `owner`, serde drops it, and the tool exports the whole team DAG
+    /// while reporting a filtered export. Derive the permitted vocabulary
+    /// from the args schema rather than hand-listing it, and fail loudly if
+    /// the clause this guard reads is ever reworded (a guard that can no
+    /// longer find its subject must go red, not green).
+    #[test]
+    fn description_advertises_only_filters_the_args_carry() {
+        let schema = serde_json::to_value(schemars::schema_for!(TeamWorkflowCanvasArgs)).unwrap();
+        let props = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("args schema exposes its properties");
+
+        const CLAUSE_HEAD: &str = "optionally filtered by ";
+        let tail = TeamWorkflowCanvasTool::DESCRIPTION
+            .split_once(CLAUSE_HEAD)
+            .map(|(_, tail)| tail)
+            .expect("DESCRIPTION keeps the 'optionally filtered by …' clause this guard reads");
+        let clause = tail
+            .split_once(')')
+            .map(|(clause, _)| clause)
+            .expect("the filter clause is parenthesised");
+
+        for dimension in clause.split('/') {
+            let dimension = dimension.trim();
+            assert!(
+                props.contains_key(dimension),
+                "DESCRIPTION advertises a '{dimension}' filter that TeamWorkflowCanvasArgs \
+                 does not carry — unknown keys are silently dropped, so the model would get a \
+                 successful unfiltered export"
+            );
+        }
     }
 
     #[test]

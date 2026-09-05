@@ -13,7 +13,9 @@ use ratatui::{
 };
 
 use crate::tui::app::{AppState, ChatMessage, Focus};
-use crate::tui::markdown::{markdown_to_lines, markdown_to_lines_incremental, StreamLines, StreamPrefix};
+use crate::tui::markdown::{
+    markdown_to_lines, markdown_to_lines_incremental, StreamLines, StreamPrefix,
+};
 use crate::tui::theme::DEFAULT_THEME;
 
 use super::tool_block::render_tool_block;
@@ -191,8 +193,16 @@ fn build_all_lines_cached(
     width: u16,
     cache: &mut LineCache,
 ) -> Vec<Line<'static>> {
-    let (_total, lines) =
-        build_visible_lines(messages, verbose, spinner_frame, width, cache, true, 0, usize::MAX);
+    let (_total, lines) = build_visible_lines(
+        messages,
+        verbose,
+        spinner_frame,
+        width,
+        cache,
+        true,
+        0,
+        usize::MAX,
+    );
     lines
 }
 
@@ -269,7 +279,9 @@ fn build_visible_lines(
                         &mut cache.streaming_markdown_cache,
                     ));
                 }
-                let content_rows = streaming_content.as_ref().map_or(0, StreamLines::line_count);
+                let content_rows = streaming_content
+                    .as_ref()
+                    .map_or(0, StreamLines::line_count);
                 // +1 streaming cursor, +1 blank separator.
                 heights.push(streaming_head.len() + content_rows + 2);
             }
@@ -419,7 +431,14 @@ fn render_settled_message(
             reasoning,
             ..
         } => {
-            render_assistant_head(reasoning.as_deref(), tools, verbose, spinner_frame, width, out);
+            render_assistant_head(
+                reasoning.as_deref(),
+                tools,
+                verbose,
+                spinner_frame,
+                width,
+                out,
+            );
             if !content.is_empty() {
                 let md_lines = markdown_to_lines(content, width.saturating_sub(2));
                 push_prefixed_content(out, md_lines);

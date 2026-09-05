@@ -2134,6 +2134,18 @@
       "members": "members"
     }
   },
+  "agent_panel": {
+    "title": "Running Agents",
+    "state_blocked": "Blocked",
+    "state_working": "Working",
+    "state_idle": "Idle",
+    "state_unknown": "Unknown",
+    "empty": "No agents running",
+    "quiet_seconds": "quiet {{ n }}s",
+    "quiet_minutes": "quiet {{ n }}m",
+    "quiet_hours": "quiet {{ n }}h",
+    "quiet_days": "quiet {{ n }}d"
+  },
   "cron": {
     "title": "Scheduled Tasks",
     "description": "Manage cron jobs and scheduled automation tasks",
@@ -2779,5 +2791,9 @@
     "phase_speaking": "Speaking · start talking to interrupt",
     "repeated_misses": "Still not catching it — press esc and use text instead",
     "reply_failed": "That reply went wrong — try again in a moment?"
+  },
+  "terminal": {
+    "new_tab": "New terminal",
+    "close_tab": "Close terminal"
   }
 }

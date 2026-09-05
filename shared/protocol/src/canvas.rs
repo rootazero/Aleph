@@ -143,8 +143,7 @@ fn validate_frac_index(raw: &str) -> Result<(), String> {
     }
     if raw.as_bytes().iter().any(|b| !DIGITS.contains(b)) {
         return Err(
-            "fractional index must use only 0-9, A-Z, a-z (no punctuation, no unicode)"
-                .into(),
+            "fractional index must use only 0-9, A-Z, a-z (no punctuation, no unicode)".into(),
         );
     }
     if raw.ends_with('0') {
@@ -157,9 +156,7 @@ fn validate_frac_index(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct FracIndex(String);
 
@@ -714,14 +711,10 @@ mod tests {
         }
         // Past MAX_FRAC_INDEX_LEN.
         let too_long = "UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
-        assert!(
-            serde_json::from_value::<FracIndex>(serde_json::json!(too_long)).is_err()
-        );
+        assert!(serde_json::from_value::<FracIndex>(serde_json::json!(too_long)).is_err());
         // Unicode / multi-byte punctuation must fail.
         let unicode = "Ué";
-        assert!(
-            serde_json::from_value::<FracIndex>(serde_json::json!(unicode)).is_err()
-        );
+        assert!(serde_json::from_value::<FracIndex>(serde_json::json!(unicode)).is_err());
     }
 
     #[test]

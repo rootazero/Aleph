@@ -92,6 +92,15 @@ impl HarnessRunner for AgentHarnessRunner {
         self.cheap_provider.clone()
     }
 
+    /// Hand the spawner the SAME verifier chain this runner installs on its
+    /// own harness. Without this, every spawned subagent silently ran with
+    /// `verifier_chain: None` and was unprotected against tool-call death
+    /// loops / missing stop hooks / scratchpad goal drift. AGENTS-R4-01.
+    fn verifier_chain(&self) -> Option<Arc<crate::verification::VerifierChain>> {
+        // rust-doctor-disable-next-line excessive-clone
+        self.verifier_chain.clone()
+    }
+
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     async fn run(
         &self,

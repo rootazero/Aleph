@@ -133,7 +133,11 @@ impl InProcessActorSessionService {
         // operations on unrelated sessions.
         if let Some(old_sender) = to_shutdown {
             let (stx, srx) = oneshot::channel();
-            if old_sender.send(ActorCommand::Shutdown { reply: stx }).await.is_ok() {
+            if old_sender
+                .send(ActorCommand::Shutdown { reply: stx })
+                .await
+                .is_ok()
+            {
                 match timeout(SHUTDOWN_GRACE, srx).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {

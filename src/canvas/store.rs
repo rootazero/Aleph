@@ -157,20 +157,10 @@ impl CanvasStore {
         }
     }
 
-    /// Enumerate the library as wire rows. Thin over [`Self::list_entries`];
-    /// callers that must visibility-filter (every RPC/tool face) use the
-    /// listing form instead — this one has already dropped the attribution
-    /// the predicate needs.
-    pub async fn list(&self) -> Vec<CanvasRow> {
-        self.list_entries()
-            .await
-            .into_iter()
-            .map(|e| e.row)
-            .collect()
-    }
-
     /// Enumerate the library. A broken row is skipped LOUDLY (named `warn!`)
-    /// — never silently, and never fails the whole listing (§5.23b).
+    /// — never silently, and never fails the whole listing (§5.23b). Every
+    /// RPC/tool face uses the listing form because it needs the
+    /// `owner_user_id` for visibility filtering.
     pub async fn list_entries(&self) -> Vec<CanvasListing> {
         let mut rows = Vec::new();
         let mut entries = match tokio::fs::read_dir(&self.root).await {
@@ -716,9 +706,9 @@ mod tests {
         std::fs::create_dir_all(&bad_dir).unwrap();
         std::fs::write(bad_dir.join("doc.json"), "{ this is not json").unwrap();
 
-        let rows = store.list().await;
-        assert_eq!(rows.len(), 1, "the broken row is skipped, not fatal");
-        assert_eq!(rows[0].id, good.id);
+        let entries = store.list_entries().await;
+        assert_eq!(entries.len(), 1, "the broken row is skipped, not fatal");
+        assert_eq!(entries[0].row.id, good.id);
 
         // "failed to parse" and "does not exist" are two different answers.
         let err = store.get("cv-corrupt").await.unwrap_err();
@@ -1024,7 +1014,7 @@ mod tests {
             store.get(&doc.id).await.unwrap_err(),
             CanvasError::NotFound(_)
         ));
-        assert!(store.list().await.is_empty());
+        assert!(store.list_entries().await.is_empty());
         drop(dir);
     }
 

@@ -298,7 +298,6 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
                         source: SkillOrigin::Official,
                         version: Some(BUNDLED_VERSION.to_string()),
                         url: None,
-                        installed_at: None,
                     },
                 );
                 debug!(skill = %name, "Extracted bundled skill");
@@ -318,7 +317,6 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
                         source: SkillOrigin::Official,
                         version: None,
                         url: None,
-                        installed_at: None,
                     },
                 );
                 warn!(skill = %name, error = %e, "Failed to extract skill");
@@ -653,7 +651,6 @@ pub(crate) fn extract_skill_tree_from_dir(
                         source: SkillOrigin::Official,
                         version: Some(BUNDLED_VERSION.to_string()),
                         url: None,
-                        installed_at: None,
                     },
                 );
             }
@@ -664,7 +661,6 @@ pub(crate) fn extract_skill_tree_from_dir(
                         source: SkillOrigin::Official,
                         version: None,
                         url: None,
-                        installed_at: None,
                     },
                 );
                 warn!(skill = %name, error = %e, "Failed to extract skill from checkout");
@@ -851,7 +847,6 @@ mod tests {
                 source: SkillOrigin::Local,
                 version: None,
                 url: None,
-                installed_at: None,
             },
         );
 

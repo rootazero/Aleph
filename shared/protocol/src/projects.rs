@@ -490,7 +490,10 @@ mod tests {
                 kind.as_str()
             );
         }
-        assert!(BindingPeerKind::from_str("").is_err(), "empty is not a kind");
+        assert!(
+            BindingPeerKind::from_str("").is_err(),
+            "empty is not a kind"
+        );
     }
 
     /// The single assertion that makes `BindingPeerKind` worth adding: a typo

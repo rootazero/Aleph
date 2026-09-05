@@ -297,7 +297,9 @@ mod tests {
             "this test is only meaningful while chatgpt opts out of /models probing"
         );
         let health = FailoverHealth::default();
-        health.open_for_test("chatgpt", Duration::from_secs(300)).await;
+        health
+            .open_for_test("chatgpt", Duration::from_secs(300))
+            .await;
         let configs = HashMap::from([("chatgpt".to_string(), ProviderConfig::test_config("m"))]);
 
         let outcomes = probe_open_circuits_once(&health, &configs, |_, _| async { true }).await;
@@ -341,7 +343,9 @@ mod tests {
         // Removed from the config since the trip: no probe, no reset, no panic.
         // (A *disabled* provider still has an entry — see the test above.)
         let health = FailoverHealth::default();
-        health.open_for_test("ghost", Duration::from_secs(300)).await;
+        health
+            .open_for_test("ghost", Duration::from_secs(300))
+            .await;
 
         let outcomes = probe_open_circuits_once(&health, &HashMap::new(), |_, _| async {
             panic!("an unconfigured provider must never be probed")

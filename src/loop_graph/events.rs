@@ -34,7 +34,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::sync_primitives::{Arc, AtomicU64, Ordering};
+use crate::sync_primitives::{Arc, AtomicU64};
 use tokio::sync::broadcast;
 
 use crate::loop_graph::types::{EdgeKind, NodeKind};
@@ -164,40 +164,16 @@ impl TopologyEventBus {
         self.inner.receiver_count()
     }
 
-    /// Total events dropped on a Lagged receiver since this bus was created.
-    /// Incremented by subscribers when they observe a `RecvError::Lagged(n)`;
-    /// the audit layer reads this to decide whether to surface a warning to
-    /// the operator. Resetting the counter is intentionally not provided — a
-    /// dropped event is dropped, the counter is monotonic.
-    //
-    // Not yet wired to a caller — the planned audit-warning consumer has not
-    // landed. Marked allow(dead_code) so future removal is a deliberate
-    // decision (when a consumer materialises the lint goes away naturally).
-    #[allow(dead_code)]
-    #[must_use]
-    pub fn dropped_events(&self) -> u64 {
-        self.dropped_events.load(Ordering::Acquire)
-    }
-
     /// Clone the inner lag counter so a subscriber task can record lags
     /// without holding the bus itself (which would keep the Sender alive
     /// past every other send site and prevent the bounded channel from
     /// closing — see [`spawn_event_persister`] tests).
+    /// Counter is incremented by subscribers via `Arc::fetch_add` when they
+    /// observe a `RecvError::Lagged(n)`; future audit-warning consumers can
+    /// read it by re-cloning. Resetting is intentionally not provided.
     #[must_use]
     pub fn lag_counter(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.dropped_events)
-    }
-
-    /// Record `n` events dropped by a subscriber's lag. Called by
-    /// `spawn_event_persister` (and any future subscriber) when it observes a
-    /// `RecvError::Lagged(n)` from `broadcast::Receiver::recv`.
-    //
-    // Companion to `dropped_events`: no live caller today (the persister
-    // currently does not call this), but the audit-warning consumer planned
-    // for `dropped_events` will also use this path. See allow on the getter.
-    #[allow(dead_code)]
-    pub fn record_lag(&self, n: u64) {
-        self.dropped_events.fetch_add(n, Ordering::AcqRel);
     }
 }
 

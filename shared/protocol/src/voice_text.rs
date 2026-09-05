@@ -213,9 +213,26 @@ pub fn join_needs_space(prev: &str, next: &str) -> bool {
     };
     let code_operator = matches!(
         a,
-        '/' | '+' | '=' | '-' | '_' | '\\' | '|' | '@' | '#' | '$' | '%' | '&' | '*' | '<' | '>' | '`' | '~'
+        '/' | '+'
+            | '='
+            | '-'
+            | '_'
+            | '\\'
+            | '|'
+            | '@'
+            | '#'
+            | '$'
+            | '%'
+            | '&'
+            | '*'
+            | '<'
+            | '>'
+            | '`'
+            | '~'
     );
-    (a.is_ascii_alphanumeric() || a.is_ascii_punctuation()) && b.is_ascii_alphanumeric() && !code_operator
+    (a.is_ascii_alphanumeric() || a.is_ascii_punctuation())
+        && b.is_ascii_alphanumeric()
+        && !code_operator
 }
 
 /// Assemble the final utterance text at the streaming lock point: the locked

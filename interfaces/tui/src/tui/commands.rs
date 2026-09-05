@@ -394,6 +394,15 @@ pub(super) async fn execute_local_command(
         LocalCommand::Knob { knob, value } => execute_knob(state, client, knob, value).await,
         LocalCommand::Sessions => execute_sessions(state, client).await,
         LocalCommand::Providers { query } => execute_providers(state, client, query).await,
+        LocalCommand::AgentPanel => {
+            state.toggle_agent_panel();
+            let mode = if state.agent_panel_visible {
+                "shown"
+            } else {
+                "hidden"
+            };
+            state.add_system_message(format!("Agent panel: {mode}"));
+        }
         LocalCommand::Agents => execute_agents(state, client).await,
         LocalCommand::Todo => {
             state.tasks_panel_visible = !state.tasks_panel_visible;

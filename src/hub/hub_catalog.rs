@@ -11,17 +11,17 @@ use serde::Deserialize;
 use crate::hub::types::{ExtensionCategory, ExtensionEntry, ExtensionKind, InstallSpec, TrustTier};
 
 /// Current artifact schema version this client understands.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+pub(crate) const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct HubCatalogArtifact {
+pub(crate) struct HubCatalogArtifact {
     pub manifest: HubCatalogManifest,
     #[serde(default)]
     pub entries: Vec<HubCatalogEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct HubCatalogManifest {
+pub(crate) struct HubCatalogManifest {
     pub schema_version: u32,
     pub hub_id: String,
     pub name: String,
@@ -42,7 +42,7 @@ pub struct HubCatalogManifest {
 const RESERVED_LOCAL_ID_PREFIX: &str = "local:";
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct HubCatalogEntry {
+pub(crate) struct HubCatalogEntry {
     pub id: String,
     pub kind: ExtensionKind,
     pub category: ExtensionCategory,

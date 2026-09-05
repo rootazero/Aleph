@@ -378,10 +378,7 @@ impl AgentRuntime {
     /// no-verifier path — the spawner's `verifier_chain: None` — in which
     /// case the iteration cap is the last line of defence.
     #[must_use]
-    pub fn with_verifier_chain(
-        mut self,
-        chain: Arc<crate::verification::VerifierChain>,
-    ) -> Self {
+    pub fn with_verifier_chain(mut self, chain: Arc<crate::verification::VerifierChain>) -> Self {
         self.verifier_chain = Some(chain);
         self
     }

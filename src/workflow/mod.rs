@@ -34,5 +34,5 @@ pub use compile::{
     WORKFLOW_ORIGIN_KEY, WORKFLOW_PHASE_KEY, WORKFLOW_RUN_ID_KEY, WORKFLOW_SCHEMA_KEY,
     WORKFLOW_STEP_KEY, WORKFLOW_STRATEGY_KEY,
 };
-pub use def::{render_prompt, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
+pub use def::{render_prompt, RunInputs, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};

@@ -75,7 +75,6 @@ pub struct MemoryConfig {
     // cannot express a field is the shape that silently resets it.
     #[serde(default)]
     pub curated: CuratedSettings,
-
     // A top-level `dedup_similarity_threshold` is deliberately ABSENT: the
     // server cut that key (zero readers). The live write-time dedup knob is
     // `[memory.compound_ingest] dedup_similarity_threshold`, which this page

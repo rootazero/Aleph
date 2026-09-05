@@ -76,6 +76,12 @@ for spec in args.searxng:
         f"[search.backends.{name}]",
         'provider_type = "searxng"',
         f'base_url = "http://127.0.0.1:{port}"',
+        # Required since the boot-time SSRF host check landed: without it
+        # every backend here is refused at construction, `from_config` reports
+        # "no provider was constructable", and the whole fixture silently
+        # falls back to the TAVILY_API_KEY env var. The mock IS a private
+        # upstream, so saying so is the honest config, not a workaround.
+        "allow_private_upstream = true",
         "min_request_interval_ms = 0",
     ]
 

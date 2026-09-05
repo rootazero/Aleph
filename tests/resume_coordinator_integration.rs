@@ -365,9 +365,7 @@ async fn a_resume_replays_the_crashed_runs_envelope_on_carriers_that_cannot_rais
     use alephcore::agents::thinking::{ThinkLevel, THINK_LEVEL_SESSION_KEY};
     use alephcore::gateway::execution_engine::RESUME_TIER_CEILING_KEY;
     use alephcore::memory::session_memory_mode::{MemoryMode, MEMORY_MODE_SESSION_KEY};
-    use alephcore::orchestrator::{
-        ExecTier, SessionMode, EXEC_TIER_SESSION_KEY, MODE_SESSION_KEY,
-    };
+    use alephcore::orchestrator::{ExecTier, SessionMode, EXEC_TIER_SESSION_KEY, MODE_SESSION_KEY};
 
     let store = store();
     let sid = SessionKey::main("envelope-replay");

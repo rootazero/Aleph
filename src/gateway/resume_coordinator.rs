@@ -25,9 +25,7 @@ use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
-use crate::session::reduction::{
-    reduce_disposition, reduce_run, LogContradiction, RunDisposition,
-};
+use crate::session::reduction::{reduce_disposition, reduce_run, LogContradiction, RunDisposition};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 
@@ -267,7 +265,11 @@ pub(crate) enum SnapshotModel {
         model: String,
     },
     /// The vendor retired it and named what to use instead.
-    Successor { from: String, to: String, why: String },
+    Successor {
+        from: String,
+        to: String,
+        why: String,
+    },
     /// Nothing to replay: resume on the agent's own default chain — which is
     /// exactly what this session did before the envelope existed.
     Drop { from: String, why: String },
@@ -424,17 +426,20 @@ pub(crate) fn plan_resume(
         }
     }
 
-    if let Some(model) = env.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+    if let Some(model) = env
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
         match validate_snapshot_model(pinnable, env.model_provider.as_deref(), model) {
             SnapshotModel::Keep { provider, model } => {
                 plan.model_override =
                     ModelOverride::from_voice(provider.as_deref().unwrap_or(""), &model);
             }
             SnapshotModel::Successor { from, to, why } => {
-                plan.model_override = ModelOverride::from_voice(
-                    env.model_provider.as_deref().unwrap_or(""),
-                    &to,
-                );
+                plan.model_override =
+                    ModelOverride::from_voice(env.model_provider.as_deref().unwrap_or(""), &to);
                 sentences.push(format!(
                     "This run was served by `{from}`; it resumes on `{to}` because {why}."
                 ));
@@ -474,9 +479,7 @@ pub(crate) fn plan_resume(
 }
 
 /// One note out of however many sentences the plan collected.
-fn degrade_note(
-    sentences: Vec<String>,
-) -> Option<crate::session::boundary_repair::DegradeNote> {
+fn degrade_note(sentences: Vec<String>) -> Option<crate::session::boundary_repair::DegradeNote> {
     (!sentences.is_empty())
         .then(|| crate::session::boundary_repair::DegradeNote::new(sentences.join(" ")))
 }
@@ -1202,12 +1205,10 @@ impl ResumeCoordinator {
         plan: &ResumePlan,
     ) -> Result<(), ResumeRefusal> {
         let workspace_override = plan.workspace.clone();
-        let permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}")))?;
+        let permit =
+            self.semaphore.clone().acquire_owned().await.map_err(|e| {
+                ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}"))
+            })?;
 
         let agent_id = session_id.agent_id().to_string();
         // A missing agent is its own refusal, not a generic failure: the run
@@ -1482,7 +1483,6 @@ mod tests {
         );
     }
 
-
     /// ③-D8's falsification arm. A run whose `RunStarted` is ancient but whose
     /// last tool call landed a moment ago is alive, and measuring its age from
     /// the marker abandons exactly the long runs resume exists for.
@@ -1606,7 +1606,10 @@ mod tests {
             !plan.unsnapshotted,
             "the envelope is present; only its model half is missing"
         );
-        assert!(plan.degraded, "an unrecoverable model is something given up");
+        assert!(
+            plan.degraded,
+            "an unrecoverable model is something given up"
+        );
         let note = plan
             .degrade
             .as_ref()
@@ -1639,7 +1642,10 @@ mod tests {
             Some(&pinnable(&["openai"])),
             &|_| true,
         );
-        assert!(!plan.degraded, "a model that is still valid gives nothing up");
+        assert!(
+            !plan.degraded,
+            "a model that is still valid gives nothing up"
+        );
         assert!(plan.degrade.is_none());
         assert_eq!(
             plan.model_override
@@ -1759,11 +1765,7 @@ mod tests {
         );
         assert_eq!(plan.model_override, None);
         assert!(plan.degraded);
-        assert!(plan
-            .degrade
-            .expect("stated")
-            .sentence
-            .contains("gone-inc"));
+        assert!(plan.degrade.expect("stated").sentence.contains("gone-inc"));
     }
 
     /// "No published pinnable set" is *unvalidated*, never "nothing is
@@ -1950,5 +1952,4 @@ mod tests {
             );
         }
     }
-
 }

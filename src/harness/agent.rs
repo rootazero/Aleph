@@ -72,10 +72,10 @@ pub(crate) enum ToolCallGuardOutcome {
 }
 
 pub struct AgentHarness {
-    pub(super) deps: HarnessDeps,
+    pub(crate) deps: HarnessDeps,
     /// Tracks agent activity for stall detection. `None` when stall detection
     /// is disabled (no `stall_config` in deps).
-    pub(super) stall_tracker: Option<crate::harness::deps::StallTracker>,
+    pub(crate) stall_tracker: Option<crate::harness::deps::StallTracker>,
     /// Historically set when `context_budget.before_turn` returned
     /// `FinalReply`; that path now escalates through `SplitSession` →
     /// `CompactToFit`'s deterministic truncation floor instead (never a hard
@@ -125,7 +125,7 @@ pub struct AgentHarness {
     /// Prevents the pathological loop where the model keeps re-issuing the
     /// same deterministically-failing call (e.g. `web_fetch` against a
     /// sandbox-blocked URL or a quota-exhausted API).
-    pub(super) recent_failures: Mutex<std::collections::HashSet<(String, String)>>,
+    pub(crate) recent_failures: Mutex<std::collections::HashSet<(String, String)>>,
     /// Counter for reactive-compaction rescue attempts (claude-code parity,
     /// query.ts:1092). When a provider returns `prompt_too_long` / 413, the
     /// harness consults [`crate::providers::llm_retry::classify`]; on the
@@ -135,7 +135,7 @@ pub struct AgentHarness {
     /// bumped *before* the attempt so concurrent paths cannot race the cap.
     /// Repeated overflows after summarisation indicate fundamentally
     /// oversized input. R10-safe: pure round scheduling, no policy choice.
-    pub(super) reactive_compact_attempts: AtomicU32,
+    pub(crate) reactive_compact_attempts: AtomicU32,
     /// Seq of the last persisted event covered by the most recent turn's
     /// prompt (captured in `think.rs` right after `get_events`, before that
     /// turn appended anything). `0` is the cold sentinel — the store assigns
@@ -156,7 +156,7 @@ pub struct AgentHarness {
     /// than re-fetching the whole log every call. Mechanical (R10-safe): one
     /// store per turn, no decision. The loop runs one turn at a time, so
     /// `Relaxed` ordering is sufficient.
-    pub(super) last_prompt_seq: AtomicU64,
+    pub(crate) last_prompt_seq: AtomicU64,
 }
 
 impl AgentHarness {
@@ -870,7 +870,7 @@ impl AgentHarness {
                     outcome,
                     iterations,
                     tool_calls_made,
-                    total_tokens: self.total_tokens.load(Ordering::Relaxed) as usize,
+                    total_tokens: usize::try_from(self.total_tokens.load(Ordering::Relaxed)).unwrap_or(usize::MAX),
                     hit_limit: matches!(
                         outcome,
                         crate::harness::trace::LoopTraceSessionOutcome::HitLimit,
@@ -915,7 +915,7 @@ impl AgentHarness {
                     outcome: session_outcome,
                     iterations,
                     tool_calls_made,
-                    total_tokens: self.total_tokens.load(Ordering::Relaxed) as usize,
+                    total_tokens: usize::try_from(self.total_tokens.load(Ordering::Relaxed)).unwrap_or(usize::MAX),
                     hit_limit: false,
                     final_text,
                     terminate_reason,

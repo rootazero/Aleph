@@ -17,13 +17,9 @@
 //!
 //! ## Colour mapping (Obsidian preset palette)
 //!
-//! | `CoordTaskStatus` | Preset |
-//! |-------------------|--------|
-//! | Pending           | `"3"` yellow |
-//! | InProgress        | `"5"` cyan   |
-//! | Completed         | `"4"` green  |
-//! | Failed            | `"1"` red    |
-//! | Cancelled         | none (grey)  |
+//! [`status_color`] is the single source — it was duplicated here as a table
+//! that listed 5 of the 10 statuses, i.e. a second, stale statement of one
+//! fact. Read the function.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -141,6 +137,11 @@ fn render_task_body(task: &CoordTask) -> String {
     format!("**{}**{desc}{status_line}{owner_line}", task.subject)
 }
 
+/// Obsidian preset colour per status. The 10 statuses fan into 7 presets by
+/// design — `Blocked`/`Skipped`/`Paused` share `"6"` and
+/// `Failed`/`Unsatisfiable` share `"1"`, because the card already carries the
+/// exact status as text (`task_card_text`'s `_status_:` line) and the colour
+/// is a coarse read-at-a-glance grouping, not the identity.
 const fn status_color(s: CoordTaskStatus) -> Option<&'static str> {
     match s {
         CoordTaskStatus::Pending => Some("3"),

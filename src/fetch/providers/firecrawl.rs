@@ -24,8 +24,9 @@ pub(crate) struct FirecrawlScrapeResponse {
     /// uses a top-level `success` to flag failure modes that still arrive over
     /// HTTP 200 (auth required, quota exhausted, page blocked). Without this
     /// arm the parser would silently drop the `error` field and the caller
-    /// would surface a misleading "no markdown" — see
-    /// `firecrawl_scrape_response_ignores_success_field` in the audit notes.
+    /// would surface a misleading "no markdown"; [`map_scrape`] below surfaces
+    /// the upstream `error` string verbatim, and the
+    /// `success_false_surfaces_upstream_error` test pins this contract.
     #[serde(default)]
     success: bool,
     #[serde(default)]

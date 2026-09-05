@@ -497,7 +497,8 @@ impl ToolRegistry for BuiltinToolRegistry {
                 let store = self.node_security_store.get().ok_or_else(|| {
                     AlephError::tool("node_manage not available: SecurityStore not injected")
                 })?;
-                let tool = crate::builtin_tools::NodeManageTool::new(reg.clone(), store.clone());
+                let tool =
+                    crate::builtin_tools::NodeManageTool::new(reg.clone(), store.clone(), None);
                 tool.call_json(arguments).await
             }),
 
@@ -1564,6 +1565,14 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "select_model" => Box::pin(async move {
                 crate::builtin_tools::SelectModelTool
+                    .call_json(arguments)
+                    .await
+            }),
+            // Read-only agent panel, model-facing (herdr runtime port, phase
+            // 1, Task 11) — reads two process-global statics, so it is
+            // dependency-free like `select_model`/`doctor` above.
+            "terminal" => Box::pin(async move {
+                crate::builtin_tools::TerminalTool
                     .call_json(arguments)
                     .await
             }),

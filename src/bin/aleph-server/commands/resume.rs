@@ -56,9 +56,9 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
     // they are unrendered arms, not evidence that the wording was ever seen,
     // and nobody should read the five sentences below as tested output.
     match response.outcome() {
-        ResumeStatus::Resumed => println!(
-            "Resumed the interrupted run in {named}. Watch the session for output."
-        ),
+        ResumeStatus::Resumed => {
+            println!("Resumed the interrupted run in {named}. Watch the session for output.")
+        }
         ResumeStatus::AlreadyFinished => {
             println!("Nothing to resume: the newest run in {named} already finished.");
         }
@@ -85,9 +85,9 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
              nothing was tried. Run `aleph doctor` — the `core/session-log` check names the \
              contradiction."
         ),
-        ResumeStatus::Unavailable => println!(
-            "This server has no run executor wired, so nothing can be resumed on it."
-        ),
+        ResumeStatus::Unavailable => {
+            println!("This server has no run executor wired, so nothing can be resumed on it.")
+        }
         ResumeStatus::Failed => println!(
             "Resume failed for {named}: {}",
             response.error.as_deref().unwrap_or("no reason given")
@@ -114,7 +114,10 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
     // only when non-zero: a line of zeroes on every successful resume trains an
     // operator to stop reading them, which is how a real one goes unnoticed.
     for entry in &response.refused {
-        println!("  refused {}: {} — {}", entry.session_key, entry.reason, entry.detail);
+        println!(
+            "  refused {}: {} — {}",
+            entry.session_key, entry.reason, entry.detail
+        );
     }
     if response.degraded > 0 {
         println!(

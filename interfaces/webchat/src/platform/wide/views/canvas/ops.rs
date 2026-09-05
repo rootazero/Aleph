@@ -400,7 +400,7 @@ fn apply_ops(doc: &mut Doc, ops: &[Op]) {
                 server_path.display()
             )
         });
-        let server_loop = mutation_loop(&server, "apply_ops");
+        let server_loop = mutation_loop(&server, "apply_mutations");
         let panel_loop = mutation_loop(include_str!("ops.rs"), "apply_local");
         assert_eq!(
             server_loop, panel_loop,

@@ -1343,7 +1343,9 @@ impl<S: NoteStore> NoteIndexer<S> {
                     // round-trip is lossy for prose bodies) and only append.
                     let old_body = fs::read_to_string(&old_file).await.map_err(|e| {
                         AlephError::ConfigError {
-                            message: format!("Supersede: failed to read old file {old_file:?}: {e}"),
+                            message: format!(
+                                "Supersede: failed to read old file {old_file:?}: {e}"
+                            ),
                             suggestion: None,
                         }
                     })?;

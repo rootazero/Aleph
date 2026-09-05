@@ -28,6 +28,18 @@ pub struct ScreenPatch {
     pub cursor: Option<(u16, u16)>,
     pub alt_screen: Option<bool>,
     pub title: Option<String>,
+    /// DECTCEM. `None` means "unchanged since the last patch", never
+    /// "hidden" -- the same convention `alt_screen` and `title` follow, and
+    /// the reason a quiet terminal still costs nothing.
+    pub cursor_visible: Option<bool>,
+    /// Mode 2004, same convention. The client needs it to decide whether a
+    /// paste is wrapped; it cannot derive it, because the sequence that sets
+    /// it never leaves the server.
+    pub bracketed_paste: Option<bool>,
+    /// The live working directory from `OSC 7`, same convention. `None` on a
+    /// full snapshot means the program has never reported one, which is not
+    /// the same as "the process has no cwd".
+    pub cwd: Option<String>,
     pub bell: bool,
 }
 

@@ -94,6 +94,25 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "config_audit",
     "get_tool_schema",
     "list_models",
+    // Read-only PTY session view (herdr runtime port, phase 1). Unlike
+    // `file_ops`/`doctor`/`note_schema` above, it has NO write arm at all to
+    // resolve per-argument — two exhaustive `match`es on `TerminalAction`
+    // make a mutating variant a compile error (deliberately not "a fourth
+    // variant": the count grew to five in round 2 and an ordinal in a comment
+    // is a fact that rots) — so listing it here outright, rather than in a
+    // `*_claim` function, is safe. One of the five, `wait`, BLOCKS for up to
+    // 150 s; it is still a read (it observes the agent table's change watch
+    // and returns a row, touching nothing), and none of the three consumers
+    // below changes answer for a read that takes time. Verified
+    // against this list's three actual consumers: `Shared` concurrency
+    // (each action only reads through `PtyManager`'s own lock and returns
+    // owned data, holding no state across the call), the one-shot
+    // auto-retry gate (nothing to retry into that a write could corrupt),
+    // and the `Ask`-tier read exemption (only an operator-tier caller can
+    // ever reach this tool at all — see `OPERATOR_TOOLS` — so exempting it
+    // from `Ask` removes a redundant confirmation on top of that gate, it
+    // does not widen who may call it).
+    "terminal",
     // Progressive-disclosure meta-tool (reads the catalog, promotes a deferred
     // tool). NB: `list_tools` / `search_tools` were ghost names matching no
     // registered tool; the live one is `tool_search`.
