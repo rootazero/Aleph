@@ -351,7 +351,7 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!("users.create: created {} role={}", user_id, role.as_str()),
-                ));
+                )).await;
             }
             let result = aleph_protocol::users::UserCreateResult {
                 user: UserView {
@@ -502,7 +502,7 @@ pub async fn handle_update(
                     old_role,
                     new_role.as_str()
                 ),
-            ));
+            )).await;
         }
     }
 
@@ -521,12 +521,12 @@ pub async fn handle_update(
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     actor.clone(),
                     format!("users.update: status {} →deactivated", params.user_id),
-                ));
+                )).await;
             }
         }
         revoked_devices = deactivate_devices(&store, &kick, &params.user_id).await;
         revoked_tickets =
-            burn_outstanding_bootstrap_tickets(&store, &params.user_id, actor.clone());
+            burn_outstanding_bootstrap_tickets(&store, &params.user_id, actor.clone()).await;
         revoked_senders = revoke_channel_bindings(&kick, &params.user_id).await;
         freeze = freeze_owned_background_work(&params.user_id).await;
     }
@@ -540,7 +540,7 @@ pub async fn handle_update(
             log.log(crate::security::audit::AuditEntry::authority_change(
                 actor.clone(),
                 format!("users.update: status {} deactivated→active", params.user_id),
-            ));
+            )).await;
         }
     }
 
@@ -795,7 +795,7 @@ async fn deactivate_devices(
 /// record. The entry names the count and the principal and never the ticket
 /// codes: a bootstrap ticket is a bearer credential and this module exists to
 /// keep bearer credentials out of logs.
-fn burn_outstanding_bootstrap_tickets(
+async fn burn_outstanding_bootstrap_tickets(
     store: &Arc<SecurityStore>,
     user_id: &str,
     actor: Option<String>,
@@ -823,7 +823,7 @@ fn burn_outstanding_bootstrap_tickets(
             log.log(crate::security::audit::AuditEntry::authority_change(
                 actor,
                 format!("users.update: burned {burned} bootstrap ticket(s) for {user_id}"),
-            ));
+            )).await;
         }
     }
     burned

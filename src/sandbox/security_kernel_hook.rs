@@ -52,7 +52,7 @@ impl SandboxBeforeHook for SecurityKernelHook {
                     true,
                     ctx.command,
                     &["custom_blocked".to_string()],
-                );
+                ).await;
                 SandboxHookResult::Deny {
                     reason: format!(
                         "command blocked by custom shell-security pattern ([security].custom_blocked): {}",
@@ -71,7 +71,7 @@ impl SandboxBeforeHook for SecurityKernelHook {
                     false,
                     ctx.command,
                     &["custom_danger".to_string()],
-                );
+                ).await;
                 SandboxHookResult::Allow
             }
             _ => SandboxHookResult::Allow,

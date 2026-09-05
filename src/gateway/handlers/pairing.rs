@@ -198,7 +198,7 @@ pub async fn handle_approve(
                         req.sender_id,
                         user_id.as_deref().unwrap_or("(owner default)")
                     ),
-                ));
+                )).await;
             }
             let response: PairingRequestResponse = req.into();
             JsonRpcResponse::success(
@@ -372,7 +372,7 @@ pub async fn handle_revoke(
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!("channel.pairing.revoke: {}:{}", channel, sender_id),
-                ));
+                )).await;
             }
             JsonRpcResponse::success(
                 request.id,

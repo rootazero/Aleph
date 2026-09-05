@@ -64,6 +64,15 @@ pub enum AuditEventType {
     /// at the time. `detail` names the matched rules and the program; it never
     /// carries the command text, which is where the secrets would be.
     CommandPolicy,
+    /// The audit pipeline itself dropped entries because the channel was
+    /// full (audit I-4). Synthesised by the drain task, never by a content
+    /// producer: the drain observes `SecurityAuditLog::dropped_count`
+    /// advancing and inserts one row recording the delta, so a degraded
+    /// trail says so in the trail itself instead of failing silently open.
+    ///
+    /// Severity is `Critical`: an incomplete audit log is the one fact an
+    /// operator must never have to infer from absence.
+    AuditLogDropped,
 }
 
 impl fmt::Display for AuditEventType {
@@ -78,6 +87,7 @@ impl fmt::Display for AuditEventType {
             Self::AuthorityChange => "authority_change",
             Self::ScopedContentRead => "scoped_content_read",
             Self::CommandPolicy => "command_policy",
+            Self::AuditLogDropped => "audit_log_dropped",
         };
         write!(f, "{s}")
     }
@@ -201,6 +211,23 @@ impl AuditEntry {
         }
     }
 
+    /// The audit channel filled and entries were dropped — synthesised by
+    /// the drain, see [`AuditEventType::AuditLogDropped`]. `dropped` is the
+    /// newly observed delta, `total` the running counter. `detail` carries
+    /// only the two numbers; there is nothing else honest to say — the
+    /// dropped entries are gone by definition.
+    #[must_use]
+    pub fn audit_log_dropped(dropped: u64, total: u64) -> Self {
+        Self {
+            event_type: AuditEventType::AuditLogDropped,
+            severity: AuditSeverity::Critical,
+            source_ip: None,
+            session_id: None,
+            actor_user: None,
+            detail: format!("audit channel full: {dropped} entries dropped (total {total})"),
+        }
+    }
+
     /// A remote connection failed the Gateway-token login wall at `connect`.
     /// `source_ip` is the socket peer; `detail` names the rejected path.
     #[must_use]
@@ -234,6 +261,11 @@ impl AuditEntry {
 pub struct SecurityAuditLog {
     sender: mpsc::Sender<AuditEntry>,
     pub(crate) dropped_count: Arc<AtomicU64>,
+    /// When `true`, [`SecurityAuditLog::log`] awaits channel capacity instead
+    /// of dropping — the operator's fail-closed opt-in (`[security]
+    /// audit_block_on_full`). Default `false`: a flooded audit pipeline
+    /// degrades the trail, never the system the trail watches.
+    block_on_full: bool,
 }
 
 /// Process-wide handle for the authority-change producers.
@@ -354,28 +386,66 @@ fn sanitize_detail(detail: &mut String) {
 impl SecurityAuditLog {
     #[must_use]
     pub fn new(buffer_size: usize) -> (Self, mpsc::Receiver<AuditEntry>) {
+        Self::new_with_policy(buffer_size, false)
+    }
+
+    /// [`new`] plus the fail-closed knob — see the `block_on_full` field.
+    #[must_use]
+    pub fn new_with_policy(
+        buffer_size: usize,
+        block_on_full: bool,
+    ) -> (Self, mpsc::Receiver<AuditEntry>) {
         let (sender, receiver) = mpsc::channel(buffer_size);
         (
             Self {
                 sender,
                 dropped_count: Arc::new(AtomicU64::new(0)),
+                block_on_full,
             },
             receiver,
         )
     }
 
+    /// Total entries dropped because the channel was full (or gone). The
+    /// drain task mirrors this counter into the table itself as
+    /// [`AuditEventType::AuditLogDropped`] rows; the getter is for live
+    /// observers (diagnostics, tests) that cannot wait for the drain.
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped_count.load(Ordering::Acquire)
+    }
+
+    /// Shared handle to the drop counter, for the drain task that turns
+    /// counter deltas into [`AuditEventType::AuditLogDropped`] rows.
+    #[must_use]
+    pub fn dropped_counter(&self) -> Arc<AtomicU64> {
+        self.dropped_count.clone()
+    }
+
+    fn note_dropped(&self) {
+        let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
+        if count == 1 || count.is_multiple_of(100) {
+            error!(
+                "Security audit log channel full, dropping entry (total dropped: {count})"
+            );
+        }
+    }
+
     /// `detail` is sanitised here, at the chokepoint every production entry
     /// flows through, rather than at each producer — see [`sanitize_detail`].
-    pub fn log(&self, mut entry: AuditEntry) {
+    ///
+    /// Async because of `block_on_full`: with the knob off (default) this is
+    /// a `try_send` that completes immediately; with it on, a full channel
+    /// applies backpressure to the producer instead of dropping the entry.
+    pub async fn log(&self, mut entry: AuditEntry) {
         sanitize_detail(&mut entry.detail);
-        if let Err(e) = self.sender.try_send(entry) {
-            let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
-            if count == 1 || count.is_multiple_of(100) {
-                error!(
-                    "Security audit log channel full, dropping entry (total dropped: {}): {}",
-                    count, e
-                );
+        if self.block_on_full {
+            // A send error means the receiver is gone — the entry is lost
+            // exactly as if the channel had been full, so count it as one.
+            if self.sender.send(entry).await.is_err() {
+                self.note_dropped();
             }
+        } else if self.sender.try_send(entry).is_err() {
+            self.note_dropped();
         }
     }
 }
@@ -602,7 +672,7 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "Blocked request to 10.0.0.1".to_string(),
-        });
+        }).await;
         let entry = rx.recv().await.unwrap();
         assert_eq!(entry.event_type, AuditEventType::ExecBlocked);
         assert_eq!(entry.severity, AuditSeverity::Warn);
@@ -619,7 +689,7 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "first".into(),
-        });
+        }).await;
         log.log(AuditEntry {
             event_type: AuditEventType::AuthFailure,
             severity: AuditSeverity::Critical,
@@ -627,7 +697,7 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "second".into(),
-        });
+        }).await;
         assert_eq!(log.dropped_count.load(Ordering::Acquire), 1);
     }
 
@@ -723,7 +793,7 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: format!("multi\nline\n{}", "x".repeat(8 * 1024)),
-        });
+        }).await;
         let entry = rx.recv().await.unwrap();
         assert!(!entry.detail.contains('\n'));
         assert!(entry.detail.ends_with(TRUNCATION_MARKER));

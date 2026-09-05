@@ -824,9 +824,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // network-exposed gateway records auth events even when guardrails are off.
     // The drain is idempotent alongside the guard's — both append to
     // `security_audit_log`; the JoinHandle is detached for the process lifetime.
-    let (gw_audit_log, gw_audit_rx) = alephcore::security::audit::SecurityAuditLog::new(256);
-    let _gw_audit_drain =
-        alephcore::security::spawn_audit_drain(gw_audit_rx, auth_bundle.security_store.clone());
+    let (gw_audit_log, gw_audit_rx) =
+        alephcore::security::audit::SecurityAuditLog::new_with_policy(
+            256,
+            loaded_app_config.security.audit_block_on_full,
+        );
+    let _gw_audit_drain = alephcore::security::spawn_audit_drain(
+        gw_audit_rx,
+        auth_bundle.security_store.clone(),
+        Some(gw_audit_log.dropped_counter()),
+    );
     // Process-wide handle for the `AuthorityChange` producers (users/projects/
     // pairing/ticket/allowed_users) — see `security::audit::install_global`.
     alephcore::security::audit::install_global(&gw_audit_log);

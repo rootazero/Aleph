@@ -75,7 +75,7 @@ pub async fn handle_token_rotate(
                     format!(
                         "gateway.token.rotate: rotated shared token; revoked {revoked_devices} paired device(s)"
                     ),
-                ));
+                )).await;
         }
         json!({ "token": token, "revoked_devices": revoked_devices })
     })
