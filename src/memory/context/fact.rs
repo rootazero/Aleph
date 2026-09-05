@@ -187,13 +187,6 @@ impl MemoryFact {
         }
     }
 
-    /// Add embedding to the fact
-    #[must_use]
-    pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
-        self.embedding = Some(embedding);
-        self
-    }
-
     /// Set similarity score (used during retrieval)
     #[must_use]
     pub const fn with_score(mut self, score: f32) -> Self {
@@ -298,17 +291,6 @@ impl MemoryFact {
         self
     }
 
-    /// Close the validity window at the current time
-    #[must_use]
-    pub fn close_validity(mut self) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        self.valid_to = Some(now);
-        self
-    }
-
     /// Returns true if this fact has no end to its validity window
     #[must_use]
     pub const fn is_currently_valid(&self) -> bool {
@@ -327,13 +309,6 @@ mod tests {
         assert!(fact.valid_from.is_none());
         assert!(fact.valid_to.is_none());
         assert!(fact.is_currently_valid());
-    }
-
-    #[test]
-    fn close_validity_sets_valid_to() {
-        let fact = MemoryFact::new("test".into(), NoteType::Other, vec![]).close_validity();
-        assert!(fact.valid_to.is_some());
-        assert!(!fact.is_currently_valid());
     }
 
     #[test]

@@ -83,8 +83,8 @@ pub use events::{
         RecordNoteAccessCommand, RestoreNoteCommand, UpdateContentCommand,
     },
     handler::{DivergentFact, MemoryCommandHandler, ReconcileReport},
-    migration::{EventSourcingMigration, MigrationReport},
-    projector::EventProjector,
+    
+    projector::fold_events_to_note,
     traveler::MemoryTimeTraveler,
     EventActor, MemoryEvent, MemoryEventEnvelope,
 };

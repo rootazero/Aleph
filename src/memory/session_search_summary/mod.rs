@@ -78,7 +78,6 @@
 //!   Signature: `async fn on_compression_complete<'a>(&'a self, agent_id: &'a str) -> BoxFuture<'a, ()>`.
 //!   Spec B does NOT implement this hook; the trait is left for future compression-time extensions.
 
-pub mod dedup;
 pub mod end_hook;
 pub mod filter;
 pub mod lookup;

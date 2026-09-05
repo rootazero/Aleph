@@ -69,7 +69,7 @@ mod event_sourcing {
     use crate::memory::context::*;
     use crate::memory::events::commands::*;
     use crate::memory::events::handler::MemoryCommandHandler;
-    use crate::memory::events::projector::EventProjector;
+    use crate::memory::events::projector::fold_events_to_note;
     use crate::memory::events::traveler::MemoryTimeTraveler;
     use crate::memory::events::*;
     use crate::resilience::database::StateDatabase;
@@ -107,7 +107,7 @@ mod event_sourcing {
         assert_eq!(events[0].seq, 1);
 
         // Rebuild from events
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .unwrap();
         assert_eq!(fact.content, "User prefers Rust for systems programming");
@@ -170,7 +170,7 @@ mod event_sourcing {
         assert_eq!(events.len(), 5);
 
         // 6. Verify final state via projector
-        let final_fact = EventProjector::fold_events_to_note(&events)
+        let final_fact = fold_events_to_note(&events)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -204,7 +204,7 @@ mod event_sourcing {
 
         let events = db.get_memory_events_for_fact(&fact_id).await.unwrap();
         assert_eq!(events.len(), 6);
-        let deleted = EventProjector::fold_events_to_note(&events).unwrap();
+        let deleted = fold_events_to_note(&events).unwrap();
         assert!(deleted.is_none()); // Fact deleted
     }
 }
