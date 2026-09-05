@@ -1,0 +1,88 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-09-05",
+  "module": "src/markdown",
+  "files_scanned": [
+    "src/markdown/mod.rs",
+    "src/markdown/fences.rs"
+  ],
+  "method": "PRODUCED-CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/, desktop/), read-before-write triage. Prior 2026-08-17 audit consulted for context; every claim re-verified with fresh rg.",
+  "findings": [
+    {
+      "id": "sw-md-1",
+      "module": "src/markdown",
+      "files": [
+        "src/markdown/fences.rs:56",
+        "src/markdown/fences.rs:62",
+        "src/markdown/fences.rs:68"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "FenceSpan::marker() / indent() / language() public accessors",
+      "produced_location": "src/markdown/fences.rs:56-70",
+      "consumer_location": "none found in production; only #[cfg(test)] consumers inside src/markdown/fences.rs (lines :136, :258-259, :269, :278-279, :297, :307, :415, :439, :450, :539, :547, :571)",
+      "decision": "DECIDE",
+      "rationale": "Three accessors on a public struct, zero production callers. The alephcore lib has external dependents (shared/client, cli, tui, webchat) so any removal is a public-API change in a lib crate. This is the same shape as the prior audit's sw-md-2 (2026-08-17, archived DECIDE) — no production caller materialized since.",
+      "proposed_change": "Either (1) keep as-is (recommended — cheap, doubles as test read path), or (2) CUT all three (fences.rs:56-70) and downgrade the corresponding pub(crate) fields (fences.rs:22, :24, :26) to private, rewriting test assertions to use field access via super::*.",
+      "risk": "Option 2 is behavior-neutral in-crate today but is a public-API removal in a lib crate; external dependents (none currently use it) would need to be migrated.",
+      "verification": "rg -n 'FenceSpan::marker|FenceSpan::indent|FenceSpan::language' src/ bin/ interfaces/ shared/ desktop/  →  0 hits outside src/markdown/. Re-run after edit + cargo test -p alephcore --lib markdown.",
+      "existing_review_ref": "review-results/severed-wire-2026-08-17/markdown/REPORT.md (sw-md-2, DECIDE)"
+    },
+    {
+      "id": "sw-md-2",
+      "module": "src/markdown",
+      "files": [
+        "src/markdown/mod.rs:6"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub mod fences; (mod.rs:6)",
+      "produced_location": "src/markdown/mod.rs:6",
+      "consumer_location": "src/gateway/formatter/splitting.rs:10",
+      "decision": "CUT",
+      "rationale": "No finding. The re-export is wired. Prior audit's sw-md-1 (dead pub use fences::{...} block at mod.rs:8-10) was CUT in commit e5f90f069 (2026-08-17). Catch-all rg on markdown::<symbol> across src/, bin/, shared/, desktop/, interfaces/ returns 0 hits; every consumer goes through the fences:: path. Listed for completeness.",
+      "proposed_change": "None.",
+      "risk": "None.",
+      "verification": "rg -n 'markdown::(parse_fence_spans|is_safe_fence_break|find_fence_at|get_fence_split|FenceSpan|FenceSplit)' src/ bin/ interfaces/ shared/ desktop/  →  0 hits.",
+      "existing_review_ref": "review-results/severed-wire-2026-08-17/markdown/REPORT.md (sw-md-1, CUT applied in e5f90f069)"
+    },
+    {
+      "id": "sw-md-3",
+      "module": "src/markdown",
+      "files": [
+        "src/markdown/fences.rs:78",
+        "src/markdown/fences.rs:94"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "FenceSpan::contains() / FenceSpan::reopen_line() public methods",
+      "produced_location": "src/markdown/fences.rs:78-91, src/markdown/fences.rs:94-103",
+      "consumer_location": "Internal only: fences.rs:226 (is_safe_fence_break), fences.rs:232 (find_fence_at), fences.rs:243 (get_fence_split), plus #[cfg(test)] tests. Zero external production callers.",
+      "decision": "DECIDE",
+      "rationale": "Both methods have intra-module callers (the helpers in fences.rs and the doctests), but every caller is in fences.rs itself. They are pub API surface with no external consumer. Inert-but-meaningful: not strictly dead, but unused outside the module.",
+      "proposed_change": "Either (1) keep as-is (recommended — symmetric with the other FenceSpan pub methods), or (2) downgrade both to pub(crate) at fences.rs:78-91 and :94-103, removing them from lib-crate public surface. Internal callers in this module continue to work.",
+      "risk": "Option 2 is a public-API tightening. No in-tree external callers to migrate.",
+      "verification": "rg -n 'FenceSpan::contains|FenceSpan::reopen_line' src/ bin/ interfaces/ shared/ desktop/  →  0 hits outside src/markdown/. (Note: lexical collision with String::contains/str::contains returns false positives — the only on-FenceSpan calls are inside src/markdown/fences.rs.)",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-md-4",
+      "module": "src/markdown",
+      "files": [
+        "src/group_chat/coordinator.rs:197",
+        "src/memory/assembler/rerank.rs:153"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "Two parallel hand-rolled fence-stripping helpers: strip_markdown_fences (coordinator.rs:197) and strip_json_fences (rerank.rs:153)",
+      "produced_location": "src/group_chat/coordinator.rs:197-211, src/memory/assembler/rerank.rs:153-159",
+      "consumer_location": "src/group_chat/coordinator.rs:101 (parse_coordinator_plan), src/memory/assembler/rerank.rs:100 (parse_response). Neither imports crate::markdown::fences.",
+      "decision": "DECIDE",
+      "rationale": "Not strictly a severed wire — the canonical parser is wired to splitting.rs and the helpers chose simpler heuristic (zero-borrow &str → &str). But these are parallel implementations of a concern the canonical parser already covers; they diverge on indented fences, tilde fences, 4+ backtick fences, whitespace inside info strings, multiple concatenated fences, and case-sensitivity of the JSON tag. In practice LLM output is overwhelmingly ```json{...}```, so the divergence has not produced observed bugs.",
+      "proposed_change": "Either (1) keep as-is (recommended — ergonomic, no current pain), or (2) add fences::strip_outer_json_fence(text: &str) -> Option<&str> as a thin wrapper around parse_fence_spans and have both helpers delegate to it. Single source of truth, zero-borrow preserved, tighter parsing.",
+      "risk": "Option 2 changes behavior of both helpers in edge cases — strictly tightening, but the unclosed-fence / multi-anchored-fence handling now treats the input as 'extending to EOF' rather than 'strip what you can'. Whether LLM-output callers want that tighter behavior is a product call. New helper would need additional test cases mirroring the divergences above.",
+      "verification": "rg -n 'parse_fence_spans' src/group_chat/ src/memory/assembler/  →  0 hits. Existing coverage: rerank.rs:253 markdown_fences_stripped, coordinator.rs:255 test_parse_coordinator_plan_with_markdown_wrapper.",
+      "existing_review_ref": null
+    }
+  ]
+}

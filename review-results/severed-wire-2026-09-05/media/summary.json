@@ -1,0 +1,188 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-09-05",
+  "module": "src/media",
+  "files_scanned": [
+    "src/media/mod.rs",
+    "src/media/cache.rs",
+    "src/media/detect.rs",
+    "src/media/error.rs",
+    "src/media/pipeline.rs",
+    "src/media/policy.rs",
+    "src/media/processor.rs",
+    "src/media/provider.rs",
+    "src/media/resolve.rs",
+    "src/media/transcription.rs",
+    "src/media/types.rs",
+    "src/media/whisper.rs",
+    "src/media/processors/audio.rs",
+    "src/media/processors/document.rs",
+    "src/media/processors/image.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/, desktop/), read-before-write triage",
+  "totals": {
+    "findings": 8,
+    "cut": 0,
+    "connect": 0,
+    "decide": 8
+  },
+  "findings": [
+    {
+      "id": "sw-media-1",
+      "module": "src/media",
+      "files": [
+        "src/media/policy.rs:11-49",
+        "src/lib.rs:234",
+        "src/media/pipeline.rs:17,26"
+      ],
+      "severity": "medium",
+      "form": 3,
+      "produced": "MediaPolicy struct with pub serde-tagged fields (max_image_bytes, max_audio_bytes, max_video_duration, max_video_bytes, max_document_bytes, max_document_pages, max_unknown_bytes) + Default impl + check_size method",
+      "produced_location": "src/media/policy.rs:11",
+      "consumer_location": "src/media/pipeline.rs:26 (sole constructor site: MediaPolicy::default()). Re-exported at src/lib.rs:234 but no external reader.",
+      "decision": "DECIDE",
+      "rationale": "Inert config: pub fields, serde-defaulted, re-exported at crate root, but no operator config loader parses a MediaPolicy. Defaults are effective compile-time constants. Decision needed: is operator-configurable media policy a product requirement? If yes, wire it through a new MediaPipeline::with_policy constructor; if no, hide the struct. Either way is non-breaking.",
+      "proposed_change": "Either (a) wire app_config.media into MediaPipeline::with_policy and have builtin_registry/constructor pass it through, or (b) drop the pub serde tags, hide the struct, remove the lib.rs re-export.",
+      "risk": "low either way. Forward-compat cost if renamed while operators have filled in the fields; otherwise none.",
+      "verification": "rg -n 'MediaPolicy' src/ bin/ --type rust | rg -v 'src/media/' returns only the lib.rs re-export. No MediaPolicy reader outside src/media/.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-media-2",
+      "module": "src/media",
+      "files": [
+        "src/media/error.rs:26",
+        "src/media/detect.rs:259"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "MediaError::DetectionFailed(String) variant",
+      "produced_location": "src/media/error.rs:26",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "Constructed exactly once (detect_from_path when neither magic nor extension resolves) and never matched. All downstream consumers wrap via format!(\"Format detection failed: {e}\") using Display. Pure dead arm, but the variant may want to exist if operator UI ever wants to distinguish detection-failure from unsupported-format errors.",
+      "proposed_change": "Either remove the variant and collapse its sole construction to MediaError::UnsupportedFormat, or keep it as a forward-looking distinction.",
+      "risk": "removing it makes the public error enum smaller; no caller matches, so no breakage.",
+      "verification": "rg -n 'DetectionFailed' --type rust returns only the construction site and the variant definition; no match arms anywhere in the repo.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-media-3",
+      "module": "src/media",
+      "files": [
+        "src/media/types.rs:79",
+        "src/media/detect.rs:54,230",
+        "src/media/policy.rs:112-130"
+      ],
+      "severity": "medium",
+      "form": 2,
+      "produced": "MediaType::Video { format: VideoFormat, duration_secs: Option<f64> } — extension + magic-byte detection + size/duration policy",
+      "produced_location": "src/media/types.rs:79",
+      "consumer_location": "none found",
+      "decision": "DECIDE",
+      "rationale": "Detection is complete (detect_video_extension covers mp4/webm/mov; detect_video_magic + detect_ftyp handle WebM EBML and ftyp boxes; check_size enforces 500 MB / 30 min). But no MediaProvider ever returns MediaType::Video in supported_types. End-to-end: a video attachment falls into MediaProcessor's [Attachment: name (video/...)] placeholder; media_understand on a video file returns MediaError::NoProvider. Product gap, not a bug — the scaffolding is waiting for a video provider. CUT only if the product decides to drop video entirely.",
+      "proposed_change": "Either (a) wait for a video provider (frame extraction + multimodal LLM, or scene-level captions), or (b) drop VideoFormat + MediaType::Video + the two detect_video_* fns.",
+      "risk": "deletion is ~80 lines and forecloses video as a future direction. Keeping it: harmless dead arm in three call sites.",
+      "verification": "rg -n 'fn supported_types' src/media/processors/ shows zero return of MediaType::Video. Test: attach mp4, observe [Attachment: name (video/mp4)] text block from MediaProcessor::process_one.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-media-4",
+      "module": "src/media",
+      "files": [
+        "src/media/types.rs:59-65",
+        "src/media/detect.rs:69-74,141-156",
+        "src/media/processors/document.rs:27-55"
+      ],
+      "severity": "medium",
+      "form": 2,
+      "produced": "DocFormat::Pdf / Docx / Xlsx variants — extension + magic-byte (PK\\x03\\x04 ZIP container) detection, and the document_extract tool's description advertises them",
+      "produced_location": "src/media/types.rs:59-65",
+      "consumer_location": "none found for Pdf/Docx/Xlsx specifically",
+      "decision": "DECIDE",
+      "rationale": "TextDocumentProvider supports only Txt/Markdown/Html. PDF and DOCX/XLSX are explicitly deferred to 'plugins (P4)' per the module docstring (processors/document.rs:1-5) and the tool description ('via plugins' in builtin_tools/media_tools/extract.rs:81). No plugin is registered today. Same shape as finding 3: detection is harmless scaffolding for a known future capability. CUT only if the deferral is canceled.",
+      "proposed_change": "Either add a PDF/DOCX provider (or document the operator's path to plugin one), or drop the three DocFormat variants and the relevant detect branches.",
+      "risk": "deletion is ~40 lines but forecloses a high-value feature (LLM reading PDFs); reimplementation cost is significant.",
+      "verification": "rg -n 'DocFormat::Pdf|DocFormat::Docx|DocFormat::Xlsx' src/media/processors/document.rs returns only false assertions in the supports() tests. End-to-end: document_extract on .pdf returns MediaError::NoProvider.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-media-5",
+      "module": "src/media",
+      "files": [
+        "src/media/types.rs:21",
+        "src/media/detect.rs:31-33,127-135,221-227",
+        "src/media/processors/image.rs:29-44",
+        "src/media/processor.rs:460-465"
+      ],
+      "severity": "low",
+      "form": 2,
+      "produced": "MediaImageFormat::Gif / Svg / Heic variants — extension + magic-byte detection",
+      "produced_location": "src/media/types.rs:21",
+      "consumer_location": "ImageMediaProvider::to_vision_format at src/media/processors/image.rs:35-44 returns None for Gif/Svg/Heic; MediaProcessor::image_format_from_mime at src/media/processor.rs:461-465 returns None for svg/heic. Both comment 'vision APIs typically cannot process them directly'.",
+      "decision": "DECIDE",
+      "rationale": "Partially inert: detection runs (extension lookup, GIF magic bytes, HEIC ftyp brand matching all return the right MediaType), but every downstream conversion to a vision-API-compatible format rejects them. End-to-end: gif/svg/heic attachments degrade to 'format not supported for description' (processor.rs:244-253) and media_understand returns MediaError::UnsupportedFormat. Documented behavior, not a bug. CUT only if the product decides to drop these formats.",
+      "proposed_change": "Either keep as-is (current behavior is the right error), or remove the three variants and the relevant detect branches (~25 lines).",
+      "risk": "low. Either path is non-breaking.",
+      "verification": "rg -n 'MediaImageFormat::Gif|MediaImageFormat::Svg|MediaImageFormat::Heic' src/media/ traces the None returns. Test: image/gif attachment produces the 'format not supported' fallback.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-media-6",
+      "module": "src/media",
+      "files": [
+        "src/lib.rs:233-234"
+      ],
+      "severity": "low",
+      "form": 3,
+      "produced": "Re-exports of AudioFormat, DocFormat, MediaImageFormat, VideoFormat at crate root",
+      "produced_location": "src/lib.rs:233-234",
+      "consumer_location": "none found (rg -n 'AudioFormat::|DocFormat::|MediaImageFormat::|VideoFormat::' --type rust outside src/media/ returns no hits)",
+      "decision": "DECIDE",
+      "rationale": "The format enums are reachable through MediaType (which IS used externally), so the variants must remain serializable. The enum types themselves do not need to be re-exported at lib.rs because no external crate pattern-matches on them — they go through serde and are treated opaquely. Removing the re-exports would not break any code observed in this worktree.",
+      "proposed_change": "Either remove the four re-exports from src/lib.rs:233-234 (keep the underlying types reachable only via MediaType), or keep them as forward-compatible surface.",
+      "risk": "removing breaks only downstream crates that import alephcore::AudioFormat etc. — none observed in this worktree.",
+      "verification": "rg -n 'use alephcore::AudioFormat|use alephcore::DocFormat|use alephcore::MediaImageFormat|use alephcore::VideoFormat' returns no hits across src/, bin/, tests/.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-media-7",
+      "module": "src/media",
+      "files": [
+        "src/media/processors/audio.rs:64-72",
+        "src/builtin_tools/media_tools/transcribe.rs:48,111"
+      ],
+      "severity": "low",
+      "form": 5,
+      "produced": "AudioMediaProvider rejects MediaInput::Url and MediaInput::Base64 (only FilePath is supported)",
+      "produced_location": "src/media/processors/audio.rs:64-72",
+      "consumer_location": "src/builtin_tools/media_tools/transcribe.rs:48 (only file_path arg) → src/media/tools/transcribe.rs:111 (only MediaInput::FilePath constructed)",
+      "decision": "DECIDE",
+      "rationale": "Not technically a severed wire — the only live caller (audio_transcribe tool) feeds FilePath, so the wire IS connected. But the asymmetry is real: MediaPipeline is documented (mod.rs:13-23) as accepting all three input variants, and ImageMediaProvider / TextDocumentProvider do accept all three. Closing the gap would require routing through MediaCache::resolve (which adds the 50 MB cap and SSRF gate that the current AudioMediaProvider doesn't apply). Test rejects_non_file_input at processors/audio.rs:189-203 documents the limitation. Decision needed: do we want audio_transcribe to accept URL/data-URL audio? If yes, route through MediaCache; if no, document the limitation in the tool description.",
+      "proposed_change": "Either (a) route through MediaCache::resolve + MediaCache::to_base64 so URL/data-URL audio is supported with the same SSRF + size gates as images, or (b) add the file_path-only constraint to the audio_transcribe DESCRIPTION constant.",
+      "risk": "routing through MediaCache improves the failure surface (50 MB cap + SSRF gate) — improvement, not regression — but changes what an unauthenticated http://localhost URL can do.",
+      "verification": "rg -n 'MediaInput::Url|MediaInput::Base64' src/media/processors/audio.rs confirms only the error arm matches.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-media-8",
+      "module": "src/media",
+      "files": [
+        "src/tools/scoped/artifact_harvest.rs:645",
+        "src/tools/scoped/artifact_harvest.rs:875",
+        "src/tools/scoped/artifact_harvest.rs:1112"
+      ],
+      "severity": "low",
+      "form": 4,
+      "produced": "MediaCache::cleanup_session returns Result<(), CacheError>",
+      "produced_location": "src/media/cache.rs:209",
+      "consumer_location": "src/tools/scoped/artifact_harvest.rs:645, 875, 1112 (silent 'let _ =')",
+      "decision": "DECIDE",
+      "rationale": "Three of five call sites silently discard the Result via 'let _ ='. The other two (artifact_harvest.rs:246 and gateway/reply_emitter/emitter/helpers.rs:266) log via tracing::warn. Silent best-effort cleanup of a temp directory is acceptable (cleanup_stale sweep on next startup catches leaks, and the private_temp_root migration in cache.rs::base_dir mitigates cross-account cases). Not load-bearing, but a one-line patch could bring symmetry.",
+      "proposed_change": "Either keep silent (current behavior is correct), or add 'tracing::warn!(error = %e, ...)' on the three 'let _ =' lines.",
+      "risk": "low. The cleanup is fire-and-forget by design.",
+      "verification": "rg -n 'let _ = MediaCache::cleanup_session' src/ returns exactly the three sites.",
+      "existing_review_ref": null
+    }
+  ]
+}
