@@ -10,6 +10,7 @@
 #   ./qa/browser_managed/run.sh pdf       # pdf_generate's browser engine
 #   ./qa/browser_managed/run.sh existing  # the OTHER driver (Chrome DevTools MCP)
 #   ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
+#   ./qa/browser_managed/run.sh attach    # Aleph starts Chrome; playwright-cli joins over CDP
 #
 # Same scratch-HOME discipline as qa/busy_input/run.sh. Every scenario but
 # `exec-offload` needs NO mock provider: they drive `tools.invoke`, which runs
@@ -27,7 +28,7 @@ set -uo pipefail
 
 SCENARIO="${1:-open}"
 case "$SCENARIO" in
-  open|ambient|headed|tools|frames|reap|pdf|existing|exec-offload) ;;
+  open|ambient|headed|tools|frames|reap|pdf|existing|exec-offload|attach) ;;
   *) echo "unknown scenario: $SCENARIO" >&2; exit 64 ;;
 esac
 
@@ -258,6 +259,24 @@ if [ "$SCENARIO" = "reap" ]; then
     --control-max-tabs "$CONTROL_MAX_TABS"
   )
 fi
+if [ "$SCENARIO" = "attach" ]; then
+  # Pin the browser so the run does not depend on which browsers this
+  # machine happens to have, and so the RED control has one thing to break.
+  # `find_chromium`'s own first macOS path; on Linux/Windows set
+  # ALEPH_QA_CHROME to override.
+  CHROME_BIN="${ALEPH_QA_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+  # The precheck is skippable BY A DOCUMENTED FLAG, not by editing this
+  # file. The RED control needs to reach the fail-closed message with a
+  # deliberately broken pin, and a control that only exists while a file is
+  # locally modified is not repeatable and will not exist next round.
+  if [ ! -x "$CHROME_BIN" ] && [ -z "${ALEPH_QA_ALLOW_MISSING_CHROME:-}" ]; then
+    echo "no browser at $CHROME_BIN; set ALEPH_QA_CHROME, or set" >&2
+    echo "ALEPH_QA_ALLOW_MISSING_CHROME=1 to drive the fail-closed path on purpose" >&2
+    exit 69
+  fi
+  BROWSER_CFG_ARGS+=(--runtime-binary-path "$CHROME_BIN" --prefer-system-browser false)
+  echo "chromium pinned: $CHROME_BIN"
+fi
 python3 "$HERE/add_browser_config.py" "$CONFIG" "${BROWSER_CFG_ARGS[@]}" || exit 1
 
 # The browser tools consult the approval policy, whose path is derived from
@@ -367,6 +386,25 @@ case "$SCENARIO" in
       --cwd "$CWD" \
       --output-dir-root "$ALEPH_HOME/data/browser/cli-output" || RC=$?
     ;;
+  attach)
+    python3 "$HERE/drive_attach.py" \
+      "ws://127.0.0.1:$GATEWAY_PORT/ws" \
+      --page-url "http://127.0.0.1:$PAGE_PORT/" \
+      --marker "$MARKER" \
+      --home "$QA_ROOT/home" \
+      --cli "$CLI" \
+      --expect-user-data-dir "$UDD" \
+      --server-pid "$SERVER_PID" || RC=$?
+    # The driver SIGTERMs the server as its LAST claim, reached only if
+    # everything before it passed. Clearing this unconditionally would orphan
+    # the server (and the Chrome it launched) whenever the driver dies or
+    # raises before reaching that step — which really happened once during
+    # this task, from an unrelated bug earlier in the driver. So only treat
+    # the server as already-gone when the driver actually exited clean.
+    if [ "$RC" -eq 0 ]; then
+      SERVER_PID=""
+    fi
+    ;;
   *)
     # Each scenario gets the page it is about; `reap` and `pdf` only need
     # *some* page, so they reuse the simple one.
@@ -389,6 +427,7 @@ case "$SCENARIO" in
       --cli "$CLI" \
       --out-dir "$OUTDIR" \
       --upload-file "$UPLOAD_FILE" \
+      --user-data-dir "$UDD" \
       --control-profile "$CONTROL_PROFILE" \
       --control-user-data-dir "$CONTROL_UDD" \
       --control-max-tabs "$CONTROL_MAX_TABS" \

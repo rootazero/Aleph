@@ -27,10 +27,8 @@ import re
 import sys
 import time
 
-import websockets
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qa_rpc import Ledger, Rpc  # noqa: E402
+from qa_rpc import Ledger, Rpc, ws_connect  # noqa: E402
 
 PERSIST_RE = re.compile(r"\[Full output persisted: (?P<path>.+?) \((?P<meta>[^)]*)\)\]")
 
@@ -69,7 +67,7 @@ def tool_results(request_log):
 
 async def main(args):
     led = Ledger()
-    async with websockets.connect(args.url, max_size=None) as ws:
+    async with ws_connect(args.url) as ws:
         rpc = Rpc(ws)
         await rpc.connect("qa-exec-offload")
 
