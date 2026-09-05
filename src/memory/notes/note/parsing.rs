@@ -104,7 +104,7 @@ pub(super) struct Frontmatter {
 }
 
 /// Accept a YAML date field as either a quoted string, a native YAML date
-/// (which `serde_yaml` may surface as a Tagged value or other scalar depending
+/// (which `serde_yml` may surface as a Tagged value or other scalar depending
 /// on version), or null. Re-serialize non-string variants and strip
 /// surrounding quotes/whitespace so downstream callers always receive a clean
 /// `YYYY-MM-DD`-shaped string (or `None` for empty/null).
@@ -113,12 +113,12 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::Deserialize;
-    let v = serde_yaml::Value::deserialize(d)?;
+    let v = serde_yml::Value::deserialize(d)?;
     Ok(match v {
-        serde_yaml::Value::Null => None,
-        serde_yaml::Value::String(s) => Some(s),
+        serde_yml::Value::Null => None,
+        serde_yml::Value::String(s) => Some(s),
         other => {
-            let s = serde_yaml::to_string(&other)
+            let s = serde_yml::to_string(&other)
                 .map_err(serde::de::Error::custom)?
                 .trim()
                 .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace())
@@ -172,7 +172,7 @@ pub(super) const KNOWN_FRONTMATTER_KEYS: &[&str] = &[
 ///
 /// `BTreeMap` (not `HashMap`): the emission order must be deterministic, or
 /// every rewrite would shuffle the header and churn `content_hash`.
-pub type ExtraFrontmatter = std::collections::BTreeMap<String, serde_yaml::Value>;
+pub type ExtraFrontmatter = std::collections::BTreeMap<String, serde_yml::Value>;
 
 /// Collect the frontmatter keys `Frontmatter` does not model.
 ///
@@ -182,13 +182,13 @@ pub type ExtraFrontmatter = std::collections::BTreeMap<String, serde_yaml::Value
 /// sees a native YAML date — a silent behaviour change on the parse path this
 /// module's own regression tests were written to pin.
 fn collect_extra_frontmatter(yaml: &str) -> ExtraFrontmatter {
-    let Ok(serde_yaml::Value::Mapping(map)) = serde_yaml::from_str::<serde_yaml::Value>(yaml)
+    let Ok(serde_yml::Value::Mapping(map)) = serde_yml::from_str::<serde_yml::Value>(yaml)
     else {
         return ExtraFrontmatter::new();
     };
     map.into_iter()
         .filter_map(|(k, v)| match k {
-            serde_yaml::Value::String(key) if !KNOWN_FRONTMATTER_KEYS.contains(&key.as_str()) => {
+            serde_yml::Value::String(key) if !KNOWN_FRONTMATTER_KEYS.contains(&key.as_str()) => {
                 Some((key, v))
             }
             _ => None,
@@ -230,7 +230,7 @@ pub fn split_frontmatter(
     let yaml_str = &after_open[..yaml_end];
     let body = after_open[body_start..].trim().to_string();
 
-    let fm: Frontmatter = serde_yaml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
+    let fm: Frontmatter = serde_yml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
         message: format!("Failed to parse YAML frontmatter: {e}"),
         suggestion: None,
     })?;

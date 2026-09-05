@@ -371,7 +371,7 @@ pub fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
                 return Ok((T::default(), body));
             }
 
-            let frontmatter: T = serde_yaml::from_str(frontmatter_str)
+            let frontmatter: T = serde_yml::from_str(frontmatter_str)
                 .map_err(|e| ExtensionError::yaml_parse(path, format!("YAML error: {e}")))?;
 
             Ok((frontmatter, body))
