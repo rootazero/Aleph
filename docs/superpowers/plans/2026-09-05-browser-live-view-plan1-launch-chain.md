@@ -6,7 +6,7 @@
 
 **Architecture:** `ChromiumLaunchSpec` → `ChromiumChild`（`std::process::Child` + `CdpEndpoint` + sidecar 文件）住在 `PlaywrightCliDriver` 的 per-session 映射里，与惰性启动咽喉、per-session 锁同处一地；`ProfileManager` 只多三个转发访问器（`live_endpoint` / `session_active` / `reap_idle` 的 Managed 臂）。二进制解析走 `chromium_resolve`：配置钉住 > `discovery::find_chromium_preferred` > 问 `playwright-cli install-browser <b> --dry-run` 要 `Install location:` 再在那一个目录里找可执行文件。运行时供给复用台账**已有的** `playwright-cli` post-install 动作（`install-browser chromium`），只加 `PLAYWRIGHT_DOWNLOAD_HOST` 透传；新增 doctor 哨兵 `browser/chromium-missing` 与 R8 工具 `runtime_manage{list,install}`。
 
-**Tech Stack:** Rust (alephcore) · tokio · serde / schemars · `std::process::Command`（子进程，`NoWindow` 扩展）· `sysinfo`（只经 `utils::process_alive::with_process_specifics`，本仓单 pid `sysinfo` 惯用法的唯一所有者；**不经** `gateway::pty::foreground::fact_for_pid`，理由见 Task 1）· bash + python3（`qa/browser_managed/`）。**零新 crate**。
+**Tech Stack:** Rust (alephcore) · tokio · serde / schemars · `std::process::Command`（子进程，`NoWindow` 扩展）· `sysinfo`（读 argv 向量与 kill，API 名单在 Task 1 的表里，逐个核对过 0.39.3 vendored 源码）· bash + python3（`qa/browser_managed/`）。**零新 crate**。
 
 **Spec:** docs/superpowers/specs/2026-09-05-browser-live-view-design.md (§3.1, §3.2 accessor only, §6.1–§6.5)
 
@@ -55,8 +55,21 @@
 - Modify `src/browser/error.rs:5-6`（`LaunchFailed(String)` → 带 `stage` 的结构变体）与它现存的四个构造点 `src/browser/chrome_mcp.rs:135, 578, 603, 609`、一个测试点 `src/diagnostics/checks/browser_runtime.rs:480`
 
 **Interfaces:**
-- Consumes: `crate::utils::no_window::NoWindow`（`src/utils/no_window.rs:32-51`，`std::process::Command` 与 `tokio::process::Command` 都实现了）· `crate::security::secret_env::is_secret_env`（`playwright_cli.rs:19` 已在用）· `crate::utils::process_alive::with_process_specifics`（`src/utils/process_alive.rs:126-131`，`pub(crate)`，本仓**唯一**的单 pid `sysinfo` 惯用法所有者）
-- **不消费** `gateway::pty::foreground::fact_for_pid`。它是 pty 侧的类型，契约不同：`ForegroundFact::cmdline` 的 doc 逐字写着「The whole command line, **space-joined**」（`src/gateway/pty/foreground.rs:142-143`），由 `cmd.iter().map(to_string_lossy).collect::<Vec<_>>().join(" ")` 造出（`:266-273`）。在那个字符串上做匹配只能是 `str::contains`——一次子串扫描，而这里的动作是 SIGKILL。见下方「为什么读 argv 向量而不是那一行字符串」。
+- Consumes: `crate::utils::no_window::NoWindow`（`src/utils/no_window.rs:32-51`，`std::process::Command` 与 `tokio::process::Command` 都实现了）· `crate::security::secret_env::is_secret_env`（`playwright_cli.rs:19` 已在用）· `crate::utils::process_alive::with_process_specifics`（`src/utils/process_alive.rs:126-131`，`pub(crate)`）用于 kill · `sysinfo` 直接用于读 argv 向量（API 名单见下）
+
+**本任务用到的 `sysinfo` API，逐个在 vendored 源码里核对过**（`Cargo.lock` 钉的是 **0.39.3**，路径 `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sysinfo-0.39.3/`，行号是该版本的 `src/common/system.rs`）：
+
+| 名字 | 位置 | 形状 |
+|---|---|---|
+| `System::new_with_specifics(refreshes: RefreshKind) -> Self` | `:87` | 构造即刷新（内部调 `refresh_specifics`，`:91`），所以之后直接读得到数据 |
+| `RefreshKind::nothing() -> Self` | `:2693` | 什么都不刷 |
+| `RefreshKind::with_processes(ProcessRefreshKind) -> Self` | `impl_get_set!` 生成，`:2716-2723` | 链式；官方 doc 示例就是 `RefreshKind::nothing().with_processes(...)`（`:80`） |
+| `ProcessRefreshKind::nothing() -> Self` | `:2457` | — |
+| `ProcessRefreshKind::with_cmd(UpdateKind) -> Self` | `impl_get_set!` 生成，`:2531` | 只刷 `cmd` 这一项 |
+| `UpdateKind::Always` | `:2319-2327`（枚举三值 `Never` / `Always` / `OnlyIfNotSet`，默认 `Never`） | 必须显式给 `Always`，否则 `cmd` 根本不被填 |
+| `System::process(&self, pid: Pid) -> Option<&Process>` | `:423` | `None` ＝ 这个 pid 不在进程表里 |
+| `Process::cmd(&self) -> &[OsString]` | `:1695` | **argv 向量**，不是拼好的一行 |
+| `Pid::from_u32` / `Pid`、`RefreshKind`、`ProcessRefreshKind`、`UpdateKind` 的 crate 根导出 | `src/lib.rs:85-87` | `use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System, UpdateKind};` |
 - Produces:
   ```rust
   pub(crate) const DEVTOOLS_PORT_DEADLINE: std::time::Duration;
@@ -308,6 +321,53 @@ mod tests {
         ));
         assert!(!argv_names_dir(&argv(&["/usr/bin/vim", "/tmp/udd/default/notes.txt"]), dir));
         assert!(!argv_names_dir(&[], dir));
+    }
+
+    /// (a) A profile directory **containing a space**, which is where an
+    /// operator on macOS naturally points one (`~/Library/Application Support/…`).
+    ///
+    /// This is the case a `split_whitespace()` implementation gets wrong, and
+    /// it fails in the silent direction: the token never matches, so the
+    /// browser is never recognised as ours and the orphan is never reaped —
+    /// forever, on every boot. Matching argv ELEMENTS has no such failure,
+    /// because the kernel already did the splitting and it did it correctly.
+    #[test]
+    fn a_user_data_dir_containing_a_space_still_matches() {
+        let dir = Path::new("/tmp/App Support/udd/default");
+        assert!(argv_names_dir(
+            &argv(&[
+                "/x/chrome",
+                "--user-data-dir=/tmp/App Support/udd/default",
+                "--headless=new",
+            ]),
+            dir
+        ));
+        assert!(argv_names_dir(
+            &argv(&["/x/chrome", "--user-data-dir", "/tmp/App Support/udd/default"]),
+            dir
+        ));
+        // The sibling-prefix trap survives the space.
+        assert!(!argv_names_dir(
+            &argv(&["/x/chrome", "--user-data-dir=/tmp/App Support/udd/default-2"]),
+            dir
+        ));
+    }
+
+    /// (b) A single element that LOOKS like a joined command line. It must not
+    /// match — matching it would mean the implementation is scanning inside an
+    /// element rather than comparing elements, i.e. the substring behaviour has
+    /// come back wearing a different shape.
+    #[test]
+    fn an_element_that_merely_contains_the_flag_does_not_match() {
+        let dir = Path::new("/tmp/udd/default");
+        assert!(!argv_names_dir(
+            &argv(&["--user-data-dir=/tmp/udd/default --headless=new"]),
+            dir
+        ));
+        assert!(!argv_names_dir(
+            &argv(&["/x/chrome --user-data-dir=/tmp/udd/default"]),
+            dir
+        ));
     }
 
     /// Fixture: a registry directory holding one sidecar per profile.
@@ -635,11 +695,15 @@ pub(crate) fn sidecar_path(session_key: &str) -> Result<PathBuf, BrowserError> {
 
 /// What a process's argv turned out to be — three states, not two.
 ///
-/// `Option` cannot carry this, and collapsing it IS the defect this enum
-/// exists to prevent: a reader that answers `None` for both "no such process"
-/// and "I could not read its command line" makes the sweep spend an unknown as
-/// a certainty, and the action on the other side is SIGKILL plus an
-/// irreversible record deletion (判据 §8).
+/// **Chosen over `Option<Vec<String>>` + a separate `present` closure.** Both
+/// shapes carry the same information; this one makes the sweep's `match`
+/// exhaustive, so a fourth outcome added later cannot be silently folded into
+/// an existing arm, and it removes the ordering hazard of two closures that
+/// must agree about one pid. `Option` alone cannot carry it at all: a reader
+/// that answers `None` for both "no such process" and "I could not read its
+/// command line" makes the sweep spend an unknown as a certainty, and the
+/// action on the other side is SIGKILL plus an irreversible record deletion
+/// (判据 §8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArgvProbe {
     /// The pid is not in the process table. It is gone.
@@ -677,6 +741,14 @@ pub(crate) enum ArgvProbe {
 /// Both spellings Chrome accepts are matched: `--user-data-dir=<path>` and the
 /// two-token `--user-data-dir <path>`. Missing the second would let a browser
 /// launched that way become unreapable.
+///
+/// **Nothing here splits, either.** An implementation that joined the argv and
+/// split it on whitespace would lose every `user_data_dir` containing a space —
+/// `~/Library/Application Support/…` is an ordinary place for an operator to
+/// point a profile — and it would fail silently: the token never matches, so
+/// that browser is never recognised as ours and its orphan is never reaped, on
+/// every boot, forever. The kernel already split the argv; comparing whole
+/// elements inherits that and adds nothing of its own.
 #[must_use]
 pub(crate) fn argv_names_dir(argv: &[String], dir: &Path) -> bool {
     let joined = format!("--user-data-dir={}", dir.display());
@@ -941,45 +1013,51 @@ pub(crate) fn reap_orphans(
     reaped
 }
 
-/// The real process-table reader.
+/// The real process-table reader: **the argv vector, not a joined line**.
 ///
-/// Goes to `sysinfo::Process::cmd()`, which is a `Vec<OsString>` — **the argv
-/// vector, not a joined line**. That is the whole point:
-/// `gateway::pty::foreground::fact_for_pid` is the obvious-looking source and
-/// it is the wrong one, because `ForegroundFact::cmdline` is documented as
-/// "The whole command line, space-joined" (`src/gateway/pty/foreground.rs:142-143`,
-/// built by `cmd.iter().map(to_string_lossy).collect::<Vec<_>>().join(" ")` at
-/// `:266-273`). Matching on that string can only ever be `str::contains`, and
-/// token equality is **not expressible** through it. `ForegroundFact` is also a
-/// pty-side type with a different contract; borrowing it here would couple two
-/// subsystems through a projection neither of them wants.
+/// `Process::cmd()` is `&[OsString]` — one element per word as the kernel
+/// recorded it. Nothing here joins, and nothing here splits: a joined string
+/// can only be matched with `str::contains`, and a split one loses any
+/// `user_data_dir` containing a space (`~/Library/Application Support/…` is a
+/// perfectly ordinary place for an operator to point a profile, and the token
+/// would then never match, so that orphan would never be reaped — forever).
 ///
-/// The `None` / `Some(empty)` split is what gives the three states: the helper
-/// answers `None` only when the pid is not in the process table, and an empty
-/// `cmd()` for a pid that IS there means the command line could not be read.
+/// `UpdateKind::Always` is not optional: `UpdateKind` defaults to `Never`
+/// (sysinfo 0.39.3 `src/common/system.rs:2319-2327`), so a refresh kind that
+/// does not name it leaves `cmd()` empty and every probe answers `Unreadable`.
 ///
-/// Built on `utils::process_alive::with_process_specifics` rather than a fresh
-/// `System::new_with_specifics(...)`: that helper is this repo's single owner of
-/// the single-pid `sysinfo` idiom and its own doc says so — "A second copy of
-/// the `System::new()` + `refresh_processes_specifics` dance would be the same
-/// fact written twice (判据 §1), and the two would drift on exactly the axis
-/// that matters, which fields get refreshed." It also scopes the refresh to one
-/// pid instead of walking every process on the machine.
+/// The three states come from two questions this call can answer separately:
+/// `System::process(pid)` returns `None` only when the pid is **not in the
+/// process table** (`:423`), and a `Some` whose `cmd()` is empty means the
+/// process is there and its command line **could not be read** — routine on
+/// Windows. An `Option<Vec<String>>` would have to pick one of those two to
+/// represent, and collapsing them is the defect this enum exists to prevent.
+///
+/// ⚠️ Cost, stated rather than discovered: `new_with_specifics` refreshes
+/// **every process on the machine**, once per call, and the sweep calls it once
+/// per sidecar. That is acceptable here — this runs once at boot, off the async
+/// worker (`spawn_idle_reaper` wraps it in `spawn_blocking`), over a directory
+/// bounded by the number of profiles. It would not be acceptable on a hot path.
 fn argv_probe(pid: u32) -> ArgvProbe {
-    let cmd = crate::utils::process_alive::with_process_specifics(
-        pid,
-        sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::Always),
-        |p| {
-            p.cmd()
+    use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System, UpdateKind};
+    let system = System::new_with_specifics(
+        RefreshKind::nothing()
+            .with_processes(ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always)),
+    );
+    match system.process(Pid::from_u32(pid)) {
+        None => ArgvProbe::Absent,
+        Some(process) => {
+            let argv: Vec<String> = process
+                .cmd()
                 .iter()
                 .map(|a| a.to_string_lossy().into_owned())
-                .collect::<Vec<String>>()
-        },
-    );
-    match cmd {
-        None => ArgvProbe::Absent,
-        Some(v) if v.is_empty() => ArgvProbe::Unreadable,
-        Some(v) => ArgvProbe::Argv(v),
+                .collect();
+            if argv.is_empty() {
+                ArgvProbe::Unreadable
+            } else {
+                ArgvProbe::Argv(argv)
+            }
+        }
     }
 }
 
@@ -1009,7 +1087,8 @@ pub(crate) fn reap_orphans_now() -> usize {
 - [ ] **证伪四次守卫。**
   1. 把 `parse_devtools_active_port` 里 `if !path.starts_with('/') { return None; }` 注释掉 → `every_partial_or_malformed_port_file_reads_as_not_yet` 必须变红（`58363\ndevtools/browser/x` 那一条）。
   2. **把 `argv_names_dir` 改回子串扫描**：`argv.join(" ").contains(&joined)` → `the_udd_match_is_token_equality_over_argv` 与 `reap_orphans_kills_only_the_process_that_carries_our_own_flag` 必须**同时**变红（前者的 sibling-prefix 与 env-value 两条，后者的 `recycled` 那一条会被误杀）。**这就是本轮 addendum 修的那个缺陷**——变异回去必须立刻可见。
-  3. 把 `argv_names_dir` 的两 token 形式那一支删掉 → `the_udd_match_is_token_equality_over_argv` 必须变红（`["--user-data-dir", "/tmp/udd/default"]` 那一条）。
+  3. 把 `argv_names_dir` 的两 token 形式那一支删掉 → `the_udd_match_is_token_equality_over_argv` 与 `a_user_data_dir_containing_a_space_still_matches` 必须变红。
+  3b. **把 `argv_names_dir` 改成先 `argv.join(" ")` 再 `split_whitespace()` 逐词比对** → `a_user_data_dir_containing_a_space_still_matches` 必须变红。这是一条与「子串扫描」不同的错法：它对普通路径是**对的**，只在路径含空格时静默失效，所以没有这条向量就看不见。
   4. 把 `reap_orphans` 的 `ArgvProbe::Unreadable` 臂改成也 `remove_file` → `an_unreadable_argv_kills_nothing_and_keeps_everything` 与 `reap_orphans_kills_only_the_process_that_carries_our_own_flag` 的 `opaque.json` 断言必须变红。**这一条是本任务最贵的守卫**：它守的是「不知道」不许当成「已经没了」花掉。
   四次都确认之后**恢复原样**。
 - [ ] `rustfmt src/browser/chromium_launch.rs src/browser/error.rs src/browser/chrome_mcp.rs src/diagnostics/checks/browser_runtime.rs`（四个都是叶子文件，不声明子模块 —— ⚠️ `src/browser/mod.rs` 这一笔只加了一行 `pub(crate) mod chromium_launch;`，**不要**把它交给 `rustfmt`：它声明 18 个子模块，`rustfmt` 会递归进去重排整个 `src/browser/`。那一行手写即可，没有可格式化的东西。）
@@ -4585,7 +4664,7 @@ nothing.
 2. **占位符扫描。** 全文无 `TBD` / 「类似 Task N」/「加上错误处理」。仅有的尖括号占位在 Task 10 的「验证」行与两条 ceiling 数值，都**必须由实测填入**，并各自带一句「不许抄，要测」的说明——这是判据 §18 要的形状，不是占位符。Task 9 的 claim 条数也刻意不写死。
 3. **跨任务签名一致性（评审前改过三处，评审后又改三处）。** 评审前：`PlaywrightCliDriver::new` 加 runtime 参数；子进程映射从 manager 挪到 driver；`resolve_binary` 带上来源。评审后：① `resolve_binary` 从 `(PathBuf, ChromiumSource)` 变成 `ResolvedChromium{path, source, engine}`，三个消费者（Task 5/7/8）同批更新；② `ChromiumChild::spawn` 多收一个 `session_key`（sidecar 进注册表，不再由 udd 定位）；③ `reap_orphans` 的注入效果先变成三个（argv / present / kill）、再随 addendum 收回两个（`ArgvProbe` 三态自带 present），`reap_orphans_now` 不再取参数；`argv_names_dir` 的入参从 `&str` 变成 `&[String]`。
 4. **锚点复核。** 评审逐条核过 24 个锚点：20 个精确、4 个差一两行、2 个真错。本轮全部修正 —— `post_install.rs` 的 `run` 分派改 `:68-78`；`browser_flag_value` 改 `:106-123`（`:110-121` 会留下四行悬空）；`managed_profiles_name_the_fields_their_driver_drops` 改 `:830-875`（`:838` 在函数体中段）；Task 9 的 `--chromium-udd-root` 整个删掉（它从未被定义过）。新引入的锚点（`method_authz.rs:31`、`check.rs:27` / `:205-225`、`manager.rs:631-643` / `:585-587`、`start/mod.rs:3642` / `:3658`、`discovery.rs:85-98`、`playwright_launch.rs:458-475`、`bash_exec.rs:476`）全部在本次会话里带行号读过。
-5. **评审 addendum（5b）落实。** 孤儿清扫的**读者**换了：从 `fact_for_pid(pid).cmdline`（space-joined 字符串，只支持子串扫描，且是 pty 侧类型的另一种契约）换成直接读 `sysinfo::Process::cmd()` 的 argv 向量，比对改为整 token 相等并同时认 `--user-data-dir=<path>` 与两 token 写法；`Option` 换成三态 `ArgvProbe{Absent, Unreadable, Argv}`，`present` 闭包随之取消（三态自带那个答案）。测试注入了 addendum 点名的五组向量：带 env 渗漏的真匹配、`default` vs `default-2` 的前缀兄弟、`Unreadable` 保留记录、`Absent` 删记录、被回收的 pid 不杀不留；外加 flag 整串出现在某个 env 值里的那一条。证伪清单里加了「改回子串扫描 → 两条测试同时红」。⚠️ 读者建在 `utils::process_alive::with_process_specifics` 之上，而不是 addendum 字面写的 `System::new_with_specifics(...)`——后者会在 `chromium_launch.rs` 造出本仓第二份 `sysinfo` 惯用法，而 `process_alive.rs:118-127` 的 doc 明写它是唯一所有者、第二份会在「刷新哪些字段」上漂移；那个 helper 的 `Option` 返回恰好就是 `Absent` 与「在表里」的分界，所以三态照样拿得到，而且刷新只作用于一个 pid 而不是全表。
+5. **评审 addendum（5b）落实。** 孤儿清扫的**读者**换了：从 `fact_for_pid(pid).cmdline`（space-joined 字符串，只支持子串扫描，且是 pty 侧类型的另一种契约）换成直接读 `sysinfo::Process::cmd()` 的 argv 向量，比对改为整 token 相等并同时认 `--user-data-dir=<path>` 与两 token 写法；`Option` 换成三态 `ArgvProbe{Absent, Unreadable, Argv}`，`present` 闭包随之取消（三态自带那个答案）。测试注入了 addendum 点名的五组向量：带 env 渗漏的真匹配、`default` vs `default-2` 的前缀兄弟、`Unreadable` 保留记录、`Absent` 删记录、被回收的 pid 不杀不留；外加 flag 整串出现在某个 env 值里的那一条。证伪清单里加了「改回子串扫描 → 两条测试同时红」。生产读者按裁定用 `System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always)))` + `System::process(Pid::from_u32(pid))` + `Process::cmd()`，九个 API 名逐个在 `Cargo.lock` 钉住的 **0.39.3** vendored 源码里核对过并列成表（不是从 0.39.6 或记忆里抄的——两个版本都在本机 registry 里，抄错版本正是判据 §18 那种量具错）。它每次刷新全表，这条成本写进了函数 doc 而不是留给人发现；调用点在 boot、在 `spawn_blocking` 里、次数由 profile 数目封顶。三态用枚举而非 `Option` + `present` 闭包，理由写在枚举 doc 里：`match` 变成穷尽的，且两个必须彼此同意的闭包不复存在。`ForegroundFact` / `fact_for_pid` 的引用已从 Interfaces 与实现中删除；FEATURE_LOCATOR ⑪ 保留那段叙述，因为那是本轮**为什么**换读者的记录，删掉它下一轮就会有人再选一次那个 API。
 6. **本轮修掉的判据错误（自查 + 评审各一半）。** ① `ChromiumChild::alive` 把 `try_wait` 的 `Err` 读成「死了」——把「我不知道」当值花掉（§8），已改成读成「活着」，由随后的 attach 结算。② doctor 读不到配置时回落 `Default::default()`——已改成 `unknown_finding`，**并且同一笔把 `runtime_manage` 的 `chromium_row` 也改了**（评审指出孪生没跟上，§16）。③ `reap_orphans` 把「argv 读不出」当「进程没了」删记录——不可逆，§8×§15，已三态分开。④ attach 锚点从 `||` 改成 `&&`：`classify_failure` 跑在可能含页面文本的输出上，`ECONNREFUSED` 是任何程序都会写的句子。⑤ `unhonored_managed_fields` 的「恒空」论断是错的，已改写并把它保护的事真正接管。⑥ 三个超时不嵌套导致 doctor 的超时臂恒假，已改成 6 < 8 < 20 并**用测试断言这个嵌套**。⑦ Task 8 的 `list` 测试会在 `cargo test --lib` 里 spawn node，违反 `playwright_cli.rs:150-165` 那条封印纪律，已改为注入 locator。
 
 ---
