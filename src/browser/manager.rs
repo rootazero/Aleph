@@ -449,10 +449,18 @@ impl ProfileManager {
     /// leaves three things behind that only this sweep clears while the daemon
     /// runs — the child record in the driver's map, the sidecar file naming its
     /// pid, and the profile's tab entries — so filtering on `alive` alone would
-    /// make "the browser died" mean "there is nothing here to reclaim". Spelled
-    /// as the two facts rather than as "the map has this key", because
-    /// [`PlaywrightCliDriver::chromium_died`] exists precisely to keep "no
-    /// browser" and "the browser died" from collapsing into one another.
+    /// make "the browser died" mean "there is nothing here to reclaim".
+    ///
+    /// The filter below reads as `chromium_alive(name) || chromium_died(name)`,
+    /// and that is NOT because it behaves differently from a bare "does the
+    /// driver have a record for this profile at all" check — algebraically it
+    /// does not: [`PlaywrightCliDriver::chromium_died`] is defined as
+    /// `key_present && !alive`, so the disjunction reduces to exactly
+    /// `key_present`, in every state, not merely today's. It is written this
+    /// way because `PlaywrightCliDriver` never exposes a bare "has a record"
+    /// accessor — `chromium_alive` / `chromium_died` are the only two names it
+    /// hands out for this decision, and they are the vocabulary the rest of
+    /// this module already reasons in.
     ///
     /// Scoped to browsers **this** process launched, deliberately: a Chromium
     /// left by a crashed daemon has no idle clock here to be past, and is the
@@ -1292,10 +1300,13 @@ mod tests {
     /// Three different things outlive that browser and only this sweep clears
     /// them while the daemon runs: the child record in the driver's map, the
     /// sidecar file that names its pid on disk, and the profile's tab entries.
-    /// `chromium_died` exists precisely because "there is no browser" and "the
-    /// browser died" are different facts (Task 5); the candidate filter admits
-    /// both, because a profile Aleph has a record for is a profile Aleph has
-    /// something to reclaim.
+    /// `chromium_died` exists as a concept distinct from "no browser" (Task 5)
+    /// for OTHER call sites (`run`'s pre-verb check reads it alone) — but the
+    /// candidate filter here admits both `chromium_alive` and `chromium_died`
+    /// profiles for a simpler reason than recognising two facts: `chromium_died`
+    /// is `key_present && !alive`, so the disjunction is exactly "Aleph has a
+    /// record for this profile at all", which is what "something to reclaim"
+    /// actually requires.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_browser_that_died_on_its_own_is_still_reclaimed() {
