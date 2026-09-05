@@ -2600,6 +2600,25 @@ mod tests {
     /// them and puts its winner to the one active-principal predicate, and
     /// `the_model_facing_copy_names_the_same_faces` pins this sentence
     /// verbatim, so the copy and the argument cannot drift apart.
+    ///
+    /// ⚠️ **This total is now PLATFORM-CONDITIONAL, and one number guards two
+    /// of them.** Since the Windows-shell round, `bash`'s DESCRIPTION is
+    /// assembled from `#[cfg]`-selected slots (`builtin_tools::bash_exec`), so
+    /// the catalogue sums to a different figure on Windows than on Unix — and
+    /// the run you happen to do only ever exercises the one that compiles for
+    /// you. The other is unmeasured, and the ceiling is flush by design, so
+    /// "green on my machine" is not evidence about it: a Windows-only addition
+    /// that fits here goes red for whoever builds on Linux, and vice versa.
+    /// Measured at the time of writing: `bash` is 4_770 B on Windows and
+    /// 4_740 B on Unix, against the 4_796 B the single string used to cost.
+    ///
+    /// So a future editor touching any `#[cfg]`-conditional description must
+    /// check **both** assemblies, not just the one their `cargo test` builds.
+    /// Without a Windows and a Linux runner to hand, extract the macro bodies
+    /// and sum them for each platform — a text-level count, since the compiler
+    /// only ever hands you one arm. And when raising this ceiling, say which
+    /// platform the new number was measured on: it bounds the max over
+    /// platforms, not the total on yours.
     const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_719;
     #[test]
     fn catalog_description_bytes_ratchet() {
