@@ -192,17 +192,15 @@ async fn run_shell(script: &str) -> Result<CmdOutcome, BootstrapError> {
 }
 
 async fn run_powershell(script: &str) -> Result<CmdOutcome, BootstrapError> {
-    // Prefer PowerShell 7 (`pwsh`) when present — modern, the direction Microsoft
-    // is steering toward — falling back to the always-present Windows PowerShell
-    // (`powershell`, 5.1). Both run the winget install commands identically.
-    // `-NoProfile` avoids loading the user profile (faster, no profile side
-    // effects), matching the skill installer's shell selection.
-    let shell = if which::which("pwsh").is_ok() {
-        "pwsh"
-    } else {
-        "powershell"
-    };
-    run_cmd(Command::new(shell).args(["-NoProfile", "-Command", script])).await
+    // Host choice (pwsh → powershell) and its cache live in `utils::shell`; the
+    // ladder used to be hand-copied here and in three other places. Both hosts
+    // run the winget install commands identically. `-NoProfile` avoids loading
+    // the user profile (faster, no profile side effects).
+    let program = crate::utils::shell::powershell_host().map_or_else(
+        || PathBuf::from("powershell"),
+        |shell| shell.program.clone(),
+    );
+    run_cmd(Command::new(program).args(["-NoProfile", "-Command", script])).await
 }
 
 /// Prepend well-known install-output directories to the current process PATH

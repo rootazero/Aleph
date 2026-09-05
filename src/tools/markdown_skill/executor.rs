@@ -44,12 +44,11 @@ fn build_host_command(bin: &str, cli_args: &[String]) -> Command {
                     c
                 }
                 Some("ps1") => {
-                    // Prefer PowerShell 7; fall back to Windows PowerShell.
-                    let shell = if which::which("pwsh").is_ok() {
-                        "pwsh"
-                    } else {
-                        "powershell"
-                    };
+                    // Host choice (pwsh → powershell) lives in `utils::shell`.
+                    let shell = crate::utils::shell::powershell_host().map_or_else(
+                        || std::path::PathBuf::from("powershell"),
+                        |shell| shell.program.clone(),
+                    );
                     let mut c = Command::new(shell);
                     c.arg("-NoProfile").arg("-File").arg(&path);
                     c
