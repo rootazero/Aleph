@@ -12,7 +12,7 @@ use crate::runtimes::post_install;
 use crate::runtimes::probe;
 use crate::sync_primitives::{Arc, AsyncRwLock as RwLock, OnceLock};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 /// Process-global per-capability install lock.

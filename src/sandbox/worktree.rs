@@ -89,9 +89,13 @@ impl Drop for WorktreeHandle {
         if self.cleaned_up.load(Ordering::Acquire) {
             return;
         }
-        // Safety net: defer the `git worktree remove --force` to a blocking
-        // task so the executor thread is not stalled on a synchronous spawn.
-        // Errors are logged via tracing; we never panic from Drop.
+        // Safety net: hand the `git worktree remove --force` to the tokio
+        // blocking pool so the calling executor thread is not stalled by a
+        // synchronous child process. The JoinHandle is intentionally dropped
+        // because `Drop` itself is sync — the blocking task is fire-and-forget
+        // and logs its own result. If no runtime is reachable (e.g. very
+        // late shutdown), fall back to a plain std::thread so we still try
+        // the cleanup once. We never panic from Drop.
         // rust-doctor-disable-next-line excessive-clone
         let repo_root = self.repo_root.clone();
         // rust-doctor-disable-next-line excessive-clone
@@ -109,52 +113,44 @@ impl Drop for WorktreeHandle {
                 leaked: true,
             });
         }
-        // Hand off to the blocking pool; if no runtime is available (e.g. the
-        // daemon is already shutting down), fall back to a best-effort sync
-        // call so we still at least try the cleanup once.
-        let join = tokio::task::spawn_blocking(move || {
-            std::process::Command::new("git")
+        let outcome = move || {
+            let result = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&repo_root)
                 .arg("worktree")
                 .arg("remove")
                 .arg("--force")
                 .arg(&path)
-                .status()
-        });
-        match join.await {
-            Ok(Ok(status)) if status.success() => {}
-            Ok(Ok(status)) => {
-                tracing::error!(
-                    path = %path.display(),
-                    code = ?status.code(),
-                    "Drop safety-net cleanup returned non-zero exit code"
-                );
+                .status();
+            match result {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    tracing::error!(
+                        path = %path.display(),
+                        code = ?status.code(),
+                        "Drop safety-net cleanup returned non-zero exit code"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        path = %path.display(),
+                        error = %e,
+                        "Drop safety-net cleanup failed"
+                    );
+                }
             }
-            Ok(Err(e)) => {
-                tracing::error!(
-                    path = %path.display(),
-                    error = %e,
-                    "Drop safety-net cleanup failed"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    path = %path.display(),
-                    error = %e,
-                    "Drop safety-net blocking task join failed"
-                );
-                // Last-ditch sync attempt when the runtime rejected the task.
-                let _ = std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(&repo_root)
-                    .arg("worktree")
-                    .arg("remove")
-                    .arg("--force")
-                    .arg(&path)
-                    .status();
-            }
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::spawn_blocking(outcome);
+        } else {
+            // Last-ditch fallback when the runtime has already been dropped.
+            // std::thread::spawn is fine here because Drop already runs
+            // off the executor; we just need the work off the current call.
+            let _ = std::thread::Builder::new()
+                .name("aleph-worktree-cleanup".into())
+                .spawn(outcome);
         }
+        let _ = trace_sink;
     }
 }
 

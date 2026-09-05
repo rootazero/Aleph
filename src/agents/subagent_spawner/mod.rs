@@ -719,7 +719,7 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                         let attribution = Arc::new(crate::routing::RoutingAttribution::new(
                             child_id.to_key_string(),
                         ));
-                        let _ = attribution.task_emb.set(task_emb);
+                        let _ = attribution.set_task_emb(task_emb);
                         Some(Arc::new(crate::routing::OutcomeObserver::new(
                             sink.clone(),
                             store.clone(),
