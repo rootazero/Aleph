@@ -159,7 +159,8 @@ pub fn parse_source_seq(id: &str, session_key: &str) -> Option<u64> {
 /// lives in this file for exactly that reason — two spellings of one rule in
 /// two files drift, and the last time these two backends answered differently
 /// about a row id it cost a whole class of readers their source seq. The
-/// cross-backend equivalence is pinned by a test, not by this paragraph.
+/// cross-backend equivalence is pinned by `cross_backend_tests`, not by this
+/// paragraph.
 pub fn order_by_source_seq<T>(rows: &mut Vec<T>, seq_of: impl Fn(&T) -> Option<u64>) {
     let mut newest_before: Option<u64> = None;
     let mut anchored: Vec<(Option<u64>, T)> = std::mem::take(rows)
@@ -357,5 +358,259 @@ mod transcript_order_tests {
             ordered(&[(Some(2), "owner"), (None, "first"), (None, "second")]),
             vec!["owner", "first", "second"]
         );
+    }
+}
+
+/// The two spellings of the transcript's order, run over the same rows.
+///
+/// [`order_by_source_seq`] (the file backend's half) and
+/// [`TRANSCRIPT_ANCHOR_SQL`] (the SQLite backend's half) are one rule written
+/// twice in two languages. Until this module existed, their agreement was a
+/// doc comment: believed, argued for, never executed. Every fixture below
+/// goes through BOTH implementations over an identical set of rows, and the
+/// two orderings must come out identical, row for row — the fixtures are
+/// chosen to exercise exactly the shapes where the two spellings could
+/// silently part company (healed rows, NULL anchors, duplicate seqs, ties).
+#[cfg(test)]
+mod cross_backend_tests {
+    use super::{order_by_source_seq, TRANSCRIPT_ANCHOR_SQL};
+
+    /// An in-memory `messages` table holding the slice of the real schema the
+    /// anchor expression reads: `id` (insert order, AUTOINCREMENT like the
+    /// production table), `session_key` (the predicate every reader applies
+    /// first — the window has no `PARTITION BY` because of it), and
+    /// `source_seq` (the projector's stamp, NULL for unprojected rows).
+    /// `content` carries the fixture label so a failure reads as the
+    /// permutation the two backends disagreed on.
+    fn seeded_db(rows: &[(Option<u64>, &str)]) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory sqlite");
+        conn.execute_batch(
+            "CREATE TABLE messages (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 session_key TEXT NOT NULL,
+                 content TEXT NOT NULL,
+                 source_seq INTEGER
+             );",
+        )
+        .expect("create messages");
+        let mut insert = conn
+            .prepare("INSERT INTO messages (session_key, content, source_seq) VALUES ('s', ?1, ?2)")
+            .expect("prepare insert");
+        for (seq, label) in rows {
+            let seq = seq.map(|s| i64::try_from(s).expect("fixture seq fits in i64"));
+            insert
+                .execute(rusqlite::params![*label, seq])
+                .expect("insert fixture row");
+        }
+        conn
+    }
+
+    fn run_sql(conn: &rusqlite::Connection, select: &str) -> Vec<String> {
+        let mut stmt = conn.prepare(select).expect("prepare select");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("run select")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("decode rows")
+    }
+
+    /// The SQL half, in `history_sql`'s unlimited shape verbatim: the anchor
+    /// computed in an inner SELECT over one session's rows, the ordering
+    /// applied OUTSIDE that subquery, ties broken by `id`.
+    fn sql_order(rows: &[(Option<u64>, &str)]) -> Vec<String> {
+        let conn = seeded_db(rows);
+        run_sql(
+            &conn,
+            &format!(
+                "SELECT content FROM ( \
+                     SELECT id, content, {TRANSCRIPT_ANCHOR_SQL} AS anchor \
+                     FROM messages WHERE session_key = 's' \
+                 ) ORDER BY anchor ASC, id ASC"
+            ),
+        )
+    }
+
+    /// The Rust half, as the file backend runs it over `transcript.jsonl`:
+    /// rows arrive in append order, each carrying the seq its id encoded.
+    fn rust_order(rows: &[(Option<u64>, &str)]) -> Vec<String> {
+        let mut v: Vec<(Option<u64>, String)> =
+            rows.iter().map(|(s, l)| (*s, (*l).to_string())).collect();
+        order_by_source_seq(&mut v, |(seq, _)| *seq);
+        v.into_iter().map(|(_, l)| l).collect()
+    }
+
+    /// One fixture, both spellings, one assertion. `case` names the shape so
+    /// a failure says WHICH conversation the backends disagree about, not
+    /// merely that one exists.
+    fn assert_backends_agree(case: &str, rows: &[(Option<u64>, &str)]) {
+        assert_eq!(
+            rust_order(rows),
+            sql_order(rows),
+            "Rust and SQL spellings of the transcript order disagree on `{case}`"
+        );
+    }
+
+    /// The equivalence corpus. Every shape where the two implementations
+    /// could plausibly diverge: NULL-anchor placement (SQLite NULLS FIRST vs
+    /// `None < Some`), the running maximum behind `newest_before` (window
+    /// frame vs `Option::max`), tie-breaking (stable sort vs `, id`), and the
+    /// healed row the whole rule exists for.
+    #[test]
+    fn both_spellings_agree_on_every_fixture_shape() {
+        let cases: &[(&str, &[(Option<u64>, &str)])] = &[
+            // Nothing in the store: both backends serve the empty transcript.
+            ("empty store", &[]),
+            // One projected row: no anchor arithmetic to do at all.
+            ("single projected row", &[(Some(1), "a")]),
+            // One unprojected row: anchor None/NULL, still the only row.
+            ("single unprojected row", &[(None, "a")]),
+            // The pre-heal world, where insert order and seq order coincide.
+            (
+                "plain ascending",
+                &[(Some(1), "a"), (Some(2), "b"), (Some(3), "c")],
+            ),
+            // A legacy prefix: rows with no seq anchor to None/NULL, which
+            // sorts first on BOTH sides (SQLite NULLS FIRST, `None < Some`).
+            (
+                "unprojected prefix",
+                &[(None, "old-1"), (None, "old-2"), (Some(9), "new")],
+            ),
+            // An unprojected row at the very end inherits the largest
+            // running anchor there is — `newest_before.max(Some(seq))` vs
+            // the window's MAX, both pinned at the top of seq space.
+            (
+                "unprojected tail",
+                &[(Some(1), "a"), (Some(2), "b"), (None, "tail")],
+            ),
+            // Insert order is the exact inverse of seq order: the sort, not
+            // the log, decides everything.
+            (
+                "insert order reversed from seq order",
+                &[(Some(5), "a"), (Some(3), "b"), (Some(1), "c")],
+            ),
+            // The heal: seq 3 appended after 4 and 5 belongs between them.
+            (
+                "healed gap",
+                &[
+                    (Some(1), "a"),
+                    (Some(2), "b"),
+                    (Some(4), "d"),
+                    (Some(5), "e"),
+                    (Some(3), "healed"),
+                ],
+            ),
+            // The non-monotonic case the audit flagged. After the heal the
+            // running maximum does NOT drop back to 3: the notice after the
+            // healed row anchors to 5 (`newest_before.max(Some(3))` keeps 5;
+            // the window's MAX over {1,2,4,5,3} is 5). Three rows tie at
+            // anchor 5 and must fall to the id/insert-order tie-break.
+            (
+                "healed gap with unprojected rows around it",
+                &[
+                    (Some(1), "a"),
+                    (Some(2), "b"),
+                    (Some(4), "d"),
+                    (Some(5), "e"),
+                    (None, "mid-notice"),
+                    (Some(3), "healed"),
+                    (None, "late-notice"),
+                ],
+            ),
+            // One seq stamped on two rows: both anchor identically, and the
+            // tie must resolve to insert order on both sides.
+            (
+                "duplicate seq",
+                &[(Some(2), "a"), (Some(2), "b"), (Some(3), "c")],
+            ),
+            // The duplicate straddling an unprojected row: three different
+            // anchor sources (own seq, inherited seq, own seq) land on the
+            // same value, so ONLY the tie-break orders them.
+            (
+                "duplicate seq around an unprojected row",
+                &[(Some(2), "a"), (None, "n"), (Some(2), "b")],
+            ),
+            // Kitchen sink: unprojected prefix, ascending run, unprojected
+            // mid-row, healed row — every rule in one conversation.
+            (
+                "everything at once",
+                &[
+                    (None, "legacy"),
+                    (Some(2), "a"),
+                    (Some(4), "c"),
+                    (None, "notice"),
+                    (Some(3), "healed"),
+                ],
+            ),
+        ];
+        for (case, rows) in cases {
+            assert_backends_agree(case, rows);
+        }
+    }
+
+    /// Agreement is necessary but not sufficient — two implementations can
+    /// agree on the WRONG answer. The healed gap is the row shape the anchor
+    /// exists for, so pin its absolute order on each spelling separately.
+    #[test]
+    fn the_healed_row_sorts_back_where_it_was_said_on_both_backends() {
+        let fixture: &[(Option<u64>, &str)] = &[
+            (Some(1), "a"),
+            (Some(2), "b"),
+            (Some(4), "d"),
+            (Some(5), "e"),
+            (Some(3), "healed"),
+        ];
+        let expected = vec!["a", "b", "healed", "d", "e"];
+        assert_eq!(rust_order(fixture), expected, "Rust spelling");
+        assert_eq!(sql_order(fixture), expected, "SQL spelling");
+    }
+
+    /// The readers rarely want the whole transcript; they want its tail.
+    /// `history_sql`'s limited arm takes the trailing N by `ORDER BY anchor
+    /// DESC, id DESC LIMIT n` and re-sorts ASC, while the file backend sorts
+    /// everything ASC and drops the prefix. The two select the same SET only
+    /// because `(anchor, id)` is a total order — a healed row inside the
+    /// window is exactly where "last N appended" and "last N of the
+    /// conversation" stop being the same question, so pin that both
+    /// spellings keep answering the second one.
+    #[test]
+    fn taking_the_trailing_n_selects_the_same_rows_on_both_backends() {
+        let fixture: &[(Option<u64>, &str)] = &[
+            (Some(1), "a"),
+            (Some(2), "b"),
+            (Some(4), "d"),
+            (Some(5), "e"),
+            (None, "notice"),
+            (Some(3), "healed"),
+        ];
+        const N: usize = 3;
+
+        // SQL: `history_sql(Some(n))`'s shape verbatim — inner DESC/LIMIT,
+        // outer ASC re-sort.
+        let conn = seeded_db(fixture);
+        let sql_tail = run_sql(
+            &conn,
+            &format!(
+                "SELECT content FROM ( \
+                     SELECT * FROM ( \
+                         SELECT id, content, {TRANSCRIPT_ANCHOR_SQL} AS anchor \
+                         FROM messages WHERE session_key = 's' \
+                     ) ORDER BY anchor DESC, id DESC LIMIT {N} \
+                 ) ORDER BY anchor ASC, id ASC"
+            ),
+        );
+
+        // Rust: the file backend's `split_off(len - n)` after the full sort.
+        let mut rust_tail = rust_order(fixture);
+        if rust_tail.len() > N {
+            rust_tail = rust_tail.split_off(rust_tail.len() - N);
+        }
+
+        // Anchors: a=1, b=2, d=4, e=5, notice=5, healed=3 — the full order is
+        // a, b, healed, d, e, notice, so the trailing 3 are d, e, notice.
+        let expected = vec!["d", "e", "notice"];
+        assert_eq!(
+            rust_tail, expected,
+            "Rust spelling (sort, then drop prefix)"
+        );
+        assert_eq!(sql_tail, expected, "SQL spelling (DESC LIMIT, then ASC)");
     }
 }
