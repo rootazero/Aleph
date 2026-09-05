@@ -3658,6 +3658,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
     }
+    // Same shape and the same reason as the background-bash reap above: the
+    // browsers are OUR child processes, `Child` does not kill on drop, and
+    // under `attach --cdp` playwright-cli was never their parent. Reached by
+    // both signal paths and by a fatal `run_until_shutdown` error. Without it
+    // every restart leaves a Chromium behind for the next boot's sweep to
+    // find — and on a host where argv is unreadable that sweep declines to
+    // act, by design, so the leak would be permanent.
+    let browsers = alephcore::browser::manager::shutdown_browsers_global();
+    if browsers > 0 {
+        tracing::info!(count = browsers, "stopped managed browsers on shutdown");
+    }
     // The projection barrier. Everything that could append an event has stopped
     // by now, but the drain is asynchronous: without this the process can exit
     // (and drop the store) with rows still queued — a projection gap

@@ -534,6 +534,20 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
             // leaving the workspace writable after the daemon exits.
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
+        // The wedged path. `std::process::exit(0)` below skips the orderly
+        // block entirely, so the browser stop has to be here too — and this is
+        // the path that matters most: `SHUTDOWN_FAILSAFE` is matched to
+        // `aleph-server stop`'s own SIGTERM->SIGKILL window, and the comment
+        // above notes a wedged shutdown usually coincides with load. A browser
+        // leaked here is leaked on exactly the shutdowns most likely to happen.
+        // No sleep after it, unlike the bash reap: this teardown is a
+        // synchronous `kill()` plus a bounded `wait()`, so it does not need
+        // another scheduler pass — only to finish before the exit below.
+        // Idempotent with the `start_server` call site.
+        let browsers = alephcore::browser::manager::shutdown_browsers_global();
+        if browsers > 0 {
+            tracing::warn!(count = browsers, "stopped managed browsers before forced exit");
+        }
         std::process::exit(0);
     });
 
@@ -607,40 +621,46 @@ mod tests {
     /// pin buys is precise: deleting either call fails a test by name
     /// instead of silently re-orphaning every long build.
     ///
-    /// Deliberately covers BOTH sites. They are not redundant —
-    /// `start_server`'s call is the orderly path (and the only one reached
-    /// when `run_until_shutdown` returns an error rather than a signal),
-    /// while this file's is the wedged path, where the failsafe
+    /// Deliberately covers BOTH sites AND both reapers. They are not
+    /// redundant — `start_server`'s call is the orderly path (and the only one
+    /// reached when `run_until_shutdown` returns an error rather than a
+    /// signal), while this file's is the wedged path, where the failsafe
     /// `std::process::exit(0)` skips the orderly block entirely.
+    ///
+    /// The browser reaper joined this pin because it is the same shape with
+    /// the same failure mode: `std::process::Child` does not kill on drop, and
+    /// under `attach --cdp` playwright-cli was never the browser's parent, so
+    /// a missing call leaks a Chromium — and leaks it on precisely the loaded
+    /// shutdowns the failsafe exists for.
     #[test]
-    fn both_daemon_exit_paths_reap_background_jobs() {
-        let reaper = "kill_all_running_background";
-        for (label, raw) in [
-            ("start/helpers.rs", include_str!("helpers.rs")),
-            ("start/mod.rs", include_str!("mod.rs")),
-        ] {
-            let src = raw.replace('\r', "");
-            let production = alephcore::utils::source_scan::production_prefix(&src);
-            // Non-vacuity: prove the bound actually cut something off in the
-            // file that HAS a test module, so the split is doing real work.
-            if label.ends_with("helpers.rs") {
+    fn both_daemon_exit_paths_reap_background_jobs_and_browsers() {
+        for reaper in ["kill_all_running_background", "shutdown_browsers_global"] {
+            for (label, raw) in [
+                ("start/helpers.rs", include_str!("helpers.rs")),
+                ("start/mod.rs", include_str!("mod.rs")),
+            ] {
+                let src = raw.replace('\r', "");
+                let production = alephcore::utils::source_scan::production_prefix(&src);
+                // Non-vacuity: prove the bound actually cut something off in
+                // the file that HAS a test module, so the split is doing real
+                // work.
+                if label.ends_with("helpers.rs") {
+                    assert!(
+                        production.len() < src.len(),
+                        "{label}: the #[cfg(test)] bound matched nothing — this \
+                         test would then be reading its own source"
+                    );
+                }
+                // Assert on the CALL (`ident(`), not the bare name: the prose
+                // above and the explanatory comments at both sites also spell
+                // the identifier, so `contains(reaper)` alone would stay green
+                // if someone deleted the statement and kept the comment.
                 assert!(
-                    production.len() < src.len(),
-                    "{label}: the #[cfg(test)] bound matched nothing — this \
-                     test would then be reading its own source"
+                    production.contains(&format!("{reaper}(")),
+                    "{label} must call {reaper}() on its exit path — a child \
+                     process this daemon owns outlives it otherwise"
                 );
             }
-            // Assert on the CALL (`ident(`), not the bare name: the prose
-            // above and the explanatory comments at both sites also spell
-            // the identifier, so `contains(reaper)` alone would stay green
-            // if someone deleted the statement and kept the comment.
-            assert!(
-                production.contains(&format!("{reaper}(")),
-                "{label} must call {reaper}() on its exit path — \
-                 `Child::kill_on_drop` is best-effort once the runtime is \
-                 being torn down, so without this a backgrounded build \
-                 outlives the daemon and keeps writing to the workspace"
-            );
         }
     }
 }

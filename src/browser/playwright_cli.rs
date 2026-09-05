@@ -431,10 +431,6 @@ impl PlaywrightCliDriver {
     /// reads `None` as "nothing is running" is reading an absent record as an
     /// absent process (判据 §8). The same caveat applies to
     /// [`Self::chromium_alive`].
-    // TODO(plan-1 task 6): remove this allow when Task 6 (manager.rs) calls
-    // this. Until then `-D warnings` on `--lib` (which does not compile
-    // `#[cfg(test)]`) sees no consumer.
-    #[allow(dead_code)]
     pub(crate) fn endpoint(&self, session_key: &str) -> Option<CdpEndpoint> {
         self.chromium
             .lock()
@@ -485,10 +481,8 @@ impl PlaywrightCliDriver {
     ///
     /// The fix for both, if it ever matters, is for this to take `session_lock`
     /// and become `async`; it is stated here rather than done because the
-    /// reaper that will call it does not exist yet.
-    // TODO(plan-1 task 6): remove this allow. The idle reaper in Task 6
-    // (manager.rs) is the first non-test caller.
-    #[allow(dead_code)]
+    /// reaper's sweep is off the request path, so a wasted relaunch — the
+    /// cheaper of the two windows — is what it usually costs.
     pub(crate) fn shutdown_chromium(&self, session_key: &str) -> bool {
         self.forget_chromium(session_key)
     }
@@ -535,7 +529,7 @@ impl PlaywrightCliDriver {
     /// Pairs with [`ChromiumChild::from_parts`]. **Task 6 consumes this same
     /// seam** for the reaper's tests; do not add a second one.
     #[cfg(test)]
-    fn insert_test_child(&self, session_key: &str, child: ChromiumChild) {
+    pub(crate) fn insert_test_child(&self, session_key: &str, child: ChromiumChild) {
         self.chromium
             .lock()
             .unwrap_or_else(|e| e.into_inner())
