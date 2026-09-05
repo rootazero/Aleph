@@ -76,6 +76,11 @@ fn found_finding(path: &std::path::Path, source: ChromiumSource) -> Finding {
 /// The fix-hint sentence, reachable from `builtin_tools::runtime_manage`'s test
 /// so the tool it names can be pinned to a tool that exists. Exposing the
 /// finding rather than the string keeps one author for the sentence.
+// TODO(plan-1 task 8): remove this allow. Task 8 (builtin_tools::runtime_manage)
+// is the only consumer; until then this fn has no non-test caller and
+// `cargo clippy --all-targets` (rust-doctor.yml:129) sees it under `--tests`,
+// which `cargo clippy -p alephcore --lib` (CI:345) does not compile.
+#[allow(dead_code)]
 #[cfg(test)]
 pub(crate) fn missing_finding_for_test() -> Finding {
     missing_finding("no system browser")
@@ -281,8 +286,7 @@ mod tests {
         assert!(joined.is_err(), "precondition: the task must have failed");
 
         let finding = settle_probe(ID, SUBJECT, joined)
-            .err()
-            .expect("a task that did not complete must not be settled into a probe outcome");
+            .expect_err("a task that did not complete must not be settled into a probe outcome");
         assert_eq!(finding.check_id, ID);
         assert_eq!(
             finding.severity,
