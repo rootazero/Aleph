@@ -1204,4 +1204,108 @@ mod tests {
         ));
         assert_eq!(reg.resolve_all_by_tags(&[]).len(), 2);
     }
+    /// Shared close-signal probe for the contrasting pair below, so ONE
+    /// instrument has to report both polarities (a "was it closed?" probe that
+    /// can only ever answer one way is worthless). `notify_one` stores a permit
+    /// when nobody is waiting, so a close fired synchronously inside `register`
+    /// is still observable afterwards: a single poll of `notified()` picks the
+    /// permit up. The zero-length timeout makes that single poll the whole
+    /// probe — ready ⇒ a permit was stored (fired), elapsed ⇒ none was.
+    async fn close_fired(close: &std::sync::Arc<tokio::sync::Notify>) -> bool {
+        tokio::time::timeout(std::time::Duration::from_millis(0), close.notified())
+            .await
+            .is_ok()
+    }
+
+    /// Like [`session`], but the channel carries a close signal, the way the
+    /// center builds it per connection.
+    fn session_with_close(
+        node_id: &str,
+        conn_id: &str,
+        close: &std::sync::Arc<tokio::sync::Notify>,
+    ) -> NodeSession {
+        let (tx, _rx) = mpsc::channel::<String>(8);
+        NodeSession {
+            channel: ReverseRpcChannel::with_close(tx, close.clone()),
+            ..session(node_id, conn_id)
+        }
+    }
+
+    /// (B1-03) The same `conn_id` re-announcing under a DIFFERENT `node_id`
+    /// orphans the previous session's map entries — but must NOT close its
+    /// channel. `gateway/server/handler.rs` builds exactly one
+    /// `with_close(tx, rpc_close.clone())` per connection and stores clones of
+    /// it, so every channel reachable through that `conn_id` shares one
+    /// `Arc<Notify>`: the "old" session's channel is *this very connection's*.
+    /// Closing it tears down the session `register` goes on to insert two lines
+    /// later — which is what the code did before 705609899: it closed, then
+    /// registered anyway, and the log claimed a survivor that was already being
+    /// torn down.
+    #[tokio::test]
+    async fn reannounce_under_new_node_id_does_not_close_this_connection() {
+        // One Notify for the whole connection, exactly as production binds it.
+        let close_c = std::sync::Arc::new(tokio::sync::Notify::new());
+        let reg = NodeRegistry::new();
+        reg.register(session_with_close("node-a", "conn-c", &close_c));
+        reg.register(session_with_close("node-b", "conn-c", &close_c));
+
+        let envs = reg.list_environments();
+        assert_eq!(
+            envs.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            vec!["node-b"],
+            "the orphaned node-a session must be gone from both maps"
+        );
+        assert_eq!(
+            reg.node_identity_by_conn("conn-c").map(|(id, _)| id),
+            Some("node-b".to_string()),
+            "the connection must now be stamped as the node it re-announced as"
+        );
+        assert!(
+            !close_fired(&close_c).await,
+            "B1-03 must not fire this connection's close signal — it is the same \
+             Arc<Notify> the node-b session just registered on top of it depends on"
+        );
+    }
+
+    /// (B1-01) The contrast to the test above, and the reason the asymmetry is
+    /// deliberate rather than an oversight: a reconnect under the same
+    /// `node_id` from a DIFFERENT `conn_id` displaces a genuinely different,
+    /// still-running connection, and that one MUST be closed. Eviction alone
+    /// only stops NEW dispatches — the displaced socket (and with it the live
+    /// `node.approval.request` path back to the operator) would survive until
+    /// the <=90s inbound watchdog, which never fires while that node keeps
+    /// talking, and any surviving `channel.clone()` could still `call()` a
+    /// session the registry no longer knows about.
+    ///
+    /// Same probe as the B1-03 test, opposite answer — and opposite answers
+    /// again within this test, on the two connections' own signals.
+    #[tokio::test]
+    async fn reconnect_from_a_new_conn_closes_the_displaced_connection() {
+        let close_1 = std::sync::Arc::new(tokio::sync::Notify::new());
+        let close_2 = std::sync::Arc::new(tokio::sync::Notify::new());
+        let reg = NodeRegistry::new();
+        reg.register(session_with_close("node-a", "conn-1", &close_1));
+        reg.register(session_with_close("node-a", "conn-2", &close_2));
+
+        assert_eq!(
+            reg.node_identity_by_conn("conn-1"),
+            None,
+            "the displaced conn must no longer resolve as the node (anti-spoof stamp)"
+        );
+        assert_eq!(
+            reg.node_identity_by_conn("conn-2").map(|(id, _)| id),
+            Some("node-a".to_string()),
+            "the fresh connection owns the identity"
+        );
+        assert!(
+            close_fired(&close_1).await,
+            "B1-01 must fire the displaced connection's close signal, otherwise the \
+             evicted session keeps its socket until the inbound idle-watchdog"
+        );
+        assert!(
+            !close_fired(&close_2).await,
+            "and only the displaced one: the surviving connection's own signal stays \
+             unfired (same probe, both polarities, inside one test)"
+        );
+    }
 }
