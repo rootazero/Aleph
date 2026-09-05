@@ -373,6 +373,58 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
                                  # that platform's SHELL_MARKER_JS arm is still unrun
 
+./qa/winshell/run.sh all         # ~28 s. WINDOWS ONLY (loud SKIP elsewhere, never a pass). The
+                                 # seven facts the pwsh-as-Windows-shell design rests on, asked of
+                                 # the HOST's PowerShell. No server, no config, no port, nothing
+                                 # under ~/.aleph — the only fixture here that boots nothing. It
+                                 # exists because those numbers were measured once in a chat
+                                 # window, and a number nobody can re-derive is a number nobody
+                                 # can check (判据 §18). Stages: resolve / encoding / exit /
+                                 # comment / length / profile / env, or `all`.
+                                 #   Nothing is copied: the prologue, the epilogue, the argv
+                                 # flags, the two separators joining them and the environment
+                                 # allowlist are DERIVED from src/utils/shell.rs and
+                                 # src/builtin_tools/code_exec.rs (`derive_ps_contract.mjs`; run it
+                                 # alone to see what it read). A hand copy would be a second
+                                 # statement of one fact. The ONE thing deliberately not derived
+                                 # is where pwsh lives — `resolve` walks PATH with PATHEXT itself,
+                                 # because reading the path out of the product would make the
+                                 # fixture agree with it by construction.
+                                 #   Every stage can be made to say NO:
+                                 # `QA_WINSHELL_FALSIFY=prologue|epilogue|join|length|profile|env|
+                                 # resolve` breaks exactly one input and the named stage goes red.
+                                 # All seven were run that way on 2026-09-05 and all seven did.
+                                 #   FLOOR: `FLOORS` in probe_pwsh.mjs — 18 gated checks for `all`;
+                                 # below that the run goes red even with zero failures, because a
+                                 # stage whose checks vanished prints a green summary too. OBSV
+                                 # lines are observations and are deliberately not counted. The
+                                 # floor earned itself on its first day: one run in eight came
+                                 # back 16/18 (a `profile` spawn died, and that stage aborts its
+                                 # arm rather than average over a failed spawn). Not reproduced in
+                                 # six runs since. `profile` now retries a broken spawn ONCE and
+                                 # prints how many needed it — a retry that is not counted is a
+                                 # failure hidden rather than survived.
+                                 #   ⚠️ Two instrument traps it is shaped around, both of which
+                                 # silently flip an answer the SAFE-LOOKING way: (1) a literal
+                                 # 中文 in the argv confounds the encoding measurement, so the
+                                 # non-ASCII string is built from code points; (2) Node's
+                                 # `spawnSync({env})` is NOT Rust's `env_clear()` — libuv copies
+                                 # eleven names (TEMP among them) out of the parent, so the `env`
+                                 # stage drives both arms through a pwsh launcher that calls
+                                 # `ProcessStartInfo.Environment.Clear()`. Measured: 3 variables
+                                 # the product's way vs 13 through Node, and only the first
+                                 # reproduces the empty TEMP.
+                                 #   Its first run corrected the tree it was written against: the
+                                 # `PS_PROLOGUE` doc comment says the code page is "a property of
+                                 # the invocation form, not of the host" (65001 via -Command, 936
+                                 # via stdin). Measured here, BOTH forms answer 936 without the
+                                 # prologue and both follow the console's code page. The
+                                 # conclusion survives — the prologue is more necessary, not less
+                                 # — but the stated reason does not reproduce. Stage 2's `2d`
+                                 # line reports that and does not gate on it: a wrong reason in a
+                                 # comment is a documentation defect, and gating it would turn a
+                                 # host that MATCHES the comment red for being correct.
+
 ./qa/rooms_channel_bind/run.sh   # §5.22 round-9: a channel GROUP conversation bound into a project
                                  # room. Three real identities, a webhook channel (the binding key is
                                  # (channel_id, peer_kind, peer_id) and the mechanism does not know

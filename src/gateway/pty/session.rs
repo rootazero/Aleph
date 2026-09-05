@@ -31,8 +31,12 @@ const READ_CHUNK: usize = 8192;
 /// request spawns the user's default login shell at 80x24.
 #[derive(Debug, Clone, Default)]
 pub struct SpawnOptions {
-    /// Program to run. `None` → the platform default shell
-    /// (`$SHELL` / `/bin/sh` on Unix, `cmd.exe` on Windows).
+    /// Program to run. `None` → the platform default shell: the human's login
+    /// shell on Unix (`$SHELL`, else `/bin/sh`), and on Windows whatever
+    /// [`crate::utils::shell::resolve`] finds — `pwsh`, else Windows
+    /// PowerShell 5.1, else `cmd.exe`. See `default_shell_command` below
+    /// (named without an intra-doc link on purpose: it is private, and this
+    /// field is not, so a link would be a rustdoc warning).
     pub command: Option<String>,
     /// Arguments passed to `command` (ignored when `command` is `None`).
     pub args: Vec<String>,
@@ -178,8 +182,12 @@ impl PtySession {
         // Build the command (explicit program or the platform default shell).
         let (mut cmd, label) = match &opts.command {
             Some(prog) => (CommandBuilder::new(prog), prog.clone()),
-            None => (CommandBuilder::new_default_prog(), default_shell_label()),
+            None => default_shell_command(),
         };
+        // Still gated on the explicit arm, and not merely because `opts.args`
+        // is documented as ignored when `command` is `None`: on Unix that arm
+        // is a `new_default_prog` builder, whose `arg()` PANICS rather than
+        // erroring (portable-pty 0.8.1, `cmdbuilder.rs`).
         if opts.command.is_some() {
             cmd.args(&opts.args);
         }
@@ -473,16 +481,76 @@ impl PtySession {
     }
 }
 
-/// The platform default shell label for display purposes only (the actual
-/// spawn uses `CommandBuilder::new_default_prog`).
-fn default_shell_label() -> String {
+/// The `(command, label)` pair for a spawn that named no program.
+///
+/// Which shell this session runs is ONE fact, so the spawn and the label are
+/// derived here together. They used to be two statements: the spawn called
+/// `CommandBuilder::new_default_prog()` while a separate `default_shell_label()`
+/// re-guessed what that would pick, under a doc comment conceding it was "for
+/// display purposes only". Nothing forced the guess to track the spawn, and the
+/// day the Windows default stopped being `%COMSPEC%` the guess would have gone
+/// on reporting `cmd.exe` for a `pwsh` session — 判据 §1, two statements of one
+/// fact where only one gets changed. `PtySession::shell` is not decoration: it
+/// is what `pty.list` shows and what `RuntimeAgentEntry` reads.
+///
+/// The two platform arms are asymmetric ON PURPOSE — see each. They are `cfg`
+/// blocks inside one item rather than two `#[cfg]`-gated items so this doc
+/// comment governs both: split into two items, the Windows one carries the
+/// contract and the Unix one silently has none.
+fn default_shell_command() -> (CommandBuilder, String) {
     #[cfg(windows)]
     {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+        use crate::utils::shell::ShellKind;
+
+        // Windows has no `$SHELL` holding a login shell, so `new_default_prog()`
+        // spawns `%COMSPEC%` — `cmd.exe`, which on Windows 11 is the legacy
+        // fallback rather than the shell a human expects a terminal to open in.
+        // `utils::shell::resolve()` walks pwsh → Windows PowerShell 5.1 →
+        // cmd.exe and returns an ABSOLUTE path, so the child cannot be
+        // re-resolved through a `PATH` other than the one we probed with.
+        let shell = crate::utils::shell::resolve();
+        let mut cmd = CommandBuilder::new(&shell.program);
+        match shell.kind {
+            // `-NoLogo` and nothing else. This is the HUMAN's interactive
+            // shell: their profile is wanted (so no `-NoProfile`) and it must
+            // accept typed input (so no `-NonInteractive`). The agent's
+            // script-running face — `ShellKind::invocation` — passes both of
+            // those flags; that is a different contract on the same binary,
+            // not an inconsistency to reconcile.
+            ShellKind::Pwsh | ShellKind::WindowsPowerShell => cmd.arg("-NoLogo"),
+            // `cmd.exe` has no banner switch for an interactive session, and
+            // `Bash` is unreachable here (`resolve()`'s Windows arm never
+            // yields it). Both take the argument-free spawn.
+            ShellKind::Cmd | ShellKind::Bash => {}
+        }
+        (cmd, shell.label.clone())
     }
     #[cfg(not(windows))]
     {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+        // Unix keeps `new_default_prog()`, which runs this user's own login
+        // shell. Do NOT route it through `utils::shell::resolve()`: that
+        // answers a different question — "which shell does the AGENT run its
+        // scripts under" — and on Unix always answers `bash`. This is the
+        // HUMAN's interactive terminal, and opening it in bash because that is
+        // what the agent uses would quietly ignore a zsh or fish user's actual
+        // shell. Someone who sees two shell resolvers and assumes one is
+        // redundant will delete the wrong one; that is what this paragraph is
+        // for.
+        //
+        // Residual, deliberately left: this label reads the SERVER process's
+        // `$SHELL`, while `new_default_prog()` reads the builder's own env —
+        // which portable-pty overwrites from the passwd database — so on a
+        // host where those disagree, so do these. Deriving the label from
+        // `CommandBuilder::get_shell()` would close it, and would also make
+        // the label `/bin/sh` on any account whose passwd shell is `/bin/sh`:
+        // the exact string `handlers/pty.rs`'s jail-bypass probe uses to
+        // recognise its own leaked session, which would turn that guard into a
+        // false positive. Not this change's bug; recorded so the next reader
+        // does not "fix" it there.
+        (
+            CommandBuilder::new_default_prog(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+        )
     }
 }
 

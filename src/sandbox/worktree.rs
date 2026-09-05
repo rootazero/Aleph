@@ -306,9 +306,11 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             .envs(command.env.iter())
             // Injected unconditionally, and it has to stay that way. `program`
             // here is never `cargo`: every caller that reaches this sandbox
-            // spawns an *interpreter* — `code_exec` uses `language.runtime()`
-            // (`bash` / `sh` / `python` / `node`), `code_check` hardcodes
-            // `bash`, and the `bash` tool likewise — with the cargo invocation
+            // spawns an *interpreter* — `node` as a literal, and otherwise a
+            // probe result from `utils::shell` (`resolve()` for every shell
+            // caller, `python3()` for Python), which on Windows is an absolute
+            // path to pwsh / powershell / cmd. `code_exec`, `code_check` and
+            // the `bash` tool all go through those, with the cargo invocation
             // living inside `args` as shell text. So a `program == "cargo"`
             // predicate is false on every production path, and narrowing to it
             // (SAN-006, f4a994ee2) silently deleted the redirect that

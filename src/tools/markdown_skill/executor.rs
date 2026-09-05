@@ -19,51 +19,67 @@ use super::tool_adapter::{MarkdownCliTool, MarkdownToolOutput};
 /// Build the host process [`Command`] for a skill's binary, accounting for
 /// Windows launcher conventions.
 ///
-/// On Windows, `which` is PATHEXT-aware and resolves launchers that
-/// `CreateProcess` cannot execute directly:
-///   * `.cmd` / `.bat` — node/npm-style CLIs; must run through `cmd /C`.
-///   * `.ps1` — PowerShell scripts; run via PowerShell 7 (`pwsh`) when present,
-///     falling back to Windows PowerShell (`powershell`), using `-File`.
+/// On Windows the job is *resolution*: `which` is PATHEXT-aware, so it finds
+/// the launchers a bare `Command::new(bin)` would miss — `npm` → `npm.cmd`, a
+/// skill's `foo` → `foo.ps1`. Without it a skill's binary check (via `which`)
+/// would pass while the actual spawn failed. What to do with the resolved path
+/// is `windows_host_command`'s decision.
 ///
-/// Without this, a skill's binary check (via `which`) would pass while the
-/// actual spawn failed. On non-Windows platforms this is byte-identical to
+/// On non-Windows platforms this is byte-identical to
 /// `Command::new(bin).args(cli_args)`.
 fn build_host_command(bin: &str, cli_args: &[String]) -> Command {
     #[cfg(windows)]
     {
         if let Ok(path) = which::which(bin) {
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_ascii_lowercase);
-            let mut cmd = match ext.as_deref() {
-                Some("cmd" | "bat") => {
-                    // CreateProcess cannot execute batch files directly.
-                    let mut c = Command::new("cmd");
-                    c.arg("/C").arg(&path);
-                    c
-                }
-                Some("ps1") => {
-                    // Prefer PowerShell 7; fall back to Windows PowerShell.
-                    let shell = if which::which("pwsh").is_ok() {
-                        "pwsh"
-                    } else {
-                        "powershell"
-                    };
-                    let mut c = Command::new(shell);
-                    c.arg("-NoProfile").arg("-File").arg(&path);
-                    c
-                }
-                _ => Command::new(&path),
-            };
-            cmd.args(cli_args);
-            return cmd;
+            return windows_host_command(&path, cli_args);
         }
         // Resolution failed — fall through to a bare spawn so the original
         // "not found" error surfaces to the caller.
     }
 
     let mut cmd = Command::new(bin);
+    cmd.args(cli_args);
+    cmd
+}
+
+/// Choose the argv for an already-resolved Windows launcher path.
+///
+/// Split out of [`build_host_command`] so the choice can be asserted without a
+/// PATH that happens to hold the right launcher.
+///
+/// `cli_args` reach here from the model's tool call, so they are untrusted and
+/// must arrive at the target as literal arguments.
+#[cfg(windows)]
+fn windows_host_command(resolved: &std::path::Path, cli_args: &[String]) -> Command {
+    let ext = resolved
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    let mut cmd = match ext.as_deref() {
+        Some("ps1") => {
+            // PowerShell will not run a script named as the program, so this
+            // one does need a host in front of it. `-File` passes the rest
+            // literally — measured: `a&whoami`, `$(whoami)`, `$env:USERNAME`
+            // and `%USERNAME%` all arrive verbatim.
+            // Host choice (pwsh → powershell) lives in `utils::shell`.
+            let shell = crate::utils::shell::powershell_host().map_or_else(
+                || std::path::PathBuf::from("powershell"),
+                |shell| shell.program.clone(),
+            );
+            let mut c = Command::new(shell);
+            c.arg("-NoProfile").arg("-File").arg(resolved);
+            c
+        }
+        // `.cmd` / `.bat` land here with everything else, deliberately. Since
+        // Rust 1.77.2 (CVE-2024-24576) std spawns a batch file itself and
+        // escapes the arguments for cmd's parser; MSRV here is 1.95, so that
+        // is always available. Wrapping it in `cmd /C <bat> <args>` instead
+        // puts `cli_args` on cmd.exe's own command line, beyond the reach of
+        // that escaping — and std quotes only on space/tab/quote, so the
+        // space-free argument is the dangerous one: `a&<command>` arrives
+        // unquoted and starts a second command, `%VAR%` expands.
+        _ => Command::new(resolved),
+    };
     cmd.args(cli_args);
     cmd
 }
@@ -776,5 +792,71 @@ mod tests {
             assert!(dir.is_dir(), "{} must exist", dir.display());
         }
         // Drop cleans the tree up.
+    }
+
+    /// A `.cmd`/`.bat` launcher must be the **program**, never an argument of
+    /// `cmd /C`. `cli_args` are the model's tool-call arguments, and std quotes
+    /// only on space/tab/quote — so under `cmd /C <bat> <args>` a space-free
+    /// `a&<command>` reaches cmd.exe's command line unquoted and starts a
+    /// second command, and `%VAR%` is expanded (both measured on this
+    /// toolchain). Spawning the batch file directly is what engages std's own
+    /// batch escaping (Rust >= 1.77.2, CVE-2024-24576; MSRV here is 1.95).
+    ///
+    /// Falsify: restore the `Some("cmd" | "bat") => Command::new("cmd")` arm.
+    #[cfg(windows)]
+    #[test]
+    fn batch_launchers_are_the_program_not_an_argument_of_cmd() {
+        let args = vec!["a&whoami".to_string(), "%USERNAME%".to_string()];
+        let expected: Vec<_> = args
+            .iter()
+            .map(|a| std::ffi::OsStr::new(a.as_str()))
+            .collect();
+
+        for launcher in [r"C:\node\npm.cmd", r"C:\node\npm.bat"] {
+            let cmd = super::windows_host_command(std::path::Path::new(launcher), &args);
+            let std_cmd = cmd.as_std();
+            assert_eq!(
+                std_cmd.get_program(),
+                std::ffi::OsStr::new(launcher),
+                "{launcher} must be the program, not an argument of another one"
+            );
+            assert_eq!(
+                std_cmd.get_args().collect::<Vec<_>>(),
+                expected,
+                "{launcher} must receive the model's arguments verbatim"
+            );
+        }
+    }
+
+    /// The `.ps1` arm is the twin, and it is deliberately *not* changed: `-File`
+    /// passes the remainder literally — measured, `a&whoami`, `$(whoami)`,
+    /// `$env:USERNAME` and `%USERNAME%` all arrive verbatim. What it must keep
+    /// is that form; `-Command` would turn those arguments into script text.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_scripts_keep_the_literal_file_form() {
+        let script = r"C:\skills\tool.ps1";
+        let args = vec!["a&whoami".to_string()];
+        let cmd = super::windows_host_command(std::path::Path::new(script), &args);
+        let std_cmd = cmd.as_std();
+
+        let stem = std::path::Path::new(std_cmd.get_program())
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::to_ascii_lowercase);
+        assert!(
+            matches!(stem.as_deref(), Some("pwsh" | "powershell")),
+            "a PowerShell script needs a PowerShell host, got {stem:?}"
+        );
+        assert_eq!(
+            std_cmd.get_args().collect::<Vec<_>>(),
+            vec![
+                std::ffi::OsStr::new("-NoProfile"),
+                std::ffi::OsStr::new("-File"),
+                std::ffi::OsStr::new(script),
+                std::ffi::OsStr::new("a&whoami"),
+            ],
+            "the script must be introduced by -File, never -Command"
+        );
     }
 }

@@ -194,22 +194,37 @@ impl CodeCheckTool {
         if let Ok(enhanced) = crate::runtimes::ledger::build_enhanced_path() {
             env.insert("PATH".to_string(), enhanced);
         }
-        for name in ["HOME", "USER", "LANG", "LC_ALL"] {
-            if let Ok(v) = std::env::var(name) {
-                env.insert(name.to_string(), v);
+        // Same allowlist the exec tools pass, for the same reason: the drivers
+        // `env_clear()` the child, so this list IS the environment a checker
+        // gets. Spelling a shorter POSIX-only one here left a Windows child
+        // without `PATHEXT` or `TEMP` — see `code_exec::default_pass_env`.
+        // `PATH` is skipped: it was rebuilt above with the toolchain dirs.
+        for name in crate::builtin_tools::code_exec::default_pass_env() {
+            if name == "PATH" {
+                continue;
+            }
+            if let Ok(v) = std::env::var(&name) {
+                env.insert(name, v);
             }
         }
 
+        // Which shell, and how a script is handed to it, is `utils::shell`'s
+        // answer — not a `"bash"` literal this file spells for itself. It used
+        // to be one, and it was the third: after `code_exec` and the prompt's
+        // `- **Shell**:` line moved to the probe, this site would have gone on
+        // spawning bash on a Windows host that need not have one.
+        let shell = crate::utils::shell::resolve();
+        let (args, stdin) = shell.kind.invocation(&plan.script);
+
         let cmd = SandboxCommand {
             session_id,
-            // The checker is shelled out through `bash`, so `program` says
-            // "bash" for both this tool and the bash tool. The admission hooks
-            // need the caller, not the interpreter.
+            // `program` names the interpreter; the admission hooks need the
+            // caller, which `tool_name` carries.
             tool_name: <Self as AlephTool>::NAME.to_string(),
-            program: "bash".to_string(),
-            args: vec!["-c".to_string(), plan.script.clone()],
+            program: shell.program_string(),
+            args,
             env,
-            stdin: None,
+            stdin,
             cwd: None, // workspace root — where the project markers live
             capabilities: SandboxCapabilities {
                 fs_read: Vec::new(),
@@ -878,9 +893,14 @@ not json at all"#;
 
         let calls = mock.calls.lock().await;
         let cmd = calls.first().expect("one sandboxed command");
+        // Not a `"bash"` literal: on Windows the checker runs under PowerShell.
+        // Asserting against the resolver is what keeps this site tied to the
+        // one answer instead of re-deciding it — the equality goes red if this
+        // file ever spells an interpreter for itself again.
         assert_eq!(
-            cmd.program, "bash",
-            "code_check shells its checker out through bash"
+            cmd.program,
+            crate::utils::shell::resolve().program_string(),
+            "code_check shells its checker out through the resolved shell"
         );
         assert_eq!(
             cmd.tool_name,

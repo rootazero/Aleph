@@ -33,7 +33,9 @@
 //! // `cwd` is the run's EFFECTIVE working directory (project override, else the
 //! // agent workspace) — the directory the shell tool will actually execute in.
 //! let ctx = RuntimeContext::collect_in("claude-opus-4-6", Some("/work/proj".as_ref()));
-//! let stable = ctx.to_stable_lines(); // "- **OS**: macos (aarch64)\n- **Shell**: bash\n…"
+//! // On macOS: "- **OS**: macos (aarch64)\n- **Shell**: bash\n…". The shell
+//! // line is whatever the exec tool resolved for THIS host — see `shell`.
+//! let stable = ctx.to_stable_lines();
 //! let live = ctx.to_environment_context_block(None); // "<environment_context><cwd>/work/proj</cwd>…"
 //! ```
 
@@ -54,13 +56,18 @@ pub struct RuntimeContext {
     pub os: String,
     /// CPU architecture, e.g. "aarch64", "x86_64"
     pub arch: String,
-    /// Interpreter a shell tool call actually runs under, e.g. "bash".
+    /// Interpreter a shell tool call actually runs under — `bash` on Unix,
+    /// PowerShell (`pwsh`, else Windows PowerShell, else `cmd`) on Windows.
     ///
     /// This is the *agent's* shell, read from the exec tool that owns the fact
     /// ([`shell_interpreter`](crate::builtin_tools::code_exec::shell_interpreter)) —
     /// **not** the human operator's `$SHELL`. `$SHELL` describes a login shell the
     /// agent never uses, and is unset on Windows, where it rendered the useless
-    /// `shell=unknown` while every `bash` / `code_exec` call still spawned bash.
+    /// `shell=unknown` while the shell tool went on spawning something else
+    /// entirely. That was already a reason to read the fact from its owner; the
+    /// Windows interpreter now being *resolved by probing* (a fallback chain,
+    /// so the answer differs between two Windows hosts) is a second one —
+    /// `$SHELL` could not name it even where it is set.
     pub shell: String,
     /// The run's **effective** working directory — the directory a shell tool
     /// call executes in when the model supplies no `cwd`.
@@ -229,6 +236,11 @@ impl RuntimeContext {
     /// - **Shell**: bash
     /// - **Host**: MacBook-Pro
     /// ```
+    ///
+    /// The `Shell` line is not a fixed string: it is whatever
+    /// [`shell_interpreter`](crate::builtin_tools::code_exec::shell_interpreter)
+    /// resolved for this host — `bash` on Unix, PowerShell on Windows — which is
+    /// why the sample above is labelled with the platform it came from.
     ///
     /// Nothing here can change while the daemon runs, so these bytes are written
     /// to the provider prompt cache once and read back cheaply for the rest of
@@ -779,7 +791,12 @@ mod tests {
 
     /// The advertised shell must be the interpreter the exec tool actually spawns,
     /// not the operator's `$SHELL` (unset on Windows, where it rendered
-    /// `shell=unknown` while every shell call still ran bash).
+    /// `shell=unknown` while the shell tool went on spawning something else).
+    ///
+    /// Asserted by identity against the owner rather than against a literal:
+    /// the answer is now per-platform *and* per-host (Windows resolves a
+    /// fallback chain), so any literal this test could name would be wrong on
+    /// some machine that still runs it.
     #[test]
     fn shell_fact_comes_from_the_exec_tool_not_the_env() {
         let ctx = RuntimeContext::collect("m");
