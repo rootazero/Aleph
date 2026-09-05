@@ -437,12 +437,22 @@ impl ProfileManager {
         reaped
     }
 
-    /// `Managed` profiles idle past their timeout that still have a browser.
+    /// `Managed` profiles idle past their timeout that Aleph has a browser
+    /// record for — alive **or** dead.
     ///
     /// Exact, not approximate: the browser is Aleph's own child process, so
     /// "does one exist" is `ChromiumChild::alive`. The `close` below still
     /// tolerates `NoSession` because the CLI's session and the browser are now
     /// two different things — the browser can be alive with no session attached.
+    ///
+    /// The dead half is not a courtesy. A Chromium that exited on its own
+    /// leaves three things behind that only this sweep clears while the daemon
+    /// runs — the child record in the driver's map, the sidecar file naming its
+    /// pid, and the profile's tab entries — so filtering on `alive` alone would
+    /// make "the browser died" mean "there is nothing here to reclaim". Spelled
+    /// as the two facts rather than as "the map has this key", because
+    /// [`PlaywrightCliDriver::chromium_died`] exists precisely to keep "no
+    /// browser" and "the browser died" from collapsing into one another.
     ///
     /// Scoped to browsers **this** process launched, deliberately: a Chromium
     /// left by a crashed daemon has no idle clock here to be past, and is the
@@ -455,7 +465,8 @@ impl ProfileManager {
             .filter(|(name, p)| {
                 p.config.driver == BrowserDriver::Managed
                     && is_idle(p.last_activity, now, p.config.idle_timeout_secs)
-                    && self.playwright_cli_driver.chromium_alive(name)
+                    && (self.playwright_cli_driver.chromium_alive(name)
+                        || self.playwright_cli_driver.chromium_died(name))
             })
             .map(|(name, _)| name.clone())
             .collect()
@@ -1078,6 +1089,8 @@ mod tests {
     /// (判据 §3 — a guard that has never been falsified is not a guard).
     #[tokio::test]
     async fn live_endpoint_is_none_without_a_browser_and_never_answers_for_existing_session() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
         let manager = ProfileManager::new(BrowserSystemConfig::default());
         // Both auto-injected profiles exist (`ProfileManager::new`): `default`
         // is Managed, `user` is ExistingSession.
@@ -1143,6 +1156,8 @@ mod tests {
     /// report itself active.
     #[tokio::test]
     async fn a_tracked_tab_no_longer_fakes_a_live_managed_session() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
         let manager = ProfileManager::new(BrowserSystemConfig::default());
         manager.touch_tab("default", "tab-1");
         assert!(
@@ -1267,6 +1282,57 @@ mod tests {
         assert!(
             manager.live_endpoint("default").is_none(),
             "the reaped profile must not still advertise an endpoint"
+        );
+    }
+
+    /// A Managed browser that exited on its own is still the reaper's to clean
+    /// up — the flip to `chromium_alive` must not turn "died" into "nothing to
+    /// do here".
+    ///
+    /// Three different things outlive that browser and only this sweep clears
+    /// them while the daemon runs: the child record in the driver's map, the
+    /// sidecar file that names its pid on disk, and the profile's tab entries.
+    /// `chromium_died` exists precisely because "there is no browser" and "the
+    /// browser died" are different facts (Task 5); the candidate filter admits
+    /// both, because a profile Aleph has a record for is a profile Aleph has
+    /// something to reclaim.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_browser_that_died_on_its_own_is_still_reclaimed() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(managed_config(None));
+
+        // A browser that is already gone: spawned, then reaped, so `try_wait`
+        // has a definite answer rather than a racy one.
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        child
+            .wait()
+            .expect("the stand-in browser exits immediately");
+        manager.insert_test_child("default", child);
+        manager.touch_tab("default", "tab-1");
+        backdate(&manager, "default", Duration::from_secs(2));
+
+        assert!(
+            !manager.session_active("default"),
+            "precondition: the browser really is gone"
+        );
+        assert!(
+            manager.has_tracked_tabs("default"),
+            "precondition: the registry has something to clear"
+        );
+
+        assert_eq!(
+            manager.reap_idle().await,
+            1,
+            "a dead browser's record, sidecar and tabs are still state to reclaim"
+        );
+        assert!(manager.live_endpoint("default").is_none());
+        assert!(
+            !manager.has_tracked_tabs("default"),
+            "the tab entries survived the sweep that was supposed to clear them"
         );
     }
 

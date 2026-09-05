@@ -686,6 +686,20 @@ struct ProcessFacts {
 }
 
 /// [`reap_orphans`] wired to the real process table.
+///
+/// Its only caller is `ProfileManager::sweep_orphaned_chromium`, which is
+/// `#[cfg(not(test))]` — sealed there because that boot hook has a unit-test
+/// caller and its task is detached, so under test it would resolve the
+/// developer's real `$ALEPH_HOME` and kill their own Aleph's Chromium. So in a
+/// test-cfg build this function structurally cannot have a caller.
+///
+/// `cfg_attr(test, ...)` rather than a bare `#[allow(dead_code)]` on purpose:
+/// the bare form would also swallow the case that matters — the PRODUCTION
+/// caller disappearing — and that is precisely the wire
+/// `manager.rs`'s `the_boot_hook_still_calls_the_orphan_sweep` exists to pin.
+/// This form exempts only the cfg that cannot answer, and leaves
+/// `cargo clippy -p alephcore --lib -- -D warnings` fully honest.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn reap_orphans_now() -> usize {
     let registry = match sidecar_registry_dir() {
         Ok(d) => d,

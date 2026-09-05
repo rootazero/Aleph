@@ -517,6 +517,26 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // is the case where orphans are most likely, not least. Idempotent
         // with the `start_server` call site.
         let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
+        // The wedged path. `std::process::exit(0)` below skips the orderly
+        // block entirely, so the browser stop has to be here too — and this is
+        // the path that matters most: `SHUTDOWN_FAILSAFE` is matched to
+        // `aleph-server stop`'s own SIGTERM->SIGKILL window, and the comment
+        // above notes a wedged shutdown usually coincides with load. A browser
+        // leaked here is leaked on exactly the shutdowns most likely to happen.
+        //
+        // **Before the 2 s sleep below, not after it.** This block has already
+        // spent the whole 5 s failsafe, and that failsafe is matched to the
+        // window `aleph-server stop` gives before its own SIGKILL — so every
+        // line past this point may simply never execute. Ordering by cost is
+        // therefore the rule: the browser stop is synchronous (`kill()` plus a
+        // bounded `wait()`, no scheduler pass needed), so putting it first
+        // costs the bash reap nothing, while putting it last is what would
+        // spend the browser's only chance on a sleep it does not need.
+        // Idempotent with the `start_server` call site.
+        let browsers = alephcore::browser::manager::shutdown_browsers_global();
+        if browsers > 0 {
+            tracing::warn!(count = browsers, "stopped managed browsers before forced exit");
+        }
         if reaped > 0 {
             // `abort()` only *marks* the task; the runtime drops its
             // `tokio::process::Child` — and so fires `kill_on_drop` — on the
@@ -533,20 +553,6 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
             // SIGKILL through the tokio → Child → kill_on_drop chain,
             // leaving the workspace writable after the daemon exits.
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
-        // The wedged path. `std::process::exit(0)` below skips the orderly
-        // block entirely, so the browser stop has to be here too — and this is
-        // the path that matters most: `SHUTDOWN_FAILSAFE` is matched to
-        // `aleph-server stop`'s own SIGTERM->SIGKILL window, and the comment
-        // above notes a wedged shutdown usually coincides with load. A browser
-        // leaked here is leaked on exactly the shutdowns most likely to happen.
-        // No sleep after it, unlike the bash reap: this teardown is a
-        // synchronous `kill()` plus a bounded `wait()`, so it does not need
-        // another scheduler pass — only to finish before the exit below.
-        // Idempotent with the `start_server` call site.
-        let browsers = alephcore::browser::manager::shutdown_browsers_global();
-        if browsers > 0 {
-            tracing::warn!(count = browsers, "stopped managed browsers before forced exit");
         }
         std::process::exit(0);
     });
@@ -621,6 +627,35 @@ mod tests {
     /// pin buys is precise: deleting either call fails a test by name
     /// instead of silently re-orphaning every long build.
     ///
+    /// On the wedged path the browser stop must come BEFORE the 2 s
+    /// `kill_on_drop` sleep.
+    ///
+    /// Position is the substance here, not tidiness. That block has already
+    /// spent `SHUTDOWN_FAILSAFE`, which is matched to the window
+    /// `aleph-server stop` allows before its own SIGKILL, so every line after
+    /// the sleep may simply never execute — and a wedged shutdown "usually
+    /// coincides with load", i.e. the case where that is likeliest. Round-1
+    /// review found this exact statement on the wrong side of the sleep; a
+    /// source pin is what keeps it from drifting back, since no unit test can
+    /// observe a 5 s race against an external signal.
+    #[test]
+    fn the_browser_stop_precedes_the_kill_on_drop_sleep() {
+        let src = include_str!("helpers.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        let stop = production
+            .find("shutdown_browsers_global(")
+            .expect("the wedged path must stop the managed browsers");
+        let sleep = production
+            .find("tokio::time::sleep(std::time::Duration::from_secs(2))")
+            .expect("the kill_on_drop sleep must still be there to be ordered against");
+        assert!(
+            stop < sleep,
+            "the browser stop sits after the 2s kill_on_drop sleep — on a \
+             wedged shutdown the external SIGKILL can land first, and the \
+             browser then outlives the daemon"
+        );
+    }
+
     /// Deliberately covers BOTH sites AND both reapers. They are not
     /// redundant — `start_server`'s call is the orderly path (and the only one
     /// reached when `run_until_shutdown` returns an error rather than a
