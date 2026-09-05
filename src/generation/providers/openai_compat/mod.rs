@@ -101,9 +101,19 @@ mod tests {
     #[test]
     fn test_builder_with_timeout() {
         let builder = OpenAiCompatProviderBuilder::new("proxy", "key", "https://api.example.com")
-            .timeout_secs(180);
+            .timeout_secs(Some(7));
 
-        assert_eq!(builder.timeout_secs, 180);
+        assert_eq!(builder.timeout_secs, 7);
+
+        // `None` = the operator never chose one, and this builder's own default
+        // has to survive it -- otherwise making the config field an `Option`
+        // buys nothing and every provider is flattened to one generic cap.
+        // 7 rather than 120 above, so neither half can pass by coincidence.
+        // Falsification: make the setter assign unconditionally; this reds.
+        let unset = OpenAiCompatProviderBuilder::new("proxy", "key", "https://api.example.com")
+            .timeout_secs(None);
+
+        assert_eq!(unset.timeout_secs, DEFAULT_TIMEOUT_SECS);
     }
 
     #[test]
@@ -113,7 +123,7 @@ mod tests {
                 .model("custom-model")
                 .color("#00ff00")
                 .supported_types(vec![GenerationType::Image])
-                .timeout_secs(60);
+                .timeout_secs(Some(60));
 
         assert_eq!(builder.name, "my-proxy");
         assert_eq!(builder.model, "custom-model");

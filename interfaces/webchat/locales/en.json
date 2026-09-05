@@ -1048,6 +1048,8 @@
       "stt_model_placeholder": "whisper-1",
       "test_connection": "Test Connection",
       "testing": "Testing...",
+      "timeout_auto": "Auto",
+      "timeout_auto_hint": "Use the provider's own default",
       "timeout_label": "Timeout",
       "title": "Generation Providers",
       "verified": "Verified",

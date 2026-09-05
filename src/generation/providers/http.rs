@@ -65,11 +65,19 @@ pub(crate) trait WithRequestTimeout: Sized {
 
     /// Rebuild that client with `secs` as the per-request cap.
     ///
+    /// `None` means nothing configured one, and the client this provider built
+    /// in `new()` -- with the default IT chose for its own API -- is left
+    /// exactly as it is. That is the whole reason the config field is an
+    /// `Option`: while it was a plain `u64`, honouring the operators who HAD
+    /// configured something meant overwriting every tuned default with a
+    /// generic 120 s, because "unset" and "120" were the same value
+    /// (判据 §8 -- "I don't know" is not an answer you may consume).
+    ///
     /// `max(1)` because reqwest reads a zero as "no timeout at all", which is
     /// the opposite of what `timeout_seconds = 0` means. Config validation
-    /// already rejects 0, so this is the second gate rather than the first
-    /// (判据 §8: a rejected value must not be read as permission).
-    fn with_timeout(mut self, secs: u64) -> GenerationResult<Self> {
+    /// already rejects 0, so this is the second gate rather than the first.
+    fn with_timeout(mut self, secs: Option<u64>) -> GenerationResult<Self> {
+        let Some(secs) = secs else { return Ok(self) };
         *self.request_client_mut() = generation_http_client(Duration::from_secs(secs.max(1)))
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
         Ok(self)
@@ -124,5 +132,57 @@ fn retry_after_of(e: &GenerationError) -> Option<Duration> {
     match e {
         GenerationError::RateLimitError { retry_after, .. } => *retry_after,
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod with_request_timeout_tests {
+    use super::generation_http_client;
+    use super::WithRequestTimeout;
+    use std::cell::Cell;
+    use std::time::Duration;
+
+    /// Counts rebuilds, because a `reqwest::Client` will not say what timeout
+    /// it was built with. The observable effect of "the knob was applied" is
+    /// that the provider's client got replaced at all.
+    struct Probe {
+        client: reqwest::Client,
+        rebuilds: Cell<usize>,
+    }
+
+    impl WithRequestTimeout for Probe {
+        fn request_client_mut(&mut self) -> &mut reqwest::Client {
+            self.rebuilds.set(self.rebuilds.get() + 1);
+            &mut self.client
+        }
+    }
+
+    /// An unset knob leaves the provider's own client alone; a set one
+    /// replaces it.
+    ///
+    /// Falsifiable in both directions: delete the `let Some(secs) = secs else`
+    /// line and the first assertion reds; make `with_timeout` return `Ok(self)`
+    /// unconditionally and the second does.
+    #[test]
+    fn an_unset_timeout_does_not_rebuild_the_provider_s_client() {
+        let probe = Probe {
+            client: generation_http_client(Duration::from_secs(1)).expect("client builds"),
+            rebuilds: Cell::new(0),
+        };
+
+        let probe = probe.with_timeout(None).expect("an unset knob cannot fail");
+        assert_eq!(
+            probe.rebuilds.get(),
+            0,
+            "an unset `timeout_seconds` rebuilt the client anyway, which throws \
+             away the default the provider chose for its own API"
+        );
+
+        let probe = probe.with_timeout(Some(7)).expect("a set knob builds");
+        assert_eq!(
+            probe.rebuilds.get(),
+            1,
+            "a configured `timeout_seconds` never reached the client"
+        );
     }
 }

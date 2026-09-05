@@ -112,7 +112,7 @@ pub fn create_provider(
                 resolved_url,
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "openai_tts" | "tts" => Arc::new(
             OpenAiTtsProvider::new(
@@ -123,7 +123,7 @@ pub fn create_provider(
                 resolved_url,
             )?
             // Honor the (previously dead) `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "openai_whisper" | "whisper" => Arc::new(
             OpenAiWhisperProvider::new(
@@ -133,7 +133,7 @@ pub fn create_provider(
                 resolved_url,
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "deepgram_stt" | "deepgram" => Arc::new(
             DeepgramSttProvider::new(
@@ -142,7 +142,7 @@ pub fn create_provider(
                 config.default_model().map(|s| s.to_string()),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "deepgram_tts" => Arc::new(
             DeepgramTtsProvider::new(
@@ -151,7 +151,7 @@ pub fn create_provider(
                 config.default_model().map(|s| s.to_string()),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "azure_speech" | "azure_tts" => Arc::new(
             AzureSpeechProvider::new(
@@ -164,7 +164,7 @@ pub fn create_provider(
                     .or_else(|| config.default_model().map(|s| s.to_string())),
             )?
             // Honor the (previously dead) `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "suno" => Arc::new(
             SunoProvider::new(
@@ -173,7 +173,7 @@ pub fn create_provider(
                 config.default_model().map(|s| s.to_string()),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "bfl" | "bfl_flux" | "flux" => Arc::new(
             BflProvider::new(
@@ -182,7 +182,7 @@ pub fn create_provider(
                 config.default_model().map(|s| s.to_string()),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "cartesia" => Arc::new(
             CartesiaProvider::new(
@@ -192,7 +192,7 @@ pub fn create_provider(
                 config.defaults.voice.clone(),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "minimax_tts" => Arc::new(
             MinimaxTtsProvider::new(
@@ -202,7 +202,7 @@ pub fn create_provider(
                 config.defaults.voice.clone(),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "volcengine_tts" => Arc::new(
             VolcengineTtsProvider::new(
@@ -212,7 +212,7 @@ pub fn create_provider(
                 config.defaults.voice.clone(),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {
@@ -231,7 +231,7 @@ pub fn create_provider(
             builder = builder.color(&config.color);
 
             // Honor the (previously dead) `timeout_seconds` config knob.
-            builder = builder.timeout_secs(config.timeout_seconds);
+            builder = builder.timeout_secs(config.request_timeout_secs());
 
             if let Some(ref edit_url) = config.edit_url {
                 builder = builder.edit_endpoint(edit_url);
@@ -251,7 +251,7 @@ pub fn create_provider(
                 config.default_model().map(|s| s.to_string()),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "google" | "google_imagen" | "imagen" => Arc::new(
             GoogleImagenProvider::new(
@@ -260,7 +260,7 @@ pub fn create_provider(
                 config.default_model().map(|s| s.to_string()),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "google_veo" | "veo" => Arc::new(
             GoogleVeoProvider::new(
@@ -269,7 +269,7 @@ pub fn create_provider(
                 config.default_model().map(|s| s.to_string()),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "replicate" => {
             let mut builder = ReplicateProvider::builder(&api_key);
@@ -297,7 +297,7 @@ pub fn create_provider(
             }
 
             // Honor the `timeout_seconds` config knob.
-            builder = builder.timeout_secs(config.timeout_seconds);
+            builder = builder.timeout_secs(config.request_timeout_secs());
 
             Arc::new(builder.build())
         }
@@ -309,7 +309,7 @@ pub fn create_provider(
                 config.defaults.voice.clone(),
             )?
             // Honor the `timeout_seconds` config knob.
-            .with_timeout(config.timeout_seconds)?,
+            .with_timeout(config.request_timeout_secs())?,
         ),
         "fal" => {
             // Fal serves image/video/music behind a single queue API.
@@ -334,7 +334,7 @@ pub fn create_provider(
             }
             // Honor the `timeout_seconds` config knob. This is the PER-REQUEST
             // cap; the job's wall clock is `JOB_DEADLINE_SECS` and is not this.
-            builder = builder.timeout_secs(config.timeout_seconds);
+            builder = builder.timeout_secs(config.request_timeout_secs());
             Arc::new(builder.build()?)
         }
         "midjourney" | "mj" => {
@@ -364,15 +364,13 @@ pub fn create_provider(
             }
 
             // Honor the (previously dead) `timeout_seconds` config knob.
-            // WARNING: this MOVES the unconfigured default. The builder's own
-            // `DEFAULT_REQUEST_TIMEOUT_SECS` is 30 s and `timeout_seconds`
-            // defaults to 120 s. That is deliberate: `timeout_seconds` is the
-            // one place this subsystem derives a request timeout (its own default
-            // reads `defaults_override::generation_timeout_seconds`), and a
-            // per-module constant that silently wins over it is the same fact
-            // stated twice. Poll CADENCE is unaffected -- that comes from
-            // `POLL_INTERVAL_SECS` / `MAX_POLL_ATTEMPTS`.
-            builder = builder.timeout_secs(config.timeout_seconds);
+            // Unconfigured this is a no-op and Midjourney keeps its own 30 s
+            // `DEFAULT_REQUEST_TIMEOUT_SECS`. It briefly did not: while the
+            // config field was a plain `u64` there was no way to tell "unset"
+            // from "120", so for one commit this line moved the unconfigured
+            // default 30 -> 120. Poll CADENCE was never affected -- that comes
+            // from `POLL_INTERVAL_SECS` / `MAX_POLL_ATTEMPTS`.
+            builder = builder.timeout_secs(config.request_timeout_secs());
 
             Arc::new(builder.build()?)
         }
@@ -436,7 +434,7 @@ mod tests {
     /// provider and forgetting the knob is what this makes loud (判据 §11:
     /// fix the class at the executor, not each instance you happen to find).
     ///
-    /// Falsification: delete `.with_timeout(config.timeout_seconds)?` from any
+    /// Falsification: delete `.with_timeout(config.request_timeout_secs())?` from any
     /// arm and this reds with both counts named.
     #[test]
     fn every_provider_arm_applies_the_timeout_knob() {
@@ -446,7 +444,8 @@ mod tests {
             .expect("create_provider still dispatches on provider_type")
             .1;
         // Bounded at the catch-all so this test's OWN source, which mentions
-        // `config.timeout_seconds` below, is not counted as an application.
+        // `config.request_timeout_secs` below, is not counted as an
+        // application.
         let body = &after[..after
             .find("        other => {")
             .expect("the match still ends in a catch-all arm")];
@@ -455,7 +454,7 @@ mod tests {
             .lines()
             .filter(|l| l.starts_with("        \""))
             .collect();
-        let applied = body.matches("(config.timeout_seconds)").count();
+        let applied = body.matches("(config.request_timeout_secs())").count();
 
         assert!(
             arms.len() > 15,

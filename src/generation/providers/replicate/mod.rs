@@ -70,6 +70,20 @@ mod tests {
 
     // === Builder Tests ===
 
+    /// An unset config knob leaves THIS builder's default in place.
+    ///
+    /// Four builders carry the same setter shape and each one can drift on its
+    /// own, so each one is guarded where its field is visible (判据 §16).
+    /// Falsification: make `timeout_secs` assign unconditionally; this reds.
+    #[test]
+    fn an_unset_timeout_keeps_the_builder_default() {
+        let unset = ReplicateProvider::builder("r8_test_key").timeout_secs(None);
+        assert_eq!(unset.timeout_secs, DEFAULT_TIMEOUT_SECS);
+
+        let set = ReplicateProvider::builder("r8_test_key").timeout_secs(Some(7));
+        assert_eq!(set.timeout_secs, 7);
+    }
+
     #[test]
     fn test_builder_creation_with_defaults() {
         let provider = ReplicateProvider::builder("r8_test_key").build();

@@ -131,7 +131,7 @@ impl OpenAiCompatProvider {
     ///     .model("dall-e-3")
     ///     .color("#ff0000")
     ///     .supported_types(vec![GenerationType::Image])
-    ///     .timeout_secs(180)
+    ///     .timeout_secs(Some(180))
     ///     .build()?;
     /// ```
     pub(crate) fn builder<S1, S2, S3>(

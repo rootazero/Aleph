@@ -113,8 +113,12 @@ impl FalProviderBuilder {
     /// Set the per-request HTTP timeout. NOT the job deadline -- see
     /// [`JOB_DEADLINE_SECS`].
     #[must_use]
-    pub const fn timeout_secs(mut self, secs: u64) -> Self {
-        self.timeout_secs = secs;
+    pub const fn timeout_secs(mut self, secs: Option<u64>) -> Self {
+        // `None` = unconfigured. Keep the default this builder chose; the
+        // config field cannot express "unset" any other way.
+        if let Some(secs) = secs {
+            self.timeout_secs = secs;
+        }
         self
     }
 
@@ -560,6 +564,20 @@ mod tests {
             .supported_types(types)
             .build()
             .unwrap()
+    }
+
+    /// An unset config knob leaves THIS builder's default in place.
+    ///
+    /// Four builders carry the same setter shape and each one can drift on its
+    /// own, so each one is guarded where its field is visible (判据 §16).
+    /// Falsification: make `timeout_secs` assign unconditionally; this reds.
+    #[test]
+    fn an_unset_timeout_keeps_the_builder_default() {
+        let unset = FalProvider::builder("fal", "fk-test").timeout_secs(None);
+        assert_eq!(unset.timeout_secs, DEFAULT_REQUEST_TIMEOUT_SECS);
+
+        let set = FalProvider::builder("fal", "fk-test").timeout_secs(Some(7));
+        assert_eq!(set.timeout_secs, 7);
     }
 
     #[test]

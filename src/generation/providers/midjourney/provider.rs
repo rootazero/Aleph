@@ -107,7 +107,7 @@ impl MidjourneyProvider {
     /// let provider = MidjourneyProvider::builder("your-api-key")
     ///     .mode(MidjourneyMode::Relax)
     ///     .color("#FF0000")
-    ///     .timeout_secs(60)
+    ///     .timeout_secs(Some(60))
     ///     .build();
     /// ```
     pub(crate) fn builder<S: Into<String>>(api_key: S) -> MidjourneyProviderBuilder {

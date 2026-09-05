@@ -61,7 +61,11 @@ pub struct GenerationProviderConfig {
     pub enabled: bool,
     pub color: String,
     pub capabilities: Vec<GenerationType>,
-    pub timeout_seconds: u64,
+    /// `None` = the operator has not chosen one and the provider keeps its own
+    /// default. Mirrors the server field, which is an `Option` for that reason;
+    /// omitting it from the payload is how "unset" crosses the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

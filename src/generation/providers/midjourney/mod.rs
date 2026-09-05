@@ -60,6 +60,20 @@ mod tests {
     use crate::generation::{GenerationProvider, GenerationType};
     use submit_polling::SubmitPolling;
 
+    /// An unset config knob leaves THIS builder's default in place.
+    ///
+    /// Four builders carry the same setter shape and each one can drift on its
+    /// own, so each one is guarded where its field is visible (判据 §16).
+    /// Falsification: make `timeout_secs` assign unconditionally; this reds.
+    #[test]
+    fn an_unset_timeout_keeps_the_builder_default() {
+        let unset = MidjourneyProviderBuilder::new("k").timeout_secs(None);
+        assert_eq!(unset.timeout_secs, DEFAULT_REQUEST_TIMEOUT_SECS);
+
+        let set = MidjourneyProviderBuilder::new("k").timeout_secs(Some(7));
+        assert_eq!(set.timeout_secs, 7);
+    }
+
     // === Construction tests ===
 
     #[test]
@@ -128,7 +142,7 @@ mod tests {
             .mode(MidjourneyMode::Relax)
             .endpoint("https://custom.api.com")
             .color("#00FF00")
-            .timeout_secs(60)
+            .timeout_secs(Some(60))
             .build()
             .unwrap();
 

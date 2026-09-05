@@ -34,7 +34,7 @@ pub(super) fn AddCustomProviderPanel(
     let base_url = RwSignal::new(String::new());
     let edit_url = RwSignal::new(String::new());
     let form_model = RwSignal::new(String::new());
-    let timeout = RwSignal::new(60u64);
+    let timeout = RwSignal::new(Option::<u64>::None);
 
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
@@ -258,18 +258,39 @@ pub(super) fn AddCustomProviderPanel(
                     <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.edit_endpoint_hint)}</p>
                 </div>
 
-                // Timeout
+                // Timeout. "Auto" is a real state and not the slider's floor:
+                // checked omits the field from the payload entirely and the
+                // provider keeps its own default. A slider alone cannot say
+                // "unset" -- every position of it is a value (判据 §17).
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        {t!(i18n, settings.generation.timeout_label)} ": " {move || timeout.get()} "s"
+                        {t!(i18n, settings.generation.timeout_label)} ": "
+                        {move || timeout.get().map_or_else(
+                            || t_string!(i18n, settings.generation.timeout_auto).to_string(),
+                            |v| format!("{v}s"),
+                        )}
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer mb-2">
+                        <input
+                            type="checkbox"
+                            checked=move || timeout.get().is_none()
+                            on:change=move |ev| {
+                                timeout.set(if event_target_checked(&ev) { None } else { Some(60) });
+                            }
+                            class="w-4 h-4 rounded"
+                        />
+                        <span class="text-xs text-text-tertiary">
+                            {t!(i18n, settings.generation.timeout_auto_hint)}
+                        </span>
                     </label>
                     <input
                         type="range" min="10" max="300" step="10"
-                        value=move || timeout.get()
+                        disabled=move || timeout.get().is_none()
+                        value=move || timeout.get().unwrap_or(60)
                         on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { timeout.set(v); }
+                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { timeout.set(Some(v)); }
                         }
-                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary disabled:opacity-40"
                     />
                 </div>
             </div>

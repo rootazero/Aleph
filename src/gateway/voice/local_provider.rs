@@ -41,17 +41,29 @@ impl LocalTranscription {
                 // reach. The voice-conversation paths carry it.
                 vocabulary: String::new(),
             },
-            client: voice_client(config.timeout_seconds),
+            client: voice_client(config.request_timeout_secs()),
         }
     }
 }
 
-/// Shared hardened client (`generation::providers::http`) honoring the
-/// entry's `timeout_seconds`; a builder failure degrades to the stock client
+/// Per-request cap for a local speech endpoint when nothing configures one.
+///
+/// Unlike every arm of `create_provider`, this path has no provider object
+/// with a tuned default of its own to fall back to -- it builds the client
+/// here -- so the fallback has to be named here. This is the value the path
+/// used to receive from `timeout_seconds`' since-removed serde default, kept
+/// deliberately generous: the endpoint is local, but a cold model load is not
+/// fast.
+const DEFAULT_LOCAL_VOICE_TIMEOUT_SECS: u64 = 120;
+
+/// Shared hardened client (`generation::providers::http`) honoring the entry's
+/// resolved `timeout_seconds`; a builder failure degrades to the stock client
 /// (P7 — never fail construction over an HTTP-client option).
-fn voice_client(timeout_seconds: u64) -> reqwest::Client {
+fn voice_client(timeout_seconds: Option<u64>) -> reqwest::Client {
     crate::generation::providers::http::voice_http_client(std::time::Duration::from_secs(
-        timeout_seconds.max(1),
+        timeout_seconds
+            .unwrap_or(DEFAULT_LOCAL_VOICE_TIMEOUT_SECS)
+            .max(1),
     ))
     .unwrap_or_default()
 }
@@ -127,7 +139,7 @@ impl LocalVoiceProvider {
             model: config.models.first().cloned().unwrap_or_default(),
             voice: config.defaults.voice.clone().unwrap_or_default(),
             format: config.defaults.format.clone().unwrap_or_default(),
-            client: voice_client(config.timeout_seconds),
+            client: voice_client(config.request_timeout_secs()),
         }
     }
 

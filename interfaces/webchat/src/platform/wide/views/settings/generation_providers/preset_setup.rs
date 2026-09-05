@@ -77,7 +77,10 @@ pub(super) fn PresetSetupPanel(
                 enabled: true,
                 color: color.clone(),
                 capabilities: capabilities.clone(),
-                timeout_seconds: 120,
+                // A preset knows the endpoint, not the operator's patience.
+                // `None` lets the provider's own tuned default stand instead of
+                // pinning every preset-created provider to a generic 120 s.
+                timeout_seconds: None,
                 verified: false,
                 defaults: Default::default(),
             }
