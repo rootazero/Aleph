@@ -573,6 +573,13 @@ impl SkillSystem {
             let dirs = self.inner.skill_dirs.read().await.clone();
             for dir in &dirs {
                 UsageStore::new(dir).forget(id.as_str());
+                // Paired with the .usage.json cleanup above: `.cooccur.json`
+                // is the second sidecar that records the same recent
+                // activity. Without this, the dream pipeline's
+                // `cluster_chains` would keep proposing workflows that
+                // include the just-deleted skill for up to MAX_ENTRIES
+                // records (see cooccurrence.rs:75-85 for the invariant).
+                CoOccurrenceLog::new(dir).forget(id.as_str());
             }
             self.rebuild_snapshot().await;
         }
