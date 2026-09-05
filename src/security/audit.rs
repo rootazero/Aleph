@@ -296,6 +296,61 @@ pub(crate) fn clear_global_for_test() {
     *GLOBAL_AUDIT.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// Maximum length of a persisted audit `detail`, after sanitisation.
+///
+/// `detail` is a `NOT NULL TEXT` column with no database-side bound; before
+/// this cap, a producer handed a multi-kilobyte payload (a model response
+/// fragment, a pasted document) inflated the audit table unboundedly — the
+/// table whose entire value is being cheap to query after an incident.
+const MAX_DETAIL_LEN: usize = 4 * 1024;
+
+/// Marker appended when a `detail` exceeded [`MAX_DETAIL_LEN`], so a truncated
+/// row reads as truncated rather than as a suspiciously clean cut.
+const TRUNCATION_MARKER: &str = "…[truncated]";
+
+/// Sanitise an audit `detail` in place (audit I-9).
+///
+/// Two transforms, both lossy-on-purpose:
+///
+/// 1. Control characters (newlines, carriage returns, tabs, ANSI escapes)
+///    collapse to a single space each run. A multi-line payload would
+///    otherwise break the one-row-one-event shape every consumer of the table
+///    (`aleph audit`, SQL `WHERE` scans) relies on, and escape sequences are
+///    how a logged string attacks the terminal that later prints it.
+/// 2. The result is capped at [`MAX_DETAIL_LEN`] bytes on a char boundary,
+///    with [`TRUNCATION_MARKER`] appended when anything was cut.
+///
+/// Applied centrally in [`SecurityAuditLog::log`] — the single chokepoint
+/// every production entry flows through — so producers stay honest by
+/// construction instead of by per-site discipline.
+fn sanitize_detail(detail: &mut String) {
+    let needs_fold = detail.chars().any(|c| c.is_control());
+    if needs_fold {
+        let mut folded = String::with_capacity(detail.len());
+        let mut last_was_space = false;
+        for c in detail.chars() {
+            if c.is_control() {
+                if !last_was_space {
+                    folded.push(' ');
+                    last_was_space = true;
+                }
+            } else {
+                last_was_space = c == ' ';
+                folded.push(c);
+            }
+        }
+        *detail = folded;
+    }
+    if detail.len() > MAX_DETAIL_LEN {
+        let mut cut = MAX_DETAIL_LEN;
+        while !detail.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        detail.truncate(cut);
+        detail.push_str(TRUNCATION_MARKER);
+    }
+}
+
 impl SecurityAuditLog {
     #[must_use]
     pub fn new(buffer_size: usize) -> (Self, mpsc::Receiver<AuditEntry>) {
@@ -309,7 +364,10 @@ impl SecurityAuditLog {
         )
     }
 
-    pub fn log(&self, entry: AuditEntry) {
+    /// `detail` is sanitised here, at the chokepoint every production entry
+    /// flows through, rather than at each producer — see [`sanitize_detail`].
+    pub fn log(&self, mut entry: AuditEntry) {
+        sanitize_detail(&mut entry.detail);
         if let Err(e) = self.sender.try_send(entry) {
             let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
             if count == 1 || count.is_multiple_of(100) {
@@ -622,5 +680,52 @@ mod tests {
         assert_eq!(e.event_type, AuditEventType::RateLimited);
         assert_eq!(e.severity, AuditSeverity::Warn);
         assert_eq!(e.source_ip.as_deref(), Some("10.0.0.6"));
+    }
+
+    #[test]
+    fn sanitize_detail_collapses_control_runs() {
+        let mut d = "line one\n\nline two\r\nline three\tend\u{7}".to_string();
+        sanitize_detail(&mut d);
+        assert_eq!(d, "line one line two line three end");
+    }
+
+    #[test]
+    fn sanitize_detail_caps_length_with_marker_on_char_boundary() {
+        // 5 KiB of ASCII: capped at 4 KiB + marker.
+        let mut d = "a".repeat(5 * 1024);
+        sanitize_detail(&mut d);
+        assert!(d.ends_with(TRUNCATION_MARKER));
+        assert_eq!(d.len(), MAX_DETAIL_LEN + TRUNCATION_MARKER.len());
+
+        // Multi-byte content straddling the cap: the cut must land on a char
+        // boundary (no panic, no invalid UTF-8).
+        let mut d = "é".repeat(3 * 1024); // 6 KiB of two-byte chars
+        sanitize_detail(&mut d);
+        assert!(d.ends_with(TRUNCATION_MARKER));
+        assert!(d.len() <= MAX_DETAIL_LEN + TRUNCATION_MARKER.len());
+    }
+
+    #[test]
+    fn sanitize_detail_leaves_clean_short_detail_untouched() {
+        let mut d = "blocked fetch: host=example.com reason=loopback".to_string();
+        let before = d.clone();
+        sanitize_detail(&mut d);
+        assert_eq!(d, before);
+    }
+
+    #[tokio::test]
+    async fn log_sanitises_detail_before_send() {
+        let (log, mut rx) = SecurityAuditLog::new(4);
+        log.log(AuditEntry {
+            event_type: AuditEventType::ExecBlocked,
+            severity: AuditSeverity::Warn,
+            source_ip: None,
+            session_id: None,
+            actor_user: None,
+            detail: format!("multi\nline\n{}", "x".repeat(8 * 1024)),
+        });
+        let entry = rx.recv().await.unwrap();
+        assert!(!entry.detail.contains('\n'));
+        assert!(entry.detail.ends_with(TRUNCATION_MARKER));
     }
 }
