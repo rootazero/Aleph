@@ -226,6 +226,19 @@ where
     Ok((value, dead))
 }
 
+/// Every tolerated path with its `retired` flag, as `(path, retired)`.
+///
+/// Exposed to `config::tests::skill_doc_drift`, which derives "which top-level
+/// sections may the bundled `self` skill legitimately document" from this list
+/// unioned with `Config`'s schema. `Config` has no `gateway` field by design, so
+/// that guard cannot get the answer from serde alone — and a hand-copied list of
+/// foreign-owned sections over there would be a second spelling of this one,
+/// which is the failure mode the guard exists to catch.
+#[cfg(test)]
+pub(super) fn tolerated_roots() -> Vec<(&'static str, bool)> {
+    TOLERATED.iter().map(|t| (t.path, t.retired)).collect()
+}
+
 /// The matched tolerated entry for `path`, or `None` when nothing reads it.
 fn tolerated_entry(path: &str) -> Option<&'static Tolerated> {
     TOLERATED.iter().find(|entry| covers(entry.path, path))
