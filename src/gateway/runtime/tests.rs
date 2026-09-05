@@ -1257,7 +1257,14 @@ async fn a_real_agent_started_after_spawn_is_identified() {
         .expect("write the command");
 
     let mut identified = None;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    // Must outlast the GATE, not just the program. One frame (the echoed
+    // command line) authorises probes for PROBE_FRAME_BUDGET *
+    // PROBE_MIN_INTERVAL_MS = 3 s, and under a full-suite run this thread is
+    // not getting a tick every 20 ms. A budget equal to the gate's own window
+    // asserts at the exact moment the gate stops looking, which is how this
+    // read green alone and red in the suite (measured 2026-09-05). Costs
+    // nothing when the condition is met early: the loop breaks on the hit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while std::time::Instant::now() < deadline {
         let now = chrono::Utc::now().timestamp_millis();
         let _ = crate::gateway::pty::manager::flush_session(&session, now);
@@ -1741,7 +1748,7 @@ fn probe_count_is_bounded_at_fifteen_sessions() {
             // Every session produces a frame on every tick: the worst case
             // the rate gate exists to bound.
             state.note_frame(true);
-            if probe_due(state.last_probe_at(), now, state.frame_since_probe(), false) {
+            if probe_due(state.last_probe_at(), now, state.frame_budget_left(), false) {
                 // A REAL process-table read, so what is counted is what
                 // production pays and not a tally this test kept itself.
                 state.observe(now, fact_for_pid(me));

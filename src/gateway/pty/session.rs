@@ -338,7 +338,7 @@ impl PtySession {
             super::foreground::probe_due(
                 state.last_probe_at(),
                 now,
-                state.frame_since_probe(),
+                state.frame_budget_left(),
                 agent_known,
             )
         };

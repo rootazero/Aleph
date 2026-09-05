@@ -124,6 +124,28 @@ pub const PROBE_RECHECK_MS: i64 = 3_000;
 /// answer as "nothing is running there" (判据 §8).
 pub const PROBE_MISSES_TO_FORGET: u32 = 6;
 
+/// How many probes ONE frame buys.
+///
+/// A frame says the SCREEN changed. The process it announced may not be in
+/// the table yet: a command is echoed at the prompt before `CreateProcess`
+/// returns and before the OS publishes the process, and a launcher chain adds
+/// more still. So the single look `PROBE_MIN_INTERVAL_MS` after the evidence
+/// can be too early -- and a single look was all a frame used to buy, because
+/// [`ForegroundState::observe`] cleared the sticky bit whatever it saw.
+///
+/// For a program that then goes SILENT (output redirected, or simply waiting
+/// for input) that made "not identified" absorbing: rule 2 had no frame left
+/// to fire on and rule 3 needs an agent already known. Measured on Windows
+/// 2026-09-05 -- `a_real_agent_started_after_spawn_is_identified` passes alone
+/// and fails inside the full suite, because load is what decides whether the
+/// one look lands before or after the process appears.
+///
+/// DERIVED, not chosen: `PROBE_FRAME_BUDGET * PROBE_MIN_INTERVAL_MS` is
+/// exactly `PROBE_RECHECK_MS`. A frame buys the same 3 s of watching that an
+/// already-identified agent gets for free -- one place decides that span
+/// (判据 §12), so moving either constant moves this with it.
+pub const PROBE_FRAME_BUDGET: u32 = (PROBE_RECHECK_MS / PROBE_MIN_INTERVAL_MS) as u32;
+
 /// One observation of a PTY's foreground process.
 ///
 /// `argv` is the whole vector and NOT a joined command line, because
@@ -192,6 +214,11 @@ impl ForegroundFact {
 ///    rule that can fire for a silent session, and without it an agent's
 ///    EXIT is never noticed.
 ///
+/// ⚠️ Rule 2 says "while the last frame still has budget", and BOTH
+/// halves of that were bought with a red test. "Not on this tick" came
+/// first; "budget, not a boolean" came second, from the same guard on
+/// Windows -- see [`PROBE_FRAME_BUDGET`] for why one look is not enough.
+///
 /// ⚠️ Rule 2 says "since the last probe", not "on this tick", and the
 /// difference is the whole rule. The first version asked whether THIS 16 ms
 /// tick produced a frame, and `a_real_agent_started_after_spawn_is_identified`
@@ -209,14 +236,14 @@ impl ForegroundFact {
 pub fn probe_due(
     last_probe_at: Option<i64>,
     now: i64,
-    frame_since_probe: bool,
+    frame_budget_left: bool,
     agent_known: bool,
 ) -> bool {
     let Some(last) = last_probe_at else {
         return true;
     };
     let age = now.saturating_sub(last);
-    (frame_since_probe && age >= PROBE_MIN_INTERVAL_MS) || (agent_known && age >= PROBE_RECHECK_MS)
+    (frame_budget_left && age >= PROBE_MIN_INTERVAL_MS) || (agent_known && age >= PROBE_RECHECK_MS)
 }
 
 /// The pid of the process group the kernel says owns this terminal, asked of
@@ -487,13 +514,15 @@ pub struct ForegroundState {
     fact: Option<ForegroundFact>,
     /// Consecutive misses since the last hit.
     misses: u32,
-    /// Whether any frame has arrived since the last probe.
+    /// Probes still owed to the most recent frame, capped at
+    /// [`PROBE_FRAME_BUDGET`].
     ///
-    /// Sticky, and that is the point: see the warning on [`probe_due`]. A
-    /// per-tick answer loses every frame that lands inside the rate limit's
-    /// shadow, which is where a program that paints once and goes quiet does
-    /// all of its painting.
-    frame_since_probe: bool,
+    /// A COUNTER and not a boolean, and that is the point twice over. Sticky,
+    /// so a frame landing inside the rate limit's shadow is not lost -- that
+    /// is where a program which paints once and goes quiet does all of its
+    /// painting. And bounded-but-plural, so the one look a frame used to buy
+    /// cannot land before the process it announced exists.
+    frame_probes_left: u32,
     /// How many probes this session has performed — the cost guard's
     /// instrument (herdr's counting-architecture-test shape).
     ///
@@ -518,13 +547,16 @@ impl ForegroundState {
     /// Record whether this tick produced a frame. Idempotent and sticky —
     /// once true it stays true until the next probe consumes it.
     pub fn note_frame(&mut self, produced: bool) {
-        self.frame_since_probe |= produced;
+        if produced {
+            self.frame_probes_left = PROBE_FRAME_BUDGET;
+        }
     }
 
-    /// Whether a frame has arrived since the last probe. Feeds [`probe_due`].
+    /// Whether the most recent frame still has probes owed to it. Feeds
+    /// [`probe_due`].
     #[must_use]
-    pub const fn frame_since_probe(&self) -> bool {
-        self.frame_since_probe
+    pub const fn frame_budget_left(&self) -> bool {
+        self.frame_probes_left > 0
     }
 
     /// Fold one probe outcome in. `now` is the tick that authorised it.
@@ -541,7 +573,9 @@ impl ForegroundState {
     /// the answer would carry no information (判据 §2).
     pub fn observe(&mut self, now: i64, observed: Option<ForegroundFact>) -> bool {
         self.last_probe_at = Some(now);
-        self.frame_since_probe = false;
+        // ONE unit, not the whole budget: the look may have been too early
+        // for the process the frame announced. See [`PROBE_FRAME_BUDGET`].
+        self.frame_probes_left = self.frame_probes_left.saturating_sub(1);
         self.probes = self.probes.saturating_add(1);
         let before = self.fact.take();
         match observed {
@@ -808,7 +842,7 @@ mod tests {
         // A frame at t=10ms: far too early to probe.
         state.note_frame(true);
         assert!(
-            !probe_due(state.last_probe_at(), 10, state.frame_since_probe(), false),
+            !probe_due(state.last_probe_at(), 10, state.frame_budget_left(), false),
             "the rate limit still applies"
         );
 
@@ -818,7 +852,7 @@ mod tests {
             assert!(!probe_due(
                 state.last_probe_at(),
                 tick,
-                state.frame_since_probe(),
+                state.frame_budget_left(),
                 false
             ));
         }
@@ -828,29 +862,72 @@ mod tests {
             probe_due(
                 state.last_probe_at(),
                 PROBE_MIN_INTERVAL_MS,
-                state.frame_since_probe(),
+                state.frame_budget_left(),
                 false
             ),
             "the frame from t=10 must still be remembered at t={PROBE_MIN_INTERVAL_MS} -- \
              otherwise a program that paints once and sleeps is never looked at again"
         );
 
-        // And the probe consumes it: no frame, no further probes.
+        // And the probe spends ONE unit of that frame's budget, not all of
+        // it. What stops the gate degenerating into "a probe every
+        // PROBE_MIN_INTERVAL_MS forever" is the budget running out, which is
+        // [`one_frame_buys_a_bounded_run_of_probes`]'s half of this.
         state.observe(
             PROBE_MIN_INTERVAL_MS,
             Some(fact("claude", PROBE_MIN_INTERVAL_MS)),
         );
         assert!(
-            !state.frame_since_probe(),
-            "a probe must consume the sticky bit, or the gate degenerates into \
-             one probe per PROBE_MIN_INTERVAL_MS forever"
+            state.frame_budget_left(),
+            "one probe must not spend the whole budget -- the look it just took \
+             may have been too early for the process the frame announced"
         );
-        assert!(!probe_due(
-            state.last_probe_at(),
-            PROBE_MIN_INTERVAL_MS * 3,
-            state.frame_since_probe(),
-            false
-        ));
+    }
+
+    /// One frame buys a bounded RUN of probes.
+    ///
+    /// The other half of [`a_frame_inside_the_rate_shadow_still_earns_the_next_probe`],
+    /// and the fix for a red this guard's real-PTY sibling only produced under
+    /// load: a command is echoed at the prompt before the OS has published the
+    /// process it starts, so the single look 500 ms later can be too early —
+    /// and if the program then stays silent, rule 2 has no frame left and rule
+    /// 3 needs an agent already known. "Not identified" was absorbing.
+    ///
+    /// Falsified both ways. Put `= 0` back in `observe` (the old
+    /// `frame_since_probe = false`) and the loop's first iteration goes red at
+    /// t=1000. Make the budget unbounded and the LAST assertion goes red —
+    /// which is the one that keeps this from becoming a full process-table
+    /// refresh per session every 500 ms forever.
+    #[test]
+    fn one_frame_buys_a_bounded_run_of_probes() {
+        let mut state = ForegroundState::default();
+
+        // One frame, and nothing else ever again.
+        state.note_frame(true);
+        assert!(
+            probe_due(state.last_probe_at(), 0, state.frame_budget_left(), false),
+            "the first look is free"
+        );
+        state.observe(0, None);
+
+        let mut now = 0;
+        for spent in 1..PROBE_FRAME_BUDGET {
+            now += PROBE_MIN_INTERVAL_MS;
+            assert!(
+                probe_due(state.last_probe_at(), now, state.frame_budget_left(), false),
+                "probe {spent} at t={now} must still be authorised by the single \
+                 frame at t=0 -- no later frame is coming, and the process it \
+                 announced may not have existed at t={PROBE_MIN_INTERVAL_MS}"
+            );
+            state.observe(now, None);
+        }
+
+        now += PROBE_MIN_INTERVAL_MS;
+        assert!(
+            !probe_due(state.last_probe_at(), now, state.frame_budget_left(), false),
+            "the budget must RUN OUT: one frame may not authorise a full \
+             process-table refresh every {PROBE_MIN_INTERVAL_MS} ms forever"
+        );
     }
 
     /// A hit is believed at once; a miss is not believed until
