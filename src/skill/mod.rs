@@ -32,7 +32,7 @@ pub use installer::{
     InstallExecutor, InstallResult, InstallSuccess, SkillInstallError,
 };
 pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, SkillParseError};
-pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
+pub use preprocess::{preprocess_skill_content, PreprocessError, SkillPreprocessContext};
 pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
 pub use registry::SkillRegistry;
 pub use shared::{ensure_shared_skill_system_initialized, shared_skill_system};
