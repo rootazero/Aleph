@@ -1221,7 +1221,7 @@ const CLAUDE_WORKING_LINE: &str = "\u{23F5} pretending to work esc to interrupt"
 /// ⚠️ It carried `#[cfg(unix)]` until 2026-09-05, and Windows is the platform
 /// that needs it MOST: there is no `tcgetpgrp` there, so the identification
 /// this asserts can only arrive through
-/// `foreground::deepest_newest_descendant`, the one branch no developer or CI
+/// `foreground::foreground_fact_for_shell`, the one branch no developer or CI
 /// job had ever executed. The per-platform halves are in [`fake_claude_on_path`],
 /// which also says which single assertion Windows skips and why.
 #[tokio::test(flavor = "multi_thread")]
