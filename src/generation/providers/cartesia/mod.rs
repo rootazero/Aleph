@@ -68,6 +68,12 @@ impl std::fmt::Debug for CartesiaProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for CartesiaProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl CartesiaProvider {
     pub fn new<S: Into<String>>(
         api_key: S,

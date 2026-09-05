@@ -33,8 +33,18 @@ use tracing::{debug, error, info, warn};
 const DEFAULT_ENDPOINT: &str = "https://queue.fal.run";
 /// Default model path when caller doesn't specify one.
 const DEFAULT_MODEL: &str = "fal-ai/flux/dev";
-/// Maximum wall-clock time we wait for a job, including all polls.
-const DEFAULT_TIMEOUT_SECS: u64 = 600;
+/// Maximum wall-clock time we wait for a job, including all polls. Bounds
+/// the POLL LOOP below, not any single request.
+const JOB_DEADLINE_SECS: u64 = 600;
+/// Per-request cap when nothing configures one.
+///
+/// ⚠️ Distinct from [`JOB_DEADLINE_SECS`], and they were ONE constant until
+/// 2026-09-05: the same 600 was handed to `Client::builder().timeout()` and to
+/// the poll loop's deadline, so the HTTP client carried a ten-minute
+/// per-request cap justified by a doc that was describing the loop. A single
+/// request here is a submit, one poll, or a result fetch; none of those is a
+/// ten-minute operation (判据 §1 — one name, two facts).
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
 /// Initial poll interval; we back off slightly each iteration.
 const POLL_INTERVAL_INITIAL_MS: u64 = 1500;
 const POLL_INTERVAL_MAX_MS: u64 = 6000;
@@ -84,6 +94,7 @@ pub(crate) struct FalProviderBuilder {
     model: Option<String>,
     supported: Vec<GenerationType>,
     color: String,
+    timeout_secs: u64,
 }
 
 impl FalProviderBuilder {
@@ -95,7 +106,16 @@ impl FalProviderBuilder {
             model: None,
             supported: vec![GenerationType::Image],
             color: "#ff8ad1".into(),
+            timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
         }
+    }
+
+    /// Set the per-request HTTP timeout. NOT the job deadline -- see
+    /// [`JOB_DEADLINE_SECS`].
+    #[must_use]
+    pub const fn timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
     }
 
     pub fn endpoint(mut self, base: impl Into<String>) -> Self {
@@ -123,7 +143,7 @@ impl FalProviderBuilder {
 
     pub fn build(self) -> GenerationResult<FalProvider> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 
@@ -442,11 +462,11 @@ impl GenerationProvider for FalProvider {
 
             // Poll until terminal status or wall-clock timeout.
             let mut interval_ms = POLL_INTERVAL_INITIAL_MS;
-            let deadline = started + Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+            let deadline = started + Duration::from_secs(JOB_DEADLINE_SECS);
             loop {
                 if Instant::now() > deadline {
                     return Err(GenerationError::timeout(Duration::from_secs(
-                        DEFAULT_TIMEOUT_SECS,
+                        JOB_DEADLINE_SECS,
                     )));
                 }
                 tokio::time::sleep(Duration::from_millis(interval_ms)).await;

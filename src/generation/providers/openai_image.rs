@@ -102,6 +102,12 @@ impl std::fmt::Debug for OpenAiImageProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for OpenAiImageProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl OpenAiImageProvider {
     /// Create a new `OpenAI` Image Provider
     ///

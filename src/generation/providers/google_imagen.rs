@@ -120,6 +120,12 @@ impl std::fmt::Debug for GoogleImagenProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for GoogleImagenProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl GoogleImagenProvider {
     /// Create a new Google Imagen Provider
     ///

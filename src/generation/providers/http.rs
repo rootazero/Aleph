@@ -31,6 +31,52 @@ pub(crate) fn voice_http_client(timeout: Duration) -> reqwest::Result<reqwest::C
         .build()
 }
 
+/// Build the plain client the image / video / music providers share.
+///
+/// The same policy each of their `new()` constructors used to write inline
+/// (`Client::builder().timeout(t).build()`), in ONE place so the per-request
+/// cap has one derivation. Deliberately NOT the hardened
+/// [`voice_http_client`]: disabling keep-alive is a defense the speech
+/// endpoints need and a cost the others have never paid, and quietly changing
+/// fifteen providers' connection policy is not what "wire up a timeout" means.
+pub(crate) fn generation_http_client(timeout: Duration) -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder().timeout(timeout).build()
+}
+
+/// Apply a provider's configured `timeout_seconds` to the client it makes its
+/// requests with.
+///
+/// Each provider supplies the field; the clamp, the build and the error
+/// mapping live here, so wiring the knob into a sixteenth provider is three
+/// lines that cannot get the policy subtly wrong.
+///
+/// ⚠️ Two providers deliberately do NOT use this. [`OpenAiTtsProvider`] and
+/// [`AzureSpeechProvider`] carry their own `with_timeout`: they hold a
+/// `timeout: Duration` field that has to stay in step with the client, and
+/// they rebuild through [`voice_http_client`] rather than this one.
+///
+/// ⚠️ This is a PER-REQUEST cap, which is what `timeout_seconds` is
+/// documented as ("Request timeout in seconds"). A provider that polls a queue
+/// bounds the whole JOB separately -- see `fal`'s deadline and
+/// `google_veo`'s `MAX_POLL_ATTEMPTS`. Do not point this at those.
+pub(crate) trait WithRequestTimeout: Sized {
+    /// The client this provider makes its requests with.
+    fn request_client_mut(&mut self) -> &mut reqwest::Client;
+
+    /// Rebuild that client with `secs` as the per-request cap.
+    ///
+    /// `max(1)` because reqwest reads a zero as "no timeout at all", which is
+    /// the opposite of what `timeout_seconds = 0` means. Config validation
+    /// already rejects 0, so this is the second gate rather than the first
+    /// (判据 §8: a rejected value must not be read as permission).
+    fn with_timeout(mut self, secs: u64) -> GenerationResult<Self> {
+        *self.request_client_mut() = generation_http_client(Duration::from_secs(secs.max(1)))
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
+        Ok(self)
+    }
+}
+
+
 /// Retry a fallible generation operation on transient errors with backoff.
 ///
 /// `is_retryable()` decides whether an attempt is retried (rate limits,

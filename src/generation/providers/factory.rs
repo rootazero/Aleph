@@ -8,6 +8,7 @@ use super::{
     OpenAiTtsProvider, OpenAiWhisperProvider, ReplicateProvider, StabilityImageProvider,
     SunoProvider, VolcengineTtsProvider,
 };
+use super::http::WithRequestTimeout;
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;
@@ -103,12 +104,16 @@ pub fn create_provider(
     })?;
 
     let provider: Arc<dyn GenerationProvider> = match config.provider_type.as_str() {
-        "openai" | "openai_image" | "dalle" => Arc::new(OpenAiImageProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-            resolved_url,
-        )?),
+        "openai" | "openai_image" | "dalle" => Arc::new(
+            OpenAiImageProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+                resolved_url,
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
         "openai_tts" | "tts" => Arc::new(
             OpenAiTtsProvider::new(
                 api_key,
@@ -120,22 +125,34 @@ pub fn create_provider(
             // Honor the (previously dead) `timeout_seconds` config knob.
             .with_timeout(config.timeout_seconds)?,
         ),
-        "openai_whisper" | "whisper" => Arc::new(OpenAiWhisperProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-            resolved_url,
-        )?),
-        "deepgram_stt" | "deepgram" => Arc::new(DeepgramSttProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-        )?),
-        "deepgram_tts" => Arc::new(DeepgramTtsProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-        )?),
+        "openai_whisper" | "whisper" => Arc::new(
+            OpenAiWhisperProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+                resolved_url,
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "deepgram_stt" | "deepgram" => Arc::new(
+            DeepgramSttProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "deepgram_tts" => Arc::new(
+            DeepgramTtsProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
         "azure_speech" | "azure_tts" => Arc::new(
             AzureSpeechProvider::new(
                 api_key,
@@ -149,34 +166,54 @@ pub fn create_provider(
             // Honor the (previously dead) `timeout_seconds` config knob.
             .with_timeout(config.timeout_seconds)?,
         ),
-        "suno" => Arc::new(SunoProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-        )?),
-        "bfl" | "bfl_flux" | "flux" => Arc::new(BflProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-        )?),
-        "cartesia" => Arc::new(CartesiaProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-            config.defaults.voice.clone(),
-        )?),
-        "minimax_tts" => Arc::new(MinimaxTtsProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-            config.defaults.voice.clone(),
-        )?),
-        "volcengine_tts" => Arc::new(VolcengineTtsProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-            config.defaults.voice.clone(),
-        )?),
+        "suno" => Arc::new(
+            SunoProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "bfl" | "bfl_flux" | "flux" => Arc::new(
+            BflProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "cartesia" => Arc::new(
+            CartesiaProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+                config.defaults.voice.clone(),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "minimax_tts" => Arc::new(
+            MinimaxTtsProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+                config.defaults.voice.clone(),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "volcengine_tts" => Arc::new(
+            VolcengineTtsProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+                config.defaults.voice.clone(),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {
                 GenerationError::invalid_parameters(
@@ -207,21 +244,33 @@ pub fn create_provider(
 
             Arc::new(builder.build()?)
         }
-        "stability" | "stability_image" | "sdxl" => Arc::new(StabilityImageProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-        )?),
-        "google" | "google_imagen" | "imagen" => Arc::new(GoogleImagenProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-        )?),
-        "google_veo" | "veo" => Arc::new(GoogleVeoProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-        )?),
+        "stability" | "stability_image" | "sdxl" => Arc::new(
+            StabilityImageProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "google" | "google_imagen" | "imagen" => Arc::new(
+            GoogleImagenProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
+        "google_veo" | "veo" => Arc::new(
+            GoogleVeoProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
         "replicate" => {
             let mut builder = ReplicateProvider::builder(&api_key);
 
@@ -247,14 +296,21 @@ pub fn create_provider(
                 builder = builder.supported_types(config.capabilities.clone());
             }
 
+            // Honor the `timeout_seconds` config knob.
+            builder = builder.timeout_secs(config.timeout_seconds);
+
             Arc::new(builder.build())
         }
-        "elevenlabs" => Arc::new(ElevenLabsProvider::new(
-            api_key,
-            config.base_url.clone(),
-            config.default_model().map(|s| s.to_string()),
-            config.defaults.voice.clone(),
-        )?),
+        "elevenlabs" => Arc::new(
+            ElevenLabsProvider::new(
+                api_key,
+                config.base_url.clone(),
+                config.default_model().map(|s| s.to_string()),
+                config.defaults.voice.clone(),
+            )?
+            // Honor the `timeout_seconds` config knob.
+            .with_timeout(config.timeout_seconds)?,
+        ),
         "fal" => {
             // Fal serves image/video/music behind a single queue API.
             // `capabilities` from config determines which modalities this
@@ -276,6 +332,9 @@ pub fn create_provider(
                 // opt in via config.capabilities.
                 builder = builder.supported_types(vec![GenerationType::Image]);
             }
+            // Honor the `timeout_seconds` config knob. This is the PER-REQUEST
+            // cap; the job's wall clock is `JOB_DEADLINE_SECS` and is not this.
+            builder = builder.timeout_secs(config.timeout_seconds);
             Arc::new(builder.build()?)
         }
         "midjourney" | "mj" => {
@@ -359,6 +418,59 @@ mod tests {
             capabilities,
             ..Default::default()
         }
+    }
+
+    /// EVERY arm of `create_provider`'s match applies `timeout_seconds`.
+    ///
+    /// A count taken from the source rather than a number written here: a
+    /// hand-computed literal has to be edited when an arm is added, and the
+    /// version that does not get edited is the one that stops constraining
+    /// anything.
+    ///
+    /// This exists because the knob has been connected THREE times, one arm at
+    /// a time. Two arms carried "Honor the (previously dead)
+    /// `timeout_seconds` config knob" from an earlier round while seventeen
+    /// others silently dropped it, and clippy only noticed the two whose
+    /// builder setter went unused — the other fifteen construct their client
+    /// inline, so nothing was unused and nothing was red. Adding an eighteenth
+    /// provider and forgetting the knob is what this makes loud (判据 §11:
+    /// fix the class at the executor, not each instance you happen to find).
+    ///
+    /// Falsification: delete `.with_timeout(config.timeout_seconds)?` from any
+    /// arm and this reds with both counts named.
+    #[test]
+    fn every_provider_arm_applies_the_timeout_knob() {
+        let src = include_str!("factory.rs");
+        let after = src
+            .split_once("match config.provider_type.as_str() {")
+            .expect("create_provider still dispatches on provider_type")
+            .1;
+        // Bounded at the catch-all so this test's OWN source, which mentions
+        // `config.timeout_seconds` below, is not counted as an application.
+        let body = &after[..after
+            .find("        other => {")
+            .expect("the match still ends in a catch-all arm")];
+
+        let arms: Vec<&str> = body
+            .lines()
+            .filter(|l| l.starts_with("        \""))
+            .collect();
+        let applied = body.matches("(config.timeout_seconds)").count();
+
+        assert!(
+            arms.len() > 15,
+            "the arm scanner found only {} arms -- it stopped matching the \
+             source's shape, which makes this guard green for the wrong reason \
+             (判据 §3)",
+            arms.len()
+        );
+        assert_eq!(
+            applied,
+            arms.len(),
+            "{} provider arms but {applied} apply `timeout_seconds`; arms are:\n{}",
+            arms.len(),
+            arms.join("\n")
+        );
     }
 
     /// The `capabilities` knob reaches the Replicate provider.

@@ -89,6 +89,12 @@ impl std::fmt::Debug for VolcengineTtsProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for VolcengineTtsProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl VolcengineTtsProvider {
     /// Construct a provider from a token (`api_key`), optional base URL,
     /// optional model (unused by the legacy API — `voice` is the selector),

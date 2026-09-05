@@ -88,6 +88,12 @@ impl std::fmt::Debug for MinimaxTtsProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for MinimaxTtsProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl MinimaxTtsProvider {
     /// Construct a provider from an API key, optional base URL, optional model,
     /// and optional default voice.

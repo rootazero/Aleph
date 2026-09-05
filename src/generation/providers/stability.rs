@@ -134,6 +134,12 @@ impl std::fmt::Debug for StabilityImageProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for StabilityImageProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl StabilityImageProvider {
     /// Create a new Stability AI Image Provider
     ///
