@@ -282,12 +282,8 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
 /// exist for a shape Aleph has no producer for yet, so they are left upstream
 /// rather than copied in untested.
 #[must_use]
-pub fn identify_agent_from_process(
-    name: &str,
-    argv0: Option<&str>,
-    cmdline: Option<&str>,
-) -> Option<Agent> {
-    identify_agent(&normalized_program_name(name, argv0, cmdline))
+pub fn identify_agent_from_process<S: AsRef<str>>(name: &str, argv: &[S]) -> Option<Agent> {
+    identify_agent(&normalized_program_name(name, argv))
 }
 
 /// What to CALL the program a process is running.
@@ -308,26 +304,42 @@ pub fn identify_agent_from_process(
 /// With nothing recognised it falls back to `argv[0]`'s basename, or the
 /// kernel's name when there is no `argv[0]`. Never empty, never a guess.
 ///
-/// That fallback takes the FIRST WHITESPACE-DELIMITED WORD of `argv[0]`,
-/// because on macOS `argv[0]` is not always argv. A process that rewrites its
-/// title — every Node CLI does — leaves `sysinfo` reporting the title in
-/// `argv[0]`'s place, so the measured values are `"npm exec claude"` for
-/// `npx claude` and `"pi TERM_PROGRAM=Apple_Terminal"` for `pi`. A program
-/// name never contains a space; handing the panel a whole title, or one with
-/// an environment variable glued to it, is a specific lie about what is
-/// running (判据 §17).
+/// ⚠️ **BASENAME FIRST, then the first word — that order is the whole fix**
+/// for a bug this function shipped with. It used to take the first
+/// whitespace-delimited word of `argv[0]` and basename THAT, which is right
+/// for the reason the old doc gave (on macOS `argv[0]` is not always argv: a
+/// process that rewrites its title — every Node CLI does — leaves `sysinfo`
+/// reporting the title in `argv[0]`'s place, and the measured values are
+/// `"npm exec claude …"` for `npx claude` and `"pi TERM_PROGRAM=…"` for
+/// `pi`) and WRONG on Windows, where `argv[0]` is the full image path and a
+/// space inside it is just a directory name. Measured 2026-09-05 with an
+/// independent `sysinfo` probe on Windows 11: `argv[0]` =
+/// `"C:\Program Files\Git\bin\bash.exe"`, first word = `"C:\Program"`,
+/// basename of that = **`"Program"`** — the name the panel printed for every
+/// process installed under `C:\Program Files\` (判据 §17: a wrong label costs
+/// more than a missing one).
+///
+/// Reversing the two answers every MEASURED shape, because a real path's
+/// last component has no space and a rewritten title's basename still does:
+///
+/// ```text
+/// "C:\Program Files\Git\bin\bash.exe" -> basename "bash.exe" -> bash.exe
+/// "npm exec claude TERM_PROGRAM=…"    -> basename is itself  -> npm
+/// "pi TERM_PROGRAM=Apple_Terminal"    -> basename is itself  -> pi
+/// ```
 #[must_use]
-pub fn normalized_program_name(name: &str, argv0: Option<&str>, cmdline: Option<&str>) -> String {
-    let effective = argv0.unwrap_or(name);
+pub fn normalized_program_name<S: AsRef<str>>(name: &str, argv: &[S]) -> String {
+    let argv: Vec<&str> = argv.iter().map(AsRef::as_ref).collect();
+    let effective = argv.first().copied().unwrap_or(name);
     for candidate in [name, effective] {
         if identify_agent(candidate).is_some() {
             return path_basename(candidate).to_owned();
         }
     }
-    if let Some(token) = cmdline.and_then(agent_token_in_cmdline) {
+    if let Some(token) = agent_token_in_argv(&argv_tokens(&argv)) {
         return path_basename(token).to_owned();
     }
-    path_basename(first_word(effective)).to_owned()
+    first_word(path_basename(effective)).to_owned()
 }
 
 /// The first whitespace-delimited word, or the whole string when it has none.
@@ -335,6 +347,38 @@ pub fn normalized_program_name(name: &str, argv0: Option<&str>, cmdline: Option<
 /// its "never empty" promise.
 fn first_word(value: &str) -> &str {
     value.split_whitespace().next().unwrap_or(value)
+}
+
+/// The command line's tokens, derived from the argv vector the OS gave us.
+///
+/// ONE rule, because there is exactly one thing to tell apart, and the two
+/// cases are otherwise identical (an element containing a space):
+///
+/// * an element whose BASENAME still contains whitespace is a rewritten
+///   process TITLE sitting in argv's place — its words are separate tokens;
+/// * an element whose basename is a single word is a real argv element and
+///   stays WHOLE, because on Windows `argv[0]` is the full image path.
+///
+/// This exists because the previous shape destroyed the information it then
+/// tried to recover: `fact_for_pid` joined the vector with spaces and this
+/// file split it back apart, so on Windows `["C:\Program Files\nodejs\
+/// node.exe", "…\cli.js"]` arrived as the token `"C:\Program"`, which is not
+/// an agent, not a launcher and not a generic runtime — the entire launcher
+/// chain below went dead for every process under a path with a space, and
+/// `C:\Program Files\nodejs` is where the Windows Node installer puts `node`.
+/// Taking the vector means there is nothing to recover (判据 §1: the lossy
+/// round trip WAS the defect, not the tokenizer at the end of it).
+fn argv_tokens<'a>(argv: &[&'a str]) -> Vec<&'a str> {
+    argv.iter()
+        .flat_map(|element| {
+            if path_basename(element).split_whitespace().nth(1).is_some() {
+                element.split_whitespace().collect::<Vec<_>>()
+            } else {
+                vec![*element]
+            }
+        })
+        .filter(|token| !token.is_empty())
+        .collect()
 }
 
 /// The token of a command line that names an agent, if any.
@@ -371,8 +415,7 @@ fn first_word(value: &str) -> &str {
 /// full process-table refresh on every probe of every idle shell —
 /// `gateway::pty::foreground::deepest_newest_descendant` says why that is
 /// second choice. A wrapper that hides its operand would need it; none does.
-fn agent_token_in_cmdline(cmdline: &str) -> Option<&str> {
-    let tokens: Vec<&str> = cmdline.split_whitespace().collect();
+fn agent_token_in_argv<'a>(tokens: &[&'a str]) -> Option<&'a str> {
     let mut cursor = 0usize;
     // Bounded so a pathological command line cannot walk far: `sudo npx
     // claude` is two hand-offs, and nothing measured needs more than two.
@@ -860,8 +903,7 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                Some("npm exec claude"),
-                Some("npm exec claude TERM_PROGRAM=Apple_Terminal SHELL=/bin/zsh"),
+                &["npm exec claude", "TERM_PROGRAM=Apple_Terminal", "SHELL=/bin/zsh"],
             ),
             Some(Agent::Claude),
             "`npx claude`: the leader's own command line names its operand"
@@ -870,8 +912,7 @@ mod tests {
         assert_eq!(
             normalized_program_name(
                 "node",
-                Some("npm exec claude"),
-                Some("npm exec claude TERM_PROGRAM=Apple_Terminal SHELL=/bin/zsh"),
+                &["npm exec claude", "TERM_PROGRAM=Apple_Terminal", "SHELL=/bin/zsh"],
             ),
             "claude",
         );
@@ -885,8 +926,15 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "uv",
-                Some("/opt/homebrew/bin/uv"),
-                Some("/opt/homebrew/bin/uv tool uvx --offline --from pkg codex"),
+                &[
+                    "/opt/homebrew/bin/uv",
+                    "tool",
+                    "uvx",
+                    "--offline",
+                    "--from",
+                    "pkg",
+                    "codex",
+                ],
             ),
             Some(Agent::Codex),
             "`uvx`: `--from`'s value is a value, the operand is the operand"
@@ -894,14 +942,13 @@ mod tests {
 
         // `sudo claude` — and the counter-case in the same breath.
         assert_eq!(
-            identify_agent_from_process("sudo", Some("sudo"), Some("sudo claude --resume")),
+            identify_agent_from_process("sudo", &["sudo", "claude", "--resume"]),
             Some(Agent::Claude),
         );
         assert_eq!(
             identify_agent_from_process(
                 "sudo",
-                Some("sudo"),
-                Some("sudo -u claude systemctl restart nginx"),
+                &["sudo", "-u", "claude", "systemctl", "restart", "nginx"],
             ),
             None,
             "`-u claude` is a username; naming it as the program is 判据 §17"
@@ -912,16 +959,14 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                Some("node"),
-                Some("node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+                &["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"],
             ),
             Some(Agent::Claude),
         );
         assert_eq!(
             normalized_program_name(
                 "node",
-                Some("node"),
-                Some("node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"),
+                &["node", "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"],
             ),
             "claude-code",
             "the package is what is running; `cli` and `node` are both generic"
@@ -931,7 +976,7 @@ mod tests {
         // the title lands in argv[0] and the environment bleeds into cmd().
         // Already worked — pinned so it stays worked.
         assert_eq!(
-            identify_agent_from_process("node", Some("pi"), Some("pi TERM_PROGRAM=Apple_Terminal")),
+            identify_agent_from_process("node", &["pi", "TERM_PROGRAM=Apple_Terminal"]),
             Some(Agent::Pi),
         );
 
@@ -949,11 +994,12 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                Some("npm exec pi"),
-                Some(
-                    "npm exec pi ZSH_AI_PROMPT_EXTEND=Always prefer modern CLI tools \
-                     like ripgrep, fd, and bat. CLAUDE_CODE_MESSAGING_TOKEN=25c6ea90"
-                ),
+                &[
+                    "npm exec pi",
+                    "ZSH_AI_PROMPT_EXTEND=Always prefer modern CLI tools \
+                     like ripgrep, fd, and bat.",
+                    "CLAUDE_CODE_MESSAGING_TOKEN=25c6ea90",
+                ],
             ),
             Some(Agent::Pi),
         );
@@ -962,8 +1008,7 @@ mod tests {
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                Some("node"),
-                Some("node ZSH_AI_PROMPT_EXTEND=Always prefer claude over codex"),
+                &["node", "ZSH_AI_PROMPT_EXTEND=Always prefer claude over codex"],
             ),
             None,
             "the first operand is the script; a scan would have found `claude`"
@@ -973,11 +1018,7 @@ mod tests {
         // arrives is the script's own. Pinned because the leftover list
         // claimed `env` was unidentified and the measurement says otherwise.
         assert_eq!(
-            identify_agent_from_process(
-                "bash",
-                Some("/bin/bash"),
-                Some("/bin/bash /usr/local/bin/claude"),
-            ),
+            identify_agent_from_process("bash", &["/bin/bash", "/usr/local/bin/claude"]),
             Some(Agent::Claude),
         );
     }
@@ -986,22 +1027,22 @@ mod tests {
     /// about. Each line here contains an agent's name and no agent.
     #[test]
     fn a_name_outside_operand_position_is_never_the_program() {
-        for (name, argv0, cmdline) in [
-            ("vim", "vim", "vim claude.rs"),
-            ("git", "git", "git commit -m claude"),
-            ("grep", "grep", "grep -r codex src/"),
+        for (name, argv) in [
+            ("vim", &["vim", "claude.rs"][..]),
+            ("git", &["git", "commit", "-m", "claude"]),
+            ("grep", &["grep", "-r", "codex", "src/"]),
             // A launcher whose operand is not an agent must not keep looking.
-            ("sudo", "sudo", "sudo systemctl restart claude.service"),
+            ("sudo", &["sudo", "systemctl", "restart", "claude.service"]),
             // A package root is required: a working copy is not a package.
-            ("node", "node", "node /home/claude/project/cli.js"),
+            ("node", &["node", "/home/claude/project/cli.js"]),
             // A subcommand vocabulary that is never spent is not a launcher
             // hand-off — `bun script.ts` runs a script called `script.ts`.
-            ("bun", "bun", "bun /srv/app/claude.ts"),
+            ("bun", &["bun", "/srv/app/claude.ts"]),
         ] {
             assert_eq!(
-                identify_agent_from_process(name, Some(argv0), Some(cmdline)),
+                identify_agent_from_process(name, argv),
                 None,
-                "{cmdline:?} names no running agent"
+                "{argv:?} names no running agent"
             );
         }
     }
@@ -1012,13 +1053,13 @@ mod tests {
     #[test]
     fn a_program_that_is_both_runtime_and_launcher_takes_both_arms() {
         assert_eq!(
-            identify_agent_from_process("bun", Some("bun"), Some("bun x claude")),
+            identify_agent_from_process("bun", &["bun", "x", "claude"]),
             Some(Agent::Claude),
             "launcher arm: `x` is spent, `claude` is the operand — the runtime \
              arm would have stopped at the script `x`"
         );
         assert_eq!(
-            identify_agent_from_process("bun", Some("bun"), Some("bun /usr/local/bin/claude")),
+            identify_agent_from_process("bun", &["bun", "/usr/local/bin/claude"]),
             Some(Agent::Claude),
             "runtime arm: no subcommand is spent, so the script is the program"
         );
@@ -1027,7 +1068,7 @@ mod tests {
         // non-agent script is not renamed — widening it to "which program"
         // would be a different question with a different blast radius.
         assert_eq!(
-            normalized_program_name("bun", Some("bun"), Some("bun /srv/app/serve.ts")),
+            normalized_program_name("bun", &["bun", "/srv/app/serve.ts"]),
             "bun",
         );
     }
@@ -1037,12 +1078,12 @@ mod tests {
     #[test]
     fn the_launcher_chain_is_bounded() {
         assert_eq!(
-            identify_agent_from_process("sudo", Some("sudo"), Some("sudo nice npx claude")),
+            identify_agent_from_process("sudo", &["sudo", "nice", "npx", "claude"]),
             Some(Agent::Claude),
             "three layers is the budget and it is spendable"
         );
         assert_eq!(
-            identify_agent_from_process("sudo", Some("sudo"), Some("sudo nice nohup npx claude"),),
+            identify_agent_from_process("sudo", &["sudo", "nice", "nohup", "npx", "claude"]),
             None,
             "a fourth layer is refused rather than followed"
         );
@@ -1066,7 +1107,7 @@ mod tests {
             "a path is an operand even when it contains `=`"
         );
         assert_eq!(
-            identify_agent_from_process("env", Some("env"), Some("env FOO=1 claude")),
+            identify_agent_from_process("env", &["env", "FOO=1", "claude"]),
             Some(Agent::Claude),
         );
     }
@@ -1074,51 +1115,46 @@ mod tests {
     #[test]
     fn identify_agent_from_process_reads_node_scripts() {
         assert_eq!(
-            identify_agent_from_process(
-                "node",
-                Some("node"),
-                Some("/usr/local/bin/claude --resume x")
-            ),
+            identify_agent_from_process("node", &["/usr/local/bin/claude", "--resume", "x"]),
             Some(Agent::Claude),
-            "the command line's own program names the agent"
+            "argv[0] names the agent even when the kernel's name does not"
         );
         assert_eq!(
             identify_agent_from_process(
                 "node",
-                Some("node"),
-                Some("node /usr/local/bin/claude --resume x")
+                &["node", "/usr/local/bin/claude", "--resume", "x"],
             ),
             Some(Agent::Claude),
             "a runtime followed by its script names the agent"
         );
         assert_eq!(
-            identify_agent_from_process("sh", None, Some("/bin/sh /tmp/bin/claude")),
+            identify_agent_from_process("sh", &["/bin/sh", "/tmp/bin/claude"]),
             Some(Agent::Claude),
             "a shebang script is the shape the end-to-end guard produces"
         );
         assert_eq!(
-            identify_agent_from_process("python3", None, Some("python3 -u /opt/pi")),
+            identify_agent_from_process("python3", &["python3", "-u", "/opt/pi"]),
             Some(Agent::Pi),
             "flags between the runtime and its script are skipped"
         );
 
         assert_eq!(
-            identify_agent_from_process("vim", Some("vim"), Some("vim claude.rs")),
+            identify_agent_from_process("vim", &["vim", "claude.rs"]),
             None,
             "an editor holding a file named after an agent is not that agent"
         );
         assert_eq!(
-            identify_agent_from_process("claude", None, None),
+            identify_agent_from_process("claude", &[] as &[&str]),
             Some(Agent::Claude),
             "the process name alone still answers when it is the agent"
         );
         assert_eq!(
-            identify_agent_from_process("zsh", Some("-zsh"), Some("-zsh")),
+            identify_agent_from_process("zsh", &["-zsh"]),
             None,
             "a login shell is not an agent"
         );
         assert_eq!(
-            identify_agent_from_process("node", None, None),
+            identify_agent_from_process("node", &[] as &[&str]),
             None,
             "a runtime with nothing to run identifies nothing"
         );
@@ -1137,28 +1173,78 @@ mod tests {
     #[test]
     fn normalized_program_name_prefers_the_program_over_the_interpreter() {
         assert_eq!(
-            normalized_program_name("bash", Some("/bin/sh"), Some("/bin/sh /tmp/bin/claude")),
+            normalized_program_name("bash", &["/bin/sh", "/tmp/bin/claude"]),
             "claude",
             "a shebang script must be named by the script, not the interpreter"
         );
         assert_eq!(
-            normalized_program_name("node", Some("node"), Some("node /usr/local/bin/claude --x")),
+            normalized_program_name("node", &["node", "/usr/local/bin/claude", "--x"]),
             "claude"
         );
         assert_eq!(
-            normalized_program_name("claude-code", None, None),
+            normalized_program_name("claude-code", &[] as &[&str]),
             "claude-code",
             "as INVOKED, not canonicalised -- `agent` is what says which agent it is"
         );
         assert_eq!(
-            normalized_program_name("bash", Some("/bin/sh"), Some("/bin/sh")),
+            normalized_program_name("bash", &["/bin/sh"]),
             "sh",
             "a plain shell is named by its argv[0], which is what the user typed"
         );
         assert_eq!(
-            normalized_program_name("vim", Some("vim"), Some("vim claude.rs")),
+            normalized_program_name("vim", &["vim", "claude.rs"]),
             "vim",
             "an editor holding a file named after an agent is still vim"
+        );
+    }
+
+    /// An argv element containing a space is EITHER a Windows image path OR a
+    /// rewritten macOS title, and before 2026-09-05 this file resolved both
+    /// the same way — by splitting on whitespace — so Windows lost.
+    ///
+    /// Every `argv` below is a VERBATIM reading from `sysinfo` 0.39.6 on
+    /// Windows 11 (an independent probe, 2026-09-05; the joined-and-respilt
+    /// shape it replaced is in `normalized_program_name`'s doc). Both halves
+    /// are asserted in one test on purpose: they are one rule, and a test
+    /// that only pinned the Windows half would go green on a "fix" that
+    /// stopped splitting titles.
+    #[test]
+    fn an_argv_element_splits_only_when_its_basename_still_has_a_space() {
+        // WINDOWS — the path is one token. `first_word` first answered
+        // `"C:\Program"`, whose basename is `"Program"`: the name the panel
+        // printed for every process under `C:\Program Files\` (判据 §17).
+        assert_eq!(
+            normalized_program_name("bash.exe", &["C:\\Program Files\\Git\\bin\\bash.exe", "-c"]),
+            "bash.exe",
+            "a directory called `Program Files` is not a program called `Program`"
+        );
+        // The same defect one layer down: with `C:\Program` as token 0 the
+        // launcher walk saw no agent, no launcher and no runtime, so it
+        // returned `None` for EVERY process under a path with a space — and
+        // `C:\Program Files\nodejs` is where the Windows Node installer puts
+        // `node`, i.e. every Node-installed agent, out of the box.
+        let node_claude = [
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js",
+        ];
+        assert_eq!(
+            identify_agent_from_process("node.exe", &node_claude),
+            Some(Agent::Claude),
+            "the runtime arm must survive a space in the runtime's own path"
+        );
+        assert_eq!(
+            normalized_program_name("node.exe", &node_claude),
+            "claude-code",
+            "and the panel must name the package, not `Program`"
+        );
+
+        // macOS — the title still splits, which is the half that already
+        // worked and the half a naive Windows fix would have broken. Its
+        // basename is the whole string (no separator) and it has a space.
+        assert_eq!(
+            normalized_program_name("node", &["pi TERM_PROGRAM=Apple_Terminal"]),
+            "pi",
+            "a rewritten process title is still several tokens"
         );
     }
 

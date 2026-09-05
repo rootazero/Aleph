@@ -33,21 +33,20 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     engine::identify_agent(process_name)
 }
 
-/// Identify which agent is running from a probed process's name, `argv[0]`
-/// and command line. Returns `None` for plain shells and unrecognized
-/// programs.
+/// Identify which agent is running from a probed process's name and its argv
+/// VECTOR. Returns `None` for plain shells and unrecognized programs.
 ///
 /// This is the entry the PTY foreground probe uses, and the reason it exists
 /// beside [`identify_agent`] is that an agent's name is often not the process
 /// name: `claude` runs as a Node script, so the kernel reports `node`. All
 /// behaviour lives in [`engine::identify_agent_from_process`].
+///
+/// It takes the vector and not a joined command line because joining and
+/// re-splitting is lossy exactly where Windows needs it not to be — see
+/// [`engine::normalized_program_name`] for the measurement.
 #[must_use]
-pub fn identify_agent_from_process(
-    name: &str,
-    argv0: Option<&str>,
-    cmdline: Option<&str>,
-) -> Option<Agent> {
-    engine::identify_agent_from_process(name, argv0, cmdline)
+pub fn identify_agent_from_process<S: AsRef<str>>(name: &str, argv: &[S]) -> Option<Agent> {
+    engine::identify_agent_from_process(name, argv)
 }
 
 /// What to call the program a probed process is running — the name a panel
@@ -58,8 +57,8 @@ pub fn identify_agent_from_process(
 /// disagree about the token they looked at. All behaviour lives in
 /// [`engine::normalized_program_name`].
 #[must_use]
-pub fn normalized_program_name(name: &str, argv0: Option<&str>, cmdline: Option<&str>) -> String {
-    engine::normalized_program_name(name, argv0, cmdline)
+pub fn normalized_program_name<S: AsRef<str>>(name: &str, argv: &[S]) -> String {
+    engine::normalized_program_name(name, argv)
 }
 
 /// Detect an agent's state from a screen snapshot.
