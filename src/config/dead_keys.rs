@@ -163,6 +163,18 @@ const TOLERATED: &[Tolerated] = &[
         why: "retired 2026-08-23 — a failed ingest defers its raw rows for RETRY_GRACE_SECS               (src/memory/compression/service.rs); this knob never reached anything",
         retired: true,
     },
+    // Another whole-section retirement, so the same serde-root rule as
+    // `[agent]` / `[cowork]` applies: the path here must be `secret_providers`,
+    // not `secret_providers.*.account` — `Config` no longer has the field, so
+    // serde reports the root and never descends.
+    Tolerated {
+        path: "secret_providers",
+        why: "the whole [secret_providers] table was retired in the 2026-09-05 audit pass \
+               (secrets I-3): the SecretProvider trait never grew a `get_secret`, so a configured \
+               external provider could never resolve a single secret. Secrets resolve only through \
+               the built-in local vault (src/secrets/vault_resolver.rs)",
+        retired: true,
+    },
 ];
 
 /// Deserialize `contents`, returning the value alongside the dotted key paths
@@ -374,6 +386,36 @@ mod tests {
                 entry.path
             );
         }
+    }
+
+    /// A retired *section* has to be listed at its serde root, and only the
+    /// real `Config` can show that: what makes the entry correct is that
+    /// `Config` no longer declares the field, which the `Root` fixture above
+    /// cannot model. Scanning the fixture would only re-prove `covers`.
+    ///
+    /// `[secret_providers]` is the 2026-09-05 case. Two things are asserted
+    /// together because either alone is a false green: the table must still
+    /// **parse** (`Config` has no `deny_unknown_fields`, so an operator
+    /// upgrading past the retirement keeps booting), and it must be reported
+    /// as *retired* rather than *dead* — otherwise he gets a bare "config key
+    /// reaches no code" warning and a `core/config-parse` Warning finding with
+    /// no reason attached to it.
+    #[test]
+    fn the_retired_secret_providers_table_parses_and_is_not_reported_dead() {
+        let (_config, dead) = deserialize_reporting_dead_keys::<crate::config::Config>(
+            "[secret_providers.op]\ntype = \"1password\"\naccount = \"acme\"\n",
+        )
+        .expect("a retired table must still parse: Config has no deny_unknown_fields");
+
+        assert!(
+            dead.is_empty(),
+            "[secret_providers] must be reported as retired, not dead: {dead:?}"
+        );
+        let entry = tolerated_entry("secret_providers").expect("secret_providers is tolerated");
+        assert!(
+            entry.retired,
+            "the table is inert, so it must be flagged retired (info!), not foreign-owned (debug!)"
+        );
     }
 
     /// The two foreign-owned entries are only correct while the reader they
