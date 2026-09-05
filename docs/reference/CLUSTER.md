@@ -190,7 +190,9 @@ Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。Pane
 
 **第 ① 步现在会当场掐断那条 socket**(2026-07-25):`NodeRegistry::forget` 除了驱逐会话,
 还会触发该连接的 close 信号(`ReverseRpcChannel::close_connection`,与慢消费者踢除共用
-同一根线),读循环退出 → 跑现有全套 cleanup → 关 socket。此前只驱逐不关连接,那条连接要
+同一根线),读循环退出 → 跑现有全套 cleanup → 关 socket。两张表在**同一个写锁**下清空,
+close 信号在锁释放之后才发——不是为了躲死锁(`close_connection` 是不拿锁、不阻塞的
+`Notify::notify_one`),而是让驱逐本身原子、临界区里不带唤醒副作用。此前只驱逐不关连接,那条连接要
 熬到下一次 ping / ≤90s 入站 idle-watchdog 才断——而这段窗口里被注销的节点**仍在跑**中心
 先前下发的命令,且它的 `node.approval.request` 通道**仍然活着**,刚把它踢掉的 operator
 还会收到它弹的审批卡。
@@ -371,11 +373,26 @@ approve/deny → 决策作 JSON-RPC 响应下行。
   信号)触发,绝不碰响应超时(长命令落 `Timeout`,安全);且踢除=关连接→节点秒级重连,
   即便偶发误判也自愈,严格优于留着僵尸。节点侧拨出通道用 `new`(无 close 信号),重连由其
   `run_session` 自管。
-- 重连安全:`NodeRegistry::register` 同 `node_id` 重连覆盖旧会话并清旧 `conn`
-  映射;`deregister` 仅当当前会话确属该 `conn_id` 时才移除(旧连接 cleanup 不误删
-  新会话)。
+- 重连安全:`NodeRegistry::register` 同 `node_id` 重连覆盖旧会话、清旧 `conn` 映射,
+  **并关掉被顶下去的那条连接**(B1-01);同一 `conn_id` 改用另一个 `node_id` 重新
+  announce 则只删掉被孤立会话在两张表里的条目、**不关任何东西**(B1-03)——
+  `nodes_by_conn[conn_id] == prev_node_id` 蕴含 `prev.conn_id == conn_id`,那条
+  channel 就是**本连接自己的**(中心每条连接只绑一个 `with_close` channel,存进
+  registry 的都是它的 clone,共享同一个 `Arc<Notify>`),关掉它等于把正要登记的这条
+  会话拆掉。两条臂的这种不对称是刻意的,由 `registry.rs` 的一对对照测试钉住(见
+  下方测试清单)。`deregister` 仅当当前会话确属该 `conn_id` 时才移除(旧连接 cleanup
+  不误删新会话)。
+- **`register` 对两张表的读-改-写是原子的**(2026-09-05 起):整段 read-modify-write
+  在**同一个写锁**下完成,要关的 channel 收进 `to_close`、锁释放之后才 fire——
+  `forget` 早就是这个形状。此前它在函数中途 drop 写锁去调 `close_connection()` 再重新
+  获取,写着的理由是「被通知的连接任务会经 `deregister` 重入 registry」,而这条理由是
+  **伪的**:`close_connection` 全部内容就是 `Notify::notify_one`,不拿锁、不阻塞、不碰
+  registry 状态,重入发生在稍后的另一个任务上。那个窗口的实际代价见下方记账条目。
 - 防伪:`node_identity_by_conn` 从**已认证连接**盖章节点身份,而非信任请求
-  params——节点无法冒充别的节点(审批路由用此)。
+  params——节点无法冒充别的节点(审批路由用此)。**这条依赖上面那条原子性**:它要求
+  `nodes_by_conn` 与 `nodes_by_id` 互为一致(`conn → node_id → session` 且
+  `session.conn_id == conn`),而中途放锁的旧实现会**瞬时打破**这个双表不变量。在
+  2026-09-05 修掉之前,这句话描述的是**期望**,不是既成事实。
 
 ## 线协议速查
 
@@ -414,7 +431,9 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 `environments.list` 是**合并视图**:NodeRegistry 在线会话 + security_store 已登记
 (role=node、未吊销)但离线的设备(`status:"offline"`,附 `last_seen_at` Unix 秒,
 `null` = 登记后从未连入)。last_seen 在节点 connect/disconnect 两接缝经
-`TokenManager::touch_device` 盖章。
+`SecurityStore::touch_device`(`gateway/security/store/devices.rs`)盖章——**不是**
+`SharedTokenManager`(那是凭据 vault,与设备表无关;旧写法 `TokenManager::touch_device`
+指向一个不存在的符号)。
 
 ### LLM 工具(`OPERATOR_TOOLS`)
 
@@ -445,6 +464,14 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   `inflight_call_returns_cancelled_after_cancel_all`(断线 fail-fast)/
   `call_times_out_instead_of_hanging_on_a_wedged_outbound_queue`(满队列不挂死)。
 - 登记/重连:`registry.rs` 的 `reconnect_same_node_overwrites_and_old_cleanup_does_not_evict_new`。
+- **`register` 原子性**:`registry.rs::concurrent_register_same_node_leaves_no_orphan_conn_mapping`
+  ——多线程同 `node_id` 并发登记,断言经**公开**的 `node_identity_by_conn` 只有一条连接解析得出
+  身份(守的是"效果到达了",不是"调用发生了")。
+- **两条驱逐臂的不对称**:`registry.rs::{reconnect_from_a_new_conn_closes_the_displaced_connection,
+  reannounce_under_new_node_id_does_not_close_this_connection}` ——一对**对照**测试:B1-01 断言被顶
+  下去的连接的 close 信号**确实**发了、新连接的**没发**;B1-03 让两条会话共享同一个 `Arc<Notify>`
+  (镜像 handler 每连接一个 `rpc_close` 的形状)并断言**没发**。同一个 `close_fired` 探针在 B1-01
+  测试内部同时给出 true 与 false,即"这个探针能区分"本身也被证明了。
 - allowlist 权威:`node_runtime.rs` 的 `dispatch_rejects_unlisted_command`。
 - jail containment:`node_file_cmd.rs` 的 `file_write_rejects_traversal`。
 - 审批 fail-closed:`node_approval.rs` 的 `outcome_mapping_is_fail_closed` /
@@ -504,6 +531,27 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
 
 ### 已闭合(记账)
 
+- **`register` 原子化 / 被证伪的死锁理由(2026-09-05)**:`register` 在两条驱逐臂里都会中途
+  drop 写锁去 fire `close_connection()` 再重新获取,理由写作「被通知的连接任务会经 `deregister`
+  重入 registry」。**这条理由不成立**:`close_connection` 全部内容就是 `Notify::notify_one`,
+  不拿锁、不阻塞、不碰 registry 状态,重入发生在稍后的另一个任务上——那段说明描述的是这段代码
+  **没有**的危险,而它正是那个窗口存在的原因。**窗口的实际代价**:B1-01 臂当时只对
+  `nodes_by_id` 做 `get`,陈旧会话跨越整个间隙都可见;两条连接并发登记同一 `node_id`(每条 WS
+  连接是独立 task,一次网络抖动就让节点在旧 socket 还活着时重拨)会**读到同一个** previous
+  session 并各自插入自己的 `conn_id`——输的那条既没被关也没被覆盖,却仍能经
+  `node_identity_by_conn`(**每一帧入站节点帧的防伪盖章**)以赢家的身份解析出来。同一个间隙还
+  让并发的 `forget` 打出 "evicted"、把会话交还给 operator,然后被 re-insert **静默撤销**。现整段
+  read-modify-write 收进**一个**写锁,close 收进 `to_close`、锁释放后才 fire(`forget` 的既有
+  形状),B1-01 改用 `remove` 而非 `get`,临界区里不再有一瞬可见的陈旧会话。**B1-03 从此不关任何
+  东西**:`nodes_by_conn[conn_id] == prev_node_id` 蕴含 `prev.conn_id == conn_id`,那条 channel
+  就是本连接的——旧代码是先叫正在登记的这条连接自我拆除、然后照样把它登记上去,日志却声称新会话
+  活着。回归测试 `concurrent_register_same_node_leaves_no_orphan_conn_mapping` 在无修复时**第 1
+  轮**(共 500 轮)即红——窗口是宽的,不是罕见的。**同轮顺带修掉的腐烂引用**:`reverse_rpc.rs`
+  的「Two producers fire this」(实际三个;改写为**不带任何数目**的表述,因为注释里的数目是一张
+  会腐烂的名单)、`register` doc 里引用的过期调用方**行号**(改为指符号)、`forget` doc 里描述的
+  它早已不返回的 `bool`、以及 `handler.rs` 里 `node.disconnected` 的 "KNOWN GAP (2026-08-29)"
+  段(其修复其实已随 `180f9a0b1` 落地)。锚点 `cluster/registry.rs::{register, forget}`。
+
 - **`cluster.enroll` 幂等化(2026-07-25,自身 bug,非 openclaw delta)**:`handle_cluster_enroll`
   直接调 `mint_node_device`,**无条件铸新 UUID**——而模块 doc 一直声称「与 connect 自助登记
   共用同一真源,故同名 enroll 不会铸重复行」。**声称的不变量在代码里根本不存在**:Panel
@@ -521,8 +569,10 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   卡死会触发它**。`cluster.deregister` 明明要求节点立刻离场,却只驱逐 registry、不碰连接——那条
   socket 要熬到下一次 ping / ≤90s 入站 idle-watchdog。这段窗口里被注销的节点**仍在执行**中心
   先前下发的命令,且 `node.approval.request` 通道**仍然活着**:刚把它踢掉的 operator 还会收到
-  它弹的审批卡。现 `NodeRegistry::forget` 直接 `channel.close_connection()`(新公开的第二个
-  producer),复用**同一根线**跑现有全套 cleanup。单测看不见这条线(测试通道用 `new`,无 close
+  它弹的审批卡。现 `NodeRegistry::forget` 直接 `channel.close_connection()`(当时新增的一个
+  producer;**producer 清单不在这里维护**——真源是 `reverse_rpc.rs::close_connection` 的 doc
+  与 `grep close_connection()`,注释里写死一个数目就是一张会腐烂的名单,那条注释本身后来
+  正是这么错的),复用**同一根线**跑现有全套 cleanup。单测看不见这条线(测试通道用 `new`,无 close
   信号),故补真实 socket 集成测试 `deregister_tears_down_the_nodes_live_socket`。
 
 - **`ExclusiveScope::Nodes` 的 key 归一化(2026-07-25,又一次自引 SSOT 漂移)**:
@@ -549,8 +599,9 @@ device token / bootstrap ticket / 共享 Gateway token)成为 **operator**,要�
   绑一个 close 信号(`with_close`),`call()` 命中入队卡死时 `notify` 它 → 连接读循环退出
   → 跑**现有全套** cleanup(`cancel_all`+`deregister`+`node.disconnected`+关 socket),
   节点退避重连自愈。**误杀顾虑已解**:只在**入队**卡死(容量 64 满满整段预算 = 强背压)触发、
-  绝不碰响应超时(长命令安全),且关连接→节点秒级重连,偶发误判也自愈。四个 LLM 工具与
-  `NodeRegistry` **零改动**(纯传输层收口)。锚点 `cluster/reverse_rpc.rs::with_close` +
+  绝不碰响应超时(长命令安全),且关连接→节点秒级重连,偶发误判也自愈。**该轮**四个 LLM 工具与
+  `NodeRegistry` **零改动**(纯传输层收口)——这是当时那笔 diff 的记账,不是现状:
+  一周后的注销掐断、以及 2026-09-05 的原子化,都改到了 `NodeRegistry`。锚点 `cluster/reverse_rpc.rs::with_close` +
   `gateway/server/handler.rs` 的 `rpc_close` select arm。
 
 - **按名寻址 Unicode 化(2026-07-20 收口 ASCII-only 漂移)**:`normalize_node_key` 曾用
