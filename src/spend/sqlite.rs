@@ -123,6 +123,18 @@ impl SpendLedger for SqliteSpendLedger {
             Delta::Partial(usd) => (usd, 0, 1),
             Delta::Unpriced => (0.0, 1, 0),
         };
+        // NaN / ±inf in the USD column silently disables the spend ceiling
+        // (IEEE 754 NaN comparisons are false, so `spent >= limit` is false
+        // forever once a corrupt row lands). Mirror the InMemory backend's
+        // guard: coerce to 0.0 + bump unpriced_calls so the 'this call had
+        // a price it couldn't represent' signal is loud and the ceiling
+        // continues to evaluate against a real number.
+        let (delta_usd, delta_unpriced, delta_partial): (f64, i64, i64) =
+            if !delta_usd.is_finite() {
+                (0.0, delta_unpriced.saturating_add(1), delta_partial)
+            } else {
+                (delta_usd, delta_unpriced, delta_partial)
+            };
         let key = principal.as_key().to_string();
         let updated_at = chrono::Utc::now().timestamp_millis();
 

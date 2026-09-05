@@ -280,10 +280,28 @@ impl SpendLedger for InMemorySpendLedger {
             .entry((principal.as_key().to_string(), period_start_ms))
             .or_default();
         match delta {
-            Delta::Usd(usd) => row.usd += usd,
+            Delta::Usd(usd) => {
+                if !usd.is_finite() {
+                    // NaN / ±inf in the USD column silently disables the
+                    // spend ceiling: `ceiling_blown(NaN, anything)` is
+                    // always false (IEEE 754 NaN comparisons), so once a
+                    // single corrupt price lands in the row the principal
+                    // is allowed to continue calling forever. Coerce to
+                    // 0.0 + bump unpriced_calls so the 'this call had a
+                    // price it couldn't represent' signal is loud and the
+                    // ceiling continues to evaluate against a real number.
+                    row.unpriced_calls += 1;
+                } else {
+                    row.usd += usd;
+                }
+            }
             Delta::Partial(usd) => {
-                row.usd += usd;
-                row.partial_calls += 1;
+                if !usd.is_finite() {
+                    row.unpriced_calls += 1;
+                } else {
+                    row.usd += usd;
+                    row.partial_calls += 1;
+                }
             }
             Delta::Unpriced => row.unpriced_calls += 1,
         }

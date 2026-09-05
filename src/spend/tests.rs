@@ -241,6 +241,36 @@ fn record_accumulates_across_calls_for_the_same_principal_and_period() {
     assert_eq!(spent.partial_calls, 2);
 }
 
+/// Regression for `severed-wire-2026-09-05-modules2 spend I-2`: NaN /
+/// ±inf in `Delta::Usd` or `Delta::Partial` used to land in the row
+/// verbatim. `ceiling_blown(NaN, anything)` is always false (IEEE 754),
+/// so a single corrupt price silently disabled the spend ceiling for
+/// the rest of the period. The InMemory backend now coerces to 0.0 and
+/// bumps `unpriced_calls`, so the 'this call had a price it couldn't
+/// represent' signal stays loud and the ceiling continues to evaluate
+/// against a real number.
+#[test]
+fn record_replaces_non_finite_usd_with_unpriced_and_keeps_ceiling_alive() {
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+
+    ledger.record(&alice, 1_000, Delta::Usd(f64::NAN)).unwrap();
+    ledger.record(&alice, 1_000, Delta::Partial(f64::INFINITY)).unwrap();
+    ledger
+        .record(&alice, 1_000, Delta::Partial(f64::NEG_INFINITY))
+        .unwrap();
+
+    let spent = ledger.spent_for(&alice, 1_000).unwrap();
+    assert!(
+        spent.usd.is_finite(),
+        "usd column must never carry NaN/inf (got {})",
+        spent.usd
+    );
+    assert_eq!(spent.usd, 0.0);
+    assert_eq!(spent.unpriced_calls, 3);
+    assert_eq!(spent.partial_calls, 0);
+}
+
 #[test]
 fn record_keeps_distinct_periods_separate() {
     let ledger = InMemorySpendLedger::default();
