@@ -484,8 +484,16 @@ mod tests {
     use super::*;
     use crate::routing::session_key::SessionKey;
 
-    /// Keys are namespaced per test so the process-global map cannot make these
-    /// order-dependent.
+    /// Keys are namespaced per test so no two tests write the same entry.
+    ///
+    /// ⚠️ That buys less than it reads like. Namespacing rules out COLLISION;
+    /// it does nothing about CAPACITY, which every test in this binary shares.
+    /// Two tests here used to fill the process-global map with
+    /// `MAX_TRACKED_SESSIONS * 2` entries, and the LRU then evicted whatever
+    /// the rest of the binary had in flight -- including the eleven witness
+    /// tests in `failover::tests`, each of which writes a record and reads it
+    /// back one `.await` later. They now drive a private [`BoundedWitnesses`]
+    /// (判据 §3: the guard covered only the shape it recognised).
     fn key(name: &str) -> String {
         format!("agent:route-witness-test:{name}")
     }
@@ -616,14 +624,29 @@ mod tests {
         assert!(take(&k).is_none());
     }
 
+    /// Fill a private store past the cap, the way an un-taken child session
+    /// backlog would.
+    ///
+    /// Private, not the process-global map: overflowing the shared store is how
+    /// these two tests used to evict other tests' in-flight records. Nothing is
+    /// lost by moving them -- the global map IS a `BoundedWitnesses` and
+    /// `record` is its single insert path (see its doc), so the bound the
+    /// global map has is the bound proven here.
+    fn flooded_store(prefix: &str) -> BoundedWitnesses {
+        let mut store = BoundedWitnesses::default();
+        for i in 0..(MAX_TRACKED_SESSIONS * 2) {
+            let d = Dialed::new("p", None);
+            store.record(key(&format!("{prefix}-{i}")), d.clone(), Some(d));
+        }
+        store
+    }
+
     #[test]
     fn the_map_stays_bounded_when_records_are_never_taken() {
         // Child sessions (subagents, team members) get their own session keys
         // and no taker, so the un-taken case is the normal one, not an edge.
-        for i in 0..(MAX_TRACKED_SESSIONS * 2) {
-            clean_dial(&key(&format!("bounded-{i}")), Dialed::new("p", None));
-        }
-        let len = map().read().unwrap_or_else(|e| e.into_inner()).len();
+        let store = flooded_store("bounded");
+        let len = store.len();
         assert!(
             len <= MAX_TRACKED_SESSIONS,
             "witness map grew to {len}, past the {MAX_TRACKED_SESSIONS} cap"
@@ -634,13 +657,12 @@ mod tests {
     fn overflow_clears_rather_than_wedging_the_recorder() {
         // Refusing writes at the cap would permanently silence the banner once
         // enough un-taken child sessions accumulated.
-        for i in 0..(MAX_TRACKED_SESSIONS * 2) {
-            clean_dial(&key(&format!("wedge-{i}")), Dialed::new("p", None));
-        }
+        let mut store = flooded_store("wedge");
         let k = key("wedge-after-overflow");
-        clean_dial(&k, Dialed::new("openai", Some("gpt-5".into())));
+        let d = Dialed::new("openai", Some("gpt-5".into()));
+        store.record(k.clone(), d.clone(), Some(d));
         assert!(
-            take(&k).is_some(),
+            store.take(&k).is_some(),
             "the recorder must still accept writes after an overflow clear"
         );
     }
