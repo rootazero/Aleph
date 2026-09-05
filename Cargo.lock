@@ -440,6 +440,7 @@ dependencies = [
  "libc",
  "log",
  "loom",
+ "lopdf",
  "lru 0.12.5",
  "mail-parser",
  "matrix-sdk",

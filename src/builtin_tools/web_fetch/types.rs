@@ -27,6 +27,10 @@ pub enum Extractor {
     Readability,
     /// CSS selector-based fallback
     Selector,
+    /// PDF text-layer extraction via lopdf (per-page `[page N]` markers)
+    Pdf,
+    /// YouTube transcript via yt-dlp (subtitles, VTT cleaned)
+    Youtube,
 }
 
 impl Extractor {
@@ -39,6 +43,8 @@ impl Extractor {
         match self {
             Self::Readability => "readability",
             Self::Selector => "selector",
+            Self::Pdf => "pdf",
+            Self::Youtube => "youtube",
         }
     }
 }

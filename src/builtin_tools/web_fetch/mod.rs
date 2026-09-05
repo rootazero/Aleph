@@ -4,7 +4,12 @@
 
 mod cache;
 mod extract;
+mod pdf;
 mod types;
+
+// YouTube transcript path. Dispatched in `call_impl` before the HTTP
+// fetch; gated by `[policies.web_fetch] youtube_transcript` (default on).
+mod youtube;
 
 pub use types::{ExtractMode, Extractor, WebFetchArgs, WebFetchResult};
 
@@ -32,6 +37,10 @@ pub struct WebFetchTool {
     timeout_secs: u64,
     /// Whether Readability extraction is enabled
     enable_readability: bool,
+    /// Whether PDF responses take the lopdf text-extraction pipeline
+    pdf_extract: bool,
+    /// Whether YouTube URLs take the yt-dlp transcript pipeline
+    youtube_transcript: bool,
     /// SSRF protection policy
     ssrf_policy: SsrfPolicy,
 }
@@ -58,6 +67,15 @@ impl WebFetchTool {
     /// Maximum response body size in bytes (10 MB)
     const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
+    /// Fetch-time body cap. Raised to the PDF budget (20 MB) so PDFs can
+    /// use their full budget regardless of how they were dispatched
+    /// (Content-Type or URL hint); non-PDF responses are still rejected
+    /// past 10 MB by the post-fetch check below, so HTML behavior is
+    /// unchanged. The streamed cap only moves the point at which a
+    /// hostile >10 MB HTML page aborts from "during download" to
+    /// "after download" — the rejection itself is identical.
+    const FETCH_BODY_CAP: usize = pdf::MAX_PDF_BYTES;
+
     /// Create a new `WebFetchTool` with default settings
     #[must_use]
     pub fn new() -> Self {
@@ -67,6 +85,8 @@ impl WebFetchTool {
             user_agent: Self::DEFAULT_USER_AGENT.to_string(),
             timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
             enable_readability: true,
+            pdf_extract: true,
+            youtube_transcript: true,
             ssrf_policy: SsrfPolicy::default(),
         }
     }
@@ -87,6 +107,8 @@ impl WebFetchTool {
             user_agent: policy.user_agent.clone(),
             timeout_secs: policy.timeout_seconds,
             enable_readability: policy.enable_readability,
+            pdf_extract: policy.pdf_extract,
+            youtube_transcript: policy.youtube_transcript,
             ssrf_policy: SsrfPolicy::default(),
         }
     }
@@ -122,6 +144,46 @@ impl WebFetchTool {
             return Ok(result);
         }
 
+        // YouTube special case: the transcript comes from yt-dlp, not from
+        // fetching the watch page (whose HTML carries almost no readable
+        // text). SSRF is safe by construction here: `detect_youtube` only
+        // matches real YouTube hosts and `fetch_transcript` re-derives a
+        // canonical youtube.com URL from the bare video id, so no
+        // caller-controlled host reaches the network. Soft failures (yt-dlp
+        // not installed, video has no subtitles) fall through to the generic
+        // HTTP path; hard failures are honest errors.
+        if self.youtube_transcript {
+            if let Some(target) = youtube::detect_youtube(&args.url) {
+                match youtube::fetch_transcript(&target).await {
+                    Ok(transcript) => {
+                        debug!(
+                            "YouTube transcript: {} chars for {}",
+                            transcript.text().len(),
+                            args.url
+                        );
+                        return Ok(self.finalize_success(
+                            args,
+                            key,
+                            None,
+                            transcript.text(),
+                            Extractor::Youtube,
+                        ));
+                    }
+                    Err(e) if e.is_soft() => {
+                        info!(
+                            "YouTube transcript unavailable for {} ({e}); falling back to HTTP fetch",
+                            args.url
+                        );
+                    }
+                    Err(e) => {
+                        let error_msg = format!("YouTube transcript failed: {e}");
+                        notify_tool_result(Self::NAME, &error_msg, false);
+                        return Err(ToolError::Execution(error_msg));
+                    }
+                }
+            }
+        }
+
         // No fetch-provider branch here. `[fetch]` providers (crawl4ai,
         // firecrawl) are deliberately NOT wired into this tool: they receive
         // the target URL as a string and resolve/follow it on their own
@@ -143,7 +205,7 @@ impl WebFetchTool {
         let fetch_request =
             SafeFetchRequest::get(std::time::Duration::from_secs(self.timeout_secs))
                 .with_headers(headers)
-                .with_max_body_bytes(Self::MAX_RESPONSE_BYTES);
+                .with_max_body_bytes(Self::FETCH_BODY_CAP);
 
         let fetch_response = safe_fetch(&args.url, ssrf_policy, fetch_request)
             .await
@@ -163,6 +225,14 @@ impl WebFetchTool {
         }
 
         let bytes = &fetch_response.body;
+
+        // PDF special case, dispatched BEFORE the HTML size gate: PDFs
+        // carry a 20 MB byte budget, HTML pages keep 10 MB. When the
+        // policy switch is off, PDFs fall through to the legacy HTML
+        // path unchanged.
+        if self.pdf_extract && pdf::is_pdf_response(&fetch_response.headers, &args.url) {
+            return self.handle_pdf(bytes, args, key);
+        }
 
         if bytes.len() > Self::MAX_RESPONSE_BYTES {
             let error_msg = format!(
@@ -197,12 +267,51 @@ impl WebFetchTool {
             extractor
         );
 
-        // Notify success
-        let extractor_name = extractor.as_str();
+        Ok(self.finalize_success(args, key, title, &content, extractor))
+    }
+
+    /// PDF branch of `call_impl`: extract the text layer with lopdf, then
+    /// run the exact same post-processing as the HTML path. Failures are
+    /// honest errors — never a fallback to parsing binary as HTML.
+    fn handle_pdf(
+        &self,
+        bytes: &[u8],
+        args: WebFetchArgs,
+        key: cache::CacheKey,
+    ) -> std::result::Result<WebFetchResult, ToolError> {
+        use super::notify_tool_result;
+
+        debug!("PDF response detected for {}", args.url);
+        let (title, text) = pdf::extract_pdf(bytes).inspect_err(|e| {
+            notify_tool_result(Self::NAME, &e.to_string(), false);
+        })?;
+        debug!(
+            "Extracted {} chars of PDF text from {}",
+            text.len(),
+            args.url
+        );
+        Ok(self.finalize_success(args, key, title, &text, Extractor::Pdf))
+    }
+
+    /// Shared success tail for the HTML and PDF paths: notify, cap the
+    /// sanitized image, wrap with external-content boundary markers,
+    /// cache the bare result, then apply the focus-prompt marker.
+    fn finalize_success(
+        &self,
+        args: WebFetchArgs,
+        key: cache::CacheKey,
+        title: Option<String>,
+        content: &str,
+        extractor: Extractor,
+    ) -> WebFetchResult {
+        use super::notify_tool_result;
+
+        let WebFetchArgs { url, prompt, .. } = args;
+
         let result_summary = format!(
             "已获取网页内容 ({} 字符, {})",
             content.len(),
-            extractor_name,
+            extractor.as_str(),
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
@@ -211,24 +320,20 @@ impl WebFetchTool {
         // SANITIZED image so placeholder growth (a 3-char `<s>` becomes a
         // 23-char `[REMOVED_SPECIAL_TOKEN]`) cannot push the fenced payload
         // past `max_content_length`.
-        let content = self.truncate_fetched(&content);
-        let wrapped_content = wrap_external_content(
-            &content,
-            ContentSource::WebFetch {
-                url: args.url.clone(),
-            },
-        );
+        let content = self.truncate_fetched(content);
+        let wrapped_content =
+            wrap_external_content(&content, ContentSource::WebFetch { url: url.clone() });
 
         // Cache the BARE wrapped result (no focus prompt) so subsequent
         // fetches with different prompts can share the cached body.
         let bare_result = WebFetchResult {
-            url: args.url,
+            url,
             title,
             content: wrapped_content,
             extractor,
         };
         cache_store(key, bare_result.clone());
-        Ok(apply_focus_prompt(bare_result, args.prompt.as_deref()))
+        apply_focus_prompt(bare_result, prompt.as_deref())
     }
 
     /// Extract the page title from <title> tag
@@ -298,6 +403,8 @@ impl Clone for WebFetchTool {
             user_agent: self.user_agent.clone(),
             timeout_secs: self.timeout_secs,
             enable_readability: self.enable_readability,
+            pdf_extract: self.pdf_extract,
+            youtube_transcript: self.youtube_transcript,
             ssrf_policy: self.ssrf_policy.clone(),
         }
     }
@@ -505,6 +612,25 @@ mod tests {
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["extractor"], "readability");
+    }
+
+    #[test]
+    fn pdf_extractor_serializes_as_pdf() {
+        assert_eq!(serde_json::to_value(Extractor::Pdf).unwrap(), "pdf");
+        assert_eq!(Extractor::Pdf.as_str(), "pdf");
+    }
+
+    #[test]
+    fn with_policy_maps_pdf_extract_flag() {
+        let default_tool = WebFetchTool::new();
+        assert!(default_tool.pdf_extract);
+
+        let policy = WebFetchPolicy {
+            pdf_extract: false,
+            ..WebFetchPolicy::default()
+        };
+        let tool = WebFetchTool::with_policy(&policy);
+        assert!(!tool.pdf_extract);
     }
 
     // ─── Focus prompt ──────────────────────────────────────────────────

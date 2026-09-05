@@ -38,6 +38,22 @@ pub struct WebFetchPolicy {
     #[serde(default = "default_enable_readability")]
     pub enable_readability: bool,
 
+    /// Whether PDF responses take the lopdf text-extraction pipeline
+    /// (per-page `[page N]` markers, honest error when there is no text
+    /// layer). When false, PDFs fall through to the HTML path, which
+    /// mangles binary content into lossy UTF-8 — kept only as an escape
+    /// hatch.
+    /// Default: true
+    #[serde(default = "default_pdf_extract")]
+    pub pdf_extract: bool,
+
+    /// Whether YouTube URLs take the yt-dlp transcript pipeline (subtitles
+    /// cleaned from VTT, scrolling-overlap deduplicated). Soft failures
+    /// (yt-dlp not installed, no subtitles) fall back to the generic HTTP
+    /// path. Default: true
+    #[serde(default = "default_youtube_transcript")]
+    pub youtube_transcript: bool,
+
     /// Legacy crawl4ai backend config. Read only by `Config::migrate_fetch`,
     /// which folds it into `[fetch].backends.crawl4ai` at load. Note that
     /// `[fetch]` providers are currently NOT wired into `web_fetch` at
@@ -56,6 +72,8 @@ impl Default for WebFetchPolicy {
             user_agent: default_user_agent(),
             timeout_seconds: default_timeout_seconds(),
             enable_readability: default_enable_readability(),
+            pdf_extract: default_pdf_extract(),
+            youtube_transcript: default_youtube_transcript(),
             crawl4ai: Crawl4aiConfig::default(),
         }
     }
@@ -78,6 +96,14 @@ const fn default_timeout_seconds() -> u64 {
 }
 
 const fn default_enable_readability() -> bool {
+    true
+}
+
+const fn default_pdf_extract() -> bool {
+    true
+}
+
+const fn default_youtube_transcript() -> bool {
     true
 }
 
@@ -139,6 +165,17 @@ mod tests {
         assert_eq!(policy.user_agent, "Aleph/1.0");
         assert_eq!(policy.timeout_seconds, 30);
         assert!(policy.enable_readability);
+        assert!(policy.pdf_extract);
+        assert!(policy.youtube_transcript);
+    }
+
+    #[test]
+    fn pdf_extract_parses_explicit_false() {
+        let toml = r#"
+            pdf_extract = false
+        "#;
+        let policy: WebFetchPolicy = toml::from_str(toml).unwrap();
+        assert!(!policy.pdf_extract);
     }
 
     #[test]

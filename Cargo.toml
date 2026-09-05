@@ -251,6 +251,12 @@ vte = "0.14"
 # a second one — verify with `cargo tree -p alephcore -i unicode-width`.
 unicode-width = "0.2"
 printpdf = "0.9"
+# Already in the dependency tree transitively via printpdf; pinned to the
+# version Cargo.lock already carries (0.39) with the exact feature set
+# printpdf enables (default off + "time"), so this resolves to the same
+# copy with zero new transitive weight — verify with
+# `cargo tree -p alephcore -i lopdf --depth 1`.
+lopdf = { version = "0.39", default-features = false, features = ["time"] }
 pulldown-cmark = "0.12"
 httpdate = "1.0"
 dashmap = "5.5"
