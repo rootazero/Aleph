@@ -65,6 +65,15 @@ const OPERATOR_TOOLS: &[&str] = &[
     "agent_unbind",
     "channel_pairing",
     "hub_install_run",
+    // `runtime_manage{install}` runs `ensure_capability`, i.e. the ledger's
+    // bootstrap installers — an npm global install, a `curl … | sh` script, a
+    // winget invocation — plus their post-install subcommands. One call
+    // installs software on the host. Its three nearest siblings
+    // (`skill_install`, `skill_manage`, `hub_install_run`) are already here for
+    // the same reason. Deliberately NOT split so `list` stays open: this table
+    // matches on the tool NAME, and a chat-tier run that wants to know what is
+    // installed has `doctor`, which is open.
+    "runtime_manage",
     "moa",
     // Cluster: driving remote execution arms. Local `bash` is deliberately open
     // to chat tier, but the fleet is a different blast radius — one call reaches
@@ -256,6 +265,15 @@ mod tests {
             unique.len(),
             OPERATOR_TOOLS.len(),
             "OPERATOR_TOOLS must not list a tool twice"
+        );
+    }
+
+    #[test]
+    fn installing_a_runtime_is_operator_only() {
+        assert!(
+            tool_requires_operator("runtime_manage"),
+            "runtime_manage installs software on the host; it sits with \
+             skill_install and hub_install_run, not with the read-only tools"
         );
     }
 

@@ -446,7 +446,7 @@ impl BashExecTool {
 
 /// Session label used to scope the process registry. Mirrors the JSON form the
 /// sandbox uses for its workspace key so the value is stable for a session.
-fn session_label() -> Option<String> {
+pub(crate) fn session_label() -> Option<String> {
     current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
 }
 

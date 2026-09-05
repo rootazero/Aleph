@@ -250,6 +250,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: <crate::builtin_tools::list_models::ListModelsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Reads injected config + vault for provider/credential state
     },
+    // Reads the ledger + config from process-global paths, like `doctor`.
+    BuiltinToolDefinition {
+        name: "runtime_manage",
+        description: <crate::builtin_tools::runtime_manage::RuntimeManageTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
     BuiltinToolDefinition {
         name: "self_manage",
         description: <crate::builtin_tools::self_manage::SelfManageTool as crate::tools::AlephTool>::DESCRIPTION,
@@ -1182,6 +1188,12 @@ pub fn create_tool_boxed(
         // list_models needs the injected config + vault handles (provider/credential
         // state), bound at BuiltinToolRegistry construction — not standalone here.
         "list_models" => None,
+        // runtime_manage reads the ledger + config from process-global paths
+        // (get_runtimes_dir / Config::load), like doctor — no injected handle
+        // needed, so it gets a real construction arm here.
+        "runtime_manage" => Some(Box::new(
+            crate::builtin_tools::runtime_manage::RuntimeManageTool::new(),
+        ) as Box<dyn AlephToolDyn>),
         // Media tools — require MediaPipeline
         "media_understand" => config
             .and_then(|c| c.media_pipeline.as_ref())
@@ -2600,7 +2612,16 @@ mod tests {
     /// them and puts its winner to the one active-principal predicate, and
     /// `the_model_facing_copy_names_the_same_faces` pins this sentence
     /// verbatim, so the copy and the argument cannot drift apart.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_719;
+    /// 2026-09-06 (browser live-view plan-1, task 8): 113_719 -> 114_106 B
+    /// (+387), all `runtime_manage`'s new DESCRIPTION (`runtime_manage` is not
+    /// in `default_core_tools()`, so this catalog line is the whole of what a
+    /// model reads before deciding whether to fetch its schema — the R8 tool
+    /// face of the `runtimes.*` RPC family). First draft measured 569 B; the
+    /// action semantics ("list shows what's installed", "install takes a
+    /// capability") duplicated the `RuntimeAction` enum's own variant docs
+    /// (the same fact twice, 判据 §1) and were cut, landing at 387 — under the
+    /// 400 B pruning threshold this plan sets before a raise is accepted.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_106;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -2996,7 +3017,12 @@ mod tests {
     /// believing it had constrained one.
     ///
     /// Set flush against the measurement, as the rule above requires.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_302;
+    /// 2026-09-06 (browser live-view plan-1, task 8): 104_302 -> 104_830 B
+    /// (+528), all of it the new `runtime_manage` entry (`RuntimeManageArgs`'s
+    /// `action`/`capability` fields plus the `RuntimeAction` enum's variant
+    /// docs). The guard's own per-tool ledger names it as the only row that
+    /// moved.
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_830;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3066,6 +3092,7 @@ mod tests {
         ("read_config_guide", 854),
         ("recall_events", 553),
         ("remember", 1907),
+        ("runtime_manage", 528),
         ("scratchpad", 4014),
         ("search", 2050),
         ("self_config", 3553),

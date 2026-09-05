@@ -208,6 +208,11 @@ impl BuiltinToolRegistry {
             tool
         };
 
+        // Runtime-manage tool (external runtime ledger: list + install). No
+        // injected handle needed — it reads the ledger + config from
+        // process-global paths, like the doctor tool below.
+        let runtime_manage_tool = crate::builtin_tools::runtime_manage::RuntimeManageTool::new();
+
         // Doctor tool (self-diagnosis). Reuses the already-injected config +
         // vault handles — when both are present the diagnostics engine gains
         // the providers/connectivity runtime check, so the LLM repair loop
@@ -1160,6 +1165,7 @@ impl BuiltinToolRegistry {
             self_config_tool,
             moa_manage_tool,
             list_models_tool,
+            runtime_manage_tool,
             doctor_tool,
             vault_store_tool,
             hub_catalog_search_tool,
