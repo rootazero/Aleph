@@ -247,7 +247,11 @@ impl SpendLedger for SqliteSpendLedger {
         })
     }
 
-    fn total_for(&self, period_start_ms: i64) -> anyhow::Result<Spent> {
+    fn total_for(
+        &self,
+        window_start_ms: i64,
+        coarse_ancestor_start_ms: i64,
+    ) -> anyhow::Result<Spent> {
         // Deliberately not cached, and deliberately not a stored `@org` row
         // — see the module this trait lives in
         // (`crate::spend::SpendLedger`) and the plan: a stored aggregate is
@@ -255,12 +259,22 @@ impl SpendLedger for SqliteSpendLedger {
         // and the two drift the first time a write lands on one and not the
         // other. `SUM()` over zero matching rows is `NULL`, hence the
         // `Option` columns.
+        //
+        // The WHERE clause is the trait's fail-closed window rule (spend
+        // I-1), identical to the in-memory backend's: every row keyed
+        // inside the current window (`period_start >= window_start_ms`,
+        // which also catches rows recorded under a finer old policy after
+        // a hot `SpendPeriod` switch, e.g. Day → Month), plus the row
+        // keyed at the start of the coarsest period containing the window
+        // (`period_start = coarse_ancestor_start_ms`, which catches a
+        // coarser old policy, e.g. Month → Day). See the trait method's
+        // doc for why the deliberate over-count is the chosen direction.
         let conn = self.store.conn.lock().unwrap_or_else(|e| e.into_inner());
         let (usd, unpriced_calls, partial_calls): (Option<f64>, Option<i64>, Option<i64>) = conn
             .query_row(
                 "SELECT SUM(usd), SUM(unpriced_calls), SUM(partial_calls) \
-             FROM spend_ledger WHERE period_start = ?1",
-                rusqlite::params![period_start_ms],
+             FROM spend_ledger WHERE period_start >= ?1 OR period_start = ?2",
+                rusqlite::params![window_start_ms, coarse_ancestor_start_ms],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
 
@@ -268,7 +282,7 @@ impl SpendLedger for SqliteSpendLedger {
             usd: usd.unwrap_or(0.0),
             unpriced_calls: unpriced_calls.unwrap_or(0) as u64,
             partial_calls: partial_calls.unwrap_or(0) as u64,
-            period_start_ms,
+            period_start_ms: window_start_ms,
             // See `Spent::period_end_ms`'s doc.
             period_end_ms: None,
         })

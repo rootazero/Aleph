@@ -439,7 +439,7 @@ mod tests {
         fn spent_for(&self, _: &Principal, _: i64) -> anyhow::Result<crate::spend::Spent> {
             unimplemented!("not exercised by these tests")
         }
-        fn total_for(&self, _: i64) -> anyhow::Result<crate::spend::Spent> {
+        fn total_for(&self, _: i64, _: i64) -> anyhow::Result<crate::spend::Spent> {
             unimplemented!("not exercised by these tests")
         }
         fn sweep_before(&self, _: i64) -> anyhow::Result<usize> {

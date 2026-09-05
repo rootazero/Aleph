@@ -89,25 +89,83 @@ fn unpriced_delta_increments_the_counter_and_leaves_usd_at_exactly_zero() {
     assert_eq!(spent.partial_calls, 0);
 }
 
+/// The durable backend must implement the same fail-closed window rule as
+/// the in-memory one (spend I-1 — see the trait method's doc): rows keyed
+/// inside the window count, the coarse-ancestor row counts, and an older
+/// non-ancestor row stays out.
 #[test]
-fn total_for_sums_three_principals_and_ignores_other_periods() {
+fn total_for_sums_the_window_rule_and_excludes_older_non_ancestor_rows() {
     let ledger = ledger();
     let alice = Principal::User("u-alice".to_string());
     let bob = Principal::User("u-bob".to_string());
     let carol = Principal::User("u-carol".to_string());
 
+    // Window-start rows: the steady-state case.
     ledger.record(&alice, 1_000, Delta::Usd(1.0)).unwrap();
     ledger.record(&bob, 1_000, Delta::Usd(2.0)).unwrap();
     ledger.record(&carol, 1_000, Delta::Usd(3.0)).unwrap();
     ledger.record(&bob, 1_000, Delta::Unpriced).unwrap();
     ledger.record(&carol, 1_000, Delta::Partial(0.0)).unwrap();
-    // A different period must not contribute to the 1_000 total.
+    // A finer boundary inside the window — e.g. a day-keyed row recorded
+    // before a Day → Month switch. Must count.
     ledger.record(&alice, 2_000, Delta::Usd(100.0)).unwrap();
+    // The coarse-ancestor boundary — e.g. a month-keyed row before a
+    // Month → Day switch. Must count (the deliberate over-count).
+    ledger.record(&carol, 100, Delta::Usd(7.0)).unwrap();
+    // An old row that is neither inside the window nor the coarse
+    // ancestor: must NOT count.
+    ledger.record(&alice, 500, Delta::Usd(50.0)).unwrap();
 
-    let total = ledger.total_for(1_000).unwrap();
-    assert_eq!(total.usd, 6.0);
+    let total = ledger.total_for(1_000, 100).unwrap();
+    assert_eq!(total.usd, 113.0, "1 + 2 + 3 + 100 + 7; the 500 row is out");
     assert_eq!(total.unpriced_calls, 1);
     assert_eq!(total.partial_calls, 1);
+    assert_eq!(total.period_start_ms, 1_000);
+}
+
+/// spend I-1 on the durable backend, both switch directions: rows
+/// recorded under a Day policy must keep counting toward a Month window
+/// (the `>=` arm), and a row recorded under a Month policy must keep
+/// counting toward a Day window (the coarse-ancestor arm) — keyed on real
+/// local-calendar boundaries, the same values `check_with` would compute.
+#[test]
+fn total_for_survives_a_policy_switch_in_both_directions() {
+    use crate::config::types::policies::SpendPeriod;
+    let now_ms = 1_700_000_000_000i64; // mid-month in any timezone
+    let month_start = crate::spend::period::period_start_ms(now_ms, SpendPeriod::Month);
+    let day_start = crate::spend::period::period_start_ms(now_ms, SpendPeriod::Day);
+    assert!(month_start < day_start, "test setup: now must be mid-month");
+
+    // Day → Month: the day-keyed row lies inside the month window.
+    let ledger = ledger();
+    let alice = Principal::User("u-alice".to_string());
+    ledger.record(&alice, day_start, Delta::Usd(3.0)).unwrap();
+    let total = ledger.total_for(month_start, month_start).unwrap();
+    assert_eq!(
+        total.usd, 3.0,
+        "after a Day → Month switch the month total must not read zero"
+    );
+
+    // Month → Day: the month-keyed row is the coarse ancestor of the day
+    // window (the deliberate fail-closed over-count).
+    let ledger = ledger();
+    ledger.record(&alice, month_start, Delta::Usd(40.0)).unwrap();
+    let total = ledger.total_for(day_start, month_start).unwrap();
+    assert_eq!(
+        total.usd, 40.0,
+        "after a Month → Day switch the day total must keep the month-keyed row"
+    );
+    // …and it must NOT leak into a day window of a different month, where
+    // the row's period no longer contains the queried window.
+    let next_month_start = crate::spend::period::period_end_ms(now_ms, SpendPeriod::Month);
+    let next_day_start = crate::spend::period::period_start_ms(next_month_start, SpendPeriod::Day);
+    let total = ledger
+        .total_for(next_day_start, next_month_start)
+        .unwrap();
+    assert_eq!(
+        total.usd, 0.0,
+        "the ancestor arm must not reach into a month the row does not cover"
+    );
 }
 
 /// `SUM()` over zero matching rows is `NULL` in SQLite, not `0` — this pins
@@ -116,7 +174,7 @@ fn total_for_sums_three_principals_and_ignores_other_periods() {
 #[test]
 fn total_for_an_empty_period_is_zero_not_an_error() {
     let ledger = ledger();
-    let total = ledger.total_for(1_000).unwrap();
+    let total = ledger.total_for(1_000, 100).unwrap();
     assert_eq!(total.usd, 0.0);
     assert_eq!(total.unpriced_calls, 0);
     assert_eq!(total.partial_calls, 0);

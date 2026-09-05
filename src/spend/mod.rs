@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, MutableCapabilitySlot, SlotStatus};
-use crate::config::types::policies::SpendPolicy;
+use crate::config::types::policies::{SpendPeriod, SpendPolicy};
 use crate::sync_primitives::{Arc, Mutex};
 
 pub mod period;
@@ -225,7 +225,60 @@ pub trait SpendLedger: Send + Sync {
         delta: Delta,
     ) -> anyhow::Result<()>;
     fn spent_for(&self, principal: &Principal, period_start_ms: i64) -> anyhow::Result<Spent>;
-    fn total_for(&self, period_start_ms: i64) -> anyhow::Result<Spent>;
+
+    /// The machine-wide spend that counts against the total ceiling for the
+    /// window `[window_start_ms, now]`.
+    ///
+    /// # Window rule — deliberately wider than an exact key match
+    ///
+    /// A row counts toward the total iff either:
+    ///
+    /// - its `period_start_ms >= window_start_ms` — the row was recorded
+    ///   under the current period or under a *finer* period whose boundary
+    ///   lies inside the current window. This arm is an exact match in
+    ///   steady state, and it is what keeps a `Day → Month` policy switch
+    ///   from zeroing the total: the day-keyed rows already recorded this
+    ///   month keep counting toward the month ceiling;
+    /// - its `period_start_ms == coarse_ancestor_start_ms` — the row was
+    ///   recorded under a *coarser* period whose window still contains the
+    ///   current one. Callers pass the start of the longest period kind
+    ///   ([`SpendPeriod::Month`]) containing the current window
+    ///   (`period::period_start_ms(now, SpendPeriod::Month)`); when the
+    ///   configured period is already `Month` it equals `window_start_ms`
+    ///   and this arm is a no-op. This is what keeps a `Month → Day`
+    ///   switch from zeroing the total: the month-keyed row keeps counting
+    ///   toward today's ceiling.
+    ///
+    /// # Fail-closed, on purpose
+    ///
+    /// Both arms can over-count, and that is the chosen direction. A
+    /// month-keyed row covers the whole month's spend, not just the day
+    /// window it is summed into after a `Month → Day` switch; and under a
+    /// steady `Day` policy a row recorded on the 1st of a month is keyed
+    /// exactly at the month boundary — indistinguishable from a
+    /// month-keyed row — so it counts toward every daily total for the
+    /// rest of that month. The alternative direction (under-counting) is
+    /// the audit's spend I-1: after a hot `SpendPeriod` change the exact
+    /// key match found no rows, the total read zero, and the machine
+    /// ceiling silently stopped firing for the rest of the window. The
+    /// machine total is the ceiling of last resort: it must fire a little
+    /// early before it may ever silently stop. Distinguishing the two row
+    /// kinds would require storing the recording period per row — a schema
+    /// change this fix deliberately avoids; the over-count is bounded (at
+    /// most one coarse period's spend) and ages out as the rows themselves
+    /// roll out of the window or are swept.
+    ///
+    /// [`Self::spent_for`] and [`Self::principals_in`] deliberately keep
+    /// exact-key semantics: the per-user ceiling is the axis a principal
+    /// can move himself, and the admin read face is a report of the window
+    /// that is open now, not a brake — only the machine total gets the
+    /// fail-closed window. Closing the analogous per-user hole is a known,
+    /// scoped-out follow-up.
+    fn total_for(
+        &self,
+        window_start_ms: i64,
+        coarse_ancestor_start_ms: i64,
+    ) -> anyhow::Result<Spent>;
     fn sweep_before(&self, period_start_ms: i64) -> anyhow::Result<usize>;
 
     /// Every principal with a row in `period_start_ms`, `usd` descending
@@ -257,15 +310,42 @@ struct Row {
     partial_calls: u64,
 }
 
+/// The two maps [`InMemorySpendLedger`] keeps mutually consistent under
+/// one lock — see the struct's doc for why a single lock, and for the
+/// window rule the index exists to serve.
+#[derive(Default)]
+struct LedgerState {
+    /// The ledger rows themselves, keyed by `(principal key, period_start_ms)`.
+    rows: HashMap<(String, i64), Row>,
+    /// `period_start_ms` → the principal keys holding a row at that period
+    /// start. This index is what makes [`SpendLedger::total_for`] and
+    /// [`SpendLedger::principals_in`] cheaper than a full scan of `rows`
+    /// (spend I-3: both ran on the hot `check_with` path and walked every
+    /// retained row of every period and principal): `total_for` walks the
+    /// index's keys — a set bounded by the retention horizon plus any
+    /// strays a hot `SpendPeriod` switch left behind — and `principals_in`
+    /// reads exactly one entry. Every mutation site of `rows` (`record`,
+    /// `sweep_before`) maintains this map in the same critical section, so
+    /// the two can never be observed mid-drift; the invariant is pinned by
+    /// `tests::the_by_period_index_never_drifts_from_the_rows_across_random_ops`.
+    by_period: HashMap<i64, Vec<String>>,
+}
+
 /// In-process, non-durable [`SpendLedger`]. This is the default the global
 /// handle lazily falls back to ([`global_ledger`]) when nothing has called
 /// [`install_ledger`] yet — pre-boot code, embedded uses, and any unit test
 /// that never wires the durable backend. Production installs
 /// `spend::sqlite::SqliteSpendLedger` at boot instead, before the gateway
 /// serves its first request.
+///
+/// Both maps live in a single [`LedgerState`] under one `Mutex`, not two
+/// `Mutex<HashMap>` fields: a row insert and its index insert must be one
+/// critical section, or a concurrent `total_for`/`principals_in` could
+/// observe one map updated and not the other — and two locks would also
+/// have to agree on an acquisition order forever after.
 #[derive(Default)]
 pub struct InMemorySpendLedger {
-    rows: Mutex<HashMap<(String, i64), Row>>,
+    state: Mutex<LedgerState>,
 }
 
 impl SpendLedger for InMemorySpendLedger {
@@ -275,10 +355,10 @@ impl SpendLedger for InMemorySpendLedger {
         period_start_ms: i64,
         delta: Delta,
     ) -> anyhow::Result<()> {
-        let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
-        let row = rows
-            .entry((principal.as_key().to_string(), period_start_ms))
-            .or_default();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (principal.as_key().to_string(), period_start_ms);
+        let is_new_row = !state.rows.contains_key(&key);
+        let row = state.rows.entry(key).or_default();
         match delta {
             Delta::Usd(usd) => {
                 if !usd.is_finite() {
@@ -305,12 +385,24 @@ impl SpendLedger for InMemorySpendLedger {
             }
             Delta::Unpriced => row.unpriced_calls += 1,
         }
+        if is_new_row {
+            // First time this principal appears in this period: index it.
+            // Same critical section as the row insert — see `LedgerState`'s
+            // doc for why the two maps must never be observed mid-drift.
+            state
+                .by_period
+                .entry(period_start_ms)
+                .or_default()
+                .push(principal.as_key().to_string());
+        }
         Ok(())
     }
 
     fn spent_for(&self, principal: &Principal, period_start_ms: i64) -> anyhow::Result<Spent> {
-        let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
-        let row = rows.get(&(principal.as_key().to_string(), period_start_ms));
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let row = state
+            .rows
+            .get(&(principal.as_key().to_string(), period_start_ms));
         Ok(Spent {
             usd: row.map_or(0.0, |r| r.usd),
             unpriced_calls: row.map_or(0, |r| r.unpriced_calls),
@@ -322,58 +414,96 @@ impl SpendLedger for InMemorySpendLedger {
         })
     }
 
-    fn total_for(&self, period_start_ms: i64) -> anyhow::Result<Spent> {
-        let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+    fn total_for(
+        &self,
+        window_start_ms: i64,
+        coarse_ancestor_start_ms: i64,
+    ) -> anyhow::Result<Spent> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let mut usd = 0.0;
         let mut unpriced_calls = 0;
         let mut partial_calls = 0;
-        for (key, row) in rows.iter() {
-            if key.1 != period_start_ms {
+        // Walk the period index, not the row map: the number of distinct
+        // period starts is bounded by the retention horizon (plus strays a
+        // hot `SpendPeriod` switch left behind), so this is O(distinct
+        // period starts + matching rows) rather than O(every retained row)
+        // on the hot `check_with` path — spend I-3. The window rule itself
+        // (`>= window_start` OR `== coarse_ancestor_start`) is specified on
+        // the trait method; both backends implement it identically.
+        for (period, principal_keys) in state.by_period.iter() {
+            if *period < window_start_ms && *period != coarse_ancestor_start_ms {
                 continue;
             }
-            usd += row.usd;
-            unpriced_calls += row.unpriced_calls;
-            partial_calls += row.partial_calls;
+            for principal_key in principal_keys {
+                let Some(row) = state.rows.get(&(principal_key.clone(), *period)) else {
+                    // The index is maintained in the same critical section
+                    // as every row mutation, so a miss here is a broken
+                    // invariant, not a race — loud in debug builds, skipped
+                    // (never panicked on) in release, matching the ledger's
+                    // fail-open read posture.
+                    debug_assert!(
+                        false,
+                        "by_period index names ({principal_key}, {period}) but rows has no such key"
+                    );
+                    continue;
+                };
+                usd += row.usd;
+                unpriced_calls += row.unpriced_calls;
+                partial_calls += row.partial_calls;
+            }
         }
         Ok(Spent {
             usd,
             unpriced_calls,
             partial_calls,
-            period_start_ms,
+            period_start_ms: window_start_ms,
             // See `Spent::period_end_ms`'s doc.
             period_end_ms: None,
         })
     }
 
     fn sweep_before(&self, period_start_ms: i64) -> anyhow::Result<usize> {
-        let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
-        let before = rows.len();
-        rows.retain(|key, _| key.1 >= period_start_ms);
-        Ok(before - rows.len())
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let before = state.rows.len();
+        state.rows.retain(|key, _| key.1 >= period_start_ms);
+        // The same cutoff on the index, in the same critical section: an
+        // index entry left behind for a swept period would keep answering
+        // `principals_in`/`total_for` for rows that no longer exist.
+        state.by_period.retain(|period, _| *period >= period_start_ms);
+        Ok(before - state.rows.len())
     }
 
     fn principals_in(&self, period_start_ms: i64) -> anyhow::Result<Vec<(Principal, Spent)>> {
-        let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
-        let mut out: Vec<(Principal, Spent)> = rows
-            .iter()
-            .filter(|((_, period), _)| *period == period_start_ms)
-            .map(|((key, _), row)| {
-                (
-                    Principal::from_key(key),
-                    Spent {
-                        usd: row.usd,
-                        unpriced_calls: row.unpriced_calls,
-                        partial_calls: row.partial_calls,
-                        period_start_ms,
-                        // See `Spent::period_end_ms`'s doc.
-                        period_end_ms: None,
-                    },
-                )
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // One index lookup instead of a full `rows` scan — spend I-3. Every
+        // key the index names for this period has a row by construction;
+        // the `filter_map` is the same defensive skip `total_for` uses.
+        let mut out: Vec<(Principal, Spent)> = state
+            .by_period
+            .get(&period_start_ms)
+            .map(|principal_keys| {
+                principal_keys
+                    .iter()
+                    .filter_map(|key| {
+                        let row = state.rows.get(&(key.clone(), period_start_ms))?;
+                        Some((
+                            Principal::from_key(key),
+                            Spent {
+                                usd: row.usd,
+                                unpriced_calls: row.unpriced_calls,
+                                partial_calls: row.partial_calls,
+                                period_start_ms,
+                                // See `Spent::period_end_ms`'s doc.
+                                period_end_ms: None,
+                            },
+                        ))
+                    })
+                    .collect()
             })
-            .collect();
-        // `HashMap` iteration order is not stable across calls — see the
-        // trait method's doc for why this must be sorted explicitly rather
-        // than relying on it.
+            .unwrap_or_default();
+        // `HashMap` index values are in insertion order, which is not the
+        // contracted order — see the trait method's doc for why this must
+        // be sorted explicitly rather than relying on iteration order.
         out.sort_by(|(a_principal, a_spent), (b_principal, b_spent)| {
             b_spent
                 .usd
@@ -699,8 +829,20 @@ pub(crate) fn check_with(
     // an install with `total_usd` unset must not pay for a query whose
     // answer can never matter.
     if let Some(total_limit) = policy.total_usd {
+        // Fail-closed window for the machine total (spend I-1): rows
+        // recorded before a hot `SpendPeriod` switch are keyed by the OLD
+        // policy's boundaries, so an exact `period_start_ms` match reads
+        // zero for the rest of the current window and the total ceiling
+        // silently stops firing. `total_for` therefore sums every row keyed
+        // inside the current window (covers a finer old period, e.g.
+        // Day → Month) plus the row keyed at the start of the coarsest
+        // period containing `now` (covers a coarser old period, e.g.
+        // Month → Day). The deliberate over-count that rule accepts — and
+        // why over-counting is the right direction for the ceiling of last
+        // resort — is on the trait method's doc.
+        let coarse_ancestor_start_ms = period::period_start_ms(now_ms, SpendPeriod::Month);
         let total = resolve_read(
-            ledger.total_for(period_start_ms),
+            ledger.total_for(period_start_ms, coarse_ancestor_start_ms),
             period_start_ms,
             period_end_ms,
             |error| {
