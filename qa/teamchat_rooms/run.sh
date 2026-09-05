@@ -65,6 +65,11 @@ MOCK_PORT="${MOCK_PORT:-18915}"
 
 command -v node >/dev/null 2>&1 || { echo "node is required for this fixture" >&2; exit 1; }
 
+# `qa_build` is called by the hoisted block below, so build.sh has to be sourced
+# above it — not down next to `scratch_home.sh`, where the HOME redirect needs
+# its own helper.
+. "$HERE/../lib/build.sh"
+
 # --- build BEFORE the HOME redirect ----------------------------------------
 # Deliberately ahead of `qa_redirect_home`, unlike the sibling fixtures. Their
 # per-command `HOME="$REAL_HOME" cargo …` guard is correct on POSIX, where the
@@ -94,7 +99,6 @@ if [ -z "${QA_ROOT:-}" ]; then
 fi
 
 . "$HERE/../lib/scratch_home.sh"
-. "$HERE/../lib/build.sh"
 qa_redirect_home "$QA_ROOT"
 export REAL_HOME
 mkdir -p "$ALEPH_HOME"
@@ -122,7 +126,14 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== generate a baseline config ==="
-timeout 40 "$SERVER" start >"$QA_ROOT/gen.log" 2>&1 &
+# `--port` on the GENERATION boot. The config does not exist yet, so without
+# it this boot binds the built-in default port — and if anything already holds
+# that port (another fixture, a dev server, the operator's own daemon) the
+# process exits before writing a config at all. The symptom is
+# `no config generated at …`, which reads like a permissions or path problem;
+# the cause is one line further up the log. Binding the port this run already
+# owns makes the generation boot as isolated as the real one.
+timeout 40 "$SERVER" --port "$GATEWAY_PORT" start >"$QA_ROOT/gen.log" 2>&1 &
 GEN_PID=$!
 for _ in $(seq 1 60); do [ -f "$CONFIG" ] && break; sleep 0.5; done
 kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null

@@ -263,6 +263,7 @@ fn blocked_run_log(turn: uuid::Uuid) -> Vec<SessionEventRecord> {
                 run_id: "r1".into(),
                 at: 0,
                 project_root: None,
+                envelope: None,
             },
         ),
         ev(

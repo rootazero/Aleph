@@ -72,9 +72,11 @@ pub struct MemoryConfig {
     pub enabled: bool,
     #[serde(default = "defaults::default_vector_db")]
     pub vector_db: String,
-    #[serde(default = "defaults::default_similarity_threshold")]
-    pub similarity_threshold: f32,
-
+    // A top-level `similarity_threshold` used to live here. It was cut rather
+    // than wired: retrieval ranks on RRF-fused rank scores (and rank-derived
+    // FTS scores), so no quantity with honest "similarity in [0,1]" semantics
+    // exists for such a gate to act on. Stray keys in existing config.toml
+    // files are silently ignored (no `deny_unknown_fields`).
     #[serde(default)]
     pub embedding: EmbeddingSettings,
 
@@ -101,9 +103,10 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub expansion: ExpansionConfig,
 
-    #[serde(default = "defaults::default_dedup_similarity_threshold")]
-    pub dedup_similarity_threshold: f32,
-
+    // Write-time semantic dedup is owned by
+    // `[memory.compound_ingest] dedup_similarity_threshold` (`ingest.rs`).
+    // A top-level twin of that key used to live here with zero readers; do
+    // not reintroduce it — two spellings of one knob means one is a lie.
     #[serde(default)]
     pub reflection: ReflectionConfig,
 
@@ -173,7 +176,6 @@ impl Default for MemoryConfig {
         Self {
             enabled: defaults::default_enabled(),
             vector_db: defaults::default_vector_db(),
-            similarity_threshold: defaults::default_similarity_threshold(),
             embedding: EmbeddingSettings::default(),
             dreaming: DreamingConfig::default(),
             memory_decay: MemoryDecayPolicy::default(),
@@ -182,7 +184,6 @@ impl Default for MemoryConfig {
             rerank: crate::memory::rerank::RerankConfig::default(),
             retrieval_scoring: RetrievalScoringConfig::default(),
             expansion: ExpansionConfig::default(),
-            dedup_similarity_threshold: defaults::default_dedup_similarity_threshold(),
             reflection: ReflectionConfig::default(),
             assembler: AssemblerConfig::default(),
             injection_mode: MemoryInjectionMode::Hybrid,

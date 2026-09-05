@@ -1,6 +1,22 @@
-// Turn a freshly generated Aleph config into the daemon this fixture needs.
+// Turn a freshly generated Aleph config into the daemon the fixtures that
+// call it need.
 //
-// ## Why this fixture is JavaScript when every sibling is Python
+// ## Callers — a change here changes all three
+//
+// `qa/teamchat_rooms/run.sh`, `qa/agents_viz/run.sh:136`, and
+// `qa/multiuser_audit/run.sh:150` all shell out to this file rather than
+// keeping a patcher of their own. It is not this fixture's private file —
+// edit it and every caller's real-machine stage moves.
+//
+// ## Contract
+//
+//     node patch_config.mjs <config.toml> <gateway-port> <mock-port>
+//
+// Produces: inert provider (every channel / provider / agent the generator
+// wrote is dropped, then exactly one provider — the mock — is added back) +
+// LAN leg open + memory on + two agents (`main`, `coder`).
+//
+// ## Why JavaScript when every sibling is Python
 //
 // The Python drivers under `qa/` need `websockets`, and the gateway's only
 // client-facing transport is a WebSocket. On a Windows host the only `python3`
@@ -10,7 +26,7 @@
 // server in core, with no dependency to install — so the fixture that CAN run
 // here is worth more than the one that matches the sibling's language.
 //
-// ## What it does
+// ## What each part of the contract is for
 //
 // 1. **Make it inert.** Drop every channel / provider / agent the generator
 //    wrote, then add back exactly one provider (the mock) and two agents.

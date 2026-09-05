@@ -781,13 +781,18 @@ impl GoalStore {
     /// [`crate::goal::types::Goal::owner_user_id`] instead of taking
     /// everything. Returns the count paused.
     ///
-    /// The predicate is exact equality against `Some(user_id)` — a legacy
-    /// goal with `owner_user_id: None` belongs to the platform owner (spec
-    /// §10: the owner account can never be deactivated), never to the user
-    /// being deactivated here, so it is left untouched by construction. This
-    /// is a one-way freeze: reactivating the user does not auto-resume its
-    /// goals (spec is silent on auto-resume; each is a deliberate design
-    /// choice recorded here rather than a client-side fallback guess).
+    /// The owner half of the predicate is
+    /// [`aleph_protocol::users::owned_by`], shared with the three sibling
+    /// sweeps and with [`Self::count_owned_by`] — a legacy goal with
+    /// `owner_user_id: None` belongs to nobody and is left untouched by
+    /// construction. This is a one-way freeze: reactivating the user does not
+    /// auto-resume its goals (spec is silent on auto-resume; each is a
+    /// deliberate design choice recorded here rather than a client-side
+    /// fallback guess).
+    ///
+    /// The `is_active()` half is NOT shared with the counter, deliberately:
+    /// this reports what the freeze CHANGED, the counter reports what the
+    /// principal OWNS. See [`Self::count_owned_by`].
     pub fn pause_all_owned_by(&self, user_id: &str) -> Result<usize> {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -805,7 +810,9 @@ impl GoalStore {
                 row.map_err(|e| AlephError::other(format!("goal pause_all_owned_by row: {e}")))?;
             // Corrupt rows are skipped, like `get` / `pause_all_active` (fail-safe).
             if let Ok(goal) = serde_json::from_str::<Goal>(&json) {
-                if goal.is_active() && goal.owner_user_id.as_deref() == Some(user_id) {
+                if goal.is_active()
+                    && aleph_protocol::users::owned_by(goal.owner_user_id.as_deref(), user_id)
+                {
                     targets.push(goal);
                 }
             }
@@ -822,6 +829,39 @@ impl GoalStore {
                     .without_wait(now_ms)
                     .with_pending_continuation(None),
             )?;
+        }
+        Ok(count)
+    }
+
+    /// How many goals `user_id` OWNS — the read-only counterpart of
+    /// [`Self::pause_all_owned_by`], and the goals leg of `users.get`'s
+    /// dossier.
+    ///
+    /// Same owner predicate ([`aleph_protocol::users::owned_by`]), a
+    /// **deliberately different** status filter: the freeze counts
+    /// `is_active() && owned` because that is what it changed; this counts
+    /// `owned` because the operator about to deactivate somebody needs to see
+    /// the paused goal they are about to strand too. Reusing the freeze's
+    /// `is_active()` here would silently under-report the preview.
+    ///
+    /// Corrupt rows are skipped exactly as the sweep skips them, so the two
+    /// scan the same population.
+    pub fn count_owned_by(&self, user_id: &str) -> Result<usize> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT json FROM goals")
+            .map_err(|e| AlephError::other(format!("goal count_owned_by prepare: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| AlephError::other(format!("goal count_owned_by query: {e}")))?;
+        let mut count = 0usize;
+        for row in rows {
+            let json = row.map_err(|e| AlephError::other(format!("goal count_owned_by row: {e}")))?;
+            if let Ok(goal) = serde_json::from_str::<Goal>(&json) {
+                if aleph_protocol::users::owned_by(goal.owner_user_id.as_deref(), user_id) {
+                    count += 1;
+                }
+            }
         }
         Ok(count)
     }
@@ -2048,6 +2088,50 @@ mod tests {
             store.get("s-legacy").unwrap().unwrap().status,
             GoalStatus::Active,
             "legacy None-owner rows belong to the platform owner, not alice — untouched"
+        );
+    }
+
+    /// The deliberate asymmetry, pinned with two explicit numbers rather than
+    /// with an equality: a goal alice owns but has already PAUSED is one the
+    /// freeze reports as 0-changed and the dossier still counts as hers. A
+    /// counter that reused the freeze's `is_active()` filter would report 1
+    /// here instead of 2, and the operator would deactivate her believing the
+    /// paused goal was somebody else's.
+    #[test]
+    fn count_owned_by_counts_what_she_owns_not_what_a_freeze_would_change() {
+        let (store, _d) = temp_store();
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        store
+            .put(&pursuing("s-alice-active", 5).with_owner_scope(Some(&alice)))
+            .unwrap();
+        store
+            .put(
+                &pursuing("s-alice-paused", 5)
+                    .with_owner_scope(Some(&alice))
+                    .with_status(GoalStatus::Paused, 1),
+            )
+            .unwrap();
+        store
+            .put(&pursuing("s-bob", 5).with_owner_scope(Some(&bob)))
+            .unwrap();
+        // Legacy (pre-P1) row: owned by nobody, so counted for nobody.
+        store.put(&pursuing("s-legacy", 5)).unwrap();
+
+        assert_eq!(
+            store.count_owned_by("u-alice").unwrap(),
+            2,
+            "the read counts what she OWNS, paused goal included"
+        );
+        assert_eq!(
+            store.pause_all_owned_by("u-alice").unwrap(),
+            1,
+            "the freeze reports only what it CHANGED — the already-paused goal is 0-changed"
+        );
+        assert_eq!(
+            store.count_owned_by("u-legacy-nobody").unwrap(),
+            0,
+            "an unstamped row appears in no principal's dossier"
         );
     }
 

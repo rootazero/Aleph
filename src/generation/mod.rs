@@ -40,7 +40,6 @@ pub mod error;
 pub mod probe;
 pub mod providers;
 pub mod registry;
-pub mod response_parser;
 pub mod types;
 pub mod voice_catalog;
 
@@ -63,9 +62,6 @@ pub struct VoiceInfo {
     pub description: String,
 }
 
-pub use response_parser::{
-    has_generation_requests, parse_generation_requests, ParseResult, ParsedGenerationRequest,
-};
 pub use types::{
     GenerationData, GenerationMetadata, GenerationOutput, GenerationParams,
     GenerationParamsBuilder, GenerationProgress, GenerationRequest, GenerationType,

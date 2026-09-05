@@ -137,6 +137,24 @@ pub struct RateLimits {
     by_provider: std::collections::BTreeMap<String, (Option<u32>, Option<u32>)>,
 }
 
+/// The one rule for "does this configured value actually bound anything".
+///
+/// `Some(0)` does not: dividing by it is undefined, so [`RateLimits::assess`]
+/// ignores a zero ceiling and the provider reads 0‰ utilisation and never
+/// `over_limit` — identical to omitting the field. Shared with
+/// [`route_problems`] so the diagnostic cannot decide "inert" by a different
+/// rule than the one the ordering layer applies (criterion: order / unit /
+/// boundary derived in one place).
+///
+/// It is *not* read as "block this provider": the failover chain must never
+/// starve, so no `[route]` value drops a candidate outright.
+const fn effective_ceiling(limit: Option<u32>) -> Option<u32> {
+    match limit {
+        Some(l) if l > 0 => Some(l),
+        _ => None,
+    }
+}
+
 impl RateLimits {
     /// Lift the per-provider ceilings out of a `[route]` config snapshot.
     #[must_use]
@@ -157,12 +175,26 @@ impl RateLimits {
         self.by_provider.is_empty()
     }
 
-    /// The configured `(rpm, tpm)` ceiling for `name`, if any. Diagnostic
-    /// accessor for the `route_status` snapshot; the hot path only ever uses
-    /// the folded output of [`assess`](Self::assess).
+    /// The ceiling for `name` that actually bounds something, per dimension.
+    ///
+    /// Diagnostic accessor for the `route_status` snapshot; the hot path only
+    /// ever uses the folded output of [`assess`](Self::assess). It returns the
+    /// values *after* [`effective_ceiling`], so a rendered number can never
+    /// disagree with what the ordering layer binds on: a configured `0` comes
+    /// back `None` here exactly as it contributes nothing there. There is
+    /// deliberately no raw accessor beside it — the raw value has one honest
+    /// reader ([`route_problems`], which reports the zero as a config problem)
+    /// and it reads `[route].rate_limits` directly.
+    ///
+    /// `(None, None)` therefore means "nothing is bounded", whether the
+    /// operator wrote no entry at all or wrote an inert one.
     #[must_use]
-    pub fn ceiling(&self, name: &str) -> Option<(Option<u32>, Option<u32>)> {
-        self.by_provider.get(name).copied()
+    pub fn effective_ceiling(&self, name: &str) -> (Option<u32>, Option<u32>) {
+        self.by_provider
+            .get(name)
+            .map_or((None, None), |&(rpm, tpm)| {
+                (effective_ceiling(rpm), effective_ceiling(tpm))
+            })
     }
 
     /// Fold a provider's live window counts against its ceiling into
@@ -178,12 +210,9 @@ impl RateLimits {
         let Some(&(rpm, tpm)) = self.by_provider.get(name) else {
             return (0, false); // no ceiling → no signal
         };
-        let rpm_permille = rpm
-            .filter(|&l| l > 0)
-            .map_or(0, |l| u64::from(rpm_used) * 1000 / u64::from(l));
-        let tpm_permille = tpm
-            .filter(|&l| l > 0)
-            .map_or(0, |l| tpm_used * 1000 / u64::from(l));
+        let rpm_permille =
+            effective_ceiling(rpm).map_or(0, |l| u64::from(rpm_used) * 1000 / u64::from(l));
+        let tpm_permille = effective_ceiling(tpm).map_or(0, |l| tpm_used * 1000 / u64::from(l));
         let permille = rpm_permille.max(tpm_permille);
         let over = permille >= 1000;
         (permille.min(u64::from(u16::MAX)) as u16, over)
@@ -226,6 +255,44 @@ pub enum CandidateAction {
     CrossTier { requires_approval: bool },
     /// Drop the candidate from the chain entirely.
     Skip,
+}
+
+/// The gate a candidate that SURVIVED ordering carries — [`CandidateAction`]
+/// without the one variant no surviving candidate can hold.
+///
+/// Both ordering functions drop every [`Skip`](CandidateAction::Skip) before
+/// returning ([`order_candidates`] and [`order_candidates_balanced`]), and the
+/// failover walk drops it for the primary slot the same way. So a chain entry
+/// typed `CandidateAction` had a fourth state that could not occur, and the
+/// `route_status` renderer carried an arm for it that could never be reached —
+/// an "always-true predicate" wearing a match arm's clothes.
+///
+/// [`retained`](Self::retained) is the ONLY conversion. A future
+/// `CandidateAction` variant therefore stops the build there, in one place,
+/// with the question "does this one survive ordering?" — instead of silently
+/// picking up whichever arm a second, hand-written match happened to have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteGate {
+    /// Dial it with no further gate.
+    Allow,
+    /// Dial it only after the cross-tier rule is satisfied — see
+    /// [`CandidateAction::CrossTier`].
+    CrossTier { requires_approval: bool },
+}
+
+impl RouteGate {
+    /// The gate a retained candidate carries, or `None` when the policy drops
+    /// the candidate outright.
+    #[must_use]
+    pub const fn retained(action: CandidateAction) -> Option<Self> {
+        match action {
+            CandidateAction::Allow => Some(Self::Allow),
+            CandidateAction::CrossTier { requires_approval } => {
+                Some(Self::CrossTier { requires_approval })
+            }
+            CandidateAction::Skip => None,
+        }
+    }
 }
 
 /// Classify one candidate from the two hard signals.
@@ -534,6 +601,30 @@ pub fn route_problems(
                     "sets a ceiling for '{name}', which is not defined under [providers] — no \
                      request is ever counted against it. Configured providers: {}",
                     names()
+                ),
+            });
+            continue;
+        }
+        // A zero is judged per DIMENSION, not per entry. Asking only whether the
+        // whole entry is inert (`effective_ceiling` `None` on both) left the
+        // more misleading half silent: `{rpm = 60, tpm = 0}` still bounds rpm,
+        // so the entry "has an effect" — while the tpm the operator wrote to
+        // mean "no tokens through here" binds nothing, which is precisely the
+        // thing this problem exists to say.
+        let zeroed: Vec<&str> = [("rpm", limit.rpm), ("tpm", limit.tpm)]
+            .into_iter()
+            .filter(|(_, v)| *v == Some(0))
+            .map(|(d, _)| d)
+            .collect();
+        if !zeroed.is_empty() {
+            out.push(RouteProblem {
+                field: format!("rate_limits.{name}"),
+                detail: format!(
+                    "sets {} to 0, which means *unbounded*, not blocked — a zero ceiling is \
+                     ignored, so that dimension never reads as over limit and contributes 0‰ \
+                     utilisation, which under load_balance = \"usage_based\" ranks the provider \
+                     FIRST. Set a positive limit, or remove the dimension.",
+                    zeroed.join(" and ")
                 ),
             });
         } else if limit.rpm.is_none() && limit.tpm.is_none() {
@@ -1216,6 +1307,77 @@ mod tests {
         // neither dimension set bounds nothing.
         assert!(problems[0].detail.contains("not defined under [providers]"));
         assert!(problems[1].detail.contains("neither rpm nor tpm"));
+    }
+
+    /// A `0` ceiling is the *more* misleading inert shape, and the guard used
+    /// to recognise only the both-`None` one.
+    ///
+    /// `assess` drops a zero ceiling (dividing by it is undefined), so
+    /// `{rpm = 0}` bounds nothing — while reading, to whoever wrote it, as
+    /// "block this provider". Worse than silent: 0‰ utilisation is the *best*
+    /// score `usage_based` can see, so the provider the operator meant to stop
+    /// using is ranked first. The problem list and `assess` now share one rule
+    /// (`effective_ceiling`), which is why this test asserts both halves.
+    #[test]
+    fn a_zero_ceiling_is_reported_per_dimension() {
+        let entry = |rpm, tpm| crate::config::types::ProviderRateLimit { rpm, tpm };
+        let cfg = ModelRouteConfig {
+            rate_limits: [
+                ("zero".to_string(), entry(Some(0), None)),
+                ("both_zero".to_string(), entry(Some(0), Some(0))),
+                ("real".to_string(), entry(Some(60), Some(0))),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let map = tiers(&[
+            ("zero", EndpointTier::Local),
+            ("both_zero", EndpointTier::Local),
+            ("real", EndpointTier::Cloud),
+        ]);
+        let problems = route_problems(&cfg, &map);
+        let fields: Vec<&str> = problems.iter().map(|p| p.field.as_str()).collect();
+        assert_eq!(
+            fields,
+            vec![
+                "rate_limits.both_zero",
+                "rate_limits.real",
+                "rate_limits.zero"
+            ],
+            "a zero is judged per dimension: `real` still binds on rpm, and that is \
+             exactly why its zeroed tpm would otherwise go unmentioned"
+        );
+        assert!(problems[0].detail.contains("rpm and tpm"), "{problems:?}");
+        assert!(
+            problems[1].detail.contains("sets tpm to 0") && !problems[1].detail.contains("rpm"),
+            "the surviving dimension must not be named as inert: {problems:?}"
+        );
+        assert!(problems[2].detail.contains("usage_based"), "{problems:?}");
+
+        // The other half of the shared rule: the engine really does ignore it,
+        // so the wording above is not describing a behaviour nobody has.
+        let limits = RateLimits::from_config(&cfg);
+        assert_eq!(
+            limits.assess("zero", 10_000, 0),
+            (0, false),
+            "a zero rpm ceiling must read as unbounded, not as instantly over limit"
+        );
+        assert_eq!(
+            limits.assess("real", 30, 999_999),
+            (500, false),
+            "the surviving dimension still binds; the zeroed one contributes nothing"
+        );
+        // …and the diagnostic accessor `route_status` renders from folds the
+        // zero the same way, so the snapshot cannot print a bound the ordering
+        // layer does not apply.
+        assert_eq!(limits.effective_ceiling("real"), (Some(60), None));
+        assert_eq!(limits.effective_ceiling("both_zero"), (None, None));
+        assert_eq!(
+            limits.effective_ceiling("absent"),
+            (None, None),
+            "no entry and an inert entry are the same answer: nothing is bounded"
+        );
     }
 
     #[test]

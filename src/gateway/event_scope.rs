@@ -30,6 +30,7 @@ impl EventScopeGuard {
     /// | `config.changed` | admin, config.viewer |
     /// | `node.` | admin |
     /// | `pty.` | admin |
+    /// | `runtime.` | admin |
     ///
     /// `pty.` is the delivery-side half of the `pty.` RPC gate, added for the
     /// same reason `node.` was and one round later. `pty.screen` (formerly
@@ -53,6 +54,14 @@ impl EventScopeGuard {
     /// still let a member who somehow held a permission scope subscribe raw
     /// shell output, and role alone would still cross-wire two operators'
     /// terminals — see `handlers::pty::require_owned`'s doc.
+    ///
+    /// `runtime.` is the delivery-side half of the `runtime.` RPC gate
+    /// (`runtime.agents.list`'s prefix in `method_admin.rs`). Its one topic,
+    /// `runtime.agents.changed`, carries NO session id or other payload
+    /// (`json!({})` — clients re-fetch via the gated RPC), so unlike `pty.`
+    /// it needs no `session_identity_of` arm to narrow per-session ownership
+    /// within the operators this rule admits: role alone is the whole
+    /// answer, because there is no per-row content on the wire to leak.
     ///
     /// `node.` is the delivery-side half of the `environments.` RPC gate
     /// (`method_admin.rs`). `node.connected` / `node.disconnected` carry the
@@ -130,6 +139,7 @@ impl EventScopeGuard {
                 ("config.changed".to_string(), vec!["admin".to_string()]),
                 ("node.".to_string(), vec!["admin".to_string()]),
                 ("pty.".to_string(), vec!["admin".to_string()]),
+                ("runtime.".to_string(), vec!["admin".to_string()]),
             ],
         }
     }
@@ -602,6 +612,31 @@ mod tests {
         }
         // The operator still receives — the half that fails silently.
         assert!(g.can_receive("pty.screen", &scope_for_role("operator")));
+    }
+
+    /// The agent panel's twin of the same pin: `runtime.agents.list` (RPC)
+    /// and `runtime.agents.changed` (event) are two faces of the same PTY
+    /// session data `pty.*` already gates. Gating the RPC and leaving the
+    /// event unguarded would not reduce the disclosure, it would relocate it
+    /// — a member could not list the table but could still watch it change.
+    #[test]
+    fn the_agent_panel_is_gated_on_both_its_rpc_and_its_event_face() {
+        assert!(
+            crate::gateway::method_admin::method_requires_admin("runtime.agents.list"),
+            "the agent panel's RPC face must be admin-gated"
+        );
+        let g = EventScopeGuard::default_rules();
+        // Via the protocol constant, not a re-typed literal (fix round 1,
+        // review Minor 6) — a rename in the protocol crate must redden this
+        // gate test, not silently keep testing a string nothing publishes.
+        let topic = aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC;
+        assert!(
+            !g.can_receive(topic, &scope_for_role("member")),
+            "{topic} must be admin-gated on the event face too — \
+             gating only the RPC just relocates the disclosure onto the event bus"
+        );
+        // The operator still receives — the half that fails silently.
+        assert!(g.can_receive(topic, &scope_for_role("operator")));
     }
 
     /// Prefix hygiene, mirroring `method_admin`'s

@@ -93,6 +93,7 @@ mod tests {
                     thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: None,
                 })
             })
@@ -162,6 +163,7 @@ mod tests {
                     thinking_signature: None,
                     stop_reason: StopReason::ToolUse,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: None,
                 })
             })
@@ -477,6 +479,7 @@ mod tests {
             thinking_signature: None,
             stop_reason: StopReason::EndTurn,
             truncated_tool_call: None,
+            provider_error: None,
             usage: Some(TokenUsage {
                 input_tokens: 12,
                 output_tokens: 30,
@@ -698,6 +701,7 @@ mod tests {
                 thinking_signature: None,
                 stop_reason: StopReason::ToolUse,
                 truncated_tool_call: None,
+                provider_error: None,
                 usage: None,
             },
             // Turn 2: terminal text.
@@ -1045,9 +1049,19 @@ mod tests {
         let child_id = ephemeral_for("forked", None);
 
         // Stand in for `fork::seed`: the parent's turn, copied in verbatim,
-        // under the PARENT's turn id.
+        // under the PARENT's turn id — behind the real `SessionForked` marker,
+        // written by `fork::mark_forked`, which is the single producer
+        // `own_work_start` reads. A hand-written marker here would be a second
+        // answer to "what does a fork look like".
         let parent_turn = uuid::Uuid::new_v4();
         session.attach(child_id.clone()).await.unwrap();
+        super::super::fork::mark_forked(
+            session.as_ref(),
+            &crate::routing::session_key::SessionKey::main("fork-parent"),
+            &child_id,
+        )
+        .await
+        .unwrap();
         for (call, text) in [("p1", "parent's own conclusion")] {
             session
                 .emit_event(
@@ -1112,7 +1126,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = extract_run_result(session.as_ref(), &child_id, false, 0, own_turn)
+        let result = extract_run_result(session.as_ref(), &child_id, false, 0)
             .await
             .expect("extract ok");
 
@@ -1138,6 +1152,13 @@ mod tests {
         let child_id = ephemeral_for("forked-silent", None);
 
         session.attach(child_id.clone()).await.unwrap();
+        super::super::fork::mark_forked(
+            session.as_ref(),
+            &crate::routing::session_key::SessionKey::main("fork-parent"),
+            &child_id,
+        )
+        .await
+        .unwrap();
         let parent_turn = uuid::Uuid::new_v4();
         session
             .emit_event(
@@ -1170,7 +1191,7 @@ mod tests {
             .await
             .unwrap();
 
-        let result = extract_run_result(session.as_ref(), &child_id, false, 0, own_turn)
+        let result = extract_run_result(session.as_ref(), &child_id, false, 0)
             .await
             .expect("extract ok");
 
@@ -1194,11 +1215,11 @@ mod tests {
         let child_id = ephemeral_for("edge", None);
 
         // Turn 1: "thinking..." (real text). Turn 2: pure tool_use (empty).
-        let turn =
+        let _turn =
             seed_session_with_assistant_texts(&session, &child_id, &[Some("thinking..."), None])
                 .await;
 
-        let result = extract_run_result(session.as_ref(), &child_id, true, 777, turn)
+        let result = extract_run_result(session.as_ref(), &child_id, true, 777)
             .await
             .expect("extract ok");
 
@@ -1227,11 +1248,11 @@ mod tests {
         let child_id = ephemeral_for("happy", None);
 
         // Turn 1: pure tool_use (empty). Turn 2: terminal text.
-        let turn =
+        let _turn =
             seed_session_with_assistant_texts(&session, &child_id, &[None, Some("final answer")])
                 .await;
 
-        let result = extract_run_result(session.as_ref(), &child_id, false, 0, turn)
+        let result = extract_run_result(session.as_ref(), &child_id, false, 0)
             .await
             .expect("extract ok");
         assert_eq!(result.final_text.as_deref(), Some("final answer"));
@@ -1309,6 +1330,7 @@ mod tests {
                     thinking_signature: None,
                     stop_reason: StopReason::EndTurn,
                     truncated_tool_call: None,
+                    provider_error: None,
                     usage: Some(crate::providers::adapter::TokenUsage {
                         input_tokens: 10,
                         output_tokens: 5,
@@ -1831,6 +1853,7 @@ mod tests {
                 thinking_signature: None,
                 stop_reason: StopReason::ToolUse,
                 truncated_tool_call: None,
+                provider_error: None,
                 usage: None,
             },
             ProviderResponse::text_only("finished anyway".to_string()),

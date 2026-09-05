@@ -36,7 +36,8 @@ pub struct ReviewQueueRow {
 pub struct ReviewArchiveRow {
     pub id: String,
     pub candidate_json: String,
-    /// `approved` | `rejected` | `rewritten` | `timeout` | `max_retries_exceeded`.
+    /// `approved` | `rejected` | `rewritten` | `unparseable_candidate` |
+    /// `max_retries_exceeded`.
     pub final_status: String,
     pub reason: String,
     pub created_at: i64,

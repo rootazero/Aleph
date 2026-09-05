@@ -88,11 +88,7 @@ fn subtitle_kind(preset: &SearchPreset) -> Subtitle {
 /// An empty query returns **every** preset, in the protocol table's own order
 /// — the contract [`PresetPicker`] declares, and the reason opening the
 /// disclosure is still browsing.
-fn offerable(
-    cfg: &SearchConfig,
-    query: &str,
-    copy: impl Fn(Subtitle) -> String,
-) -> Vec<PickerRow> {
+fn offerable(cfg: &SearchConfig, query: &str, copy: impl Fn(Subtitle) -> String) -> Vec<PickerRow> {
     let all: Vec<SearchPreset> = presets().collect();
     let mut rows: Vec<PickerRow> = aleph_protocol::providers::filter_rows(&all, query)
         .into_iter()

@@ -311,6 +311,11 @@ fn build_reflection_prompt(
          rate limits, a service being briefly down) as permanent truths.\n\
          - Do not record negative assertions like \"tool X is broken\"; record the \
          remedy or workaround that succeeded instead.\n\
+         - Do not package an unresolved failure sequence as a recommended workflow: \
+         record nothing, or record only an independently verified alternative — \
+         never a dead end.\n\
+         - Redirect environment or configuration failures into the fix: record the \
+         troubleshooting remedy, never an incapability claim like \"I cannot do X\".\n\
          - Gate every bullet: will a future agent plausibly act better for having \
          it? Drop anything trivial, one-off, or already obvious.\n"
     ));
@@ -749,6 +754,14 @@ mod tests {
         assert!(
             p.contains("remedy or workaround"),
             "anti-rot: store the remedy, not the failure narrative"
+        );
+        assert!(
+            p.contains("never a dead end"),
+            "anti-rot: unresolved failure sequences must not become recommended workflows"
+        );
+        assert!(
+            p.contains("I cannot do X"),
+            "anti-rot: incapability claims must redirect to the troubleshooting remedy"
         );
         assert!(
             p.contains("act better for having"),

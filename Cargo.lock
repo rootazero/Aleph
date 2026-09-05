@@ -91,6 +91,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-detect"
+version = "26.9.1"
+dependencies = [
+ "regex",
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -378,6 +387,7 @@ dependencies = [
  "aes 0.8.4",
  "aes 0.9.1",
  "aes-gcm",
+ "agent-detect",
  "aho-corasick",
  "aleph-client",
  "aleph-desktop",

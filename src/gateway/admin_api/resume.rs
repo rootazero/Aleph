@@ -12,11 +12,12 @@
 //! would either do nothing or start a second runtime beside the singleton. When
 //! no server is running the honest answer is to say so.
 
+use aleph_protocol::resume::ResumeReceipt;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::gateway::admin_api::AdminApiState;
 use crate::gateway::handlers::resume::{resume_named_session, ResumeOutcome};
@@ -30,26 +31,10 @@ pub struct ResumeRequest {
     pub session_key: String,
 }
 
-/// Mirrors the JSON-RPC result body so the CLI and the Panel read the same
-/// fields.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ResumeResponse {
-    pub status: String,
-    pub session_key: String,
-    #[serde(default)]
-    pub scanned: usize,
-    #[serde(default)]
-    pub resumed: usize,
-    #[serde(default)]
-    pub abandoned: usize,
-    #[serde(default)]
-    pub skipped: usize,
-}
-
 async fn resume_session(
     State(state): State<AdminApiState>,
     Json(body): Json<ResumeRequest>,
-) -> Result<Json<ResumeResponse>, (StatusCode, String)> {
+) -> Result<Json<ResumeReceipt>, (StatusCode, String)> {
     // `None` — no registry, on purpose rather than by omission. This route
     // carries no `CALLER_USER` (the task-locals are scoped around the WS
     // `process_request`, not around axum), so `caller_may_act_as_agent` would
@@ -60,7 +45,7 @@ async fn resume_session(
     // the same reasoning `resume_named_session` records for `session_visible`
     // on this surface.
     let outcome = resume_named_session(&body.session_key, &state.session_store, None).await;
-    match outcome {
+    match &outcome {
         ResumeOutcome::InvalidKey => Err((
             StatusCode::BAD_REQUEST,
             format!("invalid session_key: {}", body.session_key),
@@ -75,7 +60,7 @@ async fn resume_session(
         // reported a permission verdict as a 404 the day it *did* become
         // reachable (a future scoped admin identity), and that shape is a
         // puzzle, not a refusal.
-        ResumeOutcome::AgentForbidden(ref agent_id) => Err((
+        ResumeOutcome::AgentForbidden(agent_id) => Err((
             StatusCode::FORBIDDEN,
             format!("not authorized to run as agent '{agent_id}'"),
         )),
@@ -83,14 +68,13 @@ async fn resume_session(
             StatusCode::SERVICE_UNAVAILABLE,
             "resume is unavailable: this server has no run executor wired".to_string(),
         )),
-        ResumeOutcome::Failed(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
-        ResumeOutcome::Done { status, ref report } => Ok(Json(ResumeResponse {
-            status: status.to_string(),
-            session_key: body.session_key,
-            scanned: report.scanned,
-            resumed: report.resumed,
-            abandoned: report.abandoned,
-            skipped: report.skipped,
-        })),
+        ResumeOutcome::Failed(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.clone())),
+        // One constructor with the JSON-RPC face — see
+        // [`crate::gateway::handlers::resume::ResumeOutcome::receipt`]. The
+        // struct this route used to declare carried four of the nine counters,
+        // so `delegated`, `busy`, `refused`, `skipped_unknown_age` and
+        // `contradictions` were unreachable from the only surface an operator
+        // actually calls.
+        ResumeOutcome::Done { .. } => Ok(Json(outcome.receipt(&body.session_key))),
     }
 }

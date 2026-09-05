@@ -73,17 +73,23 @@ impl SessionManager {
         key_str: &str,
         limit: usize,
     ) -> Result<String, rusqlite::Error> {
-        // `id` — the order rows were recorded, which is the transcript's order
-        // everywhere (`SessionStore::history_page`). It is also total, so the
-        // tie-break this query needed when it ranked the stamps is gone with
-        // the ranking: two rows can share a stamp, and which of them landed in
-        // the derived title was once left to the query planner.
-        let mut stmt = conn.prepare(
-            "SELECT role, content FROM messages
-             WHERE session_key = ?
-             ORDER BY id DESC
-             LIMIT ?",
-        )?;
+        // The seq anchor — the transcript's order everywhere
+        // (`SessionStore::history_page`), with `id` as the tie-break so the
+        // ranking stays total: two rows can share an anchor exactly as two
+        // could once share a stamp, and which of them landed in the derived
+        // title was then left to the query planner.
+        //
+        // A title is a summary of the LATEST turns, so it wants the newest of
+        // the conversation, not the newest rows on disk — after a heal those
+        // differ, and the healed row is old content wearing a new rowid.
+        let sql = format!(
+            "SELECT role, content FROM ( \
+                SELECT role, content, id, {anchor} AS anchor FROM messages \
+                WHERE session_key = ? \
+             ) ORDER BY anchor DESC, id DESC LIMIT ?",
+            anchor = crate::session::projection::TRANSCRIPT_ANCHOR_SQL,
+        );
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map(params![key_str, limit as i64], |row| {
                 Ok(format!(

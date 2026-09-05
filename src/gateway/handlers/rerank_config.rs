@@ -360,8 +360,8 @@ mod tests {
     fn test_update_preserves_other_memory_fields() {
         let mut cfg = Config::default();
         cfg.memory.enabled = true;
-        cfg.memory.similarity_threshold = 0.42;
-        cfg.memory.dedup_similarity_threshold = 0.88;
+        cfg.memory.rrf_k = 42;
+        cfg.memory.bm25_bonus_weight = 0.33;
 
         cfg.memory.rerank = RerankConfig {
             enabled: true,
@@ -373,7 +373,7 @@ mod tests {
         assert!(cfg.memory.rerank.enabled);
         assert_eq!(cfg.memory.rerank.provider, RerankProviderType::Voyage);
         assert!(cfg.memory.enabled);
-        assert_eq!(cfg.memory.similarity_threshold, 0.42);
-        assert_eq!(cfg.memory.dedup_similarity_threshold, 0.88);
+        assert_eq!(cfg.memory.rrf_k, 42);
+        assert_eq!(cfg.memory.bm25_bonus_weight, 0.33);
     }
 }

@@ -28,11 +28,24 @@
 //! No JS engine, no full parser (R3). The scan's limits are surfaced via
 //! `dropped` — an unresolved / non-data `schema`, and a count of `agent()` calls
 //! skipped for a dynamic (non-literal) prompt — never hidden (P7).
+//!
+//! **Layout.** [`lexer`] holds the literal readers and the two whole-source
+//! rewrites; [`opts`] holds the `agent(…, { … })` opts object; [`scan`] turns a
+//! body into ordered [`ScanEvent`]s. This file keeps the three entry paths and
+//! the one thing that needs the whole picture — turning those events into a
+//! manifest (DAG layers, phase plan, `dropped`).
+
+mod lexer;
+mod opts;
+mod scan;
 
 use crate::error::{AlephError, Result};
-use crate::workflow::interop::consts::{collect_consts, parse_js_data, ConstTable};
+use crate::workflow::interop::consts::collect_consts;
 use crate::workflow::interop::export::{EMBED_PREFIX, EMBED_SUFFIX};
 use crate::workflow::interop::manifest::{WorkflowManifest, WorkflowManifestStep, WorkflowPhase};
+
+use self::lexer::{blank_comments, read_first_string_literal, strip_string_literals};
+use self::scan::{contains_call_like_keyword, scan_events, ScanEvent};
 
 /// Result of importing a `.workflow.js`.
 #[derive(Debug, Clone)]
@@ -77,72 +90,6 @@ fn extract_embedded(src: &str) -> Option<String> {
     let rest = &src[start..];
     let end = rest.find(EMBED_SUFFIX)?;
     Some(rest[..end].trim().to_string())
-}
-
-/// Blank every JS comment (`//` to end of line, `/* … */`) so the bare scan
-/// sees only code. String-aware, so a `//` inside a prompt survives untouched.
-/// Comment bodies become spaces and newlines are preserved, keeping the line
-/// structure the rest of the scan reads.
-///
-/// Without this the scanner had no notion of comments at all, and two ordinary
-/// files broke it silently:
-/// - `// don't forget the schema` — the apostrophe opened a phantom string
-///   literal that ran to the next quote in the file, inverting quote parity for
-///   everything after it. Every `agent()` call downstream vanished and the user
-///   was told "no agent() calls found".
-/// - `// await agent('old first pass')` — a deliberately commented-out step
-///   imported as a live one.
-///
-/// Only reachable on the hand-written path: [`extract_embedded`] runs first,
-/// and the `@aleph-workflow` header is itself a block comment.
-fn blank_comments(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' | '"' | '`' => {
-                out.push(c);
-                while let Some(d) = chars.next() {
-                    out.push(d);
-                    if d == '\\' {
-                        if let Some(esc) = chars.next() {
-                            out.push(esc);
-                        }
-                        continue;
-                    }
-                    if d == c {
-                        break;
-                    }
-                }
-            }
-            '/' if chars.peek() == Some(&'/') => {
-                out.push_str("  ");
-                chars.next();
-                for d in chars.by_ref() {
-                    if d == '\n' {
-                        out.push('\n');
-                        break;
-                    }
-                    out.push(' ');
-                }
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                out.push_str("  ");
-                chars.next();
-                let mut prev_star = false;
-                for d in chars.by_ref() {
-                    // Newlines survive so line-oriented reads stay sane.
-                    out.push(if d == '\n' { '\n' } else { ' ' });
-                    if prev_star && d == '/' {
-                        break;
-                    }
-                    prev_star = d == '*';
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Light-weight scan of a hand-written `.workflow.js`.
@@ -235,6 +182,22 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
             dropped.push(label.to_string());
         }
     }
+    // Array fan-out is a METHOD call, not a statement keyword, so it cannot ride
+    // on the list above: `contains_call_like_keyword("for", …)` deliberately
+    // rejects `forEach(` (the leading-boundary rule is what keeps `iffy(` and
+    // `switcher` from false-positiving), and that rejection is correct there.
+    // But `.forEach(...)` / `.map(...)` ARE the engineering format's fan-out
+    // idiom. The dynamic-prompt counter only catches the fan-out whose prompt is
+    // built per item; a LITERAL prompt inside the closure
+    // (`TARGETS.forEach(() => agent("audit this target"))`) imported as ONE step
+    // with `dropped: []` — an import reported lossless for a file whose N-way
+    // fan-out had been collapsed. Matched with the leading `.` so a local
+    // identifier named `map` or a `Map(` constructor does not trip it.
+    if skeleton.contains(".forEach(") || skeleton.contains(".map(") {
+        dropped.push(
+            "array fan-out (.forEach/.map) — runtime item list not statically known".to_string(),
+        );
+    }
     // NOTE: `parallel([...])` is NO LONGER dropped — the scan reconstructs its
     // sibling steps as a DAG layer (see the `ParallelStart`/`ParallelEnd`
     // handling below), so the parallelisation structure round-trips faithfully
@@ -249,12 +212,24 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
     let mut current_phase: Option<String> = None;
     // Dependency reconstruction tracks the previous DAG "layer" so a
     // `parallel([...])` block re-imports as sibling steps that fan out from the
-    // layer before it and fan into the step after it — the exact inverse of
-    // `export`'s topo-layers → `parallel(...)` rendering. A sequential step is a
+    // layer before it and fan into the step after it. A sequential step is a
     // singleton layer (a plain chain). This recovers the parallelisation /
     // orchestrator-workers DAG shape a flat scan would otherwise linearise, so
     // re-imported siblings stay independent `Pending` tasks the dispatcher runs
     // concurrently.
+    //
+    // NOT the exact inverse of `export`'s topo-layers → `parallel(...)`
+    // rendering — this comment used to claim that, and it was only true for
+    // adjacent layers that are complete-bipartite in the original DAG. "Depend
+    // on every step of the preceding layer" WIDENS a partial fan-in: `a`, `b`
+    // independent and `c` depending on `a` alone round-trips into `c` depending
+    // on `a` AND `b`, so a failing `b` makes `c` `Unsatisfiable` where the
+    // original template ran it. The layer shape simply does not carry the edge
+    // set, so nothing here can recover it; the loss is disclosed on the far end
+    // instead — `export::partial_fan_in_disclosure` writes a `//` note into any
+    // rendered file whose DAG this rule cannot reproduce, and the embedded
+    // `@aleph-workflow` header (read before this scan ever runs) is what makes a
+    // round trip lossless.
     let mut prev_layer: Vec<usize> = Vec::new();
     let mut parallel_depth: u32 = 0;
     let mut parallel_group: Vec<usize> = Vec::new();
@@ -319,6 +294,7 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                     agent_type: call.opts.agent_type,
                     effort: call.opts.effort,
                     require_grounding: call.opts.require_grounding,
+                    tolerate_failed_deps: call.opts.tolerate_failed_deps,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                     review: call.opts.review,
@@ -377,6 +353,7 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                     choices: call.choices,
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
                 });
@@ -423,14 +400,7 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
                 .to_string(),
         );
     }
-    let phases: Vec<WorkflowPhase> = phase_titles
-        .into_iter()
-        .map(|title| WorkflowPhase {
-            title,
-            detail: String::new(),
-            model: None,
-        })
-        .collect();
+    let phases = phase_plan(meta_obj, phase_titles);
 
     Ok(ImportOutcome {
         manifest: WorkflowManifest {
@@ -444,753 +414,75 @@ fn scan_bare(raw: &str) -> Result<ImportOutcome> {
     })
 }
 
+/// The phase plan for a bare import: a parsed `meta.phases` is the authority,
+/// body `phase()` markers only supply what it does not declare.
+///
+/// `export::render_meta` writes each `meta.phases` entry WITH its `detail` and,
+/// when set, its `model`. Rebuilding the plan from body markers alone threw both
+/// away on every header-stripped round trip — with `dropped` empty, on a path
+/// whose module doc says every loss lands there.
+///
+/// This is the same "meta is authoritative, including about what it does not
+/// say" rule the string fields already follow, applied per-SOURCE: a parsed
+/// `meta` answers for the plan; titles seen only as body markers are appended
+/// (a hand-written file may carry `phase()` calls and no `meta.phases` at all),
+/// and a `meta` that is not a pure data literal leaves markers as the only
+/// source, exactly as before.
+fn phase_plan(
+    meta_obj: Option<&serde_json::Map<String, serde_json::Value>>,
+    marker_titles: Vec<String>,
+) -> Vec<WorkflowPhase> {
+    let mut out: Vec<WorkflowPhase> = Vec::new();
+    if let Some(arr) = meta_obj
+        .and_then(|m| m.get("phases"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for entry in arr {
+            // An entry that is not an object, or carries no usable `title`, is
+            // not a phase this plan can name — skip it rather than mint a
+            // blank-titled phase (a wrong label costs more than a missing one).
+            let Some(obj) = entry.as_object() else {
+                continue;
+            };
+            let title = obj
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if title.is_empty() || out.iter().any(|p| p.title == title) {
+                continue;
+            }
+            out.push(WorkflowPhase {
+                title: title.to_string(),
+                detail: obj
+                    .get("detail")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                model: obj
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            });
+        }
+    }
+    for title in marker_titles {
+        if !out.iter().any(|p| p.title == title) {
+            out.push(WorkflowPhase {
+                title,
+                detail: String::new(), // rust-doctor-disable-line unnecessary-allocation
+                model: None,
+            });
+        }
+    }
+    out
+}
+
 /// Find `<field>:` then read the next JS string literal that follows it.
 fn scan_meta_field(src: &str, field: &str) -> Option<String> {
     let key = format!("{field}:");
     let pos = src.find(&key)? + key.len();
     read_first_string_literal(&src[pos..])
-}
-
-/// Read a single- or double-quoted string literal that is the *first
-/// non-whitespace token* of `s` (UTF-8 safe, honours backslash escapes by
-/// keeping the escaped char verbatim).
-///
-/// Requiring the literal to lead — rather than scanning arbitrarily far ahead —
-/// keeps a non-literal argument (`agent(promptVar)`, `meta: { name: foo }`)
-/// from silently capturing an *unrelated* later string elsewhere in the source.
-/// Both real callers (a `meta.<field>:` value and an `agent(` first argument)
-/// place the literal immediately after optional whitespace, so this is the
-/// correct shape, not just a safer one.
-fn read_first_string_literal(s: &str) -> Option<String> {
-    let chars: Vec<char> = s.chars().collect();
-    read_first_string_literal_chars(&chars)
-}
-
-/// Char-slice core of [`read_first_string_literal`]: the leading token of
-/// `chars` must be a quote, else `None` (no over-reach to a later literal).
-fn read_first_string_literal_chars(chars: &[char]) -> Option<String> {
-    let i = first_non_ws(chars, 0);
-    match chars.get(i).copied() {
-        Some('\'' | '"') => read_literal_at(chars, i).map(|(lit, _)| lit),
-        _ => None,
-    }
-}
-
-/// Index of the first non-whitespace char at or after `start` (clamped to len).
-fn first_non_ws(chars: &[char], start: usize) -> usize {
-    let mut i = start;
-    while i < chars.len() && chars[i].is_whitespace() {
-        i += 1;
-    }
-    i
-}
-
-/// Read the quoted string literal beginning at `chars[start]` (which must be a
-/// quote). Returns the decoded content and the index just past the closing
-/// quote. Standard JS escapes are interpreted (`\n`/`\t`/`\r`/`\0` → the control
-/// char; `\"`/`\'`/`\\`/`\/` and any other escape → the char verbatim) so a
-/// `.join("\n")` separator decodes to a real newline — the round-trip inverse of
-/// `export`'s `js_str`. UTF-8 safe (operates on `char`s).
-fn read_literal_at(chars: &[char], start: usize) -> Option<(String, usize)> {
-    let quote = *chars.get(start)?;
-    let mut i = start + 1;
-    let mut out = String::new();
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\\' {
-            let esc = *chars.get(i + 1)?;
-            out.push(match esc {
-                'n' => '\n',
-                't' => '\t',
-                'r' => '\r',
-                '0' => '\0',
-                other => other,
-            });
-            i += 2;
-            continue;
-        }
-        if c == quote {
-            return Some((out, i + 1));
-        }
-        out.push(c);
-        i += 1;
-    }
-    None
-}
-
-/// Read the prompt argument of an `agent(` call from `s` (the source *after* the
-/// open paren). Handles the two declarative prompt shapes of the engineering
-/// format:
-///   * `agent("prompt", …)`              → the single string literal;
-///   * `agent([ "a", "b" ].join("\n"), …)` → the array elements joined by the
-///     `.join` separator (the format's signature multi-line idiom).
-///
-/// Returns `None` for a non-literal argument (`agent(promptVar)`, a `.map(...)`
-/// expression, or an array with a non-literal element) — those are dynamic and
-/// intentionally not statically importable (R7/R10); they surface elsewhere as
-/// `dropped` constructs rather than being half-captured.
-///
-/// On success the second tuple element is the char index just past the prompt
-/// argument, so the caller can continue into the `, { opts }` object.
-fn read_agent_prompt(chars: &[char], start: usize) -> Option<(String, usize)> {
-    let i = first_non_ws(chars, start);
-    match *chars.get(i)? {
-        '\'' | '"' => read_literal_at(chars, i),
-        '[' => read_joined_array(chars, i),
-        _ => None,
-    }
-}
-
-/// Parse `[ "a", "b", … ].join("sep")` starting at `chars[start] == '['`.
-/// Every element must be a plain string literal; a non-literal element or an
-/// element-level concatenation (`'a' + x`) makes the joined value not statically
-/// known, so the whole read abstains (returns `None`). The separator defaults to
-/// `"\n"` (the format's convention) when no explicit `.join(...)` follows.
-///
-/// The second tuple element is the index just past the array (and its `.join`,
-/// if any), so the caller can resume scanning the agent opts.
-fn read_joined_array(chars: &[char], start: usize) -> Option<(String, usize)> {
-    let n = chars.len();
-    let mut i = start + 1; // past '['
-    let mut parts: Vec<String> = Vec::new();
-    loop {
-        while i < n && (chars[i].is_whitespace() || chars[i] == ',') {
-            i += 1;
-        }
-        match *chars.get(i)? {
-            ']' => {
-                i += 1;
-                break;
-            }
-            '\'' | '"' => {
-                let (lit, next) = read_literal_at(chars, i)?;
-                // `'a' + x` concatenation → joined string not statically known.
-                if chars.get(first_non_ws(chars, next)) == Some(&'+') {
-                    return None;
-                }
-                parts.push(lit);
-                i = next;
-            }
-            // Identifier / expression element → dynamic array, abstain.
-            _ => return None,
-        }
-    }
-    // `i` now points just past `]`. An optional `.join("sep")` follows; absent
-    // it, the convention separator is `"\n"` and the array ends at `]`.
-    let (sep, end) = parse_join_separator(chars, i).unwrap_or_else(|| ("\n".to_string(), i));
-    Some((parts.join(&sep), end))
-}
-
-/// After a `]`, read an optional `.join("sep")` and return the separator literal
-/// plus the index just past the closing `)`. `None` if no well-formed
-/// `.join(<string literal>)` follows.
-fn parse_join_separator(chars: &[char], start: usize) -> Option<(String, usize)> {
-    let i = first_non_ws(chars, start);
-    // Match the `.join` identifier exactly.
-    let dotjoin = ['.', 'j', 'o', 'i', 'n'];
-    if (0..dotjoin.len()).any(|k| chars.get(i + k) != Some(&dotjoin[k])) {
-        return None;
-    }
-    let i = first_non_ws(chars, i + dotjoin.len());
-    if chars.get(i) != Some(&'(') {
-        return None;
-    }
-    let i = first_non_ws(chars, i + 1);
-    let (sep, next) = match *chars.get(i)? {
-        '\'' | '"' => read_literal_at(chars, i)?,
-        _ => return None,
-    };
-    // Consume the closing `)` so the returned end index is past the whole
-    // `.join(...)` call, not stranded mid-expression.
-    let j = first_non_ws(chars, next);
-    if chars.get(j) != Some(&')') {
-        return None;
-    }
-    Some((sep, j + 1))
-}
-
-/// Read an optional `, ["a", "b"]` choices array that follows a clarify
-/// question. `start` is the index just past the prompt argument. Returns the
-/// decoded choice literals, or an empty vec when no array follows (a free-text
-/// clarification) — the inverse of `export`'s `render_clarify_call`. A
-/// non-literal element makes the menu dynamic, so the whole read abstains
-/// (returns empty) rather than half-capturing it (R7/R10), exactly like the
-/// prompt readers.
-fn read_clarify_choices(chars: &[char], start: usize) -> Vec<String> {
-    let i = first_non_ws(chars, start);
-    if chars.get(i) != Some(&',') {
-        return Vec::new();
-    }
-    let i = first_non_ws(chars, i + 1);
-    if chars.get(i) != Some(&'[') {
-        return Vec::new();
-    }
-    let n = chars.len();
-    let mut j = i + 1; // past '['
-    let mut out: Vec<String> = Vec::new();
-    loop {
-        while j < n && (chars[j].is_whitespace() || chars[j] == ',') {
-            j += 1;
-        }
-        match chars.get(j) {
-            Some(']') | None => break,
-            Some('\'' | '"') => match read_literal_at(chars, j) {
-                Some((lit, next)) => {
-                    out.push(lit);
-                    j = next;
-                }
-                None => break,
-            },
-            // Identifier / expression element → dynamic menu, abstain entirely.
-            _ => {
-                out.clear();
-                return out;
-            }
-        }
-    }
-    out
-}
-
-/// Literal opts recovered from an `agent(prompt, { … })` call. Every field is
-/// optional; a key whose value is not a static literal (an identifier, a
-/// computed expression, a non-JSON schema) is left unset rather than guessed
-/// (R7/R10), exactly mirroring the prompt readers' abstain-on-dynamic policy.
-#[derive(Default)]
-struct AgentOpts {
-    label: Option<String>,
-    phase: Option<String>,
-    model: Option<String>,
-    schema: Option<serde_json::Value>,
-    isolation: Option<String>,
-    agent_type: Option<String>,
-    /// Reasoning-effort tier (`effort: "high"`). Interchange-only, recovered on
-    /// the bare path so a header-stripped `.workflow.js` round-trips its effort
-    /// hint instead of silently losing it (was dropped as an unknown key before).
-    effort: Option<String>,
-    /// Lead-review gate (`review: true`). Recovered on the bare path so a
-    /// header-stripped round-trip cannot silently drop an oversight gate
-    /// (a step meant to park in WaitingReview would auto-complete).
-    review: bool,
-    /// Grounding demand (`requireGrounding: true`) — the review gate's anchor
-    /// requirement. Same reasoning as `review`: a round trip that drops it
-    /// silently downgrades a gate that must touch reality into one that takes
-    /// the model's word.
-    require_grounding: bool,
-    /// Per-step timeout — parsed from `timeoutSecs: <n>`.
-    timeout_secs: Option<u64>,
-    /// Per-step retry ceiling — parsed from `maxRetries: <n>`.
-    max_retries: Option<u32>,
-    /// A `schema:` value that could not be captured — an unknown const
-    /// reference or an object literal holding non-data (expression) values.
-    /// Carried up so `scan_bare` can surface it in `dropped` (P7 honesty) rather
-    /// than the schema vanishing silently.
-    schema_dropped: Option<String>,
-    /// The opts object stopped being parseable partway through, so every key
-    /// AFTER that point was abandoned.
-    ///
-    /// The scanner is a small hand-rolled reader, not a JS parser, so it has to
-    /// stop somewhere — a spread (`{ ...BASE_OPTS, review: true }`), a computed
-    /// key, a template literal. Stopping is fine; stopping SILENTLY is not, and
-    /// this is the field that makes the difference. What lives past the stop is
-    /// the oversight half of the format: `review` (park in `WaitingReview` for
-    /// lead review) and `requireGrounding` (that review must touch reality).
-    /// Both default to `false`, so an abandoned tail downgrades a gated step
-    /// into an auto-completing one and `dropped` came back empty — the import
-    /// reported itself lossless. Same honesty rule as `schema_dropped`; this is
-    /// the case that rule did not cover.
-    opts_abandoned: Option<String>,
-}
-
-/// Read the optional `, { label: "…", phase: "…", model: "…", schema: {…},
-/// isolation: "…", agentType: "…" }` opts object that follows an agent prompt.
-///
-/// `start` is the index just past the prompt argument. Returns defaults when no
-/// `, {` opts object follows. String-valued keys decode via [`read_literal_at`];
-/// `schema` is normalised by [`parse_js_data`] whether it is an inline literal
-/// or a `schema: NAME` reference into `consts` (a hoisted top-level const), so a
-/// foreign engineering file's JS-lax schema imports instead of vanishing; an
-/// unresolved or non-data schema is recorded in [`AgentOpts::schema_dropped`].
-/// Other unknown keys and non-literal values are skipped without aborting the
-/// rest of the object — the inverse of `export`'s `render_agent_call`, so a
-/// header-stripped export round-trips its opts.
-/// Whether `skeleton` uses `keyword` as a statement keyword — the identifier
-/// followed by optional whitespace and `(`.
-///
-/// Two things a plain `contains` cannot do: accept every spacing JS allows
-/// (`for(`, `for (`, `for\t(`), and reject the keyword occurring INSIDE a
-/// longer identifier (`forEach(`, `iffy(`, a variable named `switcher`). The
-/// leading-boundary check is what makes it safe to match without a space.
-fn contains_call_like_keyword(skeleton: &str, keyword: &str) -> bool {
-    let bytes = skeleton.as_bytes();
-    skeleton.match_indices(keyword).any(|(at, _)| {
-        let leading_ok = at == 0
-            || !bytes
-                .get(at - 1)
-                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'$');
-        if !leading_ok {
-            return false;
-        }
-        skeleton[at + keyword.len()..].trim_start().starts_with('(')
-    })
-}
-
-/// How much of an abandoned opts tail to quote back to the user.
-const ABANDON_SNIPPET_CHARS: usize = 60;
-
-/// Describe what stopped the opts reader and what it therefore did not read.
-///
-/// Naming the surviving text matters more than naming the cause: the author
-/// needs to see which keys were skipped, and "everything from here" is only
-/// actionable if "here" is shown.
-fn abandon_note(chars: &[char], at: usize, why: &str) -> String {
-    let tail: String = chars
-        .get(at..)
-        .unwrap_or_default()
-        .iter()
-        .take(ABANDON_SNIPPET_CHARS)
-        .collect();
-    let tail = tail.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!(
-        "agent opts: stopped at `{tail}` ({why}) — every key after this point was NOT imported \
-         (this includes `review` / `requireGrounding`, which default to off)"
-    )
-}
-
-fn read_agent_opts(chars: &[char], start: usize, consts: &ConstTable) -> AgentOpts {
-    let mut opts = AgentOpts::default();
-    let mut i = first_non_ws(chars, start);
-    if chars.get(i) != Some(&',') {
-        return opts;
-    }
-    i = first_non_ws(chars, i + 1);
-    if chars.get(i) != Some(&'{') {
-        return opts;
-    }
-    i += 1; // past '{'
-    let n = chars.len();
-    loop {
-        i = first_non_ws(chars, i);
-        match chars.get(i) {
-            None | Some('}') => break,
-            Some(',') => {
-                i += 1;
-                continue;
-            }
-            _ => {}
-        }
-        // Read the key: a bare identifier (label / phase / model / schema / …)
-        // or a quoted one. Quoted keys are ordinary JS and the interchange
-        // format nowhere forbids them, but hitting one used to abandon the
-        // WHOLE opts object at that point with no diagnostic — so a single
-        // `{ "phase": "Ship", review: true }` silently dropped the review gate
-        // (a safety control) along with everything after it.
-        let key: String = if matches!(chars.get(i), Some('\'' | '"')) {
-            match read_literal_at(chars, i) {
-                Some((lit, next)) => {
-                    i = next;
-                    lit
-                }
-                None => {
-                    opts.opts_abandoned = Some(abandon_note(chars, i, "unterminated quoted key"));
-                    break;
-                }
-            }
-        } else {
-            let key_start = i;
-            while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            if i == key_start {
-                // Not a key at all — give up on the rest of the object rather
-                // than spin. This is the spread arm (`{ ...BASE, review: true }`)
-                // and every other construct this reader is not a parser for;
-                // record it, because what follows is usually the oversight half.
-                opts.opts_abandoned = Some(abandon_note(chars, i, "not a key"));
-                break;
-            }
-            chars[key_start..i].iter().collect()
-        };
-        i = first_non_ws(chars, i);
-        if chars.get(i) != Some(&':') {
-            opts.opts_abandoned = Some(abandon_note(chars, i, "missing ':' after key"));
-            break;
-        }
-        i = first_non_ws(chars, i + 1);
-        match chars.get(i) {
-            Some('\'' | '"') => match read_literal_at(chars, i) {
-                Some((lit, next)) => {
-                    if key == "schema" {
-                        // A string-valued schema is rare but `schema` is
-                        // `Option<Value>`; capture it verbatim so a
-                        // header-stripped export round-trips it instead of the
-                        // string arm silently dropping it (P7).
-                        opts.schema = Some(serde_json::Value::String(lit));
-                    } else {
-                        assign_string_opt(&mut opts, &key, lit);
-                    }
-                    i = next;
-                }
-                None => {
-                    opts.opts_abandoned = Some(abandon_note(chars, i, "unterminated string value"));
-                    break;
-                }
-            },
-            // An object / array literal value. Only `schema` carries one; it is
-            // normalised via the bounded data parser, which accepts JS-lax
-            // literals (bare keys, single quotes, trailing commas) that plain
-            // JSON parsing rejects — so a foreign engineering file's
-            // `schema: { type: 'object', … }` imports instead of vanishing. A
-            // literal holding expression values is not pure data → recorded
-            // dropped, never guessed (R3/R7).
-            Some('{' | '[') => {
-                if key == "schema" {
-                    match parse_js_data(chars, i) {
-                        Some((v, next)) => {
-                            opts.schema = Some(v);
-                            i = next;
-                        }
-                        None => {
-                            opts.schema_dropped = Some(
-                                "inline schema literal holds non-data (expression) values — \
-                                 not imported"
-                                    .to_string(),
-                            );
-                            i = skip_value(chars, i);
-                        }
-                    }
-                } else {
-                    // No other opt is object/array-valued; skip it wholesale.
-                    i = skip_value(chars, i);
-                }
-            }
-            // Bare (non-string, non-object) value: capture the raw token. The
-            // executable-core opts export emits as bare literals —
-            // `review: true`, `timeoutSecs: 1800`, `maxRetries: 0` — round-trip
-            // via their raw literal. A bare `schema: SOME_SCHEMA` is a hoisted
-            // const reference: resolve it against the collected const table, or
-            // record it dropped. Anything else unrecognised is skipped, not
-            // guessed.
-            _ => {
-                let end = skip_value(chars, i);
-                let raw: String = chars[i..end.min(chars.len())].iter().collect();
-                let raw = raw.trim();
-                if key == "schema" {
-                    resolve_schema_ref(&mut opts, raw, consts);
-                } else {
-                    assign_bare_opt(&mut opts, &key, raw);
-                }
-                i = end;
-            }
-        }
-    }
-    opts
-}
-
-/// Resolve a bare `schema: IDENT` reference against the collected top-level
-/// const table. A const bound to an object/array data literal becomes the
-/// step's schema; an unknown name (or a const that abstained as non-data) is
-/// recorded in `schema_dropped` so the loss is surfaced, never silent (P7).
-fn resolve_schema_ref(opts: &mut AgentOpts, raw: &str, consts: &ConstTable) {
-    match consts.get(raw) {
-        Some(v @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) => {
-            opts.schema = Some(v.clone());
-        }
-        // The name resolves, but not to an object/array — not a usable schema.
-        Some(_) => {
-            opts.schema_dropped = Some(format!(
-                "const '{raw}' is not an object/array schema — not imported"
-            ));
-        }
-        // A bare non-object literal (`schema: 42` / `true` / `null`) versus a
-        // genuine unknown identifier — distinct diagnostics either way (P7).
-        None => {
-            let is_literal = raw.parse::<f64>().is_ok() || matches!(raw, "true" | "false" | "null");
-            opts.schema_dropped = Some(if is_literal {
-                format!("non-object schema literal '{raw}' not imported")
-            } else {
-                format!(
-                    "schema reference '{raw}' unresolved (no top-level data-literal \
-                     const '{raw}') — not imported"
-                )
-            });
-        }
-    }
-}
-
-/// Assign a bare-literal opt value (boolean / number) by `.workflow.js` key.
-/// Unparseable values leave the field unset — never guessed.
-fn assign_bare_opt(opts: &mut AgentOpts, key: &str, raw: &str) {
-    match key {
-        "review" => {
-            if raw == "true" {
-                opts.review = true;
-            }
-        }
-        "requireGrounding" => {
-            if raw == "true" {
-                opts.require_grounding = true;
-            }
-        }
-        // `timeoutSecs: 0` is passed through so the shared `validate()` produces
-        // the one authoritative error ("omit the field for the global
-        // default"). Silently rewriting it to "unset" here made the UNTRUSTED
-        // boundary the most permissive of the three import paths: the author's
-        // (mistaken) "no timeout" became the dispatcher's global budget with no
-        // word to anyone.
-        "timeoutSecs" => opts.timeout_secs = raw.parse::<u64>().ok(),
-        "maxRetries" => opts.max_retries = raw.parse::<u32>().ok(),
-        _ => {}
-    }
-}
-
-/// Assign a decoded string literal to its opts field by `.workflow.js` key name.
-/// Unknown keys are ignored (forward-compatible with format additions).
-fn assign_string_opt(opts: &mut AgentOpts, key: &str, val: String) {
-    match key {
-        "label" => opts.label = Some(val),
-        "phase" => opts.phase = Some(val),
-        "model" => opts.model = Some(val),
-        "isolation" => opts.isolation = Some(val),
-        "agentType" => opts.agent_type = Some(val),
-        "effort" => opts.effort = Some(val),
-        _ => {}
-    }
-}
-
-/// Skip a value at the current opts cursor, stopping at the next top-level `,` or
-/// the object's closing `}`. Nested `{}`/`[]`/`()` and string literals are
-/// skipped wholesale so an inner separator never ends the value early. Returns
-/// the index of the stopping delimiter.
-fn skip_value(chars: &[char], start: usize) -> usize {
-    let n = chars.len();
-    let mut i = start;
-    let mut depth: i32 = 0;
-    while i < n {
-        let c = chars[i];
-        match c {
-            '\'' | '"' | '`' => {
-                i += 1;
-                while i < n {
-                    let d = chars[i];
-                    if d == '\\' {
-                        i += 2;
-                        continue;
-                    }
-                    i += 1;
-                    if d == c {
-                        break;
-                    }
-                }
-            }
-            '{' | '[' | '(' => {
-                depth += 1;
-                i += 1;
-            }
-            '}' | ']' | ')' => {
-                if depth == 0 {
-                    return i; // the opts object's closing brace
-                }
-                depth -= 1;
-                i += 1;
-            }
-            ',' if depth == 0 => return i,
-            _ => i += 1,
-        }
-    }
-    i
-}
-
-/// Blank out the contents of every string literal (`'`, `"`, `` ` ``) so a
-/// downstream keyword scan sees only the code skeleton, never prompt text.
-/// Quote delimiters and surrounding code are preserved; an escaped quote
-/// inside a literal does not terminate it. UTF-8 safe (iterates `chars`);
-/// an unterminated literal degrades to dropping the trailing bytes.
-fn strip_string_literals(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' | '"' | '`' => {
-                out.push(c);
-                while let Some(d) = chars.next() {
-                    if d == '\\' {
-                        // Skip the escaped char so e.g. \" does not close early;
-                        // its body is irrelevant to the skeleton, so drop it.
-                        chars.next();
-                        continue;
-                    }
-                    if d == c {
-                        out.push(d); // keep the closing delimiter
-                        break;
-                    }
-                    // literal body intentionally dropped
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
-/// One ordered call recovered from a bare `.workflow.js` scan.
-enum ScanEvent {
-    /// A `phase("title")` marker — the title of its string-literal argument.
-    Phase(String),
-    /// An `agent("prompt", { opts })` call — the prompt plus any recovered opts.
-    /// Boxed because `AgentOpts` dwarfs every other variant, and the whole
-    /// `Vec<ScanEvent>` would otherwise be padded up to its width.
-    Agent(Box<AgentCall>),
-    /// A `clarify("question", ["a", "b"])` call (an Aleph extension to the
-    /// `.workflow.js` vocabulary) — the question plus any literal choices.
-    Clarify(ClarifyCall),
-    /// An `agent(…)` / `clarify(…)` call whose first argument is not a static
-    /// literal (a bare identifier, `buildPrompt(u)`, a `.map` expression). It is
-    /// dynamic and not statically importable; counted for an honest `dropped`
-    /// disclosure rather than vanishing silently.
-    DynamicPrompt,
-    /// The opening of a `parallel([...])` block — the agents up to the matching
-    /// [`ParallelEnd`](ScanEvent::ParallelEnd) are siblings (same DAG layer).
-    ParallelStart,
-    /// The close of the innermost open `parallel([...])` block.
-    ParallelEnd,
-}
-
-/// A recovered `agent()` call: its prompt and the literal opts that followed.
-struct AgentCall {
-    prompt: String,
-    opts: AgentOpts,
-}
-
-/// A recovered `clarify()` call: its question and the literal choice menu
-/// (empty for a free-text clarification — the inverse of `render_clarify_call`).
-struct ClarifyCall {
-    prompt: String,
-    choices: Vec<String>,
-}
-
-/// Scan `src` for `phase(...)` and `agent(...)` calls in source order, string-
-/// aware so a prompt mentioning `phase(`/`agent(` never registers as a call.
-///
-/// A single forward pass tokenises identifiers and skips string-literal bodies
-/// wholesale; only a bare `phase`/`agent`/`parallel` identifier immediately
-/// followed by `(` counts, so `subagent(` / `useragent(` and the like never
-/// over-match. Calls whose first argument is not a string literal (e.g.
-/// `agent(promptVar)`) yield no event. Catches both top-level calls and
-/// `() => agent(` inside `parallel([...])`.
-///
-/// Parenthesis depth is tracked (string contents excluded) so a `parallel(`
-/// block's matching `)` is found: the agents between the emitted `ParallelStart`
-/// and `ParallelEnd` are siblings of one DAG layer.
-fn scan_events(src: &str, consts: &ConstTable) -> Vec<ScanEvent> {
-    let chars: Vec<char> = src.chars().collect();
-    let n = chars.len();
-    let mut events = Vec::new();
-    let mut i = 0;
-    // Depth of `(` nesting in code (not strings). `parallel_watch` records the
-    // depth at each open `parallel(` so its close emits `ParallelEnd`.
-    let mut paren_depth: i32 = 0;
-    let mut parallel_watch: Vec<i32> = Vec::new();
-    while i < n {
-        let c = chars[i];
-        // Skip string-literal bodies so their contents are never tokenised
-        // (parens inside a prompt must not perturb the depth count).
-        if c == '\'' || c == '"' || c == '`' {
-            i += 1;
-            while i < n {
-                let d = chars[i];
-                if d == '\\' {
-                    i += 2; // skip the escaped char so \" / \' does not close early
-                    continue;
-                }
-                i += 1;
-                if d == c {
-                    break;
-                }
-            }
-            continue;
-        }
-        // Identifier? Consume it, then check for a following `(`.
-        if c.is_alphabetic() || c == '_' {
-            let start = i;
-            while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            let ident: String = chars[start..i].iter().collect();
-            if ident == "phase" || ident == "agent" || ident == "parallel" || ident == "clarify" {
-                let mut j = i;
-                while j < n && chars[j].is_whitespace() {
-                    j += 1;
-                }
-                if j < n && chars[j] == '(' {
-                    // The call's argument list, as a char slice (paren consumed).
-                    let after = &chars[j + 1..];
-                    match ident.as_str() {
-                        // A phase title is always a plain literal.
-                        "phase" => {
-                            if let Some(lit) = read_first_string_literal_chars(after) {
-                                events.push(ScanEvent::Phase(lit));
-                            }
-                        }
-                        // An agent prompt may be a literal or a `[...].join()`
-                        // array; the trailing `{ opts }` object is parsed from
-                        // where the prompt ends.
-                        "agent" => {
-                            if let Some((prompt, end)) = read_agent_prompt(after, 0) {
-                                let opts = read_agent_opts(after, end, consts);
-                                events.push(ScanEvent::Agent(Box::new(AgentCall { prompt, opts })));
-                            } else {
-                                // A non-literal prompt (`agent(promptVar)`,
-                                // `buildPrompt(u)`, a `.map` expression) is
-                                // dynamic and not statically importable — record
-                                // it so `scan_bare` can report the count instead
-                                // of the call vanishing silently (P7).
-                                events.push(ScanEvent::DynamicPrompt);
-                            }
-                        }
-                        // A clarify question is a plain/`join`-array literal (the
-                        // `read_agent_prompt` shape), optionally followed by a
-                        // `["a", "b"]` choices array — the inverse of export's
-                        // `render_clarify_call`.
-                        "clarify" => {
-                            if let Some((prompt, end)) = read_agent_prompt(after, 0) {
-                                let choices = read_clarify_choices(after, end);
-                                events.push(ScanEvent::Clarify(ClarifyCall { prompt, choices }));
-                            } else {
-                                events.push(ScanEvent::DynamicPrompt);
-                            }
-                        }
-                        // The block opens at the `(` the main loop is about to
-                        // count; watch for the `)` that returns to this depth.
-                        "parallel" => {
-                            parallel_watch.push(paren_depth);
-                            events.push(ScanEvent::ParallelStart);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            continue;
-        }
-        // Track code paren depth so `parallel(`'s close can be located. An
-        // `agent(...)` / `() =>` call's own parens balance out at a deeper level
-        // and never spuriously close the watched block.
-        if c == '(' {
-            paren_depth += 1;
-            i += 1;
-            continue;
-        }
-        if c == ')' {
-            paren_depth -= 1;
-            if parallel_watch.last() == Some(&paren_depth) {
-                parallel_watch.pop();
-                events.push(ScanEvent::ParallelEnd);
-            }
-            i += 1;
-            continue;
-        }
-        i += 1;
-    }
-    events
 }
 
 #[cfg(test)]
@@ -1288,6 +580,7 @@ await agent('deploy to prod', { "phase": "Ship", review: true, timeoutSecs: 900 
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -1307,6 +600,7 @@ await agent('deploy to prod', { "phase": "Ship", review: true, timeoutSecs: 900 
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -1404,6 +698,7 @@ const r = await pipeline(items, s1, s2)
                 choices: vec![],
                 review: false,
                 require_grounding: false,
+                tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1465,17 +760,6 @@ const r = await pipeline(items, s1, s2)
         assert!(step.review, "review flag parsed from bare literal");
         assert_eq!(step.timeout_secs, Some(1800));
         assert_eq!(step.max_retries, Some(0));
-    }
-
-    #[test]
-    fn strip_string_literals_blanks_bodies_keeps_skeleton() {
-        // Bodies gone, delimiters + code kept; escaped quote does not close early.
-        assert_eq!(
-            strip_string_literals("for (x) agent('a b')"),
-            "for (x) agent('')"
-        );
-        assert_eq!(strip_string_literals(r#"f("a \" b")"#), r#"f("")"#);
-        assert_eq!(strip_string_literals("agent(`tpl text`)"), "agent(``)");
     }
 
     #[test]
@@ -1639,6 +923,7 @@ await agent('fix more')
                 choices: vec![],
                 review: false,
                 require_grounding: false,
+                tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1733,6 +1018,7 @@ await agent('fix more')
                 choices: vec![],
                 review: true,
                 require_grounding: false,
+                tolerate_failed_deps: true,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -1760,6 +1046,13 @@ await agent('fix more')
         // silently dropped `review: true` auto-completes a step that was meant
         // to park in WaitingReview for lead approval.
         assert!(s.review, "lead-review gate lost in bare round-trip");
+        // Same class of loss on the other side of the ledger: dropping
+        // `tolerateFailedDeps` turns a step authored to survive an upstream
+        // failure back into one the first failure kills.
+        assert!(
+            s.tolerate_failed_deps,
+            "tolerant fan-in lost in bare round-trip"
+        );
     }
 
     #[test]
@@ -2026,6 +1319,7 @@ await agent('fix more')
                 choices: vec![],
                 review: false,
                 require_grounding: false,
+                tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -2065,6 +1359,7 @@ await agent('fix more')
                 choices: vec![],
                 review: false,
                 require_grounding: false,
+                tolerate_failed_deps: false,
                 timeout_secs: None,
                 max_retries: None,
             }],
@@ -2110,6 +1405,7 @@ await agent('fix more')
             choices: vec![],
             review: false,
             require_grounding: false,
+            tolerate_failed_deps: false,
             timeout_secs: None,
             max_retries: None,
         }
@@ -2323,6 +1619,7 @@ await agent('fix more')
                     choices: vec!["staging".into(), "prod".into()],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -2342,6 +1639,7 @@ await agent('fix more')
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -2365,6 +1663,195 @@ await agent('fix more')
             back.steps[1].depends_on,
             vec!["step_1".to_string()],
             "the gated agent step still fans in from the clarify step"
+        );
+    }
+
+    // ---- F8: `meta.phases` is the authority on the phase plan ----
+
+    #[test]
+    fn bare_import_keeps_meta_phase_detail_and_model() {
+        // A header-stripped export used to rebuild the phase plan from body
+        // `phase()` markers alone, so `detail` and the per-phase `model` — both
+        // of which `export::render_meta` writes — came back empty/None with
+        // `dropped: []`, i.e. a loss reported as a lossless import.
+        let src = r#"
+export const meta = {
+  name: 'audit',
+  description: 'demo',
+  phases: [
+    { title: 'Analyze', detail: 'read the sources', model: 'sonnet' },
+    { title: 'Report', detail: 'write it up' },
+  ],
+}
+phase("Analyze")
+await agent('read the sources')
+phase("Report")
+await agent('write it up')
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        let ph = &out.manifest.phases;
+        assert_eq!(ph.len(), 2, "two declared phases: {ph:?}");
+        assert_eq!(ph[0].title, "Analyze");
+        assert_eq!(ph[0].detail, "read the sources", "detail survives");
+        assert_eq!(
+            ph[0].model.as_deref(),
+            Some("sonnet"),
+            "per-phase model survives"
+        );
+        assert_eq!(ph[1].title, "Report");
+        assert_eq!(ph[1].detail, "write it up");
+        assert_eq!(ph[1].model, None, "a phase without a model gets none");
+    }
+
+    #[test]
+    fn meta_phases_round_trip_through_a_header_stripped_export() {
+        // End to end over the two faces: render, drop the header line, re-scan.
+        use crate::workflow::interop::export::render_workflow_js;
+        let m = WorkflowManifest {
+            name: "wf".into(),
+            description: "d".into(),
+            when_to_use: "always".into(),
+            phases: vec![WorkflowPhase {
+                title: "Analyze".into(),
+                detail: "look hard".into(),
+                model: Some("opus".into()),
+            }],
+            steps: vec![WorkflowManifestStep {
+                id: "s1".into(),
+                agent: "ag".into(),
+                prompt: "do it".into(),
+                depends_on: vec![],
+                label: None,
+                model: None,
+                phase: Some("Analyze".into()),
+                schema: None,
+                isolation: None,
+                agent_type: None,
+                effort: None,
+                kind: crate::workflow::def::WorkflowStepKind::Agent,
+                choices: vec![],
+                review: false,
+                require_grounding: false,
+                tolerate_failed_deps: false,
+                timeout_secs: None,
+                max_retries: None,
+            }],
+        };
+        let js = render_workflow_js(&m);
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(!bare.contains("@aleph-workflow"), "header stripped");
+        let back = parse_workflow_js(&bare).expect("bare scan").manifest;
+        assert_eq!(back.phases.len(), 1);
+        assert_eq!(back.phases[0].detail, "look hard");
+        assert_eq!(back.phases[0].model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn a_body_marker_meta_does_not_declare_is_appended() {
+        // `meta` is the authority, not a replacement: a hand-written file whose
+        // body marks a phase `meta.phases` never lists still keeps it.
+        let src = r#"
+export const meta = {
+  name: 'audit',
+  phases: [ { title: 'Analyze', detail: 'read' } ],
+}
+phase("Analyze")
+await agent('read the sources')
+phase("Ship")
+await agent('ship it')
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        let titles: Vec<&str> = out
+            .manifest
+            .phases
+            .iter()
+            .map(|p| p.title.as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["Analyze", "Ship"],
+            "declared first, then marker"
+        );
+        assert_eq!(out.manifest.phases[0].detail, "read");
+        assert_eq!(out.manifest.phases[1].detail, "", "a marker has no detail");
+    }
+
+    #[test]
+    fn a_file_without_meta_phases_still_builds_the_plan_from_markers() {
+        // The pre-existing behaviour, unchanged when `meta` declares nothing.
+        let src = r#"
+export const meta = { name: 'audit' }
+phase("Analyze")
+await agent('read the sources')
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        assert_eq!(out.manifest.phases.len(), 1);
+        assert_eq!(out.manifest.phases[0].title, "Analyze");
+    }
+
+    // ---- F9: array fan-out is disclosed ----
+
+    #[test]
+    fn array_fan_out_with_a_literal_prompt_is_reported_dropped() {
+        // `.forEach(` is deliberately rejected by `contains_call_like_keyword`
+        // (the leading-boundary rule), and the dynamic-prompt counter only sees
+        // NON-literal prompts. A literal prompt inside the closure therefore
+        // imported as ONE step with `dropped: []` — a lossless-looking import of
+        // a collapsed N-way fan-out.
+        let src = r#"
+export const meta = { name: 'audit' }
+TARGETS.forEach(() => agent("audit this target"))
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        assert!(
+            out.dropped.iter().any(|d| d.contains("array fan-out")),
+            "fan-out must be disclosed: {:?}",
+            out.dropped
+        );
+    }
+
+    #[test]
+    fn map_fan_out_is_reported_dropped() {
+        let src = r#"
+export const meta = { name: 'audit' }
+const rs = TARGETS.map(() => agent("audit this target"))
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        assert!(
+            out.dropped.iter().any(|d| d.contains("array fan-out")),
+            "{:?}",
+            out.dropped
+        );
+    }
+
+    #[test]
+    fn a_script_without_fan_out_gets_no_fan_out_note() {
+        let src = r#"
+export const meta = { name: 'audit' }
+await agent('read the sources')
+await agent('write the brief')
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        assert!(
+            !out.dropped.iter().any(|d| d.contains("array fan-out")),
+            "no fan-out in this file: {:?}",
+            out.dropped
+        );
+    }
+
+    #[test]
+    fn a_prompt_mentioning_map_does_not_trip_the_fan_out_note() {
+        // String bodies are blanked before the needle check, so prose wins no
+        // false positive (the same rule the control-flow keywords follow).
+        let src = r#"
+export const meta = { name: 'audit' }
+await agent('draw the sitemap and .map( the routes')
+"#;
+        let out = scan_bare(src).expect("import must succeed");
+        assert!(
+            !out.dropped.iter().any(|d| d.contains("array fan-out")),
+            "{:?}",
+            out.dropped
         );
     }
 }

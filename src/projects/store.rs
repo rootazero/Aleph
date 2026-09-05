@@ -574,8 +574,29 @@ impl ProjectStore {
     /// and the conversation stays reachable. A room is therefore refused here
     /// and pointed at it.
     ///
-    /// A catalogue entry — no claimed session — removes exactly as it always
-    /// did, which is every pre-P2 caller.
+    /// # A room can be claimed two ways — this guard must see both
+    ///
+    /// `current_session_key` is only ONE of the two claim sources
+    /// [`Self::room_claiming`] recognises ([`ClaimSource::ExplicitClaim`]).
+    /// The other, [`ClaimSource::BoundConversation`], is a row in
+    /// `project_channel_bindings` — and [`Self::bind_conversation`] never
+    /// touches `current_session_key` at all, it only checks the project is
+    /// `status = 'active'`. So a room bound to a channel conversation but
+    /// never claimed by a Panel session (the common shape for a
+    /// channel-created room) passed the old single-arm guard: its binding row
+    /// survives (`BINDING_DDL` declares no FK, no cascade), and
+    /// `project_for_conversation` keeps answering [`Self::room_claiming`]'s
+    /// arm 2 for a project id that no longer exists — a binding orphaned
+    /// permanently, unlistable on any surface (`bindings_for` is
+    /// per-project). The second arm below closes that: it names
+    /// `projects.channel.unbind` (addressed by the conversation triple, needs
+    /// no project id — see that method) rather than adding a cascade DELETE,
+    /// because the delete-instead-of-forgetting reasoning above applies
+    /// identically to a channel-bound room, and once this guard exists that
+    /// DELETE would be an arm that can never fire.
+    ///
+    /// A catalogue entry — no claimed session, no channel binding — removes
+    /// exactly as it always did, which is every pre-P2 caller.
     pub fn remove(&self, id: &str) -> Result<(), ProjectError> {
         self.with_conn(|conn| {
             let claimed: Option<Option<String>> = conn
@@ -596,6 +617,14 @@ impl ProjectStore {
                     )));
                 }
                 Some(None) => {}
+            }
+            if Self::has_channel_binding(conn, id)? {
+                return Err(ProjectError::Invalid(format!(
+                    "project '{id}' is bound to a channel conversation: removing it would leave \
+                     that binding orphaned and its room unreachable, because a room's \
+                     visibility IS its roster. Unbind the conversation with \
+                     projects.channel.unbind first, or archive the project instead."
+                )));
             }
 
             let changed = conn
@@ -629,6 +658,18 @@ impl ProjectStore {
 
     // -- roster ------------------------------------------------------------
 
+    /// `INSERT OR IGNORE` makes this call idempotent the same way
+    /// `remove_member`'s `DELETE` is, but unlike removal it does not gate its
+    /// audit row on whether the row actually changed. Re-adding an
+    /// already-seated member is the caller asserting "this person belongs
+    /// here" again — recording that assertion is not a false claim the way
+    /// recording an unhappened revocation is, because nothing here tells a
+    /// bystander they lost access they never lost. `remove_member` cannot
+    /// make the same claim: it names the target in a push frame telling them
+    /// to drop the room, and doing that to someone who was never seated
+    /// would be actively wrong, not merely redundant. That asymmetry — one
+    /// side has a victim of a false claim, the other does not — is why only
+    /// `remove_member` returns whether it changed anything.
     pub fn add_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
         self.with_conn(|conn| {
             let exists: bool = conn
@@ -648,14 +689,22 @@ impl ProjectStore {
         })
     }
 
-    pub fn remove_member(&self, id: &str, user_id: &str) -> Result<(), ProjectError> {
+    /// Remove `user_id` from `id`'s roster. Returns whether a row was
+    /// actually deleted — the DELETE's affected-row count used to be
+    /// discarded here, so removing somebody who was never a member returned
+    /// the same `Ok(())` as a real revocation, and both call sites wrote an
+    /// audit row and named a bystander in a push frame for a revocation that
+    /// never happened. Mirrors [`Self::unbind_conversation`]'s `Ok(n > 0)`.
+    pub fn remove_member(&self, id: &str, user_id: &str) -> Result<bool, ProjectError> {
         self.with_conn(|conn| {
-            conn.execute(
-                "DELETE FROM project_members WHERE project_id = ?1 AND user_id = ?2",
-                rusqlite::params![id, user_id],
-            )
-            .map_err(db_err)?;
-            Self::republish_roster_locked(conn)
+            let changed = conn
+                .execute(
+                    "DELETE FROM project_members WHERE project_id = ?1 AND user_id = ?2",
+                    rusqlite::params![id, user_id],
+                )
+                .map_err(db_err)?;
+            Self::republish_roster_locked(conn)?;
+            Ok(changed > 0)
         })
     }
 
@@ -1009,6 +1058,30 @@ impl ProjectStore {
         }
     }
 
+    /// Whether `id` has any channel binding at all — the project-id-keyed
+    /// existence question behind [`ClaimSource::BoundConversation`], the
+    /// other half of "what makes a project a room" alongside
+    /// `current_session_key` ([`ClaimSource::ExplicitClaim`]). [`Self::room_claiming`]
+    /// answers the same underlying fact keyed the other way round (by
+    /// conversation, via [`Self::project_for_conversation`]), because that is
+    /// the direction a session key needs; [`Self::remove`]'s guard needs the
+    /// project-keyed direction, which is also what [`Self::bindings_for`]
+    /// already reads in full. This is that same query's existence-only
+    /// sibling — a private `fn(&Connection, ...)` rather than a `&self`
+    /// method, and NOT a call to `bindings_for`, because `remove` is already
+    /// inside a [`Self::with_conn`] closure and `with_conn`'s lock is not
+    /// reentrant.
+    fn has_channel_binding(conn: &Connection, id: &str) -> Result<bool, ProjectError> {
+        conn.query_row(
+            "SELECT 1 FROM project_channel_bindings WHERE project_id = ?1",
+            [id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|found| found.is_some())
+        .map_err(db_err)
+    }
+
     /// Every conversation a room is bound to, oldest first.
     ///
     /// A row whose stored `peer_kind` does not parse back as a
@@ -1081,6 +1154,39 @@ impl ProjectStore {
                 .map_err(db_err)?;
             let rows = stmt
                 .query_map([id], |r| r.get::<_, String>(0))
+                .map_err(db_err)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(db_err)?);
+            }
+            Ok(out)
+        })
+    }
+
+    /// Every room `user_id` is a member of, oldest membership first — the
+    /// by-member direction of [`Self::members`].
+    ///
+    /// It did not exist before `users.get` needed it, and the absence was
+    /// easy to misread: [`Self::list`] is explicitly **unfiltered**,
+    /// [`Self::members`] is per-project, and [`Self::rosters`] returns the
+    /// whole machine's membership keyed the other way round. Deriving one
+    /// principal's rooms from `rosters()` would read every membership row on
+    /// the machine to answer a question `idx_project_members_user` already
+    /// indexes.
+    ///
+    /// Ids only, and no join against `projects`: a membership row whose
+    /// project has since been removed is a fact about the roster table, and
+    /// this method reports the roster table. Naming the rooms is
+    /// `projects.get`'s job.
+    pub fn room_ids_for_member(&self, user_id: &str) -> Result<Vec<String>, ProjectError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT project_id FROM project_members WHERE user_id = ?1 ORDER BY added_at",
+                )
+                .map_err(db_err)?;
+            let rows = stmt
+                .query_map([user_id], |r| r.get::<_, String>(0))
                 .map_err(db_err)?;
             let mut out = Vec::new();
             for row in rows {
@@ -1196,6 +1302,15 @@ impl ProjectStore {
 
     /// [`Self::find_by_path`] with the owner passed explicitly — see
     /// [`Self::add_for`] for why a spawned caller must use this.
+    ///
+    /// The absence-resolution below must agree with
+    /// [`workspace_uniqueness_ddl`]'s: that index resolves a NULL
+    /// `owner_user_id` to the constant [`OWNER_USER_ID`], not to whichever
+    /// caller happens to be asking, and the old query here bound the SAME
+    /// `?2` parameter into both `COALESCE` slots — `COALESCE(owner_user_id,
+    /// ?2) = ?2` reduces to `?2 = ?2` for a NULL-owner row, which is true for
+    /// EVERY caller. `?3` is the fixed absence-resolution the index uses;
+    /// `?2` stays the actual caller the row is scoped to.
     pub fn find_by_path_for(
         &self,
         path: &Path,
@@ -1209,9 +1324,9 @@ impl ProjectStore {
                         created_at, updated_at, last_used_at, current_session_key
                  FROM projects
                  WHERE workspace_path = ?1
-                   AND COALESCE(owner_user_id, ?2) = ?2
+                   AND COALESCE(owner_user_id, ?3) = ?2
                    AND status = 'active'",
-                rusqlite::params![canonical.to_string_lossy(), owner_key],
+                rusqlite::params![canonical.to_string_lossy(), owner_key, OWNER_USER_ID],
                 row_to_project,
             )
             .optional()
@@ -1611,6 +1726,83 @@ mod tests {
         assert_eq!(store.list().unwrap().len(), 1);
     }
 
+    /// T05: `find_by_path_for`'s old `COALESCE(owner_user_id, ?2) = ?2` bound
+    /// the SAME parameter into both COALESCE slots, so for a NULL-owner row it
+    /// reduced to `?2 = ?2` — always true, regardless of who `?2` (the caller)
+    /// actually was. A legacy/unattributed row therefore matched EVERY
+    /// caller. Both directions must hold, or a one-directional fix could
+    /// silently make legacy rows invisible to everyone instead of just to the
+    /// wrong owner: the uniqueness index two screens up resolves the same
+    /// absence to the constant [`OWNER_USER_ID`], and this lookup must agree
+    /// with it, not with whichever owner happens to be asking.
+    #[test]
+    fn a_null_owner_row_resolves_absence_like_the_uniqueness_index_does() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let store = fresh_store();
+
+        // A legacy/unattributed row: owner_user_id is NULL. Routed through
+        // `add_for` (not `create` directly) so the stored `workspace_path` is
+        // canonicalized the same way `find_by_path_for` canonicalizes its
+        // query — `create` does not canonicalize on its own.
+        let legacy = store.add_for(&repo, None, None).unwrap();
+        assert_eq!(legacy.owner_user_id, None);
+
+        assert_eq!(
+            store.find_by_path_for(&repo, Some("u-bob")).unwrap(),
+            None,
+            "a NULL-owner row must not resolve for a caller who is not the legacy default owner"
+        );
+        assert_eq!(
+            store.find_by_path_for(&repo, None).unwrap().map(|p| p.id),
+            Some(legacy.id.clone()),
+            "an absent caller must still resolve the legacy row, the same absence the \
+             uniqueness index resolves"
+        );
+        assert_eq!(
+            store
+                .find_by_path_for(&repo, Some(OWNER_USER_ID))
+                .unwrap()
+                .map(|p| p.id),
+            Some(legacy.id.clone()),
+            "the legacy default owner (the constant absence resolves to) must still match"
+        );
+    }
+
+    /// The write half of the same fix: a DIFFERENT owner registering the same
+    /// path must not collapse onto the NULL-owner row and rename it —
+    /// `add_for` must mint a new row, and the legacy row's name must stay
+    /// byte-unchanged. A `find_by_path_for`-only test could miss this: it
+    /// asserts what a read returns, not what a write does when the read
+    /// (wrongly) returns `Some`.
+    #[test]
+    fn add_for_by_a_different_owner_does_not_rename_a_null_owner_rows_legacy_row() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let store = fresh_store();
+
+        let legacy = store.add_for(&repo, None, None).unwrap();
+
+        let bobs = store
+            .add_for(&repo, Some("renamed".to_string()), Some("u-bob"))
+            .unwrap();
+
+        assert_ne!(
+            bobs.id, legacy.id,
+            "bob must get his own row for this path, not collapse onto the legacy one"
+        );
+        assert_eq!(bobs.name, "renamed");
+        let reloaded_legacy = store.get(&legacy.id).unwrap().unwrap();
+        assert_eq!(
+            reloaded_legacy.name, "repo",
+            "the legacy row's name must be untouched by bob's rename"
+        );
+    }
+
     #[test]
     fn creating_a_project_publishes_its_roster() {
         let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
@@ -1629,6 +1821,55 @@ mod tests {
         assert!(
             !roster::is_member(&p.id, "u-bob"),
             "spec §10: removal revokes visibility immediately"
+        );
+    }
+
+    /// The by-member direction: one principal's rooms, and NOT anybody
+    /// else's. A query that dropped its `WHERE user_id = ?1` would still
+    /// return a plausible list of room ids — the assertion that catches that
+    /// is the one naming the room only the OTHER principal sits in.
+    #[test]
+    fn room_ids_for_member_names_only_that_principals_rooms() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let hers = store.create("hers", Some("u-alice"), None).unwrap();
+        let his = store.create("his", Some("u-bob"), None).unwrap();
+        let shared = store.create("shared", Some("u-bob"), None).unwrap();
+        store.add_member(&shared.id, "u-alice").unwrap();
+
+        let rooms = store.room_ids_for_member("u-alice").unwrap();
+        assert!(rooms.contains(&hers.id));
+        assert!(rooms.contains(&shared.id));
+        assert!(
+            !rooms.contains(&his.id),
+            "a room she is not seated in must not appear in her dossier"
+        );
+        assert_eq!(rooms.len(), 2);
+
+        assert!(
+            store.room_ids_for_member("u-nobody").unwrap().is_empty(),
+            "a principal with no membership row has no rooms, not everyone's"
+        );
+    }
+
+    /// T04: `remove_member` must report whether the DELETE actually removed a
+    /// row, not a constant `Ok(())` — the caller (both the RPC and tool
+    /// faces) needs that to decide whether a revocation genuinely happened
+    /// before it writes an audit row or names a bystander in a push frame.
+    #[test]
+    fn removing_reports_whether_it_changed_anything() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        store.add_member(&p.id, "u-bob").unwrap();
+
+        assert!(
+            store.remove_member(&p.id, "u-bob").unwrap(),
+            "a seated member was actually dropped"
+        );
+        assert!(
+            !store.remove_member(&p.id, "u-bob").unwrap(),
+            "the second call finds nobody to drop — it must say so, not repeat `true`"
         );
     }
 
@@ -1679,6 +1920,88 @@ mod tests {
         // what keeps the conversation reachable.
         store.archive(&p.id).unwrap();
         assert!(roster::is_member(&p.id, "u-bob"));
+    }
+
+    /// T05: a room bound to a channel conversation never sets
+    /// `current_session_key` — `bind_conversation` only checks `status =
+    /// 'active'` — so the pre-T05 guard (which probed only that column) let
+    /// this project through, orphaning the `project_channel_bindings` row.
+    /// The guard's second arm must catch this claim source too, and must name
+    /// BOTH verbs that actually work: `projects.channel.unbind` (addressed by
+    /// the conversation triple, needs no project id) and `archive`.
+    #[test]
+    fn a_channel_bound_room_without_a_claimed_session_is_refused_and_points_at_unbind_and_archive()
+    {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        store.add_member(&p.id, "u-bob").unwrap();
+        store
+            .bind_conversation(
+                &p.id,
+                "telegram",
+                BindingPeerKind::Group,
+                "C-orphan",
+                Some("u-alice"),
+                None,
+            )
+            .unwrap();
+
+        let err = store.remove(&p.id).unwrap_err();
+        assert!(
+            matches!(err, ProjectError::Invalid(ref m)
+                if m.contains("projects.channel.unbind") && m.contains("archive")),
+            "the refusal must name both verbs that actually work: {err}"
+        );
+
+        // Nothing half-applied: the project row, its roster and the binding
+        // are all still there.
+        assert!(store.get(&p.id).unwrap().is_some());
+        assert!(roster::is_member(&p.id, "u-bob"));
+        assert_eq!(
+            store
+                .project_for_conversation("telegram", BindingPeerKind::Group, "C-orphan")
+                .unwrap(),
+            Some(p.id.clone()),
+            "the refused removal must not have touched the binding"
+        );
+    }
+
+    /// The other side of the same guard: once the conversation is unbound
+    /// (the verb the refusal above names), the project has no claim source
+    /// left and `remove` must succeed.
+    #[test]
+    fn unbinding_the_channel_conversation_lets_the_room_be_removed() {
+        let _g = ROSTER_TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store();
+        let p = store.create("room", Some("u-alice"), None).unwrap();
+        store
+            .bind_conversation(
+                &p.id,
+                "telegram",
+                BindingPeerKind::Group,
+                "C-freed",
+                Some("u-alice"),
+                None,
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .unbind_conversation("telegram", BindingPeerKind::Group, "C-freed")
+                .unwrap(),
+            "the conversation was in fact bound"
+        );
+
+        store.remove(&p.id).unwrap();
+
+        assert!(store.get(&p.id).unwrap().is_none());
+        assert_eq!(
+            store
+                .project_for_conversation("telegram", BindingPeerKind::Group, "C-freed")
+                .unwrap(),
+            None
+        );
     }
 
     /// The pre-P2 catalogue entry — a folder in the recents list, no

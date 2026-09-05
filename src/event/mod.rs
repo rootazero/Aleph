@@ -24,4 +24,4 @@ pub use types::{AlephEvent, EventType, ProcessCompletionEvent, SubAgentCompletio
 
 // Event filtering for subscription-based routing
 pub use filter::EventFilter;
-pub use global_bus::{GlobalBus, GlobalEvent, Subscription, SubscriptionId};
+pub use global_bus::{GlobalBus, GlobalEvent, SubscriptionId};

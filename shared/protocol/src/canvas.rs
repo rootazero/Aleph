@@ -29,6 +29,17 @@ pub const MAX_OPS_PER_APPLY: usize = 500;
 /// 200 bytes is ~66 CJK characters — a title, not a document.
 pub const MAX_TITLE_BYTES: usize = 200;
 
+/// Upper bound for the serialized JSON of an entire canvas document.
+///
+/// The per-shape / per-asset / per-op caps already stop any one field from
+/// becoming unbounded, but the AGGREGATE document was not capped: a member
+/// could submit 5000 shapes whose `text` / `prompt` / `label` fields each
+/// held tens of KB, producing a multi-hundred-MB JSON blob that the server
+/// must deserialize, persist and broadcast. This is the byte ceiling the
+/// serializer checks after every apply, so a single apply can never push
+/// the document past it.
+pub const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
+
 /// The single gate over `CanvasDoc.title`, shared by every writer.
 ///
 /// `title` has exactly two writers — the optional title of `canvas.create`
@@ -103,9 +114,49 @@ impl std::fmt::Display for TitleRejection {
 /// point). `between` never mints an index ending in `0`, and callers must not
 /// hand-craft one: an index ending in the least digit has no room below it at
 /// any longer length.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
-)]
+/// Hard upper bound on a fractional index length, in bytes. An index longer
+/// than this on the wire is rejected at deserialisation: the type only
+/// guarantees `between()` for indices that fit in this length, and a
+/// hand-crafted (or attacker-supplied) long index would silently bypass the
+/// "no trailing zero" invariant the z-order relies on.
+pub const MAX_FRAC_INDEX_LEN: usize = 64;
+
+impl<'de> Deserialize<'de> for FracIndex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        validate_frac_index(&raw).map_err(serde::de::Error::custom)?;
+        Ok(Self(raw))
+    }
+}
+
+fn validate_frac_index(raw: &str) -> Result<(), String> {
+    if raw.is_empty() {
+        return Err("fractional index must not be empty".into());
+    }
+    if raw.len() > MAX_FRAC_INDEX_LEN {
+        return Err(format!(
+            "fractional index exceeds {MAX_FRAC_INDEX_LEN} bytes"
+        ));
+    }
+    if raw.as_bytes().iter().any(|b| !DIGITS.contains(b)) {
+        return Err(
+            "fractional index must use only 0-9, A-Z, a-z (no punctuation, no unicode)".into(),
+        );
+    }
+    if raw.ends_with('0') {
+        // An index ending in `0` has no room below it at any longer length
+        // (`between` can never widen the gap), so accepting it on the wire
+        // would let a hand-crafted value strangle the z-order at the very
+        // edge — and once persisted, there is no recovery.
+        return Err("fractional index must not end with '0'".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct FracIndex(String);
 
@@ -639,6 +690,39 @@ mod tests {
 
     fn frac(s: &str) -> FracIndex {
         serde_json::from_value(serde_json::json!(s)).expect("transparent string")
+    }
+
+    /// Wire-bound fractional index invariants: the type only guarantees
+    /// `between()` for indices that fit in `MAX_FRAC_INDEX_LEN`, only use the
+    /// 62 ASCII digits, and never end in `0` (the minimum digit, which has
+    /// no room to widen). Accepting hand-crafted (or attacker-supplied) values
+    /// that violate any of these on the wire would silently break z-order
+    /// forever once persisted.
+    #[test]
+    fn frac_index_deserialization_rejects_bad_values() {
+        for bad in ["", "path/to", "abc!", "with space", "0", "U0"] {
+            let err = serde_json::from_value::<FracIndex>(serde_json::json!(bad))
+                .err()
+                .unwrap_or_else(|| panic!("expected {bad:?} to fail to deserialize"));
+            assert!(
+                err.to_string().to_lowercase().contains("fractional index"),
+                "bad={bad:?} err={err}"
+            );
+        }
+        // Past MAX_FRAC_INDEX_LEN.
+        let too_long = "UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU";
+        assert!(serde_json::from_value::<FracIndex>(serde_json::json!(too_long)).is_err());
+        // Unicode / multi-byte punctuation must fail.
+        let unicode = "Ué";
+        assert!(serde_json::from_value::<FracIndex>(serde_json::json!(unicode)).is_err());
+    }
+
+    #[test]
+    fn frac_index_deserialization_accepts_valid_values() {
+        for good in ["U", "Uu", "Ub", "z", "1", "V", "version1"] {
+            serde_json::from_value::<FracIndex>(serde_json::json!(good))
+                .unwrap_or_else(|e| panic!("good={good:?} should deserialize: {e}"));
+        }
     }
 
     /// The cap counts bytes because it is named for bytes. A CJK title well

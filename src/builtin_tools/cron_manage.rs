@@ -337,11 +337,9 @@ impl AlephTool for CronManageTool {
                 job.source_conversation_id = args.__conversation_id;
                 // P1 data isolation: cron.* is admin-gated, so the owner is
                 // the operating admin — stamp from the ambient attribution of
-                // THIS creating (admin) run.
-                if let Some(attr) = crate::scope::current_scope() {
-                    job.owner_user_id = Some(attr.owner_user_id);
-                    job.scope_id = Some(attr.scope.render());
-                }
+                // THIS creating (admin) run, through the one derivation every
+                // creating face shares.
+                job.stamp_current_scope();
                 let id = service.add_job(job).await.map_err(|e| {
                     crate::error::AlephError::tool(format!("Failed to create cron job: {e}"))
                 })?;

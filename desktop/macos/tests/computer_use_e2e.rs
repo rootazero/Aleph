@@ -108,12 +108,21 @@ impl Rect {
 #[derive(Debug, Clone, Deserialize)]
 struct FixtureElement {
     identifier: String,
-    #[allow(dead_code, reason = "fixture field, kept for diagnostics + forward compatibility with future fixture versions")]
+    #[allow(
+        dead_code,
+        reason = "fixture field, kept for diagnostics + forward compatibility with future fixture versions"
+    )]
     role: String,
-    #[allow(dead_code, reason = "fixture field, kept for diagnostics + forward compatibility with future fixture versions")]
+    #[allow(
+        dead_code,
+        reason = "fixture field, kept for diagnostics + forward compatibility with future fixture versions"
+    )]
     title: Option<String>,
     value: Option<String>,
-    #[allow(dead_code, reason = "fixture field, kept for diagnostics + forward compatibility with future fixture versions")]
+    #[allow(
+        dead_code,
+        reason = "fixture field, kept for diagnostics + forward compatibility with future fixture versions"
+    )]
     secure: bool,
     /// What the fixture declares it offers. The bridge's AX `actions` must be a
     /// superset of this.
@@ -128,9 +137,15 @@ struct LastEvent {
     // Deserialized for completeness; the click-count / drag-step payloads it once
     // carried were asserted by the synthesized-mouse tests, which no longer exist
     // (that rail does not deliver in the background — see the refusal tests).
-    #[allow(dead_code, reason = "deserialised for the full wire shape so a future test can assert on it without changing the fixture")]
+    #[allow(
+        dead_code,
+        reason = "deserialised for the full wire shape so a future test can assert on it without changing the fixture"
+    )]
     value: Option<String>,
-    #[allow(dead_code, reason = "deserialised for the full wire shape so a future test can assert on it without changing the fixture")]
+    #[allow(
+        dead_code,
+        reason = "deserialised for the full wire shape so a future test can assert on it without changing the fixture"
+    )]
     seq: u64,
 }
 
@@ -139,7 +154,10 @@ struct FixtureState {
     pid: i32,
     // Part of the wire format and shown in `{:?}` failure dumps; no assertion
     // reads it directly since `wait_until` polls observed facts, not the counter.
-    #[allow(dead_code, reason = "part of the wire format and shown in failure dumps; `wait_until` polls observed facts so no assertion reads it directly")]
+    #[allow(
+        dead_code,
+        reason = "part of the wire format and shown in failure dumps; `wait_until` polls observed facts so no assertion reads it directly"
+    )]
     seq: u64,
     focused: Option<String>,
     counter: i64,

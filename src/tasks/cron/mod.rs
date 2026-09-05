@@ -65,8 +65,9 @@ pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 
 /// Process-global cron service, installed once at daemon boot.
 ///
-/// The third of three: `goal::global()` and `looping::global()` already exist
-/// for exactly this reason — `users.update`'s deactivation freeze is a free
+/// The third of four: `goal::global()`, `looping::global()` and — since the
+/// heartbeat leg landed — `tasks::heartbeat::global()` exist for exactly this
+/// reason — `users.update`'s deactivation freeze is a free
 /// function with no injected dependencies, and it has to reach every
 /// subsystem that runs work on a principal's behalf. Cron was the one it could
 /// not reach, and the exclusion was written down as a product fact ("`cron.*`
@@ -223,12 +224,19 @@ impl CronService {
     ///
     /// One-way, like its two siblings: reactivating the user does not
     /// re-enable these. The owner re-enables their own from a live session.
+    ///
+    /// The owner half of the predicate is
+    /// [`aleph_protocol::users::owned_by`], shared with the three sibling
+    /// sweeps and with [`Self::count_owned_by`]; the `enabled` half is
+    /// deliberately NOT shared (see that method).
     pub async fn pause_all_owned_by(&self, user_id: &str) -> Result<usize, TaskError> {
         let paused: Vec<String> = {
             let mut store = self.state.store.lock().await;
             let mut ids = Vec::new();
             for job in store.jobs_mut() {
-                if job.enabled && job.owner_user_id.as_deref() == Some(user_id) {
+                if job.enabled
+                    && aleph_protocol::users::owned_by(job.owner_user_id.as_deref(), user_id)
+                {
                     job.enabled = false;
                     ids.push(job.id.clone());
                 }
@@ -243,6 +251,28 @@ impl CronService {
             self.emit_change(id, crate::gateway::events::ChangeKind::Updated);
         }
         Ok(paused.len())
+    }
+
+    /// How many cron jobs `user_id` OWNS — the read-only counterpart of
+    /// [`Self::pause_all_owned_by`], and the crons leg of `users.get`'s
+    /// dossier.
+    ///
+    /// Same owner predicate, a **deliberately different** enabled filter: the
+    /// freeze counts `enabled && owned` because that is what it disabled;
+    /// this counts `owned` so a disabled job the principal still owns shows
+    /// up in the preview. A read that reused `enabled` would tell the
+    /// operator the principal owns fewer jobs than they do.
+    ///
+    /// Read-only: takes the store lock but never calls `jobs_mut()`, which
+    /// would mark the store dirty and schedule a write for a call that
+    /// changed nothing.
+    pub async fn count_owned_by(&self, user_id: &str) -> usize {
+        let store = self.state.store.lock().await;
+        store
+            .jobs()
+            .iter()
+            .filter(|j| aleph_protocol::users::owned_by(j.owner_user_id.as_deref(), user_id))
+            .count()
     }
 
     /// Fire-time liveness enforcement (round-5 ④, the qm `run-trigger.ts`
@@ -617,6 +647,59 @@ mod tests {
         let jobs = service.list_jobs().await.unwrap();
         assert!(!by_name(&jobs, "alice-live"));
         assert!(!by_name(&jobs, "alice-already-off"));
+    }
+
+    /// The deliberate asymmetry, pinned with two explicit numbers rather than
+    /// with an equality: a DISABLED job alice owns is 0-changed to the freeze
+    /// and still hers in the dossier. A counter that reused the freeze's
+    /// `enabled` filter would report 1 here instead of 2.
+    #[tokio::test]
+    async fn counting_by_owner_reports_ownership_not_what_a_freeze_would_change() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let service = CronService::new(CronConfig {
+            db_path: dir.path().join("cron.db").to_string_lossy().to_string(),
+            ..CronConfig::default()
+        })
+        .unwrap();
+
+        let make = |name: &str, owner: Option<&str>, enabled: bool| {
+            let mut job = CronJob::new(
+                name,
+                "agent-1",
+                "do something",
+                ScheduleKind::Every {
+                    every_ms: 60_000,
+                    anchor_ms: None,
+                },
+            );
+            job.owner_user_id = owner.map(str::to_string);
+            job.enabled = enabled;
+            job
+        };
+        for job in [
+            make("alice-live", Some("u-alice"), true),
+            make("alice-already-off", Some("u-alice"), false),
+            make("bob-live", Some("u-bob"), true),
+            make("legacy", None, true),
+        ] {
+            service.add_job(job).await.unwrap();
+        }
+
+        assert_eq!(
+            service.count_owned_by("u-alice").await,
+            2,
+            "the read counts what she OWNS, the disabled job included"
+        );
+        assert_eq!(
+            service.pause_all_owned_by("u-alice").await.unwrap(),
+            1,
+            "the freeze reports only what it CHANGED — the disabled job is 0-changed"
+        );
+        assert_eq!(
+            service.count_owned_by("u-nobody").await,
+            0,
+            "a pre-P1 job with no owner appears in no principal's dossier"
+        );
     }
 
     #[tokio::test]

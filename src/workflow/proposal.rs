@@ -56,10 +56,7 @@ pub fn proposals_dir() -> PathBuf {
 /// thereafter never matches the in-memory canonical_name — silently defeating
 /// the proposal dedup gate.
 pub fn canonical_name(skills: &[String]) -> String {
-    let mut sorted: Vec<String> = skills.iter().map(|s| sanitise_name(s)).collect();
-    sorted.sort_unstable();
-    sorted.dedup();
-    let joined = sorted.join("-");
+    let joined = canonical_set(skills).join("-");
     let mut name = format!("{PROPOSAL_PREFIX}{joined}");
     if name.len() > MAX_NAME_LEN {
         // Truncate on a char boundary to stay UTF-8 safe (P7).
@@ -70,6 +67,24 @@ pub fn canonical_name(skills: &[String]) -> String {
         name.truncate(end);
     }
     name
+}
+
+/// Canonical, comparable form of a name set: **sanitise first, then sort,
+/// then dedup**.
+///
+/// The order matters and is the single derivation point for it (criterion
+/// 12). `sanitise_name` maps every char outside `[A-Za-z0-9._-]` to `_`
+/// (`0x5F`), which sorts ABOVE both `-` (`0x2D`) and space (`0x20`) — so
+/// sorting before sanitising yields a different sequence than sorting after
+/// (`"deep dive" < "deep-scan"` raw, `"deep-scan" < "deep_dive"` sanitised),
+/// and deduping before sanitising leaves two entries where the sanitised
+/// world has one. Every comparison of a skill/step name set in this module
+/// goes through here so no two of them can disagree.
+fn canonical_set(names: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = names.iter().map(|s| sanitise_name(s)).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Build a linear [`WorkflowDef`] skeleton from an observed skill chain. Each
@@ -86,37 +101,52 @@ pub fn skeleton_from_chain(chain: &[String], observations: u32) -> Option<Workfl
     if chain.len() < 2 {
         return None;
     }
-    let steps: Vec<WorkflowStepDef> = chain
-        .iter()
-        .enumerate()
-        .map(|(i, skill)| {
-            let id = sanitise_name(skill);
-            let depends_on = if i == 0 {
-                Vec::new()
-            } else {
-                vec![sanitise_name(&chain[i - 1])]
-            };
-            let prompt = if i == 0 {
-                format!("Apply the '{skill}' skill toward the goal: {{input}}")
-            } else {
-                format!(
-                    "Continue with the '{skill}' skill, building on the previous step's output."
-                )
-            };
-            WorkflowStepDef {
-                id,
-                agent: DEFAULT_AGENT_ID.to_string(),
-                prompt,
-                depends_on,
-                kind: Default::default(),
-                choices: Vec::new(),
-                review: false,
-                require_grounding: false,
-                timeout_seconds: None,
-                max_retries: None,
-            }
-        })
-        .collect();
+    // Step ids are `sanitise_name(skill)`, which is not injective: two
+    // distinct skills (`deploy:prod`, `deploy prod`) collapse onto one id.
+    // `cluster_chains` dedups on the RAW skill name, so such a pair survives
+    // to here — and minting both steps produced a def with a duplicate step
+    // id, which `validate` rejects at `save_proposal`. Nothing records that
+    // failure, so the miner re-drafted the same chain on every dream cycle,
+    // forever. Keep the first occurrence and let the next step depend on the
+    // survivor.
+    let mut steps: Vec<WorkflowStepDef> = Vec::with_capacity(chain.len());
+    for skill in chain {
+        let id = sanitise_name(skill);
+        if steps.iter().any(|s| s.id == id) {
+            continue;
+        }
+        let depends_on = match steps.last() {
+            None => Vec::new(),
+            Some(prev) => vec![prev.id.clone()],
+        };
+        let prompt = if depends_on.is_empty() {
+            format!("Apply the '{skill}' skill toward the goal: {{input}}")
+        } else {
+            format!("Continue with the '{skill}' skill, building on the previous step's output.")
+        };
+        steps.push(WorkflowStepDef {
+            id,
+            agent: DEFAULT_AGENT_ID.to_string(),
+            prompt,
+            depends_on,
+            kind: Default::default(),
+            choices: Vec::new(),
+            review: false,
+            require_grounding: false,
+            tolerate_failed_deps: false,
+            timeout_seconds: None,
+            max_retries: None,
+        });
+    }
+    if steps.len() < 2 {
+        // Every skill in the chain collapsed onto one id — the same rule as a
+        // one-skill chain, one step later: this is not a `MetaSkill`.
+        tracing::warn!(
+            chain = %chain.join(" → "),
+            "MetaSkill skeleton: the whole chain collapsed to one step id after sanitising — not drafting"
+        );
+        return None;
+    }
 
     let description = format!(
         "Auto-drafted MetaSkill from {observations} observed co-occurrence(s) of skills: {}. \
@@ -194,14 +224,7 @@ pub fn already_covered(chain: &[String]) -> bool {
 /// catches the case where the user already built (and renamed) the same
 /// `MetaSkill` by hand, so the miner does not shadow it with a draft.
 pub fn covered_by_step_set(chain: &[String]) -> bool {
-    // Sort once into a side-allocated `Vec` and compare sorted vectors — avoids
-    // allocating two `HashSet`s per stored workflow (`store::load` already
-    // does the heavy lifting). Two sets match iff they have the same elements,
-    // so equal sorted sequences are equivalent.
-    let mut want: Vec<&str> = chain.iter().map(String::as_str).collect();
-    want.sort_unstable();
-    want.dedup();
-    let want_sanitised: Vec<String> = want.iter().map(|s| sanitise_name(s)).collect();
+    let want = canonical_set(chain);
     let Ok(listing) = store::list() else {
         return false;
     };
@@ -209,14 +232,32 @@ pub fn covered_by_step_set(chain: &[String]) -> bool {
         let Ok(manifest) = store::load(&meta.name) else {
             continue;
         };
-        let mut have: Vec<&str> = manifest.steps.iter().map(|s| s.id.as_str()).collect();
-        have.sort_unstable();
-        have.dedup();
-        if have == want_sanitised {
+        let have: Vec<&str> = manifest.steps.iter().map(|s| s.id.as_str()).collect();
+        if step_ids_cover_chain(&have, &want) {
             return true;
         }
     }
     false
+}
+
+/// Pure half of [`covered_by_step_set`] (the other half is store I/O), so the
+/// ordering rule is unit-testable without an `$ALEPH_HOME`.
+///
+/// Sorted-vector compare rather than two `HashSet`s: two sets match iff they
+/// hold the same elements, so equal sorted-and-deduped sequences are
+/// equivalent, and this runs once per stored workflow.
+///
+/// **Design note (not a defect fixed here):** `step_ids` are the RAW stored
+/// ids while `want` is canonical, so this only ever matches a workflow whose
+/// step ids are already slug-shaped. Canonicalising the stored side too would
+/// widen the match — and would also collapse two ids differing only in
+/// punctuation into one, silently suppressing a draft — so that is left as an
+/// open design question rather than changed under a bug fix.
+fn step_ids_cover_chain(step_ids: &[&str], want: &[String]) -> bool {
+    let mut have: Vec<&str> = step_ids.to_vec();
+    have.sort_unstable();
+    have.dedup();
+    have.iter().copied().eq(want.iter().map(String::as_str))
 }
 
 #[cfg(test)]
@@ -279,5 +320,66 @@ mod tests {
         assert!(def.description.contains("3 observed"));
         // The skeleton must pass the store's own validator.
         def.validate().unwrap();
+    }
+
+    /// The set compare must be done in ONE alphabet. Sanitisation reorders
+    /// (`"deep dive" < "deep-scan"` raw, `"deep-scan" < "deep_dive"`
+    /// sanitised), so sorting before sanitising made two lists holding the
+    /// same elements compare unequal — and the miner re-drafted a workflow
+    /// the user had already built by hand, every dream cycle.
+    #[test]
+    fn step_set_compare_is_stable_under_sanitisation_reordering() {
+        let chain: Vec<String> = vec!["deep dive".into(), "deep-scan".into()];
+        assert!(
+            step_ids_cover_chain(&["deep-scan", "deep_dive"], &canonical_set(&chain)),
+            "the same set in the sanitised alphabet must compare equal"
+        );
+        assert!(
+            !step_ids_cover_chain(&["deep-scan"], &canonical_set(&chain)),
+            "a strictly smaller step set is not coverage"
+        );
+    }
+
+    /// Second axis of the same rule: dedup must happen AFTER sanitising, or
+    /// two raw skills that collapse to one id leave `want` one element longer
+    /// than any stored workflow can ever be.
+    #[test]
+    fn step_set_compare_dedups_after_sanitising() {
+        let chain: Vec<String> = vec!["deploy:prod".into(), "deploy prod".into()];
+        assert_eq!(canonical_set(&chain), vec!["deploy_prod".to_string()]);
+        assert!(step_ids_cover_chain(
+            &["deploy_prod"],
+            &canonical_set(&chain)
+        ));
+    }
+
+    /// Two skills that sanitise to one id must not mint two steps with the
+    /// same id: `validate` rejects the duplicate, `save_proposal` fails, and
+    /// nothing records the failure — so the miner re-attempts the same chain
+    /// on every dream cycle, forever.
+    #[test]
+    fn skeleton_dedups_steps_whose_ids_collide_after_sanitising() {
+        let def = skeleton_from_chain(
+            &["deploy:prod".into(), "deploy prod".into(), "verify".into()],
+            3,
+        )
+        .unwrap();
+        let ids: Vec<&str> = def.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["deploy_prod", "verify"]);
+        assert_eq!(
+            def.steps[1].depends_on,
+            vec!["deploy_prod".to_string()],
+            "the survivor of a collision must be what the next step depends on"
+        );
+        // The whole point: a skeleton that cannot be saved is a permanent
+        // silent retry loop.
+        def.validate().unwrap();
+    }
+
+    /// A chain whose every skill collapses onto one id is not a `MetaSkill` —
+    /// same rule as a one-skill chain, one step later.
+    #[test]
+    fn skeleton_rejects_a_chain_that_collapses_to_one_step() {
+        assert!(skeleton_from_chain(&["deploy:prod".into(), "deploy prod".into()], 5).is_none());
     }
 }

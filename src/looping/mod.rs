@@ -240,11 +240,16 @@ impl LoopRegistry {
     /// `Refused` from `transition` and is not counted, mirroring `stop_all`'s
     /// "already-stopped loops are left untouched and omitted").
     ///
-    /// The predicate is exact equality against `Some(user_id)` — a legacy
-    /// loop with `owner_user_id: None` belongs to the platform owner (spec
-    /// §10: the owner account can never be deactivated), never to the user
-    /// being deactivated here. One-way freeze: reactivating the user does not
-    /// auto-resume its loops (spec is silent on auto-resume).
+    /// The owner half of the predicate is
+    /// [`aleph_protocol::users::owned_by`], shared with the three sibling
+    /// sweeps and with [`Self::count_owned_by`] — a legacy loop with
+    /// `owner_user_id: None` belongs to nobody and is never swept. One-way
+    /// freeze: reactivating the user does not auto-resume its loops (spec is
+    /// silent on auto-resume).
+    ///
+    /// The status half is NOT shared with the counter, deliberately: this
+    /// reports what the freeze CHANGED, the counter reports what the
+    /// principal OWNS. See [`Self::count_owned_by`].
     pub fn pause_all_owned_by(&self, user_id: &str) -> usize {
         let reason = format!("Account '{user_id}' was deactivated — pursuit frozen.");
         let mut map = self.lock();
@@ -255,7 +260,8 @@ impl LoopRegistry {
         let targets: Vec<String> = map
             .values()
             .filter(|l| {
-                l.status != LoopStatus::Stopped && l.owner_user_id.as_deref() == Some(user_id)
+                l.status != LoopStatus::Stopped
+                    && aleph_protocol::users::owned_by(l.owner_user_id.as_deref(), user_id)
             })
             .map(|l| l.session_id.clone())
             .collect();
@@ -294,6 +300,23 @@ impl LoopRegistry {
             }
         }
         applied
+    }
+
+    /// How many loops `user_id` OWNS — the read-only counterpart of
+    /// [`Self::pause_all_owned_by`], and the loops leg of `users.get`'s
+    /// dossier.
+    ///
+    /// Same owner predicate ([`aleph_protocol::users::owned_by`]), a
+    /// **deliberately different** status filter: the freeze counts only loops
+    /// it moved out of `Active`; this counts every loop she owns, `Stopped`
+    /// ones included. Reusing the freeze's status filter here would hide the
+    /// stopped loops the operator is about to leave without an owner.
+    #[must_use]
+    pub fn count_owned_by(&self, user_id: &str) -> usize {
+        self.lock()
+            .values()
+            .filter(|l| aleph_protocol::users::owned_by(l.owner_user_id.as_deref(), user_id))
+            .count()
     }
 
     /// The continuation hook's whole post-run decision, under ONE lock guard:
@@ -1037,6 +1060,40 @@ mod tests {
             reg.get("s-legacy").unwrap().status,
             LoopStatus::Active,
             "legacy None-owner rows belong to the platform owner, not alice — untouched"
+        );
+    }
+
+    /// The deliberate asymmetry, pinned with two explicit numbers rather than
+    /// with an equality: a loop alice owns but has already stopped is
+    /// 0-changed to the freeze and still hers in the dossier.
+    #[test]
+    fn count_owned_by_counts_what_she_owns_not_what_a_freeze_would_change() {
+        let reg = LoopRegistry::default();
+        let alice = crate::scope::ScopeAttribution::personal("u-alice");
+        let bob = crate::scope::ScopeAttribution::personal("u-bob");
+        reg.put(st("s-alice-active").with_owner_scope(Some(&alice)));
+        reg.put(
+            st("s-alice-stopped")
+                .with_owner_scope(Some(&alice))
+                .with_status(LoopStatus::Stopped),
+        );
+        reg.put(st("s-bob").with_owner_scope(Some(&bob)));
+        reg.put(st("s-legacy"));
+
+        assert_eq!(
+            reg.count_owned_by("u-alice"),
+            2,
+            "the read counts what she OWNS, the stopped loop included"
+        );
+        assert_eq!(
+            reg.pause_all_owned_by("u-alice"),
+            1,
+            "the freeze reports only what it CHANGED — the stopped loop is 0-changed"
+        );
+        assert_eq!(
+            reg.count_owned_by("u-nobody"),
+            0,
+            "an unstamped loop appears in no principal's dossier"
         );
     }
 

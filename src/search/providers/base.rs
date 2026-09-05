@@ -410,6 +410,41 @@ mod tests {
         assert!(text.contains("metadata"), "{text}");
     }
 
+    /// Both directions of the gate, because a gate whose negative half has
+    /// no exit is fail-dead, not fail-closed (判据 §14).
+    ///
+    /// The closed direction is the reason the check exists. The open one is
+    /// the reason it needs an opener: SearXNG's own documented deployment is
+    /// `docker run -p 8080:8080`, so `http://127.0.0.1:8080` is the common
+    /// case. With no opener the backend was dropped at boot behind one WARN
+    /// line, `from_config` answered "no provider was constructable", and the
+    /// operator read a working refusal as a missing backend (判据 §8).
+    #[test]
+    fn the_private_upstream_gate_opens_and_closes() {
+        for host in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "localhost",
+            "169.254.169.254",
+            "0177.0.0.1",
+        ] {
+            assert!(
+                reject_ssrf_target_host("T", host, false).is_err(),
+                "{host} must be refused by default"
+            );
+            assert!(
+                reject_ssrf_target_host("T", host, true).is_ok(),
+                "{host} must be reachable once the operator opts in"
+            );
+        }
+        // The opener is not a bypass of anything else: a public host was
+        // never refused, so opting in changes nothing for it.
+        for host in ["searx.be", "api.firecrawl.dev"] {
+            assert!(reject_ssrf_target_host("T", host, false).is_ok());
+            assert!(reject_ssrf_target_host("T", host, true).is_ok());
+        }
+    }
+
     #[test]
     fn redaction_replaces_every_occurrence_and_leaves_empty_secrets_alone() {
         assert_eq!(

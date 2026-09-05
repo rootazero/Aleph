@@ -36,8 +36,8 @@
 # first command that must see the throwaway home.
 #
 # Enforced by `tests/qa_fixture_hygiene.rs`, which derives the fixture list from
-# the filesystem rather than from a list in the test — a seventh fixture that
-# hand-rolls `export HOME=` is named by that guard on its first run.
+# the filesystem rather than from a list in the test — a newly added fixture
+# that hand-rolls `export HOME=` is named by that guard on its first run.
 
 qa_redirect_home() {
     local qa_root="$1"

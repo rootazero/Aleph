@@ -97,6 +97,15 @@ pub struct PtySession {
     pub created_at: i64,
     /// Who asked for this session — see [`SpawnOptions::created_by`].
     pub created_by: Option<String>,
+    /// The directory the child was SPAWNED in ([`SpawnOptions::cwd`]), or
+    /// empty when the spawn inherited the server's.
+    ///
+    /// NOT the live cwd: a shell that has since `cd`'d is not tracked,
+    /// because that needs PID probing (a phase 0-A gap). Retained rather than
+    /// dropped after `CommandBuilder` because `RuntimeAgentEntry.cwd` has no
+    /// other producer, and a field that is empty for every session is a
+    /// predicate that cannot vary (判据 §2).
+    pub cwd: String,
     /// Writer into the child's stdin (the PTY master write side).
     writer: crate::sync_primitives::Mutex<Box<dyn Write + Send>>,
     /// Master handle, retained for resize (`TIOCSWINSZ` equivalent).
@@ -113,6 +122,18 @@ pub struct PtySession {
     /// Monotonic per-session frame counter. Advances only when a frame is
     /// actually published, so a client's gap detection means what it says.
     seq: crate::sync_primitives::Mutex<u64>,
+    /// The pid of the process this session spawned — the shell, normally.
+    ///
+    /// `None` when `portable-pty` would not say (it returns `Option`).
+    /// Captured at spawn because the reader thread takes ownership of the
+    /// `Child` immediately afterwards and is the only other holder of this
+    /// fact; asking it later would need a channel for something that never
+    /// changes.
+    shell_pid: Option<u32>,
+    /// The foreground-process probe's bookkeeping. Its own lock, held for
+    /// microseconds and NEVER around the `sysinfo` refresh — see
+    /// [`super::foreground`]'s Locks section.
+    foreground: crate::sync_primitives::Mutex<super::foreground::ForegroundState>,
 }
 
 impl PtySession {
@@ -164,6 +185,8 @@ impl PtySession {
         drop(slave);
 
         let killer = child.clone_killer();
+        // Read BEFORE `spawn_reader` moves the child onto the reader thread.
+        let shell_pid = child.process_id();
         let reader = master
             .try_clone_reader()
             .map_err(|e| format!("clone_reader failed: {e}"))?;
@@ -181,6 +204,7 @@ impl PtySession {
         let session = Arc::new(Self {
             id: id.clone(),
             shell: label,
+            cwd: opts.cwd.clone().unwrap_or_default(),
             created_at: chrono::Utc::now().timestamp(),
             created_by: opts.created_by.clone(),
             writer: crate::sync_primitives::Mutex::new(writer),
@@ -189,6 +213,8 @@ impl PtySession {
             closed: AtomicBool::new(false),
             screen: crate::sync_primitives::Mutex::new(screen),
             seq: crate::sync_primitives::Mutex::new(0),
+            shell_pid,
+            foreground: crate::sync_primitives::Mutex::default(),
         });
 
         spawn_reader(session.clone(), reader, child, bus);
@@ -239,6 +265,118 @@ impl PtySession {
         self.closed.load(Ordering::SeqCst)
     }
 
+    // A `pub fn shell_pid(&self) -> Option<u32>` accessor lived here with zero
+    // callers crate-wide (R10 / YAGNI — CUT 2026-09-04). Its doc named "the
+    // only consumer, the non-Unix foreground heuristic", and that consumer
+    // reads the FIELD directly in `maybe_probe_foreground` below — so the
+    // accessor was both dead and describing someone else's call site (判据 §1).
+    // Re-add it when a reader outside this type exists, not before.
+
+    /// Probe the terminal's foreground process, if this tick is due. Returns
+    /// whether the believed foreground process CHANGED.
+    ///
+    /// `frame_produced` and `agent_known` are the gate's two inputs; see
+    /// [`super::foreground::probe_due`] for the three rules. Calling this on
+    /// every tick — not only on ticks that produced a frame — is what makes
+    /// the recheck rule reachable, and the recheck rule is the only thing
+    /// that can notice an agent EXITING.
+    ///
+    /// The return value is what lets `flush_session` re-sample a session whose
+    /// screen did not change but whose foreground program did; without it, a
+    /// program that starts, paints once and goes quiet is identified here and
+    /// never published.
+    ///
+    /// # Locks
+    ///
+    /// Three acquisitions, none overlapping, and the screen lock is not among
+    /// them:
+    /// 1. the foreground lock, to ask the gate;
+    /// 2. the master lock, inside [`Self::terminal_leader`], for one
+    ///    `tcgetpgrp` ioctl and nothing else;
+    /// 3. the foreground lock again, to fold the outcome in.
+    ///
+    /// **Every process-table read happens between 2 and 3, holding nothing** —
+    /// both the descendant walk (a full refresh) and the single-pid read. An
+    /// earlier version composed the walk into the locked step, so on Windows
+    /// every probe scanned the whole process table while `PtySession::resize`
+    /// waited behind the same lock. `terminal_leader` exists to make that
+    /// impossible to reintroduce by accident, and
+    /// `foreground::tests::no_process_table_read_happens_under_the_master_lock`
+    /// pins it.
+    pub fn maybe_probe_foreground(
+        &self,
+        now: i64,
+        frame_produced: bool,
+        agent_known: bool,
+    ) -> bool {
+        let due = {
+            let mut state = self.foreground.lock().unwrap_or_else(|e| e.into_inner());
+            // Remember the frame even when the gate is about to say no: a
+            // frame that lands inside the rate limit's shadow still means the
+            // screen changed, and dropping it is how a program that paints
+            // once and goes quiet stays unidentified forever (see
+            // `foreground::probe_due`).
+            state.note_frame(frame_produced);
+            super::foreground::probe_due(
+                state.last_probe_at(),
+                now,
+                state.frame_since_probe(),
+                agent_known,
+            )
+        };
+        if !due {
+            return false;
+        }
+        // The master lock is taken and released inside `terminal_leader`.
+        // Everything below this line reads the process table and holds
+        // nothing.
+        let leader = self.terminal_leader().or_else(|| {
+            self.shell_pid
+                .and_then(super::foreground::deepest_newest_descendant)
+        });
+        let observed = leader.and_then(super::foreground::fact_for_pid);
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .observe(now, observed)
+    }
+
+    /// The pgid the terminal itself reports, under the master lock.
+    ///
+    /// The whole body is the lock plus one ioctl, and it is a separate
+    /// function so that "what may run under the master lock" is a question
+    /// with a one-line answer rather than a promise in a comment. Anything
+    /// that reads the process table goes in the caller, after this returns.
+    fn terminal_leader(&self) -> Option<u32> {
+        let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
+        super::foreground::leader_from_terminal(&**master)
+    }
+
+    /// How many probes this session has performed — the cost guard's
+    /// instrument. See [`super::foreground::ForegroundState::probes`].
+    #[must_use]
+    pub fn probe_count(&self) -> u64 {
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .probes()
+    }
+
+    /// The foreground process this session is currently believed to be
+    /// running, after the miss hysteresis.
+    ///
+    /// `None` means the probe has not answered — never that the shell is what
+    /// is running. Those are different facts and the wire keeps them apart
+    /// (`RuntimeAgentEntry::program`'s doc).
+    #[must_use]
+    pub fn foreground_fact(&self) -> Option<super::foreground::ForegroundFact> {
+        self.foreground
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current()
+            .cloned()
+    }
+
     /// The diff since the last call, already in wire form, with a fresh `seq`.
     /// `None` when nothing changed — that is what makes a quiet terminal free.
     pub fn feed_and_take_frame(&self) -> Option<aleph_protocol::pty::PtyScreenFrame> {
@@ -260,6 +398,18 @@ impl PtySession {
             cols,
             patch: super::screen::convert::patch(&patch),
         })
+    }
+
+    /// Run `f` against the server-held screen under ONE lock acquisition.
+    ///
+    /// The agent sampler needs the visible text *and* the OSC title from the
+    /// same screen; two accessors would be two acquisitions and two
+    /// observations of a screen the reader thread mutates in between. Handing
+    /// the borrow out instead of returning `(String, Option<String>)` also
+    /// keeps the title read inside `RuntimeAgents::sample`, which is the line
+    /// the falsification guard has to be able to cut.
+    pub(crate) fn with_screen<R>(&self, f: impl FnOnce(&super::screen::Screen) -> R) -> R {
+        f(&self.screen.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Override the scrollback ceiling for this session. Called at spawn
@@ -349,6 +499,19 @@ fn spawn_reader(
                 let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
             }
             super::manager().remove(&session.id);
+            // Spec §5: the PTY session is gone, so its agent entry is gone.
+            // Here and not as a prune inside `RuntimeAgents::snapshot` —
+            // two mechanisms would be two answers to "is this session
+            // alive" (判据 §6), and only an explicit removal gives task 6 an
+            // edge to emit `runtime.agents.changed` on.
+            crate::gateway::runtime::agents().remove(&session.id);
+            // Task 6: the edge above IS the change — a removed row is
+            // exactly what `runtime.agents.list`'s next fetch will no longer
+            // show. Same helper `start_flush_loop` uses, called with `true`
+            // unconditionally: a removed row is always a change.
+            if let Some(bus) = &bus {
+                super::manager::publish_agents_changed_if(true, bus);
+            }
         })
         .ok();
 }

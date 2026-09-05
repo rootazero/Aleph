@@ -1202,7 +1202,7 @@ impl<S: NoteStore> NoteIndexer<S> {
     ///
     /// `category` is the destination/source category (e.g. `"skill"` for `SkillDistill`).
     /// For `Strengthen` and `Supersede`, the category is parsed from the embedded
-    /// note path so cross-category deletes work correctly.
+    /// note path so cross-category supersedes archive the right file.
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub async fn apply_distill_action(
         &self,
@@ -1317,6 +1317,45 @@ impl<S: NoteStore> NoteIndexer<S> {
                     );
                 }
                 if old_file.exists() {
+                    // Lineage instead of deletion: park the replaced note under
+                    // `archive/` (outside CATEGORY_DIRS, so index and watcher
+                    // ignore it) and stamp the same dated
+                    // `## Superseded by [[X]]` marker the ingest path's
+                    // `mark_superseded` writes. The dream log's
+                    // `DistillActionRecord` only says *that* a supersede
+                    // happened; the archived file preserves *what* was replaced
+                    // and by whom, greppable from the vault itself and
+                    // promotable to a `superseded_by` edge if ever re-ingested.
+                    let archive_dir = self
+                        .memory_dir
+                        .join(agent_id)
+                        .join("archive")
+                        .join(&safe_old_cat);
+                    fs::create_dir_all(&archive_dir).await.map_err(|e| {
+                        AlephError::ConfigError {
+                            message: format!(
+                                "Supersede: failed to create archive dir {archive_dir:?}: {e}"
+                            ),
+                            suggestion: None,
+                        }
+                    })?;
+                    // Keep the raw markdown verbatim (a `KnowledgeNote`
+                    // round-trip is lossy for prose bodies) and only append.
+                    let old_body = fs::read_to_string(&old_file).await.map_err(|e| {
+                        AlephError::ConfigError {
+                            message: format!(
+                                "Supersede: failed to read old file {old_file:?}: {e}"
+                            ),
+                            suggestion: None,
+                        }
+                    })?;
+                    let new_note_path = format!("{category}/{}", sanitize_title(title)?);
+                    let marker = format!(
+                        "\n## Superseded by [[{new_note_path}]] ({})\n",
+                        chrono::Utc::now().format("%Y-%m-%d")
+                    );
+                    let dest = archive_dir.join(format!("{safe_old}.md"));
+                    atomic_write_file(&dest, &format!("{old_body}{marker}")).await?;
                     fs::remove_file(&old_file)
                         .await
                         .map_err(|e| AlephError::ConfigError {

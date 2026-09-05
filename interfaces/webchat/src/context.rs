@@ -290,7 +290,15 @@ pub(crate) fn query_with_bootstrap_ticket(search: &str, ticket: &str) -> String 
 #[cfg(target_arch = "wasm32")]
 fn persist_device_token(token: &str) {
     if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(GATEWAY_DEVICE_TOKEN_KEY, token);
+        if let Err(e) = s.set_item(GATEWAY_DEVICE_TOKEN_KEY, token) {
+            // Silent failure here used to surface as the user logging back in
+            // on every reload ("Aleph keeps forgetting my token"). Log so
+            // the dev console shows the real cause (full / private mode /
+            // disabled storage) and the boot flow can react.
+            web_sys::console::warn_1(
+                &format!("localStorage write failed for device token: {e:?}").into(),
+            );
+        }
     }
 }
 
@@ -298,7 +306,11 @@ fn persist_device_token(token: &str) {
 #[cfg(target_arch = "wasm32")]
 fn persist_legacy_token(token: &str) {
     if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(GATEWAY_LEGACY_TOKEN_KEY, token);
+        if let Err(e) = s.set_item(GATEWAY_LEGACY_TOKEN_KEY, token) {
+            web_sys::console::warn_1(
+                &format!("localStorage write failed for legacy token: {e:?}").into(),
+            );
+        }
     }
 }
 
@@ -530,6 +542,25 @@ pub struct DashboardState {
     /// Typed classification of the latest connection failure. Single source of
     /// truth; `connection_error` (String) is derived from it for legacy readers.
     pub connection_failure: RwSignal<Option<ConnectionFailure>>,
+
+    /// Which PTY session the terminal view is showing, by `session_id`.
+    ///
+    /// The cross-component ADDRESS of that answer, not the answer itself:
+    /// `views::terminal::tabs::TabModel` owns the tab order and the selection
+    /// rules, and the terminal view publishes what it settled on here.
+    /// Surfaces outside that view WRITE this to request a session — the agent
+    /// panel's row click is the reason it exists (D3: the panel that tells you
+    /// an agent is blocked had no way to show you its terminal).
+    ///
+    /// A request naming a session the terminal has no open tab for is refused
+    /// by the model and simply does not take effect; nothing here may create a
+    /// tab. `None` means "no request; show whatever the tab model selects".
+    ///
+    /// Session-scoped by design: which terminal THIS browser tab is looking at
+    /// is not a fact about the account, so it is neither persisted to
+    /// `localStorage` nor sent to the server. A second device on the same
+    /// gateway is looking at its own terminal.
+    pub terminal_selection: RwSignal<Option<String>>,
 }
 
 /// Build the gateway WS URL from a page protocol + host. `https:` ⇒ `wss://`.
@@ -746,6 +777,7 @@ impl DashboardState {
             needs_token: RwSignal::new(false),
             token_was_rejected: RwSignal::new(false),
             connection_failure: RwSignal::new(None),
+            terminal_selection: RwSignal::new(None),
         }
     }
 
@@ -1106,8 +1138,12 @@ impl DashboardState {
         {
             let rpc_tx = self.rpc_tx.with_value(std::clone::Clone::clone);
             if let Some(tx) = rpc_tx {
-                tx.unbounded_send(request)
-                    .map_err(|_| RpcFailure::local("Failed to send RPC request"))?;
+                tx.unbounded_send(request).map_err(|e| {
+                    // Keep the source error so triage can tell a closed channel
+                    // from a full one (the old "Failed to send RPC request"
+                    // string lumped every failure mode together).
+                    RpcFailure::local(format!("Failed to send RPC request: {e}"))
+                })?;
             } else {
                 return Err(RpcFailure::local("Not connected"));
             }
@@ -1121,7 +1157,7 @@ impl DashboardState {
         use futures::future::{select, Either};
         match select(response_rx, TimeoutFuture::new(30_000)).await {
             Either::Left((res, _)) => {
-                res.map_err(|_| RpcFailure::local("Response channel closed"))?
+                res.map_err(|e| RpcFailure::local(format!("Response channel closed: {e}")))?
             }
             Either::Right(((), _)) => Err(RpcFailure::local("Request timed out")),
         }
@@ -1304,8 +1340,16 @@ impl DashboardState {
                                         } else {
                                             // This is an event notification
                                             // Parse event format: { "method": "event", "params": { "topic": "...", "data": {...} } }
+                                            //
+                                            // The method name comes from the
+                                            // shared constant, not a literal:
+                                            // it is a wire key, and this was
+                                            // the sixth writer of it — the one
+                                            // the constant was introduced to
+                                            // abolish and then missed, on the
+                                            // client side of the same wire.
                                             if let Some(method) = value.get("method").and_then(|m| m.as_str()) {
-                                                if method == "event" {
+                                                if method == aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD {
                                                     if let Some(params) = value.get("params") {
                                                         if let Some(topic) = params.get("topic").and_then(|t| t.as_str()) {
                                                             let data = params.get("data").cloned().unwrap_or(Value::Null);

@@ -286,6 +286,16 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
     }
 
     let mut job = CronJob::new(name, agent_id, prompt, schedule_kind);
+    // P1 data isolation: the caller in front of this RPC owns the job it is
+    // minting. `current_scope()` is live on this face — `server::handler`
+    // wraps `process_request` in `scope::with_scope` at BOTH dispatch
+    // stations, and a loopback connection resolves to a real `u-` owner — so
+    // this is the same derivation `cron_manage`'s tool face already uses.
+    // Until this line existed, every job created from the Panel or the CLI
+    // reached the store with both columns NULL. See
+    // `CronJob::stamp_current_scope` for what the four downstream readers do
+    // with that NULL.
+    job.stamp_current_scope();
 
     // Optional fields
     if let Some(enabled) = params.get("enabled").and_then(|v| v.as_bool()) {
@@ -898,6 +908,55 @@ mod tests {
     fn error_of(response: JsonRpcResponse) -> (i32, String) {
         let e = response.error.expect("expected an error response");
         (e.code, e.message)
+    }
+
+    /// The offboarding sweep must actually reach a job this RPC face created.
+    ///
+    /// `pause_all_owned_by` keys on `owner_user_id`, so an unstamped RPC job
+    /// is simply not in the set it walks — and the sweep reports a perfectly
+    /// truthful count of the jobs it DID pause, so nothing upstream notices.
+    /// The assertion is therefore that the job is DISABLED, not that the
+    /// sweep ran or what it returned.
+    #[tokio::test]
+    async fn the_offboarding_sweep_reaches_a_job_created_over_the_rpc_face() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cron = live_service(&dir);
+
+        let response = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-leaver")),
+            handle_create(
+                request(
+                    "cron.create",
+                    json!({
+                        "name": "leavers-job",
+                        "schedule_kind": { "kind": "every", "every_ms": 60_000 },
+                    }),
+                ),
+                cron.clone(),
+            ),
+        )
+        .await;
+        assert!(
+            response.error.is_none(),
+            "precondition: create must succeed"
+        );
+
+        cron.lock()
+            .await
+            .pause_all_owned_by("u-leaver")
+            .await
+            .unwrap();
+
+        let jobs = cron.lock().await.list_jobs().await.unwrap();
+        let job = jobs
+            .iter()
+            .find(|j| j.name == "leavers-job")
+            .expect("the created job must still be listed");
+        assert!(
+            !job.enabled,
+            "an RPC-created job belongs to its creator, so offboarding that \
+             creator must switch it off"
+        );
     }
 
     /// The leftover this round exists for.

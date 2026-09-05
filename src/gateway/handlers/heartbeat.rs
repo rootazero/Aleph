@@ -274,6 +274,9 @@ pub async fn handle_create(
 
     let mut task =
         crate::tasks::heartbeat::config::HeartbeatTask::new(name, agent_id, interval_ms, probe);
+    // Who this monitor belongs to. One of the two creating faces (the other is
+    // `builtin_tools::heartbeat_manage`), both calling the same derivation.
+    task.stamp_current_scope();
 
     // Optional: enabled
     if let Some(enabled) = params.get("enabled").and_then(|v| v.as_bool()) {
@@ -586,6 +589,7 @@ mod tests {
     // helper itself has two live callers (`parse_interval` at lines 205/356),
     // so the test was orphaned, not obsolete.
     use super::parse_interval;
+    use serde_json::{json, Value};
 
     #[test]
     fn test_parse_interval() {
@@ -594,5 +598,66 @@ mod tests {
         assert_eq!(parse_interval("30s").unwrap(), 30_000);
         assert_eq!(parse_interval("60000").unwrap(), 60_000);
         assert!(parse_interval("abc").is_err());
+    }
+
+    /// `heartbeat.create` — the RPC face — must persist the calling user as
+    /// the task's owner.
+    ///
+    /// Read back from a store freshly loaded off the same file, so what is
+    /// asserted is what reached SQLite, not what the handler happened to hold
+    /// in memory. Its twin lives in `builtin_tools::heartbeat_manage`: two
+    /// tests because there are two creating faces, and cron shipped a round
+    /// with exactly one of its two stamped.
+    #[tokio::test]
+    async fn heartbeat_create_over_the_rpc_face_persists_the_callers_scope() {
+        use crate::tasks::heartbeat::config::HeartbeatConfig;
+        use crate::tasks::heartbeat::store::HeartbeatStore;
+        use crate::tasks::heartbeat::HeartbeatService;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("heartbeat.db");
+        let service = std::sync::Arc::new(tokio::sync::Mutex::new(HeartbeatService::new(
+            HeartbeatStore::open(&db_path).unwrap(),
+            HeartbeatConfig::default(),
+        )));
+
+        let request = crate::gateway::protocol::JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "heartbeat.create".to_string(),
+            params: Some(json!({
+                "name": "rpc-monitor",
+                "interval_ms": 300_000,
+                "probe": { "tool_name": "gmail.unread_count" },
+            })),
+        };
+        let response = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-rpc")),
+            super::handle_create(request, service),
+        )
+        .await;
+        assert!(
+            response.error.is_none(),
+            "precondition: create must succeed, got {:?}",
+            response.error
+        );
+
+        let reloaded = HeartbeatStore::open(&db_path).unwrap();
+        let task = reloaded
+            .tasks()
+            .iter()
+            .find(|t| t.name == "rpc-monitor")
+            .expect("the created task must be on disk");
+        let row = serde_json::to_value(task).unwrap();
+        assert_eq!(
+            row.get("owner_user_id").and_then(Value::as_str),
+            Some("u-rpc"),
+            "a task created over the RPC face must reach the store owned"
+        );
+        assert_eq!(
+            row.get("scope_id").and_then(Value::as_str),
+            Some("personal:u-rpc"),
+            "and scoped — from_persisted needs the pair, not half of it"
+        );
     }
 }

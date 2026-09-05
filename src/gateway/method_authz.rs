@@ -122,6 +122,33 @@ const OPERATOR_TOOLS: &[&str] = &[
     // their own read-only tool name — not a carve-out inside a tool whose
     // other arms rewrite install-wide trust.
     "plugin_manage",
+    // `terminal` LOOKS like the `*_list`/`*_status`/`*_read` shape this
+    // list's own doc comment says is deliberately absent — it is not one of
+    // those. Read-only self-management (`config_audit`, `gateway_route`)
+    // discloses THIS server's own config; `terminal` discloses *another
+    // principal's* live terminal screen. The repo already made this exact
+    // call one face over: `"runtime."` sits in `method_admin::ADMIN_PREFIXES`
+    // with the reasoning "read-only agent panel over the same PTY sessions
+    // `pty.` gates — a session id, its cwd, and what is running in it, seen
+    // through a different lens. Same disclosure, same gate." `terminal` is a
+    // THIRD lens on that identical disclosure (herdr runtime port, phase 1,
+    // Task 11) — leaving it open would make the tool face a lower-privilege
+    // bypass of a decision `pty.*`/`runtime.*` already made twice.
+    // Before deleting this entry to "clean up" an apparent `*_read`
+    // exception: re-read the paragraph above, not just this line.
+    //
+    // ⚠️ The escalation card that membership here triggers
+    // (`gate_chain::GateRule::OperatorRequired::reason`, in
+    // `tools/scoped/gate_chain.rs`) reads "… which changes Aleph's own
+    // configuration. Approve to allow this change." That sentence is false
+    // for `terminal` — a read-only tool that changes nothing. Nothing is
+    // disclosed by it today only because `terminal`'s own inline gate
+    // refuses the call anyway even after a human approves that card
+    // (`caller_is_operator()` reads an unchanged `TurnContext` — see
+    // `terminal.rs`'s module doc). The card's TEXT is still wrong for a
+    // read-only tool, and the fix belongs in `gate_chain.rs`, not in this
+    // list or in `terminal.rs` (task-11 review F1).
+    "terminal",
 ];
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
@@ -163,6 +190,12 @@ mod tests {
         // gates are different mechanisms: deleting this entry would not make
         // any `workspace.` RPC test go red, it would only widen the tool.
         "workspace_manage",
+        // A third lens on the disclosure `pty.`/`runtime.` already gate
+        // operator-only on both their faces (session id, cwd, live screen
+        // contents). Deleting this entry would not redden any `pty.*` or
+        // `runtime.*` test — it would silently expose another principal's
+        // terminal content through the one face nothing else gates.
+        "terminal",
         // Writes `allowed_users` — the list the run-start gate
         // (`caller_may_act_as_agent`) reads. Ungated, the people that gate
         // refuses could add themselves to it, and nothing in `handlers::agent`

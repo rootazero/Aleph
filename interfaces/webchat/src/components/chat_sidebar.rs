@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::api::chat::ChatApi;
 use crate::api::teams::{TeamSummary, TeamsApi};
 use crate::context::DashboardState;
-use crate::i18n::{t, t_string, use_i18n};
+use crate::i18n::{t, t_string, td_string, use_i18n};
 use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::agent_identity::agent_color_for_id;
@@ -26,14 +26,15 @@ use aleph_protocol::queue::PendingRun;
 
 use web_sys::HtmlInputElement;
 
-/// A session entry returned by the backend (`sessions.list`).
+/// A session entry returned by the backend (`sessions.list`) — the type the
+/// server constructs the row from, shared through `aleph-protocol`.
 ///
-/// One decoder for every Panel surface — the phone history reads the same rows
-/// (`api::sessions::SessionRow`). It used to be two hand-written copies, and
-/// they had diverged: the phone's carried no dials, so tapping a row there
-/// restored the folder and dropped the tier and the mode while the server kept
-/// enforcing them.
-use crate::api::sessions::SessionRow as SessionEntry;
+/// One decoder for every Panel surface; the phone history reads the same rows.
+/// It used to be two hand-written copies, and they had diverged: the phone's
+/// carried no dials, so tapping a row there restored the folder and dropped the
+/// tier and the mode while the server kept enforcing them.
+use crate::api::sessions::{SessionListRow as SessionEntry, SessionRowKnobs};
+use crate::components::sidebar::AgentPanel;
 use crate::components::team_chat_entry::{enter_team_chat, AgentEntry};
 
 /// Should a `run.session_updated` frame re-hydrate the open transcript from
@@ -287,11 +288,156 @@ pub(crate) async fn hydrate_session_history(
                 chat.settle_plan(Some(&plan));
             }
 
+            // What the PREVIOUS run did, as the last row of the transcript —
+            // the one fact the rows above cannot express, because a run cut off
+            // mid-tool persists exactly what a run that finished persists.
+            // Pushed after the replay loop so it sits at the bottom, where a
+            // freshly-attached client is already looking.
+            if let Some(notice) = loaded
+                .last_run
+                .as_ref()
+                .and_then(|lr| last_run_notice(lr, locale))
+            {
+                chat.messages.update(|msgs| {
+                    msgs.push(crate::views::chat::state::ChatMessage {
+                        timestamp: None,
+                        id: "last-run-notice".to_string(),
+                        role: "system".to_string(),
+                        content: notice,
+                        tool_calls: vec![],
+                        is_streaming: false,
+                        is_intermediate: false,
+                        error: None,
+                        model_info: None,
+                        iteration: None,
+                        is_final: false,
+                        text_finalized: false,
+                        agent_id: None,
+                        plan_archive: None,
+                        author_user_id: None,
+                    });
+                });
+            }
+
             (active_run, pending)
         }
         Err(e) => {
             web_sys::console::error_1(&format!("Failed to load history: {e}").into());
             (None, Vec::new())
+        }
+    }
+}
+
+/// The one sentence this Panel says about a conversation's newest run, or
+/// `None` when there is nothing to say.
+///
+/// The numbers are the server's reduction rendered — `RunProgressView` and the
+/// dangling list — never recounted from the transcript: two derivations of "how
+/// far did it get" are two answers and the wrong one is unfalsifiable here.
+///
+/// `inspected == false` is the list face's answer (the word and nothing else),
+/// and the counts are withheld then rather than printed as zeroes, which would
+/// read as "nothing was lost" off a face that never looked.
+///
+/// Not keyed on `disposition == interrupted`. A log holding dispatched calls
+/// that never came back but no run marker at all reduces to `never_ran`, and a
+/// log the reducer refused to `log_inconsistent` — both are runs nobody can
+/// vouch for, and a notice that skipped them would leave calls the server
+/// produced rendered by nobody (criterion #17).
+#[must_use]
+pub(crate) fn last_run_notice(
+    last_run: &aleph_protocol::LastRunState,
+    locale: crate::i18n::Locale,
+) -> Option<String> {
+    use aleph_protocol::LastRunDisposition as D;
+
+    let dangling = last_run.dangling().map(<[_]>::len);
+    match last_run.disposition() {
+        D::LogInconsistent => {
+            // The server always names at least one tag on this path; an empty
+            // list would be a core that refused a log without saying why, and
+            // an em dash says that rather than inventing a reason.
+            let tags = if last_run.contradictions.is_empty() {
+                "—".to_string()
+            } else {
+                last_run.contradictions.join(", ")
+            };
+            Some(td_string!(locale, narration.last_run_log_inconsistent, tags = tags).to_string())
+        }
+        D::Interrupted => Some(match (last_run.progress, dangling) {
+            (Some(p), Some(n)) => td_string!(
+                locale,
+                narration.last_run_interrupted,
+                answered = i64::from(p.tool_calls_answered),
+                dispatched = i64::from(p.tool_calls_dispatched),
+                unknown = n as i64
+            )
+            .to_string(),
+            _ => td_string!(locale, narration.last_run_interrupted_plain).to_string(),
+        }),
+        D::Unrecognized => Some(
+            td_string!(
+                locale,
+                narration.last_run_unknown_state,
+                word = last_run.disposition.clone()
+            )
+            .to_string(),
+        ),
+        D::Clean | D::NeverRan => match dangling {
+            Some(n) if n > 0 => {
+                Some(td_string!(locale, narration.last_run_dangling, count = n as i64).to_string())
+            }
+            _ => None,
+        },
+    }
+}
+
+/// The sidebar row's badge for a conversation whose newest run needs attention,
+/// beside the mode badge — or `None`, which is most rows.
+///
+/// The list face carries the disposition word and nothing else (its
+/// `LastRunState::dangling` deliberately answers `None`), so this reads the
+/// word. It is the same rule [`last_run_notice`] applies, narrowed to what fits
+/// in a badge.
+#[must_use]
+pub(crate) fn run_badge(session: &SessionEntry) -> Option<RunBadge> {
+    use aleph_protocol::LastRunDisposition as D;
+
+    let last_run = session.last_run.as_ref()?;
+    let dangling = last_run.dangling().is_some_and(|d| !d.is_empty());
+    match last_run.disposition() {
+        D::Interrupted => Some(RunBadge::Interrupted),
+        D::LogInconsistent => Some(RunBadge::LogInconsistent),
+        D::Unrecognized => Some(RunBadge::Unknown),
+        D::Clean | D::NeverRan if dangling => Some(RunBadge::Interrupted),
+        D::Clean | D::NeverRan => None,
+    }
+}
+
+/// What a session row's run badge says, decided once and worded per surface.
+///
+/// The decision and the wording are split because the wording is localised and
+/// the decision is not: the wide sidebar and the phone history both call
+/// [`run_badge`], and a second `match` over dispositions in either of them
+/// would be a second rule to keep in step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunBadge {
+    /// The run was cut off, or left tool calls with no receipt.
+    Interrupted,
+    /// The reducer refused this session's log.
+    LogInconsistent,
+    /// The server used a disposition word this build does not know.
+    Unknown,
+}
+
+impl RunBadge {
+    /// This badge in the viewer's language.
+    #[must_use]
+    pub(crate) fn label(self, i18n: crate::i18n::I18nCtx) -> String {
+        match self {
+            Self::Interrupted => t_string!(i18n, chat.run_badge_interrupted).to_string(),
+            Self::LogInconsistent => t_string!(i18n, chat.run_badge_log_inconsistent).to_string(),
+            Self::Unknown => t_string!(i18n, chat.run_badge_unknown).to_string(),
         }
     }
 }
@@ -764,7 +910,7 @@ pub fn ChatSidebar() -> impl IntoView {
                 .get_untracked()
                 .iter()
                 .find(|s| s.key == key)
-                .map(SessionEntry::knobs)
+                .map(SessionRowKnobs::knobs)
                 .unwrap_or_default(),
         );
 
@@ -1252,8 +1398,13 @@ pub fn ChatSidebar() -> impl IntoView {
                 }
             }}
 
+            // Agent panel (Task 9) + session list share the remaining
+            // vertical space; the divider between them lives inside
+            // `<AgentPanel />` itself (`components/sidebar/agent_panel.rs`).
+            <div class="flex-1 flex flex-col min-h-0">
+            <AgentPanel />
             // Session list + group section (single scroll container)
-            <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+            <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1 min-h-0">
 
                 // ── Group Chat collapsible section ────────────────────
                 {move || {
@@ -1594,6 +1745,11 @@ pub fn ChatSidebar() -> impl IntoView {
                                     // rows stay clean (the global default is
                                     // not a per-row fact worth repeating).
                                     let mode_badge = session.mode.clone();
+                                    // The server's word about this row's newest
+                                    // run. Absent on a clean one, and absent
+                                    // entirely when the server did not answer —
+                                    // never a green "fine" this client made up.
+                                    let run_badge = run_badge(&session).map(|b| b.label(i18n));
                                     let do_rename = do_rename.clone();
                                     let do_delete = do_delete.clone();
 
@@ -1743,6 +1899,12 @@ pub fn ChatSidebar() -> impl IntoView {
                                                                     {m}
                                                                 </span>
                                                             })}
+                                                            {run_badge.map(|b| view! {
+                                                                <span class="shrink-0 px-1 py-px rounded border border-warning/50
+                                                                             text-[9px] text-warning">
+                                                                    {b}
+                                                                </span>
+                                                            })}
                                                         </div>
                                                         <div class="truncate text-[10px] text-text-tertiary mt-0.5">
                                                             {subtitle}
@@ -1811,6 +1973,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     .into_any()
                 }}
             </div>
+            </div>
 
             // Bottom status bar — gateway state + active run count.
             <crate::components::sidebar::SessionStatusBar />
@@ -1820,15 +1983,20 @@ pub fn ChatSidebar() -> impl IntoView {
 
 fn format_session_subtitle(session: &SessionEntry) -> String {
     let msg_count = session.message_count;
-    match session.updated_at {
-        Some(ts) => {
-            // Format Unix epoch seconds as MM-DD using js_sys::Date (WASM-safe)
-            let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
-            let month = date.get_month() + 1; // 0-based in JS
-            let day = date.get_date();
-            format!("{msg_count} msgs - {month:02}-{day:02}")
-        }
-        None => format!("{msg_count} messages"),
+    // `0` is the row's "no timestamp" — the field is a plain `i64` on the wire
+    // with a `#[serde(default)]`, so an older core and a session the server
+    // never stamped both arrive as the epoch. Rendering 1970 for either would
+    // be a date this client invented.
+    if session.updated_at > 0 {
+        // Format Unix epoch seconds as MM-DD using js_sys::Date (WASM-safe)
+        let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(
+            session.updated_at as f64 * 1000.0,
+        ));
+        let month = date.get_month() + 1; // 0-based in JS
+        let day = date.get_date();
+        format!("{msg_count} msgs - {month:02}-{day:02}")
+    } else {
+        format!("{msg_count} messages")
     }
 }
 
@@ -1974,5 +2142,216 @@ mod rehydrate_tests {
             None,
             started_here
         ));
+    }
+}
+
+#[cfg(test)]
+mod last_run_face_tests {
+    use super::{last_run_notice, run_badge, RunBadge, SessionEntry};
+    use crate::i18n::Locale;
+    use aleph_protocol::{DanglingCallView, LastRunState, RunProgressView};
+
+    /// `n` calls that crossed the dispatch line and never came back.
+    fn dangling(n: usize) -> Vec<DanglingCallView> {
+        (0..n)
+            .map(|i| DanglingCallView {
+                call_id: format!("call-{i}"),
+                tool_name: "shell".into(),
+                provenance: DanglingCallView::THIS_RESTART.into(),
+                denied: false,
+            })
+            .collect()
+    }
+
+    fn interrupted() -> LastRunState {
+        LastRunState {
+            disposition: LastRunState::INTERRUPTED.into(),
+            run_id: Some("run-9".into()),
+            trailing_starts: 1,
+            dangling: dangling(3),
+            progress: Some(RunProgressView {
+                tool_calls_dispatched: 5,
+                tool_calls_answered: 2,
+                assistant_messages: 1,
+                last_activity_ms: Some(1_750_000_000_000),
+            }),
+            contradictions: Vec::new(),
+            inspected: true,
+        }
+    }
+
+    /// One sentence, carrying the numbers the attach face actually looked up.
+    /// They are the server's reduction rendered, never recounted here — and the
+    /// assertions are on the digits rather than on the words around them, which
+    /// are localised.
+    #[test]
+    fn history_with_interrupted_last_run_pushes_one_system_notice() {
+        let notice =
+            last_run_notice(&interrupted(), Locale::default()).expect("an interrupted run is news");
+        assert!(
+            notice.contains("2/5"),
+            "the landed/dispatched pair rides: {notice}"
+        );
+        assert!(
+            notice.contains('3'),
+            "and so does the count nobody can vouch for: {notice}"
+        );
+    }
+
+    /// The same reduction with no progress recorded says the word alone —
+    /// zeroes would read as "nothing was lost".
+    #[test]
+    fn an_interrupted_run_with_no_progress_prints_no_numbers() {
+        let bare = LastRunState {
+            progress: None,
+            dangling: Vec::new(),
+            ..interrupted()
+        };
+        let notice = last_run_notice(&bare, Locale::default()).expect("still news");
+        assert!(
+            !notice.contains('0'),
+            "an unmeasured run must not report zeroes: {notice}"
+        );
+    }
+
+    /// A run that finished is not news, and neither is a conversation the
+    /// server said nothing about — but those are different silences, and only
+    /// this one is an assertion about a fact.
+    #[test]
+    fn clean_last_run_pushes_none() {
+        let clean = LastRunState {
+            disposition: LastRunState::CLEAN.into(),
+            inspected: true,
+            ..LastRunState::default()
+        };
+        assert_eq!(last_run_notice(&clean, Locale::default()), None);
+    }
+
+    /// A refused log is not a clean one. The tag is what an operator takes to
+    /// `aleph doctor`, so it rides in the sentence.
+    #[test]
+    fn log_inconsistent_pushes_doctor_notice() {
+        let refused = LastRunState {
+            disposition: LastRunState::LOG_INCONSISTENT.into(),
+            contradictions: vec!["session-log-duplicate-dispatch".into()],
+            inspected: true,
+            ..LastRunState::default()
+        };
+        let notice = last_run_notice(&refused, Locale::default()).expect("a refused log is news");
+        assert!(
+            notice.contains("session-log-duplicate-dispatch") && notice.contains("doctor"),
+            "{notice}"
+        );
+    }
+
+    /// A log can hold dispatched calls that never came back and carry no run
+    /// marker at all — `never_ran`, not `interrupted`. A notice keyed on the
+    /// word alone would leave those calls rendered by nobody.
+    #[test]
+    fn dangling_calls_are_reported_even_when_the_word_is_not_interrupted() {
+        let unmarked = LastRunState {
+            disposition: LastRunState::NEVER_RAN.into(),
+            dangling: dangling(2),
+            inspected: true,
+            ..LastRunState::default()
+        };
+        let notice = last_run_notice(&unmarked, Locale::default()).expect("lost calls are news");
+        assert!(notice.contains('2'), "the count rides: {notice}");
+    }
+
+    /// The list face fills the word and nothing else, and that is enough to
+    /// badge the row. Its empty `dangling` is not evidence — `dangling()`
+    /// withholds it — so the badge is derived from the word, never from a list
+    /// nobody populated.
+    #[test]
+    fn sidebar_row_shows_interrupted_badge_from_list_face() {
+        let row = SessionEntry {
+            key: "agent:main:main:s1".into(),
+            last_run: Some(LastRunState::from_markers(
+                LastRunState::INTERRUPTED,
+                Some("run-3".into()),
+                2,
+            )),
+            ..SessionEntry::default()
+        };
+        assert!(row.last_run.as_ref().unwrap().dangling().is_none());
+        assert_eq!(run_badge(&row), Some(RunBadge::Interrupted));
+    }
+
+    /// The two silences a row can carry, neither of which earns a badge — and
+    /// the one that must never be painted as "fine" is the first.
+    #[test]
+    fn an_unanswered_or_clean_row_carries_no_badge() {
+        let unanswered = SessionEntry {
+            key: "agent:main:main:s2".into(),
+            ..SessionEntry::default()
+        };
+        assert_eq!(run_badge(&unanswered), None);
+
+        let clean = SessionEntry {
+            key: "agent:main:main:s3".into(),
+            last_run: Some(LastRunState::from_markers(LastRunState::CLEAN, None, 0)),
+            ..SessionEntry::default()
+        };
+        assert_eq!(run_badge(&clean), None);
+    }
+
+    /// A word this build has never heard of is "cannot vouch", not "fine" —
+    /// the same reading the shared type gives it.
+    #[test]
+    fn an_unknown_disposition_is_not_read_as_clean() {
+        let odd = LastRunState {
+            disposition: "quarantined".into(),
+            inspected: true,
+            ..LastRunState::default()
+        };
+        assert!(last_run_notice(&odd, Locale::default()).is_some_and(|n| n.contains("quarantined")));
+        let row = SessionEntry {
+            key: "agent:main:main:s4".into(),
+            last_run: Some(odd),
+            ..SessionEntry::default()
+        };
+        assert_eq!(run_badge(&row), Some(RunBadge::Unknown));
+    }
+
+    /// The notice exists only if something renders it. This pins the wire:
+    /// `hydrate_session_history` pushes what `last_run_notice` returns into the
+    /// transcript as a `role: "system"` row, which is the row
+    /// `platform/wide/views/chat/messages.rs` draws as `SystemNoticeRow`. A
+    /// decision function with no push site is scaffolding (criterion #7), and
+    /// nothing else in this crate would go red for it.
+    #[test]
+    fn the_notice_is_pushed_into_the_transcript_as_a_system_row() {
+        let src = include_str!("chat_sidebar.rs");
+        // `production_lines`, not a cut at the first `#[cfg(test)]` marker:
+        // that cut only under-scans, and an under-scanning guard reports a
+        // clean pass for whatever it could not see.
+        let production = crate::i18n_census::production_lines(src)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let hydrate = production
+            .split("pub(crate) async fn hydrate_session_history")
+            .nth(1)
+            .expect("hydrate_session_history must exist");
+        let body = hydrate
+            .split("pub(crate) fn last_run_notice")
+            .next()
+            .unwrap_or_default();
+        // Self-protection: a scan that matched nothing would agree with
+        // everything below it.
+        assert!(
+            body.contains("ChatApi::history"),
+            "the scan found no hydrate body — the guard is blind, not clean"
+        );
+        assert!(
+            body.contains("last_run_notice"),
+            "the reduction the server sent must reach the transcript"
+        );
+        assert!(
+            body.contains("role: \"system\".to_string()"),
+            "it is pushed as the row SystemNoticeRow draws"
+        );
     }
 }

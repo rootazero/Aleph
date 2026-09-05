@@ -6,9 +6,12 @@
 //! by the tier the *server* assigned (local vs cloud), so the user sees exactly
 //! which endpoints each mode will target without re-deriving locality here.
 
-use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
-use crate::context::DashboardState;
+use crate::api::{
+    parse_probe_interval as parse_interval, RateLimit, RouteConfigApi, RouteConfigUpdate,
+    RouteProviderInfo,
+};
 use crate::components::route_labels::{lb_label, mode_desc, mode_label, LB_KEYS, MODE_KEYS};
+use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -28,6 +31,10 @@ pub fn RouteView() -> impl IntoView {
     let providers = RwSignal::new(Vec::<RouteProviderInfo>::new());
     let load_balance = RwSignal::new(String::from("ordered"));
     let rate_limits = RwSignal::new(BTreeMap::<String, RateLimit>::new());
+    // Health-probe interval as typed text; empty == off. Seeded from the view
+    // and always sent back: `route_config.update` full-replaces `[route]`, so
+    // dropping the key would switch off a prober the operator enabled in TOML.
+    let probe_interval = RwSignal::new(String::new());
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let saved = RwSignal::new(false);
@@ -45,6 +52,11 @@ pub fn RouteView() -> impl IntoView {
                     providers.set(view.providers);
                     load_balance.set(view.load_balance.unwrap_or_else(|| "ordered".into()));
                     rate_limits.set(view.rate_limits);
+                    probe_interval.set(
+                        view.health_probe_interval_secs
+                            .map(|s| s.to_string())
+                            .unwrap_or_default(),
+                    );
                     loading.set(false);
                 }
                 Err(e) => {
@@ -74,6 +86,7 @@ pub fn RouteView() -> impl IntoView {
                 cloud_provider: to_pin(cloud_provider.get()),
                 load_balance: Some(load_balance.get()),
                 rate_limits: rate_limits.get(),
+                health_probe_interval_secs: parse_interval(&probe_interval.get()),
             };
             match RouteConfigApi::update(&state, update).await {
                 Ok(()) => {
@@ -159,6 +172,29 @@ pub fn RouteView() -> impl IntoView {
                                 view! { <option value=key>{label}</option> }
                             }).collect::<Vec<_>>()}
                         </select>
+                    </div>
+
+                    // Background health probe — how often a circuit-open
+                    // provider is re-dialled. Blank / 0 = off (the default);
+                    // a probe is a real, paid request.
+                    <div class="bg-surface-raised rounded-lg border border-border p-4">
+                        <label class="block font-semibold text-text-primary mb-1">
+                            {t!(i18n, settings.route.health_probe)}
+                        </label>
+                        <p class="text-sm text-text-secondary mb-2">
+                            {t!(i18n, settings.route.health_probe_desc)}
+                        </p>
+                        <input
+                            type="number"
+                            min="0"
+                            class="w-40 bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary"
+                            placeholder=move || t_string!(i18n, settings.route.health_probe_off).to_string()
+                            prop:value=move || probe_interval.get()
+                            on:input=move |ev| {
+                                probe_interval.set(event_target_value(&ev));
+                                saved.set(false);
+                            }
+                        />
                     </div>
 
                     // Cloud-escalation toggle (only meaningful in Always Local)

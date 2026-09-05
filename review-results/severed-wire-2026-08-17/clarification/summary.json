@@ -1,0 +1,46 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-08-17",
+  "module": "src/clarification",
+  "files_scanned": [
+    "src/clarification/ask.rs",
+    "src/clarification/mod.rs",
+    "src/clarification/render.rs",
+    "src/clarification/session.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/ (src/bin/), interfaces/, shared/, desktop/), read-before-write triage; no cargo runs; read-only",
+  "findings": [
+    {
+      "id": "sw-clar-01",
+      "module": "src/clarification",
+      "files": ["src/clarification/mod.rs:289"],
+      "severity": "low",
+      "form": 6,
+      "produced": "pub struct ClarificationOptionView { pub label: String, pub description: Option<String> } (#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)])",
+      "produced_location": "src/clarification/mod.rs:289-296",
+      "consumer_location": "none found; only used as field type of ClarificationQuestionView.options (mod.rs:308) and constructed in the From<&ClarificationQuestion> impl (mod.rs:322-326). A doc mirror comment at shared/protocol/src/events.rs:872 mentions the type but does not import it. No other crate imports ClarificationOptionView by name; TUI/Webchat deserialize their own mirror types (AskOptionView, OptionItem) from JSON. Evidence: `rg -n \"ClarificationOptionView\\b\" src/ interfaces/ shared/ desktop/ src/bin/ --type rust` -> shared/protocol/src/events.rs:872 (doc mirror comment), src/clarification/mod.rs:289 (def), :308 (field type), :324 (construction in From impl).",
+      "decision": "DECIDE",
+      "rationale": "Type IS reachable over the wire (it's part of the JSON shape ClarificationQuestionView serializes), but no other crate ever names it. The outer type ClarificationQuestionView is the actual wire entry-point and IS consumed in production (frame.rs:130, event_emitter/types.rs:229, session.rs:81, 219, 384). ClarificationOptionView's only purpose is to be the Vec element type for ClarificationQuestionView.options; serde does not consult Rust visibility so a `struct` (private) would produce the exact same JSON bytes.",
+      "proposed_change": "DECIDE. Option (a) change `pub struct` to `struct` at mod.rs:289; update the doc mirror at shared/protocol/src/events.rs:872 to drop the path (the wire shape is unchanged). Option (b) keep as-is to preserve the doc-link target in shared/protocol/src/events.rs. Risk nil either way.",
+      "risk": "nil at runtime; option (a) is a one-line visibility change plus a doc touch.",
+      "verification": "rg -n \"ClarificationOptionView\\b\" src/ interfaces/ shared/ desktop/ src/bin/ --type rust -> only the doc mirror + mod.rs:289 (def), :308 (field type), :324 (construction).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-clar-02",
+      "module": "src/clarification",
+      "files": ["src/clarification/mod.rs:275"],
+      "severity": "low",
+      "form": 6,
+      "produced": "pub const DEFAULT_QUESTION_ID: &str = \"answer\";",
+      "produced_location": "src/clarification/mod.rs:275",
+      "consumer_location": "none found; only used inside src/clarification/mod.rs at lines 222 (ClarificationRequest::text) and 231 (ClarificationRequest::select). Evidence: `rg -n \"DEFAULT_QUESTION_ID\" src/ interfaces/ shared/ desktop/ src/bin/ --type rust` -> src/clarification/mod.rs:222, :231, :275 (def) only.",
+      "decision": "DECIDE",
+      "rationale": "Every external caller (ask_user, scratchpad, workflow::clarify) either builds ClarificationRequest::new(vec![...]) with explicit ids or uses ClarificationRequest::text / ClarificationRequest::select without naming the constant. The constant exists to give the single-question constructors a stable wire id; downstream Rust code never needs to know that literal. Module doc at mod.rs:272-274 documents it but no Rust caller reaches for it.",
+      "proposed_change": "DECIDE. Option (a) CUT the `pub` keyword (downgrade to a private `const` inside mod.rs); the text() and select() constructors still reference it, and the wire id stays \"answer\". Option (b) keep as-is — the literal \"answer\" is part of the wire contract even if no Rust caller names it today. Risk nil either way.",
+      "risk": "nil; nothing reads DEFAULT_QUESTION_ID by name outside the module.",
+      "verification": "rg -n \"DEFAULT_QUESTION_ID\" src/ interfaces/ shared/ desktop/ src/bin/ --type rust -> mod.rs:222 (ClarificationRequest::text), mod.rs:231 (ClarificationRequest::select), mod.rs:275 (def). Three hits, all in mod.rs.",
+      "existing_review_ref": null
+    }
+  ]
+}

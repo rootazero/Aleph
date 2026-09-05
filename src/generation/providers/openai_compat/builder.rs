@@ -29,7 +29,7 @@ use super::types::{DEFAULT_COLOR, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS};
 ///     .build()?;
 /// ```
 #[derive(Debug)]
-pub struct OpenAiCompatProviderBuilder {
+pub(crate) struct OpenAiCompatProviderBuilder {
     /// Provider name
     pub(crate) name: String,
     /// API key for authentication

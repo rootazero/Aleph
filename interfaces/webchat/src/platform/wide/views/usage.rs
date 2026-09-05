@@ -8,7 +8,7 @@
 //! (lane gauge is eventually consistent so a slow tick is safe and avoids
 //! event-bus chatter for a low-priority dashboard).
 
-use crate::api::system::{BusyQueue, LaneOccupancy, RunConcurrency, SystemApi};
+use crate::api::system::{BusyQueueMetrics, LaneOccupancy, RunConcurrency, SystemApi};
 use crate::api::teams::{TeamSummary, TeamUsageDto, TeamsApi};
 use crate::components::ui::Card;
 use crate::context::DashboardState;
@@ -42,7 +42,7 @@ pub fn UsageView() -> impl IntoView {
     // Run-slot concurrency gauge — global N/M + per-agent + queue depth.
     let run_slots = RwSignal::new(None::<RunConcurrency>);
     // Backlog waiting behind the run slots (per-session busy wait lanes).
-    let busy_queue = RwSignal::new(BusyQueue::default());
+    let busy_queue = RwSignal::new(BusyQueueMetrics::default());
 
     // Teams list + selected team + that team's usage rollup.
     let teams = RwSignal::new(Vec::<TeamSummary>::new());
@@ -55,7 +55,7 @@ pub fn UsageView() -> impl IntoView {
         if !state.is_connected.get() {
             lanes.set(None);
             run_slots.set(None);
-            busy_queue.set(BusyQueue::default());
+            busy_queue.set(BusyQueueMetrics::default());
             teams.set(Vec::new());
             team_usage.set(None);
             usage_error.set(None);
@@ -284,7 +284,7 @@ fn LaneCard(row: LaneOccupancy) -> impl IntoView {
 }
 
 #[component]
-fn RunSlotsCard(rc: RunConcurrency, bq: BusyQueue) -> impl IntoView {
+fn RunSlotsCard(rc: RunConcurrency, bq: BusyQueueMetrics) -> impl IntoView {
     let i18n = use_i18n();
     let used = rc.global_in_use;
     let total_label = rc.global_total;
@@ -354,14 +354,20 @@ fn RunSlotsCard(rc: RunConcurrency, bq: BusyQueue) -> impl IntoView {
             }}
 
             // Per-agent breakdown (the memory/storage isolation boundary).
-            {if per_agent.is_empty() {
-                view! {
+            //
+            // Three answers, not two. `None` means the server withheld the
+            // breakdown from this caller — a member sees run slots but not who
+            // is holding them — and rendering "no agent is busy" over that
+            // would be a fact this client was never given (criterion #17), so
+            // it renders nothing at all and claims nothing.
+            {match per_agent {
+                None => ().into_any(),
+                Some(rows) if rows.is_empty() => view! {
                     <div class="text-xs text-text-tertiary border-t border-border pt-3">
                         {t!(i18n, usage.run_slots_idle)}
                     </div>
-                }.into_any()
-            } else {
-                view! {
+                }.into_any(),
+                Some(per_agent) => view! {
                     <div class="border-t border-border pt-3 space-y-2">
                         <div class="text-[10px] uppercase tracking-wider text-text-tertiary font-bold">
                             {t!(i18n, usage.run_slots_per_agent)}
@@ -382,7 +388,7 @@ fn RunSlotsCard(rc: RunConcurrency, bq: BusyQueue) -> impl IntoView {
                             }
                         }).collect_view()}
                     </div>
-                }.into_any()
+                }.into_any(),
             }}
         </Card>
     }

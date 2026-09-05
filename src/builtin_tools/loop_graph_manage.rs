@@ -739,6 +739,22 @@ impl AlephTool for LoopGraphTool {
             }
 
             LoopGraphAction::Gc => {
+                // Snapshot before the destructive op so an audit can answer
+                // "what did the graph look like before this gc?" — same
+                // shape `enable_audit` uses for its destructive action.
+                // Best-effort: a snapshot-store failure is logged but does
+                // not block the gc itself (the audit gap is recoverable from
+                // the events stream + the gc's own report).
+                if let Some(snapshots) = &self.snapshots {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    let pre_label = format!("pre-gc-{now}");
+                    if let Err(e) = snapshots.capture(&self.store, &agent_id, &pre_label) {
+                        tracing::warn!(agent_id = %agent_id, error = %e,
+                            "loop_graph gc: pre-action snapshot failed (continuing)");
+                    }
+                }
                 let report = match self.store.gc(&agent_id) {
                     Ok(r) => r,
                     Err((report, err)) => {
@@ -1408,24 +1424,19 @@ fn require(v: Option<String>, action: &str, field: &str) -> Result<String> {
 ///
 /// 1. **The delivery route**, so the ring can report (AUDIT_TEMPLATE step 7 /
 ///    WATCH_TEMPLATE_FOOTER).
-/// 2. **`owner_user_id` / `scope_id`**, so the scheduled run executes as the
-///    admin who installed it. Without them `cron::executor::build_cron_metadata`
-///    finds no `ScopeAttribution` to rehydrate and the run is unscoped — which
-///    in a multi-user install means the weekly audit reads the graph, the notes
-///    and the sessions of nobody in particular, and its `note_manage` verdicts
-///    land outside the installer's partition. `CronJob::new` defaults both to
-///    `None` and nothing else on this path sets them.
-///
-/// `current_scope()` being `None` (single-user install, or a pre-P1 path) leaves
-/// both columns `None`, which is exactly the legacy shape `from_persisted`
-/// already treats as "unscoped" — no behaviour change there.
+/// 2. **`owner_user_id` / `scope_id`**, delegated to
+///    [`CronJob::stamp_current_scope`] — the one derivation every creating
+///    face shares — so the scheduled run executes as the admin who installed
+///    it. Without them `cron::executor::build_cron_metadata` finds no
+///    `ScopeAttribution` to rehydrate and the run is unscoped, which in a
+///    multi-user install means the weekly audit reads the graph, the notes and
+///    the sessions of nobody in particular, and its `note_manage` verdicts
+///    land outside the installer's partition. That method's own doc carries
+///    the rest of the mechanism, including why `None` is a safe no-op.
 fn stamp_governance_job(job: &mut CronJob, delivery: &(Option<String>, Option<String>)) {
     job.source_channel_id = delivery.0.clone();
     job.source_conversation_id = delivery.1.clone();
-    if let Some(attr) = crate::scope::current_scope() {
-        job.owner_user_id = Some(attr.owner_user_id);
-        job.scope_id = Some(attr.scope.render());
-    }
+    job.stamp_current_scope();
 }
 
 #[cfg(test)]

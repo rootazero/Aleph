@@ -13,9 +13,9 @@
 
 use std::error::Error;
 
+use aleph_protocol::resume::{ResumeReceipt, ResumeStatus};
 use alephcore::cli::ipc_client::forward_to_server;
 use alephcore::cli::policy::{run_no_lock, HttpMethod};
-use alephcore::gateway::admin_api::resume::ResumeResponse;
 use alephcore::utils::paths;
 
 /// Handle `aleph-server resume`.
@@ -23,7 +23,7 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
     let data_dir = paths::get_data_dir().map_err(|e| format!("data dir: {e}"))?;
     let body = serde_json::json!({ "session_key": &session_key });
 
-    let response: ResumeResponse =
+    let response: ResumeReceipt =
         run_no_lock(|| forward_to_server(&data_dir, HttpMethod::Post, "/v1/admin/resume", body))
             .map_err(|e| -> Box<dyn Error> { format!("{e:#}").into() })?;
 
@@ -32,33 +32,117 @@ pub fn handle_resume_command(session_key: String, json: bool) -> Result<(), Box<
         return Ok(());
     }
 
-    // Each status gets its own sentence. "resumed" and "no_runs" are both
+    let named = response.session_key.as_deref().unwrap_or(&session_key);
+
+    // Each outcome gets its own sentence. `resumed` and `no_runs` are both
     // successful exits, and an operator who cannot tell them apart will sit
     // waiting for output from a session that never had a run to resume.
-    match response.status.as_str() {
-        "resumed" => println!(
-            "Resumed the interrupted run in {}. Watch the session for output.",
-            response.session_key
+    //
+    // Matched **exhaustively**, with no catch-all: a new outcome must be given
+    // a sentence here before this compiles. The `other => println!("{other}")`
+    // arm this replaces printed a raw status word as though it were an
+    // instruction, and it printed it for the three words the server had already
+    // been writing for months (`delegated`, `already_resuming`,
+    // `log_inconsistent`) — a wire vocabulary can grow silently, a `match`
+    // cannot.
+    //
+    // Five of these sentences have **no renderer today**: `NotFound`,
+    // `InvalidSessionKey`, `AgentForbidden`, `Unavailable` and `Failed` cannot
+    // arrive over the one transport this command uses. `admin_api/resume.rs`
+    // turns those outcomes into 4xx/5xx, and `forward_to_server` returns `Err`
+    // on a non-2xx, so the receipt is never parsed and this `match` is never
+    // reached with them. They stay because the JSON-RPC face DOES produce them
+    // and because the exhaustiveness is the ratchet this round wanted — but
+    // they are unrendered arms, not evidence that the wording was ever seen,
+    // and nobody should read the five sentences below as tested output.
+    match response.outcome() {
+        ResumeStatus::Resumed => {
+            println!("Resumed the interrupted run in {named}. Watch the session for output.")
+        }
+        ResumeStatus::AlreadyFinished => {
+            println!("Nothing to resume: the newest run in {named} already finished.");
+        }
+        ResumeStatus::NoRuns => println!("Nothing to resume: {named} has no run history."),
+        ResumeStatus::Abandoned => println!(
+            "The interrupted run in {named} was abandoned (too old, or it crashed on every \
+             previous resume). It will not be retried."
         ),
-        "already_finished" => println!(
-            "Nothing to resume: the newest run in {} already finished.",
-            response.session_key
+        ResumeStatus::NotResumed => println!(
+            "Found an interrupted run in {named} but could not re-trigger it. \
+             Check the server log for the reason."
         ),
-        "no_runs" => println!(
-            "Nothing to resume: {} has no run history.",
-            response.session_key
+        ResumeStatus::Delegated => println!(
+            "The interrupted run in {named} belongs to a scheduler that runs its own \
+             recovery (cron, heartbeat, or the team dispatcher). Its dangling marker was \
+             closed; that scheduler will re-drive the work."
         ),
-        "abandoned" => println!(
-            "The interrupted run in {} was abandoned (too old, or it crashed on every \
-             previous resume). It will not be retried.",
-            response.session_key
+        ResumeStatus::AlreadyResuming => println!(
+            "A resume for {named} is already in flight. Nothing was looked at — try again \
+             once it settles."
         ),
-        "not_resumed" => println!(
-            "Found an interrupted run in {} but could not re-trigger it. \
-             Check the server log for the reason.",
-            response.session_key
+        ResumeStatus::LogInconsistent => println!(
+            "{named}'s event log contradicts itself, so its run state could not be read and \
+             nothing was tried. Run `aleph doctor` — the `core/session-log` check names the \
+             contradiction."
         ),
-        other => println!("{other} ({})", response.session_key),
+        ResumeStatus::Unavailable => {
+            println!("This server has no run executor wired, so nothing can be resumed on it.")
+        }
+        ResumeStatus::Failed => println!(
+            "Resume failed for {named}: {}",
+            response.error.as_deref().unwrap_or("no reason given")
+        ),
+        ResumeStatus::NotFound => println!("No such session: {named}."),
+        ResumeStatus::InvalidSessionKey => {
+            println!("{session_key} is not a session key.");
+        }
+        ResumeStatus::AgentForbidden => println!(
+            "Not authorized to run as agent '{}'.",
+            response.agent_id.as_deref().unwrap_or("<unnamed>")
+        ),
+        // A word this build has never heard of. It is NOT rendered as a
+        // sentence — the whole point of the closed set is that an unknown
+        // status reads as "I cannot vouch for this", never as an outcome.
+        ResumeStatus::Unrecognized => println!(
+            "The server reported an outcome this build does not recognise ({:?}) for {named}. \
+             Re-run with --json to see the whole receipt.",
+            response.status
+        ),
+    }
+
+    // The counters that only ever reached the JSON-RPC face before. Printed
+    // only when non-zero: a line of zeroes on every successful resume trains an
+    // operator to stop reading them, which is how a real one goes unnoticed.
+    for entry in &response.refused {
+        println!(
+            "  refused {}: {} — {}",
+            entry.session_key, entry.reason, entry.detail
+        );
+    }
+    if response.degraded > 0 {
+        println!(
+            "  {} run(s) came back degraded — the model was told what it lost.",
+            response.degraded
+        );
+    }
+    if response.unsnapshotted > 0 {
+        println!(
+            "  {} run(s) had no settings snapshot; they resume under this session's \
+             current values, not the ones they crashed with.",
+            response.unsnapshotted
+        );
+    }
+    if response.skipped_unknown_age > 0 {
+        println!(
+            "  {} session(s) were left alone because their log's recency could not be read.",
+            response.skipped_unknown_age
+        );
+    }
+    if response.contradictions > 0 {
+        println!(
+            "  {} log contradiction(s) were reported along the way — see `aleph doctor`.",
+            response.contradictions
+        );
     }
     Ok(())
 }

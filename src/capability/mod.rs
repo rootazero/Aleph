@@ -283,7 +283,8 @@ impl<T: Send + Sync + 'static> SlotStatus for MutableCapabilitySlot<T> {
 /// ID when a new slot is not listed. The list is a data structure; the rule
 /// is the guard.
 ///
-/// 46 entries, not 47: `providers::route_handle::GLOBAL` is the census's one
+/// Exactly one entry SHORT of the handle census, and the missing one is
+/// `providers::route_handle::GLOBAL`: it is the census's one
 /// first-caller-wins member and by ruling stays a raw `OnceLock` rather than
 /// migrating onto [`CapabilitySlot`] — see this module's `census` submodule
 /// doc ("Why form 2 is a rule and not an exemption") and
@@ -299,17 +300,26 @@ impl<T: Send + Sync + 'static> SlotStatus for MutableCapabilitySlot<T> {
 /// deliberate exception rather than excluding it silently, so a second bare
 /// handle appearing anywhere else still fails that guard.
 ///
+/// No count is written here any more. The previous wording carried one
+/// ("46 entries, not 47") and it had already gone stale in a sibling doc
+/// before the first slot added after it — a figure copied out of a data
+/// structure rots the next time the structure grows, and
+/// `census::every_declared_slot_is_in_the_roster` compares the roster against
+/// the live census rather than against any written number, so nothing needed
+/// the figure to be right.
+///
 /// Every entry below is a call through a `pub(crate) fn … -> &'static dyn
 /// SlotStatus` accessor in the slot's own module (`const fn`, so this array
 /// can be a `static` rather than a `LazyLock`), never a `pub` re-export of the
-/// slot itself — see `spend::global_ledger_slot`'s doc for why: exposing 45
-/// statics to answer one question would widen the crate's surface by 45 items,
-/// and erasure at the accessor means a roster consumer gets exactly `id` /
-/// `missing` / `outcome`, never the value.
+/// slot itself — see `spend::global_ledger_slot`'s doc for why: exposing every
+/// one of these statics to answer one question would widen the crate's surface
+/// by exactly that many items, and erasure at the accessor means a roster
+/// consumer gets exactly `id` / `missing` / `outcome`, never the value.
 pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::metrics::metrics_runtime_slot(),
     crate::pii::engine::pii_engine_slot(),
     crate::tasks::cron::global_cron_slot(),
+    crate::tasks::heartbeat::global_heartbeat_slot(),
     crate::tools::result_store::global_tool_result_store_slot(),
     crate::tools::turn_budget::global_turn_result_budget_slot(),
     crate::tools::result_processing::result_budget_ceiling_slot(),
@@ -352,6 +362,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::thinker::memory_context_provider::open_loop_inject_slot(),
     crate::strategy::global_slot(),
     crate::session::store::global_session_event_store_slot(),
+    crate::gateway::session_projector::message_projector_slot(),
     crate::session::service::global_session_service_slot(),
 ];
 

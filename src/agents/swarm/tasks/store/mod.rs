@@ -233,11 +233,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         deps::get_dependents(self, id).await
     }
 
-    async fn get_newly_unblocked(
-        &self,
-        completed_id: &str,
-    ) -> crate::error::Result<Vec<CoordTask>> {
-        deps::get_newly_unblocked(self, completed_id).await
+    async fn get_newly_unblocked(&self, settled_id: &str) -> crate::error::Result<Vec<CoordTask>> {
+        deps::get_newly_unblocked(self, settled_id).await
     }
 
     // --- Task locking ---
@@ -276,6 +273,14 @@ impl CoordTaskStore for SqliteCoordTaskStore {
 
     async fn abandon_orphaned_runs(&self, live_task_ids: &[String]) -> crate::error::Result<usize> {
         runs::abandon_orphaned_runs(self, live_task_ids).await
+    }
+
+    async fn stamp_abandoned_run_summary(
+        &self,
+        task_id: &str,
+        summary: &str,
+    ) -> crate::error::Result<bool> {
+        runs::stamp_abandoned_run_summary(self, task_id, summary).await
     }
 
     async fn record_run_review(
@@ -615,5 +620,103 @@ mod review_tests {
             .await
             .unwrap();
         assert!(blocked.iter().all(|t| t.id != child.id));
+    }
+}
+
+#[cfg(test)]
+mod abandoned_summary_tests {
+    use super::SqliteCoordTaskStore;
+    use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask, Priority, TaskRunStatus};
+
+    async fn make_store() -> SqliteCoordTaskStore {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let store = SqliteCoordTaskStore::new(conn);
+        store.migrate().await.unwrap();
+        store
+    }
+
+    fn new_task(subject: &str) -> NewCoordTask {
+        NewCoordTask {
+            team_id: Some("t1".into()),
+            subject: subject.into(),
+            description: String::new(),
+            owner: Some("worker".into()),
+            priority: Priority::Normal,
+            blocked_by: Vec::new(),
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    /// The crashed attempt's partial output lands on its own row, and
+    /// `build_recovery_section` reads it out of `summary` — the "partial output
+    /// (incomplete)" slot that was empty for exactly the population it exists
+    /// for.
+    #[tokio::test]
+    async fn a_crashed_attempt_gets_its_partial_output_stamped() {
+        let store = make_store().await;
+        let task = store.create_task(new_task("step")).await.unwrap();
+        store.start_task_run(&task.id, "worker").await.unwrap();
+
+        let stamped = store
+            .stamp_abandoned_run_summary(&task.id, "got as far as reading the file")
+            .await
+            .unwrap();
+        assert!(stamped, "the still-running row is the crashed attempt");
+
+        let runs = store.list_task_runs(&task.id).await.unwrap();
+        assert_eq!(
+            runs[0].summary.as_deref(),
+            Some("got as far as reading the file")
+        );
+    }
+
+    /// A finished attempt already wrote its own summary; a later stamp must not
+    /// replace a deliverable with a fragment.
+    #[tokio::test]
+    async fn a_completed_attempts_summary_is_never_overwritten() {
+        let store = make_store().await;
+        let task = store.create_task(new_task("step")).await.unwrap();
+        let run = store.start_task_run(&task.id, "worker").await.unwrap();
+        store
+            .finish_task_run(
+                &run,
+                TaskRunStatus::Completed,
+                Some("the real answer".into()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let stamped = store
+            .stamp_abandoned_run_summary(&task.id, "a fragment")
+            .await
+            .unwrap();
+        assert!(
+            !stamped,
+            "there is no crashed attempt waiting for a summary"
+        );
+        let runs = store.list_task_runs(&task.id).await.unwrap();
+        assert_eq!(runs[0].summary.as_deref(), Some("the real answer"));
+    }
+
+    /// Re-stamping on a later tick keeps the first, fuller reading: a second
+    /// pass reduces over a log that has already been repaired, so its counters
+    /// are strictly poorer.
+    #[tokio::test]
+    async fn a_second_stamp_does_not_overwrite_the_first() {
+        let store = make_store().await;
+        let task = store.create_task(new_task("step")).await.unwrap();
+        store.start_task_run(&task.id, "worker").await.unwrap();
+
+        assert!(store
+            .stamp_abandoned_run_summary(&task.id, "first reading")
+            .await
+            .unwrap());
+        assert!(!store
+            .stamp_abandoned_run_summary(&task.id, "poorer second reading")
+            .await
+            .unwrap());
+        let runs = store.list_task_runs(&task.id).await.unwrap();
+        assert_eq!(runs[0].summary.as_deref(), Some("first reading"));
     }
 }

@@ -337,7 +337,7 @@ impl SessionMetadata {
     /// Returns `None` for the synthetic `""`/`"unknown"` sentinel so callers
     /// (`sessions.list`, `sessions.changed`) omit a meaningless origin badge.
     /// Single source of truth for the "what counts as a real origin" rule,
-    /// shared by the `SessionInfo` builder and the session-changed event.
+    /// shared by the `SessionListRow` builder and the session-changed event.
     #[must_use]
     pub fn origin_channel(&self) -> Option<String> {
         let im = self.identity_meta.as_ref()?;
@@ -361,8 +361,11 @@ impl SessionMetadata {
     /// Stamp `owner_user_id`/`scope_id` from the active
     /// [`crate::scope::current_scope`] attribution. No-op when already
     /// stamped — stamping is create-only (spec §10: session scope is
-    /// immutable once set). Call sites: both `SessionStore::get_or_create`
-    /// CREATE branches only, never on the existing-session read path.
+    /// immutable once set). Called from every path that CREATES a session
+    /// row — a `SessionStore`'s `get_or_create` CREATE branch and
+    /// `branch_from_checkpoint`'s new-key row (see the contract on
+    /// [`SessionStore::branch_from_checkpoint`](super::SessionStore::branch_from_checkpoint))
+    /// — and never on the existing-session read path.
     pub fn stamp_attribution(&mut self) {
         if self.owner_user_id.is_some() {
             return;

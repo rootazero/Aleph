@@ -109,6 +109,15 @@ impl SubagentTool {
         let depth = child_chain.depth;
         let root_session = self.parent_session_id.clone().unwrap_or_default();
         let tree_agent_id = self.parent_agent_id.clone();
+        // The child's persisted transcript address — same derivation the
+        // spawner itself performs (`ephemeral_for(&req.agent_def.id,
+        // req.request_id)`), exposed once so tree consumers can open the
+        // transcript via `chat.history` without re-deriving the key shape.
+        let child_session = crate::agents::subagent_spawner::background_child_session_key(
+            &agent_def.id,
+            &request_id,
+        )
+        .to_string();
 
         self.background_tracker.register_with_meta(
             request_id.clone(),
@@ -119,6 +128,7 @@ impl SubagentTool {
                 depth,
                 root_session: root_session.clone(),
                 model: model.clone(),
+                child_session: Some(child_session.clone()),
             },
         );
         // W24 — mirror the registration into the cross-process sidecar so a
@@ -157,6 +167,8 @@ impl SubagentTool {
                     // surfaces `result_preview` once `mark_completed`
                     // folds the final text in.
                     result_preview: None,
+                    child_session: Some(child_session.clone()),
+                    total_tokens: None,
                 },
             },
         );
@@ -332,6 +344,10 @@ impl SubagentTool {
                     success,
                     error,
                     request_id: Some(rid.clone()),
+                    // One child, named explicitly rather than left to the
+                    // reader's fallback: the field means "everyone this notice
+                    // speaks for", and this notice speaks for exactly one.
+                    request_ids: vec![rid.clone()],
                 };
                 (sid, result)
             });
@@ -346,23 +362,6 @@ impl SubagentTool {
                 } => (*iterations, *tool_calls_made, *total_tokens),
                 CompletedOutcome::Err(_) => (0, 0, 0),
             };
-            emit_tree_event(
-                tree_agent_id_for_done.clone(),
-                root_session_for_done.clone(),
-                SubagentTreeEvent::Settled {
-                    node_id: rid.clone(),
-                    root_session: root_session_for_done.clone(),
-                    lifecycle: tree_lifecycle,
-                    duration_ms: settle_started
-                        .elapsed()
-                        .as_millis()
-                        .try_into()
-                        .unwrap_or(u64::MAX),
-                    iterations: settled_iters,
-                    tool_calls_made: settled_tools,
-                    total_tokens: settled_tokens,
-                },
-            );
             // W24 — stamp the terminal state into the sidecar BEFORE handing
             // the outcome to the tracker: from here on the disk record says
             // "settled", so the next boot's orphan sweep leaves it alone. The
@@ -391,6 +390,27 @@ impl SubagentTool {
                 }
             }
             tracker.mark_completed(&rid, outcome);
+            // Emit the Settled tree event AFTER mark_completed so a panel
+            // observing Settled can immediately query the tracker for the
+            // result without racing ahead of the completed-map insert. R4
+            // audit AGENTS-R4-05.
+            emit_tree_event(
+                tree_agent_id_for_done.clone(),
+                root_session_for_done.clone(),
+                SubagentTreeEvent::Settled {
+                    node_id: rid.clone(),
+                    root_session: root_session_for_done.clone(),
+                    lifecycle: tree_lifecycle,
+                    duration_ms: settle_started
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                    iterations: settled_iters,
+                    tool_calls_made: settled_tools,
+                    total_tokens: settled_tokens,
+                },
+            );
             // Terminate the per-call cancel bridge watcher now the child run is
             // done (no-op if it already fired via cancel). Keeps background
             // spawns from leaking one parked task apiece.
@@ -469,6 +489,14 @@ impl SubagentTool {
         }
         if let Some(cheap) = self.cheap_summary_provider.clone() {
             runtime = runtime.with_cheap_summary_provider(cheap);
+        }
+        // AGENTS-R4-01 — thread the parent runner's verifier chain so spawned
+        // subagents get the same death-loop / stop-hook / goal-drift watchdogs
+        // as the main run. Without this, every spawned child silently ran with
+        // `verifier_chain: None` and the parent's `halt_threshold` (8 identical
+        // calls) only protected the main run.
+        if let Some(vc) = self.verifier_chain.clone() {
+            runtime = runtime.with_verifier_chain(vc);
         }
         if !self.provider_overrides.is_empty() {
             runtime = runtime.with_provider_overrides(self.provider_overrides.clone());

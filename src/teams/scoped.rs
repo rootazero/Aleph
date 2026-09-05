@@ -58,6 +58,11 @@ use super::types::{NewTeam, NewTeamMember, Team, TeamMember, TeamSummary};
 /// `None` actor (cron / background sweep / in-process test) is unrestricted,
 /// matching every sibling predicate. Do not inline an `owner == caller`
 /// comparison here or at any call site.
+///
+/// This is the store/RPC face of that rule; the delivery plane is its second
+/// face — `gateway::event_visibility::EventVisibilityIndex::team_admits`
+/// reaches the same body with the frame's recipient as the actor. A change to
+/// either column has to answer both.
 #[must_use]
 pub fn team_visible(owner_user_id: Option<&str>, scope_id: Option<&str>) -> bool {
     match crate::gateway::visibility::ambient_actor() {

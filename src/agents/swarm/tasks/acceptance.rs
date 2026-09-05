@@ -100,6 +100,47 @@ pub fn with_require_grounding(metadata: Value, required: bool) -> Value {
     value
 }
 
+/// Metadata key marking a task that stays schedulable when one of its
+/// dependencies ends `failed`/`cancelled`, instead of deriving `Unsatisfiable`.
+///
+/// The stamp is the ONLY carrier of this fact at run time: readiness is derived
+/// from the stored row and its dependency edges (`Blocked` / `Unsatisfiable` are
+/// never stored), so the three derivation sites read the flag off the task's
+/// metadata rather than re-consulting whatever authored the task.
+pub const TOLERATE_FAILED_DEPS_METADATA_KEY: &str = "tolerate_failed_deps";
+
+/// Whether this task runs even with a terminally-failed dependency.
+/// Tolerant like [`lead_review_required`]: missing / non-bool reads `false`,
+/// i.e. the strict behaviour every pre-existing row has.
+pub fn tolerate_failed_deps(metadata: &Value) -> bool {
+    metadata
+        .get(TOLERATE_FAILED_DEPS_METADATA_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Return a new metadata value with the tolerant-fan-in flag merged in.
+/// Mirrors [`with_lead_review_required`]: non-object input promoted,
+/// `tolerate = false` is a pass-through (byte-identical rows), original
+/// untouched.
+#[must_use]
+pub fn with_tolerate_failed_deps(metadata: Value, tolerate: bool) -> Value {
+    let mut value = match metadata {
+        Value::Object(_) => metadata,
+        _ => Value::Object(serde_json::Map::new()),
+    };
+    if !tolerate {
+        return value;
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            TOLERATE_FAILED_DEPS_METADATA_KEY.to_string(),
+            Value::Bool(true),
+        );
+    }
+    value
+}
+
 /// Metadata key recording when the dispatcher last surfaced this task as
 /// stalled in `WaitingReview` (epoch seconds). Stamped by
 /// `warn_stale_reviews`; doubles as the **durable** once-per-park dedup — a

@@ -28,11 +28,17 @@ macro_rules! lock_conn {
 /// underscore in a session key or agent id cannot act as a single-char
 /// wildcard and match another session's rows. Pair with `ESCAPE '\'`.
 fn like_prefix_pattern(prefix: &str) -> String {
-    let escaped = prefix
-        .replace('\\', "\\\\")
+    format!("{}%", escape_like(prefix))
+}
+
+fn like_substring_pattern(needle: &str) -> String {
+    format!("%{}%", escape_like(needle))
+}
+
+fn escape_like(text: &str) -> String {
+    text.replace('\\', "\\\\")
         .replace('%', "\\%")
-        .replace('_', "\\_");
-    format!("{escaped}%")
+        .replace('_', "\\_")
 }
 
 fn row_to_raw_memory(row: &rusqlite::Row) -> rusqlite::Result<RawMemory> {
@@ -248,6 +254,47 @@ impl RawMemoryStore for SqliteMemoryBackend {
         for row in rows {
             results.push(
                 row.map_err(|e| AlephError::config(format!("get_raw_by_path_prefix row: {e}")))?,
+            );
+        }
+        Ok(results)
+    }
+
+    async fn search_raw_by_path_prefix(
+        &self,
+        path_prefix: &str,
+        agent_id: &str,
+        needle: &str,
+        limit: usize,
+    ) -> Result<Vec<RawMemory>, AlephError> {
+        let conn = lock_conn!(self)?;
+
+        let path_pattern = like_prefix_pattern(path_prefix);
+        let content_pattern = like_substring_pattern(needle);
+        // ORDER BY created_at DESC: the trait contract is newest-first so the
+        // limit keeps the most recent matches regardless of history size.
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, content, source, source_detail, agent_id, session_id, path, attachment_text, \
+                 is_processed, created_at \
+                 FROM raw_memories \
+                 WHERE path LIKE ?1 ESCAPE '\\' AND agent_id = ?2 \
+                 AND content LIKE ?3 ESCAPE '\\' \
+                 ORDER BY created_at DESC \
+                 LIMIT ?4",
+            )
+            .map_err(|e| AlephError::config(format!("search_raw_by_path_prefix prepare: {e}")))?;
+
+        let rows = stmt
+            .query_map(
+                params![path_pattern, agent_id, content_pattern, limit as i64],
+                row_to_raw_memory,
+            )
+            .map_err(|e| AlephError::config(format!("search_raw_by_path_prefix query: {e}")))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(
+                row.map_err(|e| AlephError::config(format!("search_raw_by_path_prefix row: {e}")))?,
             );
         }
         Ok(results)
@@ -576,6 +623,96 @@ mod tests {
             "Should only find sess-a for default agent"
         );
         assert_eq!(results[0].content, "session a msg1");
+    }
+
+    #[tokio::test]
+    async fn search_raw_by_path_prefix_matches_substring_newest_first_within_agent() {
+        let backend = make_backend();
+
+        let mut old_hit = RawMemory::new(
+            "[user]: discussed the quantum sprocket earlier".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s1/0")
+        .with_agent("main");
+        old_hit.created_at = 1000;
+
+        let mut new_hit = RawMemory::new(
+            "[user]: QUANTUM sprocket follow-up".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s1/1")
+        .with_agent("main");
+        new_hit.created_at = 2000;
+
+        let miss = RawMemory::new(
+            "[user]: unrelated topic".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s1/2")
+        .with_agent("main");
+
+        let other_agent_hit = RawMemory::new(
+            "[user]: quantum sprocket but not yours".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s2/0")
+        .with_agent("other");
+
+        for r in [&old_hit, &new_hit, &miss, &other_agent_hit] {
+            backend.insert_raw_memory(r).await.unwrap();
+        }
+
+        let results = backend
+            .search_raw_by_path_prefix("aleph://transcript/", "main", "quantum sprocket", 10)
+            .await
+            .unwrap();
+
+        // ASCII-case-insensitive match, newest first, other agents excluded.
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].content, "[user]: QUANTUM sprocket follow-up");
+        assert_eq!(
+            results[1].content,
+            "[user]: discussed the quantum sprocket earlier"
+        );
+
+        // The limit keeps the newest match, not the oldest.
+        let capped = backend
+            .search_raw_by_path_prefix("aleph://transcript/", "main", "quantum sprocket", 1)
+            .await
+            .unwrap();
+        assert_eq!(capped.len(), 1);
+        assert_eq!(capped[0].content, "[user]: QUANTUM sprocket follow-up");
+    }
+
+    #[tokio::test]
+    async fn search_raw_by_path_prefix_escapes_like_metacharacters_in_needle() {
+        let backend = make_backend();
+
+        let literal = RawMemory::new(
+            "progress is 100% done".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s1/0")
+        .with_agent("main");
+        let decoy = RawMemory::new(
+            "progress is 100x done".to_string(),
+            RawMemorySource::Transcript,
+        )
+        .with_path("aleph://transcript/s1/1")
+        .with_agent("main");
+
+        backend.insert_raw_memory(&literal).await.unwrap();
+        backend.insert_raw_memory(&decoy).await.unwrap();
+
+        let results = backend
+            .search_raw_by_path_prefix("aleph://transcript/", "main", "100% done", 10)
+            .await
+            .unwrap();
+
+        // `%` in the needle must match literally, not as a LIKE wildcard.
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content, "progress is 100% done");
     }
 
     #[tokio::test]

@@ -448,13 +448,16 @@ mod tests {
             DEFAULT_AGENT_ID.to_string(),
         );
         let lookback = crate::config::types::memory::default_feedback_lookback();
+        let min = crate::config::types::memory::default_feedback_distill_min_candidates();
         let store: MemoryBackend = backend.clone();
 
         assert!(
-            !has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback).await,
+            !has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback, min).await,
             "nothing logged yet"
         );
 
+        // High severity: a single row passes the gate's urgency bypass, so this
+        // stays a one-row test without needing `min` unrelated corrections.
         let out = tool
             .call(args("stop guessing at file paths", Severity::High))
             .await
@@ -462,7 +465,7 @@ mod tests {
         assert!(out.success, "{}", out.message);
 
         assert!(
-            has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback).await,
+            has_undistilled_corrections(&store, DEFAULT_AGENT_ID, lookback, min).await,
             "the distiller must see the row the tool just wrote — a writer and a \
              reader that address different prefixes both look healthy in isolation"
         );

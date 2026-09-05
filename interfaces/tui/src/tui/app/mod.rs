@@ -13,7 +13,10 @@ mod tests;
 
 use std::time::{Duration, Instant};
 
+use aleph_protocol::plan::PlanSnapshot;
 use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
+use aleph_protocol::runtime::RuntimeAgentEntry;
+use aleph_protocol::subagent_tree::{self, NodeLifecycle, SubagentNode};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
 
@@ -102,6 +105,16 @@ pub enum Action {
     /// Confirm the selected session and switch to it
     SessionPickerConfirm,
 
+    // -- Agents overlay (`/agents`) --
+    /// Move the agents-overlay selection up
+    AgentsUp,
+    /// Move the agents-overlay selection down
+    AgentsDown,
+    /// Open the highlighted agent's run view (fetches its child transcript)
+    AgentsConfirm,
+    /// Back out one level: detail → list, list → closed
+    AgentsBack,
+
     // -- Provider / model picker --
     /// Move provider-picker selection up
     ProviderPickerUp,
@@ -130,6 +143,8 @@ pub enum Focus {
     Approval,
     /// The `/btw` side-question overlay.
     Btw,
+    /// The `/agents` overlay (sub-agent list + per-agent run view).
+    Agents,
 }
 
 // ---------------------------------------------------------------------------
@@ -397,7 +412,11 @@ impl PaletteState {
 pub struct SessionEntry {
     /// The session key used by `chat.history` / to re-point the session.
     pub key: String,
-    /// Human-facing label (name + message count, or the key as fallback).
+    /// Human-facing label: the row's `topic` (or its `label`, or the key when
+    /// it has neither), its message count, and — when the server says this
+    /// conversation's newest run needs attention — a `[interrupted]` /
+    /// `[log inconsistent]` mark. Built in one place,
+    /// `commands::session_entry_from_json`, from the shared `SessionListRow`.
     pub label: String,
 }
 
@@ -410,6 +429,47 @@ pub struct SessionPickerState {
     /// Indices into `entries` surviving the current input filter.
     pub filtered: Vec<usize>,
     pub selected: usize,
+}
+
+/// State for the `/agents` overlay: a selectable list of this session's
+/// sub-agents (pi-style "↑↓ select · enter view · esc back"), with an optional
+/// drill-in detail showing one agent's own transcript.
+#[derive(Debug, Clone)]
+pub struct AgentsOverlayState {
+    /// Index into [`agent_display_order`]'s row order.
+    pub selected: usize,
+    /// `Some` while showing one agent's run view; Esc drops back to the list.
+    pub detail: Option<AgentDetailState>,
+}
+
+/// One agent's run view, loaded on Enter. (The child session key it was
+/// fetched from is deliberately not retained — nothing re-reads it, and a
+/// stored copy would be a zero-consumer field.)
+#[derive(Debug, Clone)]
+pub struct AgentDetailState {
+    /// Header: the task the agent was spawned with.
+    pub title: String,
+    /// Pre-formatted transcript/metadata lines (the widget wraps them).
+    pub lines: Vec<String>,
+    /// Scroll offset in lines from the top.
+    pub scroll: usize,
+}
+
+/// Display order for agent rows — running first (spawn order within each
+/// group, id tiebreak). ONE derivation shared by the pinned panel, the overlay
+/// list, and Enter's index resolution: selecting in one order and applying the
+/// index in another names a different agent.
+#[must_use]
+pub fn agent_display_order(agents: &[SubagentNode]) -> Vec<&SubagentNode> {
+    let mut rows: Vec<&SubagentNode> = agents.iter().collect();
+    rows.sort_by(|a, b| {
+        let rank = |n: &SubagentNode| u8::from(n.lifecycle != NodeLifecycle::Running);
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| a.started_at_ms.cmp(&b.started_at_ms))
+            .then_with(|| a.node_id.cmp(&b.node_id))
+    });
+    rows
 }
 
 /// One row on screen in the provider picker.
@@ -615,6 +675,49 @@ pub struct ActiveRunJoin {
     pub elapsed_ms: Option<u64>,
 }
 
+/// The agent panel's data, as [`AppState::runtime_agents`] holds it.
+///
+/// Deliberately not a bare `Vec<RuntimeAgentEntry>` and not a
+/// `Result<Vec<_>, String>` either: the latter conflates "no answer yet"
+/// with "an empty list", and a `runtime.agents.list` refusal is not an
+/// absence — [`AgentPanelData::Refused`] and [`AgentPanelData::Ready`]
+/// holding an empty `Vec` must render differently, or a non-operator's
+/// screen looks identical to an operator's install with nothing running
+/// (判据 §8: a refusal must not be read as "there is nothing").
+#[derive(Debug, Clone)]
+pub enum AgentPanelData {
+    /// Asked (or about to be asked), no answer yet. NOT "no agents" — the
+    /// initial state before the first `runtime.agents.list` reply, and
+    /// while a re-fetch triggered by [`AppState::runtime_agents_refetch_due`]
+    /// is in flight the field keeps its PREVIOUS value rather than reverting
+    /// to this, so a change notification does not flash the panel to
+    /// "loading" over data that is still valid.
+    Loading,
+    /// A `runtime.agents.list` reply. An empty `Vec` here really does mean
+    /// "no agents running" — nothing upstream needs to guess.
+    #[allow(
+        dead_code,
+        reason = "the entries are the whole point of this variant and are read by Task 8b's widget, not by anything in Task 8a's scope (mod.rs/app/mod.rs/app/events.rs) — see R8-3's scope fence"
+    )]
+    Ready(Vec<RuntimeAgentEntry>),
+    /// The operator gate said no (`runtime.agents.list` returned
+    /// [`aleph_protocol::jsonrpc::AUTH_REQUIRED`]) — distinguished from
+    /// [`Self::Unavailable`] by the JSON-RPC error CODE, never by matching
+    /// words in the message (P8).
+    #[allow(
+        dead_code,
+        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
+    )]
+    Refused(String),
+    /// Every other failure: transport, timeout, decode. Not the operator
+    /// gate specifically — see [`Self::Refused`].
+    #[allow(
+        dead_code,
+        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
+    )]
+    Unavailable(String),
+}
+
 /// Read a transcript row's RFC3339 stamp, falling back to now.
 ///
 /// One parser for both producers of that stamp, and they are the same value:
@@ -807,6 +910,22 @@ pub struct AppState {
     // -- Gateway commands (fetched at startup, tree-structured) --
     pub gateway_commands: Vec<CommandEntry>,
 
+    // -- Tasks + agents visualization --
+    /// The conversation's live execution list (pi-style tasks block). Fed by
+    /// three carriers, all pre-existing: cold `chat.history.plan`, live
+    /// `scratchpad` tool results (`ScratchpadOutput.snapshot`), and the
+    /// authoritative `RunSummary.plan` at run end.
+    pub plan: Option<PlanSnapshot>,
+    /// `/todo` toggle for the pinned tasks panel. Defaults on; the panel only
+    /// occupies rows while a plan with content exists.
+    pub tasks_panel_visible: bool,
+    /// Flat sub-agent nodes for THIS session — cold `subagent.tree` snapshot
+    /// merged with live `run.subagent_tree` deltas via the shared protocol
+    /// `apply_event` (the same algorithm the Panel runs).
+    pub agents: Vec<SubagentNode>,
+    /// The `/agents` overlay, when open.
+    pub agents_overlay: Option<AgentsOverlayState>,
+
     // -- UI state --
     pub focus: Focus,
     pub dialog: Option<DialogState>,
@@ -837,6 +956,42 @@ pub struct AppState {
     /// `widgets::chat_area::LineCache`. Not part of any serialized/exported
     /// state; purely a render-time optimization.
     pub chat_line_cache: crate::tui::widgets::chat_area::LineCache,
+
+    /// The agent panel's data (Task 8b renders it; Task 8a wires it).
+    /// Populated by a startup fetch and re-fetched on every
+    /// `runtime.agents.changed` topic event — see [`AgentPanelData`].
+    pub runtime_agents: AgentPanelData,
+    /// Whether the agent-panel column is shown in the sidebar.
+    ///
+    /// Starts `false`: this is a new, opt-in surface, not a replacement for
+    /// any existing screen real estate — `/agentpanel`
+    /// (`LocalCommand::AgentPanel`) flips it. The SOLE visibility gate `render.rs`'s layout reads; when
+    /// `false` the layout takes the exact path it took before this column
+    /// existed (R8-9 — no horizontal split, not even one with a nominally
+    /// zero-width chunk).
+    ///
+    /// Deliberately NOT `shared_ui_logic::state::agent_panel::AgentPanelState`
+    /// (or its `collapsed` field): that struct's `split_ratio` is the
+    /// Panel's draggable-divider ratio (R7-2 names Task 9's drag handle as
+    /// its driver), and R8-0 scopes drag-to-resize to the Panel only this
+    /// phase — the TUI has no divider to drive it, so holding that struct
+    /// here would be a field with no writer. A plain `bool` is the whole of
+    /// what this screen's toggle needs.
+    pub agent_panel_visible: bool,
+    /// Set by [`AppState::handle_topic_event`], cleared by the main loop once
+    /// it has performed the re-fetch.
+    ///
+    /// STATE, not an `Action` — the main loop's gateway-event branch keeps
+    /// only the LAST non-`None` action out of a drained burst (see its own
+    /// comment at `mod.rs`'s `select!` arm), so an `Action` that named "go
+    /// re-fetch the agent table" could be silently overwritten by a later
+    /// frame in the same burst and never happen — and `runtime.agents.changed`
+    /// fires exactly when `stream.*` chunks are also flying, so that burst is
+    /// not a rare shape. A `bool` on `AppState` cannot be coalesced away by a
+    /// later frame the way a returned `Action` could: the main loop checks and
+    /// clears it itself, once per iteration, after the `select!` — see
+    /// `mod.rs::main_loop`.
+    pub runtime_agents_refetch_due: bool,
 }
 
 impl AppState {
@@ -888,6 +1043,11 @@ impl AppState {
             tool_progress_mode: ToolProgressMode::default(),
             gateway_commands: Vec::new(),
 
+            plan: None,
+            tasks_panel_visible: true,
+            agents: Vec::new(),
+            agents_overlay: None,
+
             focus: Focus::Input,
             dialog: None,
             palette: None,
@@ -901,6 +1061,10 @@ impl AppState {
             should_quit: false,
 
             chat_line_cache: crate::tui::widgets::chat_area::LineCache::default(),
+
+            runtime_agents: AgentPanelData::Loading,
+            agent_panel_visible: false,
+            runtime_agents_refetch_due: false,
         }
     }
 
@@ -953,6 +1117,21 @@ impl AppState {
             .rposition(|m| matches!(m, ChatMessage::Assistant { .. }))
             .unwrap_or_else(|| self.messages.len().saturating_sub(1));
         &mut self.messages[idx]
+    }
+
+    /// The name a tool row learned at its start frame, when the row exists.
+    /// Read-only sibling of [`Self::find_tool_mut`], for consumers that need
+    /// to identify a tool from a frame that carries only its id (`ToolEnd`).
+    pub(super) fn tool_name_of(&self, tool_id: &str) -> Option<String> {
+        for msg in self.messages.iter().rev() {
+            if let ChatMessage::Assistant { tools, .. } = msg {
+                return tools
+                    .iter()
+                    .find(|t| t.id == tool_id)
+                    .map(|t| t.name.clone());
+            }
+        }
+        None
     }
 
     /// Find a tool execution by `tool_id` in the last assistant message.
@@ -1137,14 +1316,139 @@ impl AppState {
     }
 
     /// Close any open overlay (palette, dialog, session picker, provider
-    /// picker) and return focus to whatever is still on screen.
+    /// picker, agents overlay) and return focus to whatever is still on screen.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
         self.session_picker = None;
         self.provider_picker = None;
         self.approval = None;
+        self.agents_overlay = None;
         self.focus = self.focus_after_modal();
+    }
+
+    // -- Tasks + agents -------------------------------------------------
+
+    /// Apply one gateway topic notification. Unknown topics are ignored —
+    /// this client consumes exactly the planes it renders.
+    ///
+    /// Two planes are understood today: `run.subagent_tree` (the agents
+    /// panel/overlay) and `runtime.agents.changed` (the agent-panel sidebar).
+    /// The latter records a re-fetch as STATE
+    /// (`AppState::runtime_agents_refetch_due`), not an `Action` — see that
+    /// field's own doc for why an `Action` here would be unsafe to coalesce
+    /// away in the main loop's burst-drain.
+    pub fn handle_topic_event(&mut self, topic: &str, data: serde_json::Value) {
+        if topic == subagent_tree::TOPIC {
+            if let Ok(ev) = serde_json::from_value::<subagent_tree::SubagentTreeEvent>(data) {
+                self.apply_subagent_tree_event(ev);
+            }
+        } else if topic == aleph_protocol::runtime::RUNTIME_AGENTS_CHANGED_TOPIC {
+            // Deliberately does NOT reset `self.runtime_agents` to `Loading`
+            // here: the notification carries no agent data, only word that
+            // the table changed, and clobbering still-valid data on every
+            // notification would flash the panel to "loading" over data
+            // that has not actually gone stale from the viewer's
+            // perspective. The re-fetch this triggers replaces it once the
+            // answer is in hand.
+            self.runtime_agents_refetch_due = true;
+        }
+    }
+
+    /// Merge one `run.subagent_tree` event into this screen's flat node list.
+    ///
+    /// Events for OTHER sessions' trees are dropped here: the gateway scopes
+    /// delivery by what this caller may see, not by which conversation this
+    /// screen currently shows, so an operator with two busy sessions receives
+    /// both trees on one socket.
+    pub fn apply_subagent_tree_event(&mut self, ev: subagent_tree::SubagentTreeEvent) {
+        let root = match &ev {
+            subagent_tree::SubagentTreeEvent::Spawned { node } => node.root_session.as_str(),
+            subagent_tree::SubagentTreeEvent::Progress { root_session, .. }
+            | subagent_tree::SubagentTreeEvent::Settled { root_session, .. } => {
+                root_session.as_str()
+            }
+        };
+        if root != self.session_key {
+            return;
+        }
+        subagent_tree::apply_event(&mut self.agents, ev);
+    }
+
+    /// How many of this session's sub-agents are still running (status bar).
+    #[must_use]
+    pub fn running_agent_count(&self) -> usize {
+        self.agents
+            .iter()
+            .filter(|n| n.lifecycle == NodeLifecycle::Running)
+            .count()
+    }
+
+    /// Live plan projection — a mutating `scratchpad` call attaches the full
+    /// snapshot to its result (`ScratchpadOutput.snapshot`); mirror it the way
+    /// the Panel's TodoPanel does. Only a parseable snapshot object updates
+    /// state: absence means "this call carried none", never "clear" — the
+    /// authoritative clear arrives as an EMPTY snapshot in `RunSummary.plan`
+    /// at run end.
+    pub(super) fn maybe_apply_plan_from_tool(
+        &mut self,
+        tool_name: &str,
+        output: &serde_json::Value,
+    ) {
+        if tool_name != "scratchpad" || self.replaying_trace {
+            return;
+        }
+        // The shared reader: on the real wire `output` is the tool's JSON as
+        // a `Value::String`, so an `output.get("snapshot")` here was `None`
+        // on every live frame and this projection only ever moved on a cold
+        // `chat.history` attach (qa/agents_viz, 2026-09-02). Same reader as
+        // the gateway's run-end latch and the Panel's Todo strip.
+        if let Ok(Some(plan)) = aleph_protocol::plan::snapshot_from_tool_output(output) {
+            self.plan = Some(plan);
+        }
+    }
+
+    /// Open the `/agents` overlay in list mode.
+    pub fn open_agents_overlay(&mut self) {
+        self.agents_overlay = Some(AgentsOverlayState {
+            selected: 0,
+            detail: None,
+        });
+        self.focus = Focus::Agents;
+    }
+
+    /// The node currently highlighted in the agents overlay, resolved through
+    /// the same [`agent_display_order`] the widget renders with.
+    #[must_use]
+    pub fn selected_agent(&self) -> Option<&SubagentNode> {
+        let overlay = self.agents_overlay.as_ref()?;
+        agent_display_order(&self.agents)
+            .get(overlay.selected)
+            .copied()
+    }
+
+    /// Esc in the agents overlay: detail → list, list → closed.
+    pub fn agents_overlay_back(&mut self) {
+        match self.agents_overlay.as_mut() {
+            Some(overlay) if overlay.detail.is_some() => overlay.detail = None,
+            _ => {
+                self.agents_overlay = None;
+                self.focus = self.focus_after_modal();
+            }
+        }
+    }
+
+    /// Scroll the agent detail view. Positive = down.
+    pub fn agents_detail_scroll(&mut self, delta: isize) {
+        if let Some(detail) = self.agents_overlay.as_mut().and_then(|o| o.detail.as_mut()) {
+            let max = detail.lines.len().saturating_sub(1);
+            let next = if delta.is_negative() {
+                detail.scroll.saturating_sub(delta.unsigned_abs())
+            } else {
+                detail.scroll.saturating_add(delta.unsigned_abs())
+            };
+            detail.scroll = next.min(max);
+        }
     }
 
     // -- Session picker -------------------------------------------------
@@ -1548,6 +1852,14 @@ impl AppState {
         // the safe direction while this screen genuinely cannot tell.
         self.session_reconciled = false;
 
+        // Per-conversation surfaces: the outgoing conversation's execution
+        // list and sub-agent tree must not caption the incoming one. The
+        // attach that follows restores both (`chat.history.plan` +
+        // `subagent.tree`).
+        self.plan = None;
+        self.agents.clear();
+        self.agents_overlay = None;
+
         // The side thread belongs to the conversation we just left, and it is
         // cleared rather than kept per-conversation. Two reasons, and the
         // second is the decisive one:
@@ -1603,6 +1915,11 @@ impl AppState {
     /// Toggle verbose/debug output mode.
     pub const fn toggle_verbose(&mut self) {
         self.verbose = !self.verbose;
+    }
+
+    /// Toggle the agent-panel column's visibility (`/agents`).
+    pub const fn toggle_agent_panel(&mut self) {
+        self.agent_panel_visible = !self.agent_panel_visible;
     }
 
     /// Clear the chat screen (keep session state).

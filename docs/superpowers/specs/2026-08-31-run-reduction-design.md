@@ -311,25 +311,37 @@ cargo clippy --workspace --all-targets        # 先 just _stage-shell-placeholde
 
 修法：把回填器的触发条件从「run 被中断」改成「投影水位有缺口」——需要一个水位的持久化处。
 
+**→ 2026-09-02 已做**（`2026-09-02-crash-recovery-r2-design.md` B 片 / plan T5）：走的**不是**水位而是**seq 集合求差**（`present` 谓词直接问转录已有哪些 `source_seq`），所以持久化水位那一步整个不需要了——`sessions.projected_through` 反过来成了下一轮的「刻意不做」第 1 条。丢行改成记 `missed`（载荷本来就在 SSOT），`Clean` 闸与 `skipped_clean` 已删，boot 候选 = 活动窗口 ∪ Interrupted，另有 `core/projection-holes` doctor 检查做无界扫描。见 FEATURE_LOCATOR §4.13a ⑯ 与 SESSION_SERVICE.md。
+
 ### 8.2 日志矛盾 fail-closed（用户已裁）
 
 pi 的 `RecordLogCorruption`（12 种闭集理由，恢复时拒绝而非修复）。Aleph 今天遇到矛盾日志（两个未闭合 run、`call_id` 重复、`ToolResult` 无对应 `Requested`）会静默按最宽松路径走。
+
+**→ 2026-09-02 已做**（plan T1/T2）：`LogContradiction` 九变体闭集，两条 REJECT + 七条 REPORT，`reduce_run` / `reduce_disposition` 返回 `Result`；会话进 `ResumeReport.refused`，收据说 `log_inconsistent`，doctor `core/session-log` 每种矛盾一条 finding。**没有照抄 pi 的 12 条**——闭集是从本仓日志里数出来的，而 REJECT 只留给「切片不可归约」那两种：把 `FinishWithoutStart` 判成 REJECT 会拒掉本仓自己的 `abandoned-*` / `delegated-*` closer（附录 D.0.164）。见 §4.13a ⑩⑪⑫。
 
 ### 8.3 恢复时重放当时的模型与档位（用户已裁）
 
 pi 的 `EffectiveLaneConfiguration` / codex 的 `model_context.rs`。被恢复的 run 今天用的是**现在**的会话旋钮（model pin / 推理档 / 执行档），不是崩溃时那一份。会触及 `SESSION_KNOBS` 的 precedence（请求 > 会话 > 全局）。
 
+**→ 2026-09-02 已做**（plan T4）：`RunStarted.envelope`（`RunEnvelopeSnapshot` 六字段）+ `plan_resume`。四根走 request rung（快照 > 会话 > 全局），**`exec_tier` 例外**：走天花板键、只收紧不放宽（附录 D.4.39）。model 先 `validate_snapshot_model` 再回放，降级要说给模型听并计 `degraded`；恢复不 stamp 会话行；无快照的 marker 计 `unsnapshotted`。见 SESSION_KNOBS.md「崩溃恢复」段与 §4.13a ⑬。
+
 ### 8.4 CLI / TUI / Panel 面（用户已裁）
 
 `aleph-server resume` / `agent.resume` 的返回体不携带进展摘要。要动 `shared/protocol` 就是跨 crate wire 契约（判据 #10：键集要放进两边都依赖的那个 crate 并用它构造响应）。
+
+**→ 2026-09-02 已做**（plan T3/T7）：`shared/protocol` 新增 `resume.rs` / `sessions.rs` / `metrics.rs`，`session_thread.rs` 增 `LastRunState`；服务端**用这些类型构造**响应，四个手写镜像已删。渲染点四个（Panel `chat_sidebar::{last_run_notice, run_badge}`、TUI `commands::{last_run_notice, last_run_mark}`）。见 §4.13a ⑮。
 
 ### 8.5 跨 store 词表统一（C 片）
 
 sidecar 的 `RunPhase` 与 coord 的 `TaskRunStatus` 仍各说各话。第 4、5 条归约通道（swarm / cron）本轮不碰。
 
+**→ 2026-09-02 部分做**（plan T6）：sidecar 不再整条替换日志（`Recovered::Sidecar` 合并两源），`settled_label` 读 outcome，`process_journal` 的 `JobPhase` 孪生同批改。**词表合并本身仍未做**——「三套子 agent 词汇合并为一份日志派生态」是 r2 spec §7 第 4 条的「刻意不做」（裁定 A7）。见 §4.13a ⑭。
+
 ### 8.6 归约结果落盘缓存（YAGNI）
 
 codex 的 `REDUCED_STATE_FILE_NAME` + `REDUCED_TRACE_SCHEMA_VERSION`。marker 预过滤已经很便宜，全量归约只跑在候选上；缓存本身就是「同一事实的第二份表述」的教科书形状，要配 schema 版本棘轮才安全。等真机量到再说。
+
+**→ 2026-09-02 仍不做，但真机数字到了**：`qa/resume_boundary/run.sh claims` 把 A10 推迟的两处无上限读当**数字**打印出来（`chat.history` 每次 attach 的 `load_all_events`、`sessions.list` 每次的 `load_run_markers()` 全表）——「记录在案的成本」只有带着数字才算记录在案。上限本身是 r2 spec §7 第 6 条的刻意不做。
 
 ---
 

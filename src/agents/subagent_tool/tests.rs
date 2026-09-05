@@ -1451,6 +1451,7 @@ impl AiProvider for UsageMockProvider {
                 thinking_signature: None,
                 stop_reason: crate::providers::adapter::StopReason::EndTurn,
                 truncated_tool_call: None,
+                provider_error: None,
                 usage: Some(crate::providers::adapter::TokenUsage {
                     input_tokens: 10,
                     output_tokens: 5,
@@ -2929,10 +2930,10 @@ async fn spawn_background_child(tool: &SubagentTool, cancel: CancellationToken) 
 /// Two arms in one fixture on purpose: the completed child is the control, so
 /// "no announce" cannot pass merely because the broadcast path is inert here.
 ///
-/// The suppressed child is stamped `announced` on disk as well. `Settled &&
-/// !announced` is precisely what the boot reconcile hands back as an
-/// undelivered completion, so without the stamp the next restart announces
-/// exactly what this suppresses.
+/// The suppressed child is stamped delivered on disk as well. A `Settled`
+/// record with no `announced_boot` is precisely what the boot reconcile hands
+/// back as an undelivered completion, so without the stamp the next restart
+/// announces exactly what this suppresses.
 #[tokio::test]
 async fn a_cancelled_background_child_is_not_announced_and_is_stamped_on_disk() {
     use crate::agents::background_persistence as bp;
@@ -3030,8 +3031,8 @@ async fn a_cancelled_background_child_is_not_announced_and_is_stamped_on_disk() 
          nothing about cancellation"
     );
     assert!(
-        cancelled_record.announced,
-        "a suppressed announce must be stamped announced, or the next boot's reconcile hands the \
+        cancelled_record.announced_boot.is_some(),
+        "a suppressed announce must be stamped delivered, or the next boot's reconcile hands the \
          same completion back and delivers it after all"
     );
     let completed_record = completed_record.expect("the completed child left a sidecar record");
@@ -3041,7 +3042,7 @@ async fn a_cancelled_background_child_is_not_announced_and_is_stamped_on_disk() 
         "control: the other arm must settle normally"
     );
     assert!(
-        !completed_record.announced,
+        completed_record.announced_boot.is_none(),
         "the stamp belongs to the suppression, not to every settle: an announced completion is \
          stamped by the announce path when it lands"
     );

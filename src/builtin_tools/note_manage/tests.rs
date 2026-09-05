@@ -1002,3 +1002,180 @@ fn description_tells_the_model_to_get_before_it_updates() {
          moment the search hit looks complete"
     );
 }
+
+// ============================================================================
+// T08: note_manage must refuse a composed partition id the caller was never
+// handed. `agent_id` is JsonSchema-exposed model input that becomes the
+// storage partition key; before this fix only path traversal was rejected,
+// so `agent_id: "main__u-alice"` addressed another principal's vault
+// byte-for-byte. `resolve_agent_id` runs FIRST in every handler, so a
+// refusal there is a refusal before any file under that vault is touched.
+// ============================================================================
+
+/// `main__u-alice` is the OUTPUT of `project_scope::session_write_id` under
+/// u-alice's own personal scope, never a value the model was handed to type
+/// back in. Under an active Personal(u-bob) scope, `create` must refuse it —
+/// and the refused vault must never land on disk.
+#[tokio::test]
+async fn create_refuses_a_composed_agent_id_targeting_another_user() {
+    let (_d, tool) = mk_tool();
+    let attr = crate::scope::ScopeAttribution::personal("u-bob");
+    let err = crate::scope::with_scope(Some(attr), async {
+        tool.call(NoteManageArgs {
+            agent_id: Some("main__u-alice".into()),
+            ..create_args("daily-log", "- shipped the gateway retry fix")
+        })
+        .await
+    })
+    .await
+    .expect_err("a composed id addressing another principal must be refused");
+    assert!(err.to_string().contains("invalid agent_id"), "got: {err}");
+    assert!(
+        !tool.memory_dir().join("main__u-alice").exists(),
+        "the refused vault must never be created on disk"
+    );
+}
+
+/// Read family: `get` must refuse before opening any file under the named
+/// vault.
+#[tokio::test]
+async fn get_refuses_a_composed_agent_id_targeting_another_user() {
+    let (_d, tool) = mk_tool();
+    let attr = crate::scope::ScopeAttribution::personal("u-bob");
+    let err = crate::scope::with_scope(Some(attr), async {
+        tool.call(NoteManageArgs {
+            action: NoteManageAction::Get,
+            agent_id: Some("main__u-alice".into()),
+            filename: Some("daily-log".into()),
+            ..blank_args()
+        })
+        .await
+    })
+    .await
+    .expect_err("get must refuse a composed id it was not handed");
+    assert!(err.to_string().contains("invalid agent_id"), "got: {err}");
+    assert!(!tool.memory_dir().join("main__u-alice").exists());
+}
+
+/// Lifecycle family: `delete` must refuse BEFORE the existence check —
+/// otherwise the error text itself becomes an existence oracle for the
+/// named vault.
+#[tokio::test]
+async fn delete_refuses_a_composed_agent_id_targeting_another_user() {
+    let (_d, tool) = mk_tool();
+    let attr = crate::scope::ScopeAttribution::personal("u-bob");
+    let err = crate::scope::with_scope(Some(attr), async {
+        tool.call(NoteManageArgs {
+            action: NoteManageAction::Delete,
+            agent_id: Some("main__u-alice".into()),
+            category: Some("learning".into()),
+            filename: Some("daily-log".into()),
+            ..blank_args()
+        })
+        .await
+    })
+    .await
+    .expect_err("delete must refuse a composed id before checking the file exists");
+    assert!(err.to_string().contains("invalid agent_id"), "got: {err}");
+    assert!(
+        !err.to_string().contains("does not exist"),
+        "the refusal must precede the existence check, got: {err}"
+    );
+}
+
+/// Analysis family: `insights` is read-only but still reads
+/// `agent_id`-scoped materialized state and must refuse the same way.
+#[tokio::test]
+async fn insights_refuses_a_composed_agent_id_targeting_another_user() {
+    let (_d, tool) = mk_tool();
+    let attr = crate::scope::ScopeAttribution::personal("u-bob");
+    let err = crate::scope::with_scope(Some(attr), async {
+        tool.call(NoteManageArgs {
+            action: NoteManageAction::Insights,
+            agent_id: Some("main__u-alice".into()),
+            ..blank_args()
+        })
+        .await
+    })
+    .await
+    .expect_err("the analysis family must refuse a composed id too");
+    assert!(err.to_string().contains("invalid agent_id"), "got: {err}");
+}
+
+/// Load-bearing-gate proof: `is_composed_id` must refuse a composed id even
+/// with NO ambient actor at all (no scope, no turn context — the harness
+/// default, and also the shape of a genuinely actor-less cron/heartbeat
+/// run). `partition_visible_to(_, None)` is unconditionally `true`
+/// (visibility.rs), so without the unconditional `is_composed_id` gate a
+/// composed id sails straight through in exactly this context. Removing the
+/// `is_composed_id` arm and keeping only `partition_visible_to` must turn
+/// this test red — that is what proves the second gate is defence in depth,
+/// not a replacement for the first.
+#[tokio::test]
+async fn refuses_a_composed_agent_id_even_with_no_ambient_actor() {
+    let (_d, tool) = mk_tool();
+    let err = tool
+        .call(NoteManageArgs {
+            agent_id: Some("main__u-alice".into()),
+            ..create_args("daily-log", "- shipped the gateway retry fix")
+        })
+        .await
+        .expect_err("a composed id must be refused even with no ambient actor");
+    assert!(err.to_string().contains("invalid agent_id"), "got: {err}");
+}
+
+/// Positive pin: cross-AGENT targeting by BASE id (the documented purpose at
+/// `args.rs:144-151`, already pinned unguarded by
+/// `resolve_agent_id_explicit_arg_overrides_session_agent` above) must
+/// remain unaffected by the new gates even with an ambient actor present —
+/// `is_composed_id` only recognizes a scoped-suffix family, and
+/// `partition_visible_to` returns `true` early for any id with no `NS_SEP`,
+/// so a base id resolves exactly as it did before this fix.
+#[tokio::test]
+async fn resolve_agent_id_base_id_still_crosses_agents_with_an_ambient_actor() {
+    let (_d, tool) = mk_tool();
+    let args = NoteManageArgs {
+        agent_id: Some("archivist".into()),
+        ..blank_args()
+    };
+    let resolved = crate::tools::turn_context::TURN_CONTEXT
+        .sync_scope(turn_ctx("research"), || tool.resolve_agent_id(&args))
+        .unwrap();
+    assert_eq!(resolved, "archivist");
+}
+
+/// The refusal must not double as an existence oracle: the same text for a
+/// composed id whose vault directory really exists on disk and one that was
+/// never created.
+#[tokio::test]
+async fn refusal_text_does_not_vary_with_whether_the_vault_exists() {
+    let (_d, tool) = mk_tool();
+    std::fs::create_dir_all(tool.memory_dir().join("main__u-alice")).unwrap();
+    // "main__u-carol" is deliberately never created.
+
+    let attr = crate::scope::ScopeAttribution::personal("u-bob");
+    let existing = crate::scope::with_scope(Some(attr.clone()), async {
+        tool.resolve_agent_id(&NoteManageArgs {
+            agent_id: Some("main__u-alice".into()),
+            ..blank_args()
+        })
+    })
+    .await
+    .expect_err("an existing composed vault must still be refused");
+    let missing = crate::scope::with_scope(Some(attr), async {
+        tool.resolve_agent_id(&NoteManageArgs {
+            agent_id: Some("main__u-carol".into()),
+            ..blank_args()
+        })
+    })
+    .await
+    .expect_err("a never-created composed vault must be refused identically");
+
+    let normalize =
+        |s: String| s.replace("main__u-alice", "<id>").replace("main__u-carol", "<id>");
+    assert_eq!(
+        normalize(existing.to_string()),
+        normalize(missing.to_string()),
+        "the refusal text must not leak whether the named vault exists on disk"
+    );
+}

@@ -53,6 +53,39 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         Focus::ProviderPicker => handle_provider_picker_key(state, key),
         Focus::Approval => handle_approval_key(state, key),
         Focus::Btw => handle_btw_key(state, key),
+        Focus::Agents => handle_agents_key(state, key),
+    }
+}
+
+/// Handle key events when the `/agents` overlay is focused. Two modes share
+/// the arrows: list mode moves the selection, detail mode scrolls the
+/// transcript. Esc is handled globally (`Action::AgentsBack`).
+fn handle_agents_key(state: &mut AppState, key: KeyEvent) -> Action {
+    let in_detail = state
+        .agents_overlay
+        .as_ref()
+        .is_some_and(|o| o.detail.is_some());
+    match key.code {
+        KeyCode::Up if in_detail => {
+            state.agents_detail_scroll(-1);
+            Action::None
+        }
+        KeyCode::Down if in_detail => {
+            state.agents_detail_scroll(1);
+            Action::None
+        }
+        KeyCode::PageUp if in_detail => {
+            state.agents_detail_scroll(-10);
+            Action::None
+        }
+        KeyCode::PageDown if in_detail => {
+            state.agents_detail_scroll(10);
+            Action::None
+        }
+        KeyCode::Up => Action::AgentsUp,
+        KeyCode::Down => Action::AgentsDown,
+        KeyCode::Enter if !in_detail => Action::AgentsConfirm,
+        _ => Action::None,
     }
 }
 
@@ -218,6 +251,11 @@ fn handle_global_key(
     // silently closing it would orphan that run with no response. Keep the
     // dialog on screen and force the user to answer (or /stop / Ctrl+C to abort).
     if key.code == KeyCode::Esc {
+        // The agents overlay is local and two-level: Esc backs out of the
+        // detail view before it closes the list (pi's "esc back").
+        if state.agents_overlay.is_some() {
+            return Some(Action::AgentsBack);
+        }
         // The session and provider pickers are local too: nothing on the server
         // is parked on either, and neither has sent anything until Enter.
         if state.palette.is_some()

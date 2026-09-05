@@ -14,7 +14,7 @@ pub struct VerifyReport {
 /// that want strict health gating should read `health` directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum HealthObservation {
+pub(crate) enum HealthObservation {
     Healthy,
     Degraded,
     /// The server is up but the system could not classify its health (e.g. the
@@ -46,7 +46,7 @@ pub fn verdict(running: bool, tool_count: usize, other_capability_count: usize) 
 /// callers (e.g. `extensions.install` and the verification tool) can render
 /// the distinction without re-deriving it from `HealthStatus`.
 #[must_use]
-pub fn verdict_with_health(
+pub(crate) fn verdict_with_health(
     running: bool,
     health: HealthObservation,
     tool_count: usize,

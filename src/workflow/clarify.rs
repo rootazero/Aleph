@@ -59,6 +59,21 @@ pub fn clarify_delivered(metadata: &Value) -> bool {
     metadata.get(CLARIFY_DELIVERED_AT_KEY).is_some()
 }
 
+/// *When* the clarify question was confirmed delivered (epoch seconds).
+///
+/// The stamp [`clarify_delivered`] reads as a boolean, read as the number it
+/// is. This is the ordering key for "which parked question does an incoming
+/// reply answer": the one the user saw LAST. Creation order cannot answer
+/// that — `created_at` is epoch *seconds*, so two clarify steps materialised
+/// in one `materialize` call tie, and the delivery order is the dispatcher's,
+/// not the DAG's. Returns `None` for a row parked by a pre-marker daemon
+/// version (still answerable — it just sorts oldest) and for a
+/// present-but-non-numeric stamp.
+#[must_use]
+pub fn clarify_delivered_at(metadata: &Value) -> Option<u64> {
+    metadata.get(CLARIFY_DELIVERED_AT_KEY)?.as_u64()
+}
+
 /// The originating channel address captured when a workflow run starts, threaded
 /// into each clarify step so the dispatcher knows where to push the question and
 /// the inbound router knows which session's reply completes it.

@@ -18,6 +18,11 @@
 //   QA-NOTE        -> tool_use note_manage     (writes into the room partition)
 //   QA-CARD        -> tool_use file_ops:delete (destructive => approval card)
 //   QA-DELEGATE    -> tool_use subagent        (a child run, phase 7)
+//   QA-DELEGATE-BG -> the same, run_in_background (qa/agents_viz — the live
+//                     tree is the background tracker's view)
+//   QA-PLAN        -> tool_use scratchpad:set_plan (qa/agents_viz — the plan
+//                     carriers a tasks panel reads; this mock is shared, not
+//                     copied, so the delegation arm has one owner)
 //   anything else  -> end_turn, "Hi <label>, noted."
 //
 // The last arm is not filler: it is the only end-to-end evidence that the
@@ -179,6 +184,52 @@ const decide = (body) => {
       input: { operation: "delete", path: DELETE_PATH },
     };
   }
+  // Two mutating scratchpad calls: the snapshots they echo are what ride the
+  // live `tool_call_completed` frame, `RunSummary.plan` at run end and
+  // `chat.history.plan` cold — the three carriers `qa/agents_viz` asserts on.
+  //
+  // Two, not one, because a plan with pending items HOLDS THE RUN OPEN: the
+  // scratchpad stop guard vetoes every end_turn while a box is unticked
+  // (`verification/scratchpad_goal_verifier.rs`), and the veto arrives as a
+  // plain user line. So the first call writes the mixed-status list the live
+  // carrier is asserted on (bare text + explicit statuses, so a carrier that
+  // flattened statuses would show up as a wrong `in_progress` count), and
+  // the veto is answered by ticking every box — different arguments, so the
+  // repeat-guard stays quiet — after which the stop is accepted.
+  //
+  // The objective deliberately does NOT contain the marker: the veto quotes
+  // it, and so does every later `[tool]:` progress line in the transcript,
+  // and a marker in there re-fired the first arm with identical arguments
+  // until the repeat-guard vetoed THAT (measured, 2026-09-02).
+  if (text.includes("QA-PLAN")) {
+    return {
+      kind: "tool",
+      name: "scratchpad",
+      input: {
+        action: "set_plan",
+        value: "Prove the plan carriers",
+        items: [
+          { text: "QA step one", status: "completed" },
+          { text: "QA step two", status: "in_progress" },
+          "QA step three",
+        ],
+      },
+    };
+  }
+  if (text.includes("[verifier veto]") && text.includes("execution list")) {
+    return {
+      kind: "tool",
+      name: "scratchpad",
+      input: {
+        action: "set_plan",
+        items: [
+          { text: "QA step one", status: "completed" },
+          { text: "QA step two", status: "completed" },
+          { text: "QA step three", status: "completed" },
+        ],
+      },
+    };
+  }
   // A delegated child is the one turn this mock serves that it also CAUSES, so
   // it is the one arm that can feed itself. Three independent guards, because
   // a runaway here does not fail the fixture — it spawns children until the
@@ -195,8 +246,18 @@ const decide = (body) => {
   //  3. The child's task carries a marker that is NOT this one, so even a
   //     `currentLine` that somehow saw the parent's text would have to match
   //     `QA-DELEGATE` rather than `QA-CHILD` to loop.
+  //
+  // Two spellings, one once-flag. `QA-DELEGATE-BG` (qa/agents_viz) sets
+  // `run_in_background`: the live tree (`run.subagent_tree`, the Panel's
+  // /dashboard/subagents, the TUI agents panel) is the BACKGROUND tracker's
+  // view — a synchronous `run` child registers running-only (for cancel
+  // reach) and emits no tree event at all, measured 2026-09-02. The room
+  // fixture keeps the synchronous `QA-DELEGATE`: its phase 7 claim reads the
+  // provider request log, not the tree, and the marker test below is
+  // ordered so the longer spelling is not swallowed by the shorter one.
   if (text.includes("QA-DELEGATE") && !delegated) {
     delegated = true;
+    const background = text.includes("QA-DELEGATE-BG");
     return {
       kind: "tool",
       name: "subagent",
@@ -205,6 +266,7 @@ const decide = (body) => {
         task: "QA-CHILD: reply with one short sentence and stop.",
         context: "isolated",
         timeout_secs: 120,
+        ...(background ? { run_in_background: true } : {}),
       },
     };
   }

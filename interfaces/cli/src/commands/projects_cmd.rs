@@ -459,8 +459,10 @@ mod tests {
     #[test]
     fn every_binding_field_is_either_a_column_or_a_named_exclusion() {
         let sent = wire_keys(&serde_json::to_value(sample_binding()).unwrap());
-        let mut accounted: BTreeSet<String> =
-            BINDING_COLUMNS.iter().map(|(_, f)| (*f).to_string()).collect();
+        let mut accounted: BTreeSet<String> = BINDING_COLUMNS
+            .iter()
+            .map(|(_, f)| (*f).to_string())
+            .collect();
         accounted.extend(BINDING_FIELDS_NOT_RENDERED.iter().map(|f| (*f).to_string()));
         assert_eq!(
             sent, accounted,
@@ -576,9 +578,8 @@ mod tests {
             // Exhaustiveness tripwire: a fourth variant is a compile error
             // here, in the same file as the sentences.
             match outcome {
-                RescopeOutcome::Moved
-                | RescopeOutcome::NothingToMove
-                | RescopeOutcome::Unknown => {}
+                RescopeOutcome::Moved | RescopeOutcome::NothingToMove | RescopeOutcome::Unknown => {
+                }
             }
             assert!(
                 seen.insert(rescope_sentence(outcome).to_string()),
@@ -605,11 +606,7 @@ mod tests {
     /// and in the server-side doc, and three copies means three authors.
     #[test]
     fn the_unbind_notice_is_the_shared_constant() {
-        let released = unbind_receipt(
-            "telegram",
-            "c1",
-            &ChannelUnbindResult { unbound: true },
-        );
+        let released = unbind_receipt("telegram", "c1", &ChannelUnbindResult { unbound: true });
         assert!(
             released.contains(&UNBIND_KEEPS_TRANSCRIPT_NOTICE.to_string()),
             "the receipt must carry the shared constant verbatim, not a retype: {released:?}"
@@ -630,11 +627,7 @@ mod tests {
     /// copy that describes an event on a run where the event did not occur.
     #[test]
     fn a_noop_unbind_says_nothing_happened_and_explains_nothing_else() {
-        let nothing = unbind_receipt(
-            "telegram",
-            "c1",
-            &ChannelUnbindResult { unbound: false },
-        );
+        let nothing = unbind_receipt("telegram", "c1", &ChannelUnbindResult { unbound: false });
         assert!(
             !nothing
                 .iter()
@@ -666,7 +659,9 @@ mod tests {
                  {lines:?}"
             );
             assert!(
-                lines.iter().any(|l| l.contains("telegram") && l.contains("p-1")),
+                lines
+                    .iter()
+                    .any(|l| l.contains("telegram") && l.contains("p-1")),
                 "{outcome:?}: the receipt must name what was bound to what: {lines:?}"
             );
         }

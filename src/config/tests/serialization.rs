@@ -31,7 +31,6 @@ fn test_memory_config_deserialization() {
     let json = r#"{
         "enabled": false,
         "vector_db": "sqlite-vec",
-        "similarity_threshold": 0.8,
         "embedding": {
             "active_provider_id": "openai"
         },
@@ -51,7 +50,6 @@ fn test_memory_config_deserialization() {
     assert!(!config.enabled);
     assert_eq!(config.embedding.active_provider_id, "openai");
     assert_eq!(config.vector_db, "sqlite-vec");
-    assert_eq!(config.similarity_threshold, 0.8);
     assert!(!config.dreaming.enabled);
     assert_eq!(config.dreaming.window_start_local, "01:00");
     assert_eq!(config.memory_decay.protected_types.len(), 2);
@@ -481,7 +479,7 @@ fn test_embedding_survives_save_incremental() {
     );
 
     // Now modify memory config (like memory_config.update would) but keep embedding
-    config.memory.similarity_threshold = 0.5;
+    config.memory.bm25_bonus_weight = 0.5;
 
     // Simulate save_incremental: serialize to toml::Value and extract memory section
     let current: toml::Value = toml::Value::try_from(&config).unwrap();

@@ -1,13 +1,28 @@
 //! Source-level census over the producers of `AUTHOR_USER_KEY`.
 //!
-//! `run_loop::with_request_scope`'s doc names TWO origin sites for this key.
-//! Before 2026-08-28 only one of them existed, and the doc was the only
-//! external reference to the missing wire — grepping the key's name found the
-//! comment that vouched for the absent producer, not the absence.
+//! `run_loop::with_request_scope`'s doc names every origin site for this key.
+//! Before 2026-08-28 this census listed only two of them
+//! (`handlers::agent::build_run_request`, `inbound_router::executor::execute_for_context_inner`)
+//! while a THIRD and FOURTH producer — `teams::broadcast::member_run_metadata`
+//! and `teams::dispatcher::runner::task_run_metadata` — had already existed
+//! since 2026-08-13 and 2026-08-18 respectively, ten to fifteen days earlier.
+//! The census's own author had all four in front of them and named two;
+//! grepping the key's name found the doc comment that vouched for two
+//! producers, not the other two that were silently uncovered.
 //!
 //! This census makes that sentence self-enforcing: it first proves the run
 //! loop really does seed `CURRENT_ROOM_AUTHOR` from the key, then requires
-//! every named origin site to actually write it.
+//! every named origin site to actually write it. Structurally it can only
+//! catch a SHRINK of `ORIGIN_SITES` (the floor below), never a new producer
+//! elsewhere in the tree that nobody added here — that half is why a fifth
+//! producer, `sessions::send_tool::build_sub_metadata`, is unit-tested at its
+//! own site (`send_tool.rs::a_background_dispatch_with_no_room_author_writes_no_author_key`
+//! and its sibling) rather than folded into `ORIGIN_SITES`: it did not exist
+//! as a writer when this census's four were surveyed, so it is not one of
+//! the four the doc above is correcting the record about. A future sixth
+//! `RunRequest`-metadata builder owes the same two things: a stamp at its own
+//! site, and either a new `ORIGIN_SITES` entry here (with the floor raised in
+//! the same edit) or a unit test at its own site — not a silent gap.
 
 #[cfg(test)]
 mod tests {
@@ -26,6 +41,16 @@ mod tests {
             "src/gateway/inbound_router/executor.rs",
             include_str!("../../inbound_router/executor.rs"),
             "execute_for_context_inner",
+        ),
+        (
+            "src/teams/broadcast/mod.rs",
+            include_str!("../../../teams/broadcast/mod.rs"),
+            "member_run_metadata",
+        ),
+        (
+            "src/teams/dispatcher/runner.rs",
+            include_str!("../../../teams/dispatcher/runner.rs"),
+            "task_run_metadata",
         ),
     ];
 
@@ -68,15 +93,18 @@ mod tests {
             checked += 1;
         }
         // A measured floor alongside the exact count: `checked == ORIGIN_SITES.len()`
-        // shrinks with ORIGIN_SITES, so an emptied list would pass it trivially
-        // (0 == 0) — the one failure this census exists to catch. The floor
-        // cannot detect a loop that SKIPS an entry, which is what the exact
-        // count is still for; keep both.
+        // shrinks with ORIGIN_SITES, so a shortened list would pass it trivially
+        // — the one failure this census exists to catch. The floor cannot detect
+        // a loop that SKIPS an entry, which is what the exact count is still for;
+        // keep both. Raised from 2 to 4 in the same edit that added the two teams
+        // producers below — a floor left at the old size would silently sanction
+        // shrinking back to them.
         assert!(
-            checked >= 2,
-            "the census inspected {checked} origin sites; it must cover at least the two \
-             that build a run request — an emptied ORIGIN_SITES would otherwise pass \
-             `checked == len()` trivially"
+            checked >= 4,
+            "the census inspected {checked} origin sites; it must cover at least the four \
+             producers surveyed when this census was corrected (agent.rs, executor.rs, \
+             teams::broadcast, teams::dispatcher::runner) — a shrunken ORIGIN_SITES would \
+             otherwise pass `checked == len()` trivially"
         );
         assert_eq!(
             checked,

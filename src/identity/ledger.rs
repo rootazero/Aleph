@@ -570,6 +570,11 @@ pub fn global() -> Option<Arc<AgentLedger>> {
 /// the chokepoint must never fail a tool call because accounting is not wired.
 pub async fn record(new: NewRecord) {
     let Some(tx) = WRITER.get() else {
+        tracing::error!(
+            agent_id = %new.agent_id,
+            action = ?new.action,
+            "agent ledger writer not installed; record dropped"
+        );
         return;
     };
     let agent_id = new.agent_id.clone();

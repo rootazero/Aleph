@@ -71,12 +71,8 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
         Box::pin(async move {
             for alert in alerts {
                 let target = alert.target;
-                let payload = failure_alert_payload(
-                    "cron",
-                    &alert.job_name,
-                    &alert.job_id,
-                    &alert.message,
-                );
+                let payload =
+                    failure_alert_payload("cron", &alert.job_name, &alert.job_id, &alert.message);
                 let config = DeliveryConfig {
                     mode: DeliveryMode::Primary,
                     targets: vec![target],
@@ -871,6 +867,83 @@ mod tests {
                 .get(crate::scope::SCOPE_META_KEY)
                 .map(String::as_str),
             Some("personal:u-alice")
+        );
+    }
+
+    /// The whole chain, from the RPC face to the money: a job created through
+    /// `cron.create` fires with its creator's principal.
+    ///
+    /// The two tests above pin `build_cron_metadata` against a hand-filled
+    /// snapshot, which proves the rehydration but says nothing about whether
+    /// anything ever fills those columns. This one starts at the creating
+    /// face, goes through the store, through `phase1_mark_due_jobs`'s real
+    /// snapshot, and ends on the `Principal` the spend ledger would charge.
+    /// Before the RPC face stamped, this ended on `Unattributed`.
+    #[tokio::test]
+    async fn a_job_created_over_the_rpc_face_fires_with_its_creators_principal() {
+        use crate::tasks::cron::service::concurrency::phase1_mark_due_jobs;
+        use crate::tasks::cron::store::CronStore;
+        use crate::tasks::cron::{CronConfig, CronService};
+        use crate::tasks::shared::clock::testing::FakeClock;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("cron.db");
+        let service = CronService::new(CronConfig {
+            db_path: db_path.to_string_lossy().to_string(),
+            ..CronConfig::default()
+        })
+        .unwrap();
+        let cron = std::sync::Arc::new(tokio::sync::Mutex::new(service));
+
+        let request = crate::gateway::protocol::JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(serde_json::json!(1)),
+            method: "cron.create".to_string(),
+            params: Some(serde_json::json!({
+                "name": "billed-job",
+                "agent_id": "main",
+                "prompt": "work",
+                "schedule_kind": { "kind": "every", "every_ms": 60_000 },
+            })),
+        };
+        let response = crate::scope::with_scope(
+            Some(crate::scope::ScopeAttribution::personal("u-payer")),
+            crate::gateway::handlers::cron::handle_create(request, cron.clone()),
+        )
+        .await;
+        assert!(
+            response.error.is_none(),
+            "precondition: create must succeed"
+        );
+
+        // A fresh store off the same file: the fire path reads what was
+        // persisted, not what the handler happened to hold in memory.
+        let store = std::sync::Arc::new(tokio::sync::Mutex::new(CronStore::load(db_path).unwrap()));
+        let clock = FakeClock::new(chrono::Utc::now().timestamp_millis() + 600_000);
+        let snapshots = phase1_mark_due_jobs(&store, &clock, 300_000).await.unwrap();
+        let snapshot = snapshots
+            .iter()
+            .find(|s| s.prompt.contains("work"))
+            .expect("the due job must produce a snapshot");
+
+        let metadata = build_cron_metadata(snapshot);
+        assert_eq!(
+            crate::scope::ScopeAttribution::from_persisted(
+                metadata
+                    .get(crate::scope::OWNER_META_KEY)
+                    .map(String::as_str),
+                metadata
+                    .get(crate::scope::SCOPE_META_KEY)
+                    .map(String::as_str),
+            ),
+            Some(crate::scope::ScopeAttribution::personal("u-payer")),
+            "the beat must carry a rehydratable attribution for its creator"
+        );
+        assert_eq!(
+            crate::spend::principal_from_metadata(&metadata),
+            crate::spend::Principal::User("u-payer".to_string()),
+            "the run this job fires must be billed to the person who scheduled \
+             it, not to @unattributed"
         );
     }
 

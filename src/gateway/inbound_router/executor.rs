@@ -285,7 +285,7 @@ impl InboundMessageRouter {
         // who triggered it (closes the group-chat approval bypass). Consumed via
         // `TURN_ORIGINATOR` → the channel approval bridge → the record.
         metadata.insert(
-            "originator_user_id".to_string(),
+            crate::gateway::execution_engine::ORIGINATOR_USER_KEY.to_string(),
             ctx.message.sender_id.as_str().to_string(),
         );
         metadata.insert(

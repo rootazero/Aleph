@@ -35,7 +35,7 @@ CREATE TABLE session_events (
 );
 ```
 
-Plus two supporting indexes (`idx_session_events_session_turn`, `idx_session_events_session_type`). Writes are synchronous; SQLite runs in WAL mode; the `(session_id, seq)` primary key enforces monotonic ordering per session.
+Plus two supporting indexes (`idx_session_events_session_turn`, `idx_session_events_session_type`). Writes are synchronous and SQLite runs in WAL mode. The `(session_id, seq)` primary key enforces **uniqueness** of a seq within a session — it does not enforce monotonicity, and no index could: a primary key accepts 5, 3, 4 in that insertion order without complaint. Monotonicity is the allocator's promise, and the reducer does not take it on faith: `session::reduction::validate_slice` REJECTS a slice whose `seq` decreases (`LogContradiction::OutOfOrderSlice`), because a reducer that proceeded would derive the run anchor and the disposition from a false order.
 
 ## Event schema
 
@@ -74,7 +74,9 @@ There is deliberately no `TurnEnded` marker to pair with `TurnStarted`; a turn e
 
 ## Gateway RPC relationship
 
-Gateway `session.*` RPC methods remain on `SessionManager` (`src/gateway/session_manager/`). A dual-write shim (`src/session/shim.rs`) mirrors each `SessionManager` append into `SessionService` so `session_events` stays populated in parallel with the legacy `messages` table. A future phase will migrate Gateway RPC directly and remove the shim.
+Gateway `session.*` RPC methods remain on `SessionManager` (`src/gateway/session_manager/`). **There is no dual-write shim.** This section described `src/session/shim.rs` — a file that does not exist and whose mirroring was removed when `session_events` became the SSOT — so anyone reading it went looking for a mirror of the `messages` table. There is no mirror: `MessageProjector` (`src/gateway/session_projector.rs`) materialises `messages` from `session_events` asynchronously and is the only writer of the rows it projects — the ones carrying a `source_seq`. It is **not** the table's only writer, and every doc that said so (this section included) was lying: two production paths append straight to `messages` and leave `source_seq` NULL — `AgentInstance::add_message` (`src/gateway/agent_instance.rs`) and the boot orphan notice (`src/gateway/orphan_notice.rs`) — the 「另两个生产者」 FEATURE_LOCATOR §6.9 names. `map_message_row` (`src/gateway/session_manager/ops/crud.rs`) reads a NULL `source_seq` back as "not event-sourced, leave it alone", which is what keeps those rows out of the projection's seq-set arithmetic.
+
+The projection is **self-healing rather than lossy**. Back-pressure or a stopped drain records the event's `seq` (payload stays in the SSOT) and the next heal pass re-reads it from the log; a heal is a seq-set difference against the transcript's own row ids, so a hole below the newest row is filled, not only a missing tail. `missed` is process memory, so a crash between an append and its drain is repaired at the NEXT boot: `ProjectionReconciler` asks the projector to repair every session in the activity window (`[resume] max_age_secs`) plus every session whose markers read as interrupted, and the `core/projection-holes` doctor check does the unbounded sweep for anything older.
 
 ## Re-attaching a client (`chat.history`'s `session` snapshot)
 
@@ -120,7 +122,7 @@ See [FEATURE_LOCATOR §5.23](FEATURE_LOCATOR.md).
 |----------|--------|
 | `AgentHarness` | Reads and writes history exclusively through `SessionService` (Phase 6 completed). |
 | `agents::runtime` (SubagentTool) | Harness-based subagent spawning uses `SessionService` for ephemeral child sessions (Phase 7 completed). |
-| Gateway `session.*` RPC | On `SessionManager`; every append dual-writes into `SessionService` via `src/session/shim.rs`. Future phase will migrate Gateway RPC directly and remove the shim. |
+| Gateway `session.*` RPC | On `SessionManager`. **No dual write** — see the section above: `session_events` is the SSOT and `MessageProjector` is the only writer of the rows `messages` projects from it (`source_seq` non-NULL). The two direct appenders named there leave `source_seq` NULL, so `messages` as a *table* has three production writers. The `src/session/shim.rs` this row used to name never survived that change. |
 | Memory / Dream / other | Read-only `SessionService::get_events` available; adoption on a case-by-case basis. |
 
 ## Non-goals

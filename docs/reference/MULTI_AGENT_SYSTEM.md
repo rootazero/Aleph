@@ -66,7 +66,9 @@ recursion), token budget, and timeout. It returns a result and is destroyed.
 - `…/result.txt` — an append-only `<unix_ms>\t<text>` activity trail. `last_activity` is the timestamp of its last line, single-sourced rather than duplicated into `state.json` (a field rewritten on every progress event would cost one fsync per tool call).
 - Boot reconcile writes a **terminal tombstone** for orphans instead of deleting the row — a mechanism that only records "it finished" cannot tell "it never ran" apart from "it ran and the write was lost". Without this, `check_status` on a child that died with the previous daemon returned `retryable: false` and the text `"No background sub-agent found with request_id '…'"`, which is indistinguishable from a typo and throws away whatever the child had produced.
 - **Every byte written here goes through `SecretMasker`, unconditionally.** `result.txt` is the first place a sub-agent's output crosses a process boundary onto disk, and it is re-injected into a fresh parent turn at the next boot (which can fan out to a chat channel). An artifact that outlives the process cannot be gated on the run's attendedness, because the reader is a later process.
-- Persistence is **opt-in**: until `init_and_reconcile` runs, every entry point is a zero-I/O no-op and the tracker behaves exactly as before. The boot orphan announcement is `await`ed after `spawn_subagent_announce` (also now `async`) — a subscriber that is merely *scheduled* is not listening yet.
+- Persistence is **opt-in**: until `init_and_reconcile` runs, every entry point is a zero-I/O no-op and the tracker behaves exactly as before. The boot orphan announcement (`init_and_announce_orphans`, the half that broadcasts) is `await`ed after `spawn_subagent_announce` (also now `async`) — a subscriber that is merely *scheduled* is not listening yet.
+- **Boot reconcile claims two populations, not one (2026-09-02).** Tombstoning the orphans is one half; the other is every record that reached `Settled` with no `announced_boot` — a completion whose notice died with the previous daemon. The old `announced: bool` answered both "was it delivered" and "how many times have we tried", and it was written *before* the delivery, so a failed delivery had already stamped itself a success. It is now `announce_attempts: u8` (incremented on the way out, and the cap that stops an undeliverable record from being handed back forever) plus `announced_boot: Option<u64>`, written only after the broadcast returns.
+- **The boot notice is one event per parent session carrying N children, and it counts instead of judging (2026-09-02).** `SubAgentCompletionEvent.success` is a single bool computed over the whole batch, so rendering it as a verdict told the model that every child shared one outcome and named one arbitrary child as the id to ask about — on a mixed batch (some finished, some interrupted) the finished children's results were discarded with it. The event now carries `request_ids: Vec<String>`, the whole batch (`#[serde(default)]`, so an event written before the field decodes as "no per-child list" and the announcer falls back to `request_id` — a missing key must read as "no list", never as "unreadable event"). `request_id` is deliberately `None` on a grouped notice: announce dedup asks the live tracker whether an id was already consumed, and the tracker has never heard of a pre-restart id. The header states the count, the per-child verdicts stay in `summary` where the producer wrote them, and `on_delivered(&request_ids)` stamps every id the delivery actually reached rather than one of N — the N-1 it could not stamp came back at the next boot.
 
 ### Fan-out width (`[execution] max_concurrent_subagents`)
 
@@ -206,13 +208,26 @@ nonce, `sub-<uuid>`.
 
 **The reader** (`src/agents/subagent_tool/recovery.rs`) is lazy: it runs only
 when the tracker reports an id it has never seen, and one `get_events` serves
-every unknown id in that call. Three verdicts — `SubagentReturned` present →
-`completed_recovered` carrying the real summary; only `SubagentSpawned` →
-`interrupted` plus a `child_session` pointer to the partial transcript;
-neither → the pre-existing `unknown`. Wired into `check_status`, `wait`
-(single and `wait_any`), `cancel`, `wait_cancelled` and `list`.
+every unknown id in that call. **Four** verdicts, not three — the sidecar
+(`background_persistence`) is a second durable source covering a set the event
+log cannot see, and it earns its own arm:
 
-Both verdicts are `ToolResult::Success`, including `interrupted`: a restart is
+1. `SubagentReturned` present → `completed_recovered` carrying the real summary;
+2. only `SubagentSpawned` → `interrupted`, plus a `child_session` pointer, the
+   progress counters, the named in-flight calls and the transcript tail;
+3. a sidecar record → its **outcome's** word (`completed` / `failed` /
+   `timed_out` / `cancelled` / `interrupted_by_restart` / `settled_unknown`,
+   from `background_persistence::settled_label`), merged with whatever the child
+   log adds rather than replacing it — only `completed` carries the "do NOT
+   re-run it" seal;
+4. neither source → the pre-existing `unknown`.
+
+Wired into `check_status`, `wait` (single and `wait_any`), `cancel`,
+`wait_cancelled` and `list`. The detail faces pay one child-log read per
+unfinished row; the directory face (`list`) does not, and renders
+`progress: null` — "did not ask", never "no progress".
+
+Every verdict is `ToolResult::Success`, including `interrupted`: a restart is
 not a verdict on the call the model is making now.
 
 `list` gained a `from_durable_log` array. It documents itself as the way to
@@ -1047,8 +1062,12 @@ coordination-task DAG to completion without leader micro-management.
   (`execute_member_task`) — real cancellation, no process-spawn cost, no
   scheduling latency.
 - **DAG as protocol**: a task created with `blocked_by` edges runs only once
-  every dependency is `Completed` (`CoordTaskStore` derives the `Blocked`
-  status dynamically). Fan-in is simply a task that depends on several others.
+  every dependency **satisfies** it — `Completed` or `Skipped`, the set
+  `CoordTaskStatus::satisfies_dependency` owns. `Blocked` and `Unsatisfiable`
+  are *derived at read time*, never stored: a pending task with unresolved
+  deps is `Unsatisfiable` when one of them is terminally dead
+  (`failed`/`cancelled`) and merely `Blocked` otherwise. Fan-in is simply a
+  task that depends on several others.
 - **Claiming**: each runnable task is claimed with an atomic lock; a
   concurrency cap (`DispatcherConfig::max_concurrent`, default 4) bounds
   parallelism.
@@ -1057,6 +1076,71 @@ coordination-task DAG to completion without leader micro-management.
 - **Unknown owner** is an explicit failure — the task is marked `Failed` with a
   clear error rather than left silently stuck.
 
+### Tolerant fan-in — a metadata-gated exception to that rule (2026-09-03)
+
+A task stamped `TOLERATE_FAILED_DEPS_METADATA_KEY`
+(`agents/swarm/tasks/acceptance.rs`; written by `workflow::compile::materialize`
+for a step declaring `tolerate_failed_deps`, and only then — an unstamped row
+is byte-identical) opts out of the **terminal-dead half** only: a
+`failed`/`cancelled` dependency stops blocking it and can never make it
+`Unsatisfiable`, while a dependency still capable of delivering
+(`pending`/`in_progress`/`waiting_review`) keeps it `Blocked`. It covers that
+task's **direct** dependencies only and is not inherited down the DAG.
+
+The rule "a dep is satisfied iff its status ∈ {completed, skipped}" is
+expressed once as `CoordTaskStatus::satisfies_dependency` and hand-copied as
+raw SQL in the store; the tolerant exception therefore lives in exactly the
+**three derivation sites**, each reading the stamp off the task's own
+metadata:
+
+| site | how the exception reads |
+|---|---|
+| `store/row_decode.rs::derive_status` | new `has_live_unresolved_deps` (unresolved **and not** dead) → `Blocked`; nothing live left → `Pending` |
+| `store/crud.rs::list_tasks` | the same partition as arithmetic over the counts this pass already scans: `unresolved - dead == 0` ⇒ `Pending`, never `Unsatisfiable` |
+| `store/deps.rs::get_newly_unblocked(settled_id)` | counts satisfied **and** dead deps, so a tolerant dependent is reported when its last blocking dep *fails* |
+
+**`CoordTaskStatus::satisfies_dependency` is deliberately unchanged.** A
+failed producer still satisfies nobody; the *consumer* merely decides to stop
+waiting. Putting the exception in the predicate would make the classification
+depend on who is asking. The drift guard
+`tasks/mod.rs::dependency_resolution_rule_is_pinned_across_all_statuses`
+(wildcard-free match + literal assertions) documents the exception and pins
+the exact `as_str()` literals the SQL copies depend on — **change one site and
+you change them all in the same edit**.
+
+Tests: `tolerant_dependent_of_a_failed_dep_is_ready_on_both_read_paths` (which
+also asserts the strict twin still derives `Unsatisfiable`),
+`tolerant_task_with_a_live_dep_left_is_still_blocked`,
+`get_newly_unblocked_reports_a_tolerant_dependent_when_its_dep_fails`
+(`agents/swarm/tasks/store/tests.rs`). The downstream prompt side is
+[WORKFLOW_TEMPLATES.md](WORKFLOW_TEMPLATES.md) *Tolerant fan-in*.
+### Scheduled work runs on somebody's behalf (cron / heartbeat)
+
+The root `CLAUDE.md` routes `src/tasks/cron/` and `src/tasks/heartbeat/` here,
+so the one thing an editor of those two must not re-derive belongs here too —
+**pointing at the owner rather than restating it**, because the full account
+lives in [FEATURE_LOCATOR §5.22](FEATURE_LOCATOR.md) round-10 ⑬⑭⑮ and in
+[SECURITY.md](SECURITY.md)'s deactivation-freeze paragraph.
+
+- **Both carry `(owner_user_id, scope_id)`, stamped at creation by ONE
+  derivation.** `CronJob::stamp_current_scope()` and its heartbeat twin are
+  called from every production construction site — RPC face, tool face, and the
+  governance-job builders — and a source-level census fails by name when a new
+  construction site appears without one. Before 2026-09-03 the cron RPC face
+  stamped neither column and `HeartbeatTask` had neither column at all, and the
+  consequence was never an error: four readers short-circuit on NULL (the
+  deactivation freeze treats the job as owned by nobody, the fire-time
+  `walled_owner_reason` check reads it as legacy, the run executes with no
+  scope, and the spend lands on `@unattributed`). That census is a NAME census,
+  not a dataflow proof — a body that stamps a different job than the one it
+  constructs passes — and its own doc says so.
+- **Heartbeat is the freeze's fourth leg, and the twin is still open.** A
+  deactivated principal's monitors are disabled by
+  `tasks::heartbeat::service::ops::pause_all_owned_by`, alongside goals, loops
+  and crons. Cron additionally has a **fire-time** backstop
+  (`walled_owner_reason` → `disable_walled_owner_job`) that catches a job
+  re-enabled by a second admin after the sweep; **heartbeat has no counterpart**,
+  which is a recorded debt, not an oversight.
 ### Outcomes that are not verdicts (2026-08-08)
 
 `MemberRunStatus` has three non-failure outcomes, and the distinction is a

@@ -9,7 +9,9 @@ use crate::gateway::session_store::types::SessionFilter;
 use crate::gateway::session_store::SessionStore;
 use crate::gateway::visibility;
 
-use super::types::{HistoryMessage, SessionInfo};
+use super::types::HistoryMessage;
+use crate::session::events::SessionEventRecord;
+use aleph_protocol::SessionListRow;
 
 /// A session's `derived_title` is computed from the first user message's raw
 /// content. Sessions seeded before the raw-input persistence fix leaked the
@@ -53,9 +55,32 @@ pub async fn handle_list_db(
         owner_visible_to: visibility::visible_owner_filter(),
         ..Default::default()
     };
+    // One indexed cross-session query for the whole page, not one per row.
+    //
+    // `None` — no event store published, or the read failed — leaves every
+    // row's `last_run` at `None`, which reads as "we did not find out". The
+    // arm that must never exist is one that renders a session as clean because
+    // nobody asked: the interrupted rows are exactly the ones this column is
+    // for (criterion #8).
+    let run_markers: Option<std::collections::HashMap<String, Vec<SessionEventRecord>>> =
+        match crate::session::store::global_session_event_store() {
+            Some(events) => match events.load_run_markers().await {
+                Ok(rows) => Some(
+                    rows.into_iter()
+                        .map(|(session, markers)| (session.to_key_string(), markers))
+                        .collect(),
+                ),
+                Err(e) => {
+                    tracing::warn!(error = %e, "sessions.list could not read run markers");
+                    None
+                }
+            },
+            None => None,
+        };
+
     match manager.list_sessions(filter).await {
         Ok(sessions) => {
-            let infos: Vec<SessionInfo> = sessions
+            let infos: Vec<SessionListRow> = sessions
                 .into_iter()
                 // Filter out internal sessions (heartbeat tasks, cron tasks, ephemeral)
                 // that should not appear in user-facing session lists
@@ -98,7 +123,18 @@ pub async fn handle_list_db(
                     let memory_mode = snapshot.memory_mode;
                     let model_pin = snapshot.model_pin;
 
-                    SessionInfo {
+                    // A session absent from the marker map has no run markers
+                    // at all — `never_ran`, which is a different answer from
+                    // "its last run finished". Derived through the same
+                    // reducer the attach face uses, so the two faces cannot
+                    // disagree about the word.
+                    let last_run = run_markers.as_ref().map(|by_session| {
+                        crate::gateway::session_snapshot::last_run_from_markers(
+                            by_session.get(&m.key).map_or(&[][..], Vec::as_slice),
+                        )
+                    });
+
+                    SessionListRow {
                         key: m.key,
                         agent_id: m.agent_id,
                         session_type: m.session_type,
@@ -127,6 +163,7 @@ pub async fn handle_list_db(
                         think_level,
                         memory_mode,
                         model_pin,
+                        last_run,
                     }
                 })
                 .collect();
@@ -463,13 +500,14 @@ pub async fn handle_preview_db(
 mod tests {
     use super::{
         clean_derived_title, handle_list_db, resolve_display_title, session_usage_cost,
-        SessionInfo, CACHE_BLIND_ESTIMATE,
+        CACHE_BLIND_ESTIMATE,
     };
     use crate::gateway::protocol::JsonRpcRequest;
     use crate::gateway::router::SessionKey;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig, SessionPatch};
     use crate::gateway::session_store::SessionStore;
     use crate::sync_primitives::Arc;
+    use aleph_protocol::SessionListRow;
     use serde_json::json;
 
     fn s(v: &str) -> Option<String> {
@@ -738,7 +776,7 @@ mod tests {
         )
         .await;
         let result = response.result.expect("result");
-        let sessions: Vec<SessionInfo> =
+        let sessions: Vec<SessionListRow> =
             serde_json::from_value(result["sessions"].clone()).expect("sessions");
 
         let tier_of = |agent: &str| -> Option<String> {
@@ -755,6 +793,63 @@ mod tests {
             None,
             "a session with no override must follow the global tier"
         );
+    }
+
+    /// What `sessions.list` emits is what [`SessionListRow`] declares — the
+    /// server constructs the shared type, so a client parsing it cannot be
+    /// reading a different shape.
+    ///
+    /// `topic` and `label` are asserted by name because a client used to look
+    /// for a key called `name`, found nothing, and fell back to the session key
+    /// — every conversation in that picker was titled by its key while the two
+    /// real titles rode the wire unread. Parsing alone would not have caught
+    /// it: a partial reader always parses (criterion #10).
+    #[tokio::test]
+    async fn a_listed_session_is_the_protocol_row_with_its_title_on_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: temp.path().join("row_shape.db"),
+            ..Default::default()
+        })
+        .unwrap();
+        let key = SessionKey::from_key_string("agent:rowshape:main").unwrap();
+        manager.get_or_create(&key).await.unwrap();
+        manager
+            .patch_session(
+                &key,
+                &SessionPatch {
+                    label: Some("r2".to_string()),
+                    metadata: Some(json!({ "topic": "crash recovery" })),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let store: Arc<dyn SessionStore> = Arc::new(manager);
+        let response = handle_list_db(
+            JsonRpcRequest {
+                jsonrpc: "2.0".into(),
+                method: "sessions.list".into(),
+                params: None,
+                id: Some(json!(1)),
+            },
+            store,
+        )
+        .await;
+        let result = response.result.expect("result");
+        let raw = result["sessions"][0].clone();
+        assert_eq!(
+            raw["topic"], "crash recovery",
+            "the display title must reach the wire under the key clients read"
+        );
+        assert_eq!(raw["label"], "r2");
+
+        let rows: Vec<SessionListRow> =
+            serde_json::from_value(result["sessions"].clone()).expect("the shared row type");
+        assert_eq!(rows[0].topic.as_deref(), Some("crash recovery"));
+        assert_eq!(rows[0].label.as_deref(), Some("r2"));
+        assert_eq!(rows[0].key, "agent:rowshape:main");
     }
 
     #[test]

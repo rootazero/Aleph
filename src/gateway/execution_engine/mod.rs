@@ -51,7 +51,7 @@ mod tests;
 
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
-pub use concurrency::ConcurrencySnapshot;
+pub use concurrency::{AgentSlotUsage, ConcurrencySnapshot};
 pub use engine::{ContinuationDeps, ExecutionEngine};
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
@@ -192,6 +192,29 @@ pub const BUSY_INPUT_MODE_KEY: &str = "busy_input_mode";
 /// `run_loop::with_request_scope` → `scope::ambient_room_author` for the main
 /// path's session seeder, which holds neither the request nor `CALLER_USER`.
 pub const AUTHOR_USER_KEY: &str = "author_user_id";
+
+/// Metadata key carrying the RAW, un-normalized id of the channel sender who
+/// woke this run tree — the approval-originator gate's identity.
+///
+/// Distinct from both siblings it sits next to in the same metadata map:
+/// unlike `sender_id` (normalized for session/routing lookups), this one must
+/// stay exactly as the channel delivered it, because the channel
+/// button-approval callback compares a clicker's raw id against it byte for
+/// byte; and unlike [`AUTHOR_USER_KEY`] (this TURN's speaker, re-derived on
+/// every message in a room), this is the id that opened the run tree and does
+/// not change as the tree spawns children.
+///
+/// Two producers, writing ids from DIFFERENT namespaces: `teams::broadcast`
+/// stamps an Aleph `u-*` id (from `scope::current_room_author()`), while
+/// `inbound_router::executor` stamps the raw platform sender id straight off
+/// the channel message — see the doc comment on
+/// `gateway::handlers::exec_approvals::originator_narrows_within_room` for how
+/// the approval bridge reconciles the two. One reader: `run_loop` seeds the
+/// `TURN_ORIGINATOR` task-local from this key. A missing value degrades the
+/// approval-originator gate to the prior any-paired-user rule — a fail-open
+/// degradation indistinguishable at runtime from a run that legitimately has
+/// no originator (e.g. cron/heartbeat).
+pub const ORIGINATOR_USER_KEY: &str = "originator_user_id";
 
 /// Metadata key carrying the originating channel's tool permission override as
 /// a JSON-serialized `ToolPermissionsConfig`. Stamped by the inbound router
@@ -351,6 +374,83 @@ pub struct RunRequest {
     /// requested model with auto-resolved provider (Raw). `None` keeps the
     /// agent's configured default + fallback chain.
     pub model_override: Option<crate::gateway::model_override::ModelOverride>,
+}
+
+/// `metadata` key: an execution-tier **ceiling** for this run.
+///
+/// Written only by [`crate::gateway::resume_coordinator`], carrying the tier
+/// the crashed run was executing under. It is deliberately NOT
+/// [`crate::config::types::policies::EXEC_TIER_SESSION_KEY`], for two reasons
+/// that are the same reason twice:
+///
+/// 1. that key is the *request* rung, which outranks the session and the
+///    global value — so replaying a `full` snapshot through it would let a
+///    crash recovery RAISE a conversation the operator has since tightened.
+///    This one composes through `ExecTier::most_restrictive` **after** the
+///    three rungs resolve, so it can only tighten, whatever they said; and
+/// 2. the request rung stamps itself onto the session
+///    (`resolve_turn_permissions`), and a resume must not rewrite the knobs
+///    the user changed *after* the crash to tame the run.
+pub const RESUME_TIER_CEILING_KEY: &str = "resume_tier_ceiling";
+
+impl RunRequest {
+    /// True when this request re-drives an existing session log rather than
+    /// seeding a new user message: the boot/on-demand resume
+    /// ([`crate::gateway::resume_coordinator`]) and the post-run steering
+    /// rescue (`steering::build_steering_rescue_request`) both set it.
+    ///
+    /// The one reader of `metadata["resume"]`. It had three hand-written
+    /// comparisons against that literal, and the fourth thing that needed to
+    /// ask — "may this turn stamp its knobs onto the session?" — is exactly
+    /// the kind of question that gets a fourth copy.
+    #[must_use]
+    pub fn is_resume(&self) -> bool {
+        self.metadata.get("resume").map(String::as_str) == Some("true")
+    }
+}
+
+/// The knob value a turn should stamp onto its session, if any.
+///
+/// The one derivation behind four faces (`turn_permissions`, `turn_mode`,
+/// `turn_thinking`, `turn_memory`). It was four inline copies of
+/// `requested.filter(|v| stored != Some(*v))`, and the fifth thing they all
+/// had to learn — that a **resume** carries an envelope rather than a user's
+/// choice — is exactly the kind of rule that gets learned by three of four.
+///
+/// A resume replays the crashed run's settings. Stamping them would overwrite
+/// whatever the user changed *after* the crash, which is most likely the
+/// change they made to tame the run that is now coming back (④-D8).
+#[must_use]
+pub(super) fn knob_to_stamp<T: PartialEq + Copy>(
+    requested: Option<T>,
+    stored: Option<T>,
+    is_resume: bool,
+) -> Option<T> {
+    requested.filter(|v| stored != Some(*v) && !is_resume)
+}
+
+#[cfg(test)]
+mod knob_stamp_tests {
+    use super::knob_to_stamp;
+
+    #[test]
+    fn a_fresh_request_carrying_a_new_value_is_stamped() {
+        assert_eq!(knob_to_stamp(Some(2), Some(1), false), Some(2));
+        assert_eq!(knob_to_stamp(Some(2), None, false), Some(2));
+    }
+
+    #[test]
+    fn a_value_the_session_already_holds_is_not_rewritten() {
+        assert_eq!(knob_to_stamp(Some(1), Some(1), false), None);
+    }
+
+    /// ④ The one this exists for: a resume replays an envelope, so it must
+    /// leave the session row exactly as the user left it after the crash.
+    #[test]
+    fn a_resume_stamps_nothing_however_far_the_snapshot_differs() {
+        assert_eq!(knob_to_stamp(Some(2), Some(1), true), None);
+        assert_eq!(knob_to_stamp(Some(2), None, true), None);
+    }
 }
 
 impl std::fmt::Debug for RunRequest {
@@ -536,6 +636,68 @@ impl ExecutionError {
                 reset_ms: *reset_ms,
             },
         }
+    }
+}
+
+/// The one untyped hop in an otherwise typed attribution chain: past this
+/// const everything is compiler-checked (`turn_context::with_originator` →
+/// `current_originator()` → `ExecApprovalRecord.originator_user_id`), but the
+/// `HashMap` key itself is a bare string with nothing stopping a producer or
+/// the reader from re-spelling it. Three layers, none subsuming the others —
+/// the same division `run_loop::flow_scope_census` uses for the scope keys,
+/// scaled down to this key's single reader and two producers:
+///
+/// 1. A round trip through the ONE producer cheap to call directly
+///    (`teams::broadcast::member_run_metadata`, already exercised by
+///    `broadcast::tests::member_run_metadata_carries_originator_for_approval_gate`
+///    and its siblings, which read the value back via this const rather than
+///    the literal).
+/// 2. A source-level census below, over the other producer
+///    (`inbound_router::executor`) and the reader (`run_loop`), both too
+///    heavy to drive end to end from a unit test (they need a wired
+///    `agent_registry` / `execution_adapter`, or a full `Agent` + provider):
+///    the const's IDENTIFIER must appear in each file's production code
+///    ([`crate::utils::source_scan::code_text`]), and the bare literal must
+///    NOT appear as a quoted payload
+///    ([`crate::utils::source_scan::code_keeping_literals`]) — a test that
+///    re-typed the literal to check this would be the same defect moved one
+///    layer out.
+/// 3. A value pin: nothing but this test ties `ORIGINATOR_USER_KEY`'s VALUE
+///    to `"originator_user_id"` — layer 2 only proves every site uses the
+///    IDENTIFIER, which stays true even if the value drifts, since every
+///    site would drift together. Renaming the const's value with no other
+///    change turns this assertion red.
+#[cfg(test)]
+mod originator_key_tests {
+    use super::ORIGINATOR_USER_KEY;
+    use crate::utils::source_scan::{code_keeping_literals, code_text};
+
+    #[test]
+    fn the_value_is_pinned() {
+        assert_eq!(ORIGINATOR_USER_KEY, "originator_user_id");
+    }
+
+    #[test]
+    fn the_reader_and_the_inbound_router_producer_spell_the_key_by_const() {
+        let reader = include_str!("run_loop/mod.rs");
+        assert!(
+            code_text(reader).contains("ORIGINATOR_USER_KEY"),
+            "run_loop/mod.rs must read the key via ORIGINATOR_USER_KEY, not a bare literal"
+        );
+        assert!(
+            !code_keeping_literals(reader).contains("\"originator_user_id\""),
+            "run_loop/mod.rs must not re-spell the key as a bare string literal"
+        );
+
+        let producer = include_str!("../inbound_router/executor.rs");
+        assert!(
+            code_text(producer).contains("ORIGINATOR_USER_KEY"),
+            "inbound_router::executor must stamp the key via ORIGINATOR_USER_KEY, not a bare literal"
+        );
+        assert!(
+            !code_keeping_literals(producer).contains("\"originator_user_id\""),
+            "inbound_router::executor must not re-spell the key as a bare string literal"
+        );
     }
 }
 

@@ -169,4 +169,3 @@ pub(super) fn AddCustomSearchProviderPanel(
         </div>
     }
 }
-

@@ -1323,6 +1323,18 @@ impl InboundMessageRouter {
             }
         };
 
+        // Collect ALL candidates before choosing one. `list_tasks` orders by
+        // (priority, created_at seconds), so taking the first match hands the
+        // reply to the OLDEST parked question for this session — while the
+        // user is answering the one they saw last. With two clarify steps in
+        // one parallel layer (or two concurrent runs in one conversation)
+        // both created in the same second, the winner was whatever order
+        // SQLite happened to return, and both steps completed with each
+        // other's answers, silently. Criterion 12: the ordering that decides
+        // which question an answer belongs to must derive from the ordering
+        // that decided which question was ASKED — the delivery stamp.
+        let mut candidates: Vec<(crate::agents::swarm::tasks::CoordTask, ClarifyTaskMeta)> =
+            Vec::new();
         for task in paused {
             let Some(meta) = ClarifyTaskMeta::from_metadata(&task.metadata) else {
                 continue;
@@ -1342,32 +1354,72 @@ impl InboundMessageRouter {
             if crate::workflow::clarify::clarify_delivery_pending_at(&task.metadata).is_some() {
                 continue;
             }
-            // Interpret number / label / free-text exactly like `ask_user`.
-            let request = meta.build_request();
-            let first = request
-                .first()
-                .expect("a ClarificationRequest built by a constructor is never empty");
-            let answer = crate::clarification::session::interpret_reply(first, reply).value;
-            if let Err(e) = store
-                .update_task(
-                    &task.id,
-                    CoordTaskUpdate {
-                        status: Some(CoordTaskStatus::Completed),
-                        result: Some(answer),
-                        ..Default::default()
-                    },
-                )
-                .await
-            {
-                warn!(task_id = %task.id, error = %e, "[Router] workflow clarify: complete failed");
-                return false;
-            }
-            if let Some(ref signal) = self.dispatch_signal {
-                signal.notify_one();
-            }
-            return true;
+            candidates.push((task, meta));
         }
-        false
+
+        // More than one question is standing in front of this user, and the
+        // reply names none of them. Say so — the answer is about to be
+        // attributed, and an attribution nobody can audit is how both steps
+        // ended up completed with each other's answers. Parsing the reply for
+        // a step id would be reading natural language with code (P8); the
+        // stamp is the evidence, so the choice below still stands, it is just
+        // no longer silent.
+        let delivered = candidates
+            .iter()
+            .filter(|(t, _)| crate::workflow::clarify::clarify_delivered(&t.metadata))
+            .count();
+        if delivered > 1 {
+            warn!(
+                session_key,
+                delivered,
+                "[Router] workflow clarify: several delivered questions are parked for this \
+                 session — answering the most recently delivered one"
+            );
+        }
+
+        // The question delivered LAST is the one the user is looking at.
+        // Ties fall back to creation order and then the id, so the choice is
+        // deterministic rather than "whatever SQLite returned first"; a row
+        // with no delivery stamp (pre-marker daemon version, or an operator's
+        // manual pause) sorts oldest and is only chosen when nothing else is
+        // standing.
+        let Some((task, meta)) = candidates.into_iter().max_by(|(a, _), (b, _)| {
+            let key = |t: &crate::agents::swarm::tasks::CoordTask| {
+                (
+                    crate::workflow::clarify::clarify_delivered_at(&t.metadata).unwrap_or(0),
+                    t.created_at,
+                    t.id.clone(),
+                )
+            };
+            key(a).cmp(&key(b))
+        }) else {
+            return false;
+        };
+
+        // Interpret number / label / free-text exactly like `ask_user`.
+        let request = meta.build_request();
+        let first = request
+            .first()
+            .expect("a ClarificationRequest built by a constructor is never empty");
+        let answer = crate::clarification::session::interpret_reply(first, reply).value;
+        if let Err(e) = store
+            .update_task(
+                &task.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    result: Some(answer),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            warn!(task_id = %task.id, error = %e, "[Router] workflow clarify: complete failed");
+            return false;
+        }
+        if let Some(ref signal) = self.dispatch_signal {
+            signal.notify_one();
+        }
+        true
     }
 
     /// Build an inline keyboard for namespace sub-commands.
@@ -1457,6 +1509,106 @@ mod tests {
         .with_approval_callback_sink(Arc::new(AlwaysIntercept));
 
         assert!(router.handle_message(cb_message()).await.is_ok());
+    }
+
+    /// Two clarify steps parked for ONE session (a parallel layer with two
+    /// independent `clarify` steps, or two concurrent runs in one
+    /// conversation): the reply answers the question the user saw LAST, not
+    /// the oldest row `list_tasks` happens to return first. The two rows here
+    /// differ in priority so `list_tasks` order is deterministic and puts the
+    /// *earlier-delivered* row first — exactly the row the pre-fix
+    /// first-match selection consumed.
+    #[tokio::test]
+    async fn clarify_reply_completes_the_last_delivered_question() {
+        use crate::agents::swarm::tasks::store::SqliteCoordTaskStore;
+        use crate::agents::swarm::tasks::{
+            CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
+        };
+        use crate::workflow::clarify::{
+            ClarifyTaskMeta, CLARIFY_DELIVERED_AT_KEY, CLARIFY_META_KEY,
+        };
+
+        let store = SqliteCoordTaskStore::new(rusqlite::Connection::open_in_memory().unwrap());
+        store.migrate().await.unwrap();
+
+        let clarify_meta = |question: &str, delivered_at: u64| {
+            serde_json::json!({
+                CLARIFY_META_KEY: ClarifyTaskMeta {
+                    question: question.to_string(),
+                    choices: vec![],
+                    channel_id: "telegram".to_string(),
+                    conversation_id: "c1".to_string(),
+                    session_key: "sess-1".to_string(),
+                }
+                .to_value(),
+                CLARIFY_DELIVERED_AT_KEY: delivered_at,
+            })
+        };
+        let new_task =
+            |subject: &str, priority: Priority, metadata: serde_json::Value| NewCoordTask {
+                team_id: Some("t1".to_string()),
+                subject: subject.to_string(),
+                description: String::new(),
+                owner: None,
+                priority,
+                blocked_by: vec![],
+                metadata,
+            };
+
+        let asked_first = store
+            .create_task(new_task(
+                "ask_env",
+                Priority::High,
+                clarify_meta("which env?", 1_000),
+            ))
+            .await
+            .unwrap();
+        let asked_last = store
+            .create_task(new_task(
+                "ask_scope",
+                Priority::Normal,
+                clarify_meta("which scope?", 2_000),
+            ))
+            .await
+            .unwrap();
+        for id in [&asked_first.id, &asked_last.id] {
+            store
+                .update_task(
+                    id,
+                    CoordTaskUpdate {
+                        status: Some(CoordTaskStatus::Paused),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(),
+        );
+        assert!(
+            router
+                .try_resolve_workflow_clarify(&store, "sess-1", "backend only")
+                .await
+        );
+
+        let last = store.get_task(&asked_last.id).await.unwrap().unwrap();
+        assert_eq!(
+            last.status,
+            CoordTaskStatus::Completed,
+            "the question delivered LAST is the one the reply answers"
+        );
+        assert_eq!(last.result.as_deref(), Some("backend only"));
+        let first = store.get_task(&asked_first.id).await.unwrap().unwrap();
+        assert_eq!(
+            first.status,
+            CoordTaskStatus::Paused,
+            "the earlier-delivered question must stay parked, not eat this answer"
+        );
+        assert!(first.result.is_none());
     }
 
     /// A `clarify:<idx>` button callback resolves the pending clarification for

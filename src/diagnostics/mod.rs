@@ -160,6 +160,50 @@ impl DiagnosticEngine {
         self
     }
 
+    /// Append `core/projection-holes`, the unbounded transcript-vs-event-log
+    /// sweep.
+    ///
+    /// Out of `default_registry()` for the same reason as its two neighbours:
+    /// it needs the live `MessageProjector` and the open `session_events` log,
+    /// and `aleph-server doctor` is by definition a cold process. Both handles
+    /// are read from their capability slots HERE rather than threaded through
+    /// the two call sites (the `doctor` builtin tool and the `diagnostics.run`
+    /// RPC), neither of which has ever held a session store.
+    ///
+    /// Registering with the handles absent is deliberate and is not a no-op
+    /// check: it then reports UNKNOWN, which is the honest answer and the one
+    /// thing that must never render as "the transcript is complete".
+    #[must_use]
+    pub fn with_projection_holes_check(mut self) -> Self {
+        self.checks.push(Arc::new(checks::ProjectionHolesCheck::new(
+            crate::gateway::session_projector::global_message_projector(),
+            crate::session::store::global_session_event_store(),
+        )));
+        self
+    }
+
+    /// Append `core/session-log`, which names the contradictions a session's
+    /// event log holds.
+    ///
+    /// Same handles, same cold-process story and same UNKNOWN-when-absent rule
+    /// as [`Self::with_projection_holes_check`] above. It is a separate builder
+    /// rather than a second check inside that one because the two answer
+    /// different questions about the same two handles: "is the projection
+    /// missing rows the log has" versus "does the log contradict itself", and
+    /// a caller that wants one may not want the other's unbounded read.
+    ///
+    /// Registering this is not optional in the daemon: `aleph resume`'s
+    /// `log_inconsistent` sentence and `ResumeReport::contradictions`' doc both
+    /// send the operator to this check by name.
+    #[must_use]
+    pub fn with_session_log_check(mut self) -> Self {
+        self.checks.push(Arc::new(checks::SessionLogCheck::new(
+            crate::gateway::session_projector::global_message_projector(),
+            crate::session::store::global_session_event_store(),
+        )));
+        self
+    }
+
     /// Append the `ext/idle-extensions` check.
     ///
     /// Separate from [`Self::with_runtime_checks`] because it needs a
@@ -567,7 +611,7 @@ mod tests {
     ///   worktree B.
     #[test]
     fn every_in_daemon_engine_also_attaches_the_capability_wiring_check() {
-        use crate::utils::source_scan::{code_text, production_prefix, rust_sources_under};
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let sources = rust_sources_under(&root);
@@ -587,7 +631,10 @@ mod tests {
         let mut daemon_callers = Vec::new();
         let mut offenders = Vec::new();
         for (rel, text) in &sources {
-            let prod = code_text(&production_prefix(text));
+            // See `production_text`: a whole-file test module reads as pure
+            // production to the per-file cut, so this walk was scanning test
+            // code as if it shipped.
+            let prod = code_text(&production_text(std::path::Path::new(rel), text));
             if !prod.contains(".with_runtime_checks(") {
                 continue;
             }

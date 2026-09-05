@@ -13,7 +13,11 @@ pub enum DreamStrategy {
     Consolidate,
     /// Growth mode: cross-category synthesis, skill-note distillation.
     Synthesize,
-    /// Defensive mode: deterministic-only ops, skip all LLM stages.
+    /// Defensive mode: no corpus-mutating LLM stages (consolidate / synthesis /
+    /// distill). The pending review queue is still adjudicated — `note_review`
+    /// calls the LLM once per queued candidate — because its rows have no other
+    /// consumer and rubber-stamping or dropping them would void the ingest
+    /// gate's Defer.
     Conserve,
 }
 

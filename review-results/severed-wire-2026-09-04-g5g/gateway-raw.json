@@ -1,0 +1,176 @@
+{
+  "module": "src/gateway",
+  "files_scanned": [
+    "src/gateway/mod.rs",
+    "src/gateway/event_bus.rs",
+    "src/gateway/method_admin.rs",
+    "src/gateway/method_visibility.rs",
+    "src/gateway/method_census.rs",
+    "src/gateway/method_authz.rs",
+    "src/gateway/visibility.rs",
+    "src/gateway/rate_limiter.rs",
+    "src/gateway/busy_queue/{mod.rs,config.rs,deliver.rs,durable.rs,spawn.rs}",
+    "src/gateway/channel_registry.rs",
+    "src/gateway/coalescer.rs",
+    "src/gateway/event_emitter/types.rs",
+    "src/gateway/event_scope.rs",
+    "src/gateway/handlers/{wizard,events,debug,spend,chat,oauth,tools_visibility}.rs",
+    "src/gateway/handlers/mod.rs",
+    "src/gateway/handlers/{teams,session,search_config,extensions,generation_providers}/",
+    "src/gateway/execution_engine/{trace_sink_adapter.rs,helpers.rs}",
+    "src/gateway/interfaces/feishu/types.rs"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg; seam-catalog lenses (registration parity, call-vs-handler, event emit-vs-subscribe, config-reader, stub sweep); handler orphan detection (pub fn/handle_X in handlers/*.rs with no external caller); code-smell pass. Read-only — no edits made during review phase. Note: gateway module has 90+ top-level .rs files and 140+ handlers/*.rs files — the audit focused on the registered-RPC boundary (method_census sweeps every .register and register_handler! site), the event bus, and the most-shipped service modules.",
+  "findings": [
+    {
+      "id": "sw-gateway-1-1",
+      "severity": "medium",
+      "form": 1,
+      "produced": "AgentInstance::list_runs (pub async fn returning Vec<RunState>)",
+      "produced_location": "src/gateway/handlers/agent.rs:436",
+      "consumer_location": "Zero call sites anywhere in src/, tests/, interfaces/, desktop/. The sibling methods on the same impl block (concurrency_snapshot, running_sessions, current_run_for_session) are heavily consumed.",
+      "decision": "CUT",
+      "rationale": "Pure form-1 dead public API. The doc comment claims it returns active runs but no RPC handler, no diagnostic endpoint, no Panel UI reads it. MethodCensus's role sweep would not flag it because it isn't an RPC — it's an internal data-accessor on a struct, and that lint-less zone is exactly where dead public methods hide. Recommend CUT (delete the method). The two near-siblings `running_sessions` and `concurrency_snapshot` are the live read paths used by `gateway.metrics.run_concurrency`.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: zero callers."
+    },
+    {
+      "id": "sw-gateway-1-2",
+      "severity": "low",
+      "form": 1,
+      "produced": "debug::parse_tool_call_params (pub fn returning Result<DebugToolCallParams, JsonRpcResponse>)",
+      "produced_location": "src/gateway/handlers/debug.rs:50",
+      "consumer_location": "Zero call sites anywhere. The handle_debug_tool_call RPC at src/gateway/handlers/debug.rs:67+ either doesn't exist or inlines the param parsing.",
+      "decision": "CUT",
+      "rationale": "Pure form-1 dead public API. The allow(clippy::result_large_err) annotation was added because this method returns a JsonRpcResponse on the Err arm — that's a smell suggesting the helper was designed to be called but never wired. The signature also doesn't match any caller in the registered debug.* RPCs.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: zero callers. Worth confirming via `git log -p src/gateway/handlers/debug.rs` whether this was meant to back the missing handle_debug_tool_call."
+    },
+    {
+      "id": "sw-gateway-1-3",
+      "severity": "low",
+      "form": 1,
+      "produced": "SubscriptionManager::get_filter / SubscriptionManager::set_filter (pub async fn accessors for the conn_id → TopicFilter map)",
+      "produced_location": "src/gateway/handlers/events.rs:32, :38",
+      "consumer_location": "Zero call sites anywhere. The live accessors are get_patterns / get_subscriptions / add_patterns / add_subscriptions / remove_patterns / should_receive — all use the underlying `self.subscriptions` HashMap directly without going through these two wrappers.",
+      "decision": "CUT",
+      "rationale": "Pure form-1 dead public API. The two methods look like they were intended as the canonical 'snapshot the whole filter' / 'replace the whole filter' pair, but the actual subscription pipeline reads/writes the filter through the more granular methods. CUT both. The `should_receive` accessor (events.rs:90) is the live read path.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: zero callers."
+    },
+    {
+      "id": "sw-gateway-2-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "TopicFilter::with_subscriptions (pub const fn builder for Vec<TopicSubscription>)",
+      "produced_location": "src/gateway/event_bus.rs:275",
+      "consumer_location": "Only used in #[cfg(test)] blocks at event_bus.rs:667, :688. Production code uses TopicFilter::default() + add_subscription per-element, not the bulk builder.",
+      "decision": "CUT-or-defer",
+      "rationale": "Pure form-1 dead public API (except for tests). The bulk builder was likely intended for the initial connection-subscription setup but the live path constructs an empty filter and lets subscriptions accumulate via add_subscriptions. Demoting to pub(crate) keeps the tests compiling (they live in the same file as `pub(crate)` if added with the right cfg — but currently they are pub-cfg(test) in the same module, so even pub(crate) works).",
+      "fix_commit": null,
+      "residual_risk": "Trivial: no production callers."
+    },
+    {
+      "id": "sw-gateway-2-2",
+      "severity": "low",
+      "form": 1,
+      "produced": "GatewayEventBus::with_capacity (pub fn constructor taking capacity: usize)",
+      "produced_location": "src/gateway/event_bus.rs:361",
+      "consumer_location": "Zero callers — every GatewayEventBus construction uses GatewayEventBus::new() (which is the 226 hits the rg reported — the 226 included a lot of HashSet::with_capacity / Vec::with_capacity false positives, but the genuine GatewayEventBus::new call sites are 16+ across src/approval, src/cluster, src/bin/).",
+      "decision": "CUT-or-defer",
+      "rationale": "Pure form-1 dead public API. The default broadcast::channel capacity is the production value; with_capacity exposes a knob no caller tunes. Demoting to pub(crate) keeps it for tests; deleting is also safe.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: zero callers."
+    },
+    {
+      "id": "sw-gateway-2-3",
+      "severity": "low",
+      "form": 1,
+      "produced": "GatewayEvent::RuntimeInstallProgress (enum variant carrying RuntimeInstallProgressEvent)",
+      "produced_location": "src/gateway/event_bus.rs:62 (enum def), :45 (struct def)",
+      "consumer_location": "Zero call sites for the enum variant. `RuntimeInstallProgressEvent` (the struct) IS constructed 3 times in src/gateway/handlers/runtimes.rs:146, :156, :178 — but always published via `bus.publish_json(&TopicEvent::new(RUNTIME_INSTALL_PROGRESS_TOPIC, ...))` (runtimes.rs:199), never via `GatewayEvent::RuntimeInstallProgress(event)`.",
+      "decision": "CUT",
+      "rationale": "The variant and its matched arm in publish_gateway_event (event_bus.rs:481-487) are dead. The publish_gateway_event function's match has only the ConfigChanged arm; the RuntimeInstallProgress arm is the unreachable 50% of an unreachable match. Two CUT paths: (a) remove the RuntimeInstallProgress variant from the GatewayEvent enum + the match arm in publish_gateway_event (keeps the RuntimeInstallProgressEvent struct + RUNTIME_INSTALL_PROGRESS_TOPIC for the live TopicEvent path); (b) leave both, document that the enum variant is for the legacy publish_gateway_event surface and the live path uses TopicEvent. Recommend (a). The struct + topic stays; only the enum variant goes.",
+      "fix_commit": null,
+      "residual_risk": "If any caller depends on the variant via GatewayEventFrame deserialization, the test suite will catch it. None observed."
+    },
+    {
+      "id": "sw-gateway-3-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "wizard::handle_answer / wizard::handle_next (pub async fn only invoked by the same file's wrap closure inside `handlers()`)",
+      "produced_location": "src/gateway/handlers/wizard.rs:271 (handle_answer), :314 (handle_next)",
+      "consumer_location": "Internal-only: invoked exactly once each at wizard.rs:459 (`wrap(move |req| handle_answer(req, m3.clone()))`) and :456 (`wrap(move |req| handle_next(req, m2.clone()))`). The other three siblings (handle_start, handle_cancel, handle_status) are referenced from tests in addition to the wrap closure.",
+      "decision": "CUT",
+      "rationale": "Two pub fns whose only consumer is a closure 200 lines below them in the same file. They could be private `async fn`s next to the closure. Demoting to private (no pub modifier) requires no signature change — they're not re-exported and the wizard::handlers function lives in the same module. Recommend demoting both to private for symmetry with handle_start which is referenced in tests but still inside the same module.",
+      "fix_commit": null,
+      "residual_risk": "Trivial: same-module refactor."
+    },
+    {
+      "id": "sw-gateway-4-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "channel_registry::register_factory / channel_registry::create_channel (two pub async fn methods on ChannelRegistry)",
+      "produced_location": "src/gateway/channel_registry.rs:230 (register_factory), :245 (create_channel)",
+      "consumer_location": "Zero call sites. The doc comments explicitly say 'Internal code reaches factories through `handlers::channel::create_channel_from_config`'. The #[allow(dead_code)] annotation is already in place. Both methods preserve an 'inline factory' API that the in-tree server never invokes — production routes through the config-driven path.",
+      "decision": "CUT-or-defer",
+      "rationale": "Two dead public API methods held for a future plugin-style factory registration. The painless-wire heuristic argues CUT: the config-driven path covers all in-tree channel types, and no commit on the queue adds a runtime factory pattern. If the future plugin-extensibility story returns, the methods can be restored from git. The factories field on the struct (channel_registry.rs:73) is also dead and should be removed alongside.",
+      "fix_commit": null,
+      "residual_risk": "If a downstream patch is in flight that adds dynamic factory registration, this CUT would conflict. Recommend grep across all open PRs / branches first."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "subject": "RPC method registration parity (every registered method is in the census)",
+      "verdict": "live (with compile-time guard)",
+      "evidence": "src/gateway/method_census.rs defines `RPC_METHOD_CENSUS` (a (method, Class) table covering ~150+ methods) and a `#[test] fn every_registered_rpc_method_has_a_recorded_ruling()` (line 671) that mechanically sweeps src/ for `.register(\"...\"` and `register_handler!(server, \"...\"` patterns (via sweep_rpc_methods at line 492) and asserts every swept method is in the census AND every census entry is swept. The census also cross-checks `method_admin::method_requires_admin` against the Class column. This is exactly the compile-time-equivalent guard the audit playbook asks for: a single-source census table that fails the test if a new RPC is registered without classification. The test runs under `cargo test -p alephcore` and is the canonical severed-wire detector for the gateway boundary.",
+      "details": "Cross-checked with manual sampling: moa.{listPresets,savePreset,deletePreset,setDefault,setSaveTraces} (settings.rs:555-585, all 5 present); chat.{send,abort,history,clear,rewind,context_estimate} (agent_init/{common_handlers.rs,mod.rs}); spend.query (commands/start/mod.rs:764); wizard.{start,next,answer,cancel,status} (handlers/mod.rs:1149 install_wizard_handlers). All wired."
+    },
+    {
+      "subject": "gateway/handlers/wizard::handlers() wiring (RPC registration by closure return)",
+      "verdict": "live",
+      "evidence": "src/gateway/handlers/wizard.rs:433 `pub fn handlers(manager) -> Vec<(&'static str, HandlerFn)>` returns 5 (name, handler) tuples. src/gateway/handlers/mod.rs:1149 `pub fn install_wizard_handlers(&mut self, manager)` iterates the Vec and inserts each into the HandlerRegistry HashMap. src/bin/aleph-server/commands/start/mod.rs:816 calls `install_wizard_handlers(wizard_manager)` during boot. The 5 RPC methods (wizard.{start,next,answer,cancel,status}) are live."
+    },
+    {
+      "subject": "GatewayEvent variants: ConfigChanged",
+      "verdict": "live",
+      "evidence": "10 producer sites in src/gateway/handlers/* construct `GatewayEvent::ConfigChanged(...)` (general_config, search_config/{delete,update}, fetch_config, route_config, execution_config, acp_config, behavior_config, browser_config, routing_rules). `publish_gateway_event` (event_bus.rs:481) matches it and translates to `GatewayEventFrame::ConfigChanged`. The matched arm and the producer side agree."
+    },
+    {
+      "subject": "GroupChat handlers (start, continue, mention, end, list, history) — placeholder vs real-wiring",
+      "verdict": "live (phase-1 fallback pattern, intentional)",
+      "evidence": "src/gateway/handlers/mod.rs:816-825 registers 6 placeholder handlers that return INTERNAL_ERROR 'requires GroupChatOrchestrator runtime - wire Gateway first'. The real handlers exist at src/gateway/handlers/group_chat.rs:92, :194, :297, :309, :363, :413 and are wired by `register_group_chat_handlers` at src/bin/aleph-server/commands/start/builder/handlers/system.rs:112, called at src/bin/aleph-server/commands/start/mod.rs:3043 inside `if let Some(ref executor) = gc_executor`. The pattern matches the trace_replay/identity/metrics placeholders (handlers/mod.rs:830-845)."
+    },
+    {
+      "subject": "Event bus publish/subscribe parity (GatewayEventBus)",
+      "verdict": "live",
+      "evidence": "All pub methods on GatewayEventBus (new, publish_frame, publish, publish_json, publish_gateway_event, subscribe, subscribe_typed, subscriber_count) are called from production sites. publish_frame has 26 callers, subscribe 57, publish_json 16, publish_gateway_event 18. The single-typed variant GatewayEvent::RuntimeInstallProgress is dead (see sw-gateway-2-3) but the bus API itself is healthy."
+    },
+    {
+      "subject": "Visibility helpers (src/gateway/visibility.rs)",
+      "verdict": "live",
+      "evidence": "All 20 pub fns in visibility.rs have external callers (counts: 1..34). The ambient_actor helper is the heaviest (34 external refs), used by event_scope.rs and the inbound_router. session_visible_to (12), owner_and_scope_visible_to (8), visible_owner_filter (20), existing_session_is_visible (8), partition_visible_to (4) all consistently used."
+    },
+    {
+      "subject": "Rate limiter (src/gateway/rate_limiter.rs)",
+      "verdict": "live",
+      "evidence": "RateLimiter::new/check_and_record are widely called. tracked_entries feeds `aleph_gateway_rate_limit_tracked_entries` Prometheus gauge (src/gateway/server/metrics_endpoint.rs:116, :202-207). prune_stale is called periodically from src/gateway/server/mod.rs:938. scope_for_method (rate_limiter.rs:427) is the classifier consulted at handler entry."
+    },
+    {
+      "subject": "SubscriptionManager methods on src/gateway/handlers/events.rs",
+      "verdict": "live (with two dead accessors — see sw-gateway-1-3)",
+      "evidence": "should_receive (events.rs:90), add_patterns, add_subscriptions, remove_patterns, get_patterns, get_subscriptions are all called from the subscribe/unsubscribe RPCs at events.rs:204, :205, :235, :236, :261, :281. Only the get_filter/set_filter pair are dead."
+    },
+    {
+      "subject": "Stub far-end sweep (form 2)",
+      "verdict": "clean",
+      "evidence": "rg 'unimplemented!|todo!\\(' in src/gateway/ returns 4 matches, all in test code (src/gateway/handlers/spend.rs:437-446, inside `impl SpendLedger for ErroringLedger` test fixture — these are intentional unimplemented! in a fixture struct that exercises the error path of record/total_for/spent_for/sweep_before). The 12 TODO/FIXME hits are documentation-level or 'future' markers in comment text, not stub far-ends."
+    },
+    {
+      "subject": "#[allow(dead_code)] in src/gateway/",
+      "verdict": "intentional / triaged",
+      "evidence": "29 hits, of which: 5 are serde-deserialized API response fields (event_emitter/types.rs:27-381 are all `// F3 audit note` markers on StreamEvent variants intentionally kept for wire-shape stability — TUI/CLI deserialize them even though no producer emits); 2 are documented future boot paths (execution_engine/trace_sink_adapter.rs:30, :56); 2 are documented dormant helpers (channel_registry.rs:230, :245 — see sw-gateway-4-1); 1 is documented retained-for-future-diagnostics (coalescer.rs:79 media_group_id field — set but never read); 2 are test-only helpers (interfaces/{feishu/types.rs, telegram/error_cooldown.rs}); 2 are method_visibility test fixtures; the rest are on internal API methods whose doc comment explains the dormancy."
+    }
+  ],
+  "module_health_summary": "src/gateway has the strongest wiring discipline of the five audited modules. method_census.rs enforces registration-vs-classification parity at test time (the audit playbook's recommended 'compile-time-equivalent guard'); every registered RPC has a recorded Class::Admin / Class::Open ruling that the census cross-checks against method_admin::method_requires_admin. The audit caught 8 dead public APIs and one dead enum variant, none of which are on the RPC boundary (the census would have caught those). The trust-boundary docs at src/gateway/CLAUDE.md line up with the actual code: connect::resolve_connect_auth's 4-tier fallback is implemented (connect.rs:237), the rotate→revoke_all_panel_devices→DeviceRevoked pipeline is single-source (gateway_devices::revoke_device_and_kick), and the AUTH_KICK_REASONS registry is shared with the Panel (shared/ui_logic/connection/failure.rs per the doc)."
+}

@@ -29,6 +29,12 @@ pub use dispatch::{
 // config path alone would leave `TurnEnvelope` referencing an unreachable type.
 pub use crate::config::types::policies::ExecTier;
 pub use crate::config::types::policies::SessionMode;
+// Their `identity_meta.custom` key names, for the same reason one rung up: a
+// caller outside this crate that has to name the knob a request carries would
+// otherwise spell the string itself, which is the copy that goes stale when the
+// key is renamed. The other four knob keys are already reachable through
+// `agents::thinking` and `memory::session_memory_mode`.
+pub use crate::config::types::policies::{EXEC_TIER_SESSION_KEY, MODE_SESSION_KEY};
 pub use errors::FlowError;
 pub use flow_registry::{FlowRegistry, FlowSet};
 pub use flow_spec::{

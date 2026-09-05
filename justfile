@@ -170,8 +170,18 @@ wasm:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p {{panel_dist}}
-    # 1. Tailwind CSS
-    (cd {{panel_dir}} && npm run build:css)
+    # 1. Tailwind CSS. `npm install` is per checkout, so a git worktree has no
+    #    node_modules of its own and `npm run build:css` there used to fail (or,
+    #    with a network, npx-fetch an UNPINNED tailwind). Put the main
+    #    checkout's `.bin` on PATH instead: package.json stays the one place
+    #    the command is written, `npm run` still prepends the LOCAL `.bin` so a
+    #    checkout that has one wins, and a worktree resolves the same pinned
+    #    CLI from the main tree. `git worktree list` prints the main worktree
+    #    first; on Windows the path must be POSIX-form before it goes into a
+    #    colon-separated PATH (`D:/x` would split on its own drive colon).
+    main_bin="$(git worktree list --porcelain | sed -n '1s/^worktree //p')/{{panel_dir}}/node_modules/.bin"
+    if command -v cygpath >/dev/null 2>&1; then main_bin="$(cygpath -u "$main_bin")"; fi
+    (cd {{panel_dir}} && PATH="$main_bin:$PATH" npm run build:css)
     # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
     #    the vestigial src/main.rs bin breaks under fat LTO)
     cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release

@@ -41,11 +41,11 @@ pub fn ExtensionDetailDrawer() -> impl IntoView {
                         disc_loading.set(false);
                     }
                     Err(e) => {
-                        disc_error.set(Some(crate::components::admin_refusal::settings_load_error(
-                            i18n,
-                            &e,
-                            |e| e.to_string(),
-                        )));
+                        disc_error.set(Some(
+                            crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
+                                e.to_string()
+                            }),
+                        ));
                         disc_loading.set(false);
                     }
                 }

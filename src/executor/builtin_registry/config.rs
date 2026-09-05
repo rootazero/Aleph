@@ -72,8 +72,6 @@ pub struct BuiltinToolConfig {
     pub tool_context: Option<crate::tools::ToolContextHandle>,
     /// Shared token manager for `vault_store` tool
     pub shared_token_manager: Option<Arc<crate::gateway::security::SharedTokenManager>>,
-    /// Memory similarity threshold from config (overrides hardcoded default)
-    pub memory_similarity_threshold: Option<f32>,
     /// Coordination task store for task/team management tools
     pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
     /// Team snapshot store (sibling to `coord_task_store`; shares its connection).

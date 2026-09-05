@@ -292,11 +292,6 @@ pub struct Config {
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
     pub presets_override: crate::config::presets_override::PresetsOverride,
-    /// Defaults override loaded from ~/.aleph/defaults.toml
-    /// Not serialized to config.toml — lives in its own file
-    /// Must be loaded BEFORE config.toml parsing so serde default functions can read it
-    #[serde(skip)]
-    pub defaults_override: crate::config::defaults_override::DefaultsOverride,
 }
 
 // =============================================================================
@@ -424,7 +419,6 @@ impl Default for Config {
             projects: crate::config::types::ProjectsConfig::default(),
             desktop: crate::config::types::desktop::DesktopDaemonConfig::default(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
-            defaults_override: crate::config::defaults_override::DefaultsOverride::default(),
         }
     }
 }

@@ -25,8 +25,10 @@ use crate::error::{AlephError, Result};
 use crate::json_canvas_io::sanitise_name;
 use crate::workflow::interop::manifest::WorkflowManifest;
 
-/// File extension for stored workflow templates.
-pub const WORKFLOW_EXT: &str = "json";
+/// File extension for stored workflow templates. Private: the two readers
+/// (`resolve_path_at`, `list_at`) are both in this file, and the store's public
+/// face speaks in names, never extensions.
+const WORKFLOW_EXT: &str = "json";
 
 /// Monotonic suffix source: two concurrent writers of the SAME final path must
 /// not share a temp file, or one writer's `rename` would publish the other
@@ -146,7 +148,11 @@ pub fn save(manifest: &WorkflowManifest) -> Result<PathBuf> {
 
 /// Write rendered text (e.g. an exported `.mjs` workflow) into `dir` under
 /// `{sanitised name}.{ext}`, atomically (temp + rename). Returns the path.
-pub fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBuf> {
+///
+/// Private: the only caller is [`write_text`] (plus this file's tests). The
+/// `_at` pair exists so tests can target a tmpdir, and that is a within-file
+/// concern.
+fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBuf> {
     ensure_dir_at(dir)?;
     let final_path = dir.join(format!("{}.{ext}", sanitise_name(name)));
     let tmp_path = unique_tmp_path(&final_path);
@@ -300,6 +306,7 @@ mod tests {
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
                 },
@@ -319,6 +326,7 @@ mod tests {
                     choices: vec![],
                     review: false,
                     require_grounding: false,
+                    tolerate_failed_deps: false,
                     timeout_secs: None,
                     max_retries: None,
                 },

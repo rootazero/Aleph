@@ -98,6 +98,7 @@ impl AiProvider for FastToolCallProvider {
                 stop_reason: StopReason::ToolUse,
                 usage: None,
                 truncated_tool_call: None,
+                provider_error: None,
             })
         })
     }
@@ -183,6 +184,9 @@ fn base_with_hanging_llm(cancel: CancellationToken) -> SpawnerBase {
         context_budget_refiner: None,
         primary_context_window: None,
         cheap_summary_provider: None,
+        // No watchdog in this fixture; the field is explicit so a no-verifier child
+        // is opted into rather than inherited from a default nobody read.
+        verifier_chain: None,
     }
 }
 
@@ -223,6 +227,9 @@ fn base_with_hanging_tool(cancel: CancellationToken) -> SpawnerBase {
         context_budget_refiner: None,
         primary_context_window: None,
         cheap_summary_provider: None,
+        // No watchdog in this fixture; the field is explicit so a no-verifier child
+        // is opted into rather than inherited from a default nobody read.
+        verifier_chain: None,
     }
 }
 

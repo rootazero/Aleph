@@ -285,37 +285,103 @@ mod tests {
 
     // ---- apply_local ↔ server semantics -----------------------------------
 
-    /// Extract the `for op in ops { … }` mutation loop that follows
-    /// `fn <name>`, whitespace-normalized so formatting differences are
-    /// invisible and token differences are not.
-    fn mutation_loop(src: &str, fn_name: &str) -> String {
-        let src = src.replace('\r', "");
-        let fn_pos = src
-            .find(&format!("fn {fn_name}"))
-            .unwrap_or_else(|| panic!("fn {fn_name} not found"));
-        let tail = &src[fn_pos..];
-        let for_pos = tail
-            .find("for op in ops")
-            .unwrap_or_else(|| panic!("no `for op in ops` loop inside fn {fn_name}"));
-        let body = &tail[for_pos..];
-        let open = body.find('{').expect("loop must open a block");
+    /// `s[..end]` where `end` closes the first `{` in `s`; `None` when the
+    /// braces never balance.
+    fn balanced_block(s: &str) -> Option<&str> {
+        let open = s.find('{')?;
         let mut depth = 0i32;
-        let mut end = None;
-        for (i, c) in body[open..].char_indices() {
+        for (i, c) in s[open..].char_indices() {
             match c {
                 '{' => depth += 1,
                 '}' => {
                     depth -= 1;
                     if depth == 0 {
-                        end = Some(open + i + 1);
-                        break;
+                        return Some(&s[..open + i + 1]);
                     }
                 }
                 _ => {}
             }
         }
-        let end = end.expect("unbalanced braces in mutation loop");
-        body[..end].split_whitespace().collect::<Vec<_>>().join(" ")
+        None
+    }
+
+    /// Extract the `for op in ops { … }` loop inside `fn <name>` that
+    /// mutates `doc`, whitespace-normalized so formatting differences are
+    /// invisible and token differences are not.
+    ///
+    /// "The one that touches `doc`", not "the first one after the `fn`
+    /// line": the server's `apply_ops` grew a second `for op in ops` loop
+    /// AHEAD of the mutation (it simulates the batch on a side set of ids
+    /// for the shape cap), and an extractor keyed on the first loop compared
+    /// that simulation against the Panel's mutation and reported drift where
+    /// there was none — a guard that only recognises the shape it was
+    /// written against (§3). The search is also bounded to the function's
+    /// own body, so a loop in whatever `fn` follows can never be picked.
+    fn mutation_loop(src: &str, fn_name: &str) -> String {
+        let src = src.replace('\r', "");
+        let fn_pos = src
+            .find(&format!("fn {fn_name}"))
+            .unwrap_or_else(|| panic!("fn {fn_name} not found"));
+        let body = balanced_block(&src[fn_pos..])
+            .unwrap_or_else(|| panic!("unbalanced braces in fn {fn_name}"));
+        let mut loops = Vec::new();
+        let mut rest = body;
+        while let Some(pos) = rest.find("for op in ops") {
+            let block = balanced_block(&rest[pos..])
+                .unwrap_or_else(|| panic!("unbalanced braces in a loop of fn {fn_name}"));
+            if block.contains("doc.") {
+                loops.push(block.split_whitespace().collect::<Vec<_>>().join(" "));
+            }
+            rest = &rest[pos + block.len()..];
+        }
+        match loops.len() {
+            1 => loops.remove(0),
+            0 => panic!("fn {fn_name} has no `for op in ops` loop that mutates `doc`"),
+            n => panic!(
+                "fn {fn_name} has {n} `for op in ops` loops that touch `doc` — \
+                 the pin cannot tell which one is the mirror"
+            ),
+        }
+    }
+
+    /// The extractor's own falsifying arm: a simulation loop ahead of the
+    /// mutation must be skipped, and the search must stop at the function's
+    /// closing brace. Against the previous first-loop extractor this reads
+    /// the simulation loop and fails.
+    #[test]
+    fn mutation_loop_skips_a_leading_simulation_loop_and_stops_at_the_fn_end() {
+        let src = "\
+fn apply_ops(doc: &mut Doc, ops: &[Op]) {
+    let mut simulated = set();
+    for op in ops {
+        match op { Op::A => { simulated.insert(1); } _ => {} }
+    }
+    for op in ops {
+        match op { Op::A => doc.push(1), Op::B => doc.pop() }
+    }
+}
+fn other(doc: &mut Doc, ops: &[Op]) {
+    for op in ops { doc.other(op) }
+}
+";
+        assert_eq!(
+            mutation_loop(src, "apply_ops"),
+            "for op in ops { match op { Op::A => doc.push(1), Op::B => doc.pop() } }"
+        );
+    }
+
+    /// Two loops that both touch `doc` are not a pin the test can apply
+    /// silently — it must refuse, not pick one.
+    #[test]
+    #[should_panic(expected = "cannot tell which one is the mirror")]
+    fn mutation_loop_refuses_an_ambiguous_function() {
+        let src = "\
+fn apply_ops(doc: &mut Doc, ops: &[Op]) {
+    for op in ops { doc.a(op) }
+    for op in ops { doc.b(op) }
+}
+";
+        let _ = mutation_loop(src, "apply_ops");
     }
 
     /// The Panel's `apply_local` loop and the server's `validate::apply_ops`
@@ -334,7 +400,7 @@ mod tests {
                 server_path.display()
             )
         });
-        let server_loop = mutation_loop(&server, "apply_ops");
+        let server_loop = mutation_loop(&server, "apply_mutations");
         let panel_loop = mutation_loop(include_str!("ops.rs"), "apply_local");
         assert_eq!(
             server_loop, panel_loop,

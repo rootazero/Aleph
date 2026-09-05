@@ -101,6 +101,55 @@ impl AiProvider for ScriptProvider {
     }
 }
 
+/// A provider that has gone silent: every call yields the typed
+/// `AlephError::Timeout` that both stream watchdogs raise once an idle window
+/// has elapsed with no upstream bytes. `ScriptProvider` cannot stand in — it
+/// only ever produces `AlephError::provider`, and the whole point of the
+/// spent-window rule is that it reads the *typed variant*, not the wording.
+struct SilentProvider {
+    name: String,
+    calls: AtomicUsize,
+}
+
+impl SilentProvider {
+    fn new(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for SilentProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Err(AlephError::Timeout {
+                suggestion: Some(
+                    "Provider sent no response for 60s after the request was dispatched \
+                     (time-to-first-byte timeout)."
+                        .into(),
+                ),
+            })
+        })
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn color(&self) -> &str {
+        "#000"
+    }
+}
+
 /// Primary whose behavior-resolution fields are configurable, so the
 /// failover wrapper's pass-through can be asserted.
 struct BehaviorProvider {
@@ -146,6 +195,18 @@ fn build(
     catalog: Vec<(&str, Vec<&str>)>,
     fallbacks: Vec<FailoverNode>,
 ) -> FailoverProvider {
+    build_with_health(primary, catalog, fallbacks, FailoverHealth::default())
+}
+
+/// Same, with a caller-supplied breaker table, so a test can pre-open a circuit
+/// (`FailoverHealth::open_for_test`) instead of first driving a whole failing
+/// provider walk to trip it.
+fn build_with_health(
+    primary: Arc<dyn AiProvider>,
+    catalog: Vec<(&str, Vec<&str>)>,
+    fallbacks: Vec<FailoverNode>,
+    health: FailoverHealth,
+) -> FailoverProvider {
     let model_catalog = catalog
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
@@ -154,7 +215,7 @@ fn build(
         Arc::new(StaticDefault::new(primary)),
         fallbacks,
         model_catalog,
-        FailoverHealth::default(),
+        health,
         FailoverConfig::default(),
     )
 }
@@ -338,10 +399,24 @@ async fn explicit_chain_skips_providers_removed_from_live_registry() {
 
 // --- decide() unit tests ----------------------------------------------
 
+/// `decide` for the common shape: a later candidate still remains in the
+/// chain, so advancing is a real option. Named rather than a bare `true` at
+/// two dozen call sites, where the flag would read as noise.
+fn decide_in_chain(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
+    decide(err, attempt, max_retries, true)
+}
+
+/// `decide` on the *terminal* candidate — a single-provider deployment, or the
+/// last link of a chain. Advancing here means failing the request outright, so
+/// every in-place budget must survive unchanged.
+fn decide_terminal(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
+    decide(err, attempt, max_retries, false)
+}
+
 #[test]
 fn decide_bad_request_stops() {
     let e = AlephError::provider("HTTP 400 bad request: invalid param");
-    assert_eq!(decide(&e, 0, 2), Decision::Stop);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::Stop);
 }
 
 #[test]
@@ -352,7 +427,7 @@ fn decide_model_rate_limit_returns_rate_limited() {
     // provider's circuit is considered. The server gave no Retry-After, so
     // the cooldown hint is None.
     let e = AlephError::provider("HTTP 429 too many requests");
-    assert_eq!(decide(&e, 0, 2), Decision::RateLimited(None));
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::RateLimited(None));
 }
 
 #[test]
@@ -365,7 +440,7 @@ fn decide_model_rate_limit_honors_typed_retry_after() {
         suggestion: Some("Rate limited. Retry after 42 seconds.".into()),
     };
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::RateLimited(Some(Duration::from_secs(42)))
     );
 }
@@ -381,8 +456,44 @@ fn decide_model_rate_limit_falls_back_to_body_retry_after() {
         suggestion: None,
     };
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::RateLimited(Some(Duration::from_secs(30)))
+    );
+}
+
+/// An account-scoped 429 is **not** propagated to the user, whatever
+/// `classify_rate_limit`'s `Fatal` looks like from inside `llm_retry`.
+///
+/// Three doc comments said it was ("propagate to user", "propagate
+/// immediately", "never reach the breaker"), and all three were wrong in the
+/// same way: `Fatal` only says *a sibling model will not help*. `decide`'s
+/// `Fatal` arm then reads the TYPED error, and both `RateLimitError` and
+/// `ProviderError` are `ErrorClass::Transient` — so the attempt rides out the
+/// in-place budget and then sheds the provider onto a sibling, whose account is
+/// a different account. This anchors that wording.
+#[test]
+fn an_account_scoped_429_is_retried_then_sheds_the_provider() {
+    let e = AlephError::RateLimitError {
+        message: "HTTP 429 rate limit exceeded for your organization".into(),
+        suggestion: None,
+    };
+    // Inside the budget: retried in place, at the plain transient delay (an
+    // account limit gets no server hint and earns no deeper overload budget).
+    assert_eq!(
+        decide_in_chain(&e, 0, 2),
+        Decision::RetrySame(Duration::from_millis(300))
+    );
+    // Budget spent: the chain advances and the breaker counts a strike. Not
+    // `Stop`, and not `Permanent` — the account recovers.
+    assert_eq!(
+        decide_in_chain(&e, 2, 2),
+        Decision::NextProvider(FailureKind::Transient)
+    );
+    // Same on the terminal candidate: only the typed-`Timeout` rule reads
+    // position, so a 429 keeps its in-place budget in a single-provider setup.
+    assert_eq!(
+        decide_terminal(&e, 0, 2),
+        Decision::RetrySame(Duration::from_millis(300))
     );
 }
 
@@ -393,13 +504,13 @@ fn decide_token_count_borrowing_400_digits_is_not_a_bad_request() {
     // `has_status_code` confines the match to a real status token.
     let e = AlephError::provider("upstream hiccup: used 400123 tokens; invalid response");
     assert!(
-        matches!(decide(&e, 0, 2), Decision::RetrySame(_)),
+        matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)),
         "a token count must not read as HTTP 400, got {:?}",
-        decide(&e, 0, 2)
+        decide_in_chain(&e, 0, 2)
     );
     // …while a genuine 400 still stops the walk immediately.
     let e = AlephError::provider("HTTP 400 Bad Request: invalid parameter");
-    assert_eq!(decide(&e, 0, 2), Decision::Stop);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::Stop);
 }
 
 #[test]
@@ -412,7 +523,7 @@ fn decide_overload_429_honors_typed_retry_after() {
         suggestion: Some("Retry after 7 seconds.".into()),
     };
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::RetrySame(Duration::from_secs(7))
     );
 }
@@ -421,12 +532,12 @@ fn decide_overload_429_honors_typed_retry_after() {
 fn decide_auth_advances_provider_as_permanent() {
     let e = AlephError::provider("HTTP 401 Unauthorized");
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::NextProvider(FailureKind::Permanent)
     );
     let e = AlephError::provider("HTTP 403 Forbidden: invalid api key");
     assert_eq!(
-        decide(&e, 0, 2),
+        decide_in_chain(&e, 0, 2),
         Decision::NextProvider(FailureKind::Permanent)
     );
 }
@@ -434,22 +545,22 @@ fn decide_auth_advances_provider_as_permanent() {
 #[test]
 fn decide_model_not_found_advances_model() {
     let e = AlephError::provider("HTTP 404 model gpt-9 not found");
-    assert_eq!(decide(&e, 0, 2), Decision::NextModel);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::NextModel);
 }
 
 #[test]
 fn decide_413_stops_for_compactor() {
     let e = AlephError::provider("HTTP 413 prompt is too long: 200000 tokens > 100000 maximum");
-    assert_eq!(decide(&e, 0, 2), Decision::Stop);
+    assert_eq!(decide_in_chain(&e, 0, 2), Decision::Stop);
 }
 
 #[test]
 fn decide_transient_retries_then_advances() {
     let e = AlephError::provider("connection reset by peer");
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
-    assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 1, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 2, 2),
+        decide_in_chain(&e, 2, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -472,9 +583,9 @@ fn decide_transient_overload_429_gets_limited_retry_budget() {
             .into(),
         suggestion: None,
     };
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 1, 2),
+        decide_in_chain(&e, 1, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -491,9 +602,9 @@ fn decide_kimi_overloaded_429_fails_over_after_one_retry() {
          {\"error\":{\"type\":\"rate_limit_error\",\"message\":\"The engine is currently \
          overloaded, please try again later\"},\"type\":\"error\"}",
     );
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 1, 2),
+        decide_in_chain(&e, 1, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -509,9 +620,9 @@ fn decide_overload_429_budget_is_independent_of_max_retries() {
             .into(),
         suggestion: None,
     };
-    assert!(matches!(decide(&e, 0, 10), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 0, 10), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 1, 10),
+        decide_in_chain(&e, 1, 10),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -523,9 +634,9 @@ fn decide_plain_network_transient_keeps_shallow_budget() {
     // better next bet than hammering a flaky socket. Guards the overload
     // budget from leaking into ordinary transient errors.
     let e = AlephError::provider("connection reset by peer");
-    assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+    assert!(matches!(decide_in_chain(&e, 1, 2), Decision::RetrySame(_)));
     assert_eq!(
-        decide(&e, 2, 2),
+        decide_in_chain(&e, 2, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
@@ -539,20 +650,57 @@ fn decide_account_quota_429_excluded_from_deep_budget() {
     // attempt 1.
     let e = AlephError::provider("429 account quota exceeded; please wait a moment");
     assert_eq!(
-        decide(&e, 2, 2),
+        decide_in_chain(&e, 2, 2),
         Decision::NextProvider(FailureKind::Transient)
     );
 }
 
 #[test]
-fn decide_typed_timeout_with_no_http_code_still_fails_over() {
+fn decide_typed_timeout_advances_at_once_but_only_off_a_terminal_candidate() {
     // `Timeout` Display is "Request timed out" — no HTTP keyword — but the
-    // typed class is Transient, so the walk must still advance.
+    // typed class is Transient, so the walk must advance rather than stop.
+    //
+    // Both branches are pinned here on purpose. The rule is narrow: a typed
+    // `Timeout` is the one transient error that proves a whole silence window
+    // (TTFB / SSE gap / connect) was ALREADY spent on this attempt, so an
+    // in-place retry buys a second full window against an endpoint that has
+    // demonstrated silence. When a later candidate exists that is a bad bet and
+    // the chain advances immediately — no retry at all. When this is the last
+    // candidate, advancing means failing the request with zero attempts left,
+    // so the ordinary `max_retries` in-place budget must survive untouched.
+    // Asserting only the first half would let the rule silently widen into the
+    // single-provider shape, which is the commonest personal-runtime setup.
     let e = AlephError::Timeout { suggestion: None };
-    assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
+
     assert_eq!(
-        decide(&e, 2, 2),
-        Decision::NextProvider(FailureKind::Transient)
+        decide_in_chain(&e, 0, 2),
+        Decision::NextProvider(FailureKind::Transient),
+        "a spent idle window must move to the next candidate on the first failure",
+    );
+
+    assert!(
+        matches!(decide_terminal(&e, 0, 2), Decision::RetrySame(_)),
+        "the terminal candidate keeps its in-place retry — there is nowhere to advance to",
+    );
+    assert!(matches!(decide_terminal(&e, 1, 2), Decision::RetrySame(_)));
+    assert_eq!(
+        decide_terminal(&e, 2, 2),
+        Decision::NextProvider(FailureKind::Transient),
+        "and once that budget is exhausted it still escalates as a transient strike",
+    );
+}
+
+#[test]
+fn decide_untyped_timed_out_wording_keeps_its_in_place_retry() {
+    // The spent-window rule keys on the typed variant, never on the words
+    // "timed out" — which also reach `classify` from untyped provider bodies
+    // through `llm_retry`'s network word list. There nothing tells us a
+    // watchdog window elapsed, so the ordinary retry budget still applies even
+    // with a fallback waiting.
+    let e = AlephError::provider("upstream proxy: the request timed out");
+    assert!(
+        matches!(decide_in_chain(&e, 0, 2), Decision::RetrySame(_)),
+        "a provider *body* saying 'timed out' is not a watchdog verdict",
     );
 }
 
@@ -675,6 +823,50 @@ async fn cooling_model_is_skipped_on_next_request() {
             Some("sonnet".to_string()),
             Some("sonnet".to_string()),
         ]
+    );
+}
+
+/// A `Decision::RateLimited` parks the whole PROVIDER and arms a circuit
+/// strike, not just the one model.
+///
+/// The variant's doc said the opposite — "does not trip the provider circuit"
+/// — while the walk's arm has always called `ProviderCooldown::cool` on the
+/// candidate and set `tripped = Transient`. Sibling models stay live only
+/// *within* the walk: a later model that succeeds retires both
+/// (`a_successful_call_clears_the_provider_pacing_window` is that half). Here
+/// nothing succeeds, so both effects survive the turn and shape the next one.
+#[tokio::test]
+async fn a_model_429_parks_the_provider_and_arms_a_strike() {
+    let primary = ScriptProvider::new("anthropic", vec![Err("HTTP 429 too many requests".into())]);
+    let pacing = ProviderCooldown::default();
+    let health = FailoverHealth::default();
+    let fp = build_with_health(
+        primary as Arc<dyn AiProvider>,
+        vec![("anthropic", vec!["opus"])],
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        health.clone(),
+    )
+    .with_model_cooldown(ModelCooldown::default())
+    // rust-doctor-disable-next-line excessive-clone
+    .with_provider_cooldown(pacing.clone());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+
+    assert!(
+        pacing.remaining("anthropic").await.is_some(),
+        "the 429 must pace the whole provider, so the next turn waits instead \
+         of earning a fresh 429"
+    );
+    let view = health.snapshot().await;
+    let anthropic = view
+        .iter()
+        .find(|h| h.provider == "anthropic")
+        .expect("the breaker must have seen this provider");
+    assert_eq!(
+        anthropic.failure_count, 1,
+        "a ladder whose every model was rate-limited costs the provider a strike"
     );
 }
 
@@ -993,6 +1185,61 @@ async fn permanently_dead_fallback_skipped_on_next_request() {
 }
 
 #[tokio::test]
+async fn a_silent_primary_reaches_the_fallback_within_one_idle_window() {
+    // A black-holing endpoint (proxy accepts the connection and never answers)
+    // surfaces as a typed `Timeout` only AFTER a full TTFB/idle window has been
+    // paid. Re-dialing it in place paid that window again, twice more, before
+    // the chain moved — long enough for a configured per-turn watchdog to kill
+    // the run first, so the healthy fallback was never reached, no strike was
+    // ever recorded, and `route_status` kept reporting the dead endpoint closed.
+    let silent = SilentProvider::new("silent");
+    let fb = ScriptProvider::ok("fb");
+    // rust-doctor-disable-next-line excessive-clone
+    let fp = build(silent.clone(), vec![], vec![node("fb", fb.clone())]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        silent.call_count(),
+        1,
+        "the spent window must not be paid a second time in place",
+    );
+    assert_eq!(fb.call_count(), 1);
+
+    // …and the attempt was charged to the breaker, so the silent endpoint is
+    // shed on the ordinary schedule instead of being re-dialed every turn.
+    // One walk = one strike, so the remaining walks reach the threshold.
+    for _ in 1..CIRCUIT_OPEN_THRESHOLD {
+        // rust-doctor-disable-next-line unwrap-in-production
+        let _ = fp.process(RequestPayload::new(&msgs)).await;
+    }
+    assert!(fp.circuit_open("silent").await);
+    assert_eq!(silent.call_count(), CIRCUIT_OPEN_THRESHOLD as usize);
+}
+
+#[tokio::test]
+async fn a_lone_silent_provider_still_spends_its_in_place_retries() {
+    // The other direction of the same gate: with no later candidate, advancing
+    // the chain means failing the request with zero attempts left. A
+    // single-provider deployment — the commonest personal-runtime shape — must
+    // keep the full `max_retries` in-place budget on a timeout, exactly as it
+    // did before the spent-window rule existed.
+    let solo = SilentProvider::new("solo");
+    // rust-doctor-disable-next-line excessive-clone
+    let fp = build(solo.clone(), vec![], vec![]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+    assert_eq!(
+        solo.call_count(),
+        FailoverConfig::default().max_retries as usize + 1,
+        "a lone provider keeps its in-place retries; the rule must not widen here",
+    );
+}
+
+#[tokio::test]
 async fn lone_candidate_attempted_even_with_open_circuit() {
     // A single provider that keeps failing must still be retried after
     // its circuit opens — there is nowhere else to fail over to.
@@ -1029,6 +1276,12 @@ async fn fallback_matching_primary_name_is_deduped() {
 struct MockApprover {
     approve: bool,
     calls: AtomicUsize,
+    /// Parks a provider in its 429 pacing window at the moment the human is
+    /// asked. Stands in for the only thing that can happen during a blocking
+    /// approval prompt: a *concurrent* walk writing the shared `Arc`-backed
+    /// `ProviderCooldown` while this walk is stopped between its two pacing
+    /// halves.
+    park_on_ask: Option<(ProviderCooldown, String, Duration)>,
 }
 
 impl MockApprover {
@@ -1036,6 +1289,19 @@ impl MockApprover {
         Arc::new(Self {
             approve,
             calls: AtomicUsize::new(0),
+            park_on_ask: None,
+        })
+    }
+    fn parking(
+        approve: bool,
+        pacing: ProviderCooldown,
+        provider: &str,
+        dur: Duration,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            approve,
+            calls: AtomicUsize::new(0),
+            park_on_ask: Some((pacing, provider.to_string(), dur)),
         })
     }
     fn call_count(&self) -> usize {
@@ -1050,6 +1316,9 @@ impl ApprovalRequester for MockApprover {
         _action: &crate::sandbox::exec_approval::ApprovalAction,
     ) -> crate::sandbox::exec_approval::ApprovalResponse {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some((pacing, provider, dur)) = &self.park_on_ask {
+            pacing.cool(provider, *dur).await;
+        }
         if self.approve {
             ApprovalOutcome::Approved.into()
         } else {
@@ -1660,6 +1929,16 @@ struct StreamingProvider {
     name: String,
     chunks: Vec<&'static str>,
     fail_after_stream: Option<String>,
+    /// Reports an in-band fault (`ProviderDelta::Error`) after the chunks and
+    /// still returns `Ok` — exactly the shape `HttpProvider::execute_once`
+    /// produces when a provider faults mid-stream with content already sent.
+    report_error: Option<String>,
+    /// Streams `ToolCallStart` + `ToolCallArgDelta` INSTEAD of text, then
+    /// fails — the shape `HttpProvider` produces on a truncated tool call.
+    /// Content reached the sink (so the walk is terminal) but nothing reached
+    /// the user's transcript (so the marker must stay off).
+    tool_call_only: bool,
+    calls: AtomicUsize,
 }
 
 impl StreamingProvider {
@@ -1668,6 +1947,9 @@ impl StreamingProvider {
             name: name.to_string(),
             chunks,
             fail_after_stream: None,
+            report_error: None,
+            tool_call_only: false,
+            calls: AtomicUsize::new(0),
         })
     }
 
@@ -1676,7 +1958,39 @@ impl StreamingProvider {
             name: name.to_string(),
             chunks,
             fail_after_stream: Some("HTTP 429 too many requests".to_string()),
+            report_error: None,
+            tool_call_only: false,
+            calls: AtomicUsize::new(0),
         })
+    }
+
+    /// Emits `chunks`, then an in-band `ProviderDelta::Error`, then returns
+    /// `Ok(partial)` carrying the fault on `provider_error`.
+    fn emits_then_reports_error(name: &str, chunks: Vec<&'static str>, msg: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            chunks,
+            fail_after_stream: None,
+            report_error: Some(msg.to_string()),
+            tool_call_only: false,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// Streams only tool-call deltas, then fails — a truncated tool call.
+    fn fails_mid_tool_call(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_string(),
+            chunks: Vec::new(),
+            fail_after_stream: Some("Request timed out".to_string()),
+            report_error: None,
+            tool_call_only: true,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
     }
 }
 
@@ -1703,11 +2017,36 @@ impl AiProvider for StreamingProvider {
         sink: &'a dyn crate::providers::DeltaSink,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
         Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.tool_call_only {
+                sink.on_delta(&crate::providers::ProviderDelta::ToolCallStart {
+                    id: "t1".to_string(),
+                    name: "file_write".to_string(),
+                    signature: None,
+                })
+                .await;
+                sink.on_delta(&crate::providers::ProviderDelta::ToolCallArgDelta {
+                    id: "t1".to_string(),
+                    delta: "{\"path\":\"big".to_string(),
+                })
+                .await;
+            }
             for c in &self.chunks {
                 sink.on_delta(&crate::providers::ProviderDelta::TextDelta(
                     (*c).to_string(),
                 ))
                 .await;
+            }
+            if let Some(msg) = &self.report_error {
+                // rust-doctor-disable-next-line excessive-clone
+                sink.on_delta(&crate::providers::ProviderDelta::Error(msg.clone()))
+                    .await;
+                return Ok(ProviderResponse {
+                    text: Some(self.chunks.concat()),
+                    // rust-doctor-disable-next-line excessive-clone
+                    provider_error: Some(msg.clone()),
+                    ..Default::default()
+                });
             }
             match &self.fail_after_stream {
                 Some(msg) => Err(AlephError::provider(msg.clone())),
@@ -1819,18 +2158,90 @@ async fn a_failure_after_partial_output_is_terminal_instead_of_restarting() {
         // rust-doctor-disable-next-line excessive-clone
         vec![node("fb", fb.clone() as Arc<dyn AiProvider>)],
     );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(!fp.circuit_open("p").await);
+    for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+        let sink = RecordingSink::default();
+        let out = fp
+            .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+            .await;
+        // rust-doctor-disable-next-line unwrap-in-production
+        let err = out.expect_err("must not silently restart on another candidate");
+        assert_eq!(sink.text(), "partial ");
+        // The gateway's outer loop reads `Display`, so the fact that a half
+        // answer is already on screen has to be *in* the rendered message —
+        // the 429 wording alone would read as retryable up there.
+        assert!(
+            err.to_string().contains(PARTIAL_OUTPUT_EMITTED),
+            "the terminal verdict must survive Display: {err}"
+        );
+        assert_eq!(fb.call_count(), 0, "the fallback must not double-answer");
+    }
+
+    // A provider whose proxy cuts every long stream used to stay
+    // `circuit: closed, failure_count: 0` forever — it kept leading every walk
+    // and the prober, which only dials open circuits, never saw it. Assert the
+    // effect (the breaker), then that the walk acts on it: the next call is
+    // served by the fallback with `p` sidelined.
+    assert!(
+        fp.circuit_open("p").await,
+        "a post-emission failure must count against the provider's circuit"
+    );
+    let sink = RecordingSink::default();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp
+        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await
+        .expect("the sidelined provider must yield to the fallback");
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(fb.call_count(), 1);
+}
+
+/// The negative half of the marker's gate — without it nothing pins that
+/// `PARTIAL_OUTPUT_EMITTED` does not over-fire.
+///
+/// A truncated tool call reaches the walk with `EmissionGuard::has_emitted`
+/// already latched (its deltas were forwarded), so it is chain-terminal exactly
+/// like a cut answer. But the user's screen is still blank — the only
+/// production sink drops every non-text/thinking delta — so the harm the marker
+/// exists to prevent (a second answer landing under a visible first one) cannot
+/// occur, and the gateway's fresh attempt is the correct recovery for precisely
+/// the case the site's own diagnostic names: a large file write crossing a
+/// proxy timeout.
+#[tokio::test]
+async fn a_tool_call_only_cut_stays_chain_terminal_without_claiming_the_user_saw_anything() {
+    let primary = StreamingProvider::fails_mid_tool_call("p");
+    let fb = ScriptProvider::ok("fb");
+    let fp = build(
+        primary as Arc<dyn AiProvider>,
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        vec![node("fb", fb.clone() as Arc<dyn AiProvider>)],
+    );
     let sink = RecordingSink::default();
 
     let msgs = [UnifiedMessage::user("hi")];
     let out = fp
         .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
         .await;
+    // rust-doctor-disable-next-line unwrap-in-production
+    let err = out.expect_err("content reached the sink, so the chain must not advance");
+
+    // Terminal for the chain — the wide bit is unchanged by the split.
+    assert_eq!(fb.call_count(), 0, "the walk must not advance the chain");
+    assert!(sink.text().is_empty(), "no text was ever streamed");
+
+    // ...but the narrow bit is false, so the marker must be absent and the
+    // provider's own retryable wording must survive intact for the gateway.
     assert!(
-        out.is_err(),
-        "must not silently restart on another candidate"
+        !err.to_string().contains(PARTIAL_OUTPUT_EMITTED),
+        "nothing user-visible was shown; the marker must not over-fire: {err}"
     );
-    assert_eq!(sink.text(), "partial ");
-    assert_eq!(fb.call_count(), 0, "the fallback must not double-answer");
+    assert!(
+        err.to_string().contains("timed out"),
+        "the original diagnostic must reach the gateway unwrapped: {err}"
+    );
 }
 
 #[tokio::test]
@@ -1858,6 +2269,77 @@ async fn a_failure_before_any_output_still_fails_over_while_streaming() {
         sink.text(),
         "fb",
         "the replayed answer still reaches the sink"
+    );
+}
+
+#[tokio::test]
+async fn an_in_stream_provider_error_after_content_is_not_a_healthy_success() {
+    // A provider that emits a little text and then reports a fault in-band used
+    // to be indistinguishable from a clean answer: the collector drops the
+    // `Error` delta, `execute_once` only promotes it to `Err` when *nothing*
+    // came through, and the walk's `Ok` arm then marked the provider healthy.
+    // A provider failing this way on every request stayed `circuit: closed,
+    // failure_count: 0` forever. The fault now rides on `provider_error` and
+    // earns the same strike a pre-emission failure would have.
+    let primary = StreamingProvider::emits_then_reports_error(
+        "p",
+        vec!["par", "tial"],
+        "upstream connection error",
+    );
+    // rust-doctor-disable-next-line excessive-clone
+    let fp = build(primary.clone() as Arc<dyn AiProvider>, vec![], vec![]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(!fp.circuit_open("p").await);
+    for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+        let sink = RecordingSink::default();
+        // rust-doctor-disable-next-line unwrap-in-production
+        let resp = fp
+            .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+            .await
+            .unwrap();
+        // The user still gets what was already streamed — the strike is
+        // bookkeeping, not a change of the request outcome.
+        assert_eq!(resp.text_content(), "partial");
+        assert_eq!(sink.text(), "partial");
+    }
+    assert_eq!(primary.call_count(), CIRCUIT_OPEN_THRESHOLD as usize);
+    assert!(
+        fp.circuit_open("p").await,
+        "an in-stream fault must count against the provider's circuit"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_in_stream_provider_error_leaves_the_pacing_window_parked() {
+    // `pc.clear` retires the 429 pacing window because "we just went through
+    // it and succeeded". A faulted turn is not that evidence, so the window
+    // must survive — otherwise a provider that 429s and then faults mid-stream
+    // is un-paced by its own failure and re-dialed at full rate next turn.
+    // Asserting the *effect* (`remaining` still `Some`), not the call.
+    let primary = StreamingProvider::emits_then_reports_error("p", vec!["hi"], "overloaded");
+    let cooldown = ProviderCooldown::default();
+    cooldown
+        .cool("p", std::time::Duration::from_secs(600))
+        .await;
+
+    let fp = build(primary as Arc<dyn AiProvider>, vec![], vec![])
+        // rust-doctor-disable-next-line excessive-clone
+        .with_provider_cooldown(cooldown.clone());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let sink = RecordingSink::default();
+    // The lone candidate is paced (a virtual sleep under `start_paused`) and
+    // then dialed.
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp
+        .execute_streaming_dyn(RequestPayload::new(&msgs), &sink)
+        .await
+        .unwrap();
+    assert_eq!(resp.text_content(), "hi");
+    assert!(
+        cooldown.remaining("p").await.is_some(),
+        "a faulted turn must not retire the provider's rate-pacing window"
     );
 }
 
@@ -2249,12 +2731,14 @@ async fn the_order_preview_matches_the_walk_and_consumes_no_rotation() {
     let first: Vec<String> = fp
         .preview_order()
         .await
+        .steps
         .into_iter()
         .map(|s| s.provider)
         .collect();
     let second: Vec<String> = fp
         .preview_order()
         .await
+        .steps
         .into_iter()
         .map(|s| s.provider)
         .collect();
@@ -2266,7 +2750,7 @@ async fn the_order_preview_matches_the_walk_and_consumes_no_rotation() {
     );
     // The primary leads its own chain and is tagged as such.
     assert_eq!(first[0], "primary");
-    let steps = fp.preview_order().await;
+    let steps = fp.preview_order().await.steps;
     assert!(steps[0].primary);
     assert!(!steps[1].primary);
 }
@@ -2372,8 +2856,8 @@ async fn the_witness_records_the_model_the_walk_actually_asked_for() {
     let _ = fp.process(witness_payload(&msgs, session)).await.unwrap();
 
     let w = crate::providers::route_witness::take(session).expect("witnessed");
-    assert_eq!(w.first.model.as_deref(), Some("model-a"));
-    assert_eq!(w.served.model.as_deref(), Some("model-b"));
+    assert_eq!(w.first.model_id(), Some("model-a"));
+    assert_eq!(w.served.model_id(), Some("model-b"));
     assert!(
         w.deviated(),
         "a sibling-model migration is still a deviation"
@@ -2425,5 +2909,819 @@ async fn the_nested_chain_sentinel_never_names_itself_as_the_endpoint() {
         "global-primary",
         "the real endpoint must be reported, never `{}`",
         super::NESTED_CHAIN_NODE
+    );
+}
+
+// --- round-6: the anchor is the plan's head, not the first dial -------------
+//
+// Every cheap reason to pass a candidate over — an open circuit, a rate
+// ceiling, a denied escalation, a 429 pacing park — is settled BEFORE the walk
+// builds its first request. `first_attempt` used to be assigned inside the
+// model loop, i.e. after all of those `continue`s, so from the second run of an
+// outage onward the first *dial* was already the fallback: `first == served`,
+// `deviated()` false, and the `ModelResolved{is_fallback}` banner — the only
+// user-visible fallback signal on all four surfaces — went dark for exactly the
+// case it exists for. A 429 parks a provider for a minute; three strikes open
+// its breaker for five.
+
+#[tokio::test]
+async fn an_open_primary_that_is_skipped_still_reads_as_a_migration() {
+    let session = "agent:witness-test:skipped-open-circuit";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fallback");
+    let health = FailoverHealth::default();
+    // As if three strikes had already tripped it on an earlier run.
+    health
+        .open_for_test("primary", Duration::from_secs(300))
+        .await;
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![node("fallback", fb as Arc<dyn AiProvider>)],
+        health,
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "fallback");
+    assert_eq!(
+        primary.call_count(),
+        0,
+        "the open circuit must skip the primary before any dial — which is the \
+         whole point of this test"
+    );
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "primary",
+        "the run set out for the primary; being passed over pre-dial is not the \
+         same as never having chosen it"
+    );
+    assert_eq!(w.served.provider, "fallback");
+    assert!(
+        w.deviated(),
+        "an outage's second run is still a migration, and the banner is the only \
+         way the user learns which endpoint answered"
+    );
+}
+
+#[tokio::test]
+async fn a_paced_primary_that_is_skipped_still_reads_as_a_migration() {
+    // The twin of the breaker case, through the other pre-dial gate: a 429
+    // parks the provider for `DEFAULT_MODEL_COOLDOWN`, and the walk skips a
+    // cooling candidate outright while a later one remains.
+    let session = "agent:witness-test:skipped-paced";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fallback");
+    let cooldown = ProviderCooldown::default();
+    cooldown
+        .cool("primary", std::time::Duration::from_secs(90))
+        .await;
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![node("fallback", fb as Arc<dyn AiProvider>)],
+    )
+    .with_provider_cooldown(cooldown);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "fallback");
+    assert_eq!(primary.call_count(), 0, "the parked primary is not dialed");
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(w.first.provider, "primary");
+    assert_eq!(w.served.provider, "fallback");
+    assert!(w.deviated());
+}
+
+#[tokio::test]
+async fn a_pinned_chain_reports_the_pin_as_the_original() {
+    // A `provider_hint` override chain is `[pin, <the whole global chain>]`.
+    // The outer walk cannot record the sentinel and the inner walk records its
+    // OWN first attempt, so before the plan-time anchor a failed pin plus a
+    // failed global primary published `original_model = global-primary` — an
+    // endpoint the user never selected. A wrong report, not an under-report.
+    let session = "agent:witness-test:pinned-original";
+    crate::providers::route_witness::clear(session);
+
+    let inner_primary = ScriptProvider::err("global-primary", "HTTP 429 too many requests");
+    let inner_fb = ScriptProvider::ok("global-fallback");
+    let global = Arc::new(build(
+        inner_primary,
+        vec![],
+        vec![node("global-fallback", inner_fb as Arc<dyn AiProvider>)],
+    ));
+
+    let pinned = ScriptProvider::err("pinned", "HTTP 429 too many requests");
+    let fp = build(
+        pinned,
+        vec![],
+        vec![node(
+            super::NESTED_CHAIN_NODE,
+            global as Arc<dyn AiProvider>,
+        )],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "global-fallback");
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "pinned",
+        "the run set out for the pin the caller chose, not for whatever the \
+         nested global chain happened to try first"
+    );
+    assert_eq!(w.served.provider, "global-fallback");
+    assert!(w.deviated());
+}
+
+#[tokio::test]
+async fn a_denied_escalation_head_does_not_anchor_the_witness() {
+    // A refused borrow is not a migration: telling someone who just DECLINED
+    // the cloud that their run was migrated away from it is a wrong report. The
+    // head is anchored at plan time like any other (see the twin below for why)
+    // and the escalation arm retracts that anchor on the denial, so what a
+    // reader sees is the same as if it had never been anchored.
+    let session = "agent:witness-test:denied-escalation";
+    crate::providers::route_witness::clear(session);
+
+    let cloud = ScriptProvider::ok("openai");
+    let local = ScriptProvider::ok("ollama");
+    let approver = MockApprover::new(false);
+    let fp = build_pinned(
+        // rust-doctor-disable-next-line excessive-clone
+        cloud.clone(),
+        EndpointTier::Cloud,
+        vec![tiered_node("ollama", local, EndpointTier::Local)],
+        RouteMode::AlwaysLocal,
+        true,
+        Some(approver),
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "ollama");
+    assert_eq!(
+        cloud.call_count(),
+        0,
+        "the denied pin never reached the wire"
+    );
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "ollama",
+        "a declined escalation must not become the `original` half of a notice"
+    );
+    assert!(
+        !w.deviated(),
+        "the user asked for local and got local; there is nothing to announce"
+    );
+}
+
+#[tokio::test]
+async fn a_gated_head_skipped_before_the_prompt_still_reads_as_a_migration() {
+    // The twin of the test above, and the reason the gated head is anchored at
+    // all instead of simply never seeded. The breaker and rate-ceiling gates
+    // run BEFORE the escalation prompt, so a gated head whose provider is
+    // already open is passed over without anyone being asked — nobody declined
+    // anything, the operator's own primary was skipped for being dead, and that
+    // is the migration the banner exists to announce. Retracting only on a real
+    // denial is what keeps the two apart.
+    let session = "agent:witness-test:gated-head-open-circuit";
+    crate::providers::route_witness::clear(session);
+
+    let cloud = ScriptProvider::ok("openai");
+    let local = ScriptProvider::ok("ollama");
+    // Would approve if asked — the point is that it is never asked.
+    let approver = MockApprover::new(true);
+    let health = FailoverHealth::default();
+    health
+        .open_for_test("openai", Duration::from_secs(300))
+        .await;
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        cloud.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![tiered_node("ollama", local, EndpointTier::Local)],
+        health,
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_route(RouteMode::AlwaysLocal, true, Some(approver.clone()))
+    .with_primary_tier(EndpointTier::Cloud);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(resp.text_content(), "ollama");
+    assert_eq!(cloud.call_count(), 0, "the open circuit skipped it");
+    assert_eq!(
+        approver.call_count(),
+        0,
+        "the breaker gate runs ahead of the approval gate — this is the ordering \
+         that makes the plan-time anchor necessary"
+    );
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.provider, "openai",
+        "the run set out for the cloud primary and never got there; nobody \
+         declined it"
+    );
+    assert_eq!(w.served.provider, "ollama");
+    assert!(
+        w.deviated(),
+        "a head skipped before the prompt is a migration, not a refusal"
+    );
+}
+
+#[tokio::test]
+async fn the_anchor_never_names_a_model_the_walk_filtered_out() {
+    // The anchor names the ENDPOINT and leaves the model unresolved on purpose.
+    // Seeding it from the catalog head would duplicate a derivation the walk
+    // performs later (the capability floor, then the cooling sideline): with
+    // `model-a` cooling, the seed would read `(primary, model-a)` while the walk
+    // serves `(primary, model-b)`, and `deviated()` — which compares the model
+    // too — would light a same-provider banner naming a model that was never
+    // dialed. The dial refines the anchor instead, so the two cannot disagree.
+    let session = "agent:witness-test:anchor-model";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::ok("primary");
+    let cd = ModelCooldown::default();
+    cd.cool("primary", "model-a", Duration::from_secs(300))
+        .await;
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("primary", vec!["model-a", "model-b"])],
+        vec![],
+    )
+    .with_model_cooldown(cd);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let _ = fp.process(witness_payload(&msgs, session)).await.unwrap();
+    assert_eq!(
+        primary.models(),
+        vec![Some("model-b".to_string())],
+        "the cooling head is sidelined, so `model-b` is what actually got dialed"
+    );
+
+    let w = crate::providers::route_witness::take(session).expect("witnessed");
+    assert_eq!(
+        w.first.model_id(),
+        Some("model-b"),
+        "the anchor must adopt the model that was dialed, never the catalog head"
+    );
+    assert!(
+        !w.deviated(),
+        "the run got exactly what the walk chose; a banner here would be a wrong \
+         report naming a model nothing dialed"
+    );
+}
+
+#[tokio::test]
+async fn a_run_that_never_gets_an_answer_announces_nothing() {
+    // The anchor is written before any dial, so a walk that then fails outright
+    // leaves a record behind. It must read as "nothing deviated": a run that got
+    // no answer at all was not "served by a fallback".
+    let session = "agent:witness-test:anchored-then-failed";
+    crate::providers::route_witness::clear(session);
+
+    let primary = ScriptProvider::err("primary", "HTTP 500 upstream exploded");
+    let fp = build(primary, vec![], vec![]);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    assert!(fp.process(witness_payload(&msgs, session)).await.is_err());
+
+    let w = crate::providers::route_witness::take(session)
+        .expect("the anchor is written before the dial, so a record exists");
+    assert_eq!(w.first.provider, "primary");
+    assert!(
+        !w.deviated(),
+        "an anchored run with no answer must not manufacture a migration"
+    );
+}
+
+// --- round-6: the preview states the walk's verdict -------------------
+//
+// `route_status.next_order` is what the tool text tells the model to read
+// before guessing why a provider was chosen, so a step it renders as a
+// healthy first dial that the walk then passes over is worse than no field
+// at all — a wrong label reads as fact (判据 #17). Both flags are therefore
+// asserted the only way that cannot drift: next to the walk's own behaviour
+// on the SAME provider, in one test.
+
+#[tokio::test]
+async fn the_preview_flags_a_primary_the_walk_will_skip() {
+    // The health sideline set used to be computed over the FALLBACKS only and
+    // dropped into the ordering closure — the primary slot is not part of the
+    // pool being sorted, so nothing ever asked whether it was cooling. An
+    // open-circuit primary rendered `{slot: primary, gate: allow}` with no
+    // skip flag while the walk passed straight over it.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let health = FailoverHealth::default();
+    health
+        .open_for_test("primary", Duration::from_secs(300))
+        .await;
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone(),
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        vec![node("fb", fb.clone())],
+        health,
+    );
+
+    let steps = fp.preview_order().await.steps;
+    assert_eq!(steps[0].provider, "primary");
+    assert!(
+        steps[0].health_sidelined,
+        "an open circuit on the primary must be visible in the order it shapes"
+    );
+    assert!(!steps[1].health_sidelined, "the fallback is healthy");
+    // Neither flag is the other: the ceiling is unconfigured here.
+    assert!(!steps[0].rate_sidelined);
+
+    // Parity — the half that makes the flag a verdict rather than a decoration:
+    // the walk really does pass over exactly that step.
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(
+        primary.call_count(),
+        0,
+        "the step the preview flagged is the step the walk skipped"
+    );
+}
+
+#[tokio::test]
+async fn previewing_an_open_circuit_does_not_spend_its_probe() {
+    // The read-only invariant, now that the preview reads the breaker map for
+    // every slot: looking must not perform the `Open → HalfOpen` transition
+    // that admits probe traffic — that belongs to a real dial. (The rotation
+    // half of the same invariant is pinned by
+    // `the_order_preview_matches_the_walk_and_consumes_no_rotation`.)
+    //
+    // The state under test is Open **with its cooldown already elapsed**
+    // (`Duration::ZERO`) — the only state in which `circuit_allows` mutates
+    // anything. An Open breaker still cooling down makes this assertion
+    // unfailable: that gate answers `false` without touching the map, so the
+    // test would stay green even if the preview called it. `primary` is that
+    // second, cheaper case; `fb` is the one that can go red.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let health = FailoverHealth::default();
+    health
+        .open_for_test("primary", Duration::from_secs(300))
+        .await;
+    health.open_for_test("fb", Duration::ZERO).await;
+    let fp = build_with_health(primary, vec![], vec![node("fb", fb)], health);
+
+    let steps = fp.preview_order().await.steps;
+    // The sideline flag derives from the same "open AND still cooling" test the
+    // walk applies: the elapsed one is a dialable half-open probe, not a skip.
+    assert_eq!(steps[0].provider, "primary");
+    assert!(steps[0].health_sidelined, "still inside its cooldown");
+    assert_eq!(steps[1].provider, "fb");
+    assert!(
+        !steps[1].health_sidelined,
+        "a cooled-down breaker is the walk's next probe, not a skipped step"
+    );
+
+    for _ in 0..2 {
+        let _ = fp.preview_order().await;
+    }
+    assert!(
+        fp.circuit_open("primary").await,
+        "a preview must not half-open a circuit it looked at"
+    );
+    assert!(
+        fp.circuit_open("fb").await,
+        "three previews of a cooled-down breaker must leave the probe unspent \
+         — only a real dial may perform Open → HalfOpen"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_saturated_step_is_not_reported_rate_sidelined() {
+    use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+    // The walk's ceiling gate exempts an operator pin (round-5 F3, pinned by
+    // `a_pinned_provider_is_dialed_even_when_saturated`); the preview restated
+    // only the first half of that rule — `saturated.contains(name)` — so the
+    // one step the walk dials FIRST was rendered as skipped. Both now derive
+    // from `CandidatePlan::rate_deferred`, so this test and that one go red
+    // together if only one caller is changed.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        cloud_provider: Some("primary".to_string()),
+        rate_limits: [(
+            "primary".to_string(),
+            ProviderRateLimit {
+                rpm: Some(1),
+                tpm: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
+        Arc::new(StaticDefault::new(primary.clone())),
+        vec![tiered_node("fb", fb, EndpointTier::Cloud)],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+
+    // Saturate the pinned primary's rpm window.
+    drop(stats.begin("primary"));
+
+    let steps = fp.preview_order().await.steps;
+    assert_eq!(steps[0].provider, "primary");
+    assert!(
+        !steps[0].rate_sidelined,
+        "a pinned provider is exempt from the ceiling, so it is not deferred"
+    );
+
+    // Parity with the walk on the same plan: it is dialed, and dialed first.
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "primary");
+    assert_eq!(primary.call_count(), 1);
+}
+
+#[tokio::test]
+async fn an_unpinned_saturated_step_is_reported_rate_sidelined() {
+    use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+    // The other direction of the same helper (判据 #14, both sides of a gate):
+    // drop the pin and the identical setup must flip both halves — the preview
+    // flags the step and the walk yields it to the fallback.
+    let primary = ScriptProvider::ok("primary");
+    let fb = ScriptProvider::ok("fb");
+    let stats = Arc::new(LoadStats::new());
+    let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+        rate_limits: [(
+            "primary".to_string(),
+            ProviderRateLimit {
+                rpm: Some(1),
+                tpm: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    }));
+    let fp = FailoverProvider::new(
+        // rust-doctor-disable-next-line excessive-clone
+        Arc::new(StaticDefault::new(primary.clone())),
+        vec![tiered_node("fb", fb, EndpointTier::Cloud)],
+        HashMap::new(),
+        FailoverHealth::default(),
+        FailoverConfig::default(),
+    )
+    .with_route_live(handle)
+    // rust-doctor-disable-next-line excessive-clone
+    .with_load_stats(stats.clone());
+    drop(stats.begin("primary"));
+
+    let steps = fp.preview_order().await.steps;
+    assert_eq!(steps[0].provider, "primary");
+    assert!(steps[0].rate_sidelined);
+    assert!(!steps[0].health_sidelined, "the breaker is closed");
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "fb");
+    assert_eq!(primary.call_count(), 0);
+}
+
+// --- round-6 T8: walk-gate hygiene ------------------------------------------
+//
+// Three defects in the same gate region, each with the same shape: a statement
+// the walk makes about itself that its own code did not carry out.
+
+#[tokio::test]
+async fn a_cooling_approval_gated_candidate_is_skipped_without_asking() {
+    // The twin of `no_approval_is_requested_for_a_candidate_the_breaker_will_skip`,
+    // for the third cheap gate. The breaker and the rate ceiling were hoisted
+    // above the approval prompt; the 429 pacing skip was not, so it sat AFTER
+    // the blocking prompt while the comment above the breaker claimed every
+    // cheap local reason was already settled. Under
+    // `always_local + allow_cloud_escalation` that cost one real human
+    // interruption per cooling cloud candidate, each authorising a borrow the
+    // very next gate refused to take.
+    let cool_cloud = ScriptProvider::ok("cool_cloud");
+    let live_cloud = ScriptProvider::ok("live_cloud");
+    let approver = MockApprover::new(true);
+    let pacing = ProviderCooldown::default();
+    pacing.cool("cool_cloud", Duration::from_secs(60)).await;
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        cool_cloud.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![tiered_node(
+            "live_cloud",
+            live_cloud as Arc<dyn AiProvider>,
+            EndpointTier::Cloud,
+        )],
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_route(RouteMode::AlwaysLocal, true, Some(approver.clone()))
+    .with_primary_tier(EndpointTier::Cloud)
+    .with_provider_cooldown(pacing);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(resp.text_content(), "live_cloud");
+    assert_eq!(cool_cloud.call_count(), 0, "the pacing window skipped it");
+    assert_eq!(
+        approver.call_count(),
+        1,
+        "only the candidate that was actually dialed may cost a prompt"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_whose_whole_ladder_404s_trips_after_three_walks() {
+    // `Decision::NextModel` was the one failure exit that recorded no strike at
+    // all, so "in what state does this breaker go red for a provider that 404s
+    // everything?" answered *never*: circuit closed forever, LeastBusy /
+    // LatencyAware still ranking it first (zero in-flight, zero latency
+    // samples), and every turn paying one wasted round-trip per catalog model.
+    let primary = ScriptProvider::err("dead_gateway", "HTTP 404 model not found");
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("dead_gateway", vec!["m1", "m2"])],
+        vec![],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    for walk in 1..=CIRCUIT_OPEN_THRESHOLD {
+        let _ = fp.process(RequestPayload::new(&msgs)).await;
+        let open = fp.circuit_open("dead_gateway").await;
+        assert_eq!(
+            open,
+            walk == CIRCUIT_OPEN_THRESHOLD,
+            "walk {walk}: transient strikes must still take {CIRCUIT_OPEN_THRESHOLD} \
+             walks to open the breaker"
+        );
+    }
+    assert_eq!(
+        primary.call_count(),
+        2 * CIRCUIT_OPEN_THRESHOLD as usize,
+        "both catalog models are tried on each walk"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_model_404_does_not_shed_the_provider() {
+    // The negative half, and the reason the strike is derived from where the
+    // model list was CHOSEN rather than from the 404 alone: a single model the
+    // caller named — a `select_model` pick, an agent `model_hint`, a
+    // `BrainRef::Strict` id, or plain typo — indicts that name, never the
+    // endpoint. Shedding the provider would let one bad id take out a healthy
+    // one for five minutes.
+    let primary = ScriptProvider::err("anthropic", "HTTP 404 model not found");
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("anthropic", vec!["opus", "sonnet"])],
+        vec![],
+    );
+
+    let msgs = [UnifiedMessage::user("hi")];
+    for _ in 0..CIRCUIT_OPEN_THRESHOLD {
+        let payload = RequestPayload::new(&msgs).with_model(Some("opsu-typo".to_string()));
+        let _ = fp.process(payload).await;
+    }
+    assert!(
+        !fp.circuit_open("anthropic").await,
+        "a model id the caller named must not shed the endpoint that answered it"
+    );
+    assert_eq!(
+        primary.call_count(),
+        CIRCUIT_OPEN_THRESHOLD as usize,
+        "the pin replaces the catalog ladder, so one dial per walk"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pacing_window_longer_than_the_cap_is_not_waited_out_at_all() {
+    // The last candidate ALWAYS dials — that invariant is not up for
+    // negotiation here. What changed is the wait in front of the dial: it was
+    // `remaining.min(MAX_OVERLOAD_RETRY_DELAY)`, so a 300s server `Retry-After`
+    // bought a 120s sleep that provably could not outlast the window and then
+    // dialed *inside* it anyway. `aleph-server` caps a turn at 120s of
+    // wall-clock by default (`build_stability_triple`), so that sleep alone
+    // spent the entire turn budget and the dial it was preparing for never
+    // happened. A wait that cannot finish the job is not spent.
+    let solo = ScriptProvider::ok("solo");
+    let pacing = ProviderCooldown::default();
+    pacing.cool("solo", Duration::from_secs(300)).await;
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        solo.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![],
+    )
+    .with_provider_cooldown(pacing);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let started = tokio::time::Instant::now();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(resp.text_content(), "solo");
+    assert_eq!(solo.call_count(), 1, "the last candidate still dials");
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "a window longer than the cap must not be slept on at all; waited {elapsed:?}"
+    );
+}
+
+// --- round-6 T8 follow-up: the three gaps the first pass left open -----------
+
+#[tokio::test(start_paused = true)]
+async fn a_provider_parked_while_the_human_is_asked_is_not_waited_out() {
+    // The pacing gate is two halves reading `pc.remaining()` separately, and
+    // between them sit the escalation gate — which blocks on a human prompt —
+    // and model resolution. `ProviderCooldown` is shared `Arc` state every
+    // concurrent walk writes, so "it was not cooling at the skip gate" is NOT
+    // still true at the wait. With the wait half unguarded, a concurrent turn's
+    // 429 landing while the operator reads the prompt makes a NON-last
+    // candidate sleep out a whole window — the exact behaviour the skip half
+    // exists to prevent. Both halves must read the one `has_later_candidate`.
+    let cloud_a = ScriptProvider::ok("cloud_a");
+    let cloud_b = ScriptProvider::ok("cloud_b");
+    let pacing = ProviderCooldown::default();
+    // Approving `cloud_a` is what parks `cloud_a`: the prompt returns, and the
+    // wait half now sees a 60s window that was empty two gates ago.
+    // rust-doctor-disable-next-line excessive-clone
+    let approver = MockApprover::parking(true, pacing.clone(), "cloud_a", Duration::from_secs(60));
+
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        cloud_a.clone() as Arc<dyn AiProvider>,
+        vec![],
+        vec![tiered_node(
+            "cloud_b",
+            cloud_b as Arc<dyn AiProvider>,
+            EndpointTier::Cloud,
+        )],
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_route(RouteMode::AlwaysLocal, true, Some(approver.clone()))
+    .with_primary_tier(EndpointTier::Cloud)
+    .with_provider_cooldown(pacing);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let started = tokio::time::Instant::now();
+    // rust-doctor-disable-next-line unwrap-in-production
+    let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(resp.text_content(), "cloud_a");
+    assert_eq!(
+        cloud_a.call_count(),
+        1,
+        "the approved candidate still dials"
+    );
+    assert_eq!(approver.call_count(), 1);
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "a candidate with a later sibling must never spend a pacing wait, whenever \
+         the window opened; waited {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_ladder_narrowed_by_a_cooling_sibling_does_not_indict_the_provider() {
+    // The exhaustion strike must compare against what the CATALOG stated, not
+    // against the survivor set the request narrowed it to. Here `m1` is parked
+    // by an earlier 429 and never dialed, `m2` 404s — reading the equality off
+    // the survivor list makes that one 404 say "this provider serves none of
+    // its catalog models", and three such walks open the breaker on an endpoint
+    // whose only real fault is one stale catalog entry plus a throttle.
+    let health = FailoverHealth::default();
+    let cd = ModelCooldown::default();
+    cd.cool("gw", "m1", Duration::from_secs(60)).await;
+    let primary = ScriptProvider::err("gw", "HTTP 404 model not found");
+
+    let fp = build_with_health(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("gw", vec!["m1", "m2"])],
+        vec![],
+        // rust-doctor-disable-next-line excessive-clone
+        health.clone(),
+    )
+    .with_model_cooldown(cd);
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let _ = fp.process(RequestPayload::new(&msgs)).await;
+
+    assert_eq!(
+        primary.models(),
+        vec![Some("m2".to_string())],
+        "the cooling rung is withheld, so only one of the two catalog models is dialed"
+    );
+    assert!(
+        !fp.circuit_open("gw").await,
+        "one 404 out of a two-rung catalog must not shed the endpoint"
+    );
+    // `circuit_allows` seeds a default entry for every candidate it gates, so
+    // the question is not "is there a row" but "did that row take a strike".
+    let counts: Vec<(String, u32)> = health
+        .snapshot()
+        .await
+        .into_iter()
+        .map(|v| (v.provider, v.failure_count))
+        .collect();
+    assert_eq!(
+        counts,
+        vec![("gw".to_string(), 0)],
+        "a rung the walk never dialed cannot testify that the provider serves nothing; \
+         no strike may be recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_model_is_sidelined_so_the_next_walk_stops_paying_for_it() {
+    // The other half of the `NextModel` bookkeeping: besides the strike, the
+    // 404'd model is sidelined for `DEFAULT_MODEL_COOLDOWN`, which is the whole
+    // "60s, not 600s" justification. Without a `ModelCooldown` attached that
+    // write is unobservable, so this is the test that makes deleting the
+    // `cd.cool(...)` line go red.
+    let cd = ModelCooldown::default();
+    let primary = ScriptProvider::new(
+        "gw",
+        vec![Err("HTTP 404 model not found".to_string()), Ok(())],
+    );
+    let fp = build(
+        // rust-doctor-disable-next-line excessive-clone
+        primary.clone() as Arc<dyn AiProvider>,
+        vec![("gw", vec!["m1", "m2"])],
+        vec![],
+    )
+    // rust-doctor-disable-next-line excessive-clone
+    .with_model_cooldown(cd.clone());
+
+    let msgs = [UnifiedMessage::user("hi")];
+    // rust-doctor-disable-next-line unwrap-in-production
+    let first = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(first.text_content(), "gw");
+    assert_eq!(primary.call_count(), 2, "walk 1 pays for the 404, then m2");
+    assert!(
+        cd.is_cooling("gw", "m1").await,
+        "the model that answered 404 is sidelined"
+    );
+    assert!(
+        !cd.is_cooling("gw", "m2").await,
+        "the model that answered is not"
+    );
+
+    // rust-doctor-disable-next-line unwrap-in-production
+    let second = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+    assert_eq!(second.text_content(), "gw");
+    assert_eq!(
+        primary.call_count(),
+        3,
+        "walk 2 dials only the surviving rung — the saving the sideline buys"
+    );
+    assert_eq!(
+        primary.models(),
+        vec![
+            Some("m1".to_string()),
+            Some("m2".to_string()),
+            Some("m2".to_string())
+        ],
     );
 }

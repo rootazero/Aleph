@@ -106,11 +106,11 @@ pub fn AgentsView() -> impl IntoView {
                     }
                 }
                 Err(e) => {
-                    load_error.set(Some(
-                        crate::components::admin_refusal::settings_load_error(i18n, &e, |e| {
-                            e.to_string()
-                        }),
-                    ));
+                    load_error.set(Some(crate::components::admin_refusal::settings_load_error(
+                        i18n,
+                        &e,
+                        |e| e.to_string(),
+                    )));
                 }
             }
             is_loading.set(false);

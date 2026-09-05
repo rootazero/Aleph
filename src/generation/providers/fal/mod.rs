@@ -70,7 +70,14 @@ impl std::fmt::Debug for FalProvider {
 }
 
 /// Builder for [`FalProvider`].
-pub struct FalProviderBuilder {
+///
+/// `pub(crate)` because the only consumers are [`FalProvider::builder`] (this
+/// module's own factory surface) and the unit tests in this module. The
+/// factory at `providers/factory.rs` calls `FalProvider::builder(...).build()`
+/// without naming the builder type, so widening this to `pub` only exposed the
+/// fluent API to external crates that never use it. (severed-wire audit
+/// 2026-09-04, sw-generation-3-1.)
+pub(crate) struct FalProviderBuilder {
     name: String,
     api_key: String,
     endpoint: Option<String>,

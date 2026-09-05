@@ -132,6 +132,15 @@ pub(in crate::commands::start) fn initialize_vault(
         shared_token_mgr,
         security_store: security_store.clone(),
         node_registry,
+        // The cluster RPC handlers (e.g. `cluster.deregister`) emit
+        // `node.disconnected` into this bus so operator-initiated takedowns
+        // are observable in the same event stream the WebSocket drop arm uses.
+        // `initialize_vault` does not own an event bus (its only callers do
+        // not thread one in today); wired through this seam by adding the
+        // parameter here once the boot path passes it in. The publish is
+        // best-effort and gated by `Some(bus)` in `cluster::deregister_node`,
+        // so leaving this None is a silent no-op rather than a wrong emit.
+        event_bus: None,
     });
 
     VaultBundle {

@@ -65,6 +65,25 @@ pub const TIMEOUT_ERROR: i32 = -32010;
 /// [`ADMIN_REQUIRED_MESSAGE`]).
 pub const REVISION_CONFLICT: i32 = -32031;
 
+/// The literal JSON-RPC method every topic-event envelope carries:
+/// `{"jsonrpc":"2.0","method":"event","params":{"topic":…,"data":…}}` — the
+/// Panel's (and, since Task 8a, every client's) `events.subscribe` plane, as
+/// opposed to the `stream.*` family's per-frame method names.
+///
+/// It lives in this crate — the one the server AND every client depend on —
+/// because BOTH sides read it: the server builds this envelope from four
+/// independent producers (`gateway::server::handler::event_wire_form`,
+/// `gateway::server::handler::overflow_warning_frame`,
+/// `gateway::server::handler::extract_topic_and_data`'s classifier, and
+/// `gateway::event_bus::TopicEvent::to_notification`), and every client's
+/// frame classifier (`shared/client::connection::classify_frame`) reads it
+/// back to recognise the shape. Before this constant existed each of those
+/// five sites hand-typed its own copy of `"event"`; a rename on either side
+/// would have reddened nothing and made topic frames go quiet again — the
+/// exact failure Task 8a exists to remove (same reasoning as
+/// [`ADMIN_REQUIRED_MESSAGE`]).
+pub const TOPIC_EVENT_METHOD: &str = "event";
+
 // ============================================================================
 // JSON-RPC 2.0 Types
 // ============================================================================

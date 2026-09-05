@@ -74,7 +74,7 @@ impl MemoryCommandHandler {
             return Ok(());
         };
 
-        let events = self.db.get_memory_events_for_fact(fact_id, "").await?;
+        let events = self.db.get_memory_events_for_fact(fact_id).await?;
         let projected = super::projector::EventProjector::fold_events_to_note(&events)?;
 
         match projected {
@@ -264,7 +264,7 @@ impl MemoryCommandHandler {
         // Rebuild from events to get the current content.
         let events = self
             .db
-            .get_memory_events_for_fact(&cmd.note_path, "")
+            .get_memory_events_for_fact(&cmd.note_path)
             .await?;
         let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?
             .ok_or_else(|| {
@@ -379,7 +379,7 @@ impl MemoryCommandHandler {
         // Get current access count from event history
         let events = self
             .db
-            .get_memory_events_for_fact(&cmd.note_path, "")
+            .get_memory_events_for_fact(&cmd.note_path)
             .await?;
         let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?;
         let current_access_count = current_fact.map_or(0, |f| f.access_count);
@@ -607,7 +607,7 @@ impl MemoryCommandHandler {
                 continue;
             };
 
-            let events = self.db.get_memory_events_for_fact(fact_id, "").await?;
+            let events = self.db.get_memory_events_for_fact(fact_id).await?;
             let projected = super::projector::EventProjector::fold_events_to_note(&events)?;
 
             match projected {
@@ -902,7 +902,7 @@ mod tests {
         // Verify event was stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id, "")
+            .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
@@ -937,7 +937,7 @@ mod tests {
         // Verify two events stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id, "")
+            .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 2);
@@ -999,7 +999,7 @@ mod tests {
         // Verify invalidated state
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id, "")
+            .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
         let fact = EventProjector::fold_events_to_note(&events)
@@ -1024,7 +1024,7 @@ mod tests {
         // Verify restored state
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id, "")
+            .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + Invalidated + Restored
@@ -1066,7 +1066,7 @@ mod tests {
         // Verify access count
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id, "")
+            .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + 2 Accessed
@@ -1094,7 +1094,7 @@ mod tests {
         // Verify events stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id, "")
+            .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 2); // Created + Deleted
@@ -1158,7 +1158,7 @@ mod tests {
         // Verify consolidated event stored
         let events = handler
             .db
-            .get_memory_events_for_fact(&consolidated_id, "")
+            .get_memory_events_for_fact(&consolidated_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 1);
@@ -1210,7 +1210,7 @@ mod tests {
 
         let events = handler
             .db
-            .get_memory_events_for_fact(&fact_id, "")
+            .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
         assert_eq!(events.len(), 3);
@@ -1251,7 +1251,7 @@ mod tests {
         // All three events land in one stream keyed by the stable note path.
         let events = handler
             .db
-            .get_memory_events_for_fact(note_path, "")
+            .get_memory_events_for_fact(note_path)
             .await
             .unwrap();
         assert_eq!(events.len(), 3);

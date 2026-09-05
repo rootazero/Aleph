@@ -10,6 +10,7 @@ pub mod convert;
 pub mod diff;
 pub mod grid;
 pub mod perform;
+mod text;
 pub use diff::{RowPatch, ScreenPatch, StyleRun};
 pub use grid::{Attrs, Cell, Color, Grid};
 pub use perform::Screen;

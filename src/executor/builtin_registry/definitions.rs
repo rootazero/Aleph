@@ -55,7 +55,7 @@ use crate::builtin_tools::{
     DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool, DoctorTool, FileEditTool,
     FileOpsTool, FileReadTool, FileWriteTool, FindTool, FlagUserCorrectionTool, GrepTool,
     ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, RememberTool,
-    SearchTool, SelectModelTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+    SearchTool, SelectModelTool, SelfManageTool, TerminalTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -232,6 +232,17 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "select_model",
         description: <crate::builtin_tools::select_model::SelectModelTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
+    // Read-only agent panel, model-facing (herdr runtime port, phase 1, Task
+    // 11): a third lens over the same PTY sessions `pty.*`/`runtime.*` gate
+    // operator-only on both their faces — see `terminal.rs`'s module doc.
+    // Reads two process-global statics (`gateway::pty::manager()`,
+    // `gateway::runtime::agents()`), so `requires_config: false` like
+    // `select_model`/`doctor`.
+    BuiltinToolDefinition {
+        name: "terminal",
+        description: <crate::builtin_tools::terminal::TerminalTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -1074,6 +1085,7 @@ pub fn create_tool_boxed(
             Some(Box::new(tool))
         }
         "select_model" => Some(Box::new(SelectModelTool)),
+        "terminal" => Some(Box::new(TerminalTool)),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "hooks_manage" => Some(Box::new(
             crate::builtin_tools::hooks_manage::HooksManageTool::new(),
@@ -2477,43 +2489,122 @@ mod tests {
     /// A future round that adds bytes MUST re-run the ratchet and copy the
     /// printed total, not compute it from prior deltas.
     ///
-    /// 2026-09-05: 112_772 -> 112_960 B (+188), again all `search`, for the
-    /// `queries` parameter (a multi-query form: several questions asked in one
-    /// call, fanned out concurrently, one merged answer). The ratchet printed
-    /// 112_960 (93_364 catalog + 16_613 registry-only + 1_039 injected +
-    /// 1_944 bridge); the schema-side ledger names `search` as the only tool
-    /// that moved (2_050 -> 2_411, see REGISTRY_SCHEMA_CEILING_BYTES), and no
-    /// other description changed this round.
+    /// 2026-09-02: 112_772 -> 113_089 B (+317), all of it `TerminalTool`'s
+    /// `DESCRIPTION` (herdr runtime port, phase 1, Task 11 fix round 1). This
+    /// tool's catalog row shipped in `ab30a9f1c` without this constant moving
+    /// — the merge-base 112_772 was flush BEFORE that commit's 255 B, so the
+    /// tree went red the moment the ratchet was actually run instead of only
+    /// name-filtered (task-11 review F0). The fix round also reworded the
+    /// DESCRIPTION itself (255 -> 317 B: it named the wrong owner — "this
+    /// server owns" where the code scopes by caller — and said nothing about
+    /// the policy-disabled case reading as "no sessions exist" rather than
+    /// "this feature is off", review F5/F6), so the number below is measured
+    /// post-reword, not the commit's original 255 B. Measured via
+    /// `cargo test -p alephcore --lib catalog_description_bytes_ratchet --
+    /// --nocapture`, total copied verbatim from the panic message
+    /// (113089 B = 93493 catalog + 16613 registry-only + 1039 injected +
+    /// 1944 bridge); the 112_772 + 317 = 113_089 arithmetic agrees only
+    /// because no other tool's description moved between the two
+    /// measurements — it is not a substitute for having run the ratchet.
     ///
-    /// The three questions:
+    /// Against the three questions:
+    /// (1) No schema field can carry either fact this DESCRIPTION states.
+    /// `TerminalArgs`'s schema says `action` is one of a fixed set of strings
+    /// (three when this entry was written, five since task D); it
+    /// cannot say WHICH sessions `list`/`status` return (this server's
+    /// runtime scopes them by caller identity via `terminal_admits`, a
+    /// filter with no argument to attach a description to) or that a
+    /// disabled `[policies.terminal]` kill switch makes every action answer
+    /// "no sessions" without saying "the feature is off" (there is no
+    /// `enabled` parameter on this tool for a schema description to sit on
+    /// — reading the config live and returning a distinct message is a
+    /// follow-up, not phase 1's scope).
+    /// (2) A stronger model cannot infer either fact: that a session list
+    /// is scoped per-caller rather than per-server-instance is this
+    /// deployment's ownership model, not a convention a terminal-emulator
+    /// prior would predict, and a model that assumed "no sessions" always
+    /// means "none exist" would report the policy-disabled case as a
+    /// finding rather than recognising the feature is turned off.
+    /// (3) The consumers are shipped and dispatched: `list_sessions`,
+    /// `status`, `read_session` and (since task D) `wait_for_session` /
+    /// `explain_session` each apply `terminal_admits` /
+    /// `owner_record_admits` before returning data (`terminal.rs`), the
+    /// `[policies.terminal] enabled = false` kill switch really does call
+    /// `PtyManager::close_all()` (`config/types/policies/terminal.rs`), and
+    /// the "no write verb" half is pinned by a falsifiable test
+    /// (`the_tool_exposes_no_write_verb`).
     ///
-    /// (1) No schema can carry it. The schema declares `queries` is an array
-    /// of strings; what earns the bytes is the *relationship* the prose
-    /// states: `queries` is for asking several distinct questions at once
-    /// (concurrent fan-out, one merged answer), `query` stays the
-    /// single-question path with zero byte growth, and mixing both in one
-    /// call is an error. Which parameter a second question belongs in is a
-    /// fact about this tool's contract, not inferable from the field types.
+    /// 2026-09-04 (task D, terminal round 2): 113_089 -> 113_416 B, for
+    /// `terminal`'s two new read-only verbs. **Both endpoints are readings,
+    /// not one reading and a subtraction** — the rule the 2026-08-23
+    /// correction above had to be written for. The tree without this round's
+    /// DESCRIPTION edit measures 113_086 B (93_490 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge) and with it 113_416 B
+    /// (93_820 + the same three), each read off this test's own panic message
+    /// with the ceiling temporarily floored. So this round SPENDS 330 B —
+    /// `TerminalTool::DESCRIPTION` grows 317 -> 647 — and the remaining 3 B
+    /// were headroom the previous entry left unspent while claiming to sit
+    /// flush. It sits flush now.
     ///
-    /// (2) A stronger model cannot infer it. That fan-out over a `queries`
-    /// list is the sanctioned way to ask N questions — rather than N
-    /// sequential `search` calls that each pay chain ordering, health
-    /// demotion and result merging separately — is a property of this
-    /// implementation, aligned with the pi-web-access reference shape.
+    /// Against the three questions:
+    /// (1) No schema can carry either sentence. `wait`'s arguments say there
+    /// is an `until` and a `timeout_ms`; they cannot say that a timeout
+    /// answers with the CURRENT entry rather than a final verdict — that is a
+    /// relationship between the outcome word and the payload, and no single
+    /// field owns it. `explain`'s schema is one `session_id`; what earns the
+    /// bytes is that its output is the detector's reasoning (which rule, over
+    /// which screen), which is the only way to tell a wrong detection from an
+    /// idle agent — an OUTPUT shape, which no parameter can describe.
+    /// (2) A stronger model cannot guess them, and guessing wrong is the
+    /// expensive direction both times: not knowing `wait` exists means
+    /// polling `status` in a loop and burning turns on a table that already
+    /// publishes when it changes; not knowing `explain` exists means treating
+    /// a stale manifest's `unknown` as ground truth about the agent.
+    /// (3) Both consumers are shipped and dispatched — `wait_for_session` and
+    /// `explain_session` in `builtin_tools::terminal`, reached through
+    /// `TerminalAction::{Wait, Explain}`, each with tests.
+    /// 2026-09-04 (multi-user round 10, T25): 113_416 -> 113_719 B (+303),
+    /// all `project_manage`, for the sentence that says a roster verb is
+    /// addressable by display name. Measured twice and the two agree, the same
+    /// way the entries above do: the ratchet printed the total on this tree
+    /// (113_719 = 93_882 catalog + 16_613 registry-only + 1_039 injected +
+    /// 1_944 bridge, the last three byte-identical to the terminal round-2
+    /// figures, so nothing outside the catalog moved), and the added segment
+    /// of the literal measures exactly 303 bytes, so nothing else's
+    /// description moved either. This raise is set ON TOP of origin/main's
+    /// 113_416 measurement (terminal round-2 end-state); the two rounds' edits
+    /// are to disjoint DESCRIPTIONs (terminal's two new read-verb sentences vs
+    /// project_manage's `user`-by-display-name clause), so the bytes add
+    /// cleanly. If a future round adds bytes to either DESCRIPTION, re-run the
+    /// ratchet — do not compute from prior deltas.
     ///
-    /// (3) No other tool says it. `search` owns the web-search surface; the
-    /// guard in `builtin_tools::search` that pins prose and schema to the
-    /// same parameter names covers the new parameter too, so the two cannot
-    /// drift.
+    /// The three questions, for these bytes:
     ///
-    /// Why it is not trimmed back: the bytes ARE the parameter's
-    /// documentation. Deleting them would ship a `queries` array the model
-    /// cannot distinguish from `query` — it would guess, and the failure
-    /// mode of guessing is N sequential calls where one fanned-out call was
-    /// available. The single-query path pays nothing (its bytes are
-    /// unchanged); only the multi-query capability costs.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 112_960;
-
+    /// (1) No schema can carry it. `project_manage` is not in
+    /// `default_core_tools()`, so under progressive disclosure its schema —
+    /// including the `user` field's own description — is not resident: the
+    /// catalog line is the whole of what a model reads when deciding whether
+    /// to fetch the schema at all. An argument the catalog copy never mentions
+    /// is an argument no model sends, which is how `bind_workspace` shipped
+    /// unreachable on this very tool once already (see its module doc). And
+    /// "exactly one of `user_id` or `user`" is a relation BETWEEN two fields,
+    /// which no per-field description states even once the schema is loaded.
+    ///
+    /// (2) A stronger model cannot infer them. That this server has a
+    /// name -> principal resolver at all, that a name nobody active bears or
+    /// that more than one person bears is refused rather than guessed, and
+    /// that the id to quote back is the one `member_list` returns beside each
+    /// name, are facts about this repository. A model assuming the ordinary
+    /// shape would send a display name as `user_id` and seat a
+    /// `project_members` row nobody owns — the exact failure T25 closed.
+    ///
+    /// (3) The consumers are shipped and dispatched: both roster arms accept
+    /// `user` (`builtin_tools::project_manage`, `MemberAdd`/`MemberRemove`),
+    /// `projects::authz::principal_id_for_name` is the single resolver behind
+    /// them and puts its winner to the one active-principal predicate, and
+    /// `the_model_facing_copy_names_the_same_faces` pins this sentence
+    /// verbatim, so the copy and the argument cannot drift apart.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_719;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3176,6 +3267,27 @@ mod tests {
     /// refuses to open its own store above. The deterministic map therefore
     /// has no instance to ask for a schema. In a wired deployment the tool
     /// does carry one.)
+    ///
+    /// 2026-09-02: 132 (+1: `terminal`, herdr runtime port phase 1, Task 11
+    /// fix round 1). This test was already red the moment `terminal` was
+    /// added to `BUILTIN_TOOL_DEFINITIONS` (`ab30a9f1c`) — missed there for
+    /// the same reason F0 (`CATALOG_DESCRIPTION_CEILING_BYTES`) was: the
+    /// task's own verification ran name-filtered subsets, never this whole
+    /// `--lib` suite. Same class as `doctor` / `select_model` /
+    /// `gateway_route` / `google_meet`, already counted in an earlier round
+    /// of this pin above: all five register their schema through the
+    /// unconditional `extra_defs` back-fill in
+    /// `builder/constructor/mod.rs`, which `unconditional_registry_map()`
+    /// here does not call (it calls only `register_core_tools` and
+    /// `register_optional_tools`) — a real gap in what THIS deterministic
+    /// test can reach, not in production: `extra_defs` is unconditional, so
+    /// in a running server `get_tool_schema("terminal")` returns `Some`
+    /// (pinned separately by `terminal_wiring_tests::terminal_registers_its_schema`
+    /// in `builder/tests.rs`). Unlike the schema-bytes ratchet this residue
+    /// feeds, `terminal`'s DESCRIPTION bytes are NOT blind here: the
+    /// catalog-description ceiling sums `BUILTIN_TOOL_DEFINITIONS` directly,
+    /// independent of `unconditional_registry_map()`, and already counts it
+    /// (see `CATALOG_DESCRIPTION_CEILING_BYTES`'s own 2026-09-02 entry).
     #[test]
     fn tools_without_an_unconditional_schema_are_pinned() {
         let map = unconditional_registry_map();
@@ -3192,12 +3304,18 @@ mod tests {
         missing.dedup();
 
         assert!(
-            missing.len() <= 131,
-            "{} tools have no schema in the unconditionally-built registry map, up from the 131 \
-             recorded here, so `registry_schema_bytes_ratchet` does not bound them. Either a \
-             tool ships with no parameters at all (free, and fine), or it registers only once a \
-             dependency is live and its schema is unmeasured (not fine, just not cheap to fix). \
-             Raise this pin deliberately: {missing:?}",
+            missing.len() <= 132,
+            "{} tools have no schema in the unconditionally-built registry map, up from the 132 \
+             recorded here, so `registry_schema_bytes_ratchet` does not bound them. Three ways in, \
+             and they are not equally fine. (a) The tool ships with no parameters at all — free, \
+             and fine. (b) It registers only once a dependency is live, so its schema is unmeasured \
+             — not fine, just not cheap to fix. (c) It registers UNCONDITIONALLY through the \
+             `extra_defs` back-fill in `builder/constructor/mod.rs`, which `unconditional_registry_map()` \
+             here does not call — the schema does ship in every deployment and this test simply \
+             cannot see it, so the residue is this test's blind spot rather than a production gap. \
+             Five tools are in (c) as of 2026-09-02; if yours is one, pin the production fact with \
+             its own wiring test (see `terminal_wiring_tests::terminal_registers_its_schema`) \
+             before raising this number. Raise this pin deliberately: {missing:?}",
             missing.len()
         );
     }

@@ -1,0 +1,166 @@
+{
+  "module": "src/exec",
+  "files_scanned": [
+    "src/exec/mod.rs",
+    "src/exec/allowed_decisions.rs",
+    "src/exec/analysis.rs",
+    "src/exec/bridge.rs",
+    "src/exec/decision.rs",
+    "src/exec/kernel.rs",
+    "src/exec/leak_detector.rs",
+    "src/exec/manager.rs",
+    "src/exec/masker.rs",
+    "src/exec/parser.rs",
+    "src/exec/risk.rs",
+    "src/exec/secret_patterns.rs",
+    "src/exec/socket.rs",
+    "src/exec/approval/mod.rs",
+    "src/exec/approval/channel_bridge.rs",
+    "src/exec/approval/types.rs"
+  ],
+  "method": "PRODUCED/CONSUMED parity via rg on each pub symbol in src/exec/; cross-module consumer scan across src/ tests/ bins/ interfaces/ (excluded src/exec/ intra-module calls and audit/worktree paths); seam-catalog lenses (forms 1-5); code-smell pass on #[allow(dead_code)] markers, stale doc references, debug prints, and form-5 inert-success returns. Read-only — cargo not invoked.",
+  "findings": [
+    {
+      "id": "sw-exec-1",
+      "severity": "low",
+      "form": 1,
+      "produced": "pub use leak_detector::{LeakAction, ..., ScanResult}",
+      "produced_location": "src/exec/mod.rs:29",
+      "consumer_location": "none",
+      "decision": "CUT",
+      "rationale": "`LeakAction` and `ScanResult` are re-exported from `src/exec/mod.rs` but no external code names either type. `crate::exec::LeakDetector` is consumed (the type alias `ExecLeakDetector` in `src/security/runtime_guard.rs:23` and tests/wasm_capability_test.rs:9), yet its consumers only ever name `LeakDetector`, call `scan_*`/`redact`/`has_blocks`/`has_redacts`, and let type inference bind `ScanResult`/`LeakAction`. The two pub re-exports have zero readers; deleting them from the `pub use` line shrinks the crate's public surface with no behavioural change. `LeakDetector` itself stays exported — it has live callers.",
+      "fix_commit": null,
+      "residual_risk": "If a future caller wants to inspect a `ScanResult` by name (e.g. `pub fn pretty(s: ScanResult)`), they must import `crate::exec::leak_detector::ScanResult` directly. Public API surface shrinks, never widens."
+    },
+    {
+      "id": "sw-exec-2",
+      "severity": "low",
+      "form": 1,
+      "produced": "ExecApprovalRecord::is_resolved",
+      "produced_location": "src/exec/manager.rs:228",
+      "consumer_location": "none",
+      "decision": "CUT",
+      "rationale": "Marked `#[allow(dead_code)] const fn is_resolved(&self) -> bool { self.decision.is_some() }`. `rg '\\bis_resolved\\b' src/ tests/ bins/ interfaces/` returns no call site outside the `const` definition itself. The actual liveness check lives at `src/exec/manager.rs:264` (`PendingEntry::is_live`) which uses `record.is_expired()` (different method) and `sender.is_closed()` — `is_resolved` is the third spelling the file already abandoned. The `manager.rs:223` field-by-field audit doc claims liveness is the honest signal; a one-line `decision.is_some()` is exactly the dead abstraction form-1 catches.",
+      "fix_commit": null,
+      "residual_risk": "None — the function is const, never inlined elsewhere, no `#[cfg(test)]` test calls it."
+    },
+    {
+      "id": "sw-exec-3",
+      "severity": "low",
+      "form": 1,
+      "produced": "SecretMasker::contains_secrets",
+      "produced_location": "src/exec/masker.rs:121",
+      "consumer_location": "none (test-only: src/exec/masker.rs:262,263,283)",
+      "decision": "CUT",
+      "rationale": "`pub(crate) fn contains_secrets(...)` with `#[allow(dead_code)]`. The only call sites are three test assertions within `masker.rs` itself. The actual production secret-presence check on outbound content goes through `LeakDetector::scan_outbound` (which returns `ScanResult::has_blocks`/`has_redacts`), and the in-band masker path uses `mask()` returning a new `String`. `contains_secrets` is a dead predicate that no live code path consumes; removing it and its three test assertions (`test_contains_secrets`, two lines inside `operator_patterns_reach_a_masker_nobody_configured`) deletes ~6 lines of dead surface without changing production behaviour.",
+      "fix_commit": null,
+      "residual_risk": "Visibility is `pub(crate)` — no external surface change. If a future caller wants the predicate, they can re-add it as `pub(crate) fn contains_secrets(...)` from the same site."
+    },
+    {
+      "id": "sw-exec-4",
+      "severity": "low",
+      "form": 1,
+      "produced": "SecurityKernel::new",
+      "produced_location": "src/exec/kernel.rs:36",
+      "consumer_location": "none (test-only: src/exec/kernel.rs:47)",
+      "decision": "CUT",
+      "rationale": "`#[allow(dead_code)] fn new() -> Self { Self::default() }`. The only call site is one test asserting it behaves like `Default::default()` (which it literally is). The `Default` impl is already derived (`#[derive(Debug, Clone, Default)]` on the struct). Production construction goes exclusively through `SecurityKernel::from_config(&ShellSecurityConfig)` (`src/sandbox/factory.rs:65`, `src/sandbox/security_kernel_hook.rs:124,194`). The `new()` constructor is the dead scaffolding form-1 catches; deleting it removes the `#[allow(dead_code)]` and one trivial method.",
+      "fix_commit": null,
+      "residual_risk": "`new()` is private, so no public surface change. Tests use `kernel = SecurityKernel::new()` once; replacing with `kernel = SecurityKernel::default()` is a one-character edit in the same test module."
+    },
+    {
+      "id": "sw-exec-5",
+      "severity": "low",
+      "form": 1,
+      "produced": "LeakDetector::new(patterns: Vec<LeakPattern>)",
+      "produced_location": "src/exec/leak_detector.rs:81",
+      "consumer_location": "none (test-only: src/exec/leak_detector.rs:99, and through default_patterns())",
+      "decision": "CUT",
+      "rationale": "`#[allow(dead_code)] fn new(patterns: Vec<LeakPattern>) -> Self`. The parameter `LeakPattern` is `pub(crate)` (line 21) so no external crate can construct the input vector. The sole in-tree caller is `LeakDetector::default_patterns()` (line 88) which immediately calls `Self::new(patterns)` to wrap the `OnceLock`-cached patterns. With the parameter type `pub(crate)` and the constructor already gated by `default_patterns`, `new` is a private constructor that the codebase happens to call exactly once and never from outside `leak_detector.rs`. Inline its body into `default_patterns` (or keep `default_patterns` as the single construction path) and delete the dead helper.",
+      "fix_commit": null,
+      "residual_risk": "`new` is private; no public surface change. If external code ever needs to inject custom patterns, the right shape is `LeakDetector::with_custom_patterns(...)` like the secrets-side sibling has (`src/secrets/leak_detector.rs:686,783`) — a higher-level API than a raw `Vec<LeakPattern>` constructor."
+    },
+    {
+      "id": "sw-exec-6",
+      "severity": "low",
+      "form": 1,
+      "produced": "ScanResult::is_clean",
+      "produced_location": "src/exec/leak_detector.rs:66",
+      "consumer_location": "none (test-only: src/exec/leak_detector.rs:113,135,261)",
+      "decision": "CUT",
+      "rationale": "`#[allow(dead_code)] const fn is_clean(&self) -> bool { self.findings.is_empty() }`. Visibility is the default private (no `pub`/`pub(crate)`). The only call sites are three assertions inside the file's own `#[cfg(test)]` module. Production callers use the explicit `has_blocks()` / `has_redacts()` predicates — `is_clean` is the third spelling the codebase abandoned. The marker tells future readers \"this is dead\", so the audit instruction is to delete both the helper and its three test uses (which read `!result.is_clean()` and `result.is_clean()`); the test assertions can use `result.findings.is_empty()` inline with no loss of intent.",
+      "fix_commit": null,
+      "residual_risk": "Private — zero public surface change. Tests still assert the same property; only the spelling changes."
+    },
+    {
+      "id": "sw-exec-7",
+      "severity": "trivial",
+      "form": 4,
+      "produced": "doc comment naming removed `SocketMessage` / `ApprovalRequestPayload`",
+      "produced_location": "src/exec/socket.rs:4",
+      "consumer_location": "none",
+      "decision": "REVIEWED_NO_CHANGE",
+      "rationale": "Lines 1–6 of `socket.rs` explicitly document that `SocketMessage` and `ApprovalRequestPayload` were 'removed' because the 'transport was never wired into the server'. Confirmed via `rg '\\bSocketMessage\\b|\\bApprovalRequestPayload\\b' --type rust` — neither name exists anywhere in `src/`, `tests/`, `bins/`, `interfaces/`. This is intentional narrative explaining the removal, not stale drift; the symbol does not need to be re-added. Surfacing here only so a future automated check does not flag the comment as a dangling reference.",
+      "fix_commit": null,
+      "residual_risk": "None — purely informational."
+    },
+    {
+      "id": "sw-exec-8",
+      "severity": "medium",
+      "form": 4,
+      "produced": "crate::exec::approval::types::ApprovalRequest (single-variant tagged enum wrapping CommandApprovalRequest)",
+      "produced_location": "src/exec/approval/types.rs:11",
+      "consumer_location": "src/exec/approval/channel_bridge.rs:259; src/gateway/channel_approval.rs:13,225; src/gateway/interfaces/telegram/approval.rs:6,31,189,254",
+      "decision": "DECIDE",
+      "rationale": "The enum carries exactly one variant — `Command(CommandApprovalRequest)` — and the file's own doc-comment (lines 5–9) notes that the `Capability` variant was removed because no production code constructed it. The tagged-enum wrapper still earns its keep on the wire (`{\"type\": \"command\", ...}` is a stable serde contract for any external channel that serialised payloads pre-tag), but every caller in the codebase writes `ApprovalRequest::Command(CommandApprovalRequest { ... })` immediately. If no future variant is planned (the only candidate would be a different action shape, e.g. browser/MCP), the enum is a permanent vestigial layer that turns one constructor call into a tagged wrapper. CUT candidate if the wire-format argument is weak; KEEP if any external channel relies on the `type` discriminator. This is a product call, not a mechanical one — present the trade-off, don't silently pick.",
+      "fix_commit": null,
+      "residual_risk": "Removing the tag changes the on-the-wire JSON shape (`{\"type\": \"command\", command, cwd, reason, allowed_decisions}` → `{command, cwd, reason, allowed_decisions}`). Any persisted channel payload keyed on `type == \"command\"` would break serialization; `exec_approval/types.rs:8` was added specifically for that stability, so reverting it requires verifying no external channel cache or test fixture depends on the tag."
+    },
+    {
+      "id": "sw-exec-9",
+      "severity": "medium",
+      "form": 4,
+      "produced": "Two same-named `ApprovalRequest` types in the same module tree",
+      "produced_location": "src/exec/decision.rs:48 (pub type ApprovalRequest = ExecApprovalRequest); src/exec/approval/types.rs:11 (enum ApprovalRequest { Command(CommandApprovalRequest) })",
+      "consumer_location": "src/exec/mod.rs:27 re-exports only `decision::{ApprovalRequest, ExecApprovalRequest}`; src/gateway/channel_approval.rs:13 and src/gateway/interfaces/telegram/approval.rs:6 import `approval::types::ApprovalRequest`",
+      "decision": "REVIEWED_NO_CHANGE",
+      "rationale": "Two distinct `ApprovalRequest` types coexist with no collision: `crate::exec::decision::ApprovalRequest` is an alias for `ExecApprovalRequest` (the runtime approval-record input shape, used by `node_requester`, `operator_requester`, `callback_sink`, and the manager), while `crate::exec::approval::types::ApprovalRequest` is the channel wire envelope (used by channel capabilities). They model different things at different layers. `mod.rs:27` only re-exports the decision-side alias to keep the surface lean, and every external import names the full path (`crate::exec::approval::types::ApprovalRequest`) so there is no ambiguity at the call site. The naming collision is the kind of thing the audit checks for, but reading the consumers shows the two types are intentionally distinct — the unification `approval/types::ApprovalRequest` would force would change channel wire shapes. DECIDE-only.",
+      "fix_commit": null,
+      "residual_risk": "Renaming one of them (e.g. `decision::ApprovalRequest` → `ExecApprovalRequestAlias`) would force a crate-wide rename; the typealias is already private-to-the-decision-layer's consumers. Better: leave alone but ensure future contributors reach for `ExecApprovalRequest` when they mean the runtime record, and `approval::types::ApprovalRequest` when they mean the wire envelope."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "item": "ExecApprovalManager::create returns success after debug_assert on !analysis.ok",
+      "location": "src/exec/manager.rs:338-354",
+      "assessment": "Form-5 (no-op success) probe: `create` does NOT inert-succeed on the unhappy branch — it `debug_assert!`s that the parser produced an unrunnable command and refuses to spend a delivery slot. Production builds compile out the assert, the function still returns `ExecApprovalRecord`, but the manager.rs:344 doc and the comment at manager.rs:339-345 explain this is a deliberate fail-fast at the contract boundary, not an inert-success. The corresponding `register_pending` call (`src/exec/approval/channel_bridge.rs:104`) follows `create` immediately; the `debug_assert!` is the safety belt for misconfigured callers (verified by tests/exec_approval_resolve_loop.rs:67-72, which depend on it). Reviewed and kept."
+    },
+    {
+      "item": "ExecApprovalRecord::is_expired (manager.rs:217)",
+      "location": "src/exec/manager.rs:217",
+      "assessment": "Despite the no-expiry sentinel path looking superficially dead, `is_expired` is consumed by `PendingEntry::is_live` (manager.rs:264) which is consulted on every `resolve`, `resolve_for_session`, `resolve_for_session`, `record_originator`, `get_pending`, and `list_pending` call. Internal live consumer — not a finding."
+    },
+    {
+      "item": "cleanup_expired (manager.rs:922, pub(crate))",
+      "location": "src/exec/manager.rs:922",
+      "assessment": "Marked `pub(crate)` and called from `register_pending` itself (manager.rs:395) as an opportunistic sweep, plus from `#[cfg(test)]` modules. No external consumer, but the opportunistic sweep is the documented eviction mechanism for abandoned waiters — removing it would silently leak entries on aborted runs. Reviewed and kept."
+    },
+    {
+      "item": "ExecApprovalManager::resolve / resolve_with_reason / resolve_for_session / await_registered",
+      "location": "src/exec/manager.rs:481,494,699,432",
+      "assessment": "All four have live consumers across `src/approval/{callback_sink,node_requester,operator_requester,adapters}.rs`, `src/gateway/handlers/exec_approvals.rs:228`, `src/gateway/inbound_router/mod.rs:1125`, `tests/cluster_node_approval.rs`, `tests/exec_approval_resolve_loop.rs`. No defect."
+    },
+    {
+      "item": "SecretMasker + mask_json_strings + install_operator_patterns + MAX_OPERATOR_PATTERNS",
+      "location": "src/exec/masker.rs",
+      "assessment": "Active production use across `src/agents/background_persistence.rs:90`, `src/tasks/cron/executor.rs:667`, `src/builtin_tools/process_completion.rs:58`, `src/builtin_tools/process_journal.rs:186`, `src/gateway/execution_engine/execute.rs:1984`, `src/gateway/execution_engine/unattended_redacting_sink.rs:13`, `src/gateway/event_emitter/redacting.rs:54`, `src/approval/guardian_requester.rs:340`, `src/approval/config.rs:444`, `src/sandbox/exec_approval/action.rs:382`, `src/bin/aleph-server/commands/start/helpers.rs:30`. Every site inherits operator-configured patterns from the process-wide static. Reviewed and kept."
+    },
+    {
+      "item": "approval::allowed_decisions (full_set / session_max / with_persistent / once_only / for_confirm_gate / rule_is_a_floor / FLOOR_RULES / DECLARED_FLOOR_RULE / GATE_REMOVAL_RULE)",
+      "location": "src/exec/allowed_decisions.rs",
+      "assessment": "65 consumer sites across `src/tools/scoped/{dispatch,gate_chain,tests}.rs`, `src/approval/{callback_sink,node_requester,operator_requester}.rs`, `src/sandbox/exec_approval/{action,gate,grants}.rs`, `src/gateway/{handlers/exec_approvals,inbound_router/mod,events/frame}.rs`. This module is the canonical single derivation the manager + bridge + tests pin against. Live and correct."
+    }
+  ],
+  "verification": "Static only per instructions — cargo check / cargo test intentionally NOT run. All findings backed by `rg` output captured during the audit (symbol names, file:line, scope filters). Cross-module consumer scan excludes intra-`src/exec/` callers, audit artifacts in `review-results/`, `graphify-out/`, and other worktrees. No new dependencies added. `ExecApprovalManager` and `ChannelApprovalBridge` were sampled by reading the full 1836-line manager.rs and the full channel_bridge.rs rather than relying on `rg` alone — public-API surface is well-wired (create/register_pending/resolve/await_registered/resolve_for_session/record_originator/get_pending/list_pending all have live external callers).",
+  "notes": "The module is unusually well-disciplined for this codebase: every public function on `ExecApprovalManager` and `ChannelApprovalBridge` has at least one external caller (mod + tests + lib.rs re-exports all line up), the `allowed_decisions` module is the canonical single derivation the rest of the system pins against, and the `Decision → Outcome` mapping is enforced via `clamped_for`/`to_outcome_within`. The dead-code cuts are local one-liners with `#[allow(dead_code)]` markers as self-confessed evidence; they are not severed wires but form-1 leftovers. The one design-smell finding (sw-exec-8, single-variant tagged enum) is a DECIDE because the wire-format argument is real. No form-2 stub-and-no-client, no form-3 inert config, no form-4 producer/consumer wire cut, no form-5 no-op-success was found."
+}

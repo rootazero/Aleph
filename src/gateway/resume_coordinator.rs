@@ -25,9 +25,7 @@ use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
 use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
-use crate::session::reduction::{
-    reduce_disposition, reduce_run, DanglingProvenance, RunDisposition, RunReduction,
-};
+use crate::session::reduction::{reduce_disposition, reduce_run, LogContradiction, RunDisposition};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 
@@ -96,19 +94,115 @@ pub struct ResumeReport {
     pub skipped: usize,
     /// Interrupted sessions handed back to the scheduler that owns them
     /// (team dispatcher / cron / heartbeat) instead of being resumed here.
-    /// Their dangling marker is closed on the way out — see
-    /// [`has_own_scheduler`].
+    /// Their crash boundary is repaired and their dangling marker closed on the
+    /// way out — see [`has_own_scheduler`].
     pub delegated: usize,
-    /// Sessions left alone because a resume for them was already in flight.
+    /// Sessions left alone because somebody else is writing them right now.
     ///
-    /// Always 0 for the boot scan, which walks sessions sequentially. It exists
-    /// for the on-demand face: two `agent.resume` calls for one session — or one
-    /// racing the boot scan, which is spawned while the gateway is already
-    /// serving — must not both run `repair_boundary`, because that is a
+    /// Two producers, one fact. **A resume already in flight**: two
+    /// `agent.resume` calls for one session — or one racing the boot scan,
+    /// which is spawned while the gateway is already serving — must not both
+    /// run `repair_boundary`, because that is a
     /// read-then-append and two winners append **two** synthetic `ToolError`s
-    /// for the same `call_id`. A tool_use with two tool_results is a provider
-    /// API error on every later turn of that session.
+    /// for the same `call_id`. Since `harness::agent::prompt` learned to
+    /// downgrade an orphaned/duplicate `tool_result` to a plain user note
+    /// (7929bbda6) that is no longer a provider rejection — it is text noise:
+    /// the model reads the same "outcome unknown" sentence twice, the second
+    /// time as prose that no longer references the call it answers.
+    ///
+    /// **The owning scheduler is running it**: a delegated session that the
+    /// engine has a live turn on gets neither the repair nor the marker close,
+    /// because both are appends and a `RunFinished` written into the middle of
+    /// a running turn makes the real finish land as a `FinishWithoutStart` on
+    /// a session that is then permanently mis-read. Unlike the first producer
+    /// this one is reachable from the boot scan: the dispatcher's own tick can
+    /// re-dispatch a task while the scan is still walking the list.
     pub busy: usize,
+    /// Candidates this pass would not act on, and why. One entry per refusal,
+    /// carrying the session so a multi-session boot report names which.
+    ///
+    /// Not a counter: "something was refused" and "this session's log
+    /// contradicts itself at seq 41" are different answers, and the caller
+    /// (`status_of`, the CLI receipt, the doctor) needs the second.
+    pub refused: Vec<(SessionId, ResumeRefusal)>,
+    /// Interrupted candidates left alone because their log's recency is
+    /// unknown ([`LogContradiction::ClockAnomaly`]).
+    ///
+    /// Deliberately neither `resumed` nor `abandoned`: both are decisions
+    /// taken on an age, and the age is exactly what this log does not support.
+    pub skipped_unknown_age: usize,
+    /// REPORT-kind contradictions seen across every candidate this pass
+    /// reduced. A magnitude for the boot line — the kinds themselves are named
+    /// per session by the `core/session-log` doctor check.
+    pub contradictions: usize,
+    /// Resumed runs that had to give something up on the way back: a model the
+    /// catalog has retired since the crash, a `project_root` that no longer
+    /// exists. The model is told in-band by the boundary repair; this is the
+    /// operator's count of the same fact.
+    ///
+    /// The producer arrives with the ④ settings envelope; until a `RunStarted`
+    /// carries one there is nothing that can degrade, and this reads 0 for the
+    /// honest reason rather than because nobody looks.
+    pub degraded: usize,
+    /// Resumed runs whose `RunStarted` carried no settings envelope, so the
+    /// re-triggered run follows today's session and global values instead of
+    /// the ones the crashed run was executing under.
+    ///
+    /// Counted rather than assumed away: the first real boot after the
+    /// envelope ships is what reports the true size of the pre-envelope
+    /// backlog, and a "no-op that reports success" is exactly what a silent 0
+    /// here would be.
+    pub unsnapshotted: usize,
+}
+
+/// Why one candidate was not resumed.
+///
+/// Every arm is a refusal the coordinator *made*, not a state it found: a
+/// clean session is `skipped`, a delegated one is `delegated`. This carries
+/// only the cases where something was wrong enough to stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeRefusal {
+    /// The reducer refused the log ([`LogContradiction::rejects`]). "I do not
+    /// know what state this run is in" — never read as clean.
+    LogInconsistent(LogContradiction),
+    /// The session's agent is not in the registry, so there is nothing to
+    /// re-trigger the run on.
+    AgentMissing,
+    /// The log could not be read, or the repair events could not be appended.
+    /// Resuming anyway would hand the model a `tool_use` with no result.
+    BoundaryRepairFailed(String),
+    /// The repair landed but the run could not be dispatched.
+    RetriggerFailed(String),
+}
+
+impl ResumeRefusal {
+    /// The stable word this refusal is reported under. Pinned by test to the
+    /// variant list so a new arm cannot ship without a word of its own.
+    #[must_use]
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::LogInconsistent(_) => "log_inconsistent",
+            Self::AgentMissing => "agent_missing",
+            Self::BoundaryRepairFailed(_) => "boundary_repair_failed",
+            Self::RetriggerFailed(_) => "retrigger_failed",
+        }
+    }
+
+    /// The specifics behind [`Self::reason`], for an operator to act on.
+    #[must_use]
+    pub fn detail(&self) -> String {
+        match self {
+            Self::LogInconsistent(c) => c.to_string(),
+            Self::AgentMissing => "the session's agent is not registered".to_string(),
+            Self::BoundaryRepairFailed(e) | Self::RetriggerFailed(e) => e.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for ResumeRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.reason(), self.detail())
+    }
 }
 
 /// `task_type` of a cron-triggered run's session key.
@@ -157,18 +251,237 @@ pub fn has_own_scheduler(key: &SessionId) -> bool {
     )
 }
 
-/// Extract `project_root` from the most recent `RunStarted` marker.
-/// Returns `None` for legacy logs or when the original run was not
-/// project-scoped, so the caller falls back to the agent's default
-/// workspace — same shape as the in-memory `RunRequest.workspace_override`
-/// field flows through the engine.
-pub(crate) fn latest_project_root(markers: &[SessionEventRecord]) -> Option<std::path::PathBuf> {
-    markers.iter().rev().find_map(|record| match &record.event {
-        SessionEvent::RunStarted { project_root, .. } => {
-            project_root.as_deref().map(std::path::PathBuf::from)
+/// What a resume can still do with the model the crashed run was bound to.
+///
+/// The pin is read off a `RunStarted` envelope that may be days old, so it is
+/// **validated before it is replayed**, never after: an id the vendor retired
+/// while the daemon was down would otherwise come back as an opaque provider
+/// 400 on the first Think step of every recovered run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SnapshotModel {
+    /// Replay the pair as recorded.
+    Keep {
+        provider: Option<String>,
+        model: String,
+    },
+    /// The vendor retired it and named what to use instead.
+    Successor {
+        from: String,
+        to: String,
+        why: String,
+    },
+    /// Nothing to replay: resume on the agent's own default chain — which is
+    /// exactly what this session did before the envelope existed.
+    Drop { from: String, why: String },
+}
+
+/// Decide the above.
+///
+/// `pinnable` is the published set of provider keys a pin can name
+/// ([`crate::providers::session_model_handle::pinnable_providers`]), passed in
+/// rather than read here so this stays a pure function with no global to
+/// install in a test. `None` means **no set was published**, which is
+/// "unvalidated", never "nothing is pinnable" — the same reading
+/// `select_model::refuse_unpinnable_provider` takes of the same handle, because
+/// one verb with two faces has to share its derivation (判据 #9).
+///
+/// Lifecycle comes from [`crate::providers::model_catalog::lifecycle_for`] —
+/// the table `select_model`, the picker and the drift guard already read. A
+/// second retirement list here is the shape this round exists to delete.
+pub(crate) fn validate_snapshot_model(
+    pinnable: Option<&std::collections::BTreeSet<String>>,
+    provider: Option<&str>,
+    model: &str,
+) -> SnapshotModel {
+    use crate::providers::model_catalog::lifecycle::{lifecycle_for, ModelStatus};
+
+    let model = model.trim();
+    let provider = provider.map(str::trim).filter(|p| !p.is_empty());
+
+    // A pin naming a provider this server does not have cannot be honoured:
+    // the run would fall through to the default chain anyway, and the
+    // mis-attributed pair would be recorded as if it had served the run.
+    if let (Some(p), Some(known)) = (provider, pinnable) {
+        if !known.contains(p) {
+            return SnapshotModel::Drop {
+                from: model.to_string(),
+                why: format!("provider `{p}` is no longer configured on this server"),
+            };
         }
-        _ => None,
-    })
+    }
+
+    let life = lifecycle_for(provider, model);
+    if life.status != ModelStatus::Deprecated {
+        return SnapshotModel::Keep {
+            provider: provider.map(str::to_string),
+            model: model.to_string(),
+        };
+    }
+    let why = life.note.map_or_else(
+        || "it has been retired since this run started".to_string(),
+        |n| n.into_owned(),
+    );
+    match life.successor {
+        Some(to) => SnapshotModel::Successor {
+            from: model.to_string(),
+            to: to.into_owned(),
+            why,
+        },
+        None => SnapshotModel::Drop {
+            from: model.to_string(),
+            why,
+        },
+    }
+}
+
+/// Everything a resume replays, derived once from the crashed run's
+/// `RunStarted` marker.
+///
+/// Built by [`plan_resume`] from the reduction's `open_run` — the single
+/// anchor, so the workspace, the knobs and the model cannot come from three
+/// different markers.
+#[derive(Debug, Default)]
+pub(crate) struct ResumePlan {
+    /// The project folder to resume in, `None` for the agent's own workspace.
+    pub(crate) workspace: Option<std::path::PathBuf>,
+    /// The model pin to replay, after validation.
+    pub(crate) model_override: Option<crate::gateway::model_override::ModelOverride>,
+    /// Request metadata the resumed run carries: the three replayable knobs
+    /// plus the tier CEILING (never the tier request rung — see
+    /// [`crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY`]).
+    pub(crate) knobs: HashMap<String, String>,
+    /// What the model is told it lost, if anything.
+    pub(crate) degrade: Option<crate::session::boundary_repair::DegradeNote>,
+    /// Whether this resume gave something up (one or more sentences above).
+    pub(crate) degraded: bool,
+    /// Whether the crashed run's marker carried no envelope at all, so the
+    /// resume follows today's session and global values.
+    pub(crate) unsnapshotted: bool,
+}
+
+/// Derive the plan above.
+///
+/// `dir_exists` is injected so the project-root arm is testable without
+/// touching a filesystem; production passes `|p| p.is_dir()`.
+///
+/// A missing `open_run` is the ③-D2 writer-side shape: the `RunStarted` append
+/// failed and the run executed anyway. There is nothing to replay, and saying
+/// so (`unsnapshotted`) is the honest answer — the resume still happens, on
+/// today's values, exactly as it did before this field existed.
+pub(crate) fn plan_resume(
+    open_run: Option<&crate::session::reduction::RunStartFacts>,
+    pinnable: Option<&std::collections::BTreeSet<String>>,
+    dir_exists: &dyn Fn(&std::path::Path) -> bool,
+) -> ResumePlan {
+    use crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY;
+    use crate::gateway::model_override::ModelOverride;
+
+    let mut plan = ResumePlan::default();
+    let Some(facts) = open_run else {
+        plan.unsnapshotted = true;
+        return plan;
+    };
+    let mut sentences: Vec<String> = Vec::new();
+
+    // Workspace. A folder that has since been deleted or moved falls back to
+    // the agent's workspace rather than failing the run mid-tool-call — and
+    // says so, because a silent fallback means the recovered run writes its
+    // files somewhere the user is not looking (ruling A9).
+    if let Some(root) = facts.project_root.as_deref() {
+        let path = std::path::PathBuf::from(root);
+        if dir_exists(&path) {
+            plan.workspace = Some(path);
+        } else {
+            sentences.push(format!(
+                "This run was working in `{root}`; it resumes in this agent's default \
+                 workspace because that folder no longer exists."
+            ));
+            plan.degraded = true;
+        }
+    }
+
+    let Some(env) = facts.envelope.as_ref() else {
+        plan.unsnapshotted = true;
+        plan.degrade = degrade_note(sentences);
+        return plan;
+    };
+
+    for (key, value) in [
+        (
+            crate::config::types::policies::MODE_SESSION_KEY,
+            env.session_mode.as_deref(),
+        ),
+        (
+            crate::agents::thinking::THINK_LEVEL_SESSION_KEY,
+            env.think_level.as_deref(),
+        ),
+        (
+            crate::memory::session_memory_mode::MEMORY_MODE_SESSION_KEY,
+            env.memory_mode.as_deref(),
+        ),
+        (RESUME_TIER_CEILING_KEY, env.exec_tier.as_deref()),
+    ] {
+        if let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) {
+            plan.knobs.insert(key.to_string(), v.to_string());
+        }
+    }
+
+    if let Some(model) = env
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        match validate_snapshot_model(pinnable, env.model_provider.as_deref(), model) {
+            SnapshotModel::Keep { provider, model } => {
+                plan.model_override =
+                    ModelOverride::from_voice(provider.as_deref().unwrap_or(""), &model);
+            }
+            SnapshotModel::Successor { from, to, why } => {
+                plan.model_override =
+                    ModelOverride::from_voice(env.model_provider.as_deref().unwrap_or(""), &to);
+                sentences.push(format!(
+                    "This run was served by `{from}`; it resumes on `{to}` because {why}."
+                ));
+                plan.degraded = true;
+            }
+            SnapshotModel::Drop { from, why } => {
+                sentences.push(format!(
+                    "This run was served by `{from}`; it resumes on this agent's default \
+                     model because {why}."
+                ));
+                plan.degraded = true;
+            }
+        }
+    } else {
+        // The envelope is here and the model half is not: the writer could not
+        // name what served this run (a dynamic route whose provider chain had
+        // no `serving_model_hint`, or a marker from before that fallback
+        // existed). The resume proceeds on today's chain — but that chain is
+        // free to have moved, and this is the ONLY place that knows it might
+        // have.
+        //
+        // `unsnapshotted` cannot carry this: it means "no envelope was
+        // captured", and one was. `degraded` is the field whose definition
+        // already fits — "this resume gave something up" — so the fact travels
+        // on the existing wire instead of a new counter that four faces would
+        // then have to learn to render (判据 #9).
+        sentences.push(
+            "The model that served this run was not recorded; it resumes on this \
+             session's current model, which may not be the same one."
+                .to_string(),
+        );
+        plan.degraded = true;
+    }
+
+    plan.degrade = degrade_note(sentences);
+    plan
+}
+
+/// One note out of however many sentences the plan collected.
+fn degrade_note(sentences: Vec<String>) -> Option<crate::session::boundary_repair::DegradeNote> {
+    (!sentences.is_empty())
+        .then(|| crate::session::boundary_repair::DegradeNote::new(sentences.join(" ")))
 }
 
 /// Build a resumed run's metadata: the resume marker, the original working
@@ -223,57 +536,29 @@ pub(crate) fn resume_metadata(
     metadata
 }
 
-/// The sentence a dangling call is answered with.
+/// When this candidate was last *alive*, in recording time.
 ///
-/// Deliberately **not** a safety-level classifier. `ToolSafetyLevel` exists and
-/// could sort read-only calls from destructive ones, but deciding "is this safe
-/// to redo?" from a tool name and its arguments is exactly the reasoning R7
-/// reserves for the model. State the fact; let it judge.
+/// Measured from the last thing that happened inside the run, not from the
+/// marker that opened it. A long-running agent whose `RunStarted` is three days
+/// old and whose last tool call landed a minute before the crash is the exact
+/// candidate resume exists for; on the marker alone it was abandoned as "too
+/// old", while a run that opened seconds before a crash and did nothing was
+/// resumed. Whole classes of long agent runs were unresumable and the counter
+/// said `abandoned`, which reads like a decision rather than a mismeasurement.
 ///
-/// Two arms because there are two true sentences. Everything after the lead-in
-/// is shared, so the five semantic points cannot drift apart between them.
-fn boundary_repair_text(tool: &str, provenance: DanglingProvenance) -> String {
-    let lead = match provenance {
-        DanglingProvenance::ThisRestart => format!(
-            "the server restarted after this `{tool}` call was dispatched but before its \
-             result was recorded"
-        ),
-        DanglingProvenance::EarlierRun => format!(
-            "an earlier run in this session ended without recording the result of this \
-             `{tool}` call"
-        ),
-    };
-    format!(
-        "OUTCOME UNKNOWN — {lead}. This is NOT a report that the call failed: it may have \
-         completed, and any side effects it has (file writes, commands, network calls, \
-         external state) have already landed. Verify the current state before deciding \
-         whether to repeat it."
-    )
-}
-
-/// Turn a reduction's dangling set into appendable answer events.
-///
-/// **Both provenances get an event.** Leaving the older ones unanswered is not
-/// the cheaper option: `build_prompt` drops an orphan `tool_use` whose result
-/// never arrives, so the model stops seeing that the call ever happened — while
-/// its side effects may still be on disk. A missing row reads as "there was no
-/// value"; that is the reading this whole repair exists to prevent.
-///
-/// The answer is shaped as `ToolError` because there is no result to hand back:
-/// a synthetic `ToolResult` would make an invented payload indistinguishable
-/// from the tool's real output.
-pub(crate) fn repairs_for(reduction: &RunReduction) -> Vec<SessionEvent> {
-    let at = now_ms();
-    reduction
-        .dangling
-        .iter()
-        .map(|call| SessionEvent::ToolError {
-            turn_id: call.turn_id,
-            call_id: call.call_id.clone(),
-            error: boundary_repair_text(&call.tool_name, call.provenance),
-            at,
-        })
-        .collect()
+/// The marker still participates (`max`): a run that opened and recorded
+/// nothing has no in-scope activity at all, and the marker's own recording time
+/// is then the newest fact the log has about it. Pure, and separate from
+/// [`ResumeCoordinator::handle_interrupted`], so the rule is falsifiable
+/// without a coordinator, a store and an execution adapter.
+fn last_alive_at(
+    reduction: &crate::session::reduction::RunReduction,
+    last_marker: &SessionEventRecord,
+) -> crate::session::events::Timestamp {
+    match reduction.progress.last_activity_at {
+        Some(activity) => activity.max(last_marker.created_at_ms),
+        None => last_marker.created_at_ms,
+    }
 }
 
 /// Boot-scan coordinator. Constructed at boot with the durable event store,
@@ -355,6 +640,25 @@ impl ResumeCoordinator {
 
     /// Take this session's resume slot, or `None` if a resume is already in
     /// flight for it.
+    /// Does the engine have a turn in flight on this session right now?
+    ///
+    /// The authoritative in-memory admission gate, asked of the adapter rather
+    /// than re-derived: [`ExecutionAdapter::running_sessions`] is the same set
+    /// `gateway.metrics.run_concurrency` publishes and the same one the queue
+    /// admits against. An adapter with no run registry answers with an empty
+    /// set, which is honest for it (a `SimpleExecutionEngine` runs nothing
+    /// concurrently) and is why this is not a fail-closed predicate the way
+    /// `marker_balance::close_open_run_after_retire`'s is: that one closes the
+    /// marker of a run the *user* just cut, this one only ever declines to
+    /// touch a log.
+    fn is_running(&self, session_id: &SessionId) -> bool {
+        let key = session_id.to_key_string();
+        self.execution_adapter
+            .running_sessions()
+            .iter()
+            .any(|k| *k == key)
+    }
+
     fn try_claim_resume(&self, session_id: &SessionId) -> Option<ResumeSlot<'_>> {
         let key = session_id.to_key_string();
         let inserted = self
@@ -411,38 +715,41 @@ impl ResumeCoordinator {
         report
     }
 
-    /// Close the dangling run marker of a session this coordinator declined,
-    /// so the scan does not re-classify it as interrupted on every later boot.
+    /// Hand a session back to the scheduler that owns it: answer the calls its
+    /// crash left dangling, then close the run marker so the scan does not
+    /// re-classify it as interrupted on every later boot.
     ///
-    /// Only the marker. Deliberately none of [`Self::abandon`]'s other three
-    /// steps: this is not an abandonment. The owning scheduler decides whether
-    /// the work is redone, so blocking the session's goal or telling the user
-    /// "could not be resumed" would both be false — and the goal block in
-    /// particular would be a wrong permanent verdict on a unit that is about
-    /// to recover normally.
-    async fn close_delegated_marker(&self, session_id: &SessionId) {
-        let ev = SessionEvent::RunFinished {
-            run_id: format!("delegated-{}", uuid::Uuid::new_v4()),
-            outcome: RunOutcome::Abandoned,
-            at: now_ms(),
-        };
-        match self.next_seq(session_id).await {
-            Ok(seq) => {
-                if let Err(e) = self
-                    .event_store
-                    .append(session_id, seq, &ev, now_ms())
-                    .await
-                {
-                    tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker close failed");
-                }
-            }
-            // Same rule as `abandon`: never fabricate seq 1 on a read error —
-            // it would overwrite the session's genuine first event. Skipping
-            // costs one redundant re-classification on the next boot.
-            Err(e) => {
-                tracing::warn!(session = ?session_id, error = %e, "resume: delegated marker seq allocation failed; leaving it open");
-            }
-        }
+    /// Still none of [`Self::abandon`]'s other three steps: this is not an
+    /// abandonment. The owning scheduler decides whether the *work* is redone,
+    /// so blocking the session's goal or telling the user "could not be
+    /// resumed" would both be false — the goal block in particular would be a
+    /// wrong permanent verdict on a unit that is about to recover normally.
+    ///
+    /// But the crash boundary is not the scheduler's decision, it is a fact
+    /// about the log, and leaving it unrepaired meant this arm produced a
+    /// session whose next run replays a `tool_use` with no `tool_result` — the
+    /// exact silent drop [`crate::session::boundary_repair`] exists for. The
+    /// team dispatcher repairs its own member sessions in `reclaim_orphaned`;
+    /// cron and heartbeat have no such pass, so this arm is their only repair.
+    ///
+    /// Returns whether anything was written, so the caller can tell "handed
+    /// back" from "could not read its log".
+    async fn hand_back_to_scheduler(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<(), crate::session::SessionError> {
+        let report = crate::session::boundary_repair::repair_and_close_abandoned(
+            self.event_store.as_ref(),
+            session_id,
+        )
+        .await?;
+        tracing::info!(
+            session = ?session_id,
+            repaired = report.appended,
+            closed = ?report.closed_run_id,
+            "resume: crash boundary repaired and marker closed for the owning scheduler"
+        );
+        Ok(())
     }
 
     /// Classify one session's run markers and act on the verdict.
@@ -461,11 +768,13 @@ impl ResumeCoordinator {
         // Claimed before anything reads the log. `repair_boundary` is a
         // read-then-append: two concurrent resumes of one session both compute
         // the same repair set and both append it, leaving one `call_id` with
-        // two `ToolError`s — a tool_use with two tool_results, which the
-        // provider rejects on every later turn. The boot scan never exposed
-        // this (it walks sessions in a sequential loop); the on-demand face
-        // does, including against the boot scan itself, which is spawned while
-        // the gateway is already accepting requests.
+        // two `ToolError`s. `harness::agent::prompt` downgrades the second one
+        // to a plain user note rather than sending an invalid pair, so the cost
+        // is duplicated prose the model must reconcile, not an API rejection.
+        // The boot scan never exposed this (it walks sessions in a sequential
+        // loop); the on-demand face does, including against the boot scan
+        // itself, which is spawned while the gateway is already accepting
+        // requests.
         let Some(_slot) = self.try_claim_resume(session_id) else {
             tracing::info!(
                 session = ?session_id,
@@ -476,25 +785,70 @@ impl ResumeCoordinator {
         };
         report.scanned += 1;
         match reduce_disposition(markers) {
-            RunDisposition::Clean => {
+            Ok(RunDisposition::Clean) => {
                 report.skipped += 1;
             }
             // Not ours to resume: the team dispatcher / cron / heartbeat
             // each recover their own interrupted work, and a second driver
             // on top of that is a duplicate run, not a safety net. Close
             // the dangling marker so the next boot does not re-decide this.
-            RunDisposition::Interrupted { .. } if has_own_scheduler(session_id) => {
+            Ok(RunDisposition::Interrupted { .. }) if has_own_scheduler(session_id) => {
+                // Handing recovery back does not mean handing the log back:
+                // the marker close and the boundary repair are facts about
+                // this session that only a reader of its log can write. But
+                // both are appends, so they may only happen while nobody else
+                // is writing — a session the engine is running RIGHT NOW is
+                // mid-turn, and a `RunFinished` appended into the middle of a
+                // live run is the `FinishWithoutStart` this round exists to
+                // stop producing.
+                if self.is_running(session_id) {
+                    tracing::info!(
+                        session = ?session_id,
+                        "resume: its own scheduler is running it right now; leaving the log alone"
+                    );
+                    report.busy += 1;
+                    return;
+                }
                 tracing::info!(
                     session = ?session_id,
                     "resume: session has its own scheduler; handing recovery back to it"
                 );
-                self.close_delegated_marker(session_id).await;
+                if let Err(e) = self.hand_back_to_scheduler(session_id).await {
+                    // Not `delegated`: nothing was handed back. A refusal here
+                    // reads as "I could not repair this log", which is exactly
+                    // what the `refused` bucket says and exactly what a
+                    // `delegated` counter would hide.
+                    tracing::warn!(
+                        session = ?session_id,
+                        error = %e,
+                        "resume: delegated hand-back failed; leaving the marker open"
+                    );
+                    report.refused.push((
+                        session_id.clone(),
+                        ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+                    ));
+                    return;
+                }
                 report.delegated += 1;
             }
-            RunDisposition::Interrupted { trailing_starts } => {
-                let project_root = latest_project_root(markers);
-                self.handle_interrupted(session_id, markers, trailing_starts, project_root, report)
+            Ok(RunDisposition::Interrupted { trailing_starts }) => {
+                self.handle_interrupted(session_id, markers, trailing_starts, report)
                     .await;
+            }
+            // A refused slice is "I do not know", not "clean": it is
+            // deliberately NOT counted as `skipped` (which `status_of` renders
+            // `already_finished`). It goes in the `refused` bucket, which
+            // `status_of` reads BEFORE every counter that could be mistaken
+            // for a verdict.
+            Err(c) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    contradiction = %c,
+                    "resume: session log refused by the reducer; not resuming"
+                );
+                report
+                    .refused
+                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
             }
         }
     }
@@ -548,14 +902,19 @@ impl ResumeCoordinator {
         Ok(report)
     }
 
-    /// Handle one interrupted candidate: recency filter, cap check,
-    /// crash-boundary repair, then re-trigger.
+    /// Handle one interrupted candidate: **one** reduction over the log, then
+    /// the recency filter, the cap check, the crash-boundary repair and the
+    /// re-trigger — every one of them reading that same reduction.
+    ///
+    /// The repair used to re-read and re-reduce the log itself, so "what state
+    /// is this candidate in" was answered twice per candidate, at two moments,
+    /// with an append in between. Two derivations of one fact is the shape
+    /// this round exists to remove.
     async fn handle_interrupted(
         &self,
         session_id: &SessionId,
         markers: &[SessionEventRecord],
         trailing_starts: usize,
-        project_root: Option<std::path::PathBuf>,
         report: &mut ResumeReport,
     ) {
         // The dangling RunStarted is the last marker (reduce_disposition
@@ -564,8 +923,56 @@ impl ResumeCoordinator {
             return;
         };
 
+        let events = match self.event_store.load_all_events(session_id).await {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %e,
+                    "resume: candidate log unreadable; skipping candidate"
+                );
+                report.refused.push((
+                    session_id.clone(),
+                    ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+                ));
+                return;
+            }
+        };
+        let reduction = match reduce_run(&events) {
+            Ok(reduction) => reduction,
+            Err(c) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    contradiction = %c,
+                    "resume: candidate log refused by the reducer; not resuming"
+                );
+                report
+                    .refused
+                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
+                return;
+            }
+        };
+        report.contradictions += reduction.contradictions.len();
+
+        // A clock anomaly makes the age unknown, and BOTH remaining verdicts
+        // are decisions taken on an age: resuming says "recent enough",
+        // abandoning says "too old". Neither is derivable, so this candidate
+        // is left exactly as it is and counted under its own name.
+        if reduction
+            .contradictions
+            .iter()
+            .any(|c| matches!(c, LogContradiction::ClockAnomaly { .. }))
+        {
+            tracing::warn!(
+                session = ?session_id,
+                "resume: candidate log has a clock anomaly; its age is unknown, leaving it alone"
+            );
+            report.skipped_unknown_age += 1;
+            return;
+        }
+
         // Recency filter — abandon runs interrupted too long ago.
-        let age_ms = now_ms().saturating_sub(last.created_at_ms);
+        let age_ms = now_ms().saturating_sub(last_alive_at(&reduction, last));
         if age_ms > (self.config.max_age_secs as i64).saturating_mul(1000) {
             tracing::info!(
                 session = ?session_id,
@@ -595,42 +1002,72 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Crash-boundary repair — append a synthetic ToolError for each
-        // dangling tool call so the provider API sees a balanced log.
-        if let Err(e) = self.repair_boundary(session_id).await {
-            tracing::warn!(
-                session = ?session_id,
-                error = %e,
-                "resume: boundary repair failed; skipping candidate"
-            );
-            return;
+        // ④ Everything the resume replays, derived from the SAME `open_run`
+        // the repair is about to answer against: the project folder, the three
+        // replayable knobs, the tier ceiling and the validated model pin.
+        let plan = plan_resume(
+            reduction.open_run.as_ref(),
+            crate::providers::session_model_handle::pinnable_providers(),
+            &|p| p.is_dir(),
+        );
+        if plan.degraded {
+            report.degraded += 1;
+        }
+        if plan.unsnapshotted {
+            report.unsnapshotted += 1;
         }
 
-        // Re-trigger. Task 6 implements `retrigger`. When the original
-        // run carried a `project_root`, pre-validate it still exists so a
-        // moved/deleted folder degrades to a default-workspace resume
-        // (with a warn) instead of failing the run mid-tool-call.
-        let resume_project_root = match project_root {
-            Some(p) if p.is_dir() => Some(p),
-            Some(p) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    project_root = %p.display(),
-                    "resume: original project folder no longer exists; \
-                     falling back to agent workspace"
-                );
-                None
+        // Crash-boundary repair — append a synthetic ToolError for every
+        // dangling call THIS reduction names, so the model sees each one
+        // answered instead of silently dropped from the replay. The degrade
+        // note rides on the first of them.
+        match crate::session::boundary_repair::repair_boundary(
+            self.event_store.as_ref(),
+            session_id,
+            &reduction,
+            plan.degrade.as_ref(),
+        )
+        .await
+        {
+            // A degrade with no dangling call has no repair to ride on. It is
+            // still a fact the model needs — the alternative is a run that
+            // silently comes back on a different model — so it gets its own
+            // carrier rather than being dropped for want of one.
+            Ok(repair) => {
+                if repair.appended == 0 {
+                    if let Some(note) = plan.degrade.as_ref() {
+                        self.announce_degrade(session_id, note).await;
+                    }
+                }
             }
-            None => None,
-        };
-        match self.retrigger(session_id, resume_project_root).await {
-            Ok(()) => report.resumed += 1,
             Err(e) => {
                 tracing::warn!(
                     session = ?session_id,
                     error = %e,
+                    "resume: boundary repair failed; skipping candidate"
+                );
+                report.refused.push((
+                    session_id.clone(),
+                    ResumeRefusal::BoundaryRepairFailed(e.to_string()),
+                ));
+                return;
+            }
+        }
+
+        // Re-trigger, carrying the plan. `RunRequest.model_override` is the
+        // carrier for the model because it never writes back to the session
+        // row — the crash-time pin governs THIS run and the `select_model`
+        // pick the user made after the crash still governs the next one,
+        // which is exactly the promise `select_model` prints to the model.
+        match self.retrigger(session_id, &plan).await {
+            Ok(()) => report.resumed += 1,
+            Err(refusal) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %refusal,
                     "resume: re-trigger failed; skipping candidate"
                 );
+                report.refused.push((session_id.clone(), refusal));
             }
         }
     }
@@ -709,26 +1146,6 @@ impl ResumeCoordinator {
         }
     }
 
-    /// Append synthetic `ToolError`s for any dangling tool calls.
-    async fn repair_boundary(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<(), crate::session::service::SessionError> {
-        let events = self.event_store.load_all_events(session_id).await?;
-        let repairs = repairs_for(&reduce_run(&events));
-        if repairs.is_empty() {
-            return Ok(());
-        }
-        let mut next = self.event_store.load_head_seq(session_id).await? + 1;
-        for ev in repairs {
-            self.event_store
-                .append(session_id, next, &ev, now_ms())
-                .await?;
-            next += 1;
-        }
-        Ok(())
-    }
-
     /// Allocate the next append seq for a session.
     ///
     /// Propagates read errors rather than defaulting to `1`: a transient
@@ -742,6 +1159,40 @@ impl ResumeCoordinator {
         Ok(self.event_store.load_head_seq(session_id).await? + 1)
     }
 
+    /// Tell the model what this resume gave up, when there was no dangling
+    /// call for the note to ride on.
+    ///
+    /// Best-effort: a failed append leaves the run resumable, and refusing to
+    /// resume because a *notice* could not be written would trade a whole
+    /// recovered conversation for a sentence.
+    async fn announce_degrade(
+        &self,
+        session_id: &SessionId,
+        note: &crate::session::boundary_repair::DegradeNote,
+    ) {
+        let ev = SessionEvent::SystemMessage {
+            // A fresh turn id: the crashed turn is over, and this sentence is
+            // about the run that is starting, not about that one.
+            turn_id: crate::session::events::TurnId::new_v4(),
+            content: note.sentence.clone(),
+            at: now_ms(),
+        };
+        match self.next_seq(session_id).await {
+            Ok(seq) => {
+                if let Err(e) = self
+                    .event_store
+                    .append(session_id, seq, &ev, now_ms())
+                    .await
+                {
+                    tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice append failed");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice seq allocation failed");
+            }
+        }
+    }
+
     /// Re-trigger an interrupted run. Resolves the agent from the session
     /// key, builds a `RunRequest` with `metadata["resume"] = "true"` (the
     /// engine→orchestrator boundary converts that into `FlowInput::Resume`,
@@ -751,21 +1202,24 @@ impl ResumeCoordinator {
     async fn retrigger(
         &self,
         session_id: &SessionId,
-        workspace_override: Option<std::path::PathBuf>,
-    ) -> Result<(), crate::session::service::SessionError> {
-        use crate::session::service::SessionError;
-
-        let permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| SessionError::Other(format!("resume semaphore closed: {e}")))?;
+        plan: &ResumePlan,
+    ) -> Result<(), ResumeRefusal> {
+        let workspace_override = plan.workspace.clone();
+        let permit =
+            self.semaphore.clone().acquire_owned().await.map_err(|e| {
+                ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}"))
+            })?;
 
         let agent_id = session_id.agent_id().to_string();
-        let agent = self.agent_registry.get(&agent_id).await.ok_or_else(|| {
-            SessionError::Other(format!("resume: agent '{agent_id}' not registered"))
-        })?;
+        // A missing agent is its own refusal, not a generic failure: the run
+        // is intact and re-triggerable the moment that agent exists again,
+        // which is a different thing for an operator to read than "dispatch
+        // errored".
+        let agent = self
+            .agent_registry
+            .get(&agent_id)
+            .await
+            .ok_or(ResumeRefusal::AgentMissing)?;
 
         let mut metadata = resume_metadata(
             workspace_override.as_deref(),
@@ -773,6 +1227,12 @@ impl ResumeCoordinator {
         );
         self.stamp_origin_identity(&agent, session_id, &mut metadata)
             .await;
+        // ④ The crashed run's knobs. `extend` after the identity stamp so a
+        // replayed knob can never overwrite the caller-role / scope keys the
+        // stamp exists to restore — the knob keys are disjoint from those, and
+        // this ordering keeps that true by construction rather than by
+        // inspection.
+        metadata.extend(plan.knobs.iter().map(|(k, v)| (k.clone(), v.clone())));
 
         let request = RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -787,7 +1247,7 @@ impl ResumeCoordinator {
             sandbox_override: None,
             workspace_override,
             max_iterations_override: None,
-            model_override: None,
+            model_override: plan.model_override.clone(),
         };
 
         // Broadcast the recovered run live (Panel / CLI / `aleph watch`) on
@@ -839,7 +1299,7 @@ impl ResumeCoordinator {
             .execution_adapter
             .execute(request, agent, emitter)
             .await
-            .map_err(|e| SessionError::Other(format!("resume execute failed: {e}")));
+            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")));
 
         drop(permit);
         result
@@ -946,14 +1406,7 @@ mod tests {
             run_id: format!("r-{at}"),
             at,
             project_root: None,
-        }
-    }
-
-    fn run_started_with_project(at: i64, project: &str) -> SessionEvent {
-        SessionEvent::RunStarted {
-            run_id: format!("r-{at}"),
-            at,
-            project_root: Some(project.to_string()),
+            envelope: None,
         }
     }
 
@@ -990,7 +1443,7 @@ mod tests {
     #[test]
     fn classify_clean_when_last_marker_is_finished() {
         let markers = vec![rec(1, run_started(10), 10), rec(2, run_finished(20), 20)];
-        assert_eq!(reduce_disposition(&markers), RunDisposition::Clean);
+        assert_eq!(reduce_disposition(&markers), Ok(RunDisposition::Clean));
     }
 
     #[test]
@@ -1002,7 +1455,7 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            RunDisposition::Interrupted { trailing_starts: 1 }
+            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
         );
     }
 
@@ -1017,7 +1470,7 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            RunDisposition::Interrupted { trailing_starts: 3 }
+            Ok(RunDisposition::Interrupted { trailing_starts: 3 })
         );
     }
 
@@ -1026,101 +1479,364 @@ mod tests {
         let markers = vec![rec(1, run_started(10), 10)];
         assert_eq!(
             reduce_disposition(&markers),
-            RunDisposition::Interrupted { trailing_starts: 1 }
+            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
         );
     }
 
-    /// G3 — both arms must carry all five semantic points. Asserting on
-    /// MEANING, not bytes: `!contains("failed")` gets hit by the text's own
-    /// negation sentence, which is how the first version of this guard went
-    /// red for the wrong reason (§4.13a).
-    fn assert_five_points(error: &str, tool: &str) {
-        assert!(
-            error.contains("OUTCOME UNKNOWN"),
-            "must state the outcome is unknown, got: {error}"
-        );
-        assert!(
-            error.contains("NOT a report that the call failed"),
-            "must explicitly deny that the call failed, got: {error}"
-        );
-        assert!(
-            error.contains(tool),
-            "must name the tool so the model knows what to verify, got: {error}"
-        );
-        assert!(
-            error.contains("side effects"),
-            "must warn that side effects may have landed, got: {error}"
-        );
-        assert!(
-            error.contains("Verify the current state before deciding"),
-            "must tell the model to verify current state before redoing, got: {error}"
-        );
-    }
-
+    /// ③-D8's falsification arm. A run whose `RunStarted` is ancient but whose
+    /// last tool call landed a moment ago is alive, and measuring its age from
+    /// the marker abandons exactly the long runs resume exists for.
+    ///
+    /// Goes red if `last_alive_at` is reverted to reading the marker alone.
     #[test]
-    fn repairs_speak_a_different_sentence_per_provenance() {
+    fn recency_is_measured_from_the_last_activity_not_the_marker() {
         let events = vec![
-            rec(1, run_started(10), 10),
-            rec(2, tool_requested("c1"), 20),
-            rec(3, run_started(30), 30),
-            rec(4, tool_requested("c2"), 40),
+            rec(1, run_started(10), 1_000),
+            rec(2, tool_requested("c1"), 900_000),
         ];
-        let repairs = repairs_for(&reduce_run(&events));
-        assert_eq!(repairs.len(), 2, "BOTH provenances get a repair event");
-
-        let mut texts = Vec::new();
-        for ev in &repairs {
-            let SessionEvent::ToolError { call_id, error, .. } = ev else {
-                panic!("expected ToolError, got {ev:?}");
-            };
-            assert_five_points(error, "bash_exec");
-            texts.push((call_id.clone(), error.clone()));
-        }
-        assert_eq!(texts[0].0, "c1");
-        assert!(
-            texts[0].1.contains("an earlier run in this session"),
-            "the older dangle must not be blamed on this restart, got: {}",
-            texts[0].1
-        );
-        assert_eq!(texts[1].0, "c2");
-        assert!(
-            texts[1].1.contains("the server restarted"),
-            "this run's dangle must say so, got: {}",
-            texts[1].1
-        );
-        assert_ne!(texts[0].1, texts[1].1, "two provenances, two sentences");
-    }
-
-    #[test]
-    fn repairs_are_empty_when_every_call_is_answered() {
-        let events = vec![
-            rec(1, run_started(10), 10),
-            rec(2, tool_requested("c1"), 20),
-            rec(3, tool_result("c1"), 30),
-        ];
-        assert!(repairs_for(&reduce_run(&events)).is_empty());
-    }
-
-    /// `latest_project_root` walks the marker list from newest to oldest
-    /// and returns the most recent persisted `project_root`, falling back
-    /// to `None` (legacy log, or non-project run) for the resume default.
-    #[test]
-    fn latest_project_root_picks_newest_marker() {
-        let markers = vec![
-            rec(1, run_started_with_project(10, "/a"), 10),
-            rec(2, run_finished(20), 20),
-            rec(3, run_started_with_project(30, "/b"), 30),
-        ];
+        let reduction = reduce_run(&events).expect("legal log");
         assert_eq!(
-            latest_project_root(&markers),
-            Some(std::path::PathBuf::from("/b"))
+            last_alive_at(&reduction, &events[0]),
+            900_000,
+            "the dispatch is newer than the marker that opened the run"
         );
     }
 
+    /// The other direction: a run that opened and recorded nothing has no
+    /// in-scope activity, so the marker's own recording time is the newest
+    /// fact there is. `None` here may not read as "epoch" — that would abandon
+    /// every freshly-opened run.
     #[test]
-    fn latest_project_root_returns_none_for_legacy_runs() {
-        let markers = vec![rec(1, run_started(10), 10)];
-        assert_eq!(latest_project_root(&markers), None);
+    fn a_run_that_recorded_nothing_is_dated_by_its_marker() {
+        let events = vec![rec(1, run_started(10), 5_000)];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(reduction.progress.last_activity_at, None);
+        assert_eq!(last_alive_at(&reduction, &events[0]), 5_000);
+    }
+
+    /// An answered call is still activity — the run was alive when its result
+    /// landed, whether or not anything is left dangling.
+    #[test]
+    fn an_answered_call_is_still_activity() {
+        let events = vec![
+            rec(1, run_started(10), 1_000),
+            rec(2, tool_requested("c1"), 2_000),
+            rec(3, tool_result("c1"), 3_000),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert!(reduction.dangling.is_empty());
+        assert_eq!(last_alive_at(&reduction, &events[0]), 3_000);
+    }
+
+    /// Every refusal carries a word of its own. A new variant that fans into
+    /// an existing word would make two different answers read alike in the
+    /// receipt, the CLI and the doctor at once.
+    #[test]
+    fn every_refusal_has_its_own_reason_word() {
+        let all = [
+            ResumeRefusal::LogInconsistent(LogContradiction::OutOfOrderSlice { at_seq: 7 }),
+            ResumeRefusal::AgentMissing,
+            ResumeRefusal::BoundaryRepairFailed("append failed".into()),
+            ResumeRefusal::RetriggerFailed("adapter said no".into()),
+        ];
+        let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
+        assert_eq!(words.len(), all.len(), "two refusals share one word");
+        for refusal in &all {
+            assert!(
+                !refusal.detail().is_empty(),
+                "{refusal:?} reports no detail an operator could act on"
+            );
+        }
+        assert!(
+            all[0].detail().contains("seq 7"),
+            "a log contradiction must name where: {}",
+            all[0].detail()
+        );
+    }
+
+    // ---- ④ the crash-time envelope --------------------------------------
+
+    fn facts(
+        project_root: Option<&str>,
+        envelope: Option<crate::session::events::RunEnvelopeSnapshot>,
+    ) -> crate::session::reduction::RunStartFacts {
+        crate::session::reduction::RunStartFacts {
+            seq: 1,
+            run_id: "r".to_string(),
+            project_root: project_root.map(str::to_string),
+            envelope,
+        }
+    }
+
+    fn envelope_with(
+        model: Option<&str>,
+        provider: Option<&str>,
+        exec_tier: Option<&str>,
+    ) -> crate::session::events::RunEnvelopeSnapshot {
+        crate::session::events::RunEnvelopeSnapshot {
+            exec_tier: exec_tier.map(str::to_string),
+            session_mode: Some("code".to_string()),
+            think_level: Some("high".to_string()),
+            memory_mode: Some("off".to_string()),
+            model: model.map(str::to_string),
+            model_provider: provider.map(str::to_string),
+        }
+    }
+
+    fn pinnable(names: &[&str]) -> std::collections::BTreeSet<String> {
+        names.iter().map(|n| (*n).to_string()).collect()
+    }
+
+    /// An envelope that never recorded which model served is a DEGRADE, not a
+    /// clean resume.
+    ///
+    /// This is the silent substitution the ruling closes: the resume walks
+    /// today's chain, and if the session was re-pinned while the crashed run
+    /// sat unresumed, that chain answers with a different model. `unsnapshotted`
+    /// cannot report it — the envelope is right here — so before this the fact
+    /// had no carrier at all and every face showed a clean recovery.
+    #[test]
+    fn an_envelope_that_never_named_the_model_resumes_degraded_and_says_so() {
+        let plan = plan_resume(
+            Some(&facts(None, Some(envelope_with(None, None, Some("full"))))),
+            None,
+            &|_| true,
+        );
+        assert!(
+            !plan.unsnapshotted,
+            "the envelope is present; only its model half is missing"
+        );
+        assert!(
+            plan.degraded,
+            "an unrecoverable model is something given up"
+        );
+        let note = plan
+            .degrade
+            .as_ref()
+            .expect("a degrade must carry the sentence the model reads");
+        assert!(
+            note.sentence.contains("was not recorded"),
+            "the note must say the model is unknown, not invent one: {}",
+            note.sentence
+        );
+        assert!(
+            plan.model_override.is_none(),
+            "nothing was recorded, so there is nothing to pin"
+        );
+    }
+
+    /// The other half of the same gate: a snapshot that DID name a model must
+    /// not collect that sentence. Without this, the branch above could be made
+    /// unconditional and every test here would stay green.
+    #[test]
+    fn a_recorded_model_resumes_without_the_unknown_model_sentence() {
+        // A LIVE model, deliberately: `deepseek-chat` is deprecated in the
+        // catalog (the Successor test below depends on that), and a degrade
+        // from the lifecycle arm would have made this test pass for the wrong
+        // reason — it would no longer separate "recorded" from "not recorded".
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert!(
+            !plan.degraded,
+            "a model that is still valid gives nothing up"
+        );
+        assert!(plan.degrade.is_none());
+        assert_eq!(
+            plan.model_override
+                .as_ref()
+                .map(crate::gateway::model_override::ModelOverride::model),
+            Some("gpt-5.6")
+        );
+    }
+
+    /// The three replayable knobs ride on their own metadata keys, and the
+    /// tier rides on the CEILING key — never on `exec_tier`, which is the
+    /// request rung and would let a resume raise a tightened conversation.
+    #[test]
+    fn the_snapshot_knobs_reach_the_request_and_the_tier_rides_the_ceiling_key() {
+        // The model half is filled in so this stays a test about KNOBS: an
+        // envelope with no model is now a degrade in its own right, and the
+        // `!plan.degraded` assertion at the bottom would be answering that
+        // question instead of this one.
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), Some("full"))),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY)
+                .map(String::as_str),
+            Some("full")
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::config::types::policies::EXEC_TIER_SESSION_KEY),
+            None,
+            "the tier must never arrive as the request rung"
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::config::types::policies::MODE_SESSION_KEY)
+                .map(String::as_str),
+            Some("code")
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::agents::thinking::THINK_LEVEL_SESSION_KEY)
+                .map(String::as_str),
+            Some("high")
+        );
+        assert_eq!(
+            plan.knobs
+                .get(crate::memory::session_memory_mode::MEMORY_MODE_SESSION_KEY)
+                .map(String::as_str),
+            Some("off")
+        );
+        assert!(!plan.degraded);
+        assert!(!plan.unsnapshotted);
+        assert!(plan.degrade.is_none());
+    }
+
+    /// A live pin is replayed verbatim, as a qualified override.
+    #[test]
+    fn a_live_snapshot_model_is_replayed_as_a_qualified_override() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            plan.model_override,
+            Some(crate::gateway::model_override::ModelOverride::Qualified {
+                provider: "openai".to_string(),
+                model: "gpt-5.6".to_string(),
+            })
+        );
+        assert!(!plan.degraded);
+    }
+
+    /// A model the catalog retired since the crash comes back on its
+    /// successor, and the model is told which and why.
+    #[test]
+    fn a_retired_snapshot_model_resumes_on_its_successor_and_says_so() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("deepseek-chat"), Some("deepseek"), None)),
+            )),
+            Some(&pinnable(&["deepseek"])),
+            &|_| true,
+        );
+        let note = plan.degrade.expect("a degraded resume carries a sentence");
+        assert!(
+            note.sentence.contains("deepseek-chat") && note.sentence.contains("resumes on"),
+            "{}",
+            note.sentence
+        );
+        assert!(plan.degraded);
+        let over = plan.model_override.expect("a successor is still a pin");
+        assert_ne!(over.model(), "deepseek-chat");
+    }
+
+    /// A pin naming a provider this server no longer has cannot be honoured:
+    /// the run falls back to the default chain, degraded and stated.
+    #[test]
+    fn a_pin_on_an_unconfigured_provider_is_dropped_not_replayed() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("m-x"), Some("gone-inc"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(plan.model_override, None);
+        assert!(plan.degraded);
+        assert!(plan.degrade.expect("stated").sentence.contains("gone-inc"));
+    }
+
+    /// "No published pinnable set" is *unvalidated*, never "nothing is
+    /// pinnable" — the same reading `select_model` takes of the same handle.
+    #[test]
+    fn an_unpublished_pinnable_set_does_not_drop_the_pin() {
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("m-x"), Some("whatever"), None)),
+            )),
+            None,
+            &|_| true,
+        );
+        assert!(plan.model_override.is_some());
+        assert!(!plan.degraded);
+    }
+
+    /// A project folder that has since gone away degrades to the agent
+    /// workspace *and* says so (ruling A9) — a silent fallback would write
+    /// the recovered run's files where nobody is looking.
+    #[test]
+    fn a_vanished_project_root_degrades_and_is_stated() {
+        let plan = plan_resume(
+            Some(&facts(Some("/gone"), Some(envelope_with(None, None, None)))),
+            None,
+            &|_| false,
+        );
+        assert_eq!(plan.workspace, None);
+        assert!(plan.degraded);
+        assert!(plan.degrade.expect("stated").sentence.contains("/gone"));
+    }
+
+    /// A marker written before the envelope existed is counted, not assumed
+    /// away: the first boot after this ships is what reports the real size of
+    /// the pre-envelope backlog.
+    #[test]
+    fn a_legacy_marker_is_unsnapshotted_and_replays_nothing() {
+        let plan = plan_resume(Some(&facts(Some("/p"), None)), None, &|_| true);
+        assert!(plan.unsnapshotted);
+        assert!(plan.knobs.is_empty());
+        assert_eq!(plan.model_override, None);
+        assert_eq!(plan.workspace, Some(std::path::PathBuf::from("/p")));
+    }
+
+    /// No `open_run` at all — the ③-D2 shape where the `RunStarted` append
+    /// failed and the run executed anyway. Nothing to replay; today's values
+    /// apply, and the count says so.
+    #[test]
+    fn a_missing_open_run_is_unsnapshotted_rather_than_invented() {
+        let plan = plan_resume(None, None, &|_| true);
+        assert!(plan.unsnapshotted);
+        assert!(plan.knobs.is_empty());
+        assert_eq!(plan.workspace, None);
+        assert!(plan.degrade.is_none());
+    }
+
+    /// Two degradations in one resume are one note, not one that wins.
+    #[test]
+    fn a_resume_that_loses_two_things_says_both() {
+        let plan = plan_resume(
+            Some(&facts(
+                Some("/gone"),
+                Some(envelope_with(Some("m-x"), Some("gone-inc"), None)),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| false,
+        );
+        let s = plan.degrade.expect("stated").sentence;
+        assert!(s.contains("/gone"), "{s}");
+        assert!(s.contains("m-x"), "{s}");
     }
 
     /// I2: a resumed run must carry the session's SCOPE, not just its folder.
@@ -1235,24 +1951,5 @@ mod tests {
                  resume is double-driving that scheduler again"
             );
         }
-    }
-
-    #[test]
-    fn a_tool_error_counts_as_an_answer() {
-        let events = vec![
-            rec(1, run_started(10), 10),
-            rec(2, tool_requested("c1"), 20),
-            rec(
-                3,
-                SessionEvent::ToolError {
-                    turn_id: TurnId::new_v4(),
-                    call_id: "c1".into(),
-                    error: "prior failure".into(),
-                    at: 30,
-                },
-                30,
-            ),
-        ];
-        assert!(repairs_for(&reduce_run(&events)).is_empty());
     }
 }

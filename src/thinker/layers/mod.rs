@@ -20,7 +20,7 @@ mod soul;
 mod agent_role;
 
 // --- Project-room layer ---
-mod room_roster;
+pub(crate) mod room_roster;
 
 // --- Profile layer ---
 pub mod profile;

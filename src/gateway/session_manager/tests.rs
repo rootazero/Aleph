@@ -331,15 +331,27 @@ fn no_message_query_ranks_by_the_raw_timestamp_column() {
     );
 }
 
-/// No statement may ORDER `messages` by the stamp — normalized or raw.
+/// No statement may ORDER `messages` by the stamp — normalized or raw — and
+/// none may order by insert order alone either.
 ///
-/// The transcript's order is the order its rows were recorded: `messages.id`
-/// here, file position in `transcript.jsonl`. The reasoning is on
+/// The transcript's order is the source event's seq, with rows that have none
+/// anchored to the newest seq before them
+/// ([`crate::session::projection::TRANSCRIPT_ANCHOR_SQL`], whose Rust twin the
+/// file backend runs over `transcript.jsonl`). The reasoning is on
 /// [`SessionStore::history_page`]; what this guard adds is that the SQL half
 /// cannot quietly re-acquire a second opinion. It had one for four rounds —
 /// SQLite ranked `(stamp_millis_sql, id)` while the file store served and
 /// deleted by position — and the two agreed only because `add_message_full`
 /// was overwriting every producer's stamp with the insert clock.
+///
+/// The rule used to be "`ORDER BY id`, file position in the file backend",
+/// and recording order still beats the STAMP — that ruling stands. What
+/// changed is that recording order stopped being right about itself: the
+/// projector heals holes BELOW the newest row it has written, so a message
+/// recovered after a crash is appended last. `ORDER BY id` is therefore now a
+/// banned spelling rather than the prescribed one, and it is banned rather
+/// than merely uncounted because two of these statements pick the victims of
+/// an irreversible DELETE.
 ///
 /// Source-level because no runtime test on THIS database can see it: every
 /// production producer writes a stamp that is monotonic in append order, so a
@@ -352,22 +364,35 @@ fn no_message_query_ranks_by_the_raw_timestamp_column() {
 /// [`SessionStore::history_page`]: crate::gateway::session_store::SessionStore::history_page
 #[test]
 fn no_message_query_orders_by_the_stamp() {
-    let mut recording_order_sites = 0_usize;
+    let mut anchored_sites = 0_usize;
     for (label, src) in MESSAGE_SQL_FILES {
         let flat = flatten(src);
-        recording_order_sites += flat.matches("ORDER BY id").count();
+        // Counted by the CALL, not by the ordering's spelling: the constant is
+        // the one token no rewrite of the `ORDER BY` tail can rename away, the
+        // same reasoning the `stamp_millis_sql()` count below rests on.
+        anchored_sites += flat.matches("TRANSCRIPT_ANCHOR_SQL").count();
         for pattern in ["ORDER BY {stamp}", "ORDER BY (CASE"] {
             assert!(
                 !flat.contains(pattern),
                 "{label} orders `messages` by the timestamp (`{pattern}`). The \
-                 transcript's order is the order its rows were recorded — \
-                 `ORDER BY id` here, file position in the file backend. \
-                 Ordering by the stamp gives this backend a second opinion \
-                 about the same conversation, and two of these statements \
-                 choose the victims of a DELETE. See \
-                 `SessionStore::history_page` for why recording order won."
+                 transcript's order is the source event's seq, anchored — \
+                 `TRANSCRIPT_ANCHOR_SQL` here, its Rust twin in the file \
+                 backend. Ordering by the stamp gives this backend a second \
+                 opinion about the same conversation, and two of these \
+                 statements choose the victims of a DELETE. See \
+                 `SessionStore::history_page`."
             );
         }
+        assert!(
+            !flat.contains("ORDER BY id"),
+            "{label} orders `messages` by insert order alone. That was the \
+             rule until the projector learned to heal holes BELOW the newest \
+             row it had written — a message recovered after a crash is \
+             appended last, so insert order shows it at the bottom of the \
+             conversation and a DELETE ranked by it drops the wrong rows. \
+             Wrap the projection in `TRANSCRIPT_ANCHOR_SQL AS anchor` and \
+             order by `anchor` with `id` as the tie-break."
+        );
     }
     // The ban above keys on the spelling `{stamp}`, which is a BINDING NAME —
     // `let s = Self::stamp_millis_sql()` renames it and walks straight past.
@@ -404,12 +429,15 @@ fn no_message_query_orders_by_the_stamp() {
     );
 
     // Self-check: a scanner that stops seeing the orderings reports the same
-    // clean result as a codebase with none.
+    // clean result as a codebase with none. The ban above is a NEGATIVE rule,
+    // so on its own it is also satisfied by a file with no message queries at
+    // all — this is the half that notices.
     assert!(
-        recording_order_sites >= 8,
-        "only {recording_order_sites} `ORDER BY id` sites found across {} \
-         files; this guard used to see 8, so either statements were removed or \
-         `flatten` stopped matching them",
+        anchored_sites >= 4,
+        "only {anchored_sites} `TRANSCRIPT_ANCHOR_SQL` sites found across {} \
+         files; this guard used to see 4 (history window, preview window, \
+         title derivation, and the two DELETE boundaries), so either \
+         statements were removed or `flatten` stopped matching them",
         MESSAGE_SQL_FILES.len()
     );
 }

@@ -432,11 +432,6 @@ impl AgentRunManager {
         signalled || dequeued || was_running
     }
 
-    /// List active runs
-    pub async fn list_runs(&self) -> Vec<RunState> {
-        self.active_runs.read().await.values().cloned().collect()
-    }
-
     /// Snapshot of the execution engine's run-concurrency slot usage, for
     /// `gateway.metrics.run_concurrency` (Task 8, audit 3.4).
     pub fn concurrency_snapshot(&self) -> crate::gateway::execution_engine::ConcurrencySnapshot {
@@ -958,7 +953,7 @@ pub async fn build_run_request(
                 // which is the exact property the line above promises. The
                 // path a human reads is a different carrier —
                 // `identity_meta.custom["project_root"]`, surfaced as
-                // `SessionInfo.project_root` — and the `\\?\` prefix is kept
+                // `SessionListRow.project_root` — and the `\\?\` prefix is kept
                 // off it at the boundary that serves it.
                 metadata.insert("project_root".to_string(), path.display().to_string());
                 Ok(path)

@@ -76,6 +76,11 @@ command -v node >/dev/null 2>&1 || { echo "node is required for this fixture" >&
 node -e 'require("node:sqlite")' >/dev/null 2>&1 || {
   echo "this fixture reads the rows on disk and needs node:sqlite (node >= 22)" >&2; exit 1; }
 
+# `qa_build` is called by the hoisted block below, so build.sh has to be sourced
+# above it — not down next to `scratch_home.sh`, where the HOME redirect needs
+# its own helper.
+. "$HERE/../lib/build.sh"
+
 # --- build BEFORE the HOME redirect ----------------------------------------
 # Deliberately ahead of `qa_redirect_home`: the per-command `HOME="$REAL_HOME"
 # cargo …` guard the sibling fixtures use is correct on POSIX, where the pinned
@@ -88,10 +93,8 @@ node -e 'require("node:sqlite")' >/dev/null 2>&1 || {
 # that `aleph projects channel bind` had never spoken to a live gateway.
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   echo "=== build (server + cli) ==="
-  (cd "$REPO" && cargo build --bin aleph-server 2>&1 | tail -3) || {
-    echo "server build failed" >&2; exit 1; }
-  (cd "$REPO" && cargo build -p aleph-cli --bin aleph 2>&1 | tail -3) || {
-    echo "cli build failed" >&2; exit 1; }
+  qa_build --bin aleph-server || { echo "server build failed" >&2; exit 1; }
+  qa_build -p aleph-cli --bin aleph || { echo "cli build failed" >&2; exit 1; }
 fi
 TARGET_DIR="$(cd "$REPO" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
   | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).target_directory))')"
@@ -140,7 +143,14 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== generate a baseline config ==="
-timeout 40 "$SERVER" start >"$QA_ROOT/gen.log" 2>&1 &
+# `--port` on the GENERATION boot. The config does not exist yet, so without
+# it this boot binds the built-in default port — and if anything already holds
+# that port (another fixture, a dev server, the operator's own daemon) the
+# process exits before writing a config at all. The symptom is
+# `no config generated at …`, which reads like a permissions or path problem;
+# the cause is one line further up the log. Binding the port this run already
+# owns makes the generation boot as isolated as the real one.
+timeout 40 "$SERVER" --port "$GATEWAY_PORT" start >"$QA_ROOT/gen.log" 2>&1 &
 GEN_PID=$!
 for _ in $(seq 1 60); do [ -f "$CONFIG" ] && break; sleep 0.5; done
 kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null

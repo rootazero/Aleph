@@ -161,7 +161,7 @@ Relevant config fields on `SessionCompactorConfig`: `d1_min_fanout = 4`, `d2_min
 
 ### 6.2 TranscriptIndexer
 
-`src/memory/transcript_indexer/indexer.rs` handles near-realtime per-turn indexing. `index_turn_text(session_key, seq, user_input, ai_output, namespace, agent)` combines the `[user]` / `[assistant]` pair, chunks it through `chunk_text` when estimated tokens exceed 800, and inserts one `RawMemory` per chunk at path `aleph://transcript/{session_key}/{seq}` (or `…_chunk{i}` for multi-chunk turns). `source = "transcript"`.
+`src/memory/transcript_indexer/indexer.rs` handles near-realtime per-turn indexing (plain rows, no embeddings — recall over them is the substring transcripts leg of `memory_search`). `index_turn_text(session_key, seq, user_input, ai_output, namespace, agent)` combines the `[user]` / `[assistant]` pair, chunks it through `chunk_text` when estimated tokens (chars ÷ 4) exceed `max_tokens_per_chunk`, and inserts one `RawMemory` per chunk at path `aleph://transcript/{session_key}/{seq}` (or `…_chunk{i}` for multi-chunk turns; the prefix constant is `transcript_indexer::TRANSCRIPT_PATH_PREFIX`). `source = "transcript"`.
 
 Config keys on `TranscriptIndexerConfig` (`src/memory/transcript_indexer/config.rs`): `max_tokens_per_chunk = 400`, `overlap_tokens = 80`, `enable_chunking = true`. A separate `SemanticChunkConfig` (`similarity_threshold = 0.85`, `min_chunk_size = 50`, `max_chunk_size = 400`) governs the semantic-boundary chunker when embeddings are available.
 

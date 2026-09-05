@@ -12,7 +12,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::error::{AlephError, Result};
 
@@ -110,6 +110,23 @@ pub struct WorkflowStepDef {
     /// templates).
     #[serde(default, skip_serializing_if = "is_false")]
     pub require_grounding: bool,
+    /// Run this step even if a step it `depends_on` ended `Failed` or
+    /// `Cancelled`, instead of leaving it permanently `Unsatisfiable`.
+    ///
+    /// Off by default: a dependency edge normally means "I need this step's
+    /// output", so a dead upstream kills the branch. Set it on a **synthesis /
+    /// report / cleanup** step that can still do useful work with one input
+    /// missing — the failed upstream's error text is handed to this step in
+    /// place of a deliverable, so the agent knows what it did not get.
+    ///
+    /// Scope is deliberately narrow: it tolerates only this step's **direct**
+    /// dependencies, and only for this step. A step two hops below a failure
+    /// whose own (tolerant) parent then ran successfully is unblocked by that
+    /// parent's success, not by this flag; a step whose direct parent is
+    /// itself unsatisfiable stays blocked. Absent on the wire when false
+    /// (byte-identical legacy templates).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tolerate_failed_deps: bool,
     /// Per-step wall-clock timeout (seconds) for the member run. Stamped into
     /// the materialised task's metadata (`timeout_secs` — the same override
     /// channel `task_create` uses), so a deep-research step and a quick
@@ -197,6 +214,20 @@ impl WorkflowDef {
                             step.id
                         )));
                     }
+                    // The tolerance flag is stamped onto the materialised
+                    // task's metadata by the AGENT branch of `materialize`;
+                    // a clarify row carries a different metadata shape and
+                    // never gets it. Accepting the flag here would let it ride
+                    // through save → export → import as data nothing applies —
+                    // a declared guarantee with no machinery behind it, which
+                    // is worse than refusing it at the boundary.
+                    if step.tolerate_failed_deps {
+                        return Err(AlephError::invalid_input(format!(
+                            "clarify step '{}' cannot set tolerate_failed_deps — the flag is \
+                             applied to an agent run's readiness, and a clarify step runs none",
+                            step.id
+                        )));
+                    }
                     if step.timeout_seconds.is_some() || step.max_retries.is_some() {
                         return Err(AlephError::invalid_input(format!(
                             "clarify step '{}' cannot set timeout_seconds/max_retries — it runs no agent",
@@ -254,6 +285,49 @@ impl WorkflowDef {
         Ok(())
     }
 
+    /// Every `{{name}}` this template's prompts reference, sorted and deduped.
+    ///
+    /// **Derived, never declared.** A `vars: Vec<String>` field on the manifest
+    /// would be a second spelling of a fact the prompts already state, and the
+    /// two would drift the first time someone edits a prompt without editing
+    /// the list — after which `run` would either demand an arg no prompt uses
+    /// or accept a launch missing one that every prompt does. Scanning the
+    /// prompts means the declaration cannot be wrong, because there is no
+    /// declaration.
+    ///
+    /// Covers clarify steps too: a clarify step's `prompt` IS the question put
+    /// to the user, so an unsubstituted placeholder there is shown to a human
+    /// rather than to a model.
+    #[must_use]
+    pub fn referenced_vars(&self) -> BTreeSet<String> {
+        let mut vars = BTreeSet::new();
+        for step in &self.steps {
+            // `None` input and a lookup that never substitutes: the scan is
+            // run purely for its side effect, so the names and the renderer's
+            // notion of "what is a placeholder" cannot disagree.
+            let _ = scan_prompt(&step.prompt, None, &mut |name| {
+                vars.insert(name.to_string());
+                None
+            });
+        }
+        vars
+    }
+
+    /// The referenced vars `args` does not supply, in report order. Empty
+    /// means the run can be rendered without leaving a placeholder behind.
+    ///
+    /// Fail-closed (P7) is the caller's job and `run`'s policy: an absent arg
+    /// is "I do not know what this step should say", not "substitute nothing".
+    /// Rendering it as the literal `{{region}}` would ship that question to the
+    /// agent as if it were the instruction.
+    #[must_use]
+    pub fn missing_vars(&self, args: &HashMap<String, String>) -> Vec<String> {
+        self.referenced_vars()
+            .into_iter()
+            .filter(|v| !args.contains_key(v))
+            .collect()
+    }
+
     /// Return step indices in dependency order: every step appears after all
     /// the steps it `depends_on`. Kahn's algorithm — `O(V + E)`.
     ///
@@ -309,15 +383,105 @@ impl WorkflowDef {
     }
 }
 
-/// Substitute `{input}` placeholders in a step prompt with the run input.
+/// Everything a single `run` substitutes into its step prompts.
 ///
-/// Deliberately minimal: a single well-known placeholder, not a templating
-/// engine (R6 — KISS). Upstream step outputs are injected at run time by the
-/// dispatcher's `build_handoff_context`, so the prompt never needs to
-/// reference other steps.
+/// One value rather than a growing positional argument list: `materialize`
+/// already threads eight parameters, and the run's *inputs* are one fact with
+/// two spellings — the anonymous `{input}` every template has always had, and
+/// the named `{{var}}` args. A caller that forgets one of them is a caller
+/// that constructed this struct, not one that mis-ordered a parameter.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunInputs {
+    /// Substituted for `{input}`.
+    pub input: String,
+    /// Substituted for `{{name}}`, by name.
+    pub args: HashMap<String, String>,
+}
+
+impl RunInputs {
+    /// The anonymous input alone — the shape every run had before named args.
+    #[must_use]
+    pub fn from_input(input: impl Into<String>) -> Self {
+        Self {
+            input: input.into(),
+            args: HashMap::new(),
+        }
+    }
+}
+
+/// Walk `template` once, resolving both placeholder forms in a single pass.
+///
+/// A single pass is the point: substituting in two passes would re-scan the
+/// text a value produced, so an arg whose value happens to contain `{input}`
+/// (or vice versa) would be expanded a second time — a template injection
+/// through a run's own data. Nothing a lookup returns is ever re-examined.
+///
+/// `{{name}}` matches only `[A-Za-z0-9_]+` between the braces. Anything else
+/// after `{{` is not a placeholder and is copied through untouched, so a
+/// prompt containing JSON or a shell brace expansion survives verbatim.
+/// `lookup` returning `None` also leaves the placeholder untouched — that is
+/// what makes this same scanner usable for *collecting* the names (see
+/// [`WorkflowDef::referenced_vars`]) rather than only for rendering.
+fn scan_prompt(
+    template: &str,
+    input: Option<&str>,
+    lookup: &mut dyn FnMut(&str) -> Option<String>,
+) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(pos) = rest.find('{') {
+        out.push_str(&rest[..pos]);
+        let at = &rest[pos..];
+        if let Some(after) = at.strip_prefix("{{") {
+            // Identifier chars only; the first char that is not one ends the
+            // candidate name (and `}}` must follow immediately).
+            let name_len = after
+                .char_indices()
+                .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+                .map_or(after.len(), |(i, _)| i);
+            let (name, tail) = after.split_at(name_len);
+            if !name.is_empty() && tail.starts_with("}}") {
+                match lookup(name) {
+                    Some(value) => out.push_str(&value),
+                    None => out.push_str(&at[..name_len + 4]),
+                }
+                rest = &tail[2..];
+                continue;
+            }
+            // Not a placeholder — emit the braces and resume after them, so a
+            // `{{` that opens nothing cannot swallow the rest of the prompt.
+            out.push_str("{{");
+            rest = after;
+            continue;
+        }
+        if let (Some(input), Some(tail)) = (input, at.strip_prefix("{input}")) {
+            out.push_str(input);
+            rest = tail;
+            continue;
+        }
+        out.push('{');
+        rest = &at[1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Substitute a step prompt's placeholders with the run's inputs.
+///
+/// Two forms, both resolved in one pass: `{input}` (the run's anonymous input)
+/// and `{{name}}` (a named `args` entry). A `{{name}}` with no matching arg is
+/// left as written — `run` refuses such a launch up front (see
+/// [`WorkflowDef::referenced_vars`]), so reaching here with one means the
+/// caller deliberately rendered without validating.
+///
+/// Still not a templating engine (R6 — KISS): no conditionals, no loops, no
+/// nesting. Upstream step outputs are injected at run time by the dispatcher's
+/// `build_handoff_context`, so the prompt never needs to reference other steps.
 #[must_use]
-pub fn render_prompt(template: &str, input: &str) -> String {
-    template.replace("{input}", input)
+pub fn render_prompt(template: &str, inputs: &RunInputs) -> String {
+    scan_prompt(template, Some(&inputs.input), &mut |name| {
+        inputs.args.get(name).cloned()
+    })
 }
 
 #[cfg(test)]
@@ -334,6 +498,7 @@ mod tests {
             choices: vec![],
             review: false,
             require_grounding: false,
+            tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
         }
@@ -349,6 +514,7 @@ mod tests {
             choices: choices.iter().map(|s| s.to_string()).collect(),
             review: false,
             require_grounding: false,
+            tolerate_failed_deps: false,
             timeout_seconds: None,
             max_retries: None,
         }
@@ -444,12 +610,98 @@ mod tests {
 
     #[test]
     fn render_prompt_substitutes_input() {
+        let inputs = |s: &str| RunInputs::from_input(s);
         assert_eq!(
-            render_prompt("summarise {input}", "the logs"),
+            render_prompt("summarise {input}", &inputs("the logs")),
             "summarise the logs"
         );
-        assert_eq!(render_prompt("no placeholder", "x"), "no placeholder");
-        assert_eq!(render_prompt("{input} and {input}", "a"), "a and a");
+        assert_eq!(
+            render_prompt("no placeholder", &inputs("x")),
+            "no placeholder"
+        );
+        assert_eq!(
+            render_prompt("{input} and {input}", &inputs("a")),
+            "a and a"
+        );
+    }
+
+    fn with_args(input: &str, pairs: &[(&str, &str)]) -> RunInputs {
+        RunInputs {
+            input: input.into(),
+            args: pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn render_prompt_substitutes_named_args() {
+        let inputs = with_args("the logs", &[("region", "eu-west"), ("env", "prod")]);
+        assert_eq!(
+            render_prompt("deploy to {{env}} in {{region}}: {input}", &inputs),
+            "deploy to prod in eu-west: the logs"
+        );
+        // Repeated use, and adjacency to ordinary text.
+        assert_eq!(render_prompt("{{env}}/{{env}}!", &inputs), "prod/prod!");
+    }
+
+    #[test]
+    fn a_run_input_is_never_re_scanned_as_a_template() {
+        // Two passes would let a run's own DATA become template text: an arg
+        // value containing `{input}` (or an input containing `{{env}}`) would
+        // be expanded by the pass that follows. One pass, no re-entry.
+        let inputs = with_args("{{env}}", &[("env", "prod"), ("literal", "{input}")]);
+        assert_eq!(render_prompt("{input}", &inputs), "{{env}}");
+        assert_eq!(render_prompt("{{literal}}", &inputs), "{input}");
+    }
+
+    #[test]
+    fn a_brace_run_that_is_not_a_placeholder_survives_verbatim() {
+        // Prompts carry JSON, shell braces and prose. Only `{{ident}}` is a
+        // placeholder; everything else must reach the agent as written.
+        let inputs = with_args("x", &[("a", "A")]);
+        for text in [
+            r#"return {"shape": {"n": 1}}"#,
+            "{{ spaced }}",
+            "{{}}",
+            "{{a-b}}",
+            "{{unclosed",
+            "{notinput}",
+        ] {
+            assert_eq!(
+                render_prompt(text, &inputs),
+                text,
+                "left as written: {text}"
+            );
+        }
+        // …and an unsupplied name is left as written too (run refuses first).
+        assert_eq!(render_prompt("{{ghost}}", &inputs), "{{ghost}}");
+    }
+
+    #[test]
+    fn referenced_vars_are_derived_from_the_prompts() {
+        // Single source of truth: the prompts declare the vars. Includes
+        // clarify steps, whose prompt is the question shown to a human.
+        let mut steps = vec![step("a", &[]), step("b", &["a"])];
+        steps[0].prompt = "audit {{region}} for {{env}}, given {input}".into();
+        steps[1].kind = WorkflowStepKind::Clarify;
+        steps[1].prompt = "ship to {{env}}?".into();
+        let d = def(steps);
+        assert_eq!(
+            d.referenced_vars().into_iter().collect::<Vec<_>>(),
+            vec!["env".to_string(), "region".to_string()],
+            "sorted, deduped, both step kinds"
+        );
+        let mut args = HashMap::new();
+        args.insert("env".to_string(), "prod".to_string());
+        assert_eq!(d.missing_vars(&args), vec!["region".to_string()]);
+        args.insert("region".to_string(), "eu".to_string());
+        assert!(d.missing_vars(&args).is_empty());
+
+        // A template with no `{{...}}` references nothing — the byte-identical
+        // path for every workflow written before named args existed.
+        assert!(def(vec![step("a", &[])]).referenced_vars().is_empty());
     }
 
     #[test]
@@ -548,6 +800,39 @@ mod tests {
         assert!(err.contains("cannot require review"), "got: {err}");
     }
 
+    // ---- Tolerant fan-in ---------------------------------------------------
+
+    #[test]
+    fn tolerate_failed_deps_roundtrips_and_stays_off_the_wire_when_false() {
+        let mut d = def(vec![step("a", &[]), step("b", &["a"])]);
+        d.steps[1].tolerate_failed_deps = true;
+        assert!(d.validate().is_ok(), "{:?}", d.validate());
+        let s = serde_json::to_string(&d).unwrap();
+        let back: WorkflowDef = serde_json::from_str(&s).unwrap();
+        assert!(back.steps[1].tolerate_failed_deps);
+        assert!(
+            !back.steps[0].tolerate_failed_deps,
+            "the flag is per step, not per template"
+        );
+
+        // A template that does not use it is byte-identical to a legacy one.
+        let plain = serde_json::to_string(&def(vec![step("a", &[])])).unwrap();
+        assert!(!plain.contains("tolerate_failed_deps"), "{plain}");
+    }
+
+    /// A clarify step's readiness stamp is written only by the agent branch of
+    /// `materialize`, so accepting the flag here would let it ride through
+    /// save/export as a guarantee with no machinery behind it.
+    #[test]
+    fn validate_rejects_tolerate_failed_deps_on_clarify_step() {
+        let mut d = def(vec![clarify_step("ask", "Pick env", &[], &[])]);
+        d.steps[0].tolerate_failed_deps = true;
+        let err = d.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("cannot set tolerate_failed_deps"),
+            "got: {err}"
+        );
+    }
     // ---- Per-step timeout / retry overrides --------------------------------
 
     #[test]

@@ -1,5 +1,13 @@
 # herdr 运行时移植 · 第 1 期设计
 
+> **状态（2026-09-04 加，正文一字未改）**：本期交付的 agent 面板**在生产上从未识别过任何一个 agent**——
+> 识别源是 spawn 时的 `$SHELL` 标签，而 agent 是在 shell 里交互式启动的。第 2 期换成前台进程探测并在真机上
+> 证明了它。**下面的正文刻意保持原样**：它是「第 1 期当时相信什么」的记录，改写它就毁掉了那个缺陷存在过的证据
+> （判据 §1：同一事实的两份表述）。
+> 现状与全文 → [FEATURE_LOCATOR §6.12](../../reference/FEATURE_LOCATOR.md) ·
+> [TERMINAL_RUNTIME.md](../../reference/TERMINAL_RUNTIME.md) ·
+> 第 2 期 spec → [2026-09-04-terminal-round2-design.md](2026-09-04-terminal-round2-design.md)。
+
 > **背景、逐层对账、两条裁定的账本、明确不搬清单** → [评估页面](https://claude.ai/code/artifact/45b5b9ba-dfba-4285-a7db-fccc4b43d069)
 > **本文件不复述那些论证**（同一事实的两份表述＝判据 §1）。这里只写第 1 期的实施契约。
 >

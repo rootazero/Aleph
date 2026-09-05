@@ -109,22 +109,24 @@
 | `src/tool_output/` | FL §2.7 §3.14 | E.2 | — |
 | `src/tools/` `src/builtin_tools/` | [TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) · [SECURITY.md](docs/reference/SECURITY.md) · FL §3.2–§3.14 | E.3 | — |
 | `src/builtin_tools/file_search/` | FL §3.4 | E.0 E.3 | `qa/file_search/run.sh {floor,page,reach,steer}` · `cargo bench --bench file_search_scan` |
-| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · [`src/gateway/CLAUDE.md`](src/gateway/CLAUDE.md) · FL §4.8 §5.6 §5.18 §5.26 §6.9 | E.4 | `qa/channels/run.sh {reach,errors,approval}` · `qa/resume_boundary/run.sh {crash,attribute}` |
+| `src/gateway/` | [GATEWAY.md](docs/reference/GATEWAY.md) · [`src/gateway/CLAUDE.md`](src/gateway/CLAUDE.md) · FL §4.8 §5.6 §5.18 §5.26 §6.9 | E.4 | `qa/channels/run.sh {reach,errors,approval}` · `qa/resume_boundary/run.sh {crash,attribute,claims,denied,rewind,knobs,holes}` |
 | `src/gateway/btw/` | FL §4.14 的机制图 · [SECURITY.md](docs/reference/SECURITY.md) 只读地板 | E.4 | `qa/btw_tui/run.sh {frames,promote}` |
 | `src/gateway/session_store/` `session_manager/` | FL §6.9 | E.0 | `qa/session_order/run.sh` |
 | `src/gateway/pty/` `interfaces/webchat/.../views/terminal/` | FL §6.11 · 判据清单 §0（分派表的静默 no-op · 有损可观测量） | E.0 | — |
+| `src/gateway/runtime/` `crates/agent-detect/` `src/builtin_tools/terminal.rs` | [TERMINAL_RUNTIME.md](docs/reference/TERMINAL_RUNTIME.md) · FL §6.12 | E.4 | `qa/terminal/run.sh {identify,wait,quiet,cwd,real,tui}`（`panel` 要浏览器） |
 | `src/memory/` `src/note/` | [MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) + memory/ 三分册 · FL §2.5 §2.9 §2.16 | E.5 | `qa/memory_curated/run.sh` |
 | `src/providers/` | [MODEL_CATALOG.md](docs/reference/MODEL_CATALOG.md) · FL §3.6 §4.9 | E.9 | — |
+| `src/spend/` `src/providers/metering.rs` | FL §5.22（round-7 的 per-principal 美元上限：`[policies.spend]` → `SpendLedger` → 两条执行臂）· FL §5.25（`install_ledger` / `install_policy` 两个进程级句柄——`MeteringProvider` 有 7 个生产构造点，所以裁决是进程级而非构造参数穿线） | E.0 E.9 | `qa/spend_budget/run.sh`（**需要真 python3**，Windows 主机上是 UNRUN 而不是 PASS——见 [`qa/README.md`](qa/README.md) 该条目） |
 | `src/search/` `src/builtin_tools/search.rs` | FL §3.18 | E.3 E.9 | `qa/web_search/run.sh {reach,order,degrade,empty,fanout,demote}`（SearXNG 是唯一能指向 mock 的后端，其余八个由 `providers/capability_census.rs` 在源码级覆盖）|
 | `src/browser/` `src/builtin_tools/browser_tools/` | FL §3.12 | E.9 | `qa/browser_managed/run.sh`（九个阶段，两个 driver） |
 | `src/mcp/` · `src/hub/` | FL §5.20 §5.24 · [ALEPH_HUB.md](docs/reference/ALEPH_HUB.md) FL §5.21 | E.9 | `qa/plugins/run.sh` |
 | `src/loop_graph/` `src/workflow/` · `src/identity/` | [GRAPH_LAYER.md](docs/reference/GRAPH_LAYER.md) FL §4.12 · [AGENT_IDENTITY.md](docs/reference/AGENT_IDENTITY.md) FL §5.17 | E.3 E.0 | — |
 | `src/config/` `src/diagnostics/` · `src/sandbox/` | FL §5.8 §5.9 §5.10 §5.24 · [SANDBOX.md](docs/reference/SANDBOX.md) FL §3.8 §3.15 | E.8 E.3 | — |
-| `src/agents/` `src/teams/` · `src/tasks/cron/` `src/tasks/heartbeat/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) FL §4.4 §4.5 §4.13a–c（cron/heartbeat 是孪生，共用 `src/tasks/shared/{alert,delivery}.rs`） | E.0 | `qa/teamchat_rooms/run.sh` |
+| `src/agents/` `src/teams/` · `src/tasks/cron/` `src/tasks/heartbeat/` | [MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) FL §4.4 §4.5 §4.13a–c（cron/heartbeat 是孪生，共用 `src/tasks/shared/{alert,delivery}.rs`） | E.0 | `qa/teamchat_rooms/run.sh` · `qa/agents_viz/run.sh {claims,panel}`（直播树 = **后台** tracker 的视图，同步 `run` 孩子不发树事件） |
 | `desktop/` | [WINDOWS_RUNTIME.md](docs/reference/WINDOWS_RUNTIME.md) · [LINUX_DESKTOP.md](docs/reference/LINUX_DESKTOP.md) · [DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) · FL §7.1–§7.4 | E.6 | — |
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · FL §4.7 §6.8 §6.9 | E.7 | `qa/picker_nav/run.sh` |
 | `src/canvas/` + Panel canvas 视图 | [CANVAS.md](docs/reference/CANVAS.md) · FL §6.10 | E.7 | `qa/canvas/run.sh` |
-| `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | FL §5.4 §5.11 §5.13 §5.23 | E.0（跨 crate wire 契约） | — |
+| `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | FL §5.4 §5.11 §5.13 §5.23 | E.0（跨 crate wire 契约） | `qa/agents_viz/run.sh claims`（无过滤连接 = TUI 的形状；没有 pty，不启动 `aleph-tui`） |
 
 > **对照表已做完，别重做**：openclaw · codex · hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz · deepseek-harness。逐项结论与"刻意不做清单"都在对应 reference 文档里。
 

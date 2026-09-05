@@ -19,6 +19,8 @@
 *.rlib
 *.so
 *.a
+# Git worktrees (per-project isolation; never commit the tree)
+/.worktrees/
 # Per-machine local cargo settings (e.g. a shared absolute target-dir for
 # parallel worktree builds). Machine-specific — must never be committed, or it
 # breaks CI runners that lack the hardcoded path.

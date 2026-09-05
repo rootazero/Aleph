@@ -45,6 +45,7 @@ pub async fn handle_get(
                     engines: backend.engines.clone(),
                     has_api_key,
                     verified: backend.verified,
+                    allow_private_upstream: backend.allow_private_upstream,
                 }
             })
             .collect();

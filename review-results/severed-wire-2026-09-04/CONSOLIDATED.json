@@ -1,0 +1,119 @@
+{
+  "audit": "severed-wire-audit + static review",
+  "date": "2026-09-04",
+  "modules": ["src/exec", "src/executor", "src/export", "src/extension", "src/fetch"],
+  "branch": "audit/exec-executor-export-extension-fetch-2026-09-04",
+  "method": "5 parallel subagents (one per module) doing PRODUCED/CONSUMED parity via rg, seam-catalog lenses (forms 1-5), and code-smell pass. Read-only — no edits made during review phase.",
+  "summary": {
+    "total_findings": 37,
+    "by_module": {
+      "src/exec": 9,
+      "src/executor": 8,
+      "src/export": 5,
+      "src/extension": 10,
+      "src/fetch": 5
+    },
+    "by_decision": {
+      "CUT": 19,
+      "CUT-or-defer": 2,
+      "DECIDE": 6,
+      "CONNECT": 4,
+      "REVIEWED_NO_CHANGE": 2
+    }
+  },
+  "fix_plan": [
+    {
+      "module": "src/exec",
+      "action": "CUT",
+      "files": ["src/exec/mod.rs", "src/exec/manager.rs", "src/exec/masker.rs", "src/exec/kernel.rs", "src/exec/leak_detector.rs"],
+      "findings": ["sw-exec-1", "sw-exec-2", "sw-exec-3", "sw-exec-4", "sw-exec-5", "sw-exec-6"],
+      "summary": "Drop unused re-exports + 5 dead methods gated by #[allow(dead_code)]"
+    },
+    {
+      "module": "src/executor",
+      "action": "CUT",
+      "files": ["src/executor/builtin_registry/registry/inherent.rs", "src/executor/builtin_registry/registry/struct_def.rs"],
+      "findings": ["sw-executor-1-1"],
+      "summary": "Remove two redundant use-imports silenced by file-level #[allow(unused_imports)]"
+    },
+    {
+      "module": "src/executor",
+      "action": "DECIDE-applied",
+      "files": ["src/builtin_tools/meta_tools.rs"],
+      "findings": ["sw-executor-3-1"],
+      "summary": "Rewrite doc comment to remove stale `BuiltinToolConfig.tool_catalog` field reference"
+    },
+    {
+      "module": "src/extension",
+      "action": "CUT",
+      "files": [
+        "src/extension/mod.rs",
+        "src/extension/skill_ops.rs",
+        "src/extension/watcher.rs",
+        "src/extension/service_manager.rs",
+        "src/extension/manifest/mod.rs",
+        "src/extension/capability.rs",
+        "src/extension/manager_global.rs"
+      ],
+      "findings": ["sw-extension-1-1", "sw-extension-1-2", "sw-extension-1-3", "sw-extension-1-4", "sw-extension-1-5", "sw-extension-1-6", "sw-extension-1-7", "sw-extension-1-8", "sw-extension-1-9"],
+      "summary": "Drop 16 dead public methods across 7 files (orphan ExtensionManager API, watcher, skill registry, capability types)"
+    },
+    {
+      "module": "src/extension",
+      "action": "FIX",
+      "files": ["src/extension/manager_global.rs"],
+      "findings": ["sw-extension-4-1"],
+      "summary": "Update doc-comment count for is_extension_manager_initialized (currently says '0 production callers'; actual is 6)"
+    },
+    {
+      "module": "src/fetch",
+      "action": "CUT",
+      "files": ["src/fetch/providers/firecrawl.rs", "src/fetch/mod.rs"],
+      "findings": ["sw-fetch-3-1", "sw-fetch-3-2"],
+      "summary": "Fix two stale doc comments (audit-note pointer + Task-N rotation)"
+    }
+  ],
+  "deferred_decisions": [
+    {
+      "id": "sw-exec-8",
+      "decision": "KEEP",
+      "reason": "Single-variant tagged enum ApprovalRequest wire-stability argument is real; cannot mechanically delete without explicit signal."
+    },
+    {
+      "id": "sw-exec-9",
+      "decision": "KEEP",
+      "reason": "Two ApprovalRequest types intentionally distinct (runtime record vs channel wire envelope); no collision at any call site."
+    },
+    {
+      "id": "sw-export-1-1",
+      "decision": "DEFER",
+      "reason": "Two pub const budget limits could be demoted to pub(crate) but the value of the const being visible (advertising policy to consumers) is plausible; not a clear severed wire."
+    },
+    {
+      "id": "sw-export-1-2",
+      "decision": "DEFER",
+      "reason": "Same as 1-1."
+    },
+    {
+      "id": "sw-export-2-1",
+      "decision": "DEFER",
+      "reason": "Three human_size copies — unification would touch shared/util API and is out of this audit's surgical scope."
+    },
+    {
+      "id": "sw-fetch-2-1",
+      "decision": "KEEP",
+      "reason": "Dormant fetch provider pipeline is well-documented as awaiting DNS-pin plumbing (BT-D-R4-22). Product call, not audit-tactical cut."
+    },
+    {
+      "id": "sw-fetch-1-1",
+      "decision": "DEFER",
+      "reason": "Factory trait is wider pub than necessary but is internal architecture; the cut decision depends on sw-fetch-2-1's outcome."
+    },
+    {
+      "id": "sw-fetch-1-2",
+      "decision": "DEFER",
+      "reason": "is_available() trait method dead on the wire; depends on sw-fetch-2-1's outcome."
+    }
+  ],
+  "verification": "Static only per instructions — cargo check/test intentionally NOT run during review phase. All fixes will be applied in worktree, then a unified cargo check at the end."
+}

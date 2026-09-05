@@ -181,7 +181,9 @@ impl RunHalt {
             "consecutive_failure_cap" => {
                 td_string!(locale, chat.halt_consecutive_failure_cap).to_string()
             }
-            "empty_response_exhausted" => td_string!(locale, chat.halt_empty_response_exhausted).to_string(),
+            "empty_response_exhausted" => {
+                td_string!(locale, chat.halt_empty_response_exhausted).to_string()
+            }
             "reactive_compact_exhausted" => {
                 td_string!(locale, chat.halt_reactive_compact_exhausted).to_string()
             }
@@ -3547,10 +3549,16 @@ mod halt_vocabulary_is_shared_tests {
             if keyed.is_empty() {
                 keyed = here;
             } else {
-                assert_eq!(keyed, here, "the two locale files carry different halt keys");
+                assert_eq!(
+                    keyed, here,
+                    "the two locale files carry different halt keys"
+                );
             }
         }
-        assert!(!keyed.is_empty(), "no halt keys found — did the scan break?");
+        assert!(
+            !keyed.is_empty(),
+            "no halt keys found — did the scan break?"
+        );
 
         let mut expected: Vec<String> = terminate::labelled_tokens()
             .filter(|t| *t != terminate::CLEAN_TOKEN)

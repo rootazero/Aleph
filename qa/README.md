@@ -78,6 +78,120 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # tree this must FAIL — both misattributed to "the server
                                        # restarted" — which is the falsifying arm for the design
                                        # spec's §1.4 claim.
+./qa/resume_boundary/run.sh claims     # ONE reduction, three faces, and they must agree: the wire
+                                       # (`chat.history` → `session.last_run`, the exact field the
+                                       # Panel sidebar and TUI picker render), the operator
+                                       # (`aleph-server resume --json` → every `ResumeReceipt`
+                                       # key), and the effect (`last_run` settles to `clean`).
+                                       # Boots with resume OFF so the receipt is the ONLY pass
+                                       # over the log — a boot scan that already repaired it
+                                       # makes every counter read zero, which looks like the
+                                       # feature working. Also prints the two uncapped reads
+                                       # A10 deferred (`load_all_events`, `load_run_markers`) as
+                                       # NUMBERS: a cost on record is not a cost until measured.
+./qa/resume_boundary/run.sh denied     # a dangling call the approval gate DENIED must be repaired
+                                       # "NOT EXECUTED", never "OUTCOME UNKNOWN" — the model must
+                                       # not go looking for side effects that cannot exist. The
+                                       # denial row is written by the fixture with the server
+                                       # down, because that is the only half of this shape
+                                       # reachable from outside: a statically denied call is
+                                       # answered in the same turn (never dangling), and the
+                                       # crash window between a denial and its receipt is inside
+                                       # one process. Everything downstream — reduction, the
+                                       # `denied` flag on the wire, the repair text, the receipt
+                                       # — is the product reading its own log.
+./qa/resume_boundary/run.sh rewind     # a rewind that cuts a run's tail away and leaves its
+                                       # `RunStarted` behind must end with the marker tail
+                                       # BALANCED. Without it the log SAYS a run is still open, and
+                                       # every later boot re-classifies the session `Interrupted`,
+                                       # re-runs a turn the user deleted, and does it forever —
+                                       # nothing else ever closes that marker. The rewind is aimed
+                                       # ONE ROW PAST the open `RunStarted` on purpose: aimed AT it,
+                                       # the opening half is retired too, `close_open_run_after_retire`
+                                       # returns `Ok(None)` without appending anything, and the stage
+                                       # is green on a build with no balancer at all (that was the
+                                       # first-round arrangement; the tail then read `never_ran` and
+                                       # the receipt `no_runs`). So the stage asserts the effects the
+                                       # balancer alone can produce: the `RunStarted` still live, a
+                                       # `RunFinished{cancelled}` appended after it, the wire face
+                                       # reading `clean` before AND after a restart, and a parsed
+                                       # `aleph-server resume --json` receipt reading
+                                       # `already_finished` with `scanned > 0` (parsed, not grepped:
+                                       # every counter of `ResumeReceipt` is serialised
+                                       # unconditionally, so grepping for one of their keys matches
+                                       # any well-formed receipt). Resume is OFF:
+                                       # `balance_run_markers_after_retire` deliberately leaves a
+                                       # RUNNING session alone, so a stage that let the boot scan
+                                       # resume first would be green over a session it never tested.
+./qa/resume_boundary/run.sh knobs      # the resumed run follows the SNAPSHOT its `RunStarted`
+                                       # carried, not the session's current row. The crashing
+                                       # turn carries an explicit per-turn directive for model
+                                       # A (without one the marker records `model: None` — the
+                                       # agent's CONFIGURED model is not a routing directive —
+                                       # and there is no snapshot to replay); the session is
+                                       # then moved to model B with the server DOWN, because no
+                                       # RPC can move it (`session.update` does not exist, and
+                                       # the metadata modify path refuses `model_pin` on
+                                       # purpose — the legal writer is the `select_model` TOOL).
+                                       # Three anti-vacuity checks come first: the marker really
+                                       # snapshotted A, the row really moved to B, and the
+                                       # restarted server really reads B. One model on the
+                                       # provider could not tell those apart — the assertion
+                                       # would pass for a build that dropped the envelope
+                                       # entirely.
+                                       # The stage carries the SECOND knob too, and in the
+                                       # opposite direction on purpose: the crashing turn runs
+                                       # at exec tier `ask`, the row is opened up to `full`
+                                       # with the server down, and the resumed run's OWN
+                                       # `RunStarted` envelope must still read `ask`. Snapshot
+                                       # `full` over a session since pulled down to `ask` —
+                                       # the arrangement that reads naturally — is green for a
+                                       # build with NO ceiling at all, because the session rung
+                                       # already answers `ask`. Only the loosening direction
+                                       # separates `resolve_exec_tier_with_ceiling` from
+                                       # `resolve_exec_tier`, and it is the direction that
+                                       # costs something when it is wrong: a resume that ran
+                                       # too loose executes, unattended, at a tier the operator
+                                       # revoked while the daemon was down.
+./qa/resume_boundary/run.sh holes      # a burst of tool calls in one turn must not lose a row
+                                       # and must not bill the run twice: `chat.history`'s
+                                       # server-reported total >= projectable events in
+                                       # `session_events`, and the session's token total is
+                                       # UNCHANGED across a restart (a heal pass that re-stamps
+                                       # an already-stamped row bills the same run twice, and a
+                                       # counter that grew while nobody ran anything is the only
+                                       # outside evidence of it). The burst run is made to
+                                       # FINISH before the kill — `dangle` returns on the first
+                                       # durable dispatch, and killing there would leave dangling
+                                       # calls whose resume adds a turn's usage. Two measured
+                                       # bounds the stage prints rather than hides: the 4096
+                                       # projector queue never fills (0 deferrals at both 40 and
+                                       # 900 calls), and above the store's compaction bound the
+                                       # projection is trimmed ON PURPOSE — at `QA_BURST=900`,
+                                       # 1803 projectable events, history total 69,
+                                       # `compaction_count 34`. So the comparison is guarded by
+                                       # an explicit `compaction_count == 0` precondition:
+                                       # raising the burst turns THAT red, not the row count,
+                                       # which would otherwise read like data loss.
+#
+# Two things hold the five r2 stages themselves honest, because a QA fixture is
+# also code that can stop working without saying so:
+#
+#   * **Every stage has an assertion FLOOR** — the case block at
+#     `qa/resume_boundary/run.sh:234-240` holds the measured counts;
+#     deliberately not copied here — the rewind copy already drifted. Each
+#     `drive` call is its own node process with its own counters, so the last
+#     line a green stage prints is whichever phase ran last; for `claims` that
+#     is the cost probe, which asserts nothing and prints `0 passed, 0 failed`.
+#     A phase whose assertions all vanished prints the SAME line and still
+#     exits 0. run.sh sums the counts and turns a stage RED when it passes
+#     while measuring less than its floor. Adding an assertion raises the floor
+#     in the same commit.
+#   * **The round-1 `crash` / `attribute` stages refuse to run without a real
+#     python3** (exit 78, with the reason named). On this Windows host `python3`
+#     and `python` are both the `WindowsApps` stub — no output, exit 49 — so they
+#     have NOT been re-measured this round; the r2 stages above are the coverage
+#     that exists here. Do not read their absence as a pass.
 ./qa/session_order/run.sh        # the transcript's order and `session.truncate`, on BOTH
                                  # backends. Drives one conversation into a file-backed
                                  # server and a sqlite-backed one (separate scratch
@@ -106,6 +220,42 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # remote-pairing half — a loopback peer is authorised before
                                  # `bootstrap_ticket` is ever read, so a ticket redeemed over
                                  # 127.0.0.1 creates no device row, silently and successfully.
+                                 # Node, not Python, and it shares `teamchat_rooms`'
+                                 # `patch_config.mjs` rather than keeping a patcher of its own.
+                                 # Round-10 added the freeze's fourth leg to the same stage, and
+                                 # specifically its DECLINED arm: the patcher sets
+                                 # `[heartbeat] enabled = false`, so this run proves the receipt
+                                 # says the heartbeat leg did not RUN instead of reporting a zero —
+                                 # a boot-time `decline(because)`, an absent wire field, and a CLI
+                                 # sentence, none of which a unit test reaches together. The same
+                                 # stage also pins the deactivation's bootstrap-ticket leg: the
+                                 # count is zero here (the ticket was redeemed by the pairing
+                                 # driver), and zero is the point — only a deactivation carries
+                                 # that field, so the sentence appearing at all proves the server
+                                 # measured it, it crossed the wire, and the CLI rendered it.
+                                 # Round-10 also added stage 3b, `aleph users show`: the SAME
+                                 # devices/spend/background-work join read while she is still
+                                 # active. Until `users.get` existed the only way to learn what a
+                                 # principal held was to deactivate them and read the receipt, so
+                                 # the pairing between 3b's assertions and the receipt's is the
+                                 # claim. It pins two fail-closed renderings the receipt cannot:
+                                 # an unrecorded spend prints a sentence and never `0.00`, and the
+                                 # declined heartbeat leg prints "NOT counted" and never a number.
+                                 # Its cost warning is asserted family by family (background work,
+                                 # devices, bootstrap tickets, channel senders), because a preview
+                                 # that names two of the four effects the receipt below reports is
+                                 # read by the operator as coverage.
+                                 #
+                                 # FLOOR: run.sh's own `[ "$FAIL" -eq 0 ] || exit 1`
+                                 # — zero failures, and deliberately no number
+                                 # here (the header carries no claim count
+                                 # either, and says so). ⚠️ Like its two room
+                                 # siblings, it enforces no MINIMUM assertion
+                                 # count: a phase whose precondition stopped
+                                 # holding fires nothing, shrinks the total and
+                                 # still exits 0. The only defence is comparing
+                                 # totals across runs, so record what a run
+                                 # printed — 2026-09-04 cold: 38 passed.
 
 ./qa/teamchat_rooms/run.sh       # §5.22 round-8: three humans in one project room. A model's
                                  # `team_create` inside a room lands room-scoped; the activation
@@ -118,6 +268,71 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # project-page tab has a server-side effect. Same 0.0.0.0 + LAN-leg
                                  # reason as `multiuser_audit`. Node, not Python — see its run.sh
                                  # header.
+                                 #
+                                 # FLOOR: `drive_rooms.mjs`'s `report()` —
+                                 # `process.exit(FAIL === 0 ? 0 : 1)`. Zero
+                                 # failures, no minimum count; both driver
+                                 # report paths add FAIL+1 on an exception, so
+                                 # an abort is caught, but a phase that quietly
+                                 # never fires is not. This one has a
+                                 # cross-check the other two lack: its run.sh
+                                 # header records the total an earlier
+                                 # measurement saw, and a 2026-09-04 cold run
+                                 # printed exactly that again.
+
+./qa/agents_viz/run.sh claims    # §4.11 / §5.13 / §3.13 tasks+agents visualization: the two
+                                 # severed wires the round fixed, each asserted by effect on a
+                                 # real socket. `run.subagent_tree` reaches an UNFILTERED (TUI-
+                                 # shaped) connection in its double-nested envelope; a filtered
+                                 # connection gets it only after subscribing (a filtered-but-not-
+                                 # subscribed socket gets NOTHING — the negative arm); the node
+                                 # carries child_session and chat.history opens it. Plus the plan's
+                                 # three carriers (live frames / RunSummary.plan / chat.history).
+                                 # First run found RunSummary.plan had never left the server —
+                                 # FEATURE_LOCATOR 附录 D.4.35. Reuses teamchat_rooms' mock
+                                 # (QA-DELEGATE-BG / QA-PLAN arms) and config patcher. No pty:
+                                 # aleph-tui is never launched (same call as btw_tui).
+./qa/agents_viz/run.sh panel     # boot + hold with a minted session, prints the browser URL and
+                                 # the one-line `delegate` / `plan` commands — the tree is a LIVE
+                                 # projection, attach the browser BEFORE triggering.
+
+./qa/terminal/run.sh identify    # §6.11/§6.12 the embedded terminal's agent panel. A session
+                                 # spawned as `sh` with `claude` TYPED INTO IT afterwards reaches
+                                 # the wire as program+agent+state — the shape phase 1 could not
+                                 # produce, because it read the spawn label. A control session
+                                 # that ran no agent is the falsifying arm, and a fourth check
+                                 # ("the probe answered") keeps that arm from being green because
+                                 # nothing ever looked.
+./qa/terminal/run.sh wait        # terminal{wait} blocks on the table's watch and answers
+                                 # `reached`; a state the session never enters answers `timeout`
+                                 # with the CURRENT entry. Both arms carry a DURATION check — a
+                                 # wait that never waited answers `timeout` too.
+./qa/terminal/run.sh quiet       # ~90 s. 30 s of silence publishes `quiet_since` and does NOT
+                                 # move `state` (spec R2-3). Checks the row is not-quiet first,
+                                 # that the mark lands on the clock rather than instantly, and
+                                 # that a later frame CLEARS it — a sticky flag reads the same.
+./qa/terminal/run.sh cwd         # OSC 7 › foreground probe › spawn dir, over three directories
+                                 # that actually differ. A second session emits no OSC 7, so its
+                                 # answer can only be the probe's — without it "OSC 7 won" and
+                                 # "the probe said nothing" are the same green.
+./qa/terminal/run.sh real        # a REAL agent binary found on PATH, run directly AND behind a
+                                 # real `npx`. `fake-claude` is a bash script NAMED `claude`, so it
+                                 # can only ever cover the arm a stand-in covers by construction;
+                                 # this covers the ones only a real install has — a node CLI the
+                                 # kernel calls `node`, a CLI that rewrites `process.title`, and a
+                                 # launcher that stays the pgrp leader with the agent as its child.
+                                 # SKIPS loudly (asserting nothing) when no agent is installed.
+./qa/terminal/run.sh tui         # the REAL `aleph-tui` binary in a pty against this server.
+                                 # Three observations, two flips: the program name is absent, then
+                                 # `/agentpanel` puts it AND the header on screen, then toggling
+                                 # again removes it. One observation could not tell "the panel
+                                 # works" from "that text was on screen anyway".
+./qa/terminal/run.sh panel       # boots, sets the board and WAITS for a browser. Tabs, agent-panel
+                                 # row click, paste and cursor visibility are not reachable from the
+                                 # wire — a tab title is a rendering, "Cmd+V is left to the browser"
+                                 # is a claim about the browser, and the cursor is a rect on a
+                                 # <canvas>. Needs `just wasm`; probes in `panel_probe.js`.
+./qa/terminal/run.sh all         # the six non-interactive stages, one server each (not `panel`)
 
 ./qa/channels/run.sh             # both phases below
 ./qa/channels/run.sh reach       # feishu / line / qq really come up; msteams is the control.
@@ -156,6 +371,57 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # never a PASS.
 ./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
                                  # that platform's SHELL_MARKER_JS arm is still unrun
+
+./qa/rooms_channel_bind/run.sh   # §5.22 round-9: a channel GROUP conversation bound into a project
+                                 # room. Three real identities, a webhook channel (the binding key is
+                                 # (channel_id, peer_kind, peer_id) and the mechanism does not know
+                                 # which transport it is — webhook is the only kind a fixture can
+                                 # drive with one signed POST). Its three oracles deliberately never
+                                 # ask the server: the memory partition is read out of memory.db, the
+                                 # session row out of sessions.db, and <room_context> plus the speaker
+                                 # prefix out of the mock model's own request log. Carries the three
+                                 # negative arms that make the positive ones mean something (a paired
+                                 # non-member stays personal; an unpaired stranger runs on bare `main`
+                                 # with no room block; a member's projects.channel.bind is refused),
+                                 # and one addendum where a genuine store failure must answer
+                                 # "unknown" rather than "nothing to move".
+                                 #
+                                 # FLOOR: `drive_bind.mjs`'s `report()` —
+                                 # `process.exit(FAIL === 0 ? 0 : 1)`. SKIPPED is counted and printed
+                                 # but NOT gated, so a skipped scenario still exits 0 — read the skip
+                                 # count, it is not part of the floor. 2026-09-04 cold: 52 passed, 0
+                                 # skipped. ⚠️ Its addendum D (does the room-settings channel section
+                                 # survive a narrow viewport) is a BROWSER claim; a shell run neither
+                                 # makes it nor breaks it, and it has not been looked at since the
+                                 # fixture shipped.
+
+./qa/spend_budget/run.sh         # §5.22 round-7's per-principal dollar ceiling. Every assertion reads
+                                 # an EFFECT (a ledger row on disk, a wire error code,
+                                 # a CLI table, a survived restart) rather than counting an RPC's
+                                 # "it returned 200"; two of them read `spend_ledger` with
+                                 # `sqlite3` directly rather than through `spend.query`, which is
+                                 # what makes them evidence about the LEDGER and not about the
+                                 # handler that reads it back. This is the fixture the root
+                                 # CLAUDE.md `src/spend/` row routes to.
+                                 #
+                                 # FLOOR: run.sh's own `[ "$FAIL" -eq 0 ] || exit 1`.
+                                 # Deliberately no count here — an inline number
+                                 # for a set the script itself owns is the shape
+                                 # the five rewind/claims/denied/knobs/holes
+                                 # floors were removed for.
+                                 #
+                                 # NEEDS A REAL python3, and therefore does not run on a
+                                 # Windows host, where the only `python3` on PATH is the
+                                 # WindowsApps stub: it prints nothing and silently does
+                                 # nothing, so a heredoc leg no-ops and the run dies far
+                                 # from its cause. (No exit code is written down here —
+                                 # it is stub-version dependent, and the operative half
+                                 # of the sentence is the silence.) Its sibling
+                                 # `multiuser_audit` was ported to Node; this one was not,
+                                 # deliberately: `spend_rpc.py`, `mock_anthropic.py`, the
+                                 # float comparisons and the `jf` helper are a much larger
+                                 # surface than a port should carry in one round. On such a
+                                 # host it is UNRUN, which is not the same as passing.
 ```
 
 `plugins` uses a **short scratch root under `/tmp`** rather than `$TMPDIR` like
@@ -494,8 +760,8 @@ appearing inside your scratch dir.
 pins `RUSTUP_HOME`/`CARGO_HOME` as well.** The paragraph above was true and
 still insufficient, which is the interesting part: it names the exact signature
 (`.rustup/toolchains/` inside the scratch dir) and the fixtures all guarded
-their own cargo lines correctly — eleven `HOME="$REAL_HOME" cargo …` call sites,
-every one right — and the leak happened anyway, three times, 1.3 GB each. A
+their own cargo lines correctly — every `HOME="$REAL_HOME" cargo …` call site
+right — and the leak happened anyway, three times, 1.3 GB each. A
 per-invocation guard covers the line it is written on; `export HOME=` stays in
 force for the whole process, so any *other* rustup-shimmed command (a drive
 script, a `bash`-tool call a scenario makes the agent run, a command typed into
@@ -509,13 +775,32 @@ qa_redirect_home "$QA_ROOT"      # exports HOME, ALEPH_HOME, RUSTUP_HOME, CARGO_
 ```
 
 `tests/qa_fixture_hygiene.rs` enforces it, deriving the fixture list by walking
-`qa/` rather than from a list in the test — a seventh fixture that hand-rolls
-`export HOME=` is named on its first run. There is no allowlist: obeying the
-rule is free, and an allowlist would be a second source of truth about who may
-hand-roll a scratch home. A per-command `HOME=… cmd` prefix is still fine once
-the pins are in the environment (`browser_managed` needs two, for a
-playwright-cli whose session store is HOME-scoped); only the process-wide
-`export HOME=` is refused.
+`qa/` rather than from a list in the test — a newly added fixture that
+hand-rolls `export HOME=` is named on its first run. There is no allowlist:
+obeying the rule is free, and an allowlist would be a second source of truth
+about who may hand-roll a scratch home. A per-command `HOME=… cmd` prefix is
+still fine once the pins are in the environment (`browser_managed` needs two,
+for a playwright-cli whose session store is HOME-scoped); only the
+process-wide `export HOME=` is refused.
+
+**The frame envelope has exactly one reader: `qa/lib/ws.mjs::normalizeFrame`.**
+Four Node drivers each held a byte-identical copy of it, and what had already
+decayed was the *comment*: one carried the three-shape list plus the incident it
+cost, one a two-line abbreviation with both dropped, two nothing at all — a copy
+born as a weakened version of another. The full prose now lives on the shared
+function, which names `src/gateway/server/handler.rs::extract_topic_and_data` as
+the producer-side owner it mirrors, so the two surviving representations are
+*linked*, not merely fewer. `node --test qa/lib/ws.test.mjs` pins all three
+shapes plus a counter of the frames that yielded NO topic, and every fixture
+assertion that reports a missing frame prints its tap through `frameDigest`,
+which renders that count — so a fifth server envelope reads as `unclassified: N`
+in the fixture output instead of as the product-shaped lie ("no frame arrived").
+Deliberately **not** shared: the `Conn` classes around it — their pending maps,
+`attempt()` return shapes and poll budgets differ per fixture, and lifting those
+would change what each one asserts. Deliberately **no** `qa/lib/ws.py`: the
+Python fixtures as a family read only the single-shape `stream.*` JSON-RPC
+notifications and never observe a bus `event` frame at all, so a future Python
+fixture that needs a topic must port `normalizeFrame` first.
 
 **Debug builds need `RUST_MIN_STACK=268435456` (256 MB).** The 32 MB floor in
 `main.rs::worker_stack_size` is not enough for a debug-built agent run with
@@ -720,6 +1005,65 @@ refuses to boot with `invalid type: sequence, expected a map`.
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
   `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——**两个 driver 的每个动词都有效果断言**。
 - **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
+- **`agents_viz`** — 改 `run.subagent_tree` 的产地 / relay / 可见性分类、`events.subscribe` 的过滤语义、
+  执行清单三载体（`tool_call_completed` snapshot · `RunSummary.plan` · `chat.history.plan`）或 TUI/Panel
+  的 tasks/agents 面板前跑 `claims`；改 Panel `/dashboard/subagents` 的渲染再跑 `panel` 并挂上浏览器。
+  三个 socket 三种订阅形状，D5 是负向臂——少了它 D4 对「订阅才是载体」什么也证明不了。
 - **`picker_nav`** — 改 `interfaces/webchat/` 的键盘导航/渐隐前跑：键盘 walk · 条件渐隐 · 手机端加 provider，
   三档宽度各带效果断言。
 - **`canvas`** — 改 `src/canvas/` 或 Panel canvas 视图前跑：九项清单每条带效果断言。
+- **`terminal`** — 改 `src/gateway/pty/foreground.rs`、`src/gateway/runtime/`、`crates/agent-detect/`
+  或 `src/builtin_tools/terminal.rs` 前跑 `{identify,wait,quiet,cwd,real,tui}`；动 Panel 终端视图或
+  `components/sidebar/agent_panel.rs` 时另跑 `panel`（需要浏览器）。
+  - `identify` — **本轮存在的理由**。第 1 期的面板在生产上从未识别过一个 agent：采样器拿到的是
+    `PtySession::shell`（**spawn 时刻**的标签），而 Panel 的终端只发 `{rows, cols}`，所以标签恒为
+    `zsh`，`identify_agent` 答 `None`，检测引擎在读第一条规则**之前**就早返回 `Unknown`——21 份
+    manifest 与它们的单测全绿，因为**每一条都自己把 agent 名字递进去**（判据 §2：问的不是"规则对不对"，
+    是"它什么时候会红"）。这里 spawn 的是 `sh`，agent 是**事后敲进去的**，唯一能把它变成
+    `agent: "claude"` 的只有前台探测。负向臂是同一台服务器上一个没跑 agent 的 shell；
+    第四条断言「**探测确实答了**」把那条臂从「什么都没看」里救出来——`program: null` 会让另外
+    三条同样为真（判据 §8）。
+  - `wait` — `reached` 与 `timeout` 两臂**各带一个耗时断言**：一个从不等待的 `wait` 同样会答
+    `timeout`，光看 outcome 的绿和瞎的绿长得一样（M4 变异实测：outcome 那条仍绿，耗时那条红）。
+  - `quiet` — 三次观测两次翻转：先证明它**当时不是 quiet**，再证明标记落在 **30 s 的钟上**而非立刻，
+    最后证明**一帧能把它清掉**。少了任何一条，一个永不复位的黏滞标志都读起来一样。
+  - `cwd` — 三层来源用**三个真的不同的目录**；第二个会话不发 OSC 7，所以它的答案只可能来自探测。
+    只有一个会话时，「OSC 7 赢了」和「探测什么都没说」是同一个绿。**故意不证**的：spawn 目录那一层
+    （要让探测**失败**才能到达，从 wire 上安排不出来）、`program: null`、Panel 的渲染、以及另外 20 份 manifest。
+  - 装置的画面**不是手抄的**：`derive_chrome.py` 按 rule id 从 `claude.toml` 里取出字面量、拼成行、
+    再用 manifest 自己的正则回验；它**故意不判定哪条规则胜出**（那要在 Python 里重写一遍 region 与优先级
+    ——第二套引擎，判据 §1），胜者由运行时的 `terminal{explain}` 用**发货的引擎**报出规则 id 来断言。
+  - `real` — **`fake-claude` 只能覆盖一条臂**：它是个**名叫** `claude` 的 bash 脚本，所以"按名字认出来"
+    这条臂是它按构造必然覆盖的那条，也是唯一一条。真实安装才有的三种形状它碰不到——内核把
+    `#!/usr/bin/env node` 的 CLI 报成 `node`；重写了 `process.title` 的 CLI 让标题占了 `argv[0]` 的位置，
+    而 macOS 会把**环境变量**渗进它后面的 `cmd()`；包装器自己留在进程组组长的位置、真 agent 是它的孩子。
+    2026-09-05 在本机量到：`npx pi` 的组长是 `npm exec pi …`，真 `pi` 是它的孩子；而一个值里带空格的
+    导出变量会把**裸词**（`prefer` / `modern` / `like`）撒进命令行里程序名该在的位置。
+    候选名单**从 `engine.rs` 派生**（`agent_label` 与 `interactive_agent_executable` 对四个 agent
+    答案不同：`agy` / `copilot` / `cursor-agent` / `kiro-cli`，手写一份当天就是错的，判据 §1）；
+    "装了"不等于"能跑"，所以每个候选先在 pty 里活 3 秒（本机的 `codex` 缺 vendored 二进制，一秒内就退）；
+    排序**偏好带 shebang 的**，因为那才是替身伪造不了的形状。一台没装 agent 的机器上它**响亮地 SKIP**
+    并明说自己什么都没断言——静默通过的绿是那种唯一没有意义的绿（判据 §2）。
+  - `tui` — `interfaces/tui/` **从来没有对着活服务器跑过**。它的 agent 面板渲染
+    `shared_ui_logic::entry_name`（`program ?? agent ?? label`），数据来自实时的
+    `runtime.agents.list` + `events.subscribe`，而它现有的每一条测试都是把**手搓的**
+    `AgentPanelData` 渲进测试 backend——渲染器永远是对的，没有任何东西检查送进去的值来自 wire，
+    这正是第 1 期缺陷藏身的形状。这里跑的是**真的 `aleph-tui` 二进制**（在 pty 里，120x40）：
+    三次观测两次翻转——先证明程序名**不在**屏幕上，再 `/agentpanel` 让它和表头一起出现，
+    再切一次让它消失。只观测一次的话，「面板工作了」和「那行字本来就在屏幕上」是同一个绿（判据 §2）。
+  - `panel` — 唯一一个**boot 完就等**的阶段（和 `canvas` 同形）。标签页 / agent 面板行点击 / 粘贴 /
+    光标可见性四件事**从 wire 上够不到**：标签标题是一次渲染，"Cmd+V 交给浏览器"是一句**关于浏览器**的断言
+    （没有任何单测有浏览器），光标是画在 `<canvas>` 上的一个矩形。装置把局面摆好——一个 spawn 成 `sh`
+    然后跑起 agent 的会话，加一个什么都没跑的对照会话——再打印带效果断言的清单；探针在
+    `panel_probe.js`（`qaTerm.tabs()` / `.route()` / `.inkCount()`），光标那条比**三次读数彼此之间**的
+    差，不比字面量（判据 §18）。需要先 `just wasm`：debug server 从磁盘读 `dist/`，空 dist 会让每一条都
+    "失败"在错误的原因上。
+  - ⚠️ 它的**生成配置那一次 boot 带了 `--port`**——2026-09-05 起**每一个有生成 boot 的装置都带了**
+    （此前只有它和 `channels`；`webview_compat` 没有生成 boot，不在其列）：那一次 boot 绑的是**内置默认端口**，机器上只要有别的 server 占着，进程在写出 config
+    之前就退出了，症状是 `no config generated at …`——读起来像路径或权限问题，原因在日志下一行。
+- **`rooms_channel_bind`** — 把一个通道群会话绑到项目房间（`Real-machine QA for binding a channel
+  group conversation to a project room.`，见其 `run.sh:2`）。改 `projects.channel.*` handler、绑定的
+  CLI 面、Panel 的项目通道段或 `rescope_attribution` 前跑。它挡的那一类假绿写在自己的 header 里：
+  这条链上的每一件事——handler、CLI、Panel 段、arm 2 的名册闸、`rescope_attribution`——此前**全部**
+  只有编译期与单测证据，没有任何一件对活网关说过话。路由入口在 [GATEWAY.md](../docs/reference/GATEWAY.md)，
+  不在根 `CLAUDE.md` 的路由表里。

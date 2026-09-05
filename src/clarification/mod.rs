@@ -272,7 +272,7 @@ impl ClarificationRequest {
 /// Id given to the single question of [`ClarificationRequest::text`] /
 /// [`ClarificationRequest::select`]. Callers that only ever ask one thing
 /// (workflow `clarify` steps, plan approval) never need to invent one.
-pub const DEFAULT_QUESTION_ID: &str = "answer";
+const DEFAULT_QUESTION_ID: &str = "answer";
 
 // =============================================================================
 // Wire views
@@ -286,7 +286,7 @@ pub const DEFAULT_QUESTION_ID: &str = "answer";
 /// Shipping `value` too would invite a client to send it back and quietly
 /// become a second interpreter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClarificationOptionView {
+pub(crate) struct ClarificationOptionView {
     /// What the user reads.
     pub label: String,
     /// Why they might pick it. **This is the field whose absence made the
@@ -305,7 +305,7 @@ pub struct ClarificationQuestionView {
     pub header: Option<String>,
     pub prompt: String,
     #[serde(default)]
-    pub options: Vec<ClarificationOptionView>,
+    pub(crate) options: Vec<ClarificationOptionView>,
     #[serde(default)]
     pub multi_select: bool,
     #[serde(default)]

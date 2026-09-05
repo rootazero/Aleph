@@ -324,7 +324,7 @@ pub(super) async fn ws_upgrade_handler(
 /// before the connection is closed with WS code 1008.
 fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
     serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
-        "event",
+        aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD,
         Some(serde_json::json!({
             "topic": "connection.warning",
             "data": {
@@ -475,7 +475,9 @@ fn device_revoked_should_close(event_json: &str, session_device_id: Option<&str>
 ///   skipped owner-scoping entirely (found in review, fix round 1 — see
 ///   `run.subagent_tree`'s entry in `event_visibility::session_identity_of`).
 fn extract_topic_and_data(event_obj: &serde_json::Value) -> (&str, Option<&serde_json::Value>) {
-    if event_obj.get("method").and_then(serde_json::Value::as_str) == Some("event") {
+    if event_obj.get("method").and_then(serde_json::Value::as_str)
+        == Some(aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD)
+    {
         if let Some(params) = event_obj.get("params") {
             let topic = params
                 .get("topic")
@@ -527,7 +529,7 @@ fn event_wire_form(
         // like every other notification on the wire — see
         // `event_bus.rs::publish_frame` for what a hand-built one cost.
         serde_json::to_string(&aleph_protocol::JsonRpcRequest::notification(
-            "event",
+            aleph_protocol::jsonrpc::TOPIC_EVENT_METHOD,
             Some(event_obj),
         ))
         .unwrap_or_else(|_| String::new())
@@ -3012,6 +3014,80 @@ mod tests {
         assert!(
             resp.contains("\"owner_user_id\":\"u-alice\""),
             "scope must be observable inside process_request's dispatch: {resp}"
+        );
+    }
+
+    /// `cron.create` reached the way a Panel or CLI caller reaches it — a real
+    /// dispatch, not a hand-seeded scope — must leave the caller's identity on
+    /// the row that lands in the store.
+    ///
+    /// The effect asserted is the PERSISTED job, re-read from a freshly loaded
+    /// `CronStore`, not the RPC's own response: the response used to be a
+    /// perfectly successful `{"job": …}` while both columns were NULL.
+    #[tokio::test]
+    async fn cron_create_through_dispatch_persists_the_caller_as_owner() {
+        use crate::gateway::handlers::HandlerRegistry;
+        use crate::gateway::rate_limiter::RateLimitConfig;
+        use crate::tasks::cron::store::CronStore;
+        use crate::tasks::cron::{CronConfig, CronService};
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("cron.db");
+        let service = CronService::new(CronConfig {
+            db_path: db_path.to_string_lossy().to_string(),
+            ..CronConfig::default()
+        })
+        .unwrap();
+        let cron = Arc::new(tokio::sync::Mutex::new(service));
+
+        let mut registry = HandlerRegistry::new();
+        let handler_cron = cron.clone();
+        registry.register("cron.create", move |req| {
+            let cron = handler_cron.clone();
+            async move { crate::gateway::handlers::cron::handle_create(req, cron).await }
+        });
+        let mc = MiddlewareChain::new(
+            Arc::new(registry),
+            Arc::new(RateLimiter::new(RateLimitConfig::default())),
+        );
+        let text = r#"{"jsonrpc":"2.0","id":1,"method":"cron.create","params":{
+            "name":"nightly-digest","agent_id":"main","prompt":"digest",
+            "schedule_kind":{"kind":"every","every_ms":60000}}}"#;
+
+        let resp = dispatch_with_caller_context(
+            text,
+            &mc,
+            Some("operator".to_string()),
+            Some("u-x".to_string()),
+            true,
+            None,
+        )
+        .await;
+        assert!(
+            !resp.contains("\"error\""),
+            "precondition: the create itself must succeed: {resp}"
+        );
+
+        let store = CronStore::load(db_path).unwrap();
+        let job = store
+            .jobs()
+            .iter()
+            .find(|j| j.name == "nightly-digest")
+            .expect("the job the RPC reported creating must be on disk");
+        assert_eq!(
+            job.owner_user_id.as_deref(),
+            Some("u-x"),
+            "a job created over the wire belongs to the caller who created it"
+        );
+        assert_eq!(
+            job.scope_id.as_deref(),
+            Some(
+                crate::scope::ScopeId::Personal("u-x".to_string())
+                    .render()
+                    .as_str()
+            ),
+            "the scope column must be the rendered personal boundary, not just \
+             a repeat of the owner id"
         );
     }
 

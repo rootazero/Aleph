@@ -7,7 +7,7 @@
 //! committing, so a rejected batch never half-lands on disk.
 
 use aleph_protocol::canvas::{
-    check_title, CanvasDoc, CanvasOp, Shape, MAX_OPS_PER_APPLY, MAX_SHAPES,
+    check_title, CanvasDoc, CanvasOp, Shape, MAX_DOCUMENT_BYTES, MAX_OPS_PER_APPLY, MAX_SHAPES,
 };
 
 use super::store::CanvasError;
@@ -113,6 +113,43 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
             "{post_shape_count} shapes would exceed the {MAX_SHAPES}-shape document cap"
         )));
     }
+    apply_mutations(doc, ops);
+
+    // Document-byte budget: the per-shape / per-asset / per-op caps already
+    // stop any one field from being unbounded, but the AGGREGATE document was
+    // not capped. A member could submit 5000 shapes whose text/prompt/label
+    // fields each hold tens of KB, producing a JSON blob the server must
+    // deserialize, persist and broadcast. Check the wire-byte size after
+    // every apply so a single apply can never push the document past the
+    // budget. The cost is one JSON serialize per apply, well below the cost
+    // of writing the blob to disk.
+    let serialized = serde_json::to_vec(doc)
+        .map_err(|e| CanvasError::Internal(format!("failed to size-check canvas document: {e}")))?;
+    if serialized.len() > MAX_DOCUMENT_BYTES {
+        return Err(CanvasError::Invalid(format!(
+            "canvas document would be {} bytes after apply, exceeding the {MAX_DOCUMENT_BYTES}-byte document cap",
+            serialized.len()
+        )));
+    }
+    Ok(())
+}
+
+/// The mutation loop itself, extracted so it has a NAME to anchor on.
+///
+/// The Panel mirrors this loop verbatim in `apply_local`, and the guard that
+/// pins the two together (`views/canvas/ops.rs`'s
+/// `apply_local_matches_the_server_apply_ops_loop_verbatim`) locates it by
+/// finding a function and then taking the first `for op in ops` inside it.
+/// While this lived inline in [`apply_ops`], the shape-cap simulation added
+/// above ALSO iterates `ops`, and it comes first — so the guard silently began
+/// comparing the Panel's mutation loop against the cap simulation and went on
+/// reporting green. Three readers then quoted that green as evidence for a
+/// fact about the Panel that was not true.
+///
+/// Keeping the loop in its own function makes the anchor structural rather
+/// than positional: a new pre-pass in `apply_ops` cannot capture it again.
+/// If this function is renamed, the guard fails loudly rather than drifting.
+fn apply_mutations(doc: &mut CanvasDoc, ops: &[CanvasOp]) {
     for op in ops {
         match op {
             CanvasOp::UpsertShape { shape } => {
@@ -130,7 +167,6 @@ pub(super) fn apply_ops(doc: &mut CanvasDoc, ops: &[CanvasOp]) -> Result<(), Can
             CanvasOp::DeleteDeck { id } => doc.decks.retain(|d| &d.id != id),
         }
     }
-    Ok(())
 }
 
 fn shape_is_well_formed(shape: &Shape) -> Result<(), CanvasError> {

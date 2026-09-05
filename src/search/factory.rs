@@ -162,6 +162,7 @@ mod tests {
             engines: None,
             min_request_interval_ms: None,
             verified: false,
+            allow_private_upstream: false,
         }
     }
 

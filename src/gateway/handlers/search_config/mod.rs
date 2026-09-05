@@ -64,6 +64,7 @@ mod tests {
                         engines: None,
                         min_request_interval_ms: None,
                         verified: true,
+                        allow_private_upstream: false,
                     },
                 )]),
                 ..Default::default()
@@ -108,11 +109,16 @@ mod tests {
             engines: Some("bing".to_string()),
             has_api_key: false,
             verified: false,
+            allow_private_upstream: true,
         };
         let json = serde_json::to_value(&dto).unwrap();
         assert_eq!(json["engines"], "bing");
         let back: SearchBackendDto = serde_json::from_value(json).unwrap();
         assert_eq!(back.engines.as_deref(), Some("bing"));
+        assert!(
+            back.allow_private_upstream,
+            "the opt-in must survive the wire, or the Panel cannot set it"
+        );
     }
 
     // Regression (2026-07-02 incident): saving a searxng backend with the
@@ -152,6 +158,7 @@ mod tests {
                             engines: Some("bing".to_string()),
                             min_request_interval_ms: Some(2000),
                             verified: true,
+                            allow_private_upstream: false,
                         },
                     ),
                     (
@@ -164,6 +171,7 @@ mod tests {
                             engines: None,
                             min_request_interval_ms: None,
                             verified: true,
+                            allow_private_upstream: false,
                         },
                     ),
                 ]),

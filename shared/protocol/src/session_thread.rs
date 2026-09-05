@@ -377,6 +377,16 @@ pub struct SessionSnapshot {
     /// User-facing label, if set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+
+    /// What this conversation's newest run did — the fact a re-attaching
+    /// client had no way to learn.
+    ///
+    /// `None` means the server did not answer (an older core, or one with no
+    /// event store to ask). It never means the run was fine: absence read as
+    /// clean would hide exactly the runs this field exists to surface
+    /// (criterion #8 — a fail-closed answer may only say "I do not know").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<LastRunState>,
 }
 
 impl SessionSnapshot {
@@ -391,6 +401,298 @@ impl SessionSnapshot {
             .as_deref()
             .or(self.model.as_deref())
             .filter(|m| !m.is_empty())
+    }
+}
+
+/// What a session's newest run did, as a client is told it.
+///
+/// **A view over `alephcore`'s `session::reduction::RunReduction`, never a
+/// second derivation.** The server reduces the event log once and renders the
+/// answer into this type; no client re-computes a disposition from markers it
+/// fetched itself, because two derivations of "is this interrupted" are two
+/// answers and the wrong one is unfalsifiable from either side.
+///
+/// # Two faces, one type, and `inspected` is what tells them apart
+///
+/// `sessions.list` reads **run markers** across every session — cheap, and
+/// enough for the word. `chat.history` reduces the one session's **whole log**
+/// — which is what can name the tool calls that never came back. Both fill
+/// this type; only the second sets [`Self::inspected`]. An empty `dangling`
+/// therefore has two meanings, and exactly one of them is "no calls were lost",
+/// so [`Self::dangling`] refuses to answer at all on the list face rather than
+/// hand back a `[]` that reads as reassurance.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastRunState {
+    /// One of the four constants below. An unknown word is
+    /// [`LastRunDisposition::Unrecognized`] — read as "cannot vouch", never as
+    /// clean.
+    #[serde(default)]
+    pub disposition: String,
+
+    /// `run_id` of the newest `RunStarted`, when there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+
+    /// Consecutive `RunStarted` events after the last `RunFinished` — the
+    /// crash-loop attempt counter. `> 1` means the run has already been
+    /// resumed and crashed again.
+    #[serde(default)]
+    pub trailing_starts: u32,
+
+    /// Tool calls that were dispatched and never got a receipt.
+    ///
+    /// Meaningful **only** when [`Self::inspected`]; read it through
+    /// [`Self::dangling`], which enforces that.
+    #[serde(default)]
+    pub dangling: Vec<DanglingCallView>,
+
+    /// What the run got done before it stopped. `None` on the list face, and
+    /// on a session whose newest run never recorded anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<RunProgressView>,
+
+    /// Log-contradiction tags the reducer reported
+    /// (`session-log-duplicate-dispatch`, …). Empty on a clean log; a surface
+    /// shows them so an operator knows which `aleph doctor` finding to look
+    /// for.
+    #[serde(default)]
+    pub contradictions: Vec<String>,
+
+    /// Whether the whole log was reduced (`true`) or only its run markers
+    /// (`false`). See the type doc: this is what makes an empty `dangling`
+    /// readable.
+    #[serde(default)]
+    pub inspected: bool,
+}
+
+impl LastRunState {
+    /// The newest marker is a `RunFinished` — nothing was lost.
+    pub const CLEAN: &'static str = "clean";
+    /// A `RunStarted` with no `RunFinished` after it: the run was cut off.
+    pub const INTERRUPTED: &'static str = "interrupted";
+    /// The session has no run markers at all.
+    pub const NEVER_RAN: &'static str = "never_ran";
+    /// The reducer refused this log; its state is unknown and must not be
+    /// rendered as any of the three above.
+    pub const LOG_INCONSISTENT: &'static str = "log_inconsistent";
+
+    /// The list face's answer: the word, and the two facts markers can carry.
+    ///
+    /// A constructor rather than a struct literal so `inspected: false` is not
+    /// something a call site can forget — forgetting it is what turns "we only
+    /// looked at markers" into "no tool calls were lost".
+    #[must_use]
+    pub fn from_markers(disposition: &str, run_id: Option<String>, trailing_starts: u32) -> Self {
+        Self {
+            disposition: disposition.to_string(),
+            run_id,
+            trailing_starts,
+            dangling: Vec::new(),
+            progress: None,
+            contradictions: Vec::new(),
+            inspected: false,
+        }
+    }
+
+    /// Classify [`Self::disposition`]. The one reader of the word set.
+    #[must_use]
+    pub fn disposition(&self) -> LastRunDisposition {
+        match self.disposition.as_str() {
+            Self::CLEAN => LastRunDisposition::Clean,
+            Self::INTERRUPTED => LastRunDisposition::Interrupted,
+            Self::NEVER_RAN => LastRunDisposition::NeverRan,
+            Self::LOG_INCONSISTENT => LastRunDisposition::LogInconsistent,
+            _ => LastRunDisposition::Unrecognized,
+        }
+    }
+
+    /// The lost tool calls, or `None` when nobody looked for them.
+    ///
+    /// `None` and `Some(&[])` are different answers and a surface renders them
+    /// differently: the first says nothing, the second says "the run stopped
+    /// cleanly between calls".
+    #[must_use]
+    pub fn dangling(&self) -> Option<&[DanglingCallView]> {
+        self.inspected.then_some(self.dangling.as_slice())
+    }
+}
+
+/// The closed set of run dispositions a client renders, plus the arm for a
+/// word this build does not know.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LastRunDisposition {
+    /// [`LastRunState::CLEAN`].
+    Clean,
+    /// [`LastRunState::INTERRUPTED`].
+    Interrupted,
+    /// [`LastRunState::NEVER_RAN`].
+    NeverRan,
+    /// [`LastRunState::LOG_INCONSISTENT`].
+    LogInconsistent,
+    /// A word this build has never heard of. Read as "cannot vouch" — the same
+    /// reading [`AgentRunStatusReport::phase`] gives an unknown status, and for
+    /// the same reason: the alternative renders a state the server never
+    /// claimed.
+    Unrecognized,
+}
+
+/// One tool call that crossed the dispatch line and never got a receipt.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DanglingCallView {
+    /// The provider-side call id.
+    #[serde(default)]
+    pub call_id: String,
+    /// The tool that was asked to run.
+    #[serde(default)]
+    pub tool_name: String,
+    /// [`Self::THIS_RESTART`] or [`Self::EARLIER_RUN`] — which run dispatched
+    /// it. The difference between "the server restarted after this call" and a
+    /// leftover from a run that ended long ago, which is a sentence a surface
+    /// must not get wrong in the confident direction.
+    #[serde(default)]
+    pub provenance: String,
+    /// The approval gate denied this call, so it did **not** run. Without this
+    /// a surface says "outcome unknown" about a call that provably never
+    /// started.
+    #[serde(default)]
+    pub denied: bool,
+}
+
+impl DanglingCallView {
+    /// Dispatched by the run that was cut off.
+    pub const THIS_RESTART: &'static str = "this_restart";
+    /// Left over from an earlier run — also the honest answer whenever the
+    /// provenance cannot be established.
+    pub const EARLIER_RUN: &'static str = "earlier_run";
+}
+
+/// What a run got done before it stopped.
+///
+/// Key names are the ones `agents::subagent_tool::recovery` already writes for
+/// a sub-agent's progress, so the parent-facing and the client-facing readings
+/// of the same reduction cannot drift into two vocabularies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunProgressView {
+    /// Tool calls the run dispatched.
+    #[serde(default)]
+    pub tool_calls_dispatched: u32,
+    /// Of those, how many got an answer. Never greater than the line above:
+    /// it counts answered dispatches, not answer events.
+    #[serde(default)]
+    pub tool_calls_answered: u32,
+    /// Assistant messages the run recorded.
+    #[serde(default)]
+    pub assistant_messages: u32,
+    /// When the run was last alive (`created_at_ms` of its newest record).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_ms: Option<i64>,
+}
+
+#[cfg(test)]
+mod last_run_tests {
+    use super::*;
+
+    #[test]
+    fn every_word_the_server_writes_has_a_distinct_reading() {
+        for (word, expected) in [
+            (LastRunState::CLEAN, LastRunDisposition::Clean),
+            (LastRunState::INTERRUPTED, LastRunDisposition::Interrupted),
+            (LastRunState::NEVER_RAN, LastRunDisposition::NeverRan),
+            (
+                LastRunState::LOG_INCONSISTENT,
+                LastRunDisposition::LogInconsistent,
+            ),
+        ] {
+            let s = LastRunState::from_markers(word, None, 0);
+            assert_eq!(s.disposition(), expected, "{word}");
+        }
+    }
+
+    /// The arm that must never read as `Clean`: an unknown word — including
+    /// the absent one — is "cannot vouch".
+    #[test]
+    fn an_unknown_word_is_not_clean() {
+        for unknown in ["", "CLEAN", "running", "ok"] {
+            assert_eq!(
+                LastRunState::from_markers(unknown, None, 0).disposition(),
+                LastRunDisposition::Unrecognized,
+                "{unknown:?} must not read as a state this client claims to know"
+            );
+        }
+    }
+
+    /// The whole reason `inspected` exists. A marker-only read has an empty
+    /// `dangling` because nobody looked, and answering `Some(&[])` there is the
+    /// sentence "no tool calls were lost" said about a log nobody opened.
+    #[test]
+    fn a_marker_only_answer_refuses_to_talk_about_dangling_calls() {
+        let listed = LastRunState::from_markers(LastRunState::INTERRUPTED, Some("r1".into()), 1);
+        assert!(!listed.inspected);
+        assert_eq!(listed.dangling(), None);
+
+        let inspected = LastRunState {
+            inspected: true,
+            ..LastRunState::from_markers(LastRunState::INTERRUPTED, Some("r1".into()), 1)
+        };
+        assert_eq!(
+            inspected.dangling(),
+            Some(&[][..]),
+            "a reduced log with no dangling calls says so, and that is a different answer"
+        );
+    }
+
+    #[test]
+    fn a_dangling_call_carries_its_provenance_and_denial() {
+        let s = LastRunState {
+            inspected: true,
+            dangling: vec![DanglingCallView {
+                call_id: "call_1".into(),
+                tool_name: "shell".into(),
+                provenance: DanglingCallView::THIS_RESTART.into(),
+                denied: true,
+            }],
+            ..LastRunState::from_markers(LastRunState::INTERRUPTED, None, 1)
+        };
+        let back: LastRunState = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        let calls = back.dangling().expect("inspected");
+        assert_eq!(calls[0].tool_name, "shell");
+        assert!(calls[0].denied);
+        assert_eq!(calls[0].provenance, DanglingCallView::THIS_RESTART);
+    }
+
+    /// A snapshot from a core that predates the field parses, and the absent
+    /// answer stays absent rather than becoming a clean one.
+    #[test]
+    fn a_snapshot_without_last_run_says_nothing_about_it() {
+        let snap: SessionSnapshot = serde_json::from_value(serde_json::json!({
+            "session_key": "agent:main:main"
+        }))
+        .expect("parse");
+        assert_eq!(snap.last_run, None);
+        let v = serde_json::to_value(&snap).expect("serialize");
+        assert!(v.get("last_run").is_none(), "absent must stay absent");
+    }
+
+    #[test]
+    fn progress_keys_are_the_recovery_vocabulary() {
+        let v = serde_json::to_value(RunProgressView {
+            tool_calls_dispatched: 3,
+            tool_calls_answered: 2,
+            assistant_messages: 1,
+            last_activity_ms: Some(1_700_000_000_000),
+        })
+        .expect("serialize");
+        let obj = v.as_object().expect("object");
+        for key in [
+            "tool_calls_dispatched",
+            "tool_calls_answered",
+            "assistant_messages",
+            "last_activity_ms",
+        ] {
+            assert!(obj.contains_key(key), "{key} missing from {obj:?}");
+        }
+        assert_eq!(obj.len(), 4, "unexpected keys: {obj:?}");
     }
 }
 
@@ -535,7 +837,10 @@ mod history_window_tests {
     /// The shape the guess gets wrong: a page that is full AND complete.
     #[test]
     fn a_full_page_that_is_the_whole_session_is_complete() {
-        let w = HistoryWindow { count: 200, total: Some(200) };
+        let w = HistoryWindow {
+            count: 200,
+            total: Some(200),
+        };
         assert_eq!(w.above(), Some(0));
         assert_eq!(w.is_complete(), Some(true));
     }
@@ -555,8 +860,10 @@ mod history_window_tests {
             assert_eq!(w.is_complete(), None);
         }
         assert!(
-            serde_json::from_value::<HistoryWindow>(serde_json::json!({ "count": 20, "total": "many" }))
-                .is_err(),
+            serde_json::from_value::<HistoryWindow>(
+                serde_json::json!({ "count": 20, "total": "many" })
+            )
+            .is_err(),
             "a shape change must fail loudly here rather than decay to a number"
         );
     }
@@ -565,14 +872,19 @@ mod history_window_tests {
     /// as an empty transcript.
     #[test]
     fn a_renamed_count_fails_rather_than_reading_as_empty() {
-        assert!(serde_json::from_value::<HistoryWindow>(serde_json::json!({ "total": 5 })).is_err());
+        assert!(
+            serde_json::from_value::<HistoryWindow>(serde_json::json!({ "total": 5 })).is_err()
+        );
     }
 
     /// Two reads of a growing store: the window can come back LONGER than the
     /// count taken just before it. Saturating, not wrapping.
     #[test]
     fn a_window_longer_than_the_count_reads_as_nothing_above() {
-        let w = HistoryWindow { count: 5, total: Some(4) };
+        let w = HistoryWindow {
+            count: 5,
+            total: Some(4),
+        };
         assert_eq!(w.above(), Some(0));
         assert_eq!(w.is_complete(), Some(true));
     }

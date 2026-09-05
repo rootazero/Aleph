@@ -171,6 +171,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         ping_interval_secs: full_config.gateway.ping_interval_secs,
         idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         lane: full_config.gateway.lane.clone(),
+        // `[gateway.rate_limit]` — restart-only, like every other key here:
+        // this is the only moment the section is read.
+        rate_limit: full_config.gateway.rate_limit.clone().into(),
         require_idempotency_key: full_config.gateway.require_idempotency_key,
         allowed_origins: full_config.gateway.allowed_origins.clone(),
         allow_any_origin: full_config.gateway.allow_any_origin,
@@ -433,11 +436,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (`GatewayEventFrame::SessionUserMessage`): a room member's message
     // reaches the other members the moment it becomes a transcript row,
     // instead of only when the turn it started finishes.
+    let message_projector = alephcore::gateway::session_projector::MessageProjector::new(
+        session_store.clone(),
+        Some(event_bus.clone()),
+    );
+    // Published so the `core/projection-holes` doctor check can reach the
+    // write path from the two registries that build it — neither of which has
+    // ever held a session store. Without it that check reports UNKNOWN.
+    alephcore::gateway::session_projector::set_global_message_projector(message_projector.clone());
     let projector: Arc<dyn alephcore::session::observer::SessionEventObserver> =
-        alephcore::gateway::session_projector::MessageProjector::new(
-            session_store.clone(),
-            Some(event_bus.clone()),
-        );
+        message_projector.clone();
     let session_service_and_store = build_sqlite_session_service(
         &alephcore::gateway::SessionManagerConfig::default().db_path,
         Some(projector),
@@ -626,6 +634,33 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             });
     }
 
+    // The other two thirds of a bootstrap ticket's lifecycle: enumerate the
+    // outstanding ones and cancel one by its non-secret id. Authorized-only via
+    // the `gateway.` admin prefix, same as `ticket.create`. Neither needs the
+    // bind host — no URL is built — so they take the manager directly rather
+    // than a context with three fields they would never read.
+    {
+        let list_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.ticket.list", move |req| {
+                let mgr = list_mgr.clone();
+                async move {
+                    alephcore::gateway::handlers::gateway_ticket::handle_ticket_list(req, mgr).await
+                }
+            });
+        let revoke_mgr = device_token_mgr.clone();
+        server
+            .handlers_mut()
+            .register("gateway.ticket.revoke", move |req| {
+                let mgr = revoke_mgr.clone();
+                async move {
+                    alephcore::gateway::handlers::gateway_ticket::handle_ticket_revoke(req, mgr)
+                        .await
+                }
+            });
+    }
+
     // Paired-device management RPCs: list / revoke remote Panel devices paired
     // via the bootstrap-ticket flow. Authorized-only (login wall). Scope-guarded
     // to `device_type = "panel"` so they never touch cluster nodes.
@@ -724,6 +759,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.handlers_mut().register("users.list", move |req| {
             let s = s.clone();
             async move { alephcore::gateway::handlers::users::handle_list(req, s).await }
+        });
+        // `users.get` — the admin dossier read. Registered here AND in
+        // `handlers/mod.rs`'s default registry: a `users.*` method added to
+        // only one of the two is the "registration faces, hand-copied" shape
+        // this family has four instances of already. The project catalogue is
+        // `ProjectStore::shared()`, the same process-wide handle
+        // `register_projects_handlers` uses further down, so a dossier's room
+        // ids come from the table `projects.list` serves.
+        let s = users_store.clone();
+        let detail_ctx = alephcore::gateway::handlers::users::UserDetailContext {
+            projects: alephcore::projects::ProjectStore::shared(),
+        };
+        server.handlers_mut().register("users.get", move |req| {
+            let s = s.clone();
+            let ctx = detail_ctx.clone();
+            async move { alephcore::gateway::handlers::users::handle_get(req, s, ctx).await }
         });
         let s = users_store.clone();
         server.handlers_mut().register("users.create", move |req| {
@@ -1147,10 +1198,31 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                                 .with_event_bus(event_bus.clone());
                             let shared: SharedHeartbeatService =
                                 Arc::new(tokio::sync::Mutex::new(svc));
+                            // Same shape as `cron::init_global`: the
+                            // deactivation freeze in `users.update` is a free
+                            // function with no injected dependencies and has
+                            // to reach every subsystem that runs work on a
+                            // principal's behalf. Injecting this handle into
+                            // the timer loop alone left the freeze with no
+                            // name to call.
+                            alephcore::tasks::heartbeat::init_global(shared.clone());
                             register_heartbeat_handlers(&mut server, &shared, args.daemon);
                             Some(shared)
                         }
                         Err(e) => {
+                            alephcore::tasks::heartbeat::decline_global(
+                                "`[heartbeat] enabled = true` but the heartbeat \
+                                 store would not open — the accompanying \
+                                 \"Failed to initialize heartbeat service\" \
+                                 message names the cause. No heartbeat task \
+                                 runs this boot, and `users.update` reports its \
+                                 heartbeat leg unmeasured.",
+                            );
+                            // NOT gated on `!args.daemon`, matching the cron
+                            // arm: the decline above promises an accompanying
+                            // message names the cause, and in daemon mode the
+                            // `eprintln!` below does not run.
+                            tracing::warn!(error = %e, "Failed to open the heartbeat store; heartbeat disabled");
                             if !args.daemon {
                                 eprintln!(
                                     "Warning: Failed to initialize heartbeat service: {e}. Heartbeat disabled."
@@ -1161,6 +1233,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     }
                 }
                 Err(e) => {
+                    // A third sentence, not a reuse of the one above: a store
+                    // that will not open and a data directory that will not
+                    // resolve are different faults with different fixes, and
+                    // `because` is quoted verbatim to an operator.
+                    alephcore::tasks::heartbeat::decline_global(
+                        "`[heartbeat] enabled = true` but the data directory \
+                         would not resolve, so the heartbeat store was never \
+                         opened. No heartbeat task runs this boot, and \
+                         `users.update` reports its heartbeat leg unmeasured.",
+                    );
                     if !args.daemon {
                         eprintln!(
                             "Warning: Failed to resolve data directory: {e}. Heartbeat disabled."
@@ -1171,6 +1253,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         } else {
+            // A different sentence from the two `Err` arms above on purpose:
+            // this one is a setting an operator chose, those are faults they
+            // need to fix. One `because` covering all three would be
+            // actionable for none.
+            alephcore::tasks::heartbeat::decline_global(
+                "`[heartbeat] enabled = false`: no heartbeat scheduler runs in \
+                 this process, so the deactivation freeze in `users.update` \
+                 cannot measure its heartbeat leg and says so rather than \
+                 reporting a zero.",
+            );
             if !args.daemon {
                 println!("Heartbeat service: disabled");
                 println!();
@@ -1896,7 +1988,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.generation_registry.clone(),
     );
 
-    register_session_handlers(&mut server, &session_store, &memory_db, args.daemon);
+    register_session_handlers(
+        &mut server,
+        &session_store,
+        &memory_db,
+        Some(agent_result.run_manager.clone()),
+        args.daemon,
+    );
     // Artifact metadata (`artifacts.list`, `session.export_html`). The byte
     // route itself is plain HTTP on the axum router; these RPCs are what mint
     // the capability that authorises it.
@@ -1965,14 +2063,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             .providers
             .contains_key("chatgpt");
         if has_chatgpt {
-            use alephcore::gateway::codex_token_refresher::{set_global, CodexTokenRefresher};
+            use alephcore::gateway::codex_token_refresher::CodexTokenRefresher;
             let refresher = Arc::new(CodexTokenRefresher::new(
                 oauth_state.clone(),
                 app_config_for_oauth.clone(),
                 oauth_vault.clone(),
                 registry,
             ));
-            set_global(refresher.clone());
+            // Written fully qualified, like the `decline_global` in this gate's
+            // `else` arm two lines below and like every other conditional
+            // capability install in this file. `set_global` is a name TWO
+            // modules own (`codex_token_refresher` and
+            // `gateway::security::shared_token`), and
+            // `census::no_conditional_capability_install_is_silent` groups
+            // install sites by the path written here — an unqualified call
+            // makes those two indistinguishable to it.
+            alephcore::gateway::codex_token_refresher::set_global(refresher.clone());
             refresher.spawn_background();
             if !args.daemon {
                 println!("OAuth: Codex token auto-refresh enabled");
@@ -1994,9 +2100,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Background health prober for circuit-open providers (LiteLLM/Bifrost
     // parity). The loop self-gates on `[route] health_probe_interval_secs`
-    // (0/absent = off, the default — probing spends real requests), read fresh
-    // from the live route handle every tick so `route_config.update` hot-tunes
-    // it. Spawned unconditionally: with the knob off it idles probe-free.
+    // (0/absent = off, the default — probing spends real requests), re-read
+    // from the live route handle at every 30s slice of the wait so
+    // `route_config.update` hot-tunes it in both directions. Spawned
+    // unconditionally: with the knob off it idles probe-free.
     alephcore::gateway::health_prober::spawn_background(
         app_config_for_oauth.clone(),
         oauth_vault.clone(),
@@ -2048,12 +2155,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    // Taken before the mutable borrow below: `handle_bind` needs it to
+    // invalidate the ownership cache for every session row it rescopes.
+    let event_visibility = server.event_visibility().clone();
     register_projects_handlers(
         &mut server,
         &project_store,
         &auth_bundle.security_store,
         &event_bus,
         &session_store,
+        &event_visibility,
         args.daemon,
     );
 
@@ -2863,6 +2974,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             let reconciler = alephcore::gateway::ProjectionReconciler::new(
                 event_store.clone(),
                 session_store_for_reconcile.clone(),
+                message_projector.clone(),
+                resume_cfg.max_age_secs,
             );
             let resume_collaborators = (
                 agent_result.execution_adapter.clone(),
@@ -2876,13 +2989,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // nothing and hands out no run_id, so no UI can follow or stop it.
             let bus_for_resume = event_bus.clone();
             tokio::spawn(async move {
-                let rr = reconciler.reconcile_interrupted().await;
+                let rr = reconciler.reconcile_candidates().await;
                 tracing::info!(
                     scanned = rr.scanned,
-                    reconciled = rr.reconciled,
-                    rows_filled = rr.rows_filled,
-                    skipped_clean = rr.skipped_clean,
+                    holes_filled = rr.holes_filled,
+                    stamps_reapplied = rr.stamps_reapplied,
+                    usage_rebilled = rr.usage_rebilled,
+                    skipped_up_to_date = rr.skipped_up_to_date,
                     skipped_legacy = rr.skipped_legacy,
+                    errored = rr.errored,
                     "ProjectionReconciler boot scan finished"
                 );
                 if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
@@ -3541,6 +3656,25 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
     }
+    // The projection barrier. Everything that could append an event has stopped
+    // by now, but the drain is asynchronous: without this the process can exit
+    // (and drop the store) with rows still queued — a projection gap
+    // manufactured by the ORDERLY path, which the next boot's activity-window
+    // repair then has to clean up. Placed after the background reap for the
+    // same reason that reap is here: a background job's last tool result is an
+    // event too. Timeout rather than an unbounded wait, so a wedged drain
+    // cannot hold the shutdown open; a timeout is reported, never swallowed.
+    match message_projector
+        .flush(std::time::Duration::from_secs(5))
+        .await
+    {
+        Ok(()) => tracing::debug!("message projector drained before shutdown"),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "message projector did not drain before shutdown; the next boot's \
+             activity-window repair will fill whatever was still queued"
+        ),
+    }
     memory_monitor.shutdown().await;
     channel_health_monitor.shutdown().await;
     // Spec C: cleanup endpoint discovery file regardless of outcome. Both
@@ -3719,5 +3853,68 @@ mod tests {
                  configured"
             );
         }
+    }
+
+    /// `users.*` has TWO registration faces — this file at boot, and
+    /// `gateway::handlers::mod`'s default in-memory registry, whose own
+    /// comment says boot re-registers against the same store. A method added
+    /// to one and not the other resolves in half the processes that run this
+    /// code and in half the test harnesses, with nothing red.
+    ///
+    /// This is the boot half, and its expectation is **derived from the other
+    /// face's source**, never from a list retyped here: every `users.` method
+    /// the default registry registers must also be registered here. The
+    /// mirror-image direction is asserted on the library side
+    /// (`gateway::handlers::users`'s
+    /// `the_default_registry_and_boot_register_the_same_users_methods`), so
+    /// neither face can grow a method the other lacks.
+    ///
+    /// The registration here lives inside an `async fn` that opens sockets
+    /// and databases, so the only thing a unit test can read is the source.
+    ///
+    /// CRLF-safe and comment-stripped for the reason the spend census above
+    /// documents: an anchored `"\n#[cfg(test)]"` needle matches nothing on a
+    /// Windows checkout, and a doc comment naming the method — this one
+    /// included — would satisfy a naive `contains`.
+    #[test]
+    fn boot_registers_every_users_method_the_default_registry_has() {
+        let boot = include_str!("mod.rs").replace('\r', "");
+        let boot_production = alephcore::utils::source_scan::production_prefix(&boot);
+        assert!(
+            boot_production.len() < boot.len(),
+            "the #[cfg(test)] split matched nothing — this test would be \
+             reading its own source"
+        );
+        let boot_production = alephcore::utils::source_scan::strip_comment_lines(&boot_production);
+
+        let defaults = include_str!("../../../../gateway/handlers/mod.rs").replace('\r', "");
+        let defaults = alephcore::utils::source_scan::strip_comment_lines(
+            &alephcore::utils::source_scan::production_prefix(&defaults),
+        );
+        let wanted = registered_users_methods(&defaults);
+        assert!(
+            wanted.contains(&"users.get".to_string()),
+            "the scrape found no `users.get` in the default registry — this \
+             guard is reading the wrong file or the wrong shape, and would \
+             pass over an empty set"
+        );
+
+        for method in wanted {
+            assert!(
+                boot_production.contains(&format!("register(\"{method}\"")),
+                "{method} is registered in the default registry but boot never \
+                 registers it — it would resolve in test harnesses and be \
+                 METHOD_NOT_FOUND on a real server"
+            );
+        }
+    }
+
+    /// Every `users.*` method name a `.register("…")` call in `src` names.
+    fn registered_users_methods(src: &str) -> Vec<String> {
+        src.split("register(\"users.")
+            .skip(1)
+            .filter_map(|seg| seg.split('"').next())
+            .map(|suffix| format!("users.{suffix}"))
+            .collect()
     }
 }

@@ -14,14 +14,13 @@ use crate::providers::llm_retry::{backoff_delay, is_transient_overload};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::{RouteHandle, RouteState};
 use crate::providers::route_policy::{
-    classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
-    RateLimits, RouteTargets,
+    classify_candidate, order_candidates, order_candidates_balanced, EndpointTier, RouteGate,
 };
 use crate::providers::{AiProvider, DefaultProviderHandle, DeltaSink, ProviderDelta};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
 
-use super::decision::{decide, Decision, FailureKind};
+use super::decision::{cooldown_window, decide, strike_for, Decision, FailureKind};
 use super::health::{CircuitState, FailoverHealth, ModelCooldown, ProviderCooldown};
 use super::{
     FailoverConfig, FailoverNode, CIRCUIT_OPEN_THRESHOLD, DEFAULT_MODEL_COOLDOWN, MAX_COOLDOWN,
@@ -104,13 +103,27 @@ enum SlotKind {
 /// chain, and the two disagreeing is how a candidate ends up sorted last for a
 /// reason the walk then declines to act on.
 struct CandidatePlan {
-    /// The chain to walk, in order, each entry with the route action it must
+    /// The chain to walk, in order, each entry with the route gate it must
     /// enforce and the slot that decides whose model list wins.
-    candidates: Vec<(FailoverNode, CandidateAction, SlotKind)>,
+    candidates: Vec<(FailoverNode, RouteGate, SlotKind)>,
     /// Providers at or over a configured `[route].rate_limits` ceiling right
     /// now. Empty whenever no ceilings are configured (the default), so the
     /// gate below is a no-op on an unconfigured deployment.
+    ///
+    /// Read only through [`rate_deferred`](Self::rate_deferred) — membership
+    /// alone is not the gate's answer (a pin is exempt).
     saturated: std::collections::HashSet<String>,
+    /// Providers the shared health registries currently sideline: circuit open
+    /// and still cooling, or parked in a rate-limit pacing window. Computed
+    /// over the WHOLE chain (primary included) by
+    /// [`sidelined_providers`](FailoverProvider::sidelined_providers), the
+    /// read-only twin of the walk's two health gates.
+    ///
+    /// Two consumers: the ordering pass folds it into `LoadMetric.cooling`, and
+    /// `route_status`'s preview renders it, so the diagnostic states the same
+    /// verdict the walk is about to reach instead of showing an open-circuit
+    /// primary as a healthy first dial.
+    health_sidelined: std::collections::HashSet<String>,
     /// The single route-state generation this plan was ordered from. Carried
     /// so the walk's gates (the saturation gate's pin exemption) and the
     /// empty-chain error read the SAME snapshot that produced the candidate
@@ -118,6 +131,90 @@ struct CandidatePlan {
     /// hot-swapped in after the ordering pass and name a mode that had nothing
     /// to do with why the chain is empty.
     route: Arc<RouteState>,
+}
+
+impl CandidatePlan {
+    /// Whether the rate-ceiling gate defers `name`: it is at or over its
+    /// configured `[route].rate_limits` window AND it is not operator-pinned.
+    ///
+    /// The ONE spelling of that rule. Its two callers are the walk's gate and
+    /// `route_status`'s [`preview_order`](FailoverProvider::preview_order) —
+    /// a preview restating only the first half renders a pinned saturated
+    /// provider as "skipped" and then watches the walk dial it first (the pin
+    /// exemption is `order_candidates_balanced`'s promise). Both callers must
+    /// read this, never `saturated` directly.
+    ///
+    /// Position is deliberately NOT part of it: whether a deferral actually
+    /// happens also needs "is there a later candidate", which is a fact about
+    /// the index, not about the provider. The walk adds that; the preview
+    /// renders the per-provider half.
+    fn rate_deferred(&self, name: &str) -> bool {
+        self.saturated.contains(name) && !self.route.targets.is_pinned(name)
+    }
+
+    /// The endpoint this plan sets out for, as the route witness's anchor — or
+    /// `None` when the head is not an endpoint at all.
+    ///
+    /// The single unanchorable head is the nested-chain sentinel: it stands for
+    /// a whole chain, not a provider (see [`NESTED_CHAIN_NODE`]). There is no
+    /// fall-through for it — the dial-time anchor excludes the sentinel by the
+    /// same rule — so a walk whose head is the sentinel writes **nothing at
+    /// either point**, and the chain nested behind it becomes the run's writer.
+    ///
+    /// That head is reachable and the gap is real: a `provider_hint` pin builds
+    /// `[pin, NESTED_CHAIN_NODE]` carrying the pin's true tier, so a cloud pin
+    /// under `AlwaysLocal` with `allow_cloud_escalation = false` classifies the
+    /// pin [`Skip`](crate::providers::route_policy::CandidateAction::Skip) and
+    /// leaves the sentinel leading. The run
+    /// is then reported as whatever the *global* chain set out for, not as the
+    /// pin the caller asked for. Anchoring the dropped head instead is not
+    /// obviously right — the identical drop on an operator-configured primary
+    /// is that deployment's steady state under `AlwaysLocal`, and reporting it
+    /// would light the banner on every turn — so this round leaves the pin case
+    /// under-reported rather than guess (FEATURE_LOCATOR §3.6 round-6 T6,
+    /// deferred list).
+    ///
+    /// An approval-gated cross-tier head **is** anchored here, and the walk's
+    /// escalation arm withdraws the anchor
+    /// ([`route_witness::retract`](crate::providers::route_witness::retract)) if
+    /// the user actually declines. "Declined" and "skipped" are different
+    /// events and only the first must stay silent: the breaker and rate-ceiling
+    /// gates run *ahead* of the approval prompt, so a gated head whose provider
+    /// is dead or saturated is passed over without anyone being asked — and
+    /// being passed over for being dead is exactly the migration this anchor
+    /// exists to report.
+    ///
+    /// The model is left [`Unresolved`](crate::providers::route_witness::DialedModel::Unresolved)
+    /// on purpose: the walk settles which model this slot dials only after the
+    /// capability floor and the cooling sideline have run, so a seed derived
+    /// from the catalog head here could name a model that is then filtered out.
+    fn anchor(&self) -> Option<crate::providers::route_witness::Dialed> {
+        let (node, _, _) = self.candidates.first()?;
+        if node.name == super::NESTED_CHAIN_NODE {
+            return None;
+        }
+        Some(crate::providers::route_witness::Dialed::endpoint(
+            &node.name,
+        ))
+    }
+}
+
+/// One member of the fallback chain, as rendered by `route_status`'s
+/// `fallback_chain` ([`FailoverProvider::chain_composition`]).
+///
+/// Distinct from [`RouteStep`] on purpose: this is *membership* (who is in the
+/// chain, with what ladder and tier), that is the *dial plan* (who gets tried
+/// first, behind which gate). Both are now materialised from one place, so they
+/// can differ in what they answer but not in what they say about a provider.
+#[derive(Debug, Clone)]
+pub struct ChainMember {
+    /// Provider name — the breaker / cooldown / load key.
+    pub name: String,
+    /// The model walk order for this provider, from the boot model catalog.
+    pub models: Vec<String>,
+    /// Endpoint locality, from the boot tier catalog (see the residual noted on
+    /// [`FailoverProvider::chain_composition`]).
+    pub tier: EndpointTier,
 }
 
 /// One step of the chain the next request would walk, as rendered by
@@ -129,13 +226,42 @@ pub struct RouteStep {
     /// Endpoint locality the route policy gated on.
     pub tier: EndpointTier,
     /// What the walk will enforce before dialing it.
-    pub action: CandidateAction,
+    pub action: RouteGate,
     /// Whether this is the primary slot (the only slot that honours an
     /// explicitly pinned request model).
     pub primary: bool,
-    /// Whether a configured rate ceiling currently sidelines it — deprioritised
-    /// within its tier and skipped while a healthier candidate remains.
-    pub sidelined: bool,
+    /// Whether a configured rate ceiling currently sidelines it: at or over its
+    /// `[route].rate_limits` window and not operator-pinned, so the walk
+    /// **skips it while a later candidate remains** (the last candidate is
+    /// always attempted — the ceiling defers, it never starves).
+    ///
+    /// Derived through [`CandidatePlan::rate_deferred`], the same helper the
+    /// walk's gate calls.
+    pub rate_sidelined: bool,
+    /// Whether the health registries currently sideline it: circuit open and
+    /// still cooling, or parked in a rate-limit pacing window. Same rule as
+    /// above — the walk **skips it while a later candidate remains**, and
+    /// attempts it anyway when it is the last one.
+    ///
+    /// Derived from [`FailoverProvider::sidelined_providers`], the read-only
+    /// twin of the walk's breaker and pacing gates (it must not spend the
+    /// `Open → HalfOpen` probe that a real dial spends).
+    pub health_sidelined: bool,
+}
+
+/// What [`FailoverProvider::preview_order`] answers: the chain the next request
+/// would walk, plus the route generation that ordering was computed from.
+///
+/// The generation travels with the order because `route_status` renders both
+/// halves — the header (mode, strategy, pins, ceilings) and the order — and a
+/// concurrent `route_config.update` between two separate loads would publish a
+/// header naming one strategy next to an order produced under another. Same
+/// rule, one level up, as [`CandidatePlan::route`].
+pub struct RoutePreview {
+    /// The dial order, gates included.
+    pub steps: Vec<RouteStep>,
+    /// The single route-state generation `steps` was ordered from.
+    pub route: Arc<RouteState>,
 }
 
 /// Why a chain came back empty, phrased for whoever has to read it.
@@ -160,11 +286,13 @@ fn empty_chain_error(mode: RouteMode) -> AlephError {
 
 /// Fallback chain **membership** for the next request, in order.
 ///
-/// The single description of "who is in the chain", shared by the walk
-/// ([`FailoverProvider::candidates`]) and the `route_status` renderer
-/// ([`crate::providers::route_observe`]) so the diagnostic can never disagree
-/// with the chain it is describing. Three cases, matching how the chain was
-/// assembled:
+/// The single description of "who is in the chain". It has exactly one
+/// production caller, [`FailoverProvider::fallback_nodes`], which materialises
+/// these names into nodes; both faces that need membership — the walk
+/// ([`FailoverProvider::candidates`]) and the `route_status` composition
+/// ([`FailoverProvider::chain_composition`]) — go through *that*, so no
+/// diagnostic can disagree with the chain it is describing. Three cases,
+/// matching how the chain was assembled:
 ///
 /// * the handle exposes no live registry (tests / non-registry boot) → the
 ///   boot-time configured order verbatim;
@@ -205,17 +333,31 @@ pub(crate) fn effective_fallback_names(
         .collect()
 }
 
-/// A [`DeltaSink`] pass-through that remembers whether any *content* reached
-/// the caller.
+/// A [`DeltaSink`] pass-through that remembers what reached the caller, on the
+/// two axes the layers above ask about *separately*.
 ///
-/// The failover walk needs one bit the sink itself does not expose: has the user
-/// already been shown part of an answer? Bookkeeping-only deltas
-/// ([`Usage`](ProviderDelta::Usage), [`Done`](ProviderDelta::Done),
-/// [`Error`](ProviderDelta::Error)) do not count — they carry nothing a second
-/// candidate's answer could contradict.
+/// * [`has_emitted`](Self::has_emitted) — did any **content** delta pass?
+///   Bookkeeping-only deltas ([`Usage`](ProviderDelta::Usage),
+///   [`Done`](ProviderDelta::Done), [`Error`](ProviderDelta::Error)) do not
+///   count. This is the **chain-terminal** predicate: once a candidate has
+///   produced structural output the walk stops advancing, because a second
+///   candidate would assemble a rival answer over a half-built one.
+/// * [`has_shown_user_output`](Self::has_shown_user_output) — did anything reach
+///   the user's **transcript** ([`ProviderDelta::is_user_visible`])? Strictly
+///   narrower: a stream that emitted only tool-call deltas latches the first
+///   bit and not this one.
+///
+/// Keeping them apart is what stops [`super::PARTIAL_OUTPUT_EMITTED`] from
+/// over-firing. That marker's whole job is to stop the gateway re-dispatching a
+/// run whose user already has half an answer on screen; asserting it off
+/// `has_emitted` would plant it on failures where nothing user-visible ever
+/// existed — a truncated tool call, say — and forfeit a re-dispatch that is
+/// safe there precisely because the screen is still blank. One guard, two
+/// facts, two questions.
 struct EmissionGuard<'a> {
     inner: &'a dyn DeltaSink,
     emitted: std::sync::atomic::AtomicBool,
+    user_visible: std::sync::atomic::AtomicBool,
 }
 
 impl<'a> EmissionGuard<'a> {
@@ -223,11 +365,16 @@ impl<'a> EmissionGuard<'a> {
         Self {
             inner,
             emitted: std::sync::atomic::AtomicBool::new(false),
+            user_visible: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     fn has_emitted(&self) -> bool {
         self.emitted.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn has_shown_user_output(&self) -> bool {
+        self.user_visible.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -239,6 +386,10 @@ impl DeltaSink for EmissionGuard<'_> {
             ProviderDelta::Usage(_) | ProviderDelta::Done(_) | ProviderDelta::Error(_)
         ) {
             self.emitted
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        if delta.is_user_visible() {
+            self.user_visible
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.inner.on_delta(delta).await;
@@ -487,13 +638,14 @@ impl FailoverProvider {
     fn route_snapshot(&self) -> Arc<RouteState> {
         match &self.route_handle {
             Some(h) => h.snapshot(),
+            // No live handle (tests, non-config boot): the boot snapshot from
+            // `with_route`, over the one shared spelling of "no `[route]`
+            // section" — so this and a chain-less `route_status` render cannot
+            // disagree about what unconfigured means.
             None => Arc::new(RouteState {
                 mode: self.route_mode,
                 allow_escalation: self.allow_cloud_escalation,
-                load_balance: LoadBalanceStrategy::default(),
-                targets: Arc::new(RouteTargets::default()),
-                limits: Arc::new(RateLimits::default()),
-                health_probe_interval_secs: 0,
+                ..RouteState::unconfigured()
             }),
         }
     }
@@ -572,19 +724,21 @@ impl FailoverProvider {
     /// * the global default chain tags it [`EndpointTier::Unknown`] — its
     ///   `base_url` is not resolvable from the live `DefaultProviderHandle` and
     ///   it is the operator's configured default, so it always classifies to
-    ///   [`Allow`](CandidateAction::Allow) (byte-identical to before);
+    ///   [`Allow`](RouteGate::Allow) (byte-identical to before);
     /// * a *pinned* override chain tags it with the pin's real tier (via
     ///   [`with_primary_tier`](Self::with_primary_tier)), so a hard-guardrail
     ///   `AlwaysLocal` can turn an explicit cloud pin into a
-    ///   [`CrossTier`](CandidateAction::CrossTier) (borrow-cloud approval) or a
-    ///   [`Skip`](CandidateAction::Skip) (escalation off) — the dynamic pick no
+    ///   [`CrossTier`](RouteGate::CrossTier) (borrow-cloud approval) or dropped
+    ///   outright (escalation off) — the dynamic pick no
     ///   longer bypasses the operator's policy.
     ///
     /// The primary is never reordered below its own fallbacks (it is the
     /// operator default or the explicitly-chosen provider); only the *fallback*
     /// list is run through [`order_candidates`] for local-first ordering, pin
-    /// promotion and tier gating. Each entry carries the [`CandidateAction`] the
-    /// walk must enforce plus the [`SlotKind`] that decides whose model list wins.
+    /// promotion and tier gating. Each entry carries the [`RouteGate`] the walk
+    /// must enforce plus the [`SlotKind`] that decides whose model list wins —
+    /// the dropped candidates are gone by construction, not carried as a state
+    /// nothing downstream can act on.
     ///
     /// `advance_rotation` consumes a round-robin tick (what a real request
     /// does); the read-only [`preview_order`](Self::preview_order) passes
@@ -604,44 +758,7 @@ impl FailoverProvider {
             provider: primary,
             tier: self.primary_tier,
         };
-        // Chain membership comes from the one shared description
-        // ([`effective_fallback_names`]) so `route_status` cannot describe a
-        // different chain than the one that is walked. Each name is then
-        // materialised into a node: a boot node when the operator configured
-        // the chain (it already carries the built provider, its model list and
-        // its tier), otherwise a live registry lookup whose model list and
-        // endpoint tier come from the same boot catalogs the static path uses —
-        // a live-derived candidate is a real chain member, not a placeholder.
-        let live_names = self.primary.provider_names();
-        let configured: Vec<String> = self.fallbacks.iter().map(|n| n.name.clone()).collect();
-        let member_names = effective_fallback_names(
-            &live_names,
-            &primary_name,
-            &configured,
-            self.derive_fallbacks_live,
-        );
-        let fallbacks: Vec<FailoverNode> = member_names
-            .into_iter()
-            .filter_map(|name| {
-                // An auto-derived chain dials the *live* provider instance, so
-                // one rebuilt at runtime (rotated key, edited base_url) is used
-                // without a restart; its model list and tier still come from the
-                // boot catalogs. An operator-configured chain uses its boot node
-                // verbatim (that node already carries all three).
-                if self.derive_fallbacks_live {
-                    if let Some(provider) = self.primary.provider_by_name(&name) {
-                        return Some(FailoverNode {
-                            models: self.model_catalog.get(&name).cloned().unwrap_or_default(),
-                            tier: self.node_tier(&name),
-                            name,
-                            provider,
-                        });
-                    }
-                }
-                // rust-doctor-disable-next-line excessive-clone
-                self.fallbacks.iter().find(|fb| fb.name == name).cloned()
-            })
-            .collect();
+        let fallbacks = self.fallback_nodes(&primary_name);
         // One coherent route snapshot for the whole ordering pass — mode,
         // targets, strategy and limits all read from a single config generation.
         let route = self.route_snapshot();
@@ -651,11 +768,14 @@ impl FailoverProvider {
         // Classify the primary in place. A `Skip` (a hard-guardrail mode with
         // escalation off, on a cross-tier pin) drops it so the chain falls
         // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
-        let mut out: Vec<(FailoverNode, CandidateAction, SlotKind)> =
+        let mut out: Vec<(FailoverNode, RouteGate, SlotKind)> =
             Vec::with_capacity(fallbacks.len() + 1);
-        match classify_candidate(mode, primary_node.tier, allow_escalation) {
-            CandidateAction::Skip => {}
-            action => out.push((primary_node, action, SlotKind::Primary)),
+        if let Some(gate) = RouteGate::retained(classify_candidate(
+            mode,
+            primary_node.tier,
+            allow_escalation,
+        )) {
+            out.push((primary_node, gate, SlotKind::Primary));
         }
         // Order the fallback pool. The balanced path runs when there is a load
         // registry AND either a non-`Ordered` strategy (sort by live signals) or
@@ -672,15 +792,27 @@ impl FailoverProvider {
         // `_filter_cooldown_deployments` ahead of every strategy; Aleph
         // deprioritises rather than removes, so a chain of cooling providers
         // still resolves instead of raising "no deployments available".
+        //
+        // Gathered over the WHOLE chain, primary included. Ordering only ever
+        // reads the fallback half (the primary keeps position 0 and is not part
+        // of the pool being sorted), but the walk's health gates apply to every
+        // slot — so a fallbacks-only set left `route_status` rendering an
+        // open-circuit primary as a healthy first dial while the walk passed
+        // straight over it.
         let sidelined = self
-            .sidelined_providers(fallbacks.iter().map(|n| n.name.as_str()))
+            .sidelined_providers(
+                std::iter::once(primary_name.as_str())
+                    .chain(fallbacks.iter().map(|n| n.name.as_str())),
+            )
             .await;
         // Rate-window saturation, folded ONCE per pass for every candidate the
-        // primary included. Two consumers read this single answer: the ordering
-        // below (deprioritise to the back of the tier) and the walk's gate
-        // (skip while a healthier candidate is still ahead) — so a provider
-        // cannot be sorted last for a ceiling the walk then ignores. Empty
-        // without `[route].rate_limits`, which is the default.
+        // primary included. Three consumers read this single answer: the
+        // ordering below (deprioritise to the back of the tier), the walk's
+        // gate and `route_status`'s preview (both through
+        // `CandidatePlan::rate_deferred`, which adds the pin exemption) — so a
+        // provider cannot be sorted last for a ceiling the walk then ignores,
+        // nor reported skipped for one it is exempt from. Empty without
+        // `[route].rate_limits`, which is the default.
         let saturated: std::collections::HashSet<String> = match &self.load {
             Some(load) if !limits.is_empty() => std::iter::once(primary_name.as_str())
                 .chain(fallbacks.iter().map(|n| n.name.as_str()))
@@ -755,20 +887,30 @@ impl FailoverProvider {
                 |n| n.name.as_str(),
             ),
         };
-        out.extend(
-            ordered
-                .into_iter()
-                .map(|(node, action)| (node, action, SlotKind::Fallback)),
-        );
+        out.extend(ordered.into_iter().filter_map(|(node, action)| {
+            // Both ordering functions already dropped every `Skip`
+            // (`route_policy::order_candidates` / `order_candidates_balanced`),
+            // and the primary's own `Skip` was dropped above. This is the
+            // second half of that same statement — typed, so the chain cannot
+            // carry a state the walk has no arm for.
+            let gate = RouteGate::retained(action);
+            debug_assert!(
+                gate.is_some(),
+                "route ordering returned a Skip it promises to drop: {action:?}"
+            );
+            gate.map(|gate| (node, gate, SlotKind::Fallback))
+        }));
         CandidatePlan {
             candidates: out,
             saturated,
+            health_sidelined: sidelined,
             route,
         }
     }
 
-    /// The chain the *next* request would walk: `(provider, tier, action, slot)`
-    /// per candidate, in dial order.
+    /// The chain the *next* request would walk — one [`RouteStep`] per
+    /// candidate in dial order, plus the route generation they were ordered
+    /// from ([`RoutePreview`]).
     ///
     /// Read-only twin of [`candidates`](Self::candidates) — same function, same
     /// route snapshot, same gates — so `route_status` cannot report an order the
@@ -779,18 +921,35 @@ impl FailoverProvider {
     ///
     /// Observes without disturbing: it consumes no round-robin tick and performs
     /// no `Open → HalfOpen` breaker transition (that belongs to a real dial).
-    pub async fn preview_order(&self) -> Vec<RouteStep> {
+    ///
+    /// Both skip flags are DERIVED from the plan the walk would use — the rate
+    /// one through [`CandidatePlan::rate_deferred`] (the walk's own gate calls
+    /// the same helper) and the health one from the set
+    /// [`sidelined_providers`](Self::sidelined_providers) computed for that
+    /// plan. Restating either condition here is what made the preview describe
+    /// a chain the walk does not walk.
+    ///
+    /// The route generation comes back with the order so the caller renders one
+    /// coherent picture — see [`RoutePreview`].
+    pub async fn preview_order(&self) -> RoutePreview {
         let plan = self.candidates(false).await;
-        plan.candidates
-            .into_iter()
+        let steps = plan
+            .candidates
+            .iter()
             .map(|(node, action, slot)| RouteStep {
-                sidelined: plan.saturated.contains(&node.name),
-                provider: node.name,
+                rate_sidelined: plan.rate_deferred(&node.name),
+                health_sidelined: plan.health_sidelined.contains(&node.name),
+                // rust-doctor-disable-next-line excessive-clone
+                provider: node.name.clone(),
                 tier: node.tier,
-                action,
-                primary: slot == SlotKind::Primary,
+                action: *action,
+                primary: *slot == SlotKind::Primary,
             })
-            .collect()
+            .collect();
+        RoutePreview {
+            steps,
+            route: plan.route,
+        }
     }
 
     /// The subset of `names` the shared registries currently consider unhealthy:
@@ -842,6 +1001,88 @@ impl FailoverProvider {
             .get(name)
             .copied()
             .unwrap_or(EndpointTier::Cloud)
+    }
+
+    /// The fallback slots this chain would walk right now, materialised.
+    ///
+    /// Membership comes from the one shared description
+    /// ([`effective_fallback_names`]) so no diagnostic can describe a different
+    /// chain than the one that is walked. Each name is then materialised into a
+    /// node: a boot node when the operator configured the chain (it already
+    /// carries the built provider, its model list and its tier), otherwise a
+    /// live registry lookup whose model list and endpoint tier come from the
+    /// same boot catalogs the static path uses — a live-derived candidate is a
+    /// real chain member, not a placeholder.
+    ///
+    /// Both the walk ([`candidates`](Self::candidates)) and the read-only
+    /// composition ([`chain_composition`](Self::chain_composition)) go through
+    /// here. A second copy materialised from a boot-time vec cannot answer
+    /// this: one `providers.setDefault` is enough to make the ex-primary a
+    /// member of the walked chain that was never in that vec, and defaulting
+    /// an unfound name to `Cloud` with an empty ladder renders a member the
+    /// walk would never gate that way.
+    fn fallback_nodes(&self, primary_name: &str) -> Vec<FailoverNode> {
+        let live_names = self.primary.provider_names();
+        let configured: Vec<String> = self.fallbacks.iter().map(|n| n.name.clone()).collect();
+        effective_fallback_names(
+            &live_names,
+            primary_name,
+            &configured,
+            self.derive_fallbacks_live,
+        )
+        .into_iter()
+        .filter_map(|name| {
+            // An auto-derived chain dials the *live* provider instance, so one
+            // rebuilt at runtime (rotated key, edited base_url) is used without
+            // a restart; its model list and tier still come from the boot
+            // catalogs. An operator-configured chain uses its boot node verbatim
+            // (that node already carries all three).
+            if self.derive_fallbacks_live {
+                if let Some(provider) = self.primary.provider_by_name(&name) {
+                    return Some(FailoverNode {
+                        models: self.model_catalog.get(&name).cloned().unwrap_or_default(),
+                        tier: self.node_tier(&name),
+                        name,
+                        provider,
+                    });
+                }
+            }
+            // rust-doctor-disable-next-line excessive-clone
+            self.fallbacks.iter().find(|fb| fb.name == name).cloned()
+        })
+        .collect()
+    }
+
+    /// Read-only composition of the fallback chain the next request would walk:
+    /// each member's name, its model ladder and its endpoint tier, in
+    /// configured order (no route gating, no load-balancing — that is
+    /// [`preview_order`](Self::preview_order)'s answer).
+    ///
+    /// Rendered as `route_status`'s `fallback_chain`. It is derived from
+    /// [`fallback_nodes`](Self::fallback_nodes) — the same materialisation the
+    /// walk uses — so the two faces of the snapshot cannot state two tiers or
+    /// two ladders for one provider.
+    ///
+    /// ⚠️ Residual, deliberately open: the tier comes from
+    /// [`node_tier`](Self::node_tier), whose catalog is the BOOT `[providers]`
+    /// picture. A provider registered after boot has no entry and reads
+    /// [`EndpointTier::Cloud`] on *both* faces — agreeing, and both possibly
+    /// wrong, for an on-machine endpoint added at runtime. Closing it means
+    /// hot-extending `tier_catalog` on provider creation (the RCU shape
+    /// `RouteObservability::hot_apply_problems` already uses for the problem
+    /// list); until then this agreement is not a claim that the tier is right
+    /// (FEATURE_LOCATOR §3.6 round-6 T9, deferred list).
+    #[must_use]
+    pub fn chain_composition(&self) -> Vec<ChainMember> {
+        let primary_name = self.primary.current().name().to_string();
+        self.fallback_nodes(&primary_name)
+            .into_iter()
+            .map(|node| ChainMember {
+                name: node.name,
+                models: node.models,
+                tier: node.tier,
+            })
+            .collect()
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` once the
@@ -911,6 +1152,32 @@ impl FailoverProvider {
         }
     }
 
+    /// Bookkeeping for an attempt that failed *after* content already reached
+    /// the user — the walk's two already-emitted exits:
+    /// * an `Err` raised once [`EmissionGuard::has_emitted`] is true, and
+    /// * an `Ok` carrying
+    ///   [`ProviderResponse::provider_error`](crate::providers::adapter::ProviderResponse::provider_error)
+    ///   (the provider reported an in-band fault mid-stream).
+    ///
+    /// Both are terminal for *routing* — a second candidate would append its
+    /// answer to a half-written one — but neither is a success, so both spend
+    /// the same [`strike_for`] verdict here rather than each inventing one.
+    /// The strike is deliberately the *whole* effect: the request outcome
+    /// (partial `Ok`, or the error) is unchanged.
+    async fn record_emitted_failure(&self, provider: &str, model: Option<&str>, err: &AlephError) {
+        let strike = strike_for(err);
+        if let Some(dur) = strike.cooldown {
+            if let (Some(cd), Some(m)) = (&self.model_cooldown, model) {
+                cd.cool(provider, m, dur).await;
+            }
+            if let Some(pc) = &self.provider_cooldown {
+                pc.cool(provider, dur).await;
+            }
+        }
+        self.mark_unhealthy(provider, err.to_string(), strike.kind)
+            .await;
+    }
+
     /// Whether `name`'s circuit is currently open.
     ///
     /// Test-only: the operator/model-facing status surface is
@@ -973,20 +1240,53 @@ impl FailoverProvider {
             RequestRequirements::from_request(messages, tools.is_some_and(|t| !t.is_empty()));
 
         Box::pin(async move {
-            let plan = self.candidates(true).await;
+            let mut plan = self.candidates(true).await;
             let total = plan.candidates.len();
             let mut last_error: Option<AlephError> = None;
-            // The first endpoint this walk actually dials, for the route
-            // witness below. Attempted rather than succeeded: a primary that is
-            // down for the whole run has every *success* already on the
-            // fallback, and anchoring there would make the commonest migration
-            // of all read as "nothing deviated".
+            // The route witness's `session_id`, read once: the same
+            // `metadata["session_id"]` the metering provider and the OpenAI
+            // prompt-cache key already key on. Absent on every path that builds
+            // a payload without it (MoA advisor dials, non-gateway callers),
+            // which simply go unrecorded.
+            let witness_session = metadata.as_ref().and_then(|m| m.get("session_id"));
+            // Anchor the run on the endpoint this walk SET OUT FOR, before any
+            // gate below can pass it over. Every cheap reason to skip a
+            // candidate — open circuit, rate ceiling, 429 pacing park — is
+            // settled before the first request is built, so from the second run
+            // of an outage onward the first *dial* is already the fallback and
+            // anchoring there would report the outage as "nothing deviated".
+            //
+            // Model deliberately left unresolved: which model this slot would
+            // dial is only settled further down by the capability floor and the
+            // cooling sideline, so naming the catalog head here could publish a
+            // model the walk then filtered out. The dial below refines it.
+            if let Some(session) = witness_session {
+                if let Some(anchor) = plan.anchor() {
+                    crate::providers::route_witness::record_attempt(session, anchor);
+                }
+            }
+            // The first endpoint this walk actually dials. Refines the anchor
+            // above with the model that endpoint was really asked for, and is
+            // the run's only anchor when there is no plan-time one to refine:
+            // the head was a sentinel (no seed) or its anchor was withdrawn by
+            // a declined escalation.
             let mut first_attempt: Option<crate::providers::route_witness::Dialed> = None;
             // Records whether any candidate has already pushed content to the
             // caller's sink; see the note on `walk`.
             let emission = sink.map(EmissionGuard::new);
 
-            for (idx, (cand, action, slot)) in plan.candidates.into_iter().enumerate() {
+            // The chain is taken OUT of the plan rather than the plan being
+            // consumed: the gates below are the plan's own methods
+            // (`rate_deferred`), and a partially-moved plan cannot answer them.
+            let chain = std::mem::take(&mut plan.candidates);
+            for (idx, (cand, action, slot)) in chain.into_iter().enumerate() {
+                // "Is there somewhere else to go?" — derived once per candidate
+                // and read by every gate below plus `decide`. Four rules yield
+                // to a later candidate and insist on the last one (breaker,
+                // rate ceiling, 429 pacing, spent-timeout-window); each having
+                // spelled out `idx + 1 < total` for itself is how one of them
+                // silently ends up describing a different set.
+                let has_later_candidate = idx + 1 < total;
                 // The circuit breaker may skip a candidate only while a later
                 // one remains; the final candidate is always attempted so a
                 // transient outage cannot hard-fail every request behind an
@@ -996,10 +1296,18 @@ impl FailoverProvider {
                 // This runs BEFORE the escalation gate below: the gate can
                 // block on a user prompt, and asking someone to authorise
                 // spending on a cloud provider we are then going to skip for
-                // being dead is a prompt that buys nothing. Every cheap,
-                // local reason to pass over a candidate is settled first.
+                // being dead is a prompt that buys nothing.
+                //
+                // All THREE cheap, local reasons to pass over a candidate are
+                // settled before that prompt, and this is the whole list:
+                // breaker (here), rate ceiling (next), 429 pacing (the skip
+                // half below). Order is the whole point: a pacing skip placed
+                // *after* the prompt means that under `always_local +
+                // allow_cloud_escalation` a cooling cloud candidate costs a
+                // real human interruption and is then passed over anyway —
+                // one interruption per cooling candidate.
                 let circuit_ok = self.circuit_allows(&cand.name).await;
-                if !circuit_ok && idx + 1 < total {
+                if !circuit_ok && has_later_candidate {
                     tracing::debug!(provider = %cand.name, "failover: circuit open, skipping");
                     continue;
                 }
@@ -1025,10 +1333,7 @@ impl FailoverProvider {
                 // ignored it completely: on a single-provider or primary-heavy
                 // deployment `[route].rate_limits` changed nothing at all
                 // except a number in `route_status`.
-                if plan.saturated.contains(&cand.name)
-                    && !plan.route.targets.is_pinned(&cand.name)
-                    && idx + 1 < total
-                {
+                if plan.rate_deferred(&cand.name) && has_later_candidate {
                     tracing::debug!(
                         provider = %cand.name,
                         "failover: provider at its configured rate ceiling, deferring \
@@ -1037,12 +1342,39 @@ impl FailoverProvider {
                     continue;
                 }
 
+                // 429 pacing gate — the *skip* half only, which is the half
+                // that belongs among the cheap local reasons. Its twin, the
+                // last-resort wait, stays below the model resolution: hoisting
+                // the wait here would block for up to two minutes BEFORE asking
+                // a human to authorise a borrow, which is worse than the prompt
+                // it would be trying to save.
+                //
+                // The skip must sit above the escalation gate for the same
+                // reason the breaker and the rate ceiling do: the gate can block
+                // on a user prompt, and asking someone to authorise spending on
+                // a provider the very next gate passes over for cooling is a
+                // prompt that buys nothing — and, with two cooling cloud
+                // candidates, one prompt per candidate.
+                if has_later_candidate {
+                    if let Some(pc) = &self.provider_cooldown {
+                        if let Some(remaining) = pc.remaining(&cand.name).await {
+                            tracing::debug!(
+                                provider = %cand.name,
+                                remaining_ms = remaining.as_millis() as u64,
+                                "failover: provider cooling from a recent 429, \
+                                 deferring to a later candidate",
+                            );
+                            continue;
+                        }
+                    }
+                }
+
                 // Route gate: an approval-gated cross-tier candidate (borrow
                 // cloud under AlwaysLocal) is skipped unless the user approves
                 // — fail-closed, exactly like an open circuit. Cloud→local
                 // degrade is `CrossTier{requires_approval:false}` and is never
                 // gated (degrading to local spends nothing).
-                if let CandidateAction::CrossTier {
+                if let RouteGate::CrossTier {
                     requires_approval: true,
                 } = action
                 {
@@ -1051,6 +1383,17 @@ impl FailoverProvider {
                             provider = %cand.name,
                             "route: cloud escalation denied, skipping candidate"
                         );
+                        // The one event that invalidates a plan-time anchor.
+                        // The head was anchored like any other (the gates above
+                        // pass a gated head over without ever asking, and that
+                        // IS a migration); an actual refusal is not, so the
+                        // anchor is withdrawn rather than never written — which
+                        // would have left the far commoner "skipped before the
+                        // prompt" case unanchored too. A no-op unless the
+                        // record is still this candidate's bare anchor.
+                        if let Some(session) = witness_session {
+                            crate::providers::route_witness::retract(session, &cand.name);
+                        }
                         last_error.get_or_insert_with(|| {
                             AlephError::provider(format!(
                                 "route: cloud escalation to '{}' not approved",
@@ -1084,58 +1427,106 @@ impl FailoverProvider {
                 // 3. Otherwise the C floor drops models that structurally cannot
                 //    serve this request (no vision / no tools / over context
                 //    window), failing open so the chain is never emptied.
-                let models: Vec<Option<String>> = match (slot, &req_model) {
-                    (SlotKind::Primary, Some(pinned)) => {
+                //
+                // The same match also answers "whose statement is this ladder,
+                // and how many rungs did that statement have?" — the boot
+                // CATALOG's, or one model the caller named. Only the catalog's
+                // answer can indict the provider (see the `NextModel`
+                // bookkeeping below), and deriving it here — BEFORE the two
+                // request-shaped filters below narrow the list — is what keeps
+                // the pin exemption and the strike describing the same set.
+                //
+                // `catalog_rungs == 0` is the single spelling of "not the
+                // catalog's statement": the pinned-model arm and the
+                // empty-catalog arm both yield it, and the catalog arm cannot
+                // (its guard already proved `cand.models` non-empty). A count
+                // rather than a count-plus-flag, so the two can never disagree.
+                let (models, catalog_rungs): (Vec<Option<String>>, usize) = match (slot, &req_model)
+                {
+                    (SlotKind::Primary, Some(pinned)) => (
                         retain_capable_models(vec![pinned.clone()], &reqs)
                             .into_iter()
                             .map(Some)
-                            .collect()
-                    }
-                    _ if cand.models.is_empty() => vec![None],
+                            .collect(),
+                        0,
+                    ),
+                    _ if cand.models.is_empty() => (vec![None], 0),
                     // rust-doctor-disable-next-line excessive-clone
-                    _ => retain_capable_models(cand.models.clone(), &reqs)
-                        .into_iter()
-                        .map(Some)
-                        .collect(),
+                    _ => (
+                        retain_capable_models(cand.models.clone(), &reqs)
+                            .into_iter()
+                            .map(Some)
+                            .collect(),
+                        cand.models.len(),
+                    ),
                 };
                 // Sideline models still cooling from an earlier 429, preferring a
                 // healthy sibling (fail-open if all are cooling).
                 let models = self.drop_cooling_models(&cand.name, models).await;
+                // How many rungs answered "no such model". Counted rather than
+                // latched on a flag, because the question after the loop is an
+                // *equality* against `catalog_rungs` that no single boolean can
+                // state honestly: an early `break 'model` leaves rungs untried,
+                // and a ladder that never ran must never read as exhausted.
+                let mut missing_models: usize = 0;
 
-                // Proactive rate-limit pacing: this provider 429'd recently and
-                // is still inside its recorded cooldown.
+                // Proactive rate-limit pacing, the *wait* half: this provider
+                // 429'd recently, is still inside its recorded cooldown, and is
+                // the last resort.
+                //
+                // "Last resort" is read from the SAME `has_later_candidate` the
+                // skip half read — not inferred from having survived it. The
+                // two halves each re-read `pc.remaining()`, and between the
+                // reads sit the escalation gate (which can block on a human
+                // approval prompt for minutes) and model resolution;
+                // `ProviderCooldown` is shared `Arc` state that any concurrent
+                // walk parks on its own 429. So "it was not cooling at the skip
+                // gate" is not still true here, and without this guard a
+                // NON-last candidate could sleep out a window a concurrent turn
+                // opened while the human was being asked — exactly the wait the
+                // skip half exists to prevent.
                 //
                 // Waiting it out keeps a single paid primary (e.g. Kimi) in use
-                // instead of eating a fresh 429 — but only when there is nothing
-                // else to try. With a healthy candidate still ahead in the
-                // chain, blocking the turn for up to two minutes to insist on
-                // the parked provider is strictly worse than answering now: the
-                // window expires on its own and the provider returns to the head
-                // of the chain next turn. So the rule mirrors the circuit
-                // breaker's exactly — skip while a later candidate remains, and
-                // only wait when this is the last resort. (LiteLLM and Bifrost
-                // both drop a cooling deployment from selection outright; Aleph
-                // keeps it as the terminal candidate so a single-provider setup
-                // still gets its request served.)
-                if let Some(pc) = &self.provider_cooldown {
-                    if let Some(remaining) = pc.remaining(&cand.name).await {
-                        if idx + 1 < total {
-                            tracing::debug!(
-                                provider = %cand.name,
-                                remaining_ms = remaining.as_millis() as u64,
-                                "failover: provider cooling from a recent 429, \
-                                 deferring to a later candidate",
-                            );
-                            continue;
+                // instead of eating a fresh 429. (LiteLLM and Bifrost both drop
+                // a cooling deployment from selection outright; Aleph keeps it
+                // as the terminal candidate so a single-provider setup still
+                // gets its request served — the binding invariant here is that
+                // the last candidate ALWAYS dials.)
+                //
+                // The wait is spent only when it can actually end the window.
+                // `remaining.min(MAX_OVERLOAD_RETRY_DELAY)` would not be: a
+                // window longer than the cap — a server `Retry-After` of 300s,
+                // capped by `cooldown_window` at `MAX_COOLDOWN` = 600s — bought
+                // a 120s sleep that provably could not outlast it and then
+                // dialed *inside* the very window it had just waited for. Worse
+                // than useless: `aleph-server` gives a turn a 120s wall-clock
+                // watchdog by default (`build_stability_triple`), so the sleep
+                // alone consumed the entire turn budget and the dial that
+                // followed it never got to happen. When the wait cannot finish
+                // the job, dial now and let the provider's own answer (a fresh
+                // 429 re-parks it, a success clears it) settle the question.
+                if !has_later_candidate {
+                    if let Some(pc) = &self.provider_cooldown {
+                        if let Some(remaining) = pc.remaining(&cand.name).await {
+                            if remaining <= MAX_OVERLOAD_RETRY_DELAY {
+                                tracing::warn!(
+                                    provider = %cand.name,
+                                    wait_ms = remaining.as_millis() as u64,
+                                    "failover: last candidate is cooling from a recent 429, \
+                                     pacing out the whole window before re-request",
+                                );
+                                tokio::time::sleep(remaining).await;
+                            } else {
+                                tracing::warn!(
+                                    provider = %cand.name,
+                                    remaining_secs = remaining.as_secs(),
+                                    cap_secs = MAX_OVERLOAD_RETRY_DELAY.as_secs(),
+                                    "failover: last candidate's 429 window outlasts the pacing \
+                                     cap; dialing inside it rather than spending the turn \
+                                     budget on a wait that cannot end it",
+                                );
+                            }
                         }
-                        let wait = remaining.min(MAX_OVERLOAD_RETRY_DELAY);
-                        tracing::warn!(
-                            provider = %cand.name,
-                            wait_ms = wait.as_millis() as u64,
-                            "failover: last candidate is cooling from a recent 429, \
-                             pacing before re-request",
-                        );
-                        tokio::time::sleep(wait).await;
                     }
                 }
 
@@ -1182,12 +1573,31 @@ impl FailoverProvider {
                         // Same sentinel exclusion the load guard makes: it is
                         // not an endpoint, so it must not become the `original`
                         // half of a fallback notice either.
+                        //
+                        // This runs even when the plan already anchored the run:
+                        // the two writes answer different halves of the same
+                        // question. The plan-time anchor names the endpoint the
+                        // walk set out for (which a gate may then pass over);
+                        // this one names the model that endpoint was really
+                        // asked for, and is the only anchor at all for a walk
+                        // that had no seed to refine (a sentinel head, or a head
+                        // whose anchor a denied escalation withdrew). The witness
+                        // merges them (`RouteWitness::absorb`): the anchor's
+                        // model is refined only by a dial of that same endpoint.
                         if first_attempt.is_none() && cand.name != super::NESTED_CHAIN_NODE {
-                            first_attempt = Some(crate::providers::route_witness::Dialed::new(
+                            let dialed = crate::providers::route_witness::Dialed::new(
                                 &cand.name,
                                 // rust-doctor-disable-next-line excessive-clone
                                 model.clone(),
-                            ));
+                            );
+                            if let Some(session) = witness_session {
+                                // rust-doctor-disable-next-line excessive-clone
+                                crate::providers::route_witness::record_attempt(
+                                    session,
+                                    dialed.clone(),
+                                );
+                            }
+                            first_attempt = Some(dialed);
                         }
                         let attempt_result = match &emission {
                             Some(guard) => cand.provider.execute_streaming_dyn(inner, guard).await,
@@ -1205,6 +1615,31 @@ impl FailoverProvider {
                                         g.record_tokens(billed_tokens(u));
                                     }
                                 }
+                                // A provider that reported a fault mid-stream
+                                // is not healthy, even though the partial answer
+                                // it already streamed is returned unchanged. The
+                                // collector drops the `Error` delta and
+                                // `HttpProvider` only promotes it to `Err` when
+                                // *nothing* came through, so without this arm a
+                                // provider failing this way on every request
+                                // stayed `circuit: closed, failure_count: 0`
+                                // forever — and each fault also *cleared* its
+                                // 429 pacing window below. Fail-closed: the
+                                // fault is an answer only about the provider's
+                                // health, never a success value.
+                                if let Some(msg) = &resp.provider_error {
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, error = %msg,
+                                        "failover: provider reported a fault after emitting \
+                                         content; recording the strike and returning the \
+                                         partial answer",
+                                    );
+                                    // rust-doctor-disable-next-line excessive-clone
+                                    let err = AlephError::provider(msg.clone());
+                                    self.record_emitted_failure(&cand.name, model.as_deref(), &err)
+                                        .await;
+                                    return Ok(resp);
+                                }
                                 self.mark_healthy(&cand.name).await;
                                 // Tell the gateway which endpoint actually
                                 // answered. The `ModelResolved` banner — the
@@ -1219,14 +1654,7 @@ impl FailoverProvider {
                                 // endpoint, and the chain nested behind it
                                 // records the real provider itself.
                                 if cand.name != super::NESTED_CHAIN_NODE {
-                                    // Same `metadata["session_id"]` the metering
-                                    // provider and the OpenAI prompt-cache key
-                                    // already read; absent on paths that build a
-                                    // payload without it, which simply go
-                                    // unrecorded.
-                                    if let Some(session) =
-                                        metadata.as_ref().and_then(|m| m.get("session_id"))
-                                    {
+                                    if let Some(session) = witness_session {
                                         let served = crate::providers::route_witness::Dialed::new(
                                             &cand.name,
                                             // rust-doctor-disable-next-line excessive-clone
@@ -1275,9 +1703,49 @@ impl FailoverProvider {
                                     "failover: stream failed after partial output; \
                                      surfacing instead of restarting on another candidate",
                                 );
+                                // Terminal for *routing* only. The attempt still
+                                // failed, so it earns the same strike a
+                                // pre-emission failure would have — the identical
+                                // derivation the in-stream-fault arm above uses.
+                                self.record_emitted_failure(&cand.name, model.as_deref(), &e)
+                                    .await;
+                                // The gateway's outer dispatch loop asks a
+                                // *narrower* question than the one this arm just
+                                // answered, and must not answer it from the
+                                // provider's own wording: a proxy that cuts a
+                                // long stream says "connection reset" / "timed
+                                // out", which `harness_bridge::error` reads as
+                                // `FlowError::Transient` and re-dispatches on
+                                // the same run_id — appending a whole second
+                                // answer under the half-written one. State the
+                                // fact instead of leaving it to be re-derived.
+                                //
+                                // Narrower, because the harm is "a second answer
+                                // lands under a visible first one" — which needs
+                                // a visible first one. `has_emitted` also latches
+                                // on tool-call deltas, and those never reach the
+                                // transcript (the sole production sink,
+                                // `harness::agent::think::CallbackSink`, drops
+                                // every variant but text and thinking). Marking
+                                // off `has_emitted` would forfeit the gateway's
+                                // re-dispatch for a truncated tool call, where a
+                                // fresh attempt is the correct and blameless
+                                // recovery. So the routing verdict comes from the
+                                // wide bit and the marker from the narrow one.
+                                if emission
+                                    .as_ref()
+                                    .is_some_and(EmissionGuard::has_shown_user_output)
+                                {
+                                    return Err(super::mark_partial_output_emitted(&e));
+                                }
                                 return Err(e);
                             }
-                            Err(e) => match decide(&e, attempt, self.config.max_retries) {
+                            Err(e) => match decide(
+                                &e,
+                                attempt,
+                                self.config.max_retries,
+                                has_later_candidate,
+                            ) {
                                 Decision::RetrySame(delay) => {
                                     // Grow the wait exponentially per in-place
                                     // attempt (capped at MAX_RETRY_DELAY), then
@@ -1324,6 +1792,25 @@ impl FailoverProvider {
                                         provider = %cand.name, model = ?model, error = %e,
                                         "failover: model unavailable, trying next model",
                                     );
+                                    // Sideline the missing model the same way a
+                                    // 429'd one is sidelined, so the *next*
+                                    // turn prefers a sibling that exists
+                                    // instead of re-paying the 404 round-trip.
+                                    // `DEFAULT_MODEL_COOLDOWN` (60s), not
+                                    // `MAX_COOLDOWN`: "model not found" is
+                                    // routinely a deploy in flight — an
+                                    // `ollama pull` finishing, a serverless
+                                    // endpoint warming, a catalog entry the
+                                    // operator is in the middle of adding — so
+                                    // the window has to be short enough that a
+                                    // model deployed a minute later is used a
+                                    // minute later. `drop_cooling_models` is
+                                    // fail-open, so cooling every rung never
+                                    // empties the ladder.
+                                    if let (Some(cd), Some(m)) = (&self.model_cooldown, &model) {
+                                        cd.cool(&cand.name, m, DEFAULT_MODEL_COOLDOWN).await;
+                                    }
+                                    missing_models += 1;
                                     last_error = Some(e);
                                     continue 'model;
                                 }
@@ -1336,8 +1823,7 @@ impl FailoverProvider {
                                     // ends up exhausted (single-model providers
                                     // behave exactly as before); it is discarded the
                                     // moment a sibling model succeeds.
-                                    let dur =
-                                        hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN);
+                                    let dur = cooldown_window(hint);
                                     if let (Some(cd), Some(m)) = (&self.model_cooldown, &model) {
                                         cd.cool(&cand.name, m, dur).await;
                                     }
@@ -1380,6 +1866,48 @@ impl FailoverProvider {
                             },
                         }
                     }
+                }
+
+                // Every rung of a CATALOG ladder answered "no such model". That
+                // is a statement about the PROVIDER, not about any one model:
+                // the endpoint is up, authenticated and answering, and serves
+                // nothing we know how to ask it for (a base_url pointed at the
+                // wrong gateway, a proxy whose model set was renamed, a local
+                // server with no models pulled). A `NextModel` exit that
+                // recorded no strike would leave "in what state does this
+                // breaker go red for a provider that 404s everything?" with
+                // the answer *never*: circuit closed forever, `cooling` false
+                // forever, LeastBusy/LatencyAware still ranking it first, and
+                // every turn paying N wasted round-trips.
+                // `Transient` (not `Permanent`) keeps the 3-strike threshold, so
+                // a catalog that is briefly out of step with a redeploy is not
+                // shed on one walk.
+                //
+                // Read from the ladder's own provenance (`catalog_rungs`,
+                // derived where the list was chosen): a single model the CALLER
+                // named — a `select_model` pick, an agent `model_hint`, a
+                // `BrainRef::Strict` id, or simply a typo — indicts that name,
+                // never the endpoint, so it must not shed a healthy provider.
+                //
+                // The equality is against what the CATALOG stated, never
+                // against the survivor set the request narrowed it to. Both
+                // filters between the two can yield a proper subset — the
+                // capability floor fails open only when *every* model is
+                // dropped, `drop_cooling_models` only when *every* model is
+                // cooling — so a provider whose m1 is parked by a 429 and whose
+                // m2 404s would otherwise be indicted for "serving none of its
+                // catalog models" while m1 was never dialed and is healthy.
+                // Since the survivor set is a subset, `missing_models` can only
+                // reach `catalog_rungs` when nothing was withheld AND every
+                // rung answered 404 — one comparison covering both.
+                if catalog_rungs > 0 && missing_models == catalog_rungs {
+                    tracing::warn!(
+                        provider = %cand.name,
+                        models = catalog_rungs,
+                        "failover: provider serves none of its catalog models; \
+                         recording a strike against the provider",
+                    );
+                    tripped.get_or_insert(FailureKind::Transient);
                 }
 
                 if let Some(kind) = tripped {

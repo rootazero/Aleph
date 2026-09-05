@@ -73,7 +73,16 @@ pub struct QueryTreeParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pid: Option<i32>,
     /// Maximum depth of the returned subtree (default 6 to bound response size).
-    #[serde(default = "default_depth")]
+    ///
+    /// Clamped on the way in to [`MAX_MAX_DEPTH`]: an attacker-supplied (or
+    /// accidentally huge) value used to be accepted verbatim, and a 32-level
+    /// walk that also requests 10 000 nodes could produce a response tree
+    /// that overflows recursion on different limbs or blows the model's
+    /// context.
+    #[serde(
+        default = "default_depth",
+        deserialize_with = "deserialize_clamped_depth"
+    )]
     pub max_depth: u32,
     /// Maximum number of nodes to return, across the whole subtree.
     ///
@@ -90,8 +99,13 @@ pub struct QueryTreeParams {
     pub max_nodes: u32,
 }
 
+/// The depth budget applied when the caller does not supply one. Matches
+/// the value `default_depth()` returns so a `serde(default)` round-trip
+/// restores the original value.
+pub const DEFAULT_MAX_DEPTH: u32 = 6;
+
 const fn default_depth() -> u32 {
-    6
+    DEFAULT_MAX_DEPTH
 }
 
 /// Node budget for one tree walk.
@@ -133,6 +147,35 @@ pub const fn clamp_max_nodes(requested: u32) -> u32 {
 
 const fn default_max_nodes() -> u32 {
     DEFAULT_MAX_NODES
+}
+
+/// Ceiling a caller may raise [`QueryTreeParams::max_depth`] to.
+///
+/// 32 levels is comfortably past what any real UI tree reaches (the deepest
+/// nested menus hit 8-12). The cap exists because every additional level
+/// multiplies the wire cost of the response on limbs whose recursive
+/// walkers are not guaranteed to be stack-safe past the node budget.
+pub const MAX_MAX_DEPTH: u32 = 32;
+
+/// Clamp a caller-supplied depth budget. Zero means "unspecified", same
+/// semantic as [`clamp_max_nodes`].
+#[must_use]
+pub const fn clamp_max_depth(requested: u32) -> u32 {
+    if requested == 0 {
+        DEFAULT_MAX_DEPTH
+    } else if requested > MAX_MAX_DEPTH {
+        MAX_MAX_DEPTH
+    } else {
+        requested
+    }
+}
+
+fn deserialize_clamped_depth<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = u32::deserialize(deserializer)?;
+    Ok(clamp_max_depth(raw))
 }
 
 /// Params for `ax.query_by_role`.
@@ -434,6 +477,26 @@ mod tests {
         assert_eq!(clamp_max_nodes(DEFAULT_MAX_NODES), DEFAULT_MAX_NODES);
         assert_eq!(clamp_max_nodes(MAX_MAX_NODES + 1), MAX_MAX_NODES);
         assert_eq!(clamp_max_nodes(u32::MAX), MAX_MAX_NODES);
+    }
+
+    #[test]
+    fn clamp_max_depth_bounds_huge_requests() {
+        // Same shape as clamp_max_nodes: zero means "unspecified", oversize
+        // values clamp to MAX_MAX_DEPTH instead of being honoured.
+        assert_eq!(clamp_max_depth(0), DEFAULT_MAX_DEPTH);
+        assert_eq!(clamp_max_depth(1), 1);
+        assert_eq!(clamp_max_depth(MAX_MAX_DEPTH), MAX_MAX_DEPTH);
+        assert_eq!(clamp_max_depth(MAX_MAX_DEPTH + 1), MAX_MAX_DEPTH);
+        assert_eq!(clamp_max_depth(u32::MAX), MAX_MAX_DEPTH);
+    }
+
+    #[test]
+    fn query_tree_clamps_oversize_depth_on_deserialize() {
+        // Wire-supplied u32::MAX used to be accepted verbatim by the field;
+        // now it must clamp to MAX_MAX_DEPTH before reaching the walker.
+        let p: QueryTreeParams =
+            serde_json::from_value(serde_json::json!({"max_depth": u32::MAX})).unwrap();
+        assert_eq!(p.max_depth, MAX_MAX_DEPTH);
     }
 
     /// The tree params carry the budget by default, so a caller that spells only

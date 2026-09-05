@@ -427,7 +427,7 @@ pub(super) fn preimage_of(r: &LedgerRecord) -> Preimage<'_> {
 /// it from the verifier, which is the failure this module exists to make
 /// impossible. Only an agent with neither an identity nor a single record is
 /// genuinely unknown.
-pub fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport, KeyError> {
+pub(crate) fn verify_chain(keys: &AgentKeystore, agent_id: &str) -> Result<ChainReport, KeyError> {
     let identity = keys.identity(agent_id)?;
     let rows = keys.store().ledger_chain(agent_id)?;
     if identity.is_none() && rows.is_empty() {

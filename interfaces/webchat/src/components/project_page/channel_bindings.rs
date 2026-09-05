@@ -1,14 +1,17 @@
 //! Room settings → which channel conversations this room lives in.
 //!
-//! Its own file rather than a fifth section inside `settings.rs`: that file is
-//! already 392 lines, and folding this in would cross the 200-400 band in the
-//! same edit that touches it.
+//! Its own file rather than a fifth section inside `settings.rs`: that file
+//! already carries the tab body, four sections and its own test module, and
+//! folding this in would cross the 200-400 band in the same edit that touches
+//! it. Deliberately no line count here — the one that used to be quoted drifted
+//! twice, and a rationale that names no number cannot go stale.
 //!
 //! ## Why this section does not hide its controls behind `is_owner`
 //!
-//! Every other section in `settings.rs` renders read-only for a non-owner,
-//! mirroring the server's `require_owner`. This one must not, for two separate
-//! reasons:
+//! `settings.rs`'s workspace and archive sections render read-only for a
+//! non-owner, softening rather than removing the control (its `RosterSection`
+//! has two sites that still vanish — that file's module doc names them as the
+//! unfinished half). This one must not gate at all, for two separate reasons:
 //!
 //! 1. `projects.channel.bind` / `.unbind` are **admin**-gated
 //!    (`method_admin.rs`), not owner-gated. A room's owner who is not an org
@@ -462,7 +465,11 @@ mod tests {
     #[test]
     fn the_unknown_outcome_does_not_claim_the_store_answered() {
         let unknown = sentence(EN, "channel_unknown_rescope").to_lowercase();
-        for forbidden in ["no session was found", "nothing was moved", "nobody has spoken"] {
+        for forbidden in [
+            "no session was found",
+            "nothing was moved",
+            "nobody has spoken",
+        ] {
             assert!(
                 !unknown.contains(forbidden),
                 "the Unknown sentence says {forbidden:?}, which asserts the store \

@@ -159,7 +159,19 @@ pub(crate) async fn emit_flow_event(
             let tool_result = if let Some(err) = error {
                 crate::gateway::event_emitter::ToolResult::error(err)
             } else {
-                let output = result.map(|v| v.to_string()).unwrap_or_default();
+                // A tool's output reaches this drain as `Value::String` (its
+                // text, JSON or prose). `to_string()` on that re-encodes it —
+                // the wire carried `"\"{\\\"success\\\":…}\""`, one quoting
+                // deeper than the trace mirror's `Success.output` for the
+                // same call, so a client reading `tool_end` had to decode
+                // twice where the trace needed once. Pass text through; only
+                // a structured value needs encoding.
+                let output = result
+                    .map(|v| match v {
+                        serde_json::Value::String(text) => text,
+                        other => other.to_string(),
+                    })
+                    .unwrap_or_default();
                 crate::gateway::event_emitter::ToolResult::success(output)
             };
             let seq = emitter.next_seq();
@@ -443,12 +455,19 @@ const SCRATCHPAD_TOOL: &str = "scratchpad";
 /// any depth, so a future tool that happens to have a `snapshot` field cannot
 /// silently hijack the plan slot.
 fn extract_plan_snapshot(result: &serde_json::Value) -> Option<aleph_protocol::plan::PlanSnapshot> {
-    let raw = result.get("snapshot")?;
-    serde_json::from_value(raw.clone())
+    // The shared reader, because the harness hands this drain the tool's
+    // output as a JSON-encoded STRING (`Value::String`), not an object: a
+    // `result.get("snapshot")` here was `None` on every real run, the latch
+    // never moved, and `RunSummary.plan` never left the server — while the
+    // tests below fed an object and stayed green (qa/agents_viz P2,
+    // 2026-09-02). The Panel's reader already decoded the string; this one
+    // and the TUI's did not (§16).
+    aleph_protocol::plan::snapshot_from_tool_output(result)
         .inspect_err(|e| {
-            tracing::warn!(error = %e, ?raw, "scratchpad snapshot deserialization failed");
+            tracing::warn!(error = %e, ?result, "scratchpad snapshot deserialization failed");
         })
         .ok()
+        .flatten()
 }
 
 /// Per-tool emoji used by [`build_run_summary`] when constructing
@@ -819,10 +838,16 @@ mod tests {
 
     /// Drive one scratchpad call through the drain and return the run's
     /// latched terminal plan.
+    ///
+    /// `result` is handed over in the PRODUCTION shape — the tool's JSON
+    /// re-encoded as a `Value::String` — not as the object the assertions
+    /// below are written against. These tests used to feed the object, and
+    /// stayed green while the latch had never once moved on a real run.
     async fn drain_scratchpad(
         action: &str,
         result: serde_json::Value,
     ) -> Option<aleph_protocol::plan::PlanSnapshot> {
+        let result = serde_json::Value::String(result.to_string());
         let (_inner, emitter) = make_emitter();
         let state = make_state();
         emit_flow_event(

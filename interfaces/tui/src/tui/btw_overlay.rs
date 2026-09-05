@@ -322,7 +322,11 @@ impl BtwOverlay {
     /// The run id of the side question being answered right now.
     #[must_use]
     pub fn active_run_id(&self) -> Option<&str> {
-        self.active.as_ref()?.run_id.as_deref().filter(|id| !id.is_empty())
+        self.active
+            .as_ref()?
+            .run_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
     }
 
     /// Append a streamed delta to the active answer.

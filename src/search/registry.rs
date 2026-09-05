@@ -1660,6 +1660,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {
@@ -1695,6 +1696,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {
@@ -1736,6 +1738,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         backends.insert(
@@ -1748,6 +1751,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {
@@ -1781,6 +1785,7 @@ mod tests {
                 engines: None,
                 min_request_interval_ms: None,
                 verified: false,
+                allow_private_upstream: false,
             },
         );
         let cfg = SearchConfigInternal {

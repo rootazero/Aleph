@@ -141,14 +141,6 @@ fn test_invalid_regex_patterns_fail() {
 // ═══ Memory ═══
 
 #[test]
-fn test_similarity_threshold_out_of_range_fails() {
-    let mut config = Config::default();
-    config.memory.similarity_threshold = 1.5;
-
-    expect_invalid(&config, "similarity_threshold must be between 0.0 and 1.0");
-}
-
-#[test]
 fn test_invalid_dreaming_window_start_fails() {
     let mut config = Config::default();
     config.memory.dreaming.window_start_local = "25:00".to_string();

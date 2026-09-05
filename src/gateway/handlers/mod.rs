@@ -32,6 +32,7 @@
 //! | exec_grants | Standing approval grants (list / revoke) |
 //! | clarification | `ask_user` clarification pending/resolve (HITL P4) |
 //! | pty | Embedded interactive terminal sessions (spawn/input/resize/close/list) |
+//! | runtime | Read-only agent panel (which agent is running in which PTY session) |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
@@ -109,6 +110,7 @@ pub mod rerank_config;
 pub mod resume;
 pub mod route_config;
 pub mod routing_rules;
+pub mod runtime;
 pub mod runtimes;
 pub mod search_config;
 pub mod secret_migration;
@@ -135,6 +137,68 @@ pub mod version;
 pub mod voice;
 pub mod wizard;
 pub mod workspace;
+
+/// Close a run marker that a *retire* left open, for the two verbs that
+/// shorten a session log (`chat.rewind`, `session.truncate`).
+///
+/// One helper, not one call per verb: the two are twins, and the first version
+/// of this rule existed only on the rewind side, which meant `/undo` produced
+/// exactly the state rewind was fixed for. The derivation itself lives in
+/// [`crate::session::marker_balance`]; this is the gateway glue that resolves
+/// the process-wide store and answers "is a run in flight" from the
+/// authoritative in-memory registry.
+///
+/// **`is_running` fails closed.** With no run manager wired (the CLI one-shot,
+/// the Simulated build) the answer is "I cannot tell", and that may not be read
+/// as "no run is live": closing the marker of a still-executing run writes a
+/// `RunFinished` into the middle of it, and the real finish then lands as a
+/// `FinishWithoutStart` on a session that is permanently mis-read. Leaving a
+/// marker open costs one redundant candidate on the next boot; closing a live
+/// one corrupts the log.
+///
+/// Best-effort by construction: the retire has already committed, and failing
+/// the RPC afterwards would tell the user their edit did not happen when it
+/// did. A failure is logged and re-decided on the next boot.
+pub(crate) async fn balance_run_markers_after_retire(
+    session_key: &crate::session::service::SessionId,
+    run_manager: Option<&Arc<agent::AgentRunManager>>,
+) {
+    let Some(store) = crate::session::store::global_session_event_store() else {
+        // No event log in this process — nothing was retired from one either
+        // (`retire_live_events` is `Ok(0)` here), so there is no marker to
+        // balance.
+        return;
+    };
+    let running: Vec<String> = match run_manager {
+        Some(rm) => rm.running_sessions(),
+        None => Vec::new(),
+    };
+    let knows_runs = run_manager.is_some();
+    let result = crate::session::marker_balance::close_open_run_after_retire(
+        store.as_ref(),
+        session_key,
+        |key| !knows_runs || running.iter().any(|k| k == &key.to_key_string()),
+    )
+    .await;
+    match result {
+        Ok(Some(run_id)) => {
+            tracing::debug!(
+                session = %session_key.to_key_string(),
+                run_id,
+                "retire left a run marker open; closed it as cancelled"
+            );
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(
+                session = %session_key.to_key_string(),
+                error = %e,
+                "retire left the run markers unbalanced and they could not be closed; \
+                 the next boot scan will re-decide this session"
+            );
+        }
+    }
+}
 
 pub use config::{handle_get_full_config, handle_patch_config};
 pub use identity::{IdentityHandlerContext, SharedIdentityCtx};
@@ -374,6 +438,11 @@ impl HandlerRegistry {
         registry.register("pty.close", pty::handle_close);
         registry.register("pty.list", pty::handle_list);
         registry.register("pty.attach", pty::handle_attach);
+
+        // Read-only agent panel — same "pty." operator gate (see
+        // `handlers::runtime`'s module doc), reads the sampler table only
+        // (no live Config needed), so it takes this stateless site.
+        registry.register("runtime.agents.list", runtime::handle_list);
 
         // Heartbeat handlers — real handlers wired with HeartbeatService in Gateway startup.
 
@@ -728,6 +797,18 @@ impl HandlerRegistry {
             registry.register("users.list", move |req| {
                 let s = s.clone();
                 async move { users::handle_list(req, s).await }
+            });
+            let s = default_store.clone();
+            // The same project catalogue the `projects.*` block above shares
+            // (`ProjectStore::shared()`), so the room ids in a dossier and
+            // the rooms `projects.list` serves are one table, not two.
+            let detail_ctx = users::UserDetailContext {
+                projects: crate::projects::ProjectStore::shared(),
+            };
+            registry.register("users.get", move |req| {
+                let s = s.clone();
+                let ctx = detail_ctx.clone();
+                async move { users::handle_get(req, s, ctx).await }
             });
             let s = default_store.clone();
             registry.register("users.create", move |req| {

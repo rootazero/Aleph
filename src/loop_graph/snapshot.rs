@@ -309,7 +309,7 @@ impl SnapshotStore {
     /// operator's responsibility ("GDPR delete", "audit log retention cut").
     /// Deliberately NOT exposed through the `loop_graph` tool today; only a
     /// future admin RPC will reach it.
-    pub fn delete_snapshot(&self, id: i64) -> Result<bool> {
+    pub(crate) fn delete_snapshot(&self, id: i64) -> Result<bool> {
         let n = self
             .lock()
             .execute("DELETE FROM snapshots WHERE id = ?1", rusqlite::params![id])

@@ -1,9 +1,16 @@
-//! Gateway bootstrap ticket handler.
+//! Gateway bootstrap ticket handlers.
 //!
 //! `gateway.ticket.create` generates a short-lived, single-use bootstrap ticket
 //! that a remote Panel can exchange for a per-device token during the
 //! WebSocket `connect` handshake. This keeps the long-lived shared Gateway token
 //! out of URLs and QR codes.
+//!
+//! `gateway.ticket.list` and `gateway.ticket.revoke` are the other two thirds
+//! of that credential's lifecycle: an outstanding ticket used to be a live
+//! device credential nothing could enumerate or cancel — `gateway.token.rotate`
+//! reaches already-paired devices only, and the per-user deactivation sweep
+//! cannot touch an UNBOUND ticket because it belongs to no principal. Both are
+//! addressed by the non-secret `ticket_id`, never by the code.
 //!
 //! Authorization: the caller must already be authorized (operator role) or the
 //! connection must be loopback. The WS login wall enforces this because the
@@ -267,6 +274,117 @@ pub async fn handle_ticket_create(
     }
 }
 
+/// `gateway.ticket.list` — the outstanding, still-redeemable bootstrap tickets.
+///
+/// Response: `{ "tickets": [{ ticket_id, created_at, expires_at, user_id }] }`,
+/// serialized straight from [`crate::gateway::security::store::OutstandingBootstrapTicket`]
+/// so the wire shape
+/// and the store's shape cannot drift apart.
+///
+/// **Never carries the ticket code.** The code is the credential — a device
+/// that has it becomes an operator (unbound) or the bound principal — so the
+/// row is addressed by the non-secret `ticket_id`, the same rule
+/// `security::audit` follows for its own lines.
+///
+/// Minting a device credential has had two faces since P0 (this RPC and
+/// `aleph-server pair`); cancelling one had none, and even
+/// `gateway.token.rotate` — whose own doc calls itself the "revoke all
+/// remotes" path — only reaches already-paired devices and leaves an
+/// outstanding ticket fully redeemable. This is the enumeration half of that
+/// gap; [`handle_ticket_revoke`] is the cancellation half.
+pub async fn handle_ticket_list(
+    request: JsonRpcRequest,
+    device_token_mgr: Arc<DeviceTokenManager>,
+) -> JsonRpcResponse {
+    // Opportunistic hygiene, same as the other ticket chokepoints — an expired
+    // row would be filtered out of the listing anyway, but pruning here keeps
+    // the table from being the one place nothing ever cleans.
+    if let Err(e) = device_token_mgr.prune_now() {
+        tracing::debug!("ticket.list: prune failed: {e}");
+    }
+
+    match device_token_mgr.store().list_bootstrap_tickets() {
+        Ok(tickets) => match serde_json::to_value(&tickets) {
+            Ok(rows) => JsonRpcResponse::success(request.id, json!({ "tickets": rows })),
+            Err(e) => JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("failed to encode tickets: {e}"),
+            ),
+        },
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("failed to list tickets: {e}"),
+        ),
+    }
+}
+
+/// `gateway.ticket.revoke` — burn one outstanding bootstrap ticket by id.
+///
+/// Request params: `{ "ticket_id": "bt-…" }` (required, from
+/// [`handle_ticket_list`]).
+/// Response: `{ "revoked": bool, "ticket_id": "bt-…" }` — `revoked` is `false`
+/// when the id is unknown, already revoked, already redeemed or expired. None
+/// of those cut a live credential, and reporting them as a revocation would be
+/// a success no-op an operator then acts on.
+///
+/// Reaches the UNBOUND tickets that the deactivation sweep
+/// (`revoke_bootstrap_tickets_for_user`) deliberately cannot: an unbound
+/// ticket belongs to no principal, so no user's deactivation burns it, and it
+/// is the higher-authority half — its redeemer becomes the owner.
+///
+/// A revoked ticket is refused at redemption with exactly the answer an
+/// expired one gets (`BootstrapTicketError` collapses into
+/// `DeviceTokenError::InvalidBootstrapTicket`), so a holder learns nothing
+/// about whether an operator cut them off.
+pub async fn handle_ticket_revoke(
+    request: JsonRpcRequest,
+    device_token_mgr: Arc<DeviceTokenManager>,
+) -> JsonRpcResponse {
+    let ticket_id = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("ticket_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let Some(ticket_id) = ticket_id else {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            "missing required param: ticket_id".to_string(),
+        );
+    };
+
+    match device_token_mgr.store().revoke_bootstrap_ticket(ticket_id) {
+        Ok(revoked) => {
+            // Authority change, on the transition only: minting a ticket has
+            // been audited since round-5 and its inverse was not. `ticket_id`
+            // is non-secret by construction, so unlike the code it can be
+            // named in the log.
+            if revoked {
+                if let Some(log) = crate::security::audit::global() {
+                    log.log(crate::security::audit::AuditEntry::authority_change(
+                        crate::gateway::caller_identity::current_caller_user(),
+                        format!("gateway.ticket.revoke: {ticket_id}"),
+                    ));
+                }
+            }
+            JsonRpcResponse::success(
+                request.id,
+                json!({ "revoked": revoked, "ticket_id": ticket_id }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("failed to revoke ticket: {e}"),
+        ),
+    }
+}
+
 fn current_timestamp_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -277,6 +395,14 @@ fn current_timestamp_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bare manager over an in-memory store — all `ticket.list` /
+    /// `ticket.revoke` needs (they touch no bind address).
+    fn mgr() -> Arc<DeviceTokenManager> {
+        Arc::new(DeviceTokenManager::new(Arc::new(
+            crate::gateway::security::SecurityStore::in_memory().unwrap(),
+        )))
+    }
 
     fn ips(list: &[&str]) -> Vec<IpAddr> {
         list.iter().map(|s| s.parse().unwrap()).collect()
@@ -382,5 +508,135 @@ mod tests {
         assert!(r["ticket"].as_str().unwrap().starts_with("aleph-bt-"));
         assert!(r["expires_at"].as_i64().unwrap() > current_timestamp_ms());
         assert_eq!(r["urls"].as_array().unwrap().len(), 0);
+    }
+
+    /// The listing has to be addressable without being a credential dump.
+    /// `code` is BOTH the primary key and the secret, so a row keyed on it
+    /// either prints the secret or names nothing — this asserts the response
+    /// carries neither the code nor any part of it, and still carries an id
+    /// `gateway.ticket.revoke` can act on.
+    #[tokio::test]
+    async fn ticket_list_addresses_rows_without_carrying_the_code() {
+        let mgr = mgr();
+        let code = mgr.create_bootstrap_ticket(None, None).unwrap();
+        // The high-entropy half, in case the id is ever built as a prefix.
+        let secret_half = code.trim_start_matches("aleph-bt-").to_string();
+
+        let resp = handle_ticket_list(
+            JsonRpcRequest::with_id("gateway.ticket.list", None, json!(1)),
+            mgr,
+        )
+        .await;
+        assert!(resp.is_success(), "{resp:?}");
+        let body = serde_json::to_string(&resp.result.clone().unwrap()).unwrap();
+
+        assert!(
+            !body.contains(&code) && !body.contains(&secret_half),
+            "the listing carried ticket credential material: {body}"
+        );
+        let rows = resp.result.unwrap();
+        let rows = rows["tickets"].as_array().unwrap().clone();
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0]["ticket_id"].as_str().unwrap().is_empty());
+        assert!(rows[0]["expires_at"].as_i64().unwrap() > current_timestamp_ms());
+        assert!(
+            rows[0]["user_id"].is_null(),
+            "an unbound ticket must be visible as unbound"
+        );
+    }
+
+    /// The whole point of the verb, asserted as an effect: after a revoke the
+    /// ticket pairs NOTHING (no device row), and the redeemer's error is
+    /// byte-identical to the one an expired ticket produces — no oracle that
+    /// tells a holder an operator cut them off.
+    #[tokio::test]
+    async fn a_revoked_ticket_creates_no_device_and_fails_exactly_like_an_expired_one() {
+        let mgr = mgr();
+        let code = mgr.create_bootstrap_ticket(None, None).unwrap();
+        // Negative TTL mints an already-expired ticket — the control.
+        let expired = mgr.create_bootstrap_ticket(Some(-1), None).unwrap();
+
+        let listed = handle_ticket_list(
+            JsonRpcRequest::with_id("gateway.ticket.list", None, json!(1)),
+            mgr.clone(),
+        )
+        .await;
+        let rows = listed.result.unwrap();
+        let ticket_id = rows["tickets"][0]["ticket_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let resp = handle_ticket_revoke(
+            JsonRpcRequest::with_id(
+                "gateway.ticket.revoke",
+                Some(json!({ "ticket_id": ticket_id })),
+                json!(2),
+            ),
+            mgr.clone(),
+        )
+        .await;
+        assert!(resp.is_success(), "{resp:?}");
+        assert_eq!(resp.result.unwrap()["revoked"], json!(true));
+
+        let revoked_err = mgr
+            .exchange_bootstrap_ticket(&code, Some("dev-revoked".into()), None, None)
+            .unwrap_err()
+            .to_string();
+        let expired_err = mgr
+            .exchange_bootstrap_ticket(&expired, Some("dev-expired".into()), None, None)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            revoked_err, expired_err,
+            "a revoked ticket must fail exactly like an expired one"
+        );
+        assert!(
+            mgr.store().get_device("dev-revoked").unwrap().is_none(),
+            "a revoked ticket paired a device"
+        );
+        assert!(handle_ticket_list(
+            JsonRpcRequest::with_id("gateway.ticket.list", None, json!(3)),
+            mgr,
+        )
+        .await
+        .result
+        .unwrap()["tickets"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Only the transition is a revocation. An id that names nothing still
+    /// answers, and answers `false`, so the CLI's count means "credentials
+    /// cut".
+    #[tokio::test]
+    async fn ticket_revoke_reports_false_when_it_cut_nothing() {
+        let mgr = mgr();
+        let resp = handle_ticket_revoke(
+            JsonRpcRequest::with_id(
+                "gateway.ticket.revoke",
+                Some(json!({ "ticket_id": "bt-nobody" })),
+                json!(1),
+            ),
+            mgr,
+        )
+        .await;
+        assert!(resp.is_success(), "{resp:?}");
+        assert_eq!(resp.result.unwrap()["revoked"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn ticket_revoke_refuses_a_call_with_no_id() {
+        let mgr = mgr();
+        let resp = handle_ticket_revoke(
+            JsonRpcRequest::with_id("gateway.ticket.revoke", Some(json!({})), json!(1)),
+            mgr,
+        )
+        .await;
+        assert!(
+            !resp.is_success(),
+            "a revoke with no target must not report success"
+        );
     }
 }

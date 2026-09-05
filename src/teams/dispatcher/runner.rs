@@ -510,10 +510,7 @@ pub async fn execute_member_task(
             // member-side logs. A short grace window lets the task unwind
             // before the directory disappears. The window is bounded so a
             // misbehaving member cannot indefinitely block the dispatcher.
-            tokio::time::sleep(std::time::Duration::from_millis(
-                WORKTREE_CLEANUP_GRACE_MS,
-            ))
-            .await;
+            tokio::time::sleep(std::time::Duration::from_millis(WORKTREE_CLEANUP_GRACE_MS)).await;
             // Keep what it produced. The per-task session is durable and the
             // messages are already written, so the same one-line read the
             // success arm uses works here too — and the NEXT attempt's
@@ -522,6 +519,14 @@ pub async fn execute_member_task(
             // restart from scratch" while listing only "timeout: Timed out
             // after N seconds". A ten-minute research step therefore restarted
             // from zero on every retry until it burned `max_retries`.
+            //
+            // This arm is one of TWO producers of that "here is what it had"
+            // slot, and it is the one that gets to run: a timeout leaves the
+            // dispatcher alive. The other is `schedule::reclaim`, which stamps
+            // the same slot (`stamp_abandoned_run_summary`) for the attempt
+            // whose whole daemon died — the case where no arm here executes at
+            // all. Read them together: "no partial" means neither producer had
+            // one, not that this one is the only way a partial can exist.
             //
             // `error` is deliberately left alone rather than merged: "it did
             // not finish" and "here is what it had" are different facts, and

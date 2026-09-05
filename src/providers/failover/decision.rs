@@ -8,7 +8,7 @@ use crate::providers::llm_retry::{
     RetryVerdict,
 };
 
-use super::{DEFAULT_TRANSIENT_DELAY, OVERLOAD_RETRY_BUDGET};
+use super::{DEFAULT_MODEL_COOLDOWN, DEFAULT_TRANSIENT_DELAY, MAX_COOLDOWN, OVERLOAD_RETRY_BUDGET};
 
 /// How a provider-level failure should shape the circuit breaker.
 ///
@@ -36,8 +36,17 @@ pub(crate) enum Decision {
     NextModel,
     /// This model hit a *model-specific* 429. Record a per-model cooldown
     /// (`Some(d)` carries the server `Retry-After`), then prefer a sibling
-    /// model before advancing providers. Does **not** trip the provider
-    /// circuit — sibling models stay live.
+    /// model before advancing providers.
+    ///
+    /// "Model-specific" describes which model is *sidelined*, not how far the
+    /// consequences reach. The walk's arm also parks the whole provider
+    /// (`ProviderCooldown::cool`, so the NEXT turn paces itself before
+    /// re-dialing it) and arms `tripped = Transient`, so the circuit does trip
+    /// once every model of that provider is exhausted. Sibling models stay live
+    /// only *within this walk*: a later model that answers retires both effects
+    /// (`ProviderCooldown::clear` on success, and `tripped` is dropped). Pinned
+    /// by `failover::tests::a_model_429_parks_the_provider_and_arms_a_strike`
+    /// and its opposite half `a_successful_call_clears_the_provider_pacing_window`.
     RateLimited(Option<Duration>),
     /// Trip this provider's circuit and advance to the next provider.
     NextProvider(FailureKind),
@@ -60,6 +69,68 @@ fn retry_after_from_suggestion(err: &AlephError) -> Option<Duration> {
     extract_retry_after_str(suggestion)
 }
 
+/// The pacing window a rate-limited attempt earns: the server hint when it gave
+/// one, else the default, always capped.
+///
+/// Single derivation of that default-and-cap so the two writers of the window —
+/// [`decide`]'s `RateLimited` verdict and [`strike_for`] — cannot disagree about
+/// how long a 429 parks a provider (criterion: order/unit/boundary derived in
+/// one place).
+pub(crate) fn cooldown_window(hint: Option<Duration>) -> Duration {
+    hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN)
+}
+
+/// The bookkeeping an attempt earns when it failed *after* the user has already
+/// been shown part of an answer.
+///
+/// Two arms of the walk end that way and must not drift apart:
+/// * the streaming `Err` arm guarded by `EmissionGuard::has_emitted`, and
+/// * the `Ok(resp)` arm where the provider reported an in-band fault mid-stream
+///   ([`ProviderResponse::provider_error`](crate::providers::adapter::ProviderResponse::provider_error)).
+///
+/// Neither may retry or advance — appending a second answer to a half-written
+/// one is worse than the fault — so the *routing* half of a verdict is already
+/// settled and only the bookkeeping half is open. [`Decision`] cannot answer it:
+/// its variants encode **where to go next**, so consuming one here would have to
+/// invent bookkeeping for `NextModel` / `Stop` / `RetrySame`, which name no
+/// strike at all. This derives the two facts that are actually needed —
+/// how the breaker should count it, and whether anything told us to wait —
+/// directly from the error, in one place.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Strike {
+    /// How the circuit breaker counts this failure.
+    pub(crate) kind: FailureKind,
+    /// Pacing window to park on the model *and* its provider, set only when the
+    /// fault was a rate limit. `None` for every other fault: nothing told us to
+    /// wait, and inventing a window would sideline a provider on a blip.
+    pub(crate) cooldown: Option<Duration>,
+}
+
+/// Derive the [`Strike`] one already-emitted failed attempt deserves.
+pub(crate) fn strike_for(err: &AlephError) -> Strike {
+    let msg = err.to_string();
+    // Same permanent/transient split `decide` tags its `NextProvider` with, read
+    // from the same predicate — a dead credential is shed at once, everything
+    // else needs `CIRCUIT_OPEN_THRESHOLD` strikes.
+    let kind = if crate::providers::llm_retry::is_permanent_failure(&msg) {
+        FailureKind::Permanent
+    } else {
+        FailureKind::Transient
+    };
+    // Same classifier and same hint precedence `decide` uses for
+    // `Decision::RateLimited`: typed `suggestion` first, then the `Retry-After`
+    // the message body itself states.
+    let cooldown = match classify_exhausted(&msg) {
+        RetryVerdict::Fallback { reason } if reason.starts_with("rate limited") => {
+            Some(cooldown_window(
+                retry_after_from_suggestion(err).or_else(|| extract_retry_after_str(&msg)),
+            ))
+        }
+        _ => None,
+    };
+    Strike { kind, cooldown }
+}
+
 /// Classify one failed attempt into a [`Decision`].
 ///
 /// Two-stage: the string classifier ([`classify`]) recognises an in-place
@@ -68,8 +139,20 @@ fn retry_after_from_suggestion(err: &AlephError) -> Option<Duration> {
 /// provider-level failover when the *typed* error is transient — covering
 /// errors whose `Display` carried no HTTP code (e.g. `Timeout` →
 /// "Request timed out").
+///
+/// `has_later_candidate` states whether the walk still has somewhere to go.
+/// It is the walk's own `idx + 1 < total`, threaded in rather than re-derived
+/// here, so the circuit-breaker gate, the rate-ceiling gate, the 429 pacing
+/// gate and this classifier all read the *same* fact (criterion: a boundary
+/// is derived in one place). It only ever narrows a verdict towards the
+/// chain — when it is `false` every path behaves exactly as it did before.
 // rust-doctor-disable-next-line high-cyclomatic-complexity
-pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
+pub(crate) fn decide(
+    err: &AlephError,
+    attempt: u32,
+    max_retries: u32,
+    has_later_candidate: bool,
+) -> Decision {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
 
@@ -117,6 +200,46 @@ pub(crate) fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decisi
     } else {
         Decision::NextProvider(FailureKind::Transient)
     };
+
+    // A typed `Timeout` says a *silence window has already been spent* on this
+    // attempt, which no other transient error tells us. Every producer of the
+    // variant that reaches this walk is a watchdog that fires only after a
+    // whole window of nothing:
+    //   * the TTFB guard (`HttpProvider::execute_once`) and the SSE gap guard
+    //     (`protocols::stream_idle`) — `effective_idle_secs`, 60s by default;
+    //   * reqwest's own `is_timeout` on `send()` in the `HttpProvider` family
+    //     (every protocol adapter builds its client through
+    //     `protocols::http_client`, via `protocols::registry` or
+    //     `protocols::loader`) — that builder sets only a 10s `connect_timeout`
+    //     and deliberately no overall request timeout, so there this is the
+    //     handshake, not the body;
+    //   * reqwest's `is_timeout` in the native `providers::ollama` path, which
+    //     is *not* an `HttpProvider`: it builds its own client with an overall
+    //     `.timeout(config.timeout_seconds)` and no `connect_timeout`, 300s by
+    //     default (`config::types::provider::default_timeout_seconds`). A spent
+    //     window a fortiori — the whole request budget elapsed with nothing
+    //     returned, so re-dialing in place would buy another 300s of silence;
+    //   * a stream the adapter saw cut before its terminal frame
+    //     (`openai_chat` / `openai_responses` / `gemini`), and the
+    //     truncated-tool-call diagnostic, where re-dialing re-truncates the
+    //     same oversized output.
+    // In every one of those an in-place retry buys a second full window against
+    // an endpoint that has already demonstrated silence, while the per-turn
+    // watchdog above us keeps running. The chain, not the socket, is the next
+    // bet — so advance and let the breaker count the strike.
+    //
+    // Keyed on the *typed variant*, never on the words "timed out": that phrase
+    // also reaches `classify` from untyped provider bodies via `llm_retry`'s
+    // network word list, and there nothing tells us a window was spent.
+    //
+    // Guarded by `has_later_candidate` because advancing off the terminal
+    // candidate is not "try elsewhere", it is "fail the request with zero
+    // retries" — the single-provider shape the overload budget already reasons
+    // about. There the ordinary `max_retries` in-place budget still applies,
+    // unchanged.
+    if has_later_candidate && matches!(err, AlephError::Timeout { .. }) {
+        return next_provider;
+    }
 
     match classify_exhausted(&msg) {
         // 413 — the turn driver owns this recovery path via

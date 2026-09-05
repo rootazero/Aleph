@@ -152,10 +152,18 @@ Four things worth knowing before touching it:
   singleton, so `aleph-server resume` uses `run_no_lock` + `forward_to_server`
   and says so when no server is running.
 
-- **One resume per session at a time.** `repair_boundary` is a read-then-append,
-  so two concurrent resumes of one session both compute the same repair set and
-  both append it — leaving one `call_id` answered by two `tool_result`s, which
-  the provider rejects on every later turn of that session. The boot scan never
+- **One resume per session at a time.** `repair_boundary`
+  (`src/session/boundary_repair.rs` since round-2; the coordinator keeps only
+  the `in_flight` slot) is a read-then-append, so two concurrent resumes of one
+  session both compute the same repair set and both append it — leaving one
+  `call_id` answered by **two synthetic `ToolError`s**. What that costs is worth
+  stating exactly, because this page said the wrong thing about it until
+  2026-09-02: since `harness::agent::prompt` learned to downgrade an
+  orphaned/duplicate `tool_result` to a plain user note (7929bbda6) it is **no
+  longer a provider rejection**. The model reads the same "outcome unknown"
+  sentence twice, the second time as prose that no longer references the call it
+  answers — duplicated text it must reconcile, not an API error that bricks
+  every later turn. The boot scan never
   exposed this (it walks sessions in a sequential loop); the on-demand face
   does, and it can collide with the boot scan itself, which is spawned while the
   gateway is already serving requests. `ResumeCoordinator.in_flight` claims the
@@ -173,14 +181,44 @@ crash-loop cap tripped) · `not_resumed` (interrupted, but the boundary repair
 or the re-trigger failed; the server log has the reason).
 
 **Crash-boundary wording is part of this contract.** A dangling
-`ToolCallRequested` is answered with `boundary_repair_text`, which states that
-the outcome is **unknown** — not that the call failed. `ToolCallRequested` is
-persisted immediately before dispatch, and the two things that can still stop a
-call after that point (a guardrail `Block`, an approval denial) each write
-their own answer event, so "requested, never answered" means the call reached
-or passed the dispatch line and its side effects may have landed. The previous
-text read as a verdict, and the rational response to a failed call is to issue
-it again.
+`ToolCallRequested` is answered by `boundary_repair_text(tool, provenance,
+denied, degrade)`, which has **three arms because there are three true
+sentences**, all sharing one closing instruction (`VERIFY_CLOSE`, a constant, so
+the sentences cannot drift apart on the one point that tells the model what to
+*do*):
+
+- `OUTCOME UNKNOWN — the server restarted after this <tool> call was dispatched
+  but before its result was recorded` (`DanglingProvenance::ThisRestart`);
+- the same verdict with the other lead, `an earlier run in this session ended
+  without recording the result` (`EarlierRun`) — the attribution matters because
+  saying "the server restarted" about a dangle left by an interrupted earlier
+  run is false about *when*;
+- `NOT EXECUTED — this <tool> call was denied by the approval gate and did not
+  run` (`denied`), which explicitly lists what has therefore **not** happened.
+
+None of the three says the call *failed*: the rational response to a failed call
+is to issue it again. The first two say its side effects may already have
+landed; the third says they cannot exist.
+
+**Why there is a third arm — the two-item enumeration above it was not enough.**
+`ToolCallRequested` is persisted immediately before dispatch, and the two things
+that can still stop a call after that point (a guardrail `Block`, an approval
+denial) each write their own answer event — from which this page used to
+conclude that "requested, never answered" *always* means the call reached or
+passed the dispatch line. That inference holds only while those answer events
+are guaranteed to be on disk. A statically denied call is answered in the same
+turn and never dangles, but the window between a denial and its receipt is a
+crash window like any other, and a call that crashed inside it **never ran**.
+Telling that call "this may have completed and its side effects have already
+landed" is a fabrication, and the model's likely reaction is to go hunting for
+state that does not exist — which is why `denied` is a field on
+`session::reduction::DanglingCall` rather than a detail of the approval path.
+Real-machine stage: `qa/resume_boundary/run.sh denied`.
+
+Deliberately **not** a safety-level classifier: `ToolSafetyLevel` exists and
+could sort read-only calls from destructive ones, but deciding "is this safe to
+redo?" from a tool name and its arguments is the reasoning R7 reserves for the
+model. State the fact; let it judge.
 
 ### Session Methods
 
@@ -830,6 +868,25 @@ its clients instead is two things, both of which were missing until 2026-08-10
   missing was a client using it instead of guessing "the conversation in front
   of the user". A frame that names a session no local view is showing must be
   **dropped**, never redirected.
+- **A cache of that projection needs a verb that invalidates it, and that verb
+  needs a caller.** `session_admits` caches the `(owner_user_id, scope_id)`
+  pair per session key — fill-on-miss, process-lifetime, bounded FIFO, no TTL,
+  one `Arc` shared by every connection. Caching the **pair of facts** rather
+  than a per-caller verdict is deliberate (a cached verdict has nothing to
+  invalidate, and P2's "removing a member takes effect immediately" would
+  quietly become a lie). But exactly one verb rewrites that pair —
+  `SessionStore::rescope_attribution`, the single exception to spec §10's
+  scope immutability, used by `projects.channel.bind` — and until 2026-09-03
+  `EventVisibilityIndex::forget_session` had **zero callers**, so after a bind
+  the live frames of the newly-shared conversation were refused to every other
+  member of the roster, permanently, while both halves looked implemented. The
+  invalidation now runs inside the bind's rescope loop, **after** each write and
+  for **every** key moved; three mutations (drop it, move it above the write,
+  apply it to the first key only) each redden exactly one test, so the ordering
+  and the "every key" are falsified rather than argued. Its twin `forget_team`
+  was CUT rather than wired — a zero-consumer channel is cheaper to delete than
+  to connect. ⚠️ Still open: nothing in source forces a future second writer of
+  that pair to call it.
 - **A client joining mid-turn needs a pointer to the turn in flight.**
   `chat.history` answers it: the response carries `active_run` — the run id
   currently claiming this session's slot in the `SessionRunRegistry`, or `null`.
@@ -876,27 +933,78 @@ pub enum DmScope {
 
 ## Session Manager
 
-**Location**: `src/gateway/session_manager.rs`
+**Location**: `src/gateway/session_manager/` (a directory, not the single
+`session_manager.rs` this line used to name).
 
 ### Storage Schema
 
+Abridged from `session_manager/mod.rs`; that file is the source, this is the
+shape. There is no `messages TEXT` JSON column and no `session_metadata`
+table — both were in this document long after they stopped existing.
+
 ```sql
 CREATE TABLE sessions (
-    session_key TEXT PRIMARY KEY,
-    messages TEXT,           -- JSON array
-    created_at INTEGER,
-    updated_at INTEGER,
-    message_count INTEGER,
-    token_count INTEGER
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    key            TEXT UNIQUE NOT NULL,
+    agent_id       TEXT NOT NULL,
+    session_type   TEXT NOT NULL,
+    created_at     INTEGER NOT NULL,
+    last_active_at INTEGER NOT NULL,
+    message_count  INTEGER DEFAULT 0,
+    total_tokens   INTEGER DEFAULT 0,
+    state          TEXT DEFAULT 'created',
+    metadata       TEXT,      -- JSON: identity_meta, knobs, owner/scope
+    label          TEXT,
+    model          TEXT,
+    model_provider TEXT
+    -- plus auto_reset_at, input_tokens, output_tokens
 );
 
-CREATE TABLE session_metadata (
-    session_key TEXT PRIMARY KEY,
-    agent_id TEXT,
-    channel TEXT,
-    last_compaction INTEGER
+CREATE TABLE messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    timestamp   INTEGER NOT NULL,
+    metadata    TEXT,
+    source_seq  INTEGER,      -- the `session_events.seq` this row came from
+    FOREIGN KEY (session_key) REFERENCES sessions(key) ON DELETE CASCADE
 );
 ```
+
+### `messages` is a projection, not a source
+
+The SSOT is `session_events` ([SESSION_SERVICE.md](SESSION_SERVICE.md)).
+`MessageProjector` (`src/gateway/session_projector.rs`) is the **only** writer
+of the rows projected from it — the ones carrying a `source_seq` — and it is
+asynchronous: an append lands in the log first and reaches the transcript on a
+per-session drain. It is **not** the table's only writer: two production paths
+append straight to `messages` and leave `source_seq` NULL —
+`AgentInstance::add_message` (`src/gateway/agent_instance.rs`) and the boot
+orphan notice (`src/gateway/orphan_notice.rs`) — the 「另两个生产者」
+FEATURE_LOCATOR §6.9 names; `map_message_row`
+(`src/gateway/session_manager/ops/crud.rs`) reads that NULL back as "not
+event-sourced, leave it alone", which is what keeps those rows out of the
+projection's seq-set arithmetic.
+
+The projection is **self-healing, never lossy**. Back-pressure or a stopped
+drain records the event's `seq` in `missed` (the payload is already durable in
+the SSOT) and a later heal re-reads it; a heal is a **seq-set difference**
+against the rows the transcript already has, so a hole *below* the newest row
+is filled too — before 2026-09-02 a watermark suppressed everything at or
+under `max(seq)` and those holes were permanent. `missed` is process memory,
+so a crash between an append and its drain is repaired at the NEXT boot:
+`ProjectionReconciler` repairs every session in the activity window
+(`[resume] max_age_secs`) plus every session whose markers read as
+interrupted, and the `core/projection-holes` doctor check does the unbounded
+sweep for anything older. `RunMeta` is stamped onto the last assistant row
+**in the run's seq range** (not by position) and bills usage once, so a replay
+cannot charge a run twice.
+
+⚠️ One consequence is recorded and unfixed: a healed row is a fresh INSERT, so
+its `AUTOINCREMENT id` sorts it at the **tail** of the transcript rather than
+at its `seq` position — and `id` is the authoritative transcript order
+([FEATURE_LOCATOR](FEATURE_LOCATOR.md) §6.9 round-8 · 附录 D.4.38).
 
 ### Compaction
 
@@ -925,11 +1033,17 @@ onboarding); (4) the legacy shared **Gateway token** (`aleph-<uuid>`,
 `SharedTokenManager`, HMAC-hashed, constant-time verified). A valid
 credential = full operator authority (identical to local); a missing/invalid
 one is walled — the WS dispatch refuses every method but `connect`.
-Revocation is token rotation (`gateway.token.rotate`, which also force-closes
-live remote sockets) or per-device revoke (`gateway.devices.revoke`, which
-drops that device's live sessions to the login wall and then closes their
-sockets with WS 4001 `device_revoked`) — both effective immediately, not at the
-next handshake. The WS
+Revocation has three granularities, all effective immediately rather than at
+the next handshake: token rotation (`gateway.token.rotate`, which also
+force-closes live remote sockets), per-device revoke (`gateway.devices.revoke`,
+which drops that device's live sessions to the login wall and then closes their
+sockets with WS 4001 `device_revoked`), and — since 2026-09-03 —
+`gateway.ticket.revoke` for a still-redeemable **bootstrap ticket**, listed by
+`gateway.ticket.list` and addressed by a non-secret `ticket_id` the listing
+returns instead of the code. That third one exists because rotation does not
+reach it: an unredeemed ticket is not a remote yet, so "revoke all remotes"
+left it fully redeemable, and minting had two faces while cancelling had none.
+Client: `aleph-server pair --list` / `--revoke` (no Panel face yet). The WS
 Origin check (`src/gateway/origin_policy.rs`) additionally blocks public web
 pages from cross-origin-driving the local daemon. See
 [SECURITY.md#auth-ux](SECURITY.md#auth-ux) for the full model.
@@ -1027,6 +1141,38 @@ Abuse protection at WS upgrade: besides the global `max_connections` cap, a
 per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
 `0` disables, loopback exempt) bounds slot-exhaustion — a remote peer
 opening many idle sockets.
+
+### `[gateway.rate_limit]` — the per-principal ceilings, from the operator's side
+
+The rate limiter has keyed off the **principal** rather than the socket since
+2026-08-21 (`rate_limit_identity()`: loopback ⇒ `127.0.0.1`, authenticated ⇒
+`user:<id>`), and until 2026-09-03 every production construction site still
+passed `RateLimitConfig::default()` — no config section, no setter, so an
+operator could neither read the ceilings nor change them, while the defaults'
+own comment recorded that those numbers had already needed changing once.
+
+`[gateway.rate_limit]` now carries a window (`max_requests` +
+`window_secs`) per scope plus `lockout_secs`. Three properties are load-bearing:
+
+- **The numbers live in exactly one place.** The TOML schema's fields are all
+  optional and its `Default` does **not** replay the table — an omitted key
+  falls through to `RateLimitConfig::default()`, which stays the only statement
+  of what the defaults are. Replaying them in the schema would be a second
+  spelling that drifts silently.
+- **`lockout_secs = 0` disables the lockout.** The runtime carries
+  `Option<u64>` and TOML has no null, so without this spelling an operator could
+  only lengthen auth's five-minute lockout, never remove it.
+- **Restart-only, and it says so in its own doc.** The section is not
+  `ConfigPatcher`-reachable. Placing it under `[policies]` would make it
+  live-appliable and is the recorded alternative — a design change, not an
+  extension.
+
+Two limits carried deliberately. There is **no read face**: an operator can set
+the ceilings but still cannot ask a running server what they are. And `Auth` and
+`WebhookAuth` share one window (`RateLimitConfig::config_for` fans both into
+`auth`), so writing `[gateway.rate_limit.auth]` retunes webhook auth too and
+nothing says so — unchanged behaviour, but the section makes it visible for the
+first time.
 
 ### Reverse proxies (opt-in `X-Forwarded-For` resolution)
 

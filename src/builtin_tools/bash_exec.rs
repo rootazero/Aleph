@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
 use super::partial_output::{self, PartialView};
 use super::process_completion;
-use super::process_journal::{self, JobPhase, RecoveredJob};
+use super::process_journal::{self, JobPhase, RecoveredJob, Verdict};
 use super::process_registry::{
     process_registry, KillOutcome, PollOutcome, RegisterOutcome, WaitOutcome,
 };
@@ -53,7 +53,11 @@ const WAIT_DEFAULT_TIMEOUT_SECS: u64 = 60;
 /// Hard ceiling for a `wait` window. Stays under the 180s foreground tool
 /// budget so an over-eager `timeout` can't push the blocking wait past the
 /// point where the budget wrapper kills the whole call.
-const WAIT_MAX_TIMEOUT_SECS: u64 = 170;
+///
+/// `pub(crate)` for `builtin_tools::terminal`, whose `wait` action answers to
+/// the same budget: its own ceiling is asserted to stay under this one rather
+/// than restating "180 s minus some slack" a second time (判据 §1).
+pub(crate) const WAIT_MAX_TIMEOUT_SECS: u64 = 170;
 
 /// Arguments for bash execution tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -703,7 +707,7 @@ fn recovered_row(job: &RecoveredJob) -> serde_json::Map<String, serde_json::Valu
     obj.insert("process_id".into(), serde_json::json!(record.id));
     obj.insert(
         "status".into(),
-        serde_json::json!(record.phase.status_label()),
+        serde_json::json!(process_journal::settled_label(record)),
     );
     obj.insert("recovered".into(), serde_json::json!(true));
     obj.insert("command".into(), serde_json::json!(record.command));
@@ -750,7 +754,10 @@ fn recovered_row(job: &RecoveredJob) -> serde_json::Map<String, serde_json::Valu
             );
         }
     }
-    obj.insert("advisory".into(), serde_json::json!(advisory(record.phase)));
+    obj.insert(
+        "advisory".into(),
+        serde_json::json!(advisory(record.phase, record.outcome.as_deref())),
+    );
     obj
 }
 
@@ -763,7 +770,10 @@ fn recovered_row(job: &RecoveredJob) -> serde_json::Map<String, serde_json::Valu
 /// without being told.
 fn no_output_reason(phase: JobPhase, outcome: Option<&str>) -> &'static str {
     match (phase, outcome) {
-        (JobPhase::Settled, Some("killed")) => {
+        // The word comes from the writer's own vocabulary, never from a literal
+        // spelled again here: two spellings of one verdict is one drift away
+        // from an arm that quietly stops matching.
+        (JobPhase::Settled, Some(o)) if o == Verdict::Killed.label() => {
             "No output was recorded: the job was killed before it produced a final result, and \
              the snapshot taken as it was stopped was empty — either it had printed nothing yet, \
              or what it had printed was withheld by the secret gate."
@@ -786,23 +796,39 @@ fn no_output_reason(phase: JobPhase, outcome: Option<&str>) -> &'static str {
 /// because it knows less: a background `bash` child is a real OS process that
 /// can outlive a `SIGKILL`ed daemon, no pid is recorded anywhere, and nothing
 /// here probes for one. Claiming it died would be inventing a verdict.
-fn advisory(phase: JobPhase) -> &'static str {
-    match phase {
-        JobPhase::Interrupted => {
+///
+/// Takes the outcome as well as the phase for the same reason
+/// [`process_journal::settled_label`] takes the record: a terminal row is
+/// either a completion or a `kill`, and the sentence that tells the model what
+/// it is looking at may not answer the same way for both.
+fn advisory(phase: JobPhase, outcome: Option<&str>) -> &'static str {
+    match (phase, outcome) {
+        (JobPhase::Settled, Some(o)) if o == Verdict::Killed.label() => {
+            "Recovered from the on-disk execution journal: this job was STOPPED — Aleph killed \
+             it, either on a `kill` action or when the daemon shut down. It did not run to \
+             completion, so whatever output is here is partial by construction, and nothing about \
+             the command itself was judged. Decide for yourself whether the work still needs doing."
+        }
+        (JobPhase::Settled, Some(o)) if o == Verdict::Completed.label() => {
+            "Recovered from the on-disk execution journal: this job reached a terminal state \
+             either in an earlier daemon or before its live entry was evicted. The fields here \
+             are what was recorded then; there is no live handle to it."
+        }
+        (JobPhase::Settled, _) => {
+            "Recovered from the on-disk execution journal: this row reached a terminal state but \
+             recorded no outcome this daemon recognises, so it cannot tell you whether the job \
+             finished or was stopped. Treat the fields below as evidence, not as a result."
+        }
+        (JobPhase::Interrupted, _) => {
             "This job was still running when the previous daemon stopped. Aleph no longer holds a \
              handle to it and did NOT check whether the OS process is still alive — it may still \
              be running, it may have finished, or it may have died with the daemon. This is not a \
              verdict on the command: nothing about it failed. Check yourself (e.g. `ps`) before \
              assuming either way, and before re-running work that may already be done."
         }
-        JobPhase::Running => {
+        (JobPhase::Running, _) => {
             "This job's journal row still says running, but this process holds no handle for it. \
              Aleph did NOT check whether the OS process is still alive."
-        }
-        JobPhase::Settled => {
-            "Recovered from the on-disk execution journal: this job reached a terminal state \
-             either in an earlier daemon or before its live entry was evicted. The fields here \
-             are what was recorded then; there is no live handle to it."
         }
     }
 }

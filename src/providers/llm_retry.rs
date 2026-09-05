@@ -289,7 +289,16 @@ fn is_rate_limit_text(msg_lower: &str) -> bool {
 /// - Model-specific rate limits (error mentions a model name or per-model quota)
 ///   → `Fallback` — switching to a different provider/model may succeed.
 /// - Account-wide rate limits ("account", "organization", "quota")
-///   → `Fatal` — switching models won't help, propagate to user.
+///   → `Fatal` — switching *models* won't help.
+///
+/// `Fatal` is this classifier's verdict, not the walk's. `decide` re-reads the
+/// typed error, and `RateLimitError` / `ProviderError` are
+/// [`ErrorClass::Transient`](crate::error::ErrorClass::Transient), so an
+/// account-scoped 429 is retried in place `max_retries` times and then advances
+/// the chain as `NextProvider(Transient)` — a circuit strike. It is shed onto a
+/// sibling provider (whose account is a different one), not propagated to the
+/// user. Pinned by
+/// `failover::tests::an_account_scoped_429_is_retried_then_sheds_the_provider`.
 /// - Default 429 → `Fallback` (conservative: try switching provider).
 fn classify_rate_limit(raw: &str) -> RetryVerdict {
     let msg = raw.to_lowercase();
@@ -339,8 +348,11 @@ pub fn is_transient_overload(msg_lower: &str) -> bool {
 /// the rest of the session rather than re-probed aggressively. Transient
 /// failures (rate limit, server overload, network blips) are deliberately
 /// excluded — a momentary "forbidden"-looking overload must not be mistaken
-/// for a dead key — and account/quota 429s are already classified `Fatal`
-/// upstream so they never reach the breaker.
+/// for a dead key. An account/quota 429 does reach the breaker (`decide`'s
+/// `Fatal` arm ends at `NextProvider(Transient)` once the in-place budget is
+/// spent — see [`classify_rate_limit`]); this predicate's job is only to say it
+/// is not *permanent*, so it costs a strike instead of shedding the provider
+/// for the session.
 #[must_use]
 pub fn is_permanent_failure(raw: &str) -> bool {
     let msg = raw.to_lowercase();
@@ -440,8 +452,12 @@ pub fn classify(raw: &str) -> RetryVerdict {
     }
 
     // Rate-limit (429) → classify as model-specific vs account-wide.
-    // Model-specific limits benefit from switching providers (Fallback);
-    // account-wide limits propagate immediately (Fatal).
+    // Model-specific limits benefit from trying a sibling MODEL first
+    // (`Fallback` → `Decision::RateLimited`); account-wide ones say `Fatal`,
+    // which `decide` then reads through the typed error's class — transient for
+    // a 429 — so they still ride out `max_retries` in place and then shed the
+    // provider. `Fatal` here means "a sibling model will not help", not
+    // "give up" (see `classify_rate_limit`).
     if is_rate_limit_text(&msg) {
         return classify_rate_limit(raw);
     }

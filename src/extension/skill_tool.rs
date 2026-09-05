@@ -1,51 +1,15 @@
 //! Skill Tool - LLM-callable skill invocation
 //!
-//! This module provides the core logic for invoking skills as LLM tools:
-//! template rendering and structured results. Tool-level access control
-//! lives in the dispatch pipeline (`tools/scoped/dispatch.rs`), driven by
-//! the merged `[policies.tool_permissions]` policy — not here.
-
-use super::error::ExtensionResult;
-use super::template::SkillTemplate;
-use super::types::{ExtensionSkill, SkillMetadata, SkillToolResult};
-use tracing::debug;
-
-/// Invoke a skill and return structured result
-///
-/// This is the core function called when LLM invokes the skill tool.
-pub async fn invoke_skill(
-    skill: &ExtensionSkill,
-    arguments: &str,
-) -> ExtensionResult<SkillToolResult> {
-    let qualified_name = skill.qualified_name();
-
-    // Create template and render
-    let template = SkillTemplate::new(&skill.content, &skill.source_path);
-    let rendered_content = template.render(arguments).await?;
-
-    // Build result
-    let result = SkillToolResult {
-        title: format!("Loaded skill: {}", skill.name),
-        content: rendered_content,
-        base_dir: template.base_dir().to_path_buf(),
-        metadata: SkillMetadata {
-            name: skill.name.clone(),
-            qualified_name,
-            source: skill.source,
-        },
-    };
-
-    debug!(
-        "Skill {} invoked successfully with base_dir: {:?}",
-        result.metadata.qualified_name, result.base_dir
-    );
-
-    Ok(result)
-}
+//! The single producer (`invoke_skill`) was cut on 2026-09-04 after its only
+//! caller (`ExtensionManager::invoke_skill_tool`) lost all live consumers.
+//! What survives is the test module below, which still asserts the
+//! `qualified_name()` invariant — that contract is load-bearing for the
+//! registry lookup path (`register_skill` writes under `qualified_name()`,
+//! every reader looks it up by the same key).
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::types::ExtensionSkill;
     use crate::discovery::DiscoverySource;
     use std::path::PathBuf;
 
@@ -63,18 +27,6 @@ mod tests {
             source: DiscoverySource::AlephGlobal,
             ..Default::default()
         }
-    }
-
-    #[tokio::test]
-    async fn test_invoke_skill() {
-        let skill = create_test_skill();
-
-        let result = invoke_skill(&skill, "World").await.unwrap();
-
-        assert_eq!(result.title, "Loaded skill: test-skill");
-        assert_eq!(result.content, "Hello World!");
-        assert_eq!(result.metadata.name, "test-skill");
-        assert_eq!(result.metadata.qualified_name, "my-plugin:test-skill");
     }
 
     /// The name the model is shown must be the name the registry stores it

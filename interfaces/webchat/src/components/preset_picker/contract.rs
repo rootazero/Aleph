@@ -12,6 +12,12 @@
 //!   and once deleted it can never be configured again.
 //! * If a configured row is offered without its mark, it reads as "not set up
 //!   yet", and an operator would overwrite existing credentials.
+//!
+//! These are test-only contracts: the assertions `panic!` on violation, and
+//! in WASM a panic takes the whole module down via `panic_overlay`. The file
+//! is `#[cfg(test)]` so non-test builds cannot reach it.
+
+#![cfg(test)]
 
 use crate::components::preset_picker::PickerRow;
 

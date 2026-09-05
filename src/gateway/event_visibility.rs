@@ -455,7 +455,7 @@ pub fn session_identity_of(topic: &str, data: Option<&Value>) -> SessionIdentity
         // envelope this producer uses read as topic `"event"` before the
         // `extract_topic_and_data` fix (fix round 1) — see that function's
         // doc in `server::handler`.
-        "run.subagent_tree" => match subagent_tree_root_session(data) {
+        aleph_protocol::subagent_tree::TOPIC => match subagent_tree_root_session(data) {
             Some(k) => SessionIdentity::BySessionKey(k),
             None => SessionIdentity::Global,
         },
@@ -653,12 +653,19 @@ struct RunIndex {
     map: HashMap<String, String>,
 }
 
-/// The two immutable facts a session row contributes to a visibility decision
-/// — everything `visibility::owner_and_scope_visible_to` reads, and nothing
-/// else. Both are stamped once at creation and never rewritten
-/// (`SessionMetadata::stamp_attribution`), which is what makes them safe to
-/// cache for the process lifetime; the ROSTER they are evaluated against is
-/// not cached here and is re-read on every frame.
+/// The two facts a session row contributes to a visibility decision —
+/// everything `visibility::owner_and_scope_visible_to` reads, and nothing
+/// else. Both are stamped once at creation (`SessionMetadata::stamp_attribution`)
+/// and `owner_user_id` is never rewritten after that. `scope_id` has exactly
+/// ONE exception: [`crate::gateway::session_store::SessionStore::rescope_attribution`],
+/// the `projects.channel.bind` verb that moves an existing conversation's
+/// transcript into a room. Caching this pair for the process lifetime is
+/// therefore safe only because that verb's caller
+/// (`handlers::projects_channel::rescope_existing_transcript`) invalidates
+/// this cache with `EventVisibilityIndex::forget_session` after the rewrite
+/// commits — a promise the cache's own doc keeps, not a fact the row makes
+/// on its own. The ROSTER the pair is evaluated against is not cached here
+/// and is re-read on every frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SessionOwnership {
     owner_user_id: Option<String>,
@@ -1032,8 +1039,10 @@ impl EventVisibilityIndex {
                 // BEFORE `ensure_session` creates the row, so the very first
                 // frame of a fresh session can arrive while the row does not
                 // exist yet. Caching that absence as an unresolvable key would
-                // deny EVERY later frame for that session key — the cache has no
-                // invalidation and evicts only by FIFO at
+                // deny EVERY later frame for that session key — the only
+                // invalidation hook is `forget_session`, whose sole caller is
+                // the channel-bind rescope, so nothing on this path would ever
+                // drop the key, and the cache otherwise evicts only by FIFO at
                 // `MAX_CACHED_SESSION_OWNERS` — so streaming for that
                 // conversation would stay dead for the process lifetime. It
                 // fails closed, so nothing leaks, but it dies silently, and
@@ -1082,15 +1091,24 @@ impl EventVisibilityIndex {
 
     /// Whether `caller` may receive a `team.<id>.*` frame.
     ///
-    /// A team is owned outright — there is no `scope_id` column on `teams` and
-    /// no roster of USERS (a team's members are agents), so the room-vs-personal
-    /// branch `session_admits` needs has nothing to decide here. The one rule
-    /// that must not be re-derived is adoption-by-absence, and that goes through
-    /// [`owner_or_legacy`] — the same single authority `session_visible_to`
-    /// reaches on the RPC path.
+    /// A team row carries BOTH `owner_user_id` and `scope_id` — the column is
+    /// created by `SqliteTeamStore`'s `add_column_if_missing` migration,
+    /// written on create, selected by every team read, and typed on
+    /// [`crate::teams::types::Team`] — so the rule body here is
+    /// [`crate::gateway::visibility::owner_and_scope_visible_to`], which owns
+    /// the room-vs-personal branch. That is the same single authority the RPC
+    /// face reaches through [`crate::teams::scoped::team_visible`], whose doc
+    /// carries the statement of what the branch decides and the round-3 →
+    /// round-5 history of the column; this delivery plane is that predicate's
+    /// second face, so a change to either column has to answer both.
     ///
-    /// Only the team's owner STAMP is cached; the caller is applied to it on
-    /// every call, so this can never hold a stale per-caller verdict.
+    /// The one rule that must not be re-derived is adoption-by-absence, and
+    /// that goes through [`owner_or_legacy`] — the same single authority
+    /// `session_visible_to` reaches on the RPC path.
+    ///
+    /// The team's `(owner, scope)` PAIR is cached, never a verdict; the caller
+    /// is applied to it on every call, so this can never hold a stale
+    /// per-caller verdict.
     ///
     /// The store handle is the ownership-scoped `ScopedTeamStore` (the only one
     /// boot publishes). Its filter is ambient — `scope::ambient_owner()` — and
@@ -1151,28 +1169,31 @@ impl EventVisibilityIndex {
 
     /// Drop the cached ownership / scope for `session_key` so the next
     /// `session_admits` call falls through to `SessionStore::get_metadata`
-    /// and re-derives the truth. Required after any session row mutation
-    /// (`sessions.delete`, `sessions.patch`, `sessions.compaction.restore`,
-    /// `sessions.set_project_root`) that may change `owner_user_id` or
-    /// `scope_id` — without it the cache keeps serving the pre-mutation
-    /// pair until FIFO eviction.
+    /// and re-derives the truth.
     ///
-    /// Idempotent: dropping a missing key is a no-op. Never wired into the
-    /// per-frame read path.
+    /// Of every verb that can touch a session row, exactly ONE can rewrite
+    /// `owner_user_id`/`scope_id` after creation:
+    /// [`SessionStore::rescope_attribution`], called from
+    /// `handlers::projects_channel::rescope_existing_transcript` (the
+    /// `projects.channel.bind` verb). `rescope_existing_transcript` calls it
+    /// for every key that returned `Ok(true)`, after that key's write commits
+    /// — see its doc for why the ordering matters.
+    ///
+    /// Deliberately NOT paired with a list of the verbs that do not need this:
+    /// such a list only covers the world as of the day it was written, and the
+    /// next verb that learns to rewrite either column would inherit its silent
+    /// blessing. What is pinned today is only half of the pair —
+    /// `session_store::caller_census::SOLE_CALLERS` fails by name if
+    /// `rescope_attribution` grows a second call site; nothing yet asserts that
+    /// such a call site also forgets the key.
+    ///
+    /// Idempotent: dropping a missing key is a no-op.
+    ///
+    /// [`SessionStore::rescope_attribution`]: crate::gateway::session_store::SessionStore::rescope_attribution
     pub async fn forget_session(&self, session_key: &str) {
         let mut inner = self.owners.write().await;
         let OwnershipCache { order, map } = &mut *inner;
         forget(order, map, session_key);
-    }
-
-    /// Drop the cached team ownership for `team_id` so the next
-    /// `team_admits` call falls through to `TeamStore::get_team` and
-    /// re-derives the truth. Required after any team row mutation that may
-    /// change `owner_user_id` or `scope_id`.
-    pub async fn forget_team(&self, team_id: &str) {
-        let mut inner = self.team_owners.write().await;
-        let TeamOwnerCache { order, map } = &mut *inner;
-        forget(order, map, team_id);
     }
 
     #[cfg(test)]

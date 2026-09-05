@@ -1,0 +1,83 @@
+{
+  "audit": "severed-wire-audit + static review",
+  "date": "2026-09-04",
+  "module": "src/discovery",
+  "branch": "review/discovery",
+  "files_scanned": [
+    "src/discovery/mod.rs",
+    "src/discovery/paths.rs",
+    "src/discovery/scanner.rs",
+    "src/discovery/types.rs"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (grep-diff across src/, bin/, tests/, workspace) + seam-catalog lenses + general code review",
+  "prior_audit": "review-results/discovery-audit-2026-08-16.json",
+  "prior_audit_status": "All 4 prior findings (sw-disc-1..4) verified RESOLVED in this branch: ALEPH_CONFIG_FILE consts gone, find_config_files/find_file_upward chain gone, git_root getter gone, DiscoverySource::Plugin variant gone.",
+  "findings": [
+    {
+      "id": "sw-disc-2026-09-4-1",
+      "severity": "medium",
+      "form": 1,
+      "produced": "DiscoveredPath::name (pub field + computation in DiscoveredPath::new)",
+      "produced_location": "src/discovery/types.rs:44,51-73",
+      "consumer_location": "none — extension/mod.rs:1077-1091 reads d.path/d.source only; projection.rs:121-125 reads d.path only; repo-wide grep for DiscoveredPath outside src/discovery finds only audit artifacts",
+      "decision": "CUT",
+      "rationale": "Field-level severed wire. Produced with an elaborate empty-fallback guard whose comment claimed name 'surfaces in logs, tool catalogs, and the <available_skills> prompt index' — that architecture no longer exists; downstream names come from SKILL.md/frontmatter parsing. priority was kept: it is load-bearing via sort_by_key, which drives the extension manager's first-wins canonical-path dedup. Painless wire, zero production pain, no live caller per playbook -> CUT.",
+      "fix_commit": "419fbfcab",
+      "residual_risk": "DiscoveredPath is pub API of the lib; an out-of-tree consumer referencing .name would fail to compile. Workspace grep shows none."
+    },
+    {
+      "id": "sw-disc-2026-09-4-2",
+      "severity": "low",
+      "form": 1,
+      "produced": "DiscoveryError::Io(#[from] std::io::Error)",
+      "produced_location": "src/discovery/mod.rs:21-22",
+      "consumer_location": "none — zero construction sites; all fs errors in the module are debug-logged (read_dir/canonicalize use .ok()); no io::Error `?` conversion into DiscoveryResult anywhere; repo-wide grep for DiscoveryError::Io is empty; extension/error.rs wraps the enum via #[from] without variant matches",
+      "decision": "CUT",
+      "rationale": "Dead public error variant. Its presence also falsely advertised that discovery propagates IO errors, when the module's actual policy is log-and-skip.",
+      "fix_commit": "19f22e5f6",
+      "residual_risk": "None within the workspace; external matchers on the variant would fail to compile (grep shows none)."
+    },
+    {
+      "id": "sw-disc-2026-09-4-3",
+      "severity": "trivial",
+      "form": "doc drift (name/path drift class, comment seam)",
+      "produced": "component_marker_file doc comment referencing discover_plugins()",
+      "produced_location": "src/discovery/scanner.rs:341",
+      "consumer_location": "n/a — discover_plugins() was removed in the prior audit pass; only discover_plugins_with_extra() remains (consumed at extension/mod.rs:1073)",
+      "decision": "CUT (stale comment corrected)",
+      "rationale": "Comment pointed at a deleted method; misleading to future readers tracing how plugins are discovered.",
+      "fix_commit": "538c22920",
+      "residual_risk": "None."
+    }
+  ],
+  "reviewed_no_change": [
+    {
+      "item": "classify_entry accepts loose .md files for ANY component type, incl. 'skills' (comment scopes the intent to commands/agents)",
+      "location": "src/discovery/scanner.rs:325-330",
+      "assessment": "DECIDE, not fixed. A stray README.md directly under skills/ is discovered as a 'skill'. Tightening to commands/agents contradicts no downstream contract I could verify within budget (skill system's scan_directory may tolerate file entries), and the failure mode downstream is a graceful parse failure. Flagging for a follow-up decision rather than guessing."
+    },
+    {
+      "item": "AGENT.md (uppercase) recognized in plugin zip adapter vs agent.md (lowercase) on-disk discovery marker",
+      "location": "src/discovery/paths.rs:23 vs src/extension/types/plugins.rs:165",
+      "assessment": "Not a confirmed drift. detect_from_path matches archive entry names; whether an installed plugin with uppercase AGENT.md inside an agents/ dir would miss the discovery marker depends on the install/extract layer (outside src/discovery), which may normalize. Left as an uncertainty."
+    },
+    {
+      "item": "DiscoveryConfig fields / DiscoveryManager API / aleph_home_dir / aleph_agents_dir / aleph_plugins_dir / find_dir_upward / find_upward / validate_path_component / ScanDirectory / all paths constants",
+      "assessment": "All live (consumers in extension/, builtin_tools/, bin/aleph-server, gateway/). Not findings."
+    },
+    {
+      "item": "Security sweep: component_name traversal guard (validate_path_component + 256-byte cap), per-entry symlink screening via symlink_metadata (is_existing_dir_no_follow), hidden-file skip, no recursive walk (no symlink-loop/infinite-recursion surface), max_upward_depth bound on upward walks",
+      "assessment": "Clean. scan_component_dir/scan_plugin_parent follow symlinks only at the well-known parent level (user's own home config), which is intentional and documented."
+    },
+    {
+      "item": "P3: blocking fs I/O in discovery; TOCTOU between symlink_metadata and later reads; find_upward mid-walk canonicalize failure can make the stop comparison miss (walk continues to max_depth — benign)",
+      "assessment": "Noted, not fixed. Architecture-level / standard-for-scanners; fixes belong outside this audit's surgical scope."
+    }
+  ],
+  "verification": "Static only per instructions — cargo check/test intentionally NOT run (deferred to the orchestrating step). All edits reviewed by eye; no new deps; changes confined to src/discovery/.",
+  "commits": [
+    "19f22e5f6 discovery: cut never-constructed DiscoveryError::Io variant",
+    "419fbfcab discovery: cut unread DiscoveredPath::name field",
+    "538c22920 discovery: fix stale discover_plugins reference in marker doc"
+  ]
+}

@@ -9,6 +9,11 @@ use crate::orchestrator::errors::FlowError;
 /// Transient indicators: HTTP 5xx (500/502/503), 429, network failures,
 /// connection drops and timeouts.
 ///
+/// **A failure that already showed the user part of an answer is not among
+/// them**, whatever its wording — see the
+/// [`PARTIAL_OUTPUT_EMITTED`](crate::providers::failover::PARTIAL_OUTPUT_EMITTED)
+/// gate at the top of [`is_transient_harness_message`].
+///
 /// **Auth is not among them.** 401/403 used to be classified transient here,
 /// on the reasoning that the fallback loop should "try another provider" — but
 /// trying another provider is `FailoverProvider`'s job and it happens *inside*
@@ -67,6 +72,19 @@ fn is_transient_harness_message(msg: &str) -> bool {
     // the auth arm above was not even using.
     const TRANSIENT_STATUSES: &[u16] = &[500, 502, 503, 429];
 
+    // Content already reached the user's screen. `FailoverProvider`'s walk
+    // stops advancing the chain when that happens — a second candidate would
+    // append its answer to a half-written one — and states the fact in the
+    // error's rendered message. Re-dispatching here would do exactly what the
+    // walk refused to do, one layer up and on the same `run_id`, so this is
+    // checked FIRST: the constraint is about what the user has already been
+    // shown, not about whether the underlying failure is recoverable. A cut
+    // stream's own wording ("connection reset", "timed out") matches
+    // `NETWORK_MARKERS` below and would otherwise win.
+    if msg.contains(crate::providers::failover::PARTIAL_OUTPUT_EMITTED) {
+        return false;
+    }
+
     // An expired OAuth access token is the one auth failure this process holds
     // the remedy for: the retry arm in `run_loop/inner.rs` calls
     // `codex_token_refresher` to mint a new one and hot-swap the live provider
@@ -115,6 +133,71 @@ fn has_any_status(msg: &str, codes: &[u16]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failure raised after the user already saw text must never be
+    /// re-dispatched, even though its wording is the most transient-looking
+    /// text there is.
+    ///
+    /// Built through the real construction path
+    /// (`failover::mark_partial_output_emitted` → `HarnessError::Llm`) rather
+    /// than a hand-typed string, so it asserts the marker survives `Display`
+    /// — `AlephError::ProviderError` renders `message` and drops `suggestion`,
+    /// which is exactly how a marker parked on the wrong field would become a
+    /// no-op that reports success.
+    #[test]
+    fn a_partial_output_error_is_not_transient_even_when_its_message_says_connection() {
+        let marked = crate::providers::failover::mark_partial_output_emitted(
+            &crate::error::AlephError::provider("connection reset by peer"),
+        );
+        let rendered = marked.to_string();
+        assert!(
+            rendered.contains(crate::providers::failover::PARTIAL_OUTPUT_EMITTED),
+            "the marker must reach the classifier through Display: {rendered}"
+        );
+        assert!(
+            rendered.contains("connection reset by peer"),
+            "the original diagnostic must survive: {rendered}"
+        );
+
+        let flow = classify_harness_error(HarnessError::Llm(marked), "p");
+        assert!(
+            matches!(flow, FlowError::Internal(_)),
+            "a half-written answer must not be re-dispatched, got {flow:?}"
+        );
+
+        // Without the marker the same wording IS transient — that contrast is
+        // what makes the gate above a real gate rather than a restatement of
+        // `plain_internal_error_is_not_transient`.
+        assert!(is_transient_harness_message(
+            "llm error: Provider error: connection reset by peer"
+        ));
+    }
+
+    /// The gate's negative half: a chain-terminal failure that showed the user
+    /// nothing must still be re-dispatchable.
+    ///
+    /// `EmissionGuard::has_emitted` also latches on tool-call deltas, which the
+    /// production sink never renders. If the walk marked off *that* bit instead
+    /// of `has_shown_user_output`, a truncated tool call — the exact case its
+    /// own diagnostic calls "a large file write crossing a proxy timeout" —
+    /// would arrive here as `FlowError::Internal` and hard-fail the run on the
+    /// first truncation, silently deleting a safe recovery. Nothing else pins
+    /// that the marker does not over-fire.
+    #[test]
+    fn a_truncated_tool_call_that_showed_no_text_is_still_transient() {
+        let unmarked = crate::error::AlephError::Timeout { suggestion: None };
+        let rendered = unmarked.to_string();
+        assert!(
+            !rendered.contains(crate::providers::failover::PARTIAL_OUTPUT_EMITTED),
+            "the walk leaves a text-free cut unmarked: {rendered}"
+        );
+
+        let flow = classify_harness_error(HarnessError::Llm(unmarked), "p");
+        assert!(
+            matches!(flow, FlowError::Transient { .. }),
+            "a blank screen must keep its re-dispatch, got {flow:?}"
+        );
+    }
 
     #[test]
     fn rate_limit_429_is_transient() {

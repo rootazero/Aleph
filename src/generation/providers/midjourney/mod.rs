@@ -45,7 +45,7 @@ mod submit_polling;
 mod types;
 
 // Re-export public types for backward compatibility
-pub use builder::MidjourneyProviderBuilder;
+pub(crate) use builder::MidjourneyProviderBuilder;
 pub use provider::MidjourneyProvider;
 pub use types::{
     ImagineRequest, MidjourneyMode, SubmitResponse, TaskButton, TaskResponse, DEFAULT_COLOR,

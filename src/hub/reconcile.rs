@@ -39,13 +39,13 @@ fn base_entry(kind: ExtensionKind, local_id: &str, name: String) -> ExtensionEnt
     }
 }
 
-pub fn mcp_to_entry(info: &McpServerInfo) -> ExtensionEntry {
+pub(crate) fn mcp_to_entry(info: &McpServerInfo) -> ExtensionEntry {
     let mut e = base_entry(ExtensionKind::Mcp, &info.id, info.name.clone());
     e.enabled = !matches!(info.health, HealthStatus::Stopped | HealthStatus::Dead);
     e
 }
 
-pub fn plugin_to_entry(p: &PluginRecord) -> ExtensionEntry {
+pub(crate) fn plugin_to_entry(p: &PluginRecord) -> ExtensionEntry {
     let mut e = base_entry(ExtensionKind::Plugin, &p.id, p.name.clone());
     e.description = p.description.clone().unwrap_or_default();
     e.version = p.version.clone();
@@ -53,7 +53,7 @@ pub fn plugin_to_entry(p: &PluginRecord) -> ExtensionEntry {
     e
 }
 
-pub fn skill_to_entry(s: &SkillStatusEntry) -> ExtensionEntry {
+pub(crate) fn skill_to_entry(s: &SkillStatusEntry) -> ExtensionEntry {
     let mut e = base_entry(ExtensionKind::Skill, s.id.as_str(), s.name.clone());
     e.enabled = !s.disabled;
     e

@@ -659,6 +659,7 @@ pub async fn handle_compact_db(
 pub async fn handle_truncate_db(
     request: JsonRpcRequest,
     manager: Arc<dyn SessionStore>,
+    run_manager: Option<Arc<crate::gateway::handlers::agent::AgentRunManager>>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
@@ -743,6 +744,13 @@ pub async fn handle_truncate_db(
                 format!("Failed to retire session event log: {e}"),
             );
         }
+        // The twin of `chat.rewind`'s balance: a cut that removed a
+        // `RunFinished` and left its `RunStarted` makes the log say a run is
+        // still open, and the boot scan then resumes a turn the user undid on
+        // every later boot. Same helper, so the rule cannot exist on one verb
+        // and not the other.
+        crate::gateway::handlers::balance_run_markers_after_retire(&key, run_manager.as_ref())
+            .await;
     }
 
     match manager.truncate_messages(&key, keep_count).await {
@@ -1125,7 +1133,13 @@ mod tests {
             params: Some(json!({ "session_key": key_str, "keep_count": 2 })),
             id: Some(json!(1)),
         };
-        let response = handle_truncate_db(request, store.clone()).await;
+        // `None` run manager = "I cannot tell whether a run is live", which the
+        // marker balance must read as "leave it alone" (see
+        // `handlers::balance_run_markers_after_retire`). Nothing here opens a
+        // run marker, so the balance is a no-op either way — the assertion
+        // below still counts the surviving events, which would catch a
+        // fail-open balance appending a closer.
+        let response = handle_truncate_db(request, store.clone(), None).await;
         assert!(response.error.is_none(), "{:?}", response.error);
 
         let surviving = events.load_all_events(&key).await.unwrap();
@@ -1600,7 +1614,7 @@ mod tests {
             let as_bob = CALLER_USER
                 .scope(
                     Some("u-bob".to_string()),
-                    handle_truncate_db(req, store.clone()),
+                    handle_truncate_db(req, store.clone(), None),
                 )
                 .await;
             assert_eq!(

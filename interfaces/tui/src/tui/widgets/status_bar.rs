@@ -32,6 +32,10 @@ pub struct StatusBar<'a> {
     /// delegated sub-agent's cold start is labelled instead of being read as
     /// the root agent's prefix breaking.
     pub cache_stat_agent: Option<&'a str>,
+    /// This session's background sub-agents still running. Rendered as a
+    /// `⚡N agents` segment only when non-zero — pi's "3 running agents"
+    /// footer, in Aleph's status-bar vocabulary.
+    pub running_agents: usize,
     pub is_connected: bool,
     pub tool_progress_mode: ToolProgressMode,
     /// Advances the working-indicator spinner (shared 50ms tick counter).
@@ -123,6 +127,22 @@ impl StatusBar<'_> {
                 label,
                 Style::default()
                     .fg(cache_stat_color(pct))
+                    .bg(DEFAULT_THEME.status_bg),
+            ));
+        }
+
+        // Background sub-agents still working for this session. Absent at
+        // zero — an idle session does not need a zero.
+        if self.running_agents > 0 {
+            spans.push(sep());
+            spans.push(Span::styled(
+                format!(
+                    " \u{26a1}{} agent{} ",
+                    self.running_agents,
+                    if self.running_agents == 1 { "" } else { "s" }
+                ),
+                Style::default()
+                    .fg(DEFAULT_THEME.tool_running)
                     .bg(DEFAULT_THEME.status_bg),
             ));
         }

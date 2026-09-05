@@ -37,9 +37,22 @@ reaching a LAN core behaves exactly like a browser opening the core's IP:
   credential grants the **same** operator authority as local — there is no
   Chat/Config sub-tier. Nothing valid ⇒ the connection stays behind a
   **login wall** (`connect` is the only method it may call).
-- **Revocation**, two granularities, both effective immediately:
+- **Revocation**, three granularities, all effective immediately:
   - `gateway.token.rotate` — regenerates the shared token, revokes **every**
     paired device, and closes every remote socket (`TokenRotated`).
+    ⚠️ It does **not** reach an outstanding bootstrap ticket: a ticket is not a
+    remote yet, so "revoke all remotes" leaves it fully redeemable. Cut those
+    with the verbs below.
+  - `gateway.ticket.list` / `gateway.ticket.revoke {ticket_id}` — the
+    **outstanding**, still-redeemable bootstrap tickets. Minting one has had two
+    faces since P0 (the Panel's Security page and `aleph-server pair`);
+    cancelling one had **none** until 2026-09-03, so a minted-and-forgotten code
+    was a live credential nothing could reach. The listing addresses rows by a
+    non-secret `ticket_id` and **never carries the code**; a redeemed, revoked
+    or unknown code all fail with one indistinguishable refusal, so an
+    unauthenticated exchanger learns nothing from which one it hit. Clients:
+    `aleph-server pair --list` / `--revoke`, shipped in the same commit as
+    the RPC (a capability with no client is not delivered). No Panel face yet.
   - `gateway.devices.revoke {device_id}` — one device: its live sessions are
     dropped to the login wall synchronously, then their sockets are closed
     (`DeviceRevoked`, WS 4001). `gateway.devices.list` is the inventory, with a
@@ -80,6 +93,26 @@ Headless cores mint a ticket with `aleph-server pair` (opens the 0600
   chokepoint refuses self-config tools to a chat-tier channel (e.g. a default
   Telegram bot). An authorized Panel is always operator, so this gate is a
   no-op for it — it is not a Panel sub-tier.
+
+  ⚠️ **OPEN RULING (raised 2026-09-03, deliberately NOT implemented
+  unattended).** That vocabulary has two values and `channel_run_identity`
+  takes only the channel id, so a `permission_level = "config"` channel stamps
+  `caller_role = "operator"` for **every** admitted sender — including a paired
+  principal whose `users` row says Member. It is also the one authority axis a
+  demotion never reaches (`restamp_live_connections` rewrites WS
+  `ConnectionState` rows only). The fix is to COMPOSE the two axes to the more
+  restrictive rather than let the channel word stand alone, and the reason it
+  was not done unattended is that it changes a **shipped opt-in** (pinned by
+  `executor.rs`'s `config_tier_channel_maps_to_operator`) and would make a
+  paired member MORE restricted than an unpaired stranger on the same channel.
+  Recommendation on record, awaiting a user ruling: compose to most-restrictive
+  for KNOWN principals (`Config`+`Member` ⇒ `member`) and leave `Chat` ⇒
+  `guest` **byte-unchanged** — that clause is load-bearing, because
+  `channel_permission_level_from_role` returns `None` for `"member"` and
+  `turn_permissions.rs` back-derives the channel tier from this same string, so
+  overwriting a Chat channel's `"guest"` would DELETE the Full→Auto clamp on
+  the default surface. The unpaired-sender residual is a separate product
+  decision.
 
 ### What was removed
 
@@ -1026,7 +1059,7 @@ the operator could not have removed.
 
 ---
 
-### 内嵌终端（`pty.*`）
+### 内嵌终端（`pty.*`） {#embedded-terminal}
 
 - **两面 operator-only**：RPC 面在 `method_admin::ADMIN_PREFIXES`，订阅面在 `event_scope::default_rules`。
 - **cwd jail 只管起点**。终端内部的 `cd` 不受约束 —— 命令粒度的闸在交互式字节流上不可表达（`vim` 里的回车不是命令）。
@@ -1048,6 +1081,33 @@ the operator could not have removed.
   见 `GATE_DECIDING_CONFIG_PATHS` 自己的 doc，不在此重复——那份名单会变，这句话不该跟着腐烂）。
   一条精确点名 `self_config` 的 `[policies.tool_permissions]` 条目仍能站下这张卡（那是人写的
   决定，创建它的那次写入自己已经经过这条规则举过卡），这是有意的。
+- **第三张脸：`terminal` 工具（2026-09-04 增量，仍然只读）**。同一份数据现在有三个入口——`pty.*` RPC、
+  `pty.*`/`runtime.*` 事件、以及给 LLM 的 `terminal` 工具——所以**三张脸各关一次**（判据 §9）。
+  工具面五个动词全部只读：`list`（有哪些会话）· `read`（当前可见屏幕，无 scrollback）· `status`
+  （每个会话被检测出的 agent 状态）· `wait`（阻塞到某个状态出现，靠 `RuntimeAgents` 的变更 watch 唤醒，
+  **不轮询屏幕、不碰会话**）· `explain`（哪条 manifest 规则、在哪个 manifest 版本、基于哪段屏幕文本判的）。
+  **没有写动词**：PTY 不经 `[sandbox.command_policy]` 也不经 exec tier，把写入给 LLM 就是给它一个绕过全部
+  命令闸的 shell——那是授权架构的决定，不是一个功能（第 2 期 spec §7.1 记着「若裁定要做」的形状）。
+  闸：`method_authz::OPERATOR_TOOLS` 的成员 **＋** `builtin_tools/terminal.rs` 里的内联复查，两道。
+- **零身份的调用方看不见任何有归属的会话（有意的 fail-closed）**。归属过滤在工具面只有**一个**谓词
+  （`builtin_tools/terminal.rs::terminal_admits`，`list` 直接用它、`read`/`wait`/`explain` 经
+  `owner_record_admits` + `PtyManager::owner_of` 用它），所以五张镜头不可能对「哪些行你能看」给出不同答案。
+  对**有身份**的调用方它逐字节等于 `pty::owner_admits`；对 `actor == None` 它**刻意更窄**——
+  `owner_admits` 那条臂答"不受限"，这里只放行 `created_by == None` 的会话。
+  ⚠️ 后果要说清：**生产上每一次 spawn 都盖 actor**（loopback 的 operator 在 `connect` 就解析成
+  `OWNER_USER_ID`），所以一个真的没有调用者的运行（cron / A2A / 内部接线）**一个会话都看不见**。
+  这是**有意的**：一次没有身份的自动运行不该继承 operator 的终端。要重新打开它，开口在**身份系统**
+  （让那次运行带上身份），不在这个工具——把这条臂放宽是一行策略改动，但那一行会把"未知"读成"全体"。
+  不属于你的会话一律答 `no such session`，与"不存在"逐字节同形（否则每个动词都成了枚举别人 session id
+  的 oracle）。守卫 `an_actorless_caller_sees_only_unowned_sessions` ·
+  `a_loopback_operator_is_not_an_actor_less_caller` · `read_of_someone_elses_session_is_refused_like_unknown`。
+- **⚠️ 一个记录在案、尚未修的闸缺口**（不是本轮引入）：在 `ScopedToolService` 路径上，chat 档位 / member
+  调用方会触发 `OPERATOR_TOOLS` 的审批卡，**而即使人批准了，内联复查仍然拒绝**——批准只翻转派发管线的
+  `authorized`，没有任何东西重盖 `TurnContext`。决定的修法是一条**接缝**（把 `check_operator_gate` 已经算出的
+  `approved_by_operator_gate` 传下来），那条缝还不存在。**别用「删掉内联检查」来修**：审批卡的文案今天写着
+  "…which changes Aleph's own configuration"，对一个只读工具是假的，删掉内联检查等于让一张贴错标签的卡
+  真的授出一次读别人终端屏幕的权限。全文在 `builtin_tools/terminal.rs` 的模块 doc 与
+  `method_authz.rs` 的 `terminal` 条目 → [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md) §4
 
 ---
 
@@ -2019,11 +2079,25 @@ sees byte-identical behavior before and after.
   uses (demote the connection to guest, then close the socket) — not a second
   implementation. See `src/gateway/CLAUDE.md`'s revocation landmines for the
   ordering / single-source discipline that pipeline depends on.
-  **Scope, precisely (corrected 2026-08-13):** deactivation withdraws BOTH
-  credentials a principal is bound through — `devices.user_id` (WS/Panel) and
-  `approved_senders.user_id` (channel senders), the latter via
-  `PairingStore::revoke_for_user`. Ad-hoc cutoff of a single sender is still
-  `channel.pairing.revoke`.
+  **Scope, precisely (corrected 2026-08-13, extended 2026-09-03):**
+  deactivation withdraws the credentials a principal is bound through —
+  `devices.user_id` (WS/Panel), `approved_senders.user_id` (channel senders,
+  via `PairingStore::revoke_for_user`), and the principal's **outstanding
+  bootstrap tickets** (`SecurityStore::revoke_bootstrap_tickets_for_user`,
+  schema v18's `revoked_at`). Ad-hoc cutoff of a single sender is still
+  `channel.pairing.revoke`; of a single ticket, `gateway.ticket.revoke`.
+
+  ⚠️ **The ticket leg exists because `exchange_bootstrap_ticket` checks no
+  user status at all** — the status gate sits only on the two MINTING faces. So
+  mint → deactivate → redeem produced a brand-new, un-revoked device **after**
+  the sweep had finished, while the reactivation receipt still asserted "the
+  devices stay revoked — mint a fresh ticket". The count reports **live
+  credentials cut**, so an already-expired ticket is excluded (it is inert;
+  counting it would inflate both the receipt and the audit row), and a revoked
+  ticket's redemption is deliberately indistinguishable from an unknown or
+  already-consumed one. Unbound tickets (`user_id IS NULL`) are untouched by
+  this leg — they belong to no principal, and they are the higher-authority
+  half; `gateway.ticket.revoke` is what reaches them.
 
   The paragraph that stood here until 2026-08-13 said channel senders were
   *not* revoked, on the reasoning that "`sender_user()` has no consumer yet, so
@@ -2138,6 +2212,24 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   `BuiltinToolRegistry::caller_memory_partition`, with
   `caller_profile_partition` as the twin that must REFUSE inside a room (a room
   holds more than one human, so there is no single profile to return).
+  `memory_reflect`'s query filer was the last writer outside that contract
+  (2026-09-03): it composed from the **base** persona id, so a note synthesised
+  out of one member's private memory landed in the org partition `main`, which
+  is unioned into every principal's read set — the read side had always been
+  right, only the write side was wrong.
+
+  ⚠️ **A model-writable field that becomes a partition key must refuse a
+  COMPOSED id, not merely a traversing one.** `note_manage.agent_id` is
+  exposed on the JsonSchema the model writes and is used directly as the
+  partition key, and until 2026-09-03 it validated only path traversal — so
+  `agent_id: "main__u-alice"` addressed another principal's vault byte for
+  byte. What stopped it from being exploited was luck:
+  `partition_visible_to(_, None)` answers **true**, so the visibility gate is
+  open to exactly the callers (tool face, cron, A2A) that most need it.
+  `resolve_agent_id` — the single chokepoint all eleven call sites pass
+  through — now refuses any id the caller was never handed, and the refusal
+  text is **identical whether or not that vault exists**; a refusal that varies
+  is an existence oracle.
 - **Visibility chokepoint** (`src/gateway/visibility.rs`). `effective_owner`
   is the ONE place "who owns this row" is decided: a session's own
   `owner_user_id`, or `OWNER_USER_ID` for a legacy/pre-P1 row with none
@@ -2270,12 +2362,32 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
   from `scope::current_scope()` (`with_owner_scope`) and preserved across
   updates (e.g. `GoalStore::commit_field_update`'s status CAS never
   clobbers it). **Deactivation freeze** (spec §10): `users.update { status:
-  "deactivated" }` freezes background work owned by that user — **three legs,
+  "deactivated" }` freezes background work owned by that user — **four legs,
   one per subsystem that runs work on a principal's behalf**:
-  `GoalStore::pause_all_owned_by`, `LoopRegistry::pause_all_owned_by`, and
-  (since 2026-08-13) `CronService::pause_all_owned_by`. All three are reached
-  through process-global handles because the freeze is a free function with no
-  injected dependencies; cron was the one it could not reach.
+  `GoalStore::pause_all_owned_by`, `LoopRegistry::pause_all_owned_by`,
+  (since 2026-08-13) `CronService::pause_all_owned_by`, and (since
+  2026-09-03) `tasks::heartbeat::service::ops::pause_all_owned_by`. The first
+  three are reached through process-global handles because the freeze is a free
+  function with no injected dependencies; cron was the one it could not reach.
+
+  ⚠️ **The heartbeat leg is passed in, not read from a global, and it reports
+  `Option<usize>`.** A process-global is install-once, so a test that installs
+  a service can never afterwards observe the not-installed arm — the leg
+  therefore takes its handle as a parameter and the three older legs' shape is
+  the one that could not be tested. And "the leg did not run" is a different
+  answer from "the leg froze nothing": an absent field on the receipt says the
+  service was declined at boot (the capability slot carries the reason
+  verbatim), where `0` would be a claim. The other three still report `0` on a
+  store failure, which is criterion #8's shape; **one ruling across all four is
+  owed, not four.**
+
+  Until 2026-09-03 `HeartbeatTask` carried neither `owner_user_id` nor
+  `scope_id` at all — nine files, zero hits — so a deactivated second admin's
+  monitors kept firing and kept delivering, and every beat's L2 run executed
+  with no scope and billed `@unattributed`. Both columns now carry cron's
+  byte-identical serde attributes, both creation faces share one
+  `stamp_current_scope()`, and an incoherent `(owner, scope)` pair stamps
+  **no** scope rather than inventing one. The service is enabled by default.
 
   One-way, no auto-resume on reactivation (spec silent on the reverse;
   recorded as a deliberate P1 scope boundary, not an oversight).
@@ -2530,12 +2642,22 @@ after (verified by `single_user_fixture_is_byte_identical_after_upgrade`,
      `method_admin::MEMBER_CARVE_OUTS` and the handler narrows the response
      rather than refusing it, so a member receives all four id enumerations
      (`exec_tier`/`tiers`/`mode`/`modes`). What was missing was a guard and two
-     stale docs claiming the opposite. `MEMBER_WITHHELD_KEYS` is defined by
-     REMOVAL, which is right, and leaves the four fields the pills exist to read
-     protected by nothing but that list staying short — adding `"tiers"` to it
-     would compile and pass every test. `config::tests::
-     a_member_still_receives_both_dials_and_both_catalogues` is the positive
-     twin of the existing withholding guard.
+     stale docs claiming the opposite.
+     `aleph_protocol::tool_permissions::OPERATOR_ONLY_KEYS` is defined by
+     REMOVAL. ⚠️ **The sentence that stood here until 2026-09-03 — "the four
+     fields are protected by nothing but that list staying short; adding
+     `"tiers"` to it would compile and pass every test" — is MEASURED false,
+     and it was already false when it was written.** Moving `"tiers"` into
+     `OPERATOR_ONLY_KEYS` reddens `config::tests::
+     a_member_still_receives_both_dials_and_both_catalogues`; emitting a field
+     named in neither shared list reddens
+     `the_emitted_key_sets_are_exactly_the_declared_wire_contract`. Those two
+     tests are the protection, not the length of the table. Defined-by-removal
+     also means a new field arrives **member-VISIBLE** and someone has to rule
+     it withheld — the opposite of what an earlier version of this entry said.
+     The local `MEMBER_WITHHELD_KEYS` mirror in `handlers/config.rs` is gone
+     (one spelling, in the crate that owns it), together with the doc that cited
+     a guard `git log --all -S` proves never existed.
   0b. **`surface.approval` (the R5 banner).** ✅ Closed by giving the frame the
      `session_key` it is derived from. It was `Global` + role-gated not because
      a banner is fleet-level but because `r5_router::approval_for` dropped the
@@ -2865,11 +2987,11 @@ attribution, and a bound workspace as the room's default cwd.
   caller, and only the second one is what the code does.
 - **The workspace binding is a privilege, and it has five writers — four
   gated, one exempt by invariant.** *(Was "four writers — three gated" until
-  2026-08-30; `project_manage(bind_workspace)` is the fifth and it calls
-  `ProjectStore::bind_workspace` directly rather than routing through the
-  RPC. A sentence that counts members goes quiet on the day the set grows,
-  which is why the authoritative census is a module doc and not this
-  number.)* Turning `workspace_path` into the room's
+  2026-08-30; `project_manage(bind_workspace)` was the addition that made it
+  five, and it calls `ProjectStore::bind_workspace` directly rather than
+  routing through the RPC. A sentence that counts members goes quiet on the
+  day the set grows, which is why the authoritative census is a module doc
+  and not this number.)* Turning `workspace_path` into the room's
   runtime cwd (a dormant display field waking up) retroactively made every
   writer of that column a directory-choice authority: `projects.add`,
   `projects.create_blank`, and `projects.bind_workspace` all carry the same
@@ -2987,7 +3109,34 @@ attribution, and a bound workspace as the room's default cwd.
   `project_manage` (R8) shares `projects::authz` with `handlers/projects.rs`
   — the same `project_for` (not-found for a non-member) and `is_owner`
   (owner or org admin) — so a room renamed in words and one renamed by a
-  click pass the same gates. `bind_workspace` is **absent from the tool on
+  click pass the same gates. ⚠️ **That sentence was true of the module doc and
+  false of exactly two rules until 2026-09-03**: the owner-removal protection
+  and `require_known_user` lived only on the RPC face, so one tool call could
+  empty a roster down to nobody — a room no one, not even an org admin, could
+  see. Both are now predicates in `projects::authz`
+  (`may_remove_member` / `is_active_principal` + `unknown_user_refusal`) that
+  **both faces call**; sharing a criterion means sharing a derivation, not
+  writing the same conclusion twice. A store error resolves to REFUSE on both
+  (a failed lookup is not evidence of permission), and that arm has its own
+  test because no other test reached it.
+
+  Two consequences shipped with it. **A roster verb now reports what it
+  changed**: `ProjectStore::remove_member` discarded the DELETE's affected-row
+  count and always answered `Ok(())`, so a removal that removed nobody still
+  wrote an `AuthorityChange` row and still pushed `affected_user` to every
+  watcher; it returns `Result<bool>` and both faces write only on a real
+  change. The tool face had **zero** audit rows before this, and the
+  `AUTHORITY_PRODUCERS` census could not see the absence because both of its
+  directions key on "this file already contains `authority_change(`" — a census
+  keyed on presence is structurally blind to a silent face. **And the model can
+  now name a member**: the only roster view a model has is
+  `speaker_label` — names, no ids — so `member_add` / `member_remove` accept
+  `user_id` **or** `user` (exactly one; supplying both is refused, not
+  guessed), resolved through `authz::principal_id_for_name` over the
+  status-aware `aleph_protocol::users::resolve`. An ambiguous name **refuses**
+  and names every candidate, and resolution happens **after** the ownership
+  check — the ambiguity message names principals, so resolving first would let
+  a refused caller read the directory. `bind_workspace` is **absent from the tool on
   purpose**: it is a writer of `workspace_path`, the gate it needs is
   `caller_may_choose_directory()`, and that predicate is fail-OPEN for a
   caller with no connection role — which on a tool face is a model running

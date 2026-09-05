@@ -4,7 +4,8 @@
 One process per call, one JSON object printed to stdout as the LAST line, so
 `run.sh` can read it with `python3 -c 'import json,sys; ...'`. Every
 subcommand follows the round-6 loopback-mint / LAN-redeem pattern
-(`qa/multiuser_audit/pair_device.py`): `resolve_connect_auth` authorises a
+(`qa/multiuser_audit/pair_device.mjs` — that fixture's driver was later
+ported to Node; this one stays Python): `resolve_connect_auth` authorises a
 loopback peer unconditionally, on its FIRST line, before it ever reads a
 device token — so testing "member" identity means connecting over the LAN
 address with the device token on EVERY call, not just the ticket redemption.

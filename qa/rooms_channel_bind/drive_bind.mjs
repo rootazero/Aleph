@@ -45,6 +45,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { normalizeFrame } from "../lib/ws.mjs";
 
 const [
   portArg,
@@ -166,18 +167,7 @@ class Conn {
         this.pendingReplies.delete(msg.id);
         return;
       }
-      // `topic` is overloaded on this wire in THREE shapes; reading only one
-      // makes the tap blind to exactly the frames a scenario is chasing.
-      let topic = null;
-      let data = null;
-      if (msg.method === "event" && msg.params) {
-        topic = msg.params.topic ?? null;
-        data = msg.params.data ?? msg.params;
-      } else {
-        topic = msg.topic ?? msg.method ?? null;
-        data = msg.data ?? msg.params ?? null;
-      }
-      this.frames.push({ topic, data, raw: msg });
+      this.frames.push(normalizeFrame(msg));
     });
     return this.rpc("connect", connectParams);
   }

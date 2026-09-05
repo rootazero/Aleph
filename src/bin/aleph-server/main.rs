@@ -157,9 +157,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
         // Mint a pairing ticket: one INSERT into the same 0600 security.db
         // (WAL + busy_timeout), so it works with or without a live daemon.
-        Some(Command::Pair { ttl, user }) => {
-            return commands::handle_pair(args.config.clone(), ttl, user)
-        }
+        Some(Command::Pair {
+            ttl,
+            user,
+            list,
+            revoke,
+        }) => return commands::handle_pair(args.config.clone(), ttl, user, list, revoke),
         // Version check + delegate to the official installer. Network/process
         // only — no tokio runtime, no instance lock (must not contend with a
         // running daemon).

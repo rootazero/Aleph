@@ -16,10 +16,13 @@
 //!
 //! [`aggregate_tool_usage`] (admin RPC) and [`aggregate_tool_failures`] (the
 //! nightly `tool_failure_distill` dream stage) both fold the same rows through
-//! the same [`build_report`] core and the same [`fetch_tool_invocation_rows`]
+//! the same [`fold_window`] core and the same [`fetch_tool_invocation_rows`]
 //! read. The failure path only *adds* verbatim evidence samples on top of the
 //! counts — it deliberately does not compute a second set of statistics, so
-//! "how often did `bash` fail" cannot have two answers in this repo.
+//! "how often did `bash` fail" cannot have two answers in this repo. The two
+//! views do rank differently: the usage breakdown is most-used first, while
+//! failure evidence is most-failed first, because a tool that only ever fails
+//! must not be crowded out of the evidence by chattier successful tools.
 //!
 //! ## Scope boundary
 //!
@@ -201,8 +204,11 @@ pub struct ToolFailureDigest {
     /// The very same report `insights.tools` renders — one aggregator, so the
     /// nightly stage and the admin RPC can never disagree about the counts.
     pub report: ToolUsageReport,
-    /// Per-tool failure evidence, in the report's order (most-used first),
-    /// restricted to tools with at least one failure.
+    /// Per-tool failure evidence: every tool with at least one in-window
+    /// failure competes, ordered most-failed first (ties by name) and capped
+    /// at the same `top_n` as the report breakdown. Selected on the failure
+    /// axis rather than sliced out of the usage-ranked `report.tools`, so a
+    /// cold tool's failures cannot be hidden by chattier successful tools.
     pub failures: Vec<ToolFailureEvidence>,
     /// Newest `created_at` among the in-window rows, or `0` when there were
     /// none. This — not "now" — is the watermark a consumer may commit: it is
@@ -214,9 +220,10 @@ pub struct ToolFailureDigest {
 /// Aggregate `ToolInvocation` rows into counts **and** failure evidence in one
 /// store read.
 ///
-/// Same window/limit semantics as [`aggregate_tool_usage`]; `top_n` bounds the
-/// per-tool breakdown, and the failure list is derived from that same
-/// (already-truncated) breakdown so the two views cannot name different tools.
+/// Same window/limit semantics as [`aggregate_tool_usage`]; `top_n` bounds
+/// both the per-tool breakdown (most-used first) and the failure-evidence list
+/// (most-failed first). Both are drawn from the single shared fold, so the
+/// counts cannot disagree — only the ranking axis differs.
 ///
 /// Takes ONE partition, unlike its sibling [`aggregate_tool_usage`], and that
 /// asymmetry is deliberate: the only caller is the nightly
@@ -245,8 +252,9 @@ pub async fn aggregate_tool_failures(
     ))
 }
 
-/// Pure core of [`aggregate_tool_failures`]: reuses [`build_report`] for every
-/// number, then walks the rows once more for verbatim evidence.
+/// Pure core of [`aggregate_tool_failures`]: one [`fold_window`] pass feeds
+/// both the report and the failure evidence, plus one more walk for verbatim
+/// samples.
 fn build_failure_digest(
     rows: &[RawMemory],
     since_unix_secs: i64,
@@ -254,8 +262,8 @@ fn build_failure_digest(
     top_n: usize,
     truncated: bool,
 ) -> ToolFailureDigest {
-    let report =
-        build_report_with_truncation(rows, since_unix_secs, window_seconds, top_n, truncated);
+    let fold = fold_window(rows, since_unix_secs);
+    let report = report_from_fold(&fold, window_seconds, top_n, truncated);
 
     let mut newest_created_at = 0i64;
     let mut samples: HashMap<&str, Vec<String>> = HashMap::new();
@@ -284,17 +292,24 @@ fn build_failure_digest(
         }
     }
 
-    let failures: Vec<ToolFailureEvidence> = report
-        .tools
+    // Evidence is selected by the failure axis over the FULL fold, not sliced
+    // out of the usage-ranked (and `top_n`-truncated) `report.tools`: the
+    // distiller's quorum counts every in-window failure, so its evidence must
+    // be able to name every failing tool, or the quorum passes while the
+    // evidence list reads empty and those failures are never distilled.
+    let mut failures: Vec<ToolFailureEvidence> = fold
+        .per_tool
         .iter()
-        .filter(|b| b.failed > 0)
-        .map(|b| ToolFailureEvidence {
-            tool: b.tool.clone(),
-            failed: b.failed,
-            attempts: b.count,
-            samples: samples.get(b.tool.as_str()).cloned().unwrap_or_default(),
+        .filter(|(_, a)| a.failed > 0)
+        .map(|(tool, a)| ToolFailureEvidence {
+            tool: (*tool).to_string(),
+            failed: a.failed,
+            attempts: a.count,
+            samples: samples.get(*tool).cloned().unwrap_or_default(),
         })
         .collect();
+    failures.sort_by(|a, b| b.failed.cmp(&a.failed).then_with(|| a.tool.cmp(&b.tool)));
+    failures.truncate(top_n);
 
     ToolFailureDigest {
         report,
@@ -347,12 +362,36 @@ fn build_report_with_truncation(
     top_n: usize,
     truncated: bool,
 ) -> ToolUsageReport {
-    let mut per_tool: HashMap<String, Acc> = HashMap::new();
-    let mut sessions: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut total: u64 = 0;
-    let mut succeeded: u64 = 0;
-    let mut failed: u64 = 0;
-    let mut total_duration_ms: u64 = 0;
+    report_from_fold(
+        &fold_window(rows, since_unix_secs),
+        window_seconds,
+        top_n,
+        truncated,
+    )
+}
+
+/// The single tally over the in-window `ToolInvocation` rows: per-tool
+/// accumulators plus report-level totals. Both the usage report and the
+/// failure evidence are views over ONE of these, which is what keeps their
+/// counts from ever disagreeing.
+struct WindowFold<'a> {
+    per_tool: HashMap<&'a str, Acc>,
+    sessions: std::collections::HashSet<&'a str>,
+    total: u64,
+    succeeded: u64,
+    failed: u64,
+    total_duration_ms: u64,
+}
+
+fn fold_window(rows: &[RawMemory], since_unix_secs: i64) -> WindowFold<'_> {
+    let mut fold = WindowFold {
+        per_tool: HashMap::new(),
+        sessions: std::collections::HashSet::new(),
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        total_duration_ms: 0,
+    };
 
     for r in rows {
         if r.created_at < since_unix_secs {
@@ -367,35 +406,46 @@ fn build_report_with_truncation(
             continue;
         };
 
-        total = total.saturating_add(1);
-        total_duration_ms = total_duration_ms.saturating_add(*duration_ms);
+        fold.total = fold.total.saturating_add(1);
+        fold.total_duration_ms = fold.total_duration_ms.saturating_add(*duration_ms);
         if let Some(sid) = r.session_id.as_deref() {
-            sessions.insert(sid);
+            fold.sessions.insert(sid);
         }
 
-        let acc = per_tool.entry(tool_name.clone()).or_default();
+        let acc = fold.per_tool.entry(tool_name.as_str()).or_default();
         acc.count = acc.count.saturating_add(1);
         acc.total_duration_ms = acc.total_duration_ms.saturating_add(*duration_ms);
         if *success {
-            succeeded = succeeded.saturating_add(1);
+            fold.succeeded = fold.succeeded.saturating_add(1);
             acc.succeeded = acc.succeeded.saturating_add(1);
         } else {
-            failed = failed.saturating_add(1);
+            fold.failed = fold.failed.saturating_add(1);
             acc.failed = acc.failed.saturating_add(1);
         }
     }
 
-    let distinct_tools = per_tool.len();
-    let mut tools: Vec<ToolBreakdown> = per_tool
-        .into_iter()
+    fold
+}
+
+/// Render a [`WindowFold`] as the usage report: most-used first, top-N.
+fn report_from_fold(
+    fold: &WindowFold<'_>,
+    window_seconds: i64,
+    top_n: usize,
+    truncated: bool,
+) -> ToolUsageReport {
+    let distinct_tools = fold.per_tool.len();
+    let mut tools: Vec<ToolBreakdown> = fold
+        .per_tool
+        .iter()
         .map(|(tool, a)| ToolBreakdown {
-            tool,
+            tool: (*tool).to_string(),
             count: a.count,
             succeeded: a.succeeded,
             failed: a.failed,
             success_rate: ratio(a.succeeded, a.count),
             avg_duration_ms: mean(a.total_duration_ms, a.count),
-            percentage: ratio(a.count, total) * 100.0,
+            percentage: ratio(a.count, fold.total) * 100.0,
         })
         .collect();
     // Deterministic ordering: most-used first, ties broken by name.
@@ -404,13 +454,13 @@ fn build_report_with_truncation(
 
     ToolUsageReport {
         window_seconds,
-        total,
-        succeeded,
-        failed,
-        success_rate: ratio(succeeded, total),
-        avg_duration_ms: mean(total_duration_ms, total),
+        total: fold.total,
+        succeeded: fold.succeeded,
+        failed: fold.failed,
+        success_rate: ratio(fold.succeeded, fold.total),
+        avg_duration_ms: mean(fold.total_duration_ms, fold.total),
         distinct_tools,
-        distinct_sessions: sessions.len(),
+        distinct_sessions: fold.sessions.len(),
         tools,
         truncated,
     }
@@ -691,6 +741,60 @@ mod tests {
         let digest = build_failure_digest(&rows, 200, 3600, 10, false);
         assert_eq!(digest.newest_created_at, 500);
         assert!(digest.failures.is_empty(), "the failure is out of window");
+    }
+
+    /// A failing tool must not be hidden by chattier successful tools: the
+    /// evidence list is selected most-failed first from ALL in-window tools,
+    /// not sliced out of the usage top-N. Otherwise the distiller's quorum
+    /// (whole-window failure count) is met while its evidence list is empty,
+    /// and the failures are silently never distilled.
+    #[test]
+    fn failure_evidence_survives_usage_top_n_truncation() {
+        let mut rows = Vec::new();
+        // Six successful tools, five calls each — they own the usage top-5.
+        for t in 0..6 {
+            for i in 0..5 {
+                rows.push(tool_row(
+                    &format!("s{t}-{i}"),
+                    &format!("hot{t}"),
+                    true,
+                    5,
+                    100,
+                ));
+            }
+        }
+        // A cold tool that only ever failed, three times.
+        for i in 0..3 {
+            rows.push(failing_row(
+                &format!("c{i}"),
+                "coldtool",
+                "tool coldtool failed: exit 1",
+                100,
+            ));
+        }
+        let digest = build_failure_digest(&rows, 0, 3600, 5, false);
+        assert_eq!(digest.report.failed, 3);
+        assert!(
+            !digest.report.tools.iter().any(|b| b.tool == "coldtool"),
+            "precondition: the cold tool must be outside the usage top-N"
+        );
+        assert_eq!(digest.failures.len(), 1);
+        assert_eq!(digest.failures[0].tool, "coldtool");
+        assert_eq!(digest.failures[0].failed, 3);
+        assert_eq!(digest.failures[0].attempts, 3);
+        assert!(digest.failures[0].samples[0].contains("exit 1"));
+    }
+
+    #[test]
+    fn failure_evidence_is_ordered_most_failed_first() {
+        let rows = vec![
+            failing_row("a", "minor", "boom", 100),
+            failing_row("b", "major", "boom", 100),
+            failing_row("c", "major", "boom", 101),
+        ];
+        let digest = build_failure_digest(&rows, 0, 3600, 10, false);
+        let order: Vec<&str> = digest.failures.iter().map(|f| f.tool.as_str()).collect();
+        assert_eq!(order, vec!["major", "minor"]);
     }
 
     #[test]

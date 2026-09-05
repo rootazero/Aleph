@@ -25,7 +25,9 @@ pub mod hooks_consent;
 pub mod idle_extensions;
 pub mod loop_graph;
 pub mod media_codecs;
+pub mod projection_holes;
 pub mod providers_connectivity;
+pub mod session_log;
 pub mod sqlite_integrity;
 pub mod stale_lock;
 pub mod vault;
@@ -42,7 +44,9 @@ pub use hooks_consent::HooksConsentCheck;
 pub use idle_extensions::IdleExtensionsCheck;
 pub use loop_graph::LoopGraphCheck;
 pub use media_codecs::MediaCodecsCheck;
+pub use projection_holes::ProjectionHolesCheck;
 pub use providers_connectivity::ProvidersConnectivityCheck;
+pub use session_log::SessionLogCheck;
 pub use sqlite_integrity::SqliteIntegrityCheck;
 pub use stale_lock::StaleLockCheck;
 pub use vault::VaultCheck;
@@ -50,7 +54,7 @@ pub use vault::VaultCheck;
 #[cfg(test)]
 mod presence_discipline {
     use crate::utils::source_scan::{
-        code_text, production_code_lines, production_prefix, rust_sources_under,
+        code_text, production_code_lines, production_text, rust_sources_under,
     };
 
     /// Spellings that answer "is it there?" with `false` for BOTH "it is not
@@ -816,7 +820,9 @@ mod presence_discipline {
         let mut probe_users = 0usize;
 
         for (rel, text) in &sources {
-            let prod = code_text(&production_prefix(text));
+            // See `production_text`: whole-file test modules are invisible to
+            // the per-file `#[cfg(test)]` cut.
+            let prod = code_text(&production_text(std::path::Path::new(rel), text));
             if prod.contains("Presence::of(") || prod.contains("DirListing::of(") {
                 probe_users += 1;
             }

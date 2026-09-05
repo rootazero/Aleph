@@ -86,6 +86,43 @@ pub(super) async fn abandon_orphaned_runs(
     Ok(affected)
 }
 
+pub(super) async fn stamp_abandoned_run_summary(
+    store: &SqliteCoordTaskStore,
+    task_id: &str,
+    summary: &str,
+) -> crate::error::Result<bool> {
+    if summary.trim().is_empty() {
+        // An empty summary is not a partial output; writing it would turn the
+        // "did this attempt leave anything behind" question into a permanent
+        // yes-with-nothing-in-it.
+        return Ok(false);
+    }
+    let conn = store.conn.lock().await;
+    // The crashed attempt is the newest row that never reached
+    // `finish_task_run` (`running`) or that the run-row janitor closed
+    // (`abandoned`) — and only while it has no summary of its own, so a
+    // re-stamp on a later tick cannot overwrite the first, fuller reading, and
+    // a completed attempt's deliverable is never replaced by a fragment.
+    let affected = conn
+        .execute(
+            r#"
+            UPDATE coord_task_runs
+            SET summary = ?1
+            WHERE id = (
+                SELECT id FROM coord_task_runs
+                WHERE task_id = ?2
+                  AND status IN ('running', 'abandoned')
+                  AND (summary IS NULL OR summary = '')
+                ORDER BY started_at DESC
+                LIMIT 1
+            )
+            "#,
+            params![summary, task_id],
+        )
+        .map_err(db_err)?;
+    Ok(affected > 0)
+}
+
 pub(super) async fn list_task_runs(
     store: &SqliteCoordTaskStore,
     task_id: &str,

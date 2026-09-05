@@ -437,6 +437,13 @@ impl SessionsSendTool {
         // Same capture-before-spawn rule, same reason, and the sibling that was
         // missing: a delegated run inherits WHOSE it is, not just where it runs.
         let inherited_scope = crate::scope::current_scope();
+        // Same capture-before-spawn rule, same reason, and the sibling that was
+        // still missing: WHO is speaking, not just whose scope this is. In a
+        // project room the two differ, and `run_loop::with_request_scope` seeds
+        // `ambient_actor()`'s room-speaker arm from this key alone — losing it
+        // resolves every member's delegated child to the room's CREATOR
+        // instead (`scope::room_author`'s fallback).
+        let inherited_room_author = crate::scope::current_room_author();
         // `TURN_CONTEXT` is reliably in scope here (ScopedToolService scopes it
         // around every tool dispatch and reading it does not cross a
         // `tokio::spawn` boundary), so the dispatching turn's `caller_role` AND
@@ -455,6 +462,7 @@ impl SessionsSendTool {
                 .and_then(|t| t.channel_tool_permissions.clone()),
             args.timeout_seconds == 0 || parent_unattended,
             inherited_scope.as_ref(),
+            inherited_room_author,
         );
 
         // Tree budget (goal × session_send): when the CALLING session carries an
@@ -784,6 +792,19 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
 ///    has nobody to answer its cards either, and used to hang the full 120 s
 ///    approval timeout per gated tool instead of failing closed.
 ///
+/// 3. This turn's SPEAKER (`AUTHOR_USER_KEY`) rides beside the scope pair,
+///    not derived from it. `run_loop::with_request_scope` seeds the room
+///    author from this key alone and `scope::room_author` falls back to
+///    `attr.owner_user_id` — the room's CREATOR — when it is absent. In a
+///    project room the creator and the speaker are different people, so
+///    dropping this key does not make the child anonymous, it makes it the
+///    creator: `visibility::ambient_actor()`'s first arm resolves to them for
+///    every member's delegated run, and `memory_search` /
+///    `sessions/list_tool` both gate on that resolver. Mirrors
+///    `teams::dispatcher::runner::task_run_metadata` exactly, including its
+///    `None => write nothing` arm — a background dispatch does not invent an
+///    author.
+///
 /// `channel_id` / `conversation_id` are deliberately NOT forwarded — they are
 /// what make an approval look deliverable, and a delegated run must keep failing
 /// closed on approval-gated tools.
@@ -793,6 +814,7 @@ fn build_sub_metadata(
     channel_tool_permissions: Option<String>,
     unattended: bool,
     scope: Option<&crate::scope::ScopeAttribution>,
+    room_author: Option<String>,
 ) -> HashMap<String, String> {
     let mut m = HashMap::new();
     // The scope pair, which this function's doc claimed parity on and did not
@@ -806,6 +828,16 @@ fn build_sub_metadata(
     // `main__u-alice`.
     if let Some(attr) = scope {
         crate::scope::stamp_metadata(&mut m, attr);
+    }
+    // The room's speaker, captured before the spawn for the same reason as
+    // `inherited_scope` above it at the call site. `None` (no ambient author:
+    // background dispatch, tests) writes nothing — see this function's doc,
+    // point 3.
+    if let Some(author) = room_author {
+        m.insert(
+            crate::gateway::execution_engine::AUTHOR_USER_KEY.to_string(),
+            author,
+        );
     }
     if let Some(p) = inherited_workspace {
         m.insert("project_root".to_string(), p.display().to_string());
@@ -1030,7 +1062,7 @@ mod tests {
     fn sub_metadata_forwards_caller_role() {
         // A guest channel delegating must carry its role forward, or the child
         // run passes the operator gate (role_is_operator(None) = true).
-        let m = build_sub_metadata(None, Some("guest".to_string()), None, false, None);
+        let m = build_sub_metadata(None, Some("guest".to_string()), None, false, None, None);
         assert_eq!(m.get("caller_role").map(String::as_str), Some("guest"));
         // Wait-mode under an ATTENDED parent must NOT be stamped unattended: a
         // human is attached to the awaiting parent turn. (The call site passes
@@ -1051,6 +1083,7 @@ mod tests {
             Some(perms.clone()),
             false,
             None,
+            None,
         );
         assert_eq!(
             m.get(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY)
@@ -1063,14 +1096,14 @@ mod tests {
     fn sub_metadata_omits_caller_role_when_absent() {
         // A trusted local/internal run (no role) forwards nothing — the child
         // stays at the same absent-role trust level, not a fabricated "guest".
-        let m = build_sub_metadata(None, None, None, false, None);
+        let m = build_sub_metadata(None, None, None, false, None, None);
         assert!(!m.contains_key("caller_role"));
         assert!(!m.contains_key(crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY));
     }
 
     #[test]
     fn sub_metadata_stamps_unattended_on_fire_and_forget() {
-        let m = build_sub_metadata(None, Some("operator".to_string()), None, true, None);
+        let m = build_sub_metadata(None, Some("operator".to_string()), None, true, None, None);
         assert_eq!(
             m.get(crate::gateway::execution_engine::UNATTENDED_KEY)
                 .map(String::as_str),
@@ -1088,11 +1121,91 @@ mod tests {
     #[test]
     fn sub_metadata_stamps_unattended_for_headless_parent_wait_mode() {
         // fire_and_forget = false, parent_unattended = true → OR = true.
-        let m = build_sub_metadata(None, None, None, true, None);
+        let m = build_sub_metadata(None, None, None, true, None, None);
         assert_eq!(
             m.get(crate::gateway::execution_engine::UNATTENDED_KEY)
                 .map(String::as_str),
             Some("true")
         );
+    }
+
+    // ============================================================================
+    // T06: the delegated child must carry the room's speaker, not its creator
+    // ============================================================================
+
+    /// Behavioural, not source-level (criterion #4: throw the metadata map's
+    /// return value away). Builds the metadata a delegated `send_tool` child
+    /// actually gets, then re-derives the ambient actor the SAME way
+    /// `run_loop::with_request_scope` does — `scope_from_metadata` for the
+    /// scope pair, a raw `AUTHOR_USER_KEY` read for the speaker — and drives
+    /// the real resolver [`crate::gateway::visibility::ambient_actor`]. Then
+    /// asserts the effect that resolver gates: `memory_search`'s
+    /// `partition_visible_to` and `sessions/list_tool`'s
+    /// `owner_and_scope_visible_to`, both fed the resolved actor, not the map.
+    #[tokio::test]
+    async fn a_delegated_child_carries_the_rooms_speaker_not_its_creator() {
+        // Alice created the room; Bob is the one actually typing this turn.
+        let room_scope = crate::scope::ScopeAttribution {
+            owner_user_id: "u-alice".to_string(),
+            scope: crate::scope::ScopeId::Project("p-room".to_string()),
+        };
+        let sub_metadata = build_sub_metadata(
+            None,
+            None,
+            None,
+            false,
+            Some(&room_scope),
+            Some("u-bob".to_string()),
+        );
+
+        // Mirrors `run_loop::request_scope` / `with_request_scope` exactly:
+        // scope from the stamped pair, author from a raw key read — not from
+        // any helper that could paper over a dropped key with a fallback.
+        let scope = crate::scope::scope_from_metadata(&sub_metadata);
+        let author = sub_metadata
+            .get(crate::gateway::execution_engine::AUTHOR_USER_KEY)
+            .cloned();
+        let actor = crate::scope::with_scope(
+            scope,
+            crate::scope::with_room_author(author, async {
+                crate::gateway::visibility::ambient_actor()
+            }),
+        )
+        .await;
+        assert_eq!(
+            actor.as_deref(),
+            Some("u-bob"),
+            "a delegated child's ambient actor must be the room's speaker, not its creator"
+        );
+
+        // The effect the actor gates: `memory_search`'s exact predicate.
+        assert!(
+            !crate::gateway::visibility::partition_visible_to("main__u-alice", actor.as_deref()),
+            "the room creator's personal memory partition must stay refused to a delegated child"
+        );
+        assert!(
+            crate::gateway::visibility::partition_visible_to("main__u-bob", actor.as_deref()),
+            "the speaker's own memory partition must stay visible to their delegated child"
+        );
+
+        // `sessions/list_tool`'s exact predicate: the creator's personal
+        // session must not enumerate for the speaker.
+        assert!(
+            !crate::gateway::visibility::owner_and_scope_visible_to(
+                Some("u-alice"),
+                None,
+                actor.as_deref().expect("resolved above")
+            ),
+            "the room creator's personal sessions must not enumerate for the delegated child"
+        );
+    }
+
+    /// A background dispatch (no ambient speaker — cron, A2A, tests) must not
+    /// invent an author: `AUTHOR_USER_KEY` is absent entirely, byte-identical
+    /// to `teams::dispatcher::runner::task_run_metadata`'s `None` arm.
+    #[test]
+    fn a_background_dispatch_with_no_room_author_writes_no_author_key() {
+        let m = build_sub_metadata(None, None, None, false, None, None);
+        assert!(!m.contains_key(crate::gateway::execution_engine::AUTHOR_USER_KEY));
     }
 }

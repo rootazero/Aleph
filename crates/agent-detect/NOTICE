@@ -1,0 +1,53 @@
+This crate contains code ported from herdr (https://github.com/herdrdev/herdr),
+Copyright the herdr authors, licensed under the Apache License, Version 2.0.
+
+Source: herdr 0.8.2
+
+  herdr src/detect/mod.rs             -> src/engine.rs
+  herdr src/detect/manifest.rs        -> src/manifest.rs
+  herdr src/detect/manifest/tests.rs  -> src/manifest/tests.rs
+  herdr src/detect/manifests/*.toml   -> src/manifests/*.toml  (21 files)
+  herdr src/pane/agent_detection.rs   -> src/screen_rules.rs
+
+The 21 .toml manifests are the detection rule data, embedded with include_str!
+by src/manifest.rs; they are part of the ported work, not configuration.
+
+One item was lifted out of herdr src/detect/manifest_update.rs, which is
+otherwise not ported, into src/manifest.rs: `ManifestVersion`.
+
+Modifications: crate-path rewrites; removal of the Remote manifest source and
+the remote-update module.
+
+The platform-specific process-identification block was removed wholesale in the
+first port because it needed herdr's own `crate::platform` FFI layer, which R1
+puts out of reach. Round 2 brought back the pure-string part of it, now that
+Aleph has a foreground-process probe to feed it:
+
+  herdr `identify_agent_in_job`      -> engine::identify_agent_from_process
+        (src/detect/mod.rs:243-271)     (its single-process early return only;
+                                         `process_priority` has no candidates
+                                         to rank here and was not ported)
+  herdr `normalized_process_name`    -> the name/argv0/cmdline ordering there
+        (:359-395)
+  herdr `is_generic_runtime_or_shell`-> engine::is_generic_runtime_or_shell
+        (:696-711)                        (verbatim)
+  herdr `is_python_runtime` (:713)   -> engine::is_python_runtime (verbatim)
+
+Still not ported from that block: the runtime-specific argv walkers
+(`cmd /c`, PowerShell `-File`, Cursor's bundled-node layout, the Qwen/bun
+special cases) — each exists for a shape Aleph has no producer for.
+
+src/screen_rules.rs keeps only `detection_update_for_publish_with_osc` of the
+ten public items in herdr src/pane/agent_detection.rs; the rest were cut
+because they are driven by upstream's poll interval and content-sequence
+counter, which Aleph does not have. That file's header lists them by name.
+
+The rest of the Aleph project is MIT-licensed. This crate is not. That split is
+the reason this crate exists as a crate, so it is a boundary and not a note:
+herdr-derived code goes in here, and nowhere else. `src/gateway/pty/foreground.rs`
+in the main crate cites some of herdr's constants in comments and reproduces
+none of its code. WHICH constants, and with what line numbers, is stated in
+that file's header and deliberately not repeated here: this paragraph used to
+carry its own list and it went stale (it counted a 3 s recheck that is Aleph's
+own value, herdr's analogue being 5 s) while the header was the copy anyone
+would have checked.

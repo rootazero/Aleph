@@ -120,10 +120,10 @@ use crate::sync_primitives::Arc;
 /// [`aleph_protocol::projects::ProjectRow`]) rather than here, for the reason
 /// `projects.channel.*` already put its shapes there: `aleph-cli` must not
 /// depend on `alephcore`, so `aleph projects list` had no way to name this row
-/// and would have hand-written a third copy of it. The Panel's
-/// `api::projects::ProjectInfo` is already a second one, and a hand-copied
-/// client row is how `aleph providers list` came to render two columns
-/// (`type`, `default`) the server had never sent.
+/// and would have hand-written a copy of it. The Panel's
+/// `api::projects::ProjectInfo` was such a copy until it became a `pub use` of
+/// this same row, and a hand-copied client row is how `aleph providers list`
+/// came to render two columns (`type`, `default`) the server had never sent.
 ///
 /// The alias is deliberately kept: this name is what the seven construction
 /// sites below and `builtin_tools::project_manage` already read, and the
@@ -268,30 +268,26 @@ fn require_directory_choice(id: Option<Value>) -> Result<(), JsonRpcResponse> {
 
 /// Reject a roster mutation naming somebody who is not an active principal.
 ///
-/// A deactivated user reads as unknown here on purpose: adding one grants
-/// access that only materialises if they are ever reactivated, which is a
-/// decision `users.update` owns, not this RPC. Fails closed on a store error —
-/// an unverifiable id is not a verified one.
+/// A thin `JsonRpcResponse` wrapper over
+/// [`crate::projects::authz::is_active_principal`] — the decision core (a
+/// deactivated user reads as unknown, a store error fails closed) lives
+/// there so this face and the tool face
+/// (`builtin_tools::project_manage::ProjectManageTool::require_known_user`)
+/// ask the same question rather than each keeping their own answer.
 #[allow(clippy::result_large_err)] // house shape for Result<_, JsonRpcResponse> gates
 fn require_known_user(
     users: &SecurityStore,
     id: Option<Value>,
     user_id: &str,
 ) -> Result<(), JsonRpcResponse> {
-    let known = match users.get_user(user_id) {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::warn!(user_id = %user_id, error = %e, "projects: member check failed closed");
-            None
-        }
-    };
-    match known {
-        Some(u) if u.status == UserStatus::Active => Ok(()),
-        _ => Err(JsonRpcResponse::error(
+    if crate::projects::authz::is_active_principal(users, user_id) {
+        Ok(())
+    } else {
+        Err(JsonRpcResponse::error(
             id,
             INVALID_PARAMS,
-            format!("unknown user: {user_id}"),
-        )),
+            crate::projects::authz::unknown_user_refusal(user_id),
+        ))
     }
 }
 
@@ -396,7 +392,10 @@ pub struct AddParams {
 /// Register an existing folder — the picker's write path. Creation surface,
 /// same ruling as [`handle_create`]: `ProjectStore::add` resolves the caller
 /// off the ambient scope and collapses onto THEIR existing row for that path,
-/// never onto somebody else's.
+/// never onto somebody else's — guaranteed by `find_by_path_for`'s
+/// owner-scoped comparison, which resolves an unset `owner_user_id` to the
+/// fixed `OWNER_USER_ID` constant rather than to whichever caller happens to
+/// be asking (see that method's doc for the query this claim depends on).
 ///
 /// Gated by [`require_directory_choice`]: the row this writes carries a
 /// `workspace_path`, which since P2 becomes a run's cwd.
@@ -836,38 +835,46 @@ pub async fn handle_member_remove(
     if let Err(denial) = require_owner(&users, request.id.clone(), &project) {
         return denial;
     }
-    // The owner is the one member who cannot be removed: the roster IS the
-    // visibility predicate, so dropping them would make the room invisible to
-    // the only person who can archive or delete it. Hand the room over first
-    // (an admin operation), then remove.
-    if params.user_id == visibility::owner_or_legacy(project.owner_user_id.as_deref()) {
+    // The decision core is `authz::may_remove_member` (the owner is the one
+    // member who cannot be dropped — the roster IS the visibility predicate,
+    // so removing them would make the room invisible to the only person who
+    // can archive or delete it); this face and the tool face
+    // (`ProjectManageTool::require_removable`) both ask it rather than each
+    // re-typing `== project.owner_user_id`.
+    if !crate::projects::authz::may_remove_member(&project, &params.user_id) {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            "cannot remove the project owner from its own roster",
+            crate::projects::authz::OWNER_REMOVAL_REFUSAL,
         );
     }
     match store.remove_member(&params.id, &params.user_id) {
-        Ok(()) => {
-            // Authority-change audit (round-5 ⑦): removing a member revokes
-            // their view of the room — effective immediately, previously
-            // unrecorded.
-            if let Some(log) = crate::security::audit::global() {
-                log.log(crate::security::audit::AuditEntry::authority_change(
-                    crate::gateway::caller_identity::current_caller_user(),
-                    format!("projects.member.remove: {} ← {}", params.user_id, params.id),
-                ));
+        Ok(changed) => {
+            // Authority-change audit (round-5 ⑦, gated by `changed` in T04):
+            // removing a member revokes their view of the room — but only
+            // when a row was actually deleted. `params.user_id` naming
+            // somebody who was never on the roster is not a revocation and
+            // must not be recorded as one.
+            if changed {
+                if let Some(log) = crate::security::audit::global() {
+                    log.log(crate::security::audit::AuditEntry::authority_change(
+                        crate::gateway::caller_identity::current_caller_user(),
+                        format!("projects.member.remove: {} ← {}", params.user_id, params.id),
+                    ));
+                }
             }
             // `affected_user`: the roster projection no longer admits
             // `params.user_id` by the time this publishes
             // (`remove_member` republishes inside its own write lock), so
             // without naming them here they would never learn they were
-            // dropped — see `ProjectsChanged::affected_user`'s doc.
+            // dropped — see `ProjectsChanged::affected_user`'s doc. Named
+            // ONLY when `changed`: a bystander who was never seated must
+            // not be told they were dropped.
             projects::events::publish_changed(
                 &event_bus,
                 &params.id,
                 ChangeKind::Updated,
-                Some(&params.user_id),
+                changed.then_some(params.user_id.as_str()),
             );
             member_list_response(request.id, &store, &params.id)
         }
@@ -1503,6 +1510,66 @@ mod tests {
                 assert_eq!(project_id, project.id);
                 assert_eq!(change, ChangeKind::Updated);
                 assert_eq!(affected_user.as_deref(), Some("u-bob"));
+            }
+            other => panic!("expected a ProjectsChanged frame, got {other:?}"),
+        }
+    }
+
+    /// T04: removing somebody who was never on the roster must not report a
+    /// revocation that never happened — no AuthorityChange row (queried via
+    /// the audit log, not inferred from "the call returned Ok"), and the
+    /// push frame names nobody, because nobody was actually dropped.
+    #[tokio::test]
+    async fn removing_a_non_member_writes_no_audit_row_and_names_nobody() {
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let (log, mut rx_audit) = crate::security::audit::SecurityAuditLog::new(16);
+        crate::security::audit::replace_global_for_test(&log);
+
+        let (store, users, project, _guard) = room();
+        let bus = test_event_bus();
+        let mut rx = bus.subscribe_typed();
+
+        let removed = CALLER_USER
+            .scope(
+                Some("u-alice".to_string()),
+                handle_member_remove(
+                    rpc(
+                        "projects.member.remove",
+                        json!({ "id": project.id, "user_id": "u-mallory" }),
+                    ),
+                    store,
+                    users,
+                    Arc::clone(&bus),
+                ),
+            )
+            .await;
+        assert!(
+            removed.error.is_none(),
+            "removing a non-member is a no-op, not an error: {:?}",
+            removed.error
+        );
+
+        // The audit log is process-global and `cargo test` runs threads in
+        // parallel, so a concurrently-running test can also write into the
+        // channel this test just installed — filter to this test's own
+        // project id rather than assuming the channel is empty outright.
+        let mut leaked = Vec::new();
+        while let Ok(entry) = rx_audit.try_recv() {
+            if entry.detail.contains(&project.id) {
+                leaked.push(entry.detail);
+            }
+        }
+        assert!(
+            leaked.is_empty(),
+            "no member was actually dropped — this must not write an AuthorityChange row, got: {leaked:?}"
+        );
+
+        match rx.try_recv() {
+            Ok(GatewayEventFrame::ProjectsChanged { affected_user, .. }) => {
+                assert!(
+                    affected_user.is_none(),
+                    "nobody was actually removed — the push must not name a bystander"
+                );
             }
             other => panic!("expected a ProjectsChanged frame, got {other:?}"),
         }

@@ -60,13 +60,6 @@ impl ScanResult {
     pub fn has_redacts(&self) -> bool {
         self.findings.iter().any(|f| f.action == LeakAction::Redact)
     }
-
-    /// Returns true if no findings were detected.
-    #[must_use]
-    #[allow(dead_code)]
-    const fn is_clean(&self) -> bool {
-        self.findings.is_empty()
-    }
 }
 
 /// Bidirectional leak detector running a full regex sweep over content.
@@ -76,13 +69,6 @@ pub struct LeakDetector {
 }
 
 impl LeakDetector {
-    /// Create a new `LeakDetector` with the given patterns.
-    #[must_use]
-    #[allow(dead_code)]
-    fn new(patterns: Vec<LeakPattern>) -> Self {
-        Self { patterns }
-    }
-
     /// Create a `LeakDetector` with default patterns for common secret types.
     #[must_use]
     pub fn default_patterns() -> Self {
@@ -96,7 +82,7 @@ impl LeakDetector {
                 action: p.action,
             })
             .collect();
-        Self::new(patterns)
+        Self { patterns }
     }
 
     /// Scan content for leaks (internal implementation).
@@ -161,7 +147,7 @@ mod tests {
         let result =
             detector.scan_outbound("Authorization: Bearer sk-abc123def456ghi789jklmnopqrstuvwx");
         assert!(result.has_blocks(), "should detect OpenAI key as block");
-        assert!(!result.is_clean());
+        assert!(!result.findings.is_empty());
     }
 
     #[test]
@@ -185,7 +171,7 @@ mod tests {
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("Hello world, this is normal text");
         assert!(!result.has_blocks());
-        assert!(result.is_clean());
+        assert!(result.findings.is_empty());
     }
 
     #[test]
@@ -241,7 +227,7 @@ mod tests {
     fn test_bearer_token_is_redact_not_block() {
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
-        assert!(!result.is_clean(), "should detect bearer token");
+        assert!(!result.findings.is_empty(), "should detect bearer token");
         let bearer_finding = result
             .findings
             .iter()
@@ -286,7 +272,7 @@ mod tests {
         // Ordinary prose and numbers should not match any secret pattern.
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("The quick brown fox jumps over the lazy dog. 12345");
-        assert!(result.is_clean());
+        assert!(result.findings.is_empty());
         assert_eq!(result.findings.len(), 0);
     }
 

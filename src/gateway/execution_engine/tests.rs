@@ -777,6 +777,7 @@ async fn cancel_session_cancels_in_flight_delegated_child() {
             depth: 1,
             root_session: leader_key.to_key_string(),
             model: None,
+            child_session: None,
         },
     );
 
@@ -853,6 +854,7 @@ async fn cancel_session_cancels_own_run_and_in_flight_delegated_child() {
             depth: 1,
             root_session: leader_key.to_key_string(),
             model: None,
+            child_session: None,
         },
     );
 
@@ -927,6 +929,7 @@ async fn interrupt_on_fanout_session_cancels_parent_and_children() {
             depth: 1,
             root_session: leader_key.to_key_string(),
             model: None,
+            child_session: None,
         },
     );
 

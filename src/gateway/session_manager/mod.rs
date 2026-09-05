@@ -359,6 +359,19 @@ impl SessionManager {
 
         Self::run_migrations(conn)?;
 
+        // AFTER the migrations, not in the schema batch above: `source_seq` is
+        // added by `run_migrations` on a database created before it existed, so
+        // an index declared alongside `CREATE TABLE messages` would fail on
+        // every legacy install and take the whole store open down with it.
+        //
+        // Serves the projector's seq-ranged reads — `stamp_assistant_metadata_in_range`
+        // and `delete_messages_from_seq` both scan `(session_key, source_seq)`.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_messages_source_seq
+               ON messages(session_key, source_seq);",
+        )
+        .map_err(|e| SessionManagerError::DatabaseError(format!("source_seq index failed: {e}")))?;
+
         Ok(())
     }
 

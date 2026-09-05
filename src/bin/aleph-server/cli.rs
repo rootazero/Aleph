@@ -186,15 +186,28 @@ pub enum Command {
     /// for a per-device token you can revoke on its own.
     Pair {
         /// Ticket lifetime in seconds (default 300, clamped to 60..=86400).
-        #[arg(long, value_name = "SECONDS")]
+        #[arg(long, value_name = "SECONDS", conflicts_with_all = ["list", "revoke"])]
         ttl: Option<u64>,
         /// Bind the ticket to a principal from `aleph users list` (`u-…`).
         ///
         /// Omit it to pair your own device: an unbound ticket resolves to the
         /// owner. Pass it to invite someone else — that is what makes the
         /// redeeming device a distinct subject for every isolation predicate.
-        #[arg(long = "user", value_name = "USER_ID")]
+        #[arg(long = "user", value_name = "USER_ID", conflicts_with_all = ["list", "revoke"])]
         user: Option<String>,
+        /// List the outstanding pairing tickets instead of minting one.
+        ///
+        /// Prints each ticket's non-secret id, expiry and binding — never the
+        /// ticket code, which is the credential itself.
+        #[arg(long, conflicts_with = "revoke")]
+        list: bool,
+        /// Burn one outstanding ticket by the id `--list` prints.
+        ///
+        /// An outstanding ticket is a live device credential: `token rotate`
+        /// only reaches devices that already paired, and deactivating a user
+        /// cannot touch an UNBOUND ticket because it belongs to nobody.
+        #[arg(long = "revoke", value_name = "TICKET_ID")]
+        revoke: Option<String>,
     },
     /// Print the shared Gateway token — the recovery / manual-entry credential.
     ///

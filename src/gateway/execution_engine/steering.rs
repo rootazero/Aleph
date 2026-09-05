@@ -1231,6 +1231,7 @@ mod tests {
                 run_id: uuid::Uuid::new_v4().to_string(),
                 at: now_ms(),
                 project_root: None,
+                envelope: None,
             },
         }
     }

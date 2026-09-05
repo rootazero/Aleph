@@ -381,12 +381,20 @@ pub async fn handle_close(request: JsonRpcRequest) -> JsonRpcResponse {
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let id = request.id.clone();
     let actor = crate::gateway::visibility::ambient_actor();
-    let sessions: Vec<_> = pty::manager()
-        .list()
-        .into_iter()
-        .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor.as_deref()))
-        .collect();
-    JsonRpcResponse::success(id, json!({ "sessions": sessions }))
+    let body = aleph_protocol::pty::PtyListResponse {
+        sessions: pty::manager()
+            .list()
+            .iter()
+            .filter(|s| pty::owner_admits(s.created_by.as_deref(), actor.as_deref()))
+            .map(aleph_protocol::pty::PtySessionInfo::from)
+            .collect(),
+    };
+    // Same encode-or-report shape as `handle_spawn` and `handle_attach`: a
+    // handler must return a response, not panic (P7).
+    match serde_json::to_value(&body) {
+        Ok(v) => JsonRpcResponse::success(id, v),
+        Err(e) => JsonRpcResponse::error(id, INVALID_PARAMS, format!("encode failed: {e}")),
+    }
 }
 
 /// The ownership gate every session-ADDRESSED `pty.*` method passes through.
@@ -422,7 +430,7 @@ fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<(), JsonR
     Err(JsonRpcResponse::error(
         request.id.clone(),
         INVALID_PARAMS,
-        format!("no such session: {session_id}"),
+        pty::no_such_session(session_id),
     ))
 }
 
@@ -599,6 +607,81 @@ mod tests {
         let resp = handle_list(req("pty.list", json!({}))).await;
         let result = resp.result.expect("list always succeeds");
         assert!(result.get("sessions").and_then(|s| s.as_array()).is_some());
+    }
+
+    /// `pty.list` had THREE independently written key sets — this handler's
+    /// `json!`, the `terminal` tool's, and the Panel's hand-walked
+    /// `get("sessions")` chain. Three spellings of one contract is how one of
+    /// them drifts, so the server now builds the response from the shared
+    /// type and this asserts the shape it actually emits (judgment §10:
+    /// parsing a literal the test itself wrote proves serde, not this code).
+    ///
+    /// The key-set assertion is an EQUALITY against an independently written
+    /// five-name list, and it runs on the raw JSON before any decode. A
+    /// containment check, or a check made after `from_value`, would both be
+    /// blind to the one thing worth guarding here: serde silently discards
+    /// unknown keys, so a sixth key would reach every operator's client
+    /// while the typed assertions stayed green.
+    ///
+    /// It does NOT assert `sessions.len() == 1`. The manager is a
+    /// process-global singleton and libtest runs this binary's tests on
+    /// parallel threads, so any sibling's live session is in this list —
+    /// see `spawn_with_a_cwd_outside_every_root_creates_no_session`'s doc
+    /// for the measured flake rate a whole-list assertion produced. Naming
+    /// THIS call's
+    /// own session id is a predicate a sibling's activity cannot break.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn list_response_is_built_from_the_protocol_type() {
+        let (config, _tmp) = isolated_config();
+        let spawn = handle_spawn(req("pty.spawn", json!({ "rows": 6, "cols": 20 })), config).await;
+        let sid = spawn.result.as_ref().expect("spawned")["session_id"]
+            .as_str()
+            .expect("session_id")
+            .to_string();
+
+        let resp = handle_list(req("pty.list", json!({}))).await;
+        let value = resp.result.expect("list always succeeds");
+
+        // The key set of the row the handler ACTUALLY EMITTED, asserted
+        // before any typed decode. Equality, not containment: serde drops
+        // unknown keys, so a `from_value` round trip would let a sixth key
+        // — `created_by`, the ownership stamp — ride the wire to every
+        // operator while every assertion below stayed green. Dropping
+        // `Serialize` from `SessionInfo` blocks the whole-struct one-liner
+        // but NOT a hand-written per-field `json!`, so this is the assertion
+        // that actually closes the leak.
+        let raw_row = value["sessions"]
+            .as_array()
+            .expect("sessions is an array")
+            .iter()
+            .find(|s| s["session_id"] == json!(sid))
+            .expect("this call's own session must be listed")
+            .clone();
+        let emitted: std::collections::BTreeSet<&str> = raw_row
+            .as_object()
+            .expect("a session row is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            emitted,
+            ["closed", "created_at", "cwd", "session_id", "shell"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            "pty.list emitted a row whose key set is not the contract's"
+        );
+
+        let parsed: aleph_protocol::pty::PtyListResponse =
+            serde_json::from_value(value).expect("list response must match the contract");
+        let mine = parsed
+            .sessions
+            .iter()
+            .find(|s| s.session_id == sid)
+            .expect("this call's own session must be listed");
+        assert!(!mine.shell.is_empty(), "the shell label is the tab's name");
+
+        let _ = handle_close(req("pty.close", json!({ "session_id": sid }))).await;
     }
 
     #[tokio::test]
@@ -1396,7 +1479,11 @@ mod tests {
     /// # Attribution, and the one case it refuses to guess
     ///
     /// A hit is charged to the brace-matched body of the `#[test]` /
-    /// `#[tokio::test]` function containing it. A hit that lands in NO test
+    /// `#[tokio::test]` function containing it, by the shared walk
+    /// [`scan_test_bodies`](crate::utils::source_scan::scan_test_bodies) —
+    /// shared because "which test owns this line" is one fact and
+    /// `providers::route_observe`'s route-globals census asks it too. A hit
+    /// that lands in NO test
     /// body — a shared helper in the test module — fails too, naming itself:
     /// the guard cannot tell which tests call a helper, and silently charging
     /// it to whichever test happens to precede it in the file would be a
@@ -1412,7 +1499,9 @@ mod tests {
     #[test]
     #[serial_test::parallel(pty_global_manager)]
     fn every_test_that_reaches_the_global_pty_manager_is_tagged() {
-        use crate::utils::source_scan::{cfg_test_portion, code_text, rust_sources_under};
+        use crate::utils::source_scan::{
+            code_text, rust_sources_under, scan_test_bodies, test_text,
+        };
 
         const PARALLEL_TAG: &str = "#[serial_test::parallel(pty_global_manager)]";
         const SERIAL_TAG: &str = "#[serial_test::serial(pty_global_manager)]";
@@ -1427,10 +1516,18 @@ mod tests {
         // finding anything — a moved directory, a broken lexer, a test binary
         // built from another worktree — fails loudly instead of passing
         // vacuously.
-        const KNOWN_REACHERS: [&str; 3] = [
+        const KNOWN_REACHERS: [&str; 5] = [
             "src/gateway/handlers/pty.rs",
             "src/gateway/pty/mod.rs",
             "src/config/live_apply.rs",
+            // WHOLE-FILE test modules: these carry no `#[cfg(test)]` of their
+            // own, their parents declare them with `#[cfg(test)] mod tests;`.
+            // The census could not see this shape at all until
+            // `source_scan::test_text` resolved it, and being listed here is
+            // what makes a regression to that blindness loud instead of
+            // silent — the scan would simply stop finding the files.
+            "src/gateway/runtime/tests.rs",
+            "src/builtin_tools/terminal/tests.rs",
         ];
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1444,76 +1541,42 @@ mod tests {
                 continue;
             }
             let in_pty_module = path.contains("/gateway/pty/");
-            let code = code_text(&cfg_test_portion(&src));
-            let lines: Vec<&str> = code.lines().collect();
+            // `test_text`, not `cfg_test_portion`: a file that is a whole test
+            // module (its parent declares `#[cfg(test)] mod tests;`) carries no
+            // `#[cfg(test)]` of its own, so the narrower call returns "" for it
+            // and this walk skips a file full of tests without saying so.
+            let code = code_text(&test_text(std::path::Path::new(&path), &src));
             let reaches = |l: &str| {
                 l.contains(QUALIFIED)
                     || (in_pty_module && (l.contains(VIA_SUPER) || l.contains(BARE)))
             };
-            if !lines.iter().any(|l| reaches(l)) {
+            if !code.lines().any(&reaches) {
                 continue;
             }
             reaching.push(path.clone());
 
-            let mut charged = vec![false; lines.len()];
-            let mut i = 0usize;
-            while i < lines.len() {
-                let attr = lines[i].trim();
-                if !(attr.starts_with("#[tokio::test") || attr == "#[test]") {
-                    i += 1;
-                    continue;
-                }
-                // The rest of the attribute block, then the `fn` line.
-                let mut j = i + 1;
-                let mut tagged = false;
-                while j < lines.len() && lines[j].trim().starts_with("#[") {
-                    let a = lines[j].trim();
-                    tagged |= a == PARALLEL_TAG || a == SERIAL_TAG;
-                    j += 1;
-                }
-                if j >= lines.len() {
-                    break;
-                }
-                let name = lines[j].trim().to_string();
-
-                // Brace-match the body. Literal payloads are already blanked,
-                // so a `{` inside a string cannot desynchronise this.
-                let (mut depth, mut opened, mut end) = (0i32, false, j);
-                for (k, l) in lines.iter().enumerate().skip(j) {
-                    depth += i32::try_from(l.matches('{').count()).unwrap_or(0);
-                    depth -= i32::try_from(l.matches('}').count()).unwrap_or(0);
-                    opened |= l.contains('{');
-                    end = k;
-                    if opened && depth <= 0 {
-                        break;
-                    }
-                }
-
-                checked_tests += 1;
-                let body_reaches = lines[j..=end].iter().any(|l| reaches(l));
-                for c in charged.iter_mut().take(end + 1).skip(j) {
-                    *c = true;
-                }
-                if body_reaches && !tagged {
+            let scan = scan_test_bodies(&code, &reaches);
+            checked_tests += scan.tests.len();
+            for test in &scan.tests {
+                let tagged = test
+                    .attrs
+                    .iter()
+                    .any(|a| a == PARALLEL_TAG || a == SERIAL_TAG);
+                if test.reaches && !tagged {
                     violations.push(format!(
-                        "{path}: `{name}` reaches the process-global PtyManager but carries \
-                         neither {PARALLEL_TAG} nor {SERIAL_TAG}"
+                        "{path}: `{}` reaches the process-global PtyManager but carries \
+                         neither {PARALLEL_TAG} nor {SERIAL_TAG}",
+                        test.name
                     ));
                 }
-                i = end + 1;
             }
-
-            for (k, l) in lines.iter().enumerate() {
-                if !charged[k] && reaches(l) {
-                    violations.push(format!(
-                        "{path}:{}: `{}` reaches the process-global PtyManager outside any \
-                         #[test] body (a shared helper?). This guard will not guess which \
-                         tests call it — move the call into the tests, or tag every test in \
-                         that file with {PARALLEL_TAG}",
-                        k + 1,
-                        l.trim()
-                    ));
-                }
+            for (line, text) in &scan.uncharged {
+                violations.push(format!(
+                    "{path}:{line}: `{text}` reaches the process-global PtyManager outside any \
+                     #[test] body (a shared helper?). This guard will not guess which tests \
+                     call it — move the call into the tests, or tag every test in that file \
+                     with {PARALLEL_TAG}"
+                ));
             }
         }
 

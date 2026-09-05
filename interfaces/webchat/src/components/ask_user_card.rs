@@ -178,7 +178,13 @@ pub fn AskUserCard(ask: PendingAskView) -> impl IntoView {
         if answers.iter().any(String::is_empty) {
             return;
         }
-        answer(dashboard, session_key.get_value(), answers, answering, answer_error);
+        answer(
+            dashboard,
+            session_key.get_value(),
+            answers,
+            answering,
+            answer_error,
+        );
     };
     let all_answered = {
         let drafts_store = drafts_store;

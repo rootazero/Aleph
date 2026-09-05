@@ -8,10 +8,9 @@
 //!   3. **Stop-hook veto** forces one additional `TurnState::Continue`
 //!      even when the LLM produced no tool calls.
 
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex as AsyncMutex};

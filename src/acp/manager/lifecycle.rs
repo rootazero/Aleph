@@ -156,13 +156,26 @@ impl AcpAdapterManager {
         if !is_live {
             // Evict the dead entry so the next caller (or a `prompt_named`
             // with `reuse_session: false`) starts cleanly. Match the eviction
-            // policy of `acquire_live_entry`.
+            // policy of `acquire_live_entry` AND mirror its Removed emit so
+            // the panel sees a consistent lifecycle when set_mode / set_model /
+            // set_config_option / authenticate find a dead pool entry
+            // (ACP-R4-04).
             let mut sessions = self.sessions.write().await;
-            match sessions.get(&key) {
+            let evicted = match sessions.get(&key) {
                 Some(cur) if Arc::ptr_eq(&cur.session, &entry.session) => {
                     sessions.remove(&key);
+                    true
                 }
-                _ => {}
+                _ => false,
+            };
+            drop(sessions);
+            if evicted {
+                self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
+                    harness_id: harness_id.to_string(),
+                    cwd: cwd.to_string(),
+                    session_name: session_name.map(str::to_string),
+                })
+                .await;
             }
             return Ok(None);
         }
@@ -576,6 +589,23 @@ impl AcpAdapterManager {
         for (key, _) in &entries {
             info!(harness_id = %key.harness_id, cwd = ?key.cwd, "Shutting down ACP session");
         }
+        // Best-effort pre-fire cancel on every entry before the kill pass.
+        // Mirrors `shutdown_named` so global shutdown gives in-flight prompts
+        // a chance to flush partial output instead of interrupting them
+        // mid-stream (ACP-R4-05). A failed cancel is logged but never
+        // blocks the teardown.
+        futures::future::join_all(entries.iter().map(|(_, entry)| async move {
+            if let Err(e) = entry.cancel.send_cancel().await {
+                tracing::debug!(
+                    error = %e,
+                    "shutdown_all: pre-fire cancel failed; proceeding to kill"
+                );
+            }
+        }))
+        .await;
+        // Small grace period for the cancel notification to flush before
+        // the kill pass interrupts the harness's stdin/stdout pipes.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         // Kill all sessions concurrently. A single wedged session
         // (e.g. one whose child is stuck in uninterruptible IO) used
         // to block every other session's teardown behind it because

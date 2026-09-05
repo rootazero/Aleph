@@ -238,6 +238,8 @@ mod tests {
 
     #[test]
     fn firecrawl_provider_custom_base_url_is_trimmed() {
+        // `localhost:3002` is Firecrawl's own documented self-hosted port,
+        // so this is the opted-in shape.
         let provider = FirecrawlProvider::new(
             "fc-k".to_string(),
             // `firecrawl.test`, not `localhost`: the constructor refuses

@@ -481,8 +481,21 @@ pub async fn notify_team_settled(team_id: &str) -> bool {
 /// does NOT hold a one-shot poke claim (the settle sweep's durable marker
 /// belongs to the channel push, not the poke), so here `false` is
 /// informational — the watcher's periodic cadence backstops.
+///
+/// Pokes every id in [`workflow_node_ids`] — the raw stamped name AND the
+/// sanitised name the user actually pairs on.
 pub async fn notify_workflow_settled(template_name: &str) -> bool {
-    notify_node_settled(&workflow_node_id(template_name)).await
+    let mut earned = true;
+    for node_id in workflow_node_ids(template_name) {
+        // AND across the id forms, matching `poke_all_watchers`' own
+        // aggregate: a watcher that could not be poked under one spelling is
+        // not "covered" by another spelling having no watchers at all. `&=`
+        // (not `&&`) so every id is visited — short-circuiting here would
+        // skip the sanitised form whenever the raw one already answered
+        // `false`, which is exactly the form most pairings use.
+        earned &= notify_node_settled(&node_id).await;
+    }
+    earned
 }
 
 /// The id of the loop owning `goal:<session>`'s reference via an
@@ -792,6 +805,29 @@ fn team_node_id(team_id: &str) -> String {
 /// misses.
 fn workflow_node_id(name: &str) -> String {
     format!("workflow:{name}")
+}
+
+/// Every node id a settled run of `name` must poke.
+///
+/// The dispatcher hands us `WORKFLOW_NAME_KEY`, which carries the manifest's
+/// **raw inner name** (`workflow::compile` stamps `def.name` verbatim). The
+/// template store keys files on `sanitise_name`, so the only spelling a user
+/// ever SEES — the one `workflow(action='list')` returns and therefore the one
+/// they type into `loop_graph(action='pair', to_id='workflow:…')` — is the
+/// sanitised stem. Poking the raw form alone misses every pairing for a
+/// template whose name holds a char outside `[A-Za-z0-9._-]`, and the miss is
+/// silent in the worst way: `notify_node_settled` finds no `watches` edge,
+/// reports "no watchers paired" and returns `true`, so the caller's warning
+/// never fires either.
+///
+/// `workflow_tool::run_tasks` canonicalises both sides of the same name for
+/// the same reason; this is that rule carried one seam over.
+fn workflow_node_ids(name: &str) -> Vec<String> {
+    let sanitised = crate::json_canvas_io::sanitise_name(name);
+    if sanitised == name {
+        return vec![workflow_node_id(name)];
+    }
+    vec![workflow_node_id(name), workflow_node_id(&sanitised)]
 }
 
 /// Will a victory claim on `target` actually reach `watcher`?
@@ -1258,6 +1294,79 @@ mod tests {
     fn workflow_node_id_matches_the_tool_enforced_prefix() {
         assert_eq!(workflow_node_id("report"), "workflow:report");
         assert!(target_has_victory_claim(&workflow_node_id("report")));
+    }
+
+    /// A template whose name holds a space is stamped RAW on its tasks but is
+    /// only ever DISCOVERABLE (and therefore pairable) under its sanitised
+    /// stem. The settle poke must address both, or the pairing the user was
+    /// told would be reviewed immediately is never reached — and, because
+    /// "no watchers" returns `true`, nothing warns.
+    #[test]
+    fn workflow_poke_addresses_the_sanitised_name_the_user_pairs_on() {
+        // A slug-shaped name needs exactly one id (no redundant second poke).
+        assert_eq!(
+            workflow_node_ids("report"),
+            vec!["workflow:report".to_string()]
+        );
+        assert_eq!(
+            workflow_node_ids("Nightly Report"),
+            vec![
+                "workflow:Nightly Report".to_string(),
+                "workflow:Nightly_Report".to_string(),
+            ],
+            "the raw stamped name AND the sanitised name `list`/`pair` show must both be poked"
+        );
+    }
+
+    /// End of the same wire: a watcher paired on the sanitised id is resolved
+    /// by the id set the poke walks, while the raw id alone resolves nothing.
+    #[test]
+    fn watcher_paired_on_sanitised_workflow_id_is_reached_by_the_poke_id_set() {
+        let (_dir, store) = seeded_store();
+        store
+            .upsert_node(&GraphNode::new(
+                DEFAULT_AGENT,
+                "workflow:Nightly_Report",
+                NodeKind::LoopGoal,
+                "夜间报告模板",
+                Origin::Llm,
+            ))
+            .unwrap();
+        store
+            .upsert_node(
+                &GraphNode::new(
+                    DEFAULT_AGENT,
+                    "cron:nightly-watch",
+                    NodeKind::LoopCron,
+                    "夜间看守",
+                    Origin::Llm,
+                )
+                .with_cadence("nightly"),
+            )
+            .unwrap();
+        store
+            .upsert_edge(&GraphEdge::new(
+                DEFAULT_AGENT,
+                "cron:nightly-watch",
+                "workflow:Nightly_Report",
+                EdgeKind::Watches,
+                Origin::Llm,
+            ))
+            .unwrap();
+
+        // The raw name the dispatcher stamps finds nobody…
+        assert!(
+            watcher_jobs_for(&store, &workflow_node_id("Nightly Report"))
+                .unwrap()
+                .is_empty(),
+            "precondition: the raw stamped name is not the id anyone pairs on"
+        );
+        // …but the id set the poke walks does.
+        let reached: Vec<String> = workflow_node_ids("Nightly Report")
+            .iter()
+            .flat_map(|id| watcher_jobs_for(&store, id).unwrap())
+            .collect();
+        assert_eq!(reached, vec!["nightly-watch".to_string()]);
     }
 
     #[test]

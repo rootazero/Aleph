@@ -57,7 +57,11 @@
 //!   `"Theme: Light"`, `"Navigation"` and `"Type a command or search…"` as
 //!   hardcoded **English** — the identical defect, invisible here because the
 //!   detector looks for Han characters. Those were localised in the same round
-//!   that found them; nothing in this crate measures the class they belong to.
+//!   that found them, and since then [`hardcoded_english_line_ratchet`] below
+//!   DOES measure that class. This paragraph said "nothing in this crate
+//!   measures" it long after the ratchet landed a few hundred lines down the
+//!   same file — a stale sentence about a sibling is still a false one, and
+//!   this one was quotable as a reason not to look.
 //!
 //! The CJK that is genuinely *data* and stays that way — the sentence-splitter
 //! fixtures in `views/voice/sentence.rs`, which feed Chinese text in on purpose
@@ -695,7 +699,11 @@ fn bound_copy_lines(
                 .collect();
             found.sort_unstable();
             found.dedup();
-            hits.extend(found.into_iter().filter_map(|row| lines.get(row).map(|(n, _)| *n)));
+            hits.extend(
+                found
+                    .into_iter()
+                    .filter_map(|row| lines.get(row).map(|(n, _)| *n)),
+            );
         }
         i = end.max(i + 1);
     }
@@ -1668,4 +1676,3 @@ mod tests {
         assert!(!opens_a_cfg_test_literal("mod tests {"));
     }
 }
-

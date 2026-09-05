@@ -250,7 +250,9 @@ mod tests {
         // `javascript:` and `data:` must be canceled without being handed to
         // the OS handler. They are not internal and they are not external.
         assert!(!route(&Url::parse("javascript:alert(1)").unwrap()));
-        assert!(!route(&Url::parse("data:text/html,<script>alert(1)</script>").unwrap()));
+        assert!(!route(
+            &Url::parse("data:text/html,<script>alert(1)</script>").unwrap()
+        ));
     }
 
     #[test]
