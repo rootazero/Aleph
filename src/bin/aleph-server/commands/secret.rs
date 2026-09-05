@@ -16,9 +16,8 @@
 //!   server is up and ask the operator to stop the server first. A
 //!   future spec can promote these to `LockOrIpc` once the policy
 //!   supports owned route strings.
-//! - `secret providers`: **`NoLock`** — only inspects config and
-//!   external provider health (1Password etc.); never touches the
-//!   vault.
+//! - `secret providers`: **`NoLock`** — prints the built-in local vault;
+//!   never touches the vault.
 
 use std::error::Error;
 use std::io::Write;
@@ -148,67 +147,15 @@ fn verify_locked(name: &str) -> Result<usize, Box<dyn Error>> {
 }
 
 fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
-    use alephcore::secrets::provider::onepassword::OnePasswordProvider;
-    use alephcore::secrets::provider::SecretProvider;
-    use alephcore::secrets::ProviderStatus;
-
-    // A malformed config.toml would otherwise silently hide every configured
-    // external provider behind the built-in `local` vault. Warn before falling
-    // back so the listing is not mistaken for "no providers configured".
-    let config = alephcore::Config::load().unwrap_or_else(|e| {
-        eprintln!("warning: failed to load config ({e}); showing built-in providers only");
-        alephcore::Config::default()
-    });
-
+    // The external-provider plugin point (the `SecretProvider` trait, the
+    // 1Password stub, the `[secret_providers]` config table) was removed in
+    // the 2026-09-05 audit pass (secrets I-3): the trait never grew a
+    // `get_secret`, so a configured external provider could never resolve a
+    // single secret — the listing advertised a capability that did not
+    // exist. What remains is the truth: the built-in local vault.
     println!("{:<15} {:<15} STATUS", "KEY", "TYPE");
     println!("{}", "-".repeat(55));
-
-    // Always show built-in local vault
     println!("{:<15} {:<15} Ready (built-in)", "local", "local_vault");
-
-    // Show configured external providers
-    for (key, provider_config) in &config.secret_providers {
-        match provider_config.provider_type.as_str() {
-            "local_vault" => {
-                println!("{:<15} {:<15} Ready (built-in)", key, "local_vault");
-            }
-            "1password" => {
-                let token = provider_config
-                    .service_account_token_env
-                    .as_ref()
-                    .and_then(|env_name| std::env::var(env_name).ok())
-                    .map(secrecy::SecretString::from);
-                let op = OnePasswordProvider::new(provider_config.account.clone(), token);
-
-                // Avoid nested runtime: reuse existing or create new if absent
-                let health_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.block_on(op.health_check())
-                } else {
-                    let rt = tokio::runtime::Runtime::new()?;
-                    rt.block_on(op.health_check())
-                };
-
-                match health_result {
-                    Ok(ProviderStatus::Ready) => {
-                        println!("{:<15} {:<15} Ready", key, "1password");
-                    }
-                    Ok(ProviderStatus::NeedsAuth { message }) => {
-                        println!("{:<15} {:<15} Needs Auth: {}", key, "1password", message);
-                    }
-                    Ok(ProviderStatus::Unavailable { reason }) => {
-                        println!("{:<15} {:<15} Unavailable: {}", key, "1password", reason);
-                    }
-                    Err(e) => {
-                        println!("{:<15} {:<15} Error: {}", key, "1password", e);
-                    }
-                }
-            }
-            other => {
-                println!("{key:<15} {other:<15} Unknown type");
-            }
-        }
-    }
-
     Ok(())
 }
 

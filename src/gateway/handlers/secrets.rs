@@ -17,7 +17,6 @@
 //! secret` CLI (`LockOnly` path) when the raw value is needed.
 
 use super::auth::AuthContext;
-use crate::config::Config;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::secrets::validate_secret_name;
 use crate::sync_primitives::Arc;
@@ -194,40 +193,20 @@ pub async fn handle_secrets_verify(
     }
 }
 
-/// Surface the configured provider catalogue (config-only; does NOT
-/// perform health checks against external providers). The thin client
-/// can correlate this with `secrets.list` for an at-a-glance view of
-/// where each secret can be sourced from.
+/// Surface the configured provider catalogue. The external-provider plugin
+/// point was removed in the 2026-09-05 audit pass (secrets I-3 — the trait
+/// never grew a `get_secret`, so a configured provider could never resolve
+/// anything); what remains is the truth: the built-in local vault. The
+/// response shape is kept so existing clients keep parsing.
 pub async fn handle_secrets_providers(
     request: JsonRpcRequest,
     _ctx: Arc<AuthContext>,
 ) -> JsonRpcResponse {
-    let config = Config::load().unwrap_or_default();
-    let mut providers: Vec<serde_json::Value> = vec![
+    let providers: Vec<serde_json::Value> = vec![
         // The built-in local vault is implicit — always listed first so
         // the response is never empty even on a fresh install.
         json!({ "key": "local", "type": "local_vault", "builtin": true }),
     ];
-    for (key, p) in &config.secret_providers {
-        if key == "local" {
-            // Skip user override of the built-in slot to avoid duplicates.
-            continue;
-        }
-        let mut item = json!({
-            "key": key,
-            "type": p.provider_type,
-            "builtin": false,
-        });
-        if let Some(obj) = item.as_object_mut() {
-            if let Some(account) = &p.account {
-                obj.insert("account".into(), json!(account));
-            }
-            if let Some(env) = &p.service_account_token_env {
-                obj.insert("service_account_token_env".into(), json!(env));
-            }
-        }
-        providers.push(item);
-    }
     JsonRpcResponse::success(request.id, json!({ "providers": providers }))
 }
 
