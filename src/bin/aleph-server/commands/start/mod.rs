@@ -3679,6 +3679,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
     memory_monitor.shutdown().await;
     channel_health_monitor.shutdown().await;
+    // MCP Manager graceful shutdown — sends `McpCommand::Shutdown` so the
+    // actor's `McpManagerEvent::ManagerShutdown` reaches subscribers (the tool
+    // bridge holds one at `mcp/tool_bridge.rs:106`) and running servers get a
+    // stop signal before the process exits.
+    if let Some(ref h) = mcp_handle {
+        if let Err(e) = h.shutdown().await {
+            tracing::warn!(error = %e, "MCP manager orderly shutdown failed");
+        }
+    }
     // Spec C: cleanup endpoint discovery file regardless of outcome. Both
     // Ctrl-C and SIGTERM reach here via the unified oneshot path; only the
     // shutdown failsafe force-exit can skip it — the stale file is then

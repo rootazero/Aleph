@@ -65,9 +65,6 @@ pub use auth::{
 pub use client::{ExternalServerConfig, McpClient};
 pub use error_class::{classify_mcp_error, McpErrorKind};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
-pub use jsonrpc::{
-    IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-};
 pub use preflight::preflight_remote_url;
 pub use prompts::{McpPrompt, McpPromptArgument, PromptContent, PromptMessage, PromptResult};
 pub use protocol::IncludeContext;

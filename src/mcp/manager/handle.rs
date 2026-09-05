@@ -408,9 +408,13 @@ impl McpManagerHandle {
 
     /// Check if the manager is still running
     ///
-    /// Returns false if the command channel has been closed.
+    /// Returns false if the command channel has been closed. Test/debug-only
+    /// — production callers should drop the handle and let the actor's
+    /// shutdown flow tear the channels down. Made crate-internal because the
+    /// only consumers live in `manager::{actor,handle}` test modules.
+    #[cfg(any(test, debug_assertions))]
     #[must_use]
-    pub fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         !self.tx.is_closed()
     }
 }
@@ -418,7 +422,7 @@ impl McpManagerHandle {
 impl std::fmt::Debug for McpManagerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("McpManagerHandle")
-            .field("is_running", &self.is_running())
+            .field("is_running", &!self.tx.is_closed())
             .finish()
     }
 }

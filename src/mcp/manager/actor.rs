@@ -745,6 +745,13 @@ impl McpManagerActor {
         client.set_tool_filter(config.tool_filter.clone());
         let client = Arc::new(client);
 
+        // Reconnect sw-mcp-01: install the client on its own sampling handler
+        // so `ContextInjector::gather_context` has a registry to read from
+        // when a server sends `sampling/createMessage` with `includeContext`.
+        // Without this wire `SamplingHandler::handle_request` reads `None`
+        // and the ~250-LoC context-injection path is dead in production.
+        client.set_sampling_client(Arc::clone(&client)).await;
+
         // Install the sampling callback BEFORE any transport starts. The
         // handshake declares the `sampling` capability from
         // `McpServerConnection::can_sample`, which asks whether a callback is
