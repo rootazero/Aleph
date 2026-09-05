@@ -138,6 +138,34 @@ impl IdCardRule {
         let after_ok = end >= text.len() || !text.as_bytes()[end].is_ascii_alphanumeric();
         before_ok && after_ok
     }
+
+    /// Check if surrounded by decimal context (e.g., JSON float literal).
+    ///
+    /// The 18-digit ID-card pattern is a strict subset of any JSON float
+    /// payload whose decimal/integer split happens to contain a checksum-valid
+    /// sequence — `1.11010119900307002X` and `.11010119900307002X` both
+    /// qualify because `has_word_boundary` only excludes alphanumeric
+    /// neighbours and `.` is not alphanumeric. Without this guard a token
+    /// like `"ratio: 1.11010119900307002X"` would be redacted as an ID.
+    ///
+    /// Mirrors the same helper in `BankCardRule` so the two digit-heavy
+    /// rules agree on what "decimal context" means.
+    fn is_decimal_context(text: &str, start: usize, end: usize) -> bool {
+        let bytes = text.as_bytes();
+        if start > 0 && bytes[start - 1] == b'.' {
+            return true;
+        }
+        if end < bytes.len() && bytes[end] == b'.' && end + 1 < bytes.len() {
+            // Float tail with a continuation digit (`e`/`E` for exponent,
+            // or another digit for the mantissa) — both indicate the ID
+            // span is embedded in a larger numeric literal.
+            let next = bytes[end + 1];
+            if next.is_ascii_digit() || next == b'e' || next == b'E' {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl PiiRule for IdCardRule {
@@ -161,6 +189,11 @@ impl PiiRule for IdCardRule {
             let matched = m.as_str();
 
             if !Self::has_word_boundary(text, start, end) {
+                continue;
+            }
+
+            // Skip decimal context (JSON floats, version literals).
+            if Self::is_decimal_context(text, start, end) {
                 continue;
             }
 
@@ -318,5 +351,48 @@ mod tests {
         // 2021 is not a leap year, Feb 29 is invalid
         let matches = rule().detect("ID: 110101202102291234");
         assert_eq!(matches.len(), 0);
+    }
+
+    // === Anti-false-positive: decimal / float context ===
+
+    #[test]
+    fn test_no_match_decimal_prefix_in_float() {
+        // `.11010119900307002X` is the fractional part of a JSON float
+        // whose integer part happens to be empty (`1.110…` after a leading
+        // digit). The `.` separator before the span and the lack of a
+        // preceding alphanumeric neighbour fooled `has_word_boundary`.
+        let matches = rule().detect("ratio: .11010119900307002X");
+        assert_eq!(
+            matches.len(),
+            0,
+            "decimal-prefixed ID in float literal must not match"
+        );
+    }
+
+    #[test]
+    fn test_no_match_decimal_tail_in_float() {
+        // `1.11010119900307002X` — the ID is the fractional digits. The
+        // rule must reject spans embedded in a larger numeric literal.
+        let matches = rule().detect("ratio: 1.11010119900307002X");
+        assert_eq!(
+            matches.len(),
+            0,
+            "decimal-tail ID in float literal must not match"
+        );
+    }
+
+    #[test]
+    fn test_no_match_decimal_with_exponent() {
+        // Scientific notation: the `.` between the integer and the
+        // fractional digits is followed by an `e` / `E` exponent marker
+        // rather than another digit. The decimal-context guard treats
+        // exponent markers the same as continuation digits because both
+        // indicate the span is part of a larger numeric literal.
+        let matches = rule().detect("1.11010119900307002e3");
+        assert_eq!(
+            matches.len(),
+            0,
+            "decimal ID followed by exponent must not match"
+        );
     }
 }

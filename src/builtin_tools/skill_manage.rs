@@ -117,7 +117,7 @@ impl SkillManageOutput {
     }
 }
 
-/// Frontmatter composed for `create` — serialized through `serde_yaml` so
+/// Frontmatter composed for `create` — serialized through `serde_yml` so
 /// arbitrary names/descriptions can never break out of the YAML block.
 #[derive(Serialize)]
 struct ComposedFrontmatter<'a> {
@@ -374,7 +374,7 @@ impl SkillManageTool {
             description,
             when_to_use: args.when_to_use.as_deref().map(str::trim),
         };
-        let mut yaml = serde_yaml::to_string(&fm)
+        let mut yaml = serde_yml::to_string(&fm)
             .map_err(|e| AlephError::tool(format!("Failed to compose frontmatter: {e}")))?;
         if let Some(stripped) = yaml.strip_prefix("---\n") {
             yaml = stripped.to_string();

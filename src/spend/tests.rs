@@ -241,6 +241,38 @@ fn record_accumulates_across_calls_for_the_same_principal_and_period() {
     assert_eq!(spent.partial_calls, 2);
 }
 
+/// Regression for `severed-wire-2026-09-05-modules2 spend I-2`: NaN /
+/// ±inf in `Delta::Usd` or `Delta::Partial` used to land in the row
+/// verbatim. `ceiling_blown(NaN, anything)` is always false (IEEE 754),
+/// so a single corrupt price silently disabled the spend ceiling for
+/// the rest of the period. The InMemory backend now coerces to 0.0 and
+/// bumps `unpriced_calls`, so the 'this call had a price it couldn't
+/// represent' signal stays loud and the ceiling continues to evaluate
+/// against a real number.
+#[test]
+fn record_replaces_non_finite_usd_with_unpriced_and_keeps_ceiling_alive() {
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+
+    ledger.record(&alice, 1_000, Delta::Usd(f64::NAN)).unwrap();
+    ledger
+        .record(&alice, 1_000, Delta::Partial(f64::INFINITY))
+        .unwrap();
+    ledger
+        .record(&alice, 1_000, Delta::Partial(f64::NEG_INFINITY))
+        .unwrap();
+
+    let spent = ledger.spent_for(&alice, 1_000).unwrap();
+    assert!(
+        spent.usd.is_finite(),
+        "usd column must never carry NaN/inf (got {})",
+        spent.usd
+    );
+    assert_eq!(spent.usd, 0.0);
+    assert_eq!(spent.unpriced_calls, 3);
+    assert_eq!(spent.partial_calls, 0);
+}
+
 #[test]
 fn record_keeps_distinct_periods_separate() {
     let ledger = InMemorySpendLedger::default();
@@ -264,12 +296,20 @@ fn spent_for_an_unknown_principal_or_period_is_zero_not_an_error() {
     assert_eq!(spent.partial_calls, 0);
 }
 
+/// The window rule `total_for` implements (spend I-1 — see the trait
+/// method's doc): a row counts iff its period start is `>=` the queried
+/// window start (steady-state rows and rows recorded under a finer old
+/// policy inside the window) OR equals the coarse-ancestor boundary (rows
+/// recorded under a coarser old policy whose window still contains this
+/// one). An older row that is NOT the coarse ancestor stays out.
 #[test]
-fn total_for_sums_every_principal_in_the_period_and_ignores_other_periods() {
+fn total_for_sums_the_window_rule_and_excludes_older_non_ancestor_rows() {
     let ledger = InMemorySpendLedger::default();
     let alice = Principal::User("u-alice".to_string());
     let bob = Principal::User("u-bob".to_string());
+    let carol = Principal::User("u-carol".to_string());
 
+    // Window-start rows: the steady-state case.
     ledger.record(&alice, 1_000, Delta::Usd(1.0)).unwrap();
     ledger.record(&bob, 1_000, Delta::Usd(2.0)).unwrap();
     for _ in 0..3 {
@@ -278,13 +318,268 @@ fn total_for_sums_every_principal_in_the_period_and_ignores_other_periods() {
     for _ in 0..4 {
         ledger.record(&bob, 1_000, Delta::Partial(0.0)).unwrap();
     }
-    // A different period must not contribute to the 1_000 total.
+    // A finer boundary inside the window — e.g. a day-keyed row recorded
+    // before a Day → Month switch. Must count.
     ledger.record(&alice, 2_000, Delta::Usd(100.0)).unwrap();
+    // The coarse-ancestor boundary, older than the window but still the
+    // start of the coarsest period containing it — e.g. a month-keyed row
+    // before a Month → Day switch. Must count (the deliberate over-count).
+    ledger.record(&carol, 100, Delta::Usd(7.0)).unwrap();
+    // An old row that is neither inside the window nor the coarse
+    // ancestor: must NOT count, or the ceiling would fire on spend that
+    // no live interpretation of the window covers.
+    ledger.record(&alice, 500, Delta::Usd(50.0)).unwrap();
 
-    let total = ledger.total_for(1_000).unwrap();
-    assert_eq!(total.usd, 3.0);
+    let total = ledger.total_for(1_000, 100).unwrap();
+    assert_eq!(total.usd, 110.0, "1 + 2 + 100 + 7; the 500 row is out");
     assert_eq!(total.unpriced_calls, 3);
     assert_eq!(total.partial_calls, 4);
+    assert_eq!(
+        total.period_start_ms, 1_000,
+        "the queried window start rides the answer, as before"
+    );
+}
+
+/// spend I-1, the `Day → Month` direction, on real period boundaries:
+/// spend recorded while the policy was `Day` is keyed at day starts, so
+/// after a hot switch to `Month` an exact-match total reads zero and the
+/// machine ceiling silently stops firing for the rest of the month. The
+/// `>= window_start` arm keeps those rows counting.
+#[test]
+fn total_for_after_a_day_to_month_policy_switch_still_counts_this_months_day_rows() {
+    let now_ms = 1_700_000_000_000i64; // mid-month in any timezone (Nov 13..15 local)
+    let month_start = period::period_start_ms(now_ms, SpendPeriod::Month);
+    let day_start = period::period_start_ms(now_ms, SpendPeriod::Day);
+    assert!(
+        day_start > month_start,
+        "test setup: now must be mid-month, so the day boundary is strictly \
+         inside the month window"
+    );
+
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    // Recorded while the policy was Day — keyed at the day boundary.
+    ledger.record(&alice, day_start, Delta::Usd(3.0)).unwrap();
+
+    // After the switch, `check_with` queries (month_start, month_start):
+    // window start and coarse ancestor coincide under a Month policy.
+    let total = ledger.total_for(month_start, month_start).unwrap();
+    assert_eq!(
+        total.usd, 3.0,
+        "the day-keyed row lies inside the month window and must keep counting"
+    );
+}
+
+/// spend I-1, the `Month → Day` direction: spend recorded while the
+/// policy was `Month` is keyed at the month start, which is strictly
+/// BEFORE the day window's start — only the coarse-ancestor arm keeps it
+/// counting toward today's total. This is the deliberate fail-closed
+/// over-count: the month row covers the whole month, not just today.
+#[test]
+fn total_for_after_a_month_to_day_policy_switch_still_counts_the_month_row() {
+    let now_ms = 1_700_000_000_000i64;
+    let month_start = period::period_start_ms(now_ms, SpendPeriod::Month);
+    let day_start = period::period_start_ms(now_ms, SpendPeriod::Day);
+    assert!(month_start < day_start, "test setup: now must be mid-month");
+
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    // Recorded while the policy was Month — keyed at the month boundary.
+    ledger
+        .record(&alice, month_start, Delta::Usd(40.0))
+        .unwrap();
+
+    let total = ledger.total_for(day_start, month_start).unwrap();
+    assert_eq!(
+        total.usd, 40.0,
+        "the coarse-ancestor arm keeps the month-keyed row in today's total"
+    );
+
+    // Without the ancestor arm — i.e. if a caller passed a non-matching
+    // ancestor — the same query reads zero, which is the I-1 hole itself.
+    let hole = ledger.total_for(day_start, 42).unwrap();
+    assert_eq!(
+        hole.usd, 0.0,
+        "test setup: an ancestor that matches no row reproduces the original hole"
+    );
+}
+
+/// The ceiling-stays-armed property at the `check_with` level: record
+/// spend under a Day policy, hot-switch the policy to Month, and the
+/// machine total ceiling must still fire on the day-keyed spend.
+#[test]
+fn a_day_to_month_policy_switch_keeps_the_total_ceiling_armed() {
+    let now_ms = 1_700_000_000_000i64;
+    let day_start = period::period_start_ms(now_ms, SpendPeriod::Day);
+
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    // Recorded while the policy was Day.
+    ledger.record(&alice, day_start, Delta::Usd(60.0)).unwrap();
+
+    // Hot-switched to Month, total ceiling below the recorded spend.
+    let policy = SpendPolicy {
+        total_usd: Some(50.0),
+        period: SpendPeriod::Month,
+        ..SpendPolicy::default()
+    };
+    match check_with(&alice, now_ms, &policy, &ledger) {
+        Verdict::Denied {
+            limit: Limit::Total,
+            ..
+        } => {}
+        other => panic!(
+            "the machine ceiling must still fire on spend recorded under the old Day policy; \
+             got {other:?}"
+        ),
+    }
+}
+
+/// The `Month → Day` counterpart at the `check_with` level: the
+/// month-keyed row counts toward today's machine total (the deliberate
+/// over-count), so the ceiling still fires after the switch.
+#[test]
+fn a_month_to_day_policy_switch_keeps_the_total_ceiling_armed() {
+    let now_ms = 1_700_000_000_000i64;
+    let month_start = period::period_start_ms(now_ms, SpendPeriod::Month);
+
+    let ledger = InMemorySpendLedger::default();
+    let alice = Principal::User("u-alice".to_string());
+    // Recorded while the policy was Month.
+    ledger
+        .record(&alice, month_start, Delta::Usd(60.0))
+        .unwrap();
+
+    let policy = SpendPolicy {
+        total_usd: Some(50.0),
+        period: SpendPeriod::Day,
+        ..SpendPolicy::default()
+    };
+    match check_with(&alice, now_ms, &policy, &ledger) {
+        Verdict::Denied {
+            limit: Limit::Total,
+            ..
+        } => {}
+        other => panic!(
+            "the machine ceiling must still fire on spend recorded under the old Month policy; \
+             got {other:?}"
+        ),
+    }
+}
+
+/// Guard for the spend I-3 index: `by_period` is a second data structure
+/// maintained alongside `rows` at every mutation site, and this test is
+/// what keeps the two from drifting — a deterministic pseudo-random
+/// sequence of records and sweeps is applied to the ledger, and after
+/// every op (a) the index must enumerate exactly the row map's keys, and
+/// (b) both indexed reads (`total_for`, `principals_in`) must agree with
+/// a naive full-scan reference computed over the same rows.
+///
+/// Deterministic by construction: a seeded xorshift64* PRNG, a fixed
+/// principal set, a fixed period grid, no wall clock and no `rand`
+/// dependency — the same sequence on every run, so a failure is
+/// reproducible byte-for-byte. Dollar amounts are whole integers so the
+/// reference sum and the ledger sum are order-insensitive (f64 addition
+/// is exact for integers well past these magnitudes; non-integer cents
+/// would make the two iteration orders legitimately disagree in the last
+/// ulp and the assertion would be about summation order, not the index).
+#[test]
+fn the_by_period_index_never_drifts_from_the_rows_across_random_ops() {
+    let mut rng_state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || {
+        // xorshift64* — tiny, deterministic, good enough for a fuzz loop.
+        rng_state ^= rng_state >> 12;
+        rng_state ^= rng_state << 25;
+        rng_state ^= rng_state >> 27;
+        rng_state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+
+    let ledger = InMemorySpendLedger::default();
+    let principals = ["u-alice", "u-bob", "u-carol"];
+    // A period grid where 0 doubles as the coarse-ancestor boundary, so
+    // the ancestor arm of the window rule is exercised alongside `>=`.
+    let period_grid = [0i64, 100, 200, 300, 400];
+    // The reference model: `(principal key, period start)` -> usd total.
+    let mut reference: HashMap<(String, i64), f64> = HashMap::new();
+
+    for step in 0..500u32 {
+        match next() % 5 {
+            0 => {
+                let cutoff = period_grid[(next() as usize) % period_grid.len()];
+                ledger.sweep_before(cutoff).unwrap();
+                reference.retain(|(_, period), _| *period >= cutoff);
+            }
+            _ => {
+                let principal = principals[(next() as usize) % principals.len()];
+                let period = period_grid[(next() as usize) % period_grid.len()];
+                let usd = (next() % 50) as f64;
+                ledger
+                    .record(
+                        &Principal::User(principal.to_string()),
+                        period,
+                        Delta::Usd(usd),
+                    )
+                    .unwrap();
+                *reference
+                    .entry((principal.to_string(), period))
+                    .or_default() += usd;
+            }
+        }
+
+        // (a) The index must enumerate exactly the row map's keys — no
+        // missing entries (a read would silently undercount), no phantom
+        // entries (a read would hit the debug_assert in `total_for`), no
+        // duplicates (a principal would be summed twice).
+        {
+            let state = ledger.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut indexed: Vec<(String, i64)> = state
+                .by_period
+                .iter()
+                .flat_map(|(period, keys)| keys.iter().map(move |k| (k.clone(), *period)))
+                .collect();
+            indexed.sort();
+            let mut actual: Vec<(String, i64)> = state.rows.keys().cloned().collect();
+            actual.sort();
+            assert_eq!(
+                indexed, actual,
+                "step {step}: by_period must enumerate exactly the keys of rows"
+            );
+        }
+
+        // (b) Reads agree with the naive full-scan reference, for a random
+        // query point on the grid.
+        let window = period_grid[(next() as usize) % period_grid.len()];
+        let ancestor = 0i64;
+        let expected_total: f64 = reference
+            .iter()
+            .filter(|((_, period), _)| *period >= window || *period == ancestor)
+            .map(|(_, usd)| *usd)
+            .sum();
+        assert_eq!(
+            ledger.total_for(window, ancestor).unwrap().usd,
+            expected_total,
+            "step {step}: total_for({window}, {ancestor}) disagrees with the full-scan reference"
+        );
+
+        let mut expected_principals: Vec<String> = reference
+            .keys()
+            .filter(|(_, period)| *period == window)
+            .map(|(key, _)| key.clone())
+            .collect();
+        expected_principals.sort();
+        expected_principals.dedup();
+        let mut got_principals: Vec<String> = ledger
+            .principals_in(window)
+            .unwrap()
+            .iter()
+            .map(|(p, _)| p.as_key().to_string())
+            .collect();
+        got_principals.sort();
+        assert_eq!(
+            got_principals, expected_principals,
+            "step {step}: principals_in({window}) disagrees with the full-scan reference"
+        );
+    }
 }
 
 #[test]
@@ -401,7 +696,11 @@ impl SpendLedger for PanicOnAnyCall {
         panic!("check_with must not call SpendLedger::spent_for when the policy is disabled");
     }
 
-    fn total_for(&self, _period_start_ms: i64) -> anyhow::Result<Spent> {
+    fn total_for(
+        &self,
+        _window_start_ms: i64,
+        _coarse_ancestor_start_ms: i64,
+    ) -> anyhow::Result<Spent> {
         panic!("check_with must not call SpendLedger::total_for when the policy is disabled");
     }
 
@@ -648,9 +947,13 @@ fn denied_total_carries_the_principals_own_spend_not_the_machine_total() {
     // alice alone hasn't blown any per-user ceiling (none is configured);
     // alice + bob together blow the $50 machine ceiling.
     assert_eq!(
-        ledger.total_for(period_start_ms).unwrap().usd,
+        ledger
+            .total_for(period_start_ms, period_start_ms)
+            .unwrap()
+            .usd,
         55.0,
-        "test setup: the machine total must differ from alice's own spend"
+        "test setup: the machine total must differ from alice's own spend \
+         (ancestor == window under a Month policy, so the second arm is a no-op)"
     );
 
     match check_with(&alice, now_ms, &policy, &ledger) {
@@ -690,7 +993,11 @@ impl SpendLedger for ErroringLedger {
         anyhow::bail!("ErroringLedger: spent_for is unavailable")
     }
 
-    fn total_for(&self, _period_start_ms: i64) -> anyhow::Result<Spent> {
+    fn total_for(
+        &self,
+        _window_start_ms: i64,
+        _coarse_ancestor_start_ms: i64,
+    ) -> anyhow::Result<Spent> {
         anyhow::bail!("ErroringLedger: total_for is unavailable")
     }
 

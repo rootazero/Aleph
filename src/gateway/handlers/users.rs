@@ -351,7 +351,8 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!("users.create: created {} role={}", user_id, role.as_str()),
-                ));
+                ))
+                .await;
             }
             let result = aleph_protocol::users::UserCreateResult {
                 user: UserView {
@@ -502,7 +503,8 @@ pub async fn handle_update(
                     old_role,
                     new_role.as_str()
                 ),
-            ));
+            ))
+            .await;
         }
     }
 
@@ -521,12 +523,13 @@ pub async fn handle_update(
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     actor.clone(),
                     format!("users.update: status {} →deactivated", params.user_id),
-                ));
+                ))
+                .await;
             }
         }
         revoked_devices = deactivate_devices(&store, &kick, &params.user_id).await;
         revoked_tickets =
-            burn_outstanding_bootstrap_tickets(&store, &params.user_id, actor.clone());
+            burn_outstanding_bootstrap_tickets(&store, &params.user_id, actor.clone()).await;
         revoked_senders = revoke_channel_bindings(&kick, &params.user_id).await;
         freeze = freeze_owned_background_work(&params.user_id).await;
     }
@@ -540,7 +543,8 @@ pub async fn handle_update(
             log.log(crate::security::audit::AuditEntry::authority_change(
                 actor.clone(),
                 format!("users.update: status {} deactivated→active", params.user_id),
-            ));
+            ))
+            .await;
         }
     }
 
@@ -795,7 +799,7 @@ async fn deactivate_devices(
 /// record. The entry names the count and the principal and never the ticket
 /// codes: a bootstrap ticket is a bearer credential and this module exists to
 /// keep bearer credentials out of logs.
-fn burn_outstanding_bootstrap_tickets(
+async fn burn_outstanding_bootstrap_tickets(
     store: &Arc<SecurityStore>,
     user_id: &str,
     actor: Option<String>,
@@ -823,7 +827,8 @@ fn burn_outstanding_bootstrap_tickets(
             log.log(crate::security::audit::AuditEntry::authority_change(
                 actor,
                 format!("users.update: burned {burned} bootstrap ticket(s) for {user_id}"),
-            ));
+            ))
+            .await;
         }
     }
     burned
@@ -991,7 +996,9 @@ impl BackgroundWorkHandles {
 /// The two surfaces still report **different numbers**, on purpose: this one
 /// counts what the sweep CHANGED (`enabled && owned`), the preview counts what
 /// the principal OWNS. See [`aleph_protocol::users::FrozenBackgroundWork`].
-async fn freeze_owned_background_work(user_id: &str) -> aleph_protocol::users::FrozenBackgroundWork {
+async fn freeze_owned_background_work(
+    user_id: &str,
+) -> aleph_protocol::users::FrozenBackgroundWork {
     freeze_owned_background_work_with(&BackgroundWorkHandles::from_globals(), user_id).await
 }
 
@@ -2394,13 +2401,10 @@ mod tests {
     }
 
     fn seed_goal(handles: &BackgroundWorkHandles, session: &str, owner: Option<&str>) {
-        let goal = crate::goal::Goal::new(session, "obj", 0, 0).with_pursuit(
-            crate::goal::PursuitMode::Active { max_iterations: 5 },
-        );
+        let goal = crate::goal::Goal::new(session, "obj", 0, 0)
+            .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 });
         let goal = match owner {
-            Some(u) => {
-                goal.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u)))
-            }
+            Some(u) => goal.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u))),
             None => goal,
         };
         handles.goals.as_ref().unwrap().put(&goal).unwrap();
@@ -2414,9 +2418,7 @@ mod tests {
             0,
         );
         let state = match owner {
-            Some(u) => {
-                state.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u)))
-            }
+            Some(u) => state.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u))),
             None => state,
         };
         handles.loops.as_ref().unwrap().put(state);
@@ -2538,8 +2540,9 @@ mod tests {
     fn detail_ctx() -> UserDetailContext {
         UserDetailContext {
             projects: Arc::new({
-                let store =
-                    crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+                let store = crate::projects::ProjectStore::new(
+                    rusqlite::Connection::open_in_memory().unwrap(),
+                );
                 store.create_schema().unwrap();
                 store
             }),

@@ -41,7 +41,8 @@ pub async fn handle_shutdown(request: JsonRpcRequest) -> JsonRpcResponse {
         log.log(crate::security::audit::AuditEntry::authority_change(
             crate::gateway::caller_identity::current_caller_user(),
             "daemon.shutdown: graceful shutdown requested".to_string(),
-        ));
+        ))
+        .await;
     }
 
     // Schedule shutdown after response is sent. We use process exit directly

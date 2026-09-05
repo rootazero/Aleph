@@ -12,8 +12,8 @@ pub struct Crawl4aiFetchProvider {
 }
 
 impl Crawl4aiFetchProvider {
-    /// Build from a `[fetch].backends.crawl4ai` entry. `None` when the entry is
-    /// unusable (no/invalid base_url, or backend reports unhealthy).
+    /// Build from a `[fetch].backends.crawl4ai` entry. `None` when the entry
+    /// is unusable (disabled, or missing/invalid base_url).
     pub fn from_backend(b: &FetchBackendConfig) -> Option<Self> {
         if !b.enabled {
             return None;
@@ -32,11 +32,10 @@ impl Crawl4aiFetchProvider {
 #[async_trait]
 impl FetchProvider for Crawl4aiFetchProvider {
     async fn fetch(&self, url: &str) -> Result<String> {
-        // SSRF contract: caller (WebFetchTool) has already validated `url`
-        // against the operator's SsrfPolicy. We do NOT re-validate here so
-        // the operator's policy is authoritative and we avoid a second DNS
-        // resolution that would widen the rebinding TOCTOU window. See
-        // `FetchProvider::fetch` doc comment.
+        // SSRF contract: the caller is responsible for validating `url`
+        // against the operator's SsrfPolicy. The only production caller is
+        // the connection-test RPC (`fetch_config.test`), which passes a
+        // hardcoded https://example.com. See `FetchProvider::fetch`.
         self.inner
             .fetch_markdown(url)
             .await
@@ -44,13 +43,6 @@ impl FetchProvider for Crawl4aiFetchProvider {
     }
     fn name(&self) -> &str {
         NAME
-    }
-    fn is_available(&self) -> bool {
-        // Touch the backend's health endpoint synchronously enough to detect a
-        // dead process before we accept the full request latency. Uses a
-        // short timeout via the inner client; on unreachable host this fails
-        // fast and the registry routes to the next available provider.
-        self.inner.is_healthy()
     }
 }
 

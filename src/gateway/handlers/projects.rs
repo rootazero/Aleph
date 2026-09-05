@@ -804,7 +804,8 @@ pub async fn handle_member_add(
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!("projects.member.add: {} → {}", params.user_id, params.id),
-                ));
+                ))
+                .await;
             }
             // No `affected_user`: the newly-added member is already on the
             // roster by the time this publishes (`add_member` republishes
@@ -860,7 +861,8 @@ pub async fn handle_member_remove(
                     log.log(crate::security::audit::AuditEntry::authority_change(
                         crate::gateway::caller_identity::current_caller_user(),
                         format!("projects.member.remove: {} ← {}", params.user_id, params.id),
-                    ));
+                    ))
+                    .await;
                 }
             }
             // `affected_user`: the roster projection no longer admits

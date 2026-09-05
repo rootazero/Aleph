@@ -48,10 +48,24 @@ impl RoutingExperienceStore {
         outcome: &RoutingOutcome,
     ) -> Result<(), AlephError> {
         let dim = self.embedder.dimensions() as u32;
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let created_at = match std::time::SystemTime::now().duration_since(
+            std::time::UNIX_EPOCH,
+        ) {
+            Ok(d) => d.as_secs() as i64,
+            Err(e) => {
+                // Pre-1970 clock would silently backdate every recorded row,
+                // breaking ORDER BY created_at DESC in the prune query and
+                // the age_unix rendered in the recall block. Surface it as a
+                // warning and still write the row (with the broken timestamp)
+                // so an operator can see the anomaly in the logs without
+                // losing the routing signal.
+                tracing::warn!(
+                    error = %e,
+                    "system clock is before UNIX_EPOCH; recorded created_at will be negative"
+                );
+                0
+            }
+        };
         let row = RoutingExperienceRow {
             id: uuid::Uuid::new_v4().to_string(),
             agent_id: agent_id.to_string(),

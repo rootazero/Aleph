@@ -33,7 +33,10 @@ impl AsyncSecretResolver for TestResolver {
 
 #[tokio::test]
 async fn test_outbound_inbound_roundtrip_blocks_echo() {
-    let guard = RuntimeSecurityGuard::new(SecurityGuardConfig::default());
+    let guard = RuntimeSecurityGuard::new_without_audit(SecurityGuardConfig {
+        audit_enabled: false,
+        ..Default::default()
+    });
     let resolver = TestResolver;
 
     // Outbound: inject a secret
@@ -80,7 +83,10 @@ async fn test_outbound_inbound_roundtrip_blocks_echo() {
 
 #[tokio::test]
 async fn test_outbound_blocks_accidental_secret_in_user_text() {
-    let guard = RuntimeSecurityGuard::new(SecurityGuardConfig::default());
+    let guard = RuntimeSecurityGuard::new_without_audit(SecurityGuardConfig {
+        audit_enabled: false,
+        ..Default::default()
+    });
     let resolver = TestResolver;
 
     let input = "My secret key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
@@ -114,7 +120,10 @@ async fn test_platform_pii_policy_warn_mode_end_to_end() {
         PiiEngine::init(config);
     }
 
-    let guard = RuntimeSecurityGuard::new(SecurityGuardConfig::default());
+    let guard = RuntimeSecurityGuard::new_without_audit(SecurityGuardConfig {
+        audit_enabled: false,
+        ..Default::default()
+    });
     let context = SecurityContext {
         platform_name: Some("discord".to_string()),
         ..Default::default()
@@ -158,7 +167,10 @@ async fn test_platform_excluded_provider_end_to_end() {
         PiiEngine::init(config);
     }
 
-    let guard = RuntimeSecurityGuard::new(SecurityGuardConfig::default());
+    let guard = RuntimeSecurityGuard::new_without_audit(SecurityGuardConfig {
+        audit_enabled: false,
+        ..Default::default()
+    });
     let context = SecurityContext {
         platform_name: Some("telegram".to_string()),
         provider_name: Some("local-llm".to_string()),

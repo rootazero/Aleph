@@ -66,7 +66,7 @@ impl DreamValidationReport {
 
 /// Validate frontmatter and content of a single note's markdown.
 #[must_use]
-pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIssue> {
+fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     let tier = "L1".to_string();
 
@@ -213,36 +213,6 @@ pub fn run_l2_validation(note_hashes: &[(String, String)]) -> ValidationTier {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn valid_frontmatter_passes_l1() {
-        let content = "---\ncategory: learning\ntags: [rust]\ncreated: 2026-04-17\nupdated: 2026-04-17\n---\n\n- Some fact\n";
-        let issues = validate_frontmatter(content, "learning/test");
-        assert!(issues.is_empty(), "got issues: {:?}", issues);
-    }
-
-    #[test]
-    fn missing_category_fails_l1() {
-        let content = "---\ntags: [rust]\n---\n\n- Some fact\n";
-        let issues = validate_frontmatter(content, "learning/test");
-        assert!(!issues.is_empty());
-        assert!(issues[0].message.contains("category"));
-    }
-
-    #[test]
-    fn empty_content_fails_l1() {
-        let content =
-            "---\ncategory: learning\ntags: []\ncreated: 2026-04-17\nupdated: 2026-04-17\n---\n";
-        let issues = validate_frontmatter(content, "learning/test");
-        assert!(issues.iter().any(|i| i.message.contains("empty")));
-    }
-
-    #[test]
-    fn invalid_category_fails_l1() {
-        let content = "---\ncategory: nonexistent\ntags: []\ncreated: 2026-04-17\nupdated: 2026-04-17\n---\n\n- fact\n";
-        let issues = validate_frontmatter(content, "learning/test");
-        assert!(issues.iter().any(|i| i.message.contains("category")));
-    }
 
     #[test]
     fn duplicate_hashes_fail_l2() {

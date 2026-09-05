@@ -1039,7 +1039,7 @@ async fn handle_connection(
                                                         "connection closed: {} unauthorized requests (flood guard)",
                                                         flood_guard.strikes()
                                                     ),
-                                                ));
+                                                )).await;
                                             }
                                             break;
                                         }
@@ -1342,7 +1342,7 @@ async fn handle_connection(
                                                             log.log(crate::security::audit::AuditEntry::auth_failure(
                                                                 ctx.client_ip.to_string(),
                                                                 "remote connect rejected: no valid Gateway credential",
-                                                            ));
+                                                            )).await;
                                                         }
                                                     }
                                                     // Role + user for the login-wall gate and the

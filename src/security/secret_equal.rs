@@ -36,10 +36,20 @@ pub fn secret_equal_bytes(provided: &[u8], expected: &[u8]) -> bool {
 /// Convenience wrapper for UTF-8 string secrets (bearer tokens, signature
 /// headers). Uses byte-level comparison; treats either side being absent as
 /// "not equal".
+///
+/// Empty strings on either side are rejected outright: a misconfigured
+/// expected secret (blank config value, partially-initialized store) would
+/// otherwise accept any caller that also happens to send an empty token,
+/// turning a length-zero string into an authentication bypass. The byte-level
+/// primitive [`secret_equal_bytes`] still treats two empty inputs as equal —
+/// that contract is preserved for callers that genuinely need it (fuzz
+/// harnesses, hash-equality with a zero-length digest).
 #[must_use]
 pub fn secret_equal(provided: Option<&str>, expected: Option<&str>) -> bool {
     match (provided, expected) {
-        (Some(p), Some(e)) => secret_equal_bytes(p.as_bytes(), e.as_bytes()),
+        (Some(p), Some(e)) if !p.is_empty() && !e.is_empty() => {
+            secret_equal_bytes(p.as_bytes(), e.as_bytes())
+        }
         _ => false,
     }
 }
@@ -86,6 +96,20 @@ mod tests {
     fn str_wrapper_matches() {
         assert!(secret_equal(Some("abc"), Some("abc")));
         assert!(!secret_equal(Some("abc"), Some("abd")));
+    }
+
+    /// Regression for `severed-wire-2026-09-05-modules2 security I-2`:
+    /// empty string on either side used to authenticate (the byte-level
+    /// primitive returns true for two empty inputs, and the wrapper
+    /// forwarded). A misconfigured blank secret would then accept any
+    /// caller that also sent an empty token — an auth bypass. The wrapper
+    /// now rejects empty strings outright. The byte-level
+    /// [`secret_equal_bytes`] contract is preserved.
+    #[test]
+    fn str_wrapper_rejects_empty_strings_on_either_side() {
+        assert!(!secret_equal(Some(""), Some("")));
+        assert!(!secret_equal(Some(""), Some("real-token")));
+        assert!(!secret_equal(Some("real-token"), Some("")));
     }
 
     #[test]

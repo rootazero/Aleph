@@ -16,13 +16,11 @@
 //!
 //! - `commands`   — command structs dispatched to the handler
 //! - `handler`    — `MemoryCommandHandler` processes commands into events
-//! - `projector`  — `EventProjector` folds events into current-state projections
+//! - `projector`  — `fold_events_to_note` folds events into current-state projections
 //! - `traveler`   — `MemoryTimeTraveler` replays events to reconstruct past state
-//! - `migration`  — one-shot migration from legacy CRUD to event-sourced facts
 
 pub mod commands;
 pub mod handler;
-pub mod migration;
 pub mod projector;
 pub mod testing;
 pub mod traveler;

@@ -180,13 +180,13 @@ impl WebFetchSerpFallback {
                 }
                 Err(e) => {
                     self.note_failure(mirror.name);
-                    let kind = super::registry::classify_search_error(&e);
-                    errors.push(format!("{} [{}] {}", mirror.name, kind, e));
+                    let kind = crate::search::error::SearchErrorKind::of(&e);
+                    errors.push(format!("{} [{}] {}", mirror.name, kind.as_str(), e));
                     log::warn!(
                         target: "search",
                         "web-fetch fallback mirror={} kind={} {}",
                         mirror.name,
-                        kind,
+                        kind.as_str(),
                         e,
                     );
                 }

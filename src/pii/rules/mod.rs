@@ -16,6 +16,15 @@ mod ssh_key;
 use crate::config::types::CustomPiiRule;
 use crate::pii::engine::{PiiMatch, PiiSeverity};
 
+/// Number of built-in rules prepended by [`build_rules`] before any custom
+/// rules. Custom rules are appended after, so `rules.len() - BUILTIN_COUNT`
+/// is the number of custom rules that actually compiled.
+///
+/// This constant lives here (next to `build_rules`) so the two stay coupled
+/// by source; engine code that wants the count imports it rather than
+/// duplicating the literal.
+pub(crate) const BUILTIN_COUNT: usize = 7;
+
 /// Trait for PII detection rules
 pub trait PiiRule: Send + Sync {
     /// Rule identifier (matches config field name)
@@ -50,6 +59,11 @@ pub(crate) fn build_rules(custom_configs: &[CustomPiiRule]) -> Vec<Box<dyn PiiRu
         Box::new(email::EmailRule::new()),
         Box::new(ip_address::IpAddressRule::new()),
     ];
+    debug_assert_eq!(
+        rules.len(),
+        BUILTIN_COUNT,
+        "BUILTIN_COUNT drifted from the literal rule list"
+    );
 
     for config in custom_configs {
         match custom::CustomRegexRule::new(config.clone()) {

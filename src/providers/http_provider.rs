@@ -62,14 +62,27 @@ fn log_rejected_request_body(
 ///
 /// The `OpenAI` Responses API rejects a replayed `reasoning` input item whose
 /// `encrypted_content` blob was minted by a different endpoint/model (or has
-/// expired) with HTTP 400 `invalid_encrypted_content`. Scoped to
-/// [`AlephError::ProviderError`] so unrelated error kinds (auth, rate limit,
-/// timeouts) never trigger the strip-and-retry recovery.
+/// expired) with HTTP 400 and the structured error code
+/// `invalid_encrypted_content`. Scoped to [`AlephError::ProviderError`] so
+/// unrelated error kinds (auth, rate limit, timeouts) never trigger the
+/// strip-and-retry recovery.
+///
+/// The previous implementation substring-matched `encrypted_content` anywhere
+/// in the message — that fired on any provider error mentioning the field
+/// name (including unrelated request-log lines, documentation-style errors,
+/// or third-party proxies that wrap the upstream 400 in their own envelope).
+/// Once matched, [`strip_thinking_signatures`] stripped the signature from
+/// *every* Thinking block in the entire history, not just the offending
+/// blob's, breaking Anthropic's extended-thinking replay contract. We now
+/// require the more specific `invalid_encrypted_content` token (the OpenAI
+/// structured code) so an unrelated mention does not burn the recovery
+/// path.
 fn is_stale_encrypted_reasoning_error(err: &crate::error::AlephError) -> bool {
     let crate::error::AlephError::ProviderError { message, .. } = err else {
         return false;
     };
-    message.to_ascii_lowercase().contains("encrypted_content")
+    let lower = message.to_ascii_lowercase();
+    lower.contains("invalid_encrypted_content")
 }
 
 /// Rebuild the message list with every thinking signature dropped.

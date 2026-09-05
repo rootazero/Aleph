@@ -102,7 +102,7 @@ struct McpServerEntry {
 ///
 /// Returns (parsed frontmatter, body text). If no frontmatter delimiters are
 /// found, returns default frontmatter and the full content as body.
-fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
+fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
     content: &str,
 ) -> Result<(T, String)> {
     let content = content.trim();
@@ -127,7 +127,7 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
                 return Ok((T::default(), body));
             }
 
-            let fm: T = serde_yaml::from_str(fm_str)
+            let fm: T = serde_yml::from_str(fm_str)
                 .with_context(|| "Failed to parse YAML frontmatter".to_string())?;
             Ok((fm, body))
         }

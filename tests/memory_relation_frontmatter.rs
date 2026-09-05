@@ -24,7 +24,7 @@ use alephcore::memory::notes::{KnowledgeNote, Relation};
 fn relation_frontmatter_survives_yaml_metacharacters() {
     // `[[x]]` is the form the model sees everywhere else in the note API, so it
     // is the single most likely value to arrive here. Unquoted it parses as a
-    // nested flow sequence and `serde_yaml` fails on the ENTIRE frontmatter.
+    // nested flow sequence and `serde_yml` fails on the ENTIRE frontmatter.
     let hostile = [
         ("[[plan/old-roadmap]]", "supersedes:v2"),
         ("entity/bob", "reports_to: lead"),

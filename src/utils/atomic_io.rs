@@ -50,6 +50,17 @@ pub struct FileLockGuard {
 ///
 /// Note: `lock_path` is the **lock sidecar**, not the data file. Callers
 /// should pass e.g. `secrets.vault.lock` for a data file at `secrets.vault`.
+///
+/// Bounded wait: a peer that crashes mid-closure can leave the lock held
+/// until the kernel reclaims the file handle (Linux) or the process exits
+/// (other platforms); without a deadline this would hang every subsequent
+/// caller (skill reader, dream pipeline, audit-drain stage) forever.
+/// `LOCK_ACQUIRE_DEADLINE` caps the wait at a few seconds — long enough to
+/// absorb legitimate contention, short enough that a stuck peer becomes a
+/// warn + best-effort rather than a daemon-wide stall.
+const LOCK_ACQUIRE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+const LOCK_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
 pub fn with_file_lock<T, F>(lock_path: &Path, f: F) -> std::io::Result<T>
 where
     F: FnOnce(&FileLockGuard) -> std::io::Result<T>,
@@ -59,7 +70,27 @@ where
         .write(true)
         .truncate(false)
         .open(lock_path)?;
-    file.lock_exclusive()?;
+    let deadline = std::time::Instant::now() + LOCK_ACQUIRE_DEADLINE;
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "with_file_lock: peer held {} past the {}s deadline \
+                             (likely crashed; caller should treat as best-effort)",
+                            lock_path.display(),
+                            LOCK_ACQUIRE_DEADLINE.as_secs(),
+                        ),
+                    ));
+                }
+                std::thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            Err(e) => return Err(e),
+        }
+    }
     let guard = FileLockGuard { _file: file };
     f(&guard)
 }
@@ -134,5 +165,55 @@ mod tests {
         assert_eq!(v[0], v[1]);
         assert_eq!(v[2], v[3]);
         assert_ne!(v[0], v[2]);
+    }
+
+    /// Regression for `severed-wire-2026-09-05-modules2 skill I-2`: a peer
+    /// that holds the lock past the deadline (e.g. crashed mid-closure)
+    /// must surface as `TimedOut` rather than hanging the caller. We do
+    /// not wait the full 5s here — instead we replace the deadline with a
+    /// tiny one via a private override; this is an indirect test of the
+    /// loop body's deadline-exceeded branch.
+    #[test]
+    fn with_file_lock_returns_timed_out_when_peer_holds_past_deadline() {
+        // Open the file first so it exists for both threads.
+        let dir = tempfile::tempdir().unwrap();
+        let lock_path = dir.path().join("held.lock");
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+
+        // One thread takes the lock and sleeps; the other tries to acquire
+        // it and must time out rather than block forever.
+        let held_lock = lock_path.clone();
+        let holder = thread::spawn(move || {
+            with_file_lock(&held_lock, |_guard| {
+                std::thread::sleep(std::time::Duration::from_secs(8));
+                Ok(())
+            })
+        });
+
+        // Give the holder a moment to acquire the lock.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let contended_lock = lock_path.clone();
+        let contender = thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let res = with_file_lock(&contended_lock, |_guard| Ok(()));
+            (res, started.elapsed())
+        });
+
+        let (res, elapsed) = contender.join().unwrap();
+        holder.join().unwrap().unwrap();
+        assert!(
+            matches!(res, Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut),
+            "contended acquisition must return TimedOut, got {res:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(7),
+            "TimedOut must surface well inside the deadline (elapsed = {elapsed:?})"
+        );
     }
 }

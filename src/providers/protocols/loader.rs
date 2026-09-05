@@ -57,7 +57,7 @@ impl ProtocolLoader {
         })?;
 
         // Parse as ProtocolDefinition
-        let def: ProtocolDefinition = serde_yaml::from_str(&content).map_err(|e| {
+        let def: ProtocolDefinition = serde_yml::from_str(&content).map_err(|e| {
             AlephError::invalid_config(format!("Failed to parse protocol YAML {path:?}: {e}"))
         })?;
 

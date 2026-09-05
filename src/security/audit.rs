@@ -64,6 +64,33 @@ pub enum AuditEventType {
     /// at the time. `detail` names the matched rules and the program; it never
     /// carries the command text, which is where the secrets would be.
     CommandPolicy,
+    /// The audit pipeline itself dropped entries because the channel was
+    /// full (audit I-4). Synthesised by the drain task, never by a content
+    /// producer: the drain observes `SecurityAuditLog::dropped_count`
+    /// advancing and inserts one row recording the delta, so a degraded
+    /// trail says so in the trail itself instead of failing silently open.
+    ///
+    /// Severity is `Critical`: an incomplete audit log is the one fact an
+    /// operator must never have to infer from absence.
+    AuditLogDropped,
+    /// The SSRF guard refused an outbound fetch — a URL the model (or an MCP
+    /// server, or an operator config) asked for resolved to a blocked
+    /// address: loopback, link-local, cloud metadata, a blocklisted host, a
+    /// legacy IP literal.
+    ///
+    /// Emitted at the two validator chokepoints
+    /// ([`crate::security::ssrf::validate_url_with_pinned`] and
+    /// `safe_fetch`'s internal `validate_url_full`) — every `BlockedAddress`
+    /// decision funnels through one of them, so the trail cannot be bypassed
+    /// by taking a different entry point. Until this variant the refusal was
+    /// a `tracing` line and a returned error: the fetcher saw the "no", but
+    /// the post-incident question "did anything TRY to reach the metadata
+    /// endpoint, and when" had no answer (audit I-3).
+    ///
+    /// `detail` names the host and the refusal reason, never the full URL —
+    /// the query string is exactly where an exfiltrating URL would carry the
+    /// loot. Severity is `Critical`: the request was an attack shape, stopped.
+    SsrfBlocked,
 }
 
 impl fmt::Display for AuditEventType {
@@ -78,6 +105,8 @@ impl fmt::Display for AuditEventType {
             Self::AuthorityChange => "authority_change",
             Self::ScopedContentRead => "scoped_content_read",
             Self::CommandPolicy => "command_policy",
+            Self::AuditLogDropped => "audit_log_dropped",
+            Self::SsrfBlocked => "ssrf_blocked",
         };
         write!(f, "{s}")
     }
@@ -201,6 +230,45 @@ impl AuditEntry {
         }
     }
 
+    /// The audit channel filled and entries were dropped — synthesised by
+    /// the drain, see [`AuditEventType::AuditLogDropped`]. `dropped` is the
+    /// newly observed delta, `total` the running counter. `detail` carries
+    /// only the two numbers; there is nothing else honest to say — the
+    /// dropped entries are gone by definition.
+    #[must_use]
+    pub fn audit_log_dropped(dropped: u64, total: u64) -> Self {
+        Self {
+            event_type: AuditEventType::AuditLogDropped,
+            severity: AuditSeverity::Critical,
+            source_ip: None,
+            session_id: None,
+            actor_user: None,
+            detail: format!("audit channel full: {dropped} entries dropped (total {total})"),
+        }
+    }
+
+    /// The SSRF guard refused an outbound fetch — see
+    /// [`AuditEventType::SsrfBlocked`]. `host` only, never the full URL; the
+    /// reason comes from the validator (`SsrfError::BlockedAddress`).
+    /// `session_id` stays `None`: the validators run without one, and the
+    /// host is the join column an investigator actually needs.
+    #[must_use]
+    pub fn ssrf_blocked(host: impl Into<String>, reason: impl Into<String>) -> Self {
+        let host = host.into();
+        let reason = reason.into();
+        Self {
+            event_type: AuditEventType::SsrfBlocked,
+            severity: AuditSeverity::Critical,
+            source_ip: None,
+            session_id: None,
+            // Same task-local the runtime guard reads: the fetch tool runs on
+            // the spawned run task where CALLER_USER is dead, but the
+            // run-start seeding nest makes the room author visible here.
+            actor_user: crate::scope::current_room_author(),
+            detail: format!("blocked fetch: host={host} reason={reason}"),
+        }
+    }
+
     /// A remote connection failed the Gateway-token login wall at `connect`.
     /// `source_ip` is the socket peer; `detail` names the rejected path.
     #[must_use]
@@ -234,6 +302,11 @@ impl AuditEntry {
 pub struct SecurityAuditLog {
     sender: mpsc::Sender<AuditEntry>,
     pub(crate) dropped_count: Arc<AtomicU64>,
+    /// When `true`, [`SecurityAuditLog::log`] awaits channel capacity instead
+    /// of dropping — the operator's fail-closed opt-in (`[security]
+    /// audit_block_on_full`). Default `false`: a flooded audit pipeline
+    /// degrades the trail, never the system the trail watches.
+    block_on_full: bool,
 }
 
 /// Process-wide handle for the authority-change producers.
@@ -275,6 +348,25 @@ pub fn global() -> Option<SecurityAuditLog> {
         .clone()
 }
 
+/// Record an SSRF refusal on the process-wide trail, if one is installed.
+///
+/// Called by the two SSRF validator chokepoints on every
+/// [`crate::security::ssrf::SsrfError::BlockedAddress`]. `url_str` is the URL
+/// the fetcher asked for; only its host reaches the log (see
+/// [`AuditEventType::SsrfBlocked`] — the query string is where exfiltrated
+/// data would ride). A host that does not parse is reported as
+/// `"<unparseable>"`, which is itself the interesting fact.
+pub async fn emit_ssrf_blocked(url_str: &str, reason: &str) {
+    let Some(log) = global() else {
+        return;
+    };
+    let host = url::Url::parse(url_str)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "<unparseable>".to_string());
+    log.log(AuditEntry::ssrf_blocked(host, reason)).await;
+}
+
 /// Serialises the audit-asserting tests: each swaps in its own log, so two
 /// running concurrently would steal each other's entries. Take this lock,
 /// then [`replace_global_for_test`].
@@ -311,28 +403,122 @@ pub(crate) fn clear_global_for_test() {
     *GLOBAL_AUDIT.write().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
+/// Maximum length of a persisted audit `detail`, after sanitisation.
+///
+/// `detail` is a `NOT NULL TEXT` column with no database-side bound; before
+/// this cap, a producer handed a multi-kilobyte payload (a model response
+/// fragment, a pasted document) inflated the audit table unboundedly — the
+/// table whose entire value is being cheap to query after an incident.
+const MAX_DETAIL_LEN: usize = 4 * 1024;
+
+/// Marker appended when a `detail` exceeded [`MAX_DETAIL_LEN`], so a truncated
+/// row reads as truncated rather than as a suspiciously clean cut.
+const TRUNCATION_MARKER: &str = "…[truncated]";
+
+/// Sanitise an audit `detail` in place (audit I-9).
+///
+/// Two transforms, both lossy-on-purpose:
+///
+/// 1. Control characters (newlines, carriage returns, tabs, ANSI escapes)
+///    collapse to a single space each run. A multi-line payload would
+///    otherwise break the one-row-one-event shape every consumer of the table
+///    (`aleph audit`, SQL `WHERE` scans) relies on, and escape sequences are
+///    how a logged string attacks the terminal that later prints it.
+/// 2. The result is capped at [`MAX_DETAIL_LEN`] bytes on a char boundary,
+///    with [`TRUNCATION_MARKER`] appended when anything was cut.
+///
+/// Applied centrally in [`SecurityAuditLog::log`] — the single chokepoint
+/// every production entry flows through — so producers stay honest by
+/// construction instead of by per-site discipline.
+fn sanitize_detail(detail: &mut String) {
+    let needs_fold = detail.chars().any(|c| c.is_control());
+    if needs_fold {
+        let mut folded = String::with_capacity(detail.len());
+        let mut last_was_space = false;
+        for c in detail.chars() {
+            if c.is_control() {
+                if !last_was_space {
+                    folded.push(' ');
+                    last_was_space = true;
+                }
+            } else {
+                last_was_space = c == ' ';
+                folded.push(c);
+            }
+        }
+        *detail = folded;
+    }
+    if detail.len() > MAX_DETAIL_LEN {
+        let mut cut = MAX_DETAIL_LEN;
+        while !detail.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        detail.truncate(cut);
+        detail.push_str(TRUNCATION_MARKER);
+    }
+}
+
 impl SecurityAuditLog {
     #[must_use]
     pub fn new(buffer_size: usize) -> (Self, mpsc::Receiver<AuditEntry>) {
+        Self::new_with_policy(buffer_size, false)
+    }
+
+    /// [`new`] plus the fail-closed knob — see the `block_on_full` field.
+    #[must_use]
+    pub fn new_with_policy(
+        buffer_size: usize,
+        block_on_full: bool,
+    ) -> (Self, mpsc::Receiver<AuditEntry>) {
         let (sender, receiver) = mpsc::channel(buffer_size);
         (
             Self {
                 sender,
                 dropped_count: Arc::new(AtomicU64::new(0)),
+                block_on_full,
             },
             receiver,
         )
     }
 
-    pub fn log(&self, entry: AuditEntry) {
-        if let Err(e) = self.sender.try_send(entry) {
-            let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
-            if count == 1 || count.is_multiple_of(100) {
-                error!(
-                    "Security audit log channel full, dropping entry (total dropped: {}): {}",
-                    count, e
-                );
+    /// Total entries dropped because the channel was full (or gone). The
+    /// drain task mirrors this counter into the table itself as
+    /// [`AuditEventType::AuditLogDropped`] rows; the getter is for live
+    /// observers (diagnostics, tests) that cannot wait for the drain.
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped_count.load(Ordering::Acquire)
+    }
+
+    /// Shared handle to the drop counter, for the drain task that turns
+    /// counter deltas into [`AuditEventType::AuditLogDropped`] rows.
+    #[must_use]
+    pub fn dropped_counter(&self) -> Arc<AtomicU64> {
+        self.dropped_count.clone()
+    }
+
+    fn note_dropped(&self) {
+        let count = self.dropped_count.fetch_add(1, Ordering::AcqRel) + 1;
+        if count == 1 || count.is_multiple_of(100) {
+            error!("Security audit log channel full, dropping entry (total dropped: {count})");
+        }
+    }
+
+    /// `detail` is sanitised here, at the chokepoint every production entry
+    /// flows through, rather than at each producer — see [`sanitize_detail`].
+    ///
+    /// Async because of `block_on_full`: with the knob off (default) this is
+    /// a `try_send` that completes immediately; with it on, a full channel
+    /// applies backpressure to the producer instead of dropping the entry.
+    pub async fn log(&self, mut entry: AuditEntry) {
+        sanitize_detail(&mut entry.detail);
+        if self.block_on_full {
+            // A send error means the receiver is gone — the entry is lost
+            // exactly as if the channel had been full, so count it as one.
+            if self.sender.send(entry).await.is_err() {
+                self.note_dropped();
             }
+        } else if self.sender.try_send(entry).is_err() {
+            self.note_dropped();
         }
     }
 }
@@ -549,6 +735,78 @@ mod tests {
         );
     }
 
+    /// Every file expected to emit an SSRF-block audit entry. Much smaller
+    /// than [`AUTHORITY_PRODUCERS`] because the design is a chokepoint, not a
+    /// census of call sites: every `SsrfError::BlockedAddress` funnels through
+    /// one of these two validators, so two files cover every refusal path
+    /// (direct fetch, redirect hop, MCP SSE transport).
+    const SSRF_PRODUCERS: &[&str] = &["src/security/ssrf/mod.rs", "src/security/ssrf/fetch.rs"];
+
+    #[test]
+    fn every_declared_ssrf_producer_still_emits() {
+        let root = repo_root();
+        for path in SSRF_PRODUCERS {
+            let full = root.join(path);
+            let src = std::fs::read_to_string(&full).unwrap_or_else(|e| {
+                panic!("{path} (declared SSRF audit producer) unreadable: {e}")
+            });
+            assert!(
+                code_only(&src).contains("emit_ssrf_blocked("),
+                "{path} is a declared SSRF audit chokepoint and no longer emits. The refusal \n                 still happens — what vanished is the trail of it (audit I-3)."
+            );
+        }
+    }
+
+    #[test]
+    fn no_ssrf_producer_exists_outside_the_chokepoints() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let root = repo_root();
+        let mut files = Vec::new();
+        walk(&root.join("src"), &mut files);
+
+        // This file defines the emitter; it is not a producer.
+        let this_file = root.join("src/security/audit.rs");
+        let declared: std::collections::HashSet<_> =
+            SSRF_PRODUCERS.iter().map(|p| root.join(p)).collect();
+
+        let mut undeclared = Vec::new();
+        for file in files {
+            if file == this_file || declared.contains(&file) {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            if code_only(&src).contains("emit_ssrf_blocked(") {
+                undeclared.push(
+                    file.strip_prefix(&root)
+                        .unwrap_or(&file)
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+        assert!(
+            undeclared.is_empty(),
+            "these files emit SSRF audit entries outside the validator chokepoints: {undeclared:?}. \
+             Route the refusal through validate_url_with_pinned / validate_url_full instead — \
+             a second emission path is how the trail forks."
+        );
+    }
+
     #[tokio::test]
     async fn test_audit_log_send_receive() {
         let (log, mut rx) = SecurityAuditLog::new(100);
@@ -559,7 +817,8 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "Blocked request to 10.0.0.1".to_string(),
-        });
+        })
+        .await;
         let entry = rx.recv().await.unwrap();
         assert_eq!(entry.event_type, AuditEventType::ExecBlocked);
         assert_eq!(entry.severity, AuditSeverity::Warn);
@@ -576,7 +835,8 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "first".into(),
-        });
+        })
+        .await;
         log.log(AuditEntry {
             event_type: AuditEventType::AuthFailure,
             severity: AuditSeverity::Critical,
@@ -584,7 +844,8 @@ mod tests {
             session_id: None,
             actor_user: None,
             detail: "second".into(),
-        });
+        })
+        .await;
         assert_eq!(log.dropped_count.load(Ordering::Acquire), 1);
     }
 
@@ -637,5 +898,63 @@ mod tests {
         assert_eq!(e.event_type, AuditEventType::RateLimited);
         assert_eq!(e.severity, AuditSeverity::Warn);
         assert_eq!(e.source_ip.as_deref(), Some("10.0.0.6"));
+    }
+
+    #[test]
+    fn ssrf_blocked_entry_names_host_and_reason_never_the_url() {
+        let e = AuditEntry::ssrf_blocked("169.254.169.254", "blocked by policy");
+        assert_eq!(e.event_type, AuditEventType::SsrfBlocked);
+        assert_eq!(e.severity, AuditSeverity::Critical);
+        assert_eq!(e.event_type.to_string(), "ssrf_blocked");
+        assert!(e.detail.contains("169.254.169.254"));
+        assert!(e.detail.contains("blocked by policy"));
+    }
+
+    #[test]
+    fn sanitize_detail_collapses_control_runs() {
+        let mut d = "line one\n\nline two\r\nline three\tend\u{7}".to_string();
+        sanitize_detail(&mut d);
+        assert_eq!(d, "line one line two line three end");
+    }
+
+    #[test]
+    fn sanitize_detail_caps_length_with_marker_on_char_boundary() {
+        // 5 KiB of ASCII: capped at 4 KiB + marker.
+        let mut d = "a".repeat(5 * 1024);
+        sanitize_detail(&mut d);
+        assert!(d.ends_with(TRUNCATION_MARKER));
+        assert_eq!(d.len(), MAX_DETAIL_LEN + TRUNCATION_MARKER.len());
+
+        // Multi-byte content straddling the cap: the cut must land on a char
+        // boundary (no panic, no invalid UTF-8).
+        let mut d = "é".repeat(3 * 1024); // 6 KiB of two-byte chars
+        sanitize_detail(&mut d);
+        assert!(d.ends_with(TRUNCATION_MARKER));
+        assert!(d.len() <= MAX_DETAIL_LEN + TRUNCATION_MARKER.len());
+    }
+
+    #[test]
+    fn sanitize_detail_leaves_clean_short_detail_untouched() {
+        let mut d = "blocked fetch: host=example.com reason=loopback".to_string();
+        let before = d.clone();
+        sanitize_detail(&mut d);
+        assert_eq!(d, before);
+    }
+
+    #[tokio::test]
+    async fn log_sanitises_detail_before_send() {
+        let (log, mut rx) = SecurityAuditLog::new(4);
+        log.log(AuditEntry {
+            event_type: AuditEventType::ExecBlocked,
+            severity: AuditSeverity::Warn,
+            source_ip: None,
+            session_id: None,
+            actor_user: None,
+            detail: format!("multi\nline\n{}", "x".repeat(8 * 1024)),
+        })
+        .await;
+        let entry = rx.recv().await.unwrap();
+        assert!(!entry.detail.contains('\n'));
+        assert!(entry.detail.ends_with(TRUNCATION_MARKER));
     }
 }

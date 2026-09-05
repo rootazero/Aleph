@@ -1,9 +1,13 @@
-//! crawl4ai web_fetch backend.
+//! crawl4ai HTTP client (URL → clean markdown).
 //!
-//! crawl4ai is a self-hosted "URL → clean markdown" crawler. When the
-//! operator configures it (see `Crawl4aiConfig`), `web_fetch` routes page
-//! fetches through this backend and falls back to the built-in
-//! reqwest+readability path on any failure.
+//! crawl4ai is a self-hosted crawler. **It is not wired into `web_fetch`**:
+//! the fetch-provider delegation was removed (BT-D-R4-22) because crawl4ai
+//! resolves and follows the target URL from its own network position, where
+//! Aleph's SSRF DNS pin cannot reach. This client survives to back the
+//! operator-facing connection test (`fetch_config.test` RPC, which fetches a
+//! hardcoded `https://example.com`), and as the implementation any future
+//! revival would build on once the provider API can honor a caller-pinned
+//! resolution.
 //!
 //! This module is a thin HTTP client + response parser. It owns NO
 //! `WebFetchTool` state — `fetch_markdown` takes a URL and returns the
@@ -81,8 +85,8 @@ impl Markdown {
 
 impl Crawl4aiBackend {
     /// Build a backend from config. Returns `None` when disabled or when
-    /// `base_url` is empty / not http(s) — the caller then uses only the
-    /// built-in fetch path.
+    /// `base_url` is empty / not http(s) — the caller then reports the
+    /// backend as unconfigured.
     #[must_use]
     pub fn from_config(cfg: &Crawl4aiConfig) -> Option<Self> {
         if !cfg.enabled {
@@ -146,46 +150,6 @@ impl Crawl4aiBackend {
             .await
             .map_err(|e| ToolError::Execution(format!("crawl4ai bad JSON: {e}")))?;
         Self::extract_markdown(parsed)
-    }
-
-    /// Lightweight health check used by `is_available` to avoid sending a
-    /// full crawl request at a dead backend. Uses a short timeout so a
-    /// unreachable host fails fast and the registry can route to the next
-    /// provider. Returns `false` on any error (timeout, non-2xx, parse).
-    pub async fn health_check(&self) -> bool {
-        // crawl4ai exposes a `GET /health` on standard builds. Treat any
-        // reachable 2xx as healthy. If the endpoint is missing the request
-        // will still complete (404) but we don't fail the probe on that —
-        // we only fail on connection-level errors or non-2xx responses
-        // other than 404, since some deployments don't expose `/health`.
-        match self
-            .client
-            .get(format!("{}/health", self.base_url))
-            .timeout(Duration::from_secs(2))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                let s = resp.status();
-                s.is_success() || s == reqwest::StatusCode::NOT_FOUND
-            }
-            Err(_) => false,
-        }
-    }
-
-    /// Synchronous wrapper used by the fetch registry's `is_available`.
-    /// Since `health_check` is async and the trait method is sync, we
-    /// optimistically report availability and let the real fetch surface
-    /// failures — this avoids blocking the registry call on a network
-    /// probe. The full async health_check above is exposed for callers
-    /// that want a real probe.
-    pub fn is_healthy(&self) -> bool {
-        // The fetch registry checks this on the hot path; a sync probe would
-        // require a runtime handle. We optimistically return true when the
-        // backend was constructed successfully (from_config passed all the
-        // validation gates). Operators needing a real liveness probe can
-        // call `health_check` directly.
-        !self.base_url.is_empty()
     }
 
     /// Pure parse step: pull the first result's markdown out of a response.

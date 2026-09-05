@@ -95,17 +95,14 @@ impl FirecrawlFetchProvider {
 #[async_trait]
 impl FetchProvider for FirecrawlFetchProvider {
     async fn fetch(&self, url: &str) -> Result<String> {
-        // SSRF contract: caller is responsible for SSRF validation. Today
-        // the only live caller is `handle_test` in
-        // `gateway/handlers/fetch_config.rs`, which passes a hardcoded
-        // `https://example.com` and cannot leak. The agent-facing
-        // `WebFetchTool` path deliberately bypasses providers at the entry
-        // point (BT-D-R4-22 in `web_fetch/mod.rs`) until the SSRF DNS pin
-        // can be threaded into a provider's own `reqwest` client. When that
-        // gap closes, the `SsrfPolicy::validate_url_async` gate belongs on
-        // the CALLER, not on the provider — providers stay one-way HTTP
-        // wrappers. See `FetchProvider::fetch` doc comment for the full
-        // rationale.
+        // SSRF contract: the caller is responsible for SSRF validation. The
+        // only production caller is the connection-test RPC
+        // (`gateway/handlers/fetch_config.rs::handle_test`), which passes a
+        // hardcoded `https://example.com` and cannot leak. The agent-facing
+        // `WebFetchTool` no longer routes through providers (BT-D-R4-22):
+        // firecrawl resolves/follows the target URL on its own network, so a
+        // caller-side DNS pin cannot be enforced on the fetch that actually
+        // happens. See `FetchProvider::fetch` for the revival precondition.
         // Same funnel the search providers use: it is the only place a
         // `reqwest` failure becomes an `AlephError`, and the only place the
         // bearer token is scrubbed out of the message on the way.
@@ -146,9 +143,6 @@ impl FetchProvider for FirecrawlFetchProvider {
     }
     fn name(&self) -> &str {
         NAME
-    }
-    fn is_available(&self) -> bool {
-        !self.base_url.is_empty() && !self.api_key.is_empty()
     }
 }
 

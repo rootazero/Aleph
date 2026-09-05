@@ -114,6 +114,21 @@ pub struct ShellSecurityConfig {
     /// operator.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mask_patterns: Vec<CustomMaskPattern>,
+
+    /// Fail-closed audit opt-in (default: false).
+    ///
+    /// When `false`, a full audit channel drops entries (counted, and mirrored
+    /// into the table as `audit_log_dropped` rows by the drain) — the audit
+    /// pipeline degrades itself rather than the system it watches. When
+    /// `true`, producers await channel capacity instead: no entry is lost to
+    /// backpressure, but a flooded audit pipeline stalls the paths that
+    /// produce audit events (request handlers, the content guard). Choose
+    /// `true` when an incomplete trail is worse than a slow one.
+    ///
+    /// Applied where the audit pipelines are built at boot; like the rest of
+    /// `[security]`, not live-reloadable.
+    #[serde(default = "default_false")]
+    pub audit_block_on_full: bool,
 }
 
 const fn default_false() -> bool {
@@ -136,6 +151,7 @@ mod tests {
         assert!(!config.enable_custom_patterns);
         assert!(config.custom_blocked.is_empty());
         assert!(config.custom_danger.is_empty());
+        assert!(!config.audit_block_on_full);
     }
 
     #[test]

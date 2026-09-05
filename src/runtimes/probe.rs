@@ -63,9 +63,15 @@ pub fn probe(name: &str) -> ProbeResult {
 }
 
 fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
-    let bin_name = spec.binaries.iter().next()?;
     let search_path = enriched_search_path();
-    let bin_path = find_on_path(bin_name, &search_path)?;
+    // Iterate all known binary aliases (e.g. ["node", "nodejs"]) so a spec can
+    // express packaging differences (Debian's `nodejs` vs upstream `node`) and
+    // we keep probing on the first hit. Returning on the first `spec.binaries`
+    // entry silently dropped later aliases.
+    let bin_path = spec
+        .binaries
+        .iter()
+        .find_map(|bin_name| find_on_path(bin_name, &search_path))?;
     let version = get_version(
         &bin_path,
         spec.version_flag,
@@ -148,12 +154,36 @@ fn find_in_dirs(bin_name: &str, search_path: &OsStr) -> Option<PathBuf> {
             vec![dir.join(bin_name)]
         };
         for candidate in candidates {
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 return Some(candidate);
             }
         }
     }
     None
+}
+
+/// True if `path` is a regular file that the OS would actually launch as an
+/// executable. On Unix this requires the execute bit (a file with no +x left
+/// behind by a partial install would otherwise be reported as "found" and then
+/// fail at run time with a confusing EACCES). On Windows executability is
+/// implied by the extension handled in `find_in_dirs`.
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(md) => md.permissions().mode() & 0o111 != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
 }
 
 /// Prepend known runtime install dirs (that exist and aren't already present)

@@ -92,6 +92,21 @@ pub async fn validate_url_with_pinned(
     url_str: &str,
     policy: &SsrfPolicy,
 ) -> Result<(Url, Option<std::net::SocketAddr>), SsrfError> {
+    let result = validate_url_with_pinned_inner(url_str, policy).await;
+    // Audit chokepoint (audit I-3): every BlockedAddress this public entry
+    // can return is funnelled through here, so the trail sees the refusal
+    // regardless of which caller asked. See the sibling chokepoint on
+    // `safe_fetch`'s `validate_url_full`.
+    if let Err(SsrfError::BlockedAddress(reason)) = &result {
+        crate::security::audit::emit_ssrf_blocked(url_str, reason).await;
+    }
+    result
+}
+
+async fn validate_url_with_pinned_inner(
+    url_str: &str,
+    policy: &SsrfPolicy,
+) -> Result<(Url, Option<std::net::SocketAddr>), SsrfError> {
     use std::net::SocketAddr;
 
     let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;

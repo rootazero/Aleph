@@ -162,6 +162,8 @@ pub(super) async fn init_tool_catalog(
                         id: s.id().as_str().to_string(),
                         name: s.name().to_string(),
                         description: s.description().to_string(),
+                        scope: s.scope().clone(),
+                        version: s.version().map(str::to_string),
                     })
                     .collect();
                 tool_catalog.register_skills(&skill_infos).await;
@@ -190,6 +192,11 @@ pub(super) async fn init_tool_catalog(
                         id: cmd.qualified_name(),
                         name: cmd.name.clone(),
                         description: cmd.description.clone(),
+                        // Plugin commands have no SkillManifest behind them;
+                        // System is the manifest default and matches how every
+                        // other slash command behaves. No version to project.
+                        scope: alephcore::domain::skill::PromptScope::System,
+                        version: None,
                     })
                     .collect();
 

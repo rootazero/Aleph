@@ -31,7 +31,12 @@ pub use session_key::{normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT
 /// (std, no extra dep) — same write-once semantics. Flagged divergence.
 pub struct RoutingAttribution {
     pub session_id: String,
-    pub task_emb: std::sync::OnceLock<Vec<f32>>,
+    /// Write-once task embedding. Private so the OnceLock's set-once contract
+    /// is enforced at the API boundary; callers go through `set_task_emb` /
+    /// `task_emb` instead. The previous `pub` field exposed `OnceLock::set`
+    /// (which silently no-ops on a re-set) to any caller, defeating the
+    /// record/recall symmetry invariant in §8 D6.
+    task_emb: std::sync::OnceLock<Vec<f32>>,
 }
 
 impl RoutingAttribution {
@@ -41,6 +46,20 @@ impl RoutingAttribution {
             session_id,
             task_emb: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Set the task embedding once. Returns `Err(value)` if a caller has
+    /// already written one (and `Ok(())` otherwise), so the writer can
+    /// decide whether to log a drift warning without silently overwriting
+    /// the embedding that recall queried against.
+    pub fn set_task_emb(&self, value: Vec<f32>) -> Result<(), Vec<f32>> {
+        self.task_emb.set(value)
+    }
+
+    /// Borrow the task embedding if it has been set.
+    #[must_use]
+    pub fn task_emb(&self) -> Option<&[f32]> {
+        self.task_emb.get().map(Vec::as_slice)
     }
 }
 
@@ -155,7 +174,7 @@ mod integration_tests {
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let spy = Arc::new(SpySink::default());
         let attribution = Arc::new(RoutingAttribution::new("run".into()));
-        attribution.task_emb.set(emb(1.0)).unwrap(); // recall would have set this
+        attribution.set_task_emb(emb(1.0)).unwrap(); // recall would have set this
         let observer = OutcomeObserver::new(
             spy.clone() as Arc<dyn TraceSink>,
             store.clone(),
@@ -186,7 +205,7 @@ mod integration_tests {
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let attribution = Arc::new(RoutingAttribution::new("run".into()));
-        attribution.task_emb.set(emb(1.0)).unwrap();
+        attribution.set_task_emb(emb(1.0)).unwrap();
         // anthropic / claude-sonnet-4-6 is in the static price table → priced.
         let observer = OutcomeObserver::new(
             Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
@@ -210,7 +229,7 @@ mod integration_tests {
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(StubEmbedder { vec: emb(1.0) });
         let store = Arc::new(RoutingExperienceStore::new(backend, embedder));
         let attribution = Arc::new(RoutingAttribution::new("run".into()));
-        attribution.task_emb.set(emb(1.0)).unwrap();
+        attribution.set_task_emb(emb(1.0)).unwrap();
         let observer = OutcomeObserver::new(
             Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
             store.clone(),
@@ -238,7 +257,7 @@ mod integration_tests {
         // Two independently-constructed observers (the per-run sink-construction
         // model: each run freezes its own model + agent + attribution).
         let attr_p = Arc::new(RoutingAttribution::new("p".into()));
-        attr_p.task_emb.set(emb(1.0)).unwrap();
+        attr_p.set_task_emb(emb(1.0)).unwrap();
         let obs_p = OutcomeObserver::new(
             Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
             store.clone(),
@@ -248,7 +267,7 @@ mod integration_tests {
             "parent".into(),
         );
         let attr_c = Arc::new(RoutingAttribution::new("c".into()));
-        attr_c.task_emb.set(emb(2.0)).unwrap();
+        attr_c.set_task_emb(emb(2.0)).unwrap();
         let obs_c = OutcomeObserver::new(
             Arc::new(SpySink::default()) as Arc<dyn TraceSink>,
             store.clone(),

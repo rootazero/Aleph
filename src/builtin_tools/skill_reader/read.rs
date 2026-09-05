@@ -370,12 +370,17 @@ impl ReadSkillTool {
         // Preprocess Markdown instruction files: expand `${ALEPH_SKILL_DIR}` /
         // `${ALEPH_SESSION_ID}` template variables and, when the skill opts in
         // via `allow-inline-shell: true`, splice in bounded inline-shell output.
-        // Non-Markdown resources (scripts, data) are returned verbatim so their
-        // bytes are never altered. Content with no template token and no opt-in
-        // is returned unchanged — existing skills render identically.
+        // The expanded body is re-scanned by the content guard post-splice, so
+        // a snippet whose stdout trips the guard fails the read rather than
+        // reaching the model unexamined. Non-Markdown resources (scripts, data)
+        // are returned verbatim so their bytes are never altered. Content with
+        // no template token and no opt-in is returned unchanged — existing
+        // skills render identically.
         let content = if file_name.to_ascii_lowercase().ends_with(".md") {
             let ctx = crate::skill::SkillPreprocessContext::new(skill_dir.clone());
-            crate::skill::preprocess_skill_content(&raw_content, &ctx).await
+            crate::skill::preprocess_skill_content(&raw_content, &ctx)
+                .await
+                .map_err(|e| ToolError::Execution(format!("skill preprocessing refused: {e}")))?
         } else {
             raw_content
         };

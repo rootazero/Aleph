@@ -824,9 +824,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // network-exposed gateway records auth events even when guardrails are off.
     // The drain is idempotent alongside the guard's — both append to
     // `security_audit_log`; the JoinHandle is detached for the process lifetime.
-    let (gw_audit_log, gw_audit_rx) = alephcore::security::audit::SecurityAuditLog::new(256);
-    let _gw_audit_drain =
-        alephcore::security::spawn_audit_drain(gw_audit_rx, auth_bundle.security_store.clone());
+    let (gw_audit_log, gw_audit_rx) = alephcore::security::audit::SecurityAuditLog::new_with_policy(
+        256,
+        loaded_app_config.security.audit_block_on_full,
+    );
+    let _gw_audit_drain = alephcore::security::spawn_audit_drain(
+        gw_audit_rx,
+        auth_bundle.security_store.clone(),
+        Some(gw_audit_log.dropped_counter()),
+    );
     // Process-wide handle for the `AuthorityChange` producers (users/projects/
     // pairing/ticket/allowed_users) — see `security::audit::install_global`.
     alephcore::security::audit::install_global(&gw_audit_log);
@@ -941,15 +947,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
 
-        // crawl4ai web_fetch backend: vault key "web_fetch:crawl4ai"
-        {
-            let c4 = &mut loaded_app_config.policies.web_fetch.crawl4ai;
-            if c4.enabled && c4.token.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret("web_fetch:crawl4ai") {
-                    c4.token = Some(secret.expose().to_string());
-                }
-            }
-        }
+        // NOTE: no vault hydration for `policies.web_fetch.crawl4ai.token`
+        // here — that struct field has no reader (the legacy section only
+        // feeds `Config::migrate_fetch`, which carries no secret). The fetch
+        // provider path resolves `fetch:crawl4ai` / legacy `web_fetch:crawl4ai`
+        // straight from the vault where it builds the backend
+        // (`fetch_config.test` RPC); materializing the secret into a config
+        // struct nobody reads only widened its in-memory footprint.
     }
 
     // Resolve agent definitions from config (initializes workspace directories)
@@ -3679,6 +3683,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
     memory_monitor.shutdown().await;
     channel_health_monitor.shutdown().await;
+    // MCP Manager graceful shutdown — sends `McpCommand::Shutdown` so the
+    // actor's `McpManagerEvent::ManagerShutdown` reaches subscribers (the tool
+    // bridge holds one at `mcp/tool_bridge.rs:106`) and running servers get a
+    // stop signal before the process exits.
+    if let Some(ref h) = mcp_handle {
+        if let Err(e) = h.shutdown().await {
+            tracing::warn!(error = %e, "MCP manager orderly shutdown failed");
+        }
+    }
     // Spec C: cleanup endpoint discovery file regardless of outcome. Both
     // Ctrl-C and SIGTERM reach here via the unified oneshot path; only the
     // shutdown failsafe force-exit can skip it — the stale file is then

@@ -106,6 +106,21 @@ async fn validate_url_full(
     url_str: &str,
     policy: &SsrfPolicy,
 ) -> Result<(Url, std::net::SocketAddr), SsrfError> {
+    let result = validate_url_full_inner(url_str, policy).await;
+    // Audit chokepoint (audit I-3): `safe_fetch`'s every BlockedAddress —
+    // including each redirect hop, which re-validates through here — leaves
+    // a trail entry. See the sibling chokepoint on the public
+    // `validate_url_with_pinned`.
+    if let Err(SsrfError::BlockedAddress(reason)) = &result {
+        crate::security::audit::emit_ssrf_blocked(url_str, reason).await;
+    }
+    result
+}
+
+async fn validate_url_full_inner(
+    url_str: &str,
+    policy: &SsrfPolicy,
+) -> Result<(Url, std::net::SocketAddr), SsrfError> {
     let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
 
     validate_scheme(&url)?;
@@ -271,21 +286,25 @@ pub async fn safe_fetch(
             strip_auth_headers(&mut current_headers);
         }
 
-        // Per RFC 7231 §6.4: 307/308 MUST preserve method and body; 301/302
-        // allow POST→GET only (any other method, including PUT/PATCH/DELETE,
-        // is preserved, and the body travels with the preserved method).
-        // 303 is treated as 301/302 here — the historical "POST→GET" change
-        // is the only allowed transition; non-POST methods keep their body.
-        // The body is dropped only when the method becomes GET.
+        // Per RFC 7231 §6.4: 307/308 MUST preserve method and body. 301/302 allow
+        // POST→GET only (any other method, including PUT/PATCH/DELETE, is
+        // preserved, and the body travels with the preserved method). 303
+        // (See Other) always means "the resource is elsewhere; do not
+        // repeat this method" — the body is dropped regardless of method
+        // and the request continues as GET, matching the de-facto behavior
+        // of every major client. Forwarding the body to the redirect
+        // target on 303 would be a contract violation the receiving
+        // server did not ask for; in the worst case an attacker can plant
+        // a `303` redirect from a legitimate PUT endpoint to one that
+        // re-uses the body in a destructive way.
         let status = response.status();
-        let body_dropped = !matches!(
-            status,
-            StatusCode::TEMPORARY_REDIRECT | StatusCode::PERMANENT_REDIRECT
-        ) && matches!(
+        let drop_body = matches!(
             status,
             StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
-        ) && current_method == Method::POST;
-        if body_dropped {
+        );
+        let method_becomes_get =
+            drop_body && (current_method == Method::POST || status == StatusCode::SEE_OTHER);
+        if method_becomes_get {
             current_method = Method::GET;
         }
 
@@ -302,10 +321,13 @@ pub async fn safe_fetch(
         let mut req_builder = redirect_client.request(current_method.clone(), next_url.as_str());
         // rust-doctor-disable-next-line excessive-clone
         req_builder = req_builder.headers(current_headers.clone());
-        // Forward body unless the method was converted to GET. 307/308 always
-        // preserve; 301/302/303 with non-POST methods also preserve and must
-        // travel with the body.
-        if !body_dropped {
+        // Forward body unless the redirect status code required it to be
+        // dropped. 307/308 always preserve; 301/302 with non-POST methods
+        // also preserve (the method is unchanged). 303 always drops the
+        // body regardless of the original method (See Other means "do
+        // not repeat this request"). 301/302 with POST drop the body as
+        // a side-effect of method becoming GET.
+        if !drop_body {
             if let Some(body) = &request.body {
                 // rust-doctor-disable-next-line excessive-clone
                 req_builder = req_builder.body(body.clone());

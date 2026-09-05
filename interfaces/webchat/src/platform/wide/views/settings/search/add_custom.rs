@@ -70,7 +70,7 @@ pub(super) fn AddCustomSearchProviderPanel(
 
         spawn_local(async move {
             match SearchConfigApi::update(&state, cfg.clone()).await {
-                Ok(()) => {
+                Ok(_) => {
                     config.set(cfg);
                     on_added();
                 }

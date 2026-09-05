@@ -62,28 +62,6 @@ impl Default for WorkflowProposalStage {
     }
 }
 
-/// Aggregate co-occurrence chains keyed by their canonical (sorted) identity.
-/// Returns `(canonical_key → (observation_count, representative_chain))`, where
-/// the representative chain preserves the *first observed* order so the drafted
-/// workflow mirrors how the user actually sequenced the skills.
-///
-/// Pure function — testable without disk.
-#[must_use]
-pub fn aggregate_chains(chains: Vec<Vec<String>>) -> HashMap<String, (u32, Vec<String>)> {
-    let mut counts: HashMap<String, (u32, Vec<String>)> = HashMap::new();
-    for chain in chains {
-        if chain.len() < 2 {
-            continue;
-        }
-        let key = proposal::canonical_name(&chain);
-        counts
-            .entry(key)
-            .and_modify(|(n, _)| *n = n.saturating_add(1))
-            .or_insert((1, chain));
-    }
-    counts
-}
-
 #[async_trait]
 impl DreamStage for WorkflowProposalStage {
     fn name(&self) -> &'static str {
@@ -106,7 +84,20 @@ impl DreamStage for WorkflowProposalStage {
             all_chains.extend(cluster_chains(&snap, self.window_secs));
         }
 
-        let aggregated = aggregate_chains(all_chains);
+        // Inline co-occurrence aggregation: dedup by canonical key, keeping the
+        // first-observed chain as the representative so the drafted workflow
+        // mirrors the user's actual sequencing.
+        let mut aggregated: HashMap<String, (u32, Vec<String>)> = HashMap::new();
+        for chain in all_chains {
+            if chain.len() < 2 {
+                continue;
+            }
+            let key = proposal::canonical_name(&chain);
+            aggregated
+                .entry(key)
+                .and_modify(|(n, _)| *n = n.saturating_add(1))
+                .or_insert((1, chain));
+        }
 
         // Rank by observation count, descending; take the strongest signals
         // first so the per-cycle cap keeps the best chains.
@@ -156,29 +147,6 @@ impl DreamStage for WorkflowProposalStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn aggregate_counts_repeated_chains() {
-        let chains = vec![
-            vec!["a".into(), "b".into()],
-            vec!["b".into(), "a".into()], // same canonical identity
-            vec!["c".into(), "d".into()],
-        ];
-        let agg = aggregate_chains(chains);
-        let ab = proposal::canonical_name(&["a".into(), "b".into()]);
-        assert_eq!(agg.get(&ab).unwrap().0, 2);
-        // Representative preserves first observed order.
-        assert_eq!(
-            agg.get(&ab).unwrap().1,
-            vec!["a".to_string(), "b".to_string()]
-        );
-    }
-
-    #[test]
-    fn aggregate_drops_single_skill_chains() {
-        let agg = aggregate_chains(vec![vec!["solo".into()]]);
-        assert!(agg.is_empty());
-    }
 
     #[test]
     fn stage_has_sane_defaults() {

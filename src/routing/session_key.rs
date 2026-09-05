@@ -588,7 +588,14 @@ impl SessionKey {
                 if parts[pos + 1].is_empty() {
                     return None;
                 }
-                let subagent_id = parts[pos + 1].to_string();
+                // Mirror the constructor: sanitize the subagent_id so a path
+                // like `agent:main:main:subagent:../etc/passwd` cannot inject
+                // an unsanitized component downstream. Round-trip via
+                // `to_key_string` is now symmetric with `SessionKey::subagent`.
+                let subagent_id = sanitize_component(parts[pos + 1]);
+                if subagent_id.is_empty() {
+                    return None;
+                }
                 if let Some(parent_key) = Self::parse_with_depth(&parent_str, depth + 1) {
                     return Some(Self::Subagent {
                         parent_key: Box::new(parent_key),

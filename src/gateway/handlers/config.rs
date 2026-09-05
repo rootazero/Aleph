@@ -597,7 +597,8 @@ pub async fn handle_patch_config(
                     "config.patch: path '{path}' applied sections {:?}",
                     result.applied_sections
                 ),
-            ));
+            ))
+            .await;
         }
     }
 

@@ -19,6 +19,7 @@
 //   `.await`.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 
 use crate::exec::leak_detector::LeakDetector as ExecLeakDetector;
 use crate::pii::engine::{FilterResult, PiiEngine};
@@ -42,6 +43,9 @@ pub struct SecurityGuardConfig {
     pub leak_detection: bool,
     pub secret_injection: bool,
     pub audit_enabled: bool,
+    /// Fail-closed audit backpressure — mirrors `[security]
+    /// audit_block_on_full`; see `SecurityAuditLog::block_on_full`.
+    pub audit_block_on_full: bool,
     /// Custom leak detection patterns (additive to built-ins)
     pub custom_leak_patterns: Vec<crate::config::types::CustomLeakPattern>,
 }
@@ -53,6 +57,7 @@ impl Default for SecurityGuardConfig {
             leak_detection: true,
             secret_injection: true,
             audit_enabled: true,
+            audit_block_on_full: false,
             custom_leak_patterns: Vec::new(),
         }
     }
@@ -87,21 +92,36 @@ pub struct RuntimeSecurityGuard {
 
 impl RuntimeSecurityGuard {
     /// Create a new guard with default configuration.
-    #[must_use]
-    pub fn default_guard() -> Self {
-        Self::new(SecurityGuardConfig::default())
-    }
-
-    /// Create a new guard with the given configuration.
     ///
-    /// `config.audit_enabled` is forced to `false` here because the audit
-    /// receiver is consumed by [`new_with_audit`] and would be dropped
-    /// immediately, closing the mpsc channel and silently discarding every
-    /// entry. Callers that want the audit pipeline must construct the guard via
+    /// The default config sets `audit_enabled: true`, which this constructor
+    /// cannot honour (see [`new_without_audit`]) — the default guard runs
+    /// without an audit trail. Callers that need one must use
     /// [`new_with_audit`] and own the returned receiver.
     #[must_use]
-    pub fn new(mut config: SecurityGuardConfig) -> Self {
-        config.audit_enabled = false;
+    pub fn default_guard() -> Self {
+        Self::new_without_audit(SecurityGuardConfig::default())
+    }
+
+    /// Create a new guard WITHOUT an audit pipeline.
+    ///
+    /// The audit receiver is handed out by [`new_with_audit`], so a guard
+    /// built here has nowhere to send entries; `config.audit_enabled` is
+    /// therefore forced to `false`. That override used to be silent (audit
+    /// I-7): a caller passing `audit_enabled: true` got a guard that recorded
+    /// nothing, with no signal that the trail they asked for does not exist.
+    /// It now warns, and the constructor's name says what it does. Callers
+    /// that want the audit pipeline must construct the guard via
+    /// [`new_with_audit`] and own the returned receiver.
+    #[must_use]
+    pub fn new_without_audit(mut config: SecurityGuardConfig) -> Self {
+        if config.audit_enabled {
+            tracing::warn!(
+                "RuntimeSecurityGuard::new_without_audit called with audit_enabled=true; \
+                 audit entries have no receiver from this constructor and will not be \
+                 recorded — use new_with_audit() and drain the receiver instead"
+            );
+            config.audit_enabled = false;
+        }
         let (guard, _rx) = Self::new_with_audit(config);
         guard
     }
@@ -125,7 +145,7 @@ impl RuntimeSecurityGuard {
             None
         };
         let (audit_log, rx) = if config.audit_enabled {
-            let (log, rx) = SecurityAuditLog::new(256);
+            let (log, rx) = SecurityAuditLog::new_with_policy(256, config.audit_block_on_full);
             (Some(log), rx)
         } else {
             (None, tokio::sync::mpsc::channel(1).1)
@@ -141,7 +161,15 @@ impl RuntimeSecurityGuard {
         (guard, rx)
     }
 
-    fn log_audit(
+    /// Drop counter of the internal audit log, for the drain task that
+    /// mirrors counter deltas into `audit_log_dropped` rows (audit I-4).
+    /// `None` when this guard runs without an audit pipeline.
+    #[must_use]
+    pub fn audit_dropped_counter(&self) -> Option<Arc<AtomicU64>> {
+        self.audit_log.as_ref().map(|log| log.dropped_counter())
+    }
+
+    async fn log_audit(
         &self,
         context: &SecurityContext,
         event_type: AuditEventType,
@@ -166,7 +194,7 @@ impl RuntimeSecurityGuard {
                 actor_user: crate::scope::current_room_author(),
                 detail,
             };
-            log.log(entry);
+            log.log(entry).await;
         }
     }
 
@@ -230,7 +258,8 @@ impl RuntimeSecurityGuard {
                     AuditEventType::ExecBlocked,
                     AuditSeverity::Critical,
                     detail,
-                );
+                )
+                .await;
                 return Ok(GuardResult::Blocked {
                     reason: "Leak detector found sensitive data in outbound content".to_string(),
                 });
@@ -250,34 +279,48 @@ impl RuntimeSecurityGuard {
                     AuditEventType::LeakWarning,
                     AuditSeverity::Warn,
                     "outbound leak detector redacted sensitive token".to_string(),
-                );
+                )
+                .await;
             }
         }
 
         // 3. PII Filtering
         if self.config.pii_filtering {
             if let Some(engine) = &self.pii_engine {
-                let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
+                // The std RwLock read guard is !Send and must never live
+                // across an `.await` (see the lock-discipline header); the
+                // counts come out of the critical section, the audit awaits
+                // happen after it.
+                let counts = {
+                    let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
 
-                let should_filter = match &context.provider_name {
-                    Some(provider) => !engine_guard
-                        .is_platform_excluded(context.platform_name.as_deref(), provider),
-                    None => true,
+                    let should_filter = match &context.provider_name {
+                        Some(provider) => !engine_guard
+                            .is_platform_excluded(context.platform_name.as_deref(), provider),
+                        None => true,
+                    };
+
+                    if should_filter {
+                        let result = engine_guard
+                            .filter_with_platform(&current_text, context.platform_name.as_deref());
+                        let blocked = result.blocked_count;
+                        let warned = result.warned_count;
+                        current_text =
+                            Self::apply_filter_result(result, &mut reasons, &mut warnings);
+                        Some((blocked, warned))
+                    } else {
+                        None
+                    }
                 };
-
-                if should_filter {
-                    let result = engine_guard
-                        .filter_with_platform(&current_text, context.platform_name.as_deref());
-                    let blocked = result.blocked_count;
-                    let warned = result.warned_count;
-                    current_text = Self::apply_filter_result(result, &mut reasons, &mut warnings);
+                if let Some((blocked, warned)) = counts {
                     if blocked > 0 {
                         self.log_audit(
                             &context,
                             AuditEventType::PiiDetected,
                             AuditSeverity::Critical,
                             format!("PII filter blocked {blocked} detection(s)"),
-                        );
+                        )
+                        .await;
                     }
                     if warned > 0 {
                         self.log_audit(
@@ -285,7 +328,8 @@ impl RuntimeSecurityGuard {
                             AuditEventType::PiiDetected,
                             AuditSeverity::Warn,
                             format!("PII filter warned {warned} detection(s)"),
-                        );
+                        )
+                        .await;
                     }
                 }
             }
@@ -335,7 +379,8 @@ impl RuntimeSecurityGuard {
                     AuditEventType::ExecBlocked,
                     AuditSeverity::Critical,
                     detail,
-                );
+                )
+                .await;
                 return Ok(GuardResult::Blocked {
                     reason: "Leak detector found sensitive data in resolved outbound content"
                         .to_string(),
@@ -355,7 +400,8 @@ impl RuntimeSecurityGuard {
                     AuditEventType::LeakWarning,
                     AuditSeverity::Warn,
                     "outbound leak detector redacted sensitive token post-substitution".to_string(),
-                );
+                )
+                .await;
             }
         }
 
@@ -425,7 +471,8 @@ impl RuntimeSecurityGuard {
                 AuditEventType::EnvInjectionDetected,
                 AuditSeverity::Critical,
                 format!("inbound secret leak blocked: {reason}"),
-            );
+            )
+            .await;
             return Ok(GuardResult::Blocked {
                 reason: format!("Secret leak detector: {reason}"),
             });
@@ -441,7 +488,8 @@ impl RuntimeSecurityGuard {
                 AuditEventType::ExecBlocked,
                 AuditSeverity::Critical,
                 detail,
-            );
+            )
+            .await;
             return Ok(GuardResult::Blocked {
                 reason: "Leak detector found sensitive data in inbound content".to_string(),
             });
@@ -460,7 +508,8 @@ impl RuntimeSecurityGuard {
                 AuditEventType::LeakWarning,
                 AuditSeverity::Warn,
                 "inbound leak detector redacted sensitive token".to_string(),
-            );
+            )
+            .await;
             return Ok(GuardResult::Redacted {
                 text: redacted,
                 reasons: vec!["Inbound leak detector redacted sensitive token".to_string()],
@@ -470,15 +519,20 @@ impl RuntimeSecurityGuard {
         // Inbound PII filtering: scrub sensitive data echoed back by LLM
         if self.config.pii_filtering {
             if let Some(engine) = &self.pii_engine {
-                let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
-                let result = engine_guard.filter(text);
+                // Same !Send rule as process_outbound: the read guard is
+                // dropped before the audit awaits below.
+                let result = {
+                    let engine_guard = engine.read().unwrap_or_else(|e| e.into_inner());
+                    engine_guard.filter(text)
+                };
                 if result.blocked_count > 0 {
                     self.log_audit(
                         context,
                         AuditEventType::PiiDetected,
                         AuditSeverity::Critical,
                         format!("inbound PII redacted; {} blocks", result.blocked_count),
-                    );
+                    )
+                    .await;
                     return Ok(GuardResult::Redacted {
                         text: result.text,
                         reasons: vec![format!(
@@ -492,7 +546,8 @@ impl RuntimeSecurityGuard {
                         AuditEventType::PiiDetected,
                         AuditSeverity::Warn,
                         format!("inbound PII warning; {} warnings", result.warned_count),
-                    );
+                    )
+                    .await;
                     return Ok(GuardResult::Warned {
                         text: result.text,
                         warnings: vec![format!(

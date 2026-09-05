@@ -54,7 +54,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
 
     /// Attach a cross-encoder reranker as a final retrieval stage (non-breaking
     /// builder; the base `new()` keeps reranking disabled).
-    pub fn with_reranker(mut self, reranker: Arc<dyn RerankProvider>, weight: f32) -> Self {
+    pub(super) fn with_reranker(mut self, reranker: Arc<dyn RerankProvider>, weight: f32) -> Self {
         self.reranker = Some(reranker);
         self.rerank_weight = weight.clamp(0.0, 1.0);
         self

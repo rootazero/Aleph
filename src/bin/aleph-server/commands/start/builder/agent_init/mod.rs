@@ -377,9 +377,35 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Without this, the user can configure `[search.backends.searxng]` all
         // they want but `SearchTool` falls back to TAVILY_API_KEY env and
         // reports "No search provider configured" at runtime.
-        let search_registry =
-            alephcore::search::SearchRegistry::from_config(app_config.search.as_ref())
-                .map(Arc::new);
+        //
+        // The operator's `[ssrf] allow_private_network` switch is threaded
+        // into provider construction: it is what admits a self-hosted SearXNG
+        // on the LAN (loopback / RFC1918 base_url). Cloud metadata endpoints
+        // stay refused under every policy — the switch is not a waiver for
+        // those, only for internal services.
+        let search_registry = alephcore::search::SearchRegistry::from_config(
+            app_config.search.as_ref(),
+            app_config.ssrf.allow_private_network,
+        )
+        .map(Arc::new);
+
+        // `[search]` is a declared-live config section: publish the registry
+        // behind a process-global `SearchHandle` so a Panel `search_config.update`
+        // (or a `config.patch` of `search.*`) hot-applies via
+        // `config::live_apply` instead of waiting for a restart. The seed is
+        // exactly the registry the tool face would have resolved without a
+        // handle (configured, else bare Tavily key, else empty), so installing
+        // the handle changes nothing until the first write lands. The vault
+        // `Arc` travels with it because a patched `Config` provably carries no
+        // API keys (`SearchBackendConfig::api_key` is `skip_serializing`) and
+        // the live rebuild must re-resolve them — see `search::handle`'s doc.
+        let search_handle = Arc::new(alephcore::search::SearchHandle::new(
+            search_registry.unwrap_or_else(|| {
+                alephcore::search::SearchRegistry::for_tool(None, tavily_api_key.as_deref())
+            }),
+            shared_token_mgr.clone(),
+        ));
+        let _ = alephcore::search::install_global_search_handle(search_handle.clone());
 
         // Create agent registry before tool config so agent management tools can use it
         let agent_registry = Arc::new(AgentRegistry::new());
@@ -479,7 +505,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_db: Some(memory_db.clone()),
             embedder,
             tavily_api_key,
-            search_registry: search_registry.clone(),
+            search_handle: Some(search_handle.clone()),
             agent_registry: Some(agent_registry.clone()),
             workspace_manager: workspace_manager.clone(),
             event_bus: Some(event_bus.clone()),
@@ -1830,7 +1856,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
     } else {
         // Simulated mode: no provider registry, so none of this function's
-        // agent-engine branch ran. Seven capability handles are installed in
+        // agent-engine branch ran. Eight capability handles are installed in
         // there and every one of them now reads "never reached" — the state an
         // operator cannot tell from a wiring bug. Name the input instead.
         //
@@ -1852,6 +1878,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         alephcore::thinker::memory_context_provider::decline_session_end_summarizer(NO_ENGINE);
         alephcore::thinker::memory_context_provider::decline_session_reflector(NO_ENGINE);
         alephcore::thinker::memory_context_provider::decline_open_loop_inject(NO_ENGINE);
+        alephcore::search::decline_global_search_handle(NO_ENGINE);
         if !daemon {
             println!(
                 "  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)"

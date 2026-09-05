@@ -282,7 +282,13 @@ static COMPILED: Lazy<Vec<CompiledPattern>> = Lazy::new(|| {
 /// means no pattern at this scope matched; callers may treat that as
 /// "structurally benign" (with the usual caveat that pattern defense is a
 /// blunt first line, not the only line).
-pub fn scan(content: &str, scope: ThreatScope) -> Vec<ThreatHit> {
+///
+/// `pub(crate)`: this entry point does NOT canonicalize the input, so a
+/// caller holding raw model- or user-authored text gets the scan blind to
+/// zero-width-split and Cyrillic-folded payloads. The intended surface is
+/// [`first_threat_message_canonicalized`]; keep this one internal so a
+/// future consumer cannot accidentally reintroduce the laundering vector.
+pub(crate) fn scan(content: &str, scope: ThreatScope) -> Vec<ThreatHit> {
     if content.is_empty() {
         return Vec::new();
     }
@@ -303,17 +309,23 @@ pub fn scan(content: &str, scope: ThreatScope) -> Vec<ThreatHit> {
 /// reason for the first threat found at the given scope, or `None` when the
 /// content is clean.
 ///
-/// Production consumer: `builtin_tools::note_manage` scans note bodies/facts at
-/// [`ThreatScope::Strict`] before a write lands in long-term memory, closing
-/// the memory-poisoning laundering vector (untrusted content distilled into a
-/// note then replayed as trusted recall). That is the only path that reaches
-/// the Strict-scope persistence patterns — keep this wiring in mind before
-/// declaring them dead.
+/// `pub(crate)`: this entry point does NOT canonicalize the input (same
+/// reason as [`scan`]); the intended surface is
+/// [`first_threat_message_canonicalized`]. Keep it internal so a future
+/// consumer cannot accidentally reintroduce the laundering vector by reaching
+/// for the convenient-but-unc canonicalized wrapper.
+///
+/// Production consumer: `builtin_tools::note_manage` reaches
+/// [`first_threat_message_canonicalized`] at [`ThreatScope::Strict`] before a
+/// write lands in long-term memory, closing the memory-poisoning laundering
+/// vector (untrusted content distilled into a note then replayed as trusted
+/// recall). That is the only path that reaches the Strict-scope persistence
+/// patterns — keep this wiring in mind before declaring them dead.
 ///
 /// Pass the scope the calling surface warrants — Strict for user-mediated
 /// writes where a false positive is interactively resolvable.
 #[must_use]
-pub fn first_threat_message(content: &str, scope: ThreatScope) -> Option<String> {
+pub(crate) fn first_threat_message(content: &str, scope: ThreatScope) -> Option<String> {
     scan(content, scope).into_iter().next().map(|hit| {
         format!(
             "Blocked: content matches threat pattern '{}' ({:?}). \

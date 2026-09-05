@@ -11,6 +11,23 @@ use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_registry::FlowSet;
 use crate::orchestrator::flow_spec::FlowSpec;
 
+/// Process-wide serialization point for catalog composition.
+///
+/// The boot path and `gateway.flow.reload` both call [`load_catalog`], then
+/// the caller swaps the registry with [`FlowRegistry::replace`]. Without a
+/// shared lock, two concurrent compositions can interleave so that caller A
+/// loads the presets + empty user set while caller B loads the full set
+/// and replaces first; A's later replace then wipes B's user set on the
+/// registry. The lock spans the full composition so every observed
+/// `load_catalog` end-to-end is serialised, and `replace` happens
+/// immediately after under the same critical section by convention.
+///
+/// Async mutex because the composition awaits on `load_user_flows_from_dir`
+/// (tokio fs); a sync mutex held across `.await` would block the executor
+/// worker thread. Held for milliseconds (one disk read for presets, one
+/// for the user directory), so contention is negligible in practice.
+static CATALOG_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Debug, Deserialize)]
 struct FlowFile {
     #[serde(rename = "flow", default)]
@@ -103,7 +120,19 @@ pub fn merge_catalogs(presets: FlowSet, user: FlowSet) -> FlowSet {
 /// is a source-level check: once the two callers share this function an
 /// equality assertion between them is tautological, so the property worth
 /// pinning is that nobody grows a third, hand-rolled composition.
+///
+/// Holds [`CATALOG_LOCK`] across the full composition so concurrent reloads
+/// cannot interleave (caller A reads presets while caller B reads
+/// presets + user, then A replaces last with its empty-user set and wipes
+/// B's catalog). Callers should treat the returned `FlowSet` as the value
+/// to feed into `FlowRegistry::replace` under the same logical step.
 pub async fn load_catalog(flow_dir: &Path) -> Result<FlowSet, FlowError> {
+    // `tokio::sync::Mutex` does not have a poisoning concept (a panic in a
+    // previous holder does not poison the lock), so a contended `lock().await`
+    // simply queues — no recovery branch needed. The guard is held across the
+    // `.await` on `load_user_flows_from_dir` by design; that's why this is a
+    // tokio mutex rather than std.
+    let _guard = CATALOG_LOCK.lock().await;
     let presets = load_presets()?;
     let user = load_user_flows_from_dir(flow_dir).await?;
     Ok(merge_catalogs(presets, user))

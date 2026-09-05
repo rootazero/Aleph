@@ -1,6 +1,7 @@
 //! Orchestrator core + seven-step dispatch. See design §6.
 
 use crate::sync_primitives::Arc;
+use futures::FutureExt;
 use std::collections::{HashMap, HashSet};
 
 use crate::sync_primitives::Mutex;
@@ -20,6 +21,12 @@ use crate::orchestrator::sandbox_factory::SandboxFactory;
 /// Spawn handle returned to the Gateway.
 pub struct FlowHandle {
     pub session_key: String,
+    /// Parent session key resolved by `SessionStrategy::Child`, if any.
+    /// The gateway MUST thread this through to the session store row so
+    /// child sessions preserve their lineage. `None` for root sessions
+    /// (i.e. the original `req.parent_session` was `None` or `Child`
+    /// resolution produced a fresh key).
+    pub parent_session_key: Option<String>,
     pub events: broadcast::Receiver<FlowStreamEvent>,
     pub completion: oneshot::Receiver<Result<FlowOutcome, FlowError>>,
     pub cancel: CancellationToken,
@@ -598,6 +605,24 @@ pub struct Orchestrator {
     active_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
+/// Extract a human-readable message from the opaque `Box<dyn Any + Send>`
+/// panic payload returned by [`std::panic::catch_unwind`] / `FutureExt::catch_unwind`.
+///
+/// `catch_unwind` deliberately erases the panic type so panics from
+/// different call sites stay distinct; the trade-off is that the caller
+/// has to downcast speculatively. The two common shapes are `&'static str`
+/// (the most common — `panic!("foo")`) and `String` (`panic!("{}", x)`),
+/// plus the synthetic `"Box<dyn Any>"` payload from `std::panic::panic_any`.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
 /// Removes `key` from `active` on drop — runs even if the spawned
 /// harness task panics.
 struct SessionLockGuard {
@@ -607,11 +632,30 @@ struct SessionLockGuard {
 
 impl Drop for SessionLockGuard {
     fn drop(&mut self) {
-        // unwrap_or_else handles lock poisoning: if the mutex was poisoned,
-        // we recover the inner data and still remove the key. A panic during
-        // drop would abort the process, so we must never panic here.
-        let mut guard = self.active.lock().unwrap_or_else(|e| e.into_inner());
-        guard.remove(&self.key);
+        // Use `try_lock` so the `Drop` impl never blocks during stack
+        // unwinding. The previous form called `self.active.lock()` directly;
+        // if a prior panic held the mutex and another thread was parked on
+        // it, the drop impl would block forever and deadlock the runtime.
+        //
+        // `try_lock` here is best-effort: losing the race means we leave
+        // the entry in `active_sessions` until the next dispatch sees the
+        // conflict and the operator clears it. Surfacing the loss as a
+        // warning gives operators a signal; the alternative — recovering
+        // from a poisoned mutex — was the source of the original review
+        // finding because it silently reused a connection state that
+        // might have been mid-statement.
+        match self.active.try_lock() {
+            Ok(mut guard) => {
+                guard.remove(&self.key);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    key = %self.key,
+                    "SessionLockGuard: active_sessions lock contended during drop; \
+                     entry will be retained until the next successful dispatch"
+                );
+            }
+        }
     }
 }
 
@@ -946,17 +990,22 @@ impl Orchestrator {
             fresh_key_fn: || uuid::Uuid::new_v4().to_string(),
         };
         let session_res = resolve_session(session_input)?;
-        // SessionStrategy::Child resolved a parent key here, but the session
+        // SessionStrategy::Child resolved a parent key here. The session
         // store row is created later by the gateway (`SessionStore::get_or_create`)
-        // from the key alone — `parent_session_key` is not threaded through the
-        // dispatch boundary, so the parent link is currently dropped. Log it so
-        // the gap is observable instead of silent; wiring it into the store row
-        // is a cross-boundary change (see resolver.rs doc on SessionResolution).
+        // from the key alone — `parent_session_key` is exposed on `FlowHandle`
+        // so the gateway can persist it onto the store row. Without this,
+        // child sessions become root sessions in the store with no recovery
+        // path, breaking data lineage end-to-end.
+        //
+        // Warn (not debug) when a parent key is dropped at the dispatch
+        // boundary: the gateway is the only place that can fix it, and a
+        // silent drop has cost operators real debugging time.
         if let Some(parent) = &session_res.parent_session_key {
-            tracing::debug!(
+            tracing::warn!(
                 session_key = %session_res.session_key,
                 parent_session_key = %parent,
-                "dispatch: child session resolved; parent key is not yet persisted — session store row is created key-only by the gateway"
+                "dispatch: child session resolved; gateway MUST thread parent_session_key \
+                 onto the SessionStore row or the lineage is silently lost"
             );
         }
         {
@@ -1104,7 +1153,19 @@ impl Orchestrator {
                 }
                 crate::scope::scope_from_metadata(&m)
             };
-            let outcome = crate::agents::with_agent_id(
+
+            // Catch panics from the entire harness task-local stack so they
+            // surface on the `done_tx` channel as `FlowError::Internal`
+            // instead of being swallowed by tokio's default panic hook. The
+            // previous implementation discarded the `JoinHandle` outright:
+            // a panic in any of `with_agent_id` / `with_scope` /
+            // `with_room_author` / `with_originator` would have left the
+            // caller's `FlowHandle::completion` waiting forever. `AssertUnwindSafe`
+            // is sound here because every captured value is `Send + 'static`
+            // and the panic itself cannot violate invariants across the
+            // boundary — it just aborts this future and we convert it to an
+            // error below.
+            let outcome = std::panic::AssertUnwindSafe(crate::agents::with_agent_id(
                 Some(agent_id_for_scope),
                 crate::projects::with_project_root(
                     // rust-doctor-disable-next-line excessive-clone
@@ -1136,8 +1197,28 @@ impl Orchestrator {
                         ),
                     ),
                 ),
-            )
+            ))
+            .catch_unwind()
             .await;
+
+            let outcome = match outcome {
+                Ok(result) => result,
+                Err(panic_payload) => {
+                    let msg = panic_message(&panic_payload);
+                    // `session_key` was moved into `harness.run(...)` above;
+                    // we cannot reference it again after that move. The
+                    // structured context for this log is already captured by
+                    // the tracing span on the spawned task, so the message
+                    // alone is sufficient.
+                    tracing::error!(
+                        "harness task panicked; surfacing as FlowError::Internal: {msg}"
+                    );
+                    Err(FlowError::Internal(format!(
+                        "harness task panicked: {msg}"
+                    )))
+                }
+            };
+
             // `done_tx.send` returns Err only when `done_rx` was dropped by the
             // caller — meaning the handle was abandoned and no one is waiting for
             // the result. Dropping the result is intentional; a `return` or `?`
@@ -1147,7 +1228,8 @@ impl Orchestrator {
         });
 
         Ok(FlowHandle {
-            session_key: session_res.session_key,
+            session_key: session_res.session_key.clone(),
+            parent_session_key: session_res.parent_session_key,
             events: event_rx,
             completion: done_rx,
             cancel,

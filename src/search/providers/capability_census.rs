@@ -37,7 +37,11 @@ const DIMENSIONS: &[(&str, &[&str])] = &[
 ];
 
 /// Every provider source file, keyed by provider name.
-fn provider_sources() -> BTreeMap<&'static str, &'static str> {
+///
+/// `pub(super)` so `error_funnel_census` asks the same list its own
+/// question — a second enumeration would be two authors for one fact, and
+/// the self-assertion below only pins one of them.
+pub(super) fn provider_sources() -> BTreeMap<&'static str, &'static str> {
     // include_str! needs literals, so this list is explicit — but the
     // self-assertion below pins its length against the directory listing.
     BTreeMap::from([
@@ -59,7 +63,10 @@ fn provider_sources() -> BTreeMap<&'static str, &'static str> {
 /// this scanner's own marker text nor a provider's format strings can be
 /// mistaken for the code they merely describe — see `code_text`'s doc for
 /// why a naive quote-walk is unsafe here.
-fn production_view(src: &str) -> String {
+///
+/// `pub(super)` for `error_funnel_census`, whose forbidden markers need the
+/// same guarantee that a comment or a string literal cannot trip them.
+pub(super) fn production_view(src: &str) -> String {
     code_text(&production_prefix(src))
 }
 
@@ -214,7 +221,12 @@ fn the_census_sees_every_provider_file() {
     .filter_map(|e| e.ok())
     .filter_map(|e| e.file_name().into_string().ok())
     .filter(|n| n.ends_with(".rs"))
-    .filter(|n| !matches!(n.as_str(), "mod.rs" | "base.rs" | "capability_census.rs"))
+    .filter(|n| {
+        !matches!(
+            n.as_str(),
+            "mod.rs" | "base.rs" | "capability_census.rs" | "error_funnel_census.rs"
+        )
+    })
     .map(|n| n.trim_end_matches(".rs").to_string())
     .collect();
     let known: BTreeSet<String> = provider_sources()

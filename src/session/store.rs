@@ -773,7 +773,7 @@ fn cap_chars(s: &str, max: usize) -> String {
 /// | `builtin_tools/recall_events.rs` | `Ok(empty)` plus a note to the model |
 /// | `builtin_tools/sessions/compact_tool.rs` | an `AlephError` |
 /// | [`retire_live_events`] | `Ok(0)` — "retired nothing", indistinguishable from "there was nothing to retire" |
-/// | [`is_event_retired`] | `Ok(false)` — "not retired", the fail-open direction |
+/// | `gateway/session_projector.rs` | reads `is_retired` on its own store handle (no process-wide accessor needed) |
 /// | `gateway/execution_engine/run_loop/inner.rs` | the legacy backfill is skipped in silence |
 ///
 /// Each arm is individually defensible (all five doc-comment their reasoning),
@@ -845,8 +845,8 @@ pub async fn retire_live_events(
 }
 
 /// The process-wide event store used by tests that need the real
-/// `retire_live_events` / `is_event_retired` path (the handlers reach the store
-/// through the process-wide slot above, so they cannot be handed one).
+/// `retire_live_events` path (the handlers reach the store through the
+/// process-wide slot above, so they cannot be handed one).
 ///
 /// A single shared in-memory store: `set_global_session_event_store` only ever
 /// honours the first call, so every test must install the SAME instance or the
@@ -866,18 +866,14 @@ pub(crate) fn install_test_event_store() -> Arc<SqliteEventStore> {
     store
 }
 
-/// True when the event at `seq` has been retired in the process-wide event log.
-///
-/// Consulted by the projector before it writes a row: the drain is async, so a
-/// `clear` / `rewind` can retire an event that is still queued. `false` when no
-/// store is installed (CLI one-shot, tests) — there is no soft-delete state to
-/// respect.
-pub async fn is_event_retired(session_id: &SessionId, seq: EventSeq) -> Result<bool, SessionError> {
-    match global_session_event_store() {
-        Some(store) => store.is_retired(session_id, seq).await,
-        None => Ok(false),
-    }
-}
+// Note (severed-wire-2026-09-05-modules2 session I-3):
+// the process-wide accessor `is_event_retired` was deleted — the projector
+// reaches the trait method directly on its own `Arc<dyn SessionEventStore>`
+// handle (gateway/session_projector.rs:650), so the slot indirection had no
+// caller and the doc-cited "consulted by the projector before it writes a
+// row" contract was unwired. If a future caller needs the global accessor,
+// re-introduce it together with a real call site — the half-wired slot was
+// worse than either end state.
 
 #[cfg(test)]
 mod tests {

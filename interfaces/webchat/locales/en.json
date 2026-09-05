@@ -1461,6 +1461,7 @@
       "provider_required": "Provider name is required",
       "providers_section": "Search Providers",
       "row_needs_key": "API key required",
+      "restart_required_hint": "Saved to config.toml, but the change could not be hot-applied to the running search registry — it takes effect after aleph-server restarts.",
       "saved_successfully": "Saved successfully",
       "select_to_configure": "Select a search provider to configure",
       "self_hosted": "Self-hosted",

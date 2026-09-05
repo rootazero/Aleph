@@ -86,9 +86,17 @@ impl Default for VaultData {
 }
 
 /// Secret error types.
+///
+/// `NotFound` and `InvalidPlaceholder` carry the user-supplied secret name in
+/// a side field rather than in their `Display` output: echoing the name
+/// verbatim gave a model iterating `{{secret:NAME}}` placeholders a
+/// hit-or-miss oracle for vault contents (vault-namespace enumeration).
+/// Callers needing the name for triage should reach for [`SecretError::name`]
+/// (or `tracing::Span::record("secret_name", …)`); a `Display` consumer must
+/// never see it.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
-    #[error("Secret '{0}' not found")]
+    #[error("secret not found")]
     NotFound(String),
 
     #[error("Decryption failed: vault may be corrupted or master key is wrong")]
@@ -112,8 +120,24 @@ pub enum SecretError {
     #[error("Provider '{provider}' error: {message}")]
     ProviderError { provider: String, message: String },
 
-    #[error("Invalid secret placeholder: {0}")]
+    #[error("invalid secret placeholder")]
     InvalidPlaceholder(String),
+}
+
+impl SecretError {
+    /// Recover the user-supplied secret name carried by `NotFound` /
+    /// `InvalidPlaceholder` for triage paths (audit log, operator-only
+    /// debug log). Never feed the returned `&str` into a model-facing
+    /// surface — that is exactly the path this accessor exists to avoid.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            SecretError::NotFound(name) | SecretError::InvalidPlaceholder(name) => {
+                Some(name.as_str())
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +213,38 @@ mod tests {
             message: "item not found".into(),
         };
         assert!(format!("{}", err).contains("1password"));
+    }
+
+    /// Regression for `severed-wire-2026-09-05-modules2 secrets C-1`: the
+    /// Display impl of `NotFound` / `InvalidPlaceholder` must NOT include the
+    /// user-supplied name, or a model iterating `{{secret:NAME}}` gets a
+    /// hit/miss oracle for the vault namespace. The name is still recoverable
+    /// for triage via [`SecretError::name`].
+    #[test]
+    fn test_not_found_display_does_not_echo_name() {
+        let err = SecretError::NotFound("ghp_superSecretName42".into());
+        let display = format!("{}", err);
+        assert!(
+            !display.contains("ghp_superSecretName42"),
+            "NotFound Display must not echo the name, got: {display}"
+        );
+        assert_eq!(err.name(), Some("ghp_superSecretName42"));
+    }
+
+    #[test]
+    fn test_invalid_placeholder_display_does_not_echo_name() {
+        let err = SecretError::InvalidPlaceholder("../etc/passwd".into());
+        let display = format!("{}", err);
+        assert!(
+            !display.contains("../etc/passwd"),
+            "InvalidPlaceholder Display must not echo the name, got: {display}"
+        );
+        assert_eq!(err.name(), Some("../etc/passwd"));
+    }
+
+    #[test]
+    fn test_name_accessor_returns_none_for_other_variants() {
+        let err = SecretError::DecryptionFailed;
+        assert_eq!(err.name(), None);
     }
 }

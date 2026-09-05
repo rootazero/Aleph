@@ -284,13 +284,22 @@ impl StateDatabase {
     pub async fn delete_traces_for_task(&self, task_id: &str) -> Result<u64, AlephError> {
         let task_id = task_id.to_string();
         self.with_conn(move |conn| {
-            let count = conn
+            // `Connection::execute` returns `Result<usize>` (rows changed),
+            // not i64. Cast to i64 via try_from so an unexpected
+            // `usize > i64::MAX` (impossible per SQLite's row-count cap)
+            // is surfaced as a typed error rather than a silent truncation.
+            let count: usize = conn
                 .execute(
                     "DELETE FROM task_traces WHERE task_id = ?1",
                     params![task_id],
                 )
                 .map_err(|e| AlephError::config(format!("Failed to delete traces: {e}")))?;
-            Ok(count as u64)
+            let count_i64 = i64::try_from(count).map_err(|_| {
+                AlephError::config(format!(
+                    "delete_traces_for_task: row count {count} exceeds i64::MAX"
+                ))
+            })?;
+            super::i64_to_u64_count(count_i64, "deleted_traces")
         })
         .await
     }
@@ -306,7 +315,7 @@ impl StateDatabase {
                     |row| row.get(0),
                 )
                 .map_err(|e| AlephError::config(format!("Failed to count traces: {e}")))?;
-            Ok(count as u64)
+            super::i64_to_u64_count(count, "trace_count")
         })
         .await
     }

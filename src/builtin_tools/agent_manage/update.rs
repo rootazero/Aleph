@@ -240,7 +240,8 @@ impl AlephTool for AgentUpdateTool {
                         args.agent_id,
                         users.join(", ")
                     ),
-                ));
+                ))
+                .await;
             }
         }
 

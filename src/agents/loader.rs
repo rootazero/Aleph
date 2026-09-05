@@ -16,7 +16,7 @@ pub enum LoaderError {
     Frontmatter {
         path: PathBuf,
         #[source]
-        source: serde_yaml::Error,
+        source: serde_yml::Error,
     },
 
     #[error("missing closing '---' delimiter in {path}")]
@@ -116,7 +116,7 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
             path: path.to_path_buf(),
         })?;
 
-    let fm: UserFrontmatter = serde_yaml::from_str(yaml).map_err(|e| LoaderError::Frontmatter {
+    let fm: UserFrontmatter = serde_yml::from_str(yaml).map_err(|e| LoaderError::Frontmatter {
         path: path.to_path_buf(),
         source: e,
     })?;

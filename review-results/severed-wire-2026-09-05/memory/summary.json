@@ -1,0 +1,291 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-09-05",
+  "module": "src/memory",
+  "files_scanned": [
+    "src/memory/mod.rs",
+    "src/memory/assembler/*",
+    "src/memory/compression/*",
+    "src/memory/content_scanner.rs",
+    "src/memory/context/*",
+    "src/memory/context_comptroller/*",
+    "src/memory/curated/*",
+    "src/memory/dreaming/*",
+    "src/memory/embedding_manager.rs",
+    "src/memory/embedding_provider.rs",
+    "src/memory/embedding_resolver.rs",
+    "src/memory/embedding_signature.rs",
+    "src/memory/events/*",
+    "src/memory/explain.rs",
+    "src/memory/extensions/*",
+    "src/memory/flush/*",
+    "src/memory/insights.rs",
+    "src/memory/loom_concurrency.rs",
+    "src/memory/namespace.rs",
+    "src/memory/note_retrieval/*",
+    "src/memory/notes/*",
+    "src/memory/project_scope.rs",
+    "src/memory/reembed.rs",
+    "src/memory/reflector/*",
+    "src/memory/rerank/*",
+    "src/memory/ripple/*",
+    "src/memory/scratchpad/*",
+    "src/memory/session_compactor/*",
+    "src/memory/session_memory_mode.rs",
+    "src/memory/session_reflection/*",
+    "src/memory/session_resume/*",
+    "src/memory/session_search_summary/*",
+    "src/memory/store/*",
+    "src/memory/streaming_scrubber.rs",
+    "src/memory/tool_signal_sink.rs",
+    "src/memory/transcript_indexer/*"
+  ],
+  "method": "PRODUCED - CONSUMED symbol parity (rg across src/, bin/, interfaces/, shared/, desktop/). For each pub fn/struct/enum/trait/type/const/static, count files containing the symbol; one-file items are suspicious; one-file items with only test consumers are severed. Cross-checked against dream pipeline (src/memory/dreaming/mod.rs:238-344), rerank dispatch (src/memory/rerank/mod.rs:36-51), bin/aleph-server handlers/memory.rs, builtin_tools/, and thinker/memory_context_provider/constructor.rs to confirm live wires.",
+  "findings": [
+    {
+      "id": "sw-memory-01",
+      "module": "src/memory",
+      "files": [
+        "src/memory/events/projector.rs:32",
+        "src/memory/events/projector.rs:39",
+        "src/memory/events/projector.rs:231",
+        "src/memory/events/projector.rs:239"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "EventProjector instance surface (struct + new + rebuild_fact + rebuild_fact_at)",
+      "produced_location": "src/memory/events/projector.rs:32,39,231,239",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "Only the static fold_events_to_note is called externally (handler.rs:78/269/384/611, migration.rs:266, integration_tests/mod.rs:72). The struct's db field and three instance methods have zero callers. Tests pass the type only as a namespace, never construct it.",
+      "proposed_change": "Keep fold_events_to_note as pub static (or in a free function). Remove the db field, new(), rebuild_fact(), rebuild_fact_at(); either inline get_memory_events_for_fact/_until at the (currently nonexistent) call sites or delete the helpers.",
+      "risk": "Low — fold_events_to_note is pub static-eligible (no &self); the only tests using the struct use the static method path.",
+      "verification": "rg -n \"EventProjector::new|\\.rebuild_fact\\b|\\.rebuild_fact_at\\b\" --type rust returns zero hits. The single non-test hit on EventProjector is the re-export line src/memory/mod.rs:87.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-02",
+      "module": "src/memory",
+      "files": [
+        "src/memory/events/migration.rs:20",
+        "src/memory/events/migration.rs:33",
+        "src/memory/events/migration.rs:37",
+        "src/memory/events/migration.rs:50",
+        "src/memory/events/migration.rs:81"
+      ],
+      "severity": "medium",
+      "form": 1,
+      "produced": "EventSourcingMigration (struct + new + run_if_needed + migrate_facts) + MigrationReport",
+      "produced_location": "src/memory/events/migration.rs:20,33,37,50,81",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "The full migration module has zero production callers. There is no startup hook, no migration CLI, no admin API. Event-sourced stores replaced the legacy store without ever running this migration. Only the file's own 5 tests exercise the API.",
+      "proposed_change": "Delete src/memory/events/migration.rs and remove the pub use migration::{EventSourcingMigration, MigrationReport} line from src/memory/mod.rs:84.",
+      "risk": "Medium — if a future back-fill from pre-event-sourced install is needed, the code must be re-derived. Note this is recoverable from git history; the column-level migration path is already documented at src/memory/store/sqlite/schema/migrations.rs:30.",
+      "verification": "rg -l \"EventSourcingMigration\" --type rust returns only src/memory/mod.rs (re-export) and src/memory/events/migration.rs (definition + tests).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-03",
+      "module": "src/memory",
+      "files": [
+        "src/memory/context/fact.rs:192"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "MemoryFact::with_embedding",
+      "produced_location": "src/memory/context/fact.rs:192",
+      "consumer_location": "none found",
+      "decision": "CUT",
+      "rationale": "pub builder method with zero callers in the tree. Pure dead surface.",
+      "proposed_change": "Delete the function.",
+      "risk": "None — builder method, no I/O, no semantic effect.",
+      "verification": "rg -n \"with_embedding\" --type rust returns only the definition line.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-04",
+      "module": "src/memory",
+      "files": [
+        "src/memory/context/fact.rs:303"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "MemoryFact::close_validity",
+      "produced_location": "src/memory/context/fact.rs:303",
+      "consumer_location": "src/memory/context/fact.rs:334 (test only)",
+      "decision": "CUT",
+      "rationale": "pub builder method with only an in-file test caller. Production never sets valid_to directly — only via serde_json deserialisation paths.",
+      "proposed_change": "Delete the function and its test.",
+      "risk": "Low — the only other writer of valid_to is the legacy migration path which we are removing in sw-memory-02.",
+      "verification": "rg -n \"close_validity\" --type rust returns only the definition and one test.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-05",
+      "module": "src/memory",
+      "files": [
+        "src/memory/store/sqlite/recall_signals.rs:25",
+        "src/memory/store/sqlite/recall_signals.rs:142"
+      ],
+      "severity": "medium",
+      "form": 1,
+      "produced": "RecallAggregate (8-field struct) + SqliteMemoryBackend::aggregate_for_facts",
+      "produced_location": "src/memory/store/sqlite/recall_signals.rs:25,142",
+      "consumer_location": "src/memory/store/sqlite/recall_signals.rs (5 tests only)",
+      "decision": "CUT",
+      "rationale": "The module's own docstring (line 9) explicitly says 'the other RecallAggregate fields are currently unconsumed'. Only the production read paths are recall_signals_last_hit (used by note_decay.rs:130) and co_recall_pairs (used by co_recall_edges.rs:53); neither touches aggregate_for_facts.",
+      "proposed_change": "Either delete aggregate_for_facts + RecallAggregate + 5 tests, or shrink RecallAggregate to (note_path, signal_count) and demote aggregate_for_facts to private.",
+      "risk": "Medium — RecallAggregate was designed as the read-side projection; deleting it removes the only pub way to ask 'what notes were recalled this cycle'. note_decay stage currently uses recall_signals_last_hit per-note instead.",
+      "verification": "rg -l \"RecallAggregate\" --type rust returns only src/memory/store/sqlite/recall_signals.rs.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-06",
+      "module": "src/memory",
+      "files": [
+        "src/memory/dreaming/stages/workflow_proposal.rs:72"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "workflow_proposal::aggregate_chains",
+      "produced_location": "src/memory/dreaming/stages/workflow_proposal.rs:72",
+      "consumer_location": "src/memory/dreaming/stages/workflow_proposal.rs:109,167,179 (test only)",
+      "decision": "CUT",
+      "rationale": "Pure helper used only by the file's own tests. The production WorkflowProposalStage::execute builds its representative chain inline from sorted SQL aggregation; never calls this fn.",
+      "proposed_change": "Drop aggregate_chains (line 72) and the 2 test call sites at 167 and 179.",
+      "risk": "None — pure helper, no I/O.",
+      "verification": "rg -n \"aggregate_chains\" --type rust returns 4 lines, all in the defining file.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-07",
+      "module": "src/memory",
+      "files": [
+        "src/memory/dreaming/stages/skill_distill.rs:266"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "skill_distill::build_distill_prompt_with_candidates",
+      "produced_location": "src/memory/dreaming/stages/skill_distill.rs:266",
+      "consumer_location": "src/memory/dreaming/stages/skill_distill.rs:105,388,408,439,474 (tests only)",
+      "decision": "CUT",
+      "rationale": "pub prompt builder used only in the file's own 5 test cases. The production SkillDistillStage::execute (line 95) builds its prompt inline via the same template.",
+      "proposed_change": "Delete the pub fn and the 5 test usages; inline the template into the stage.",
+      "risk": "None — pure prompt builder, identical signature to other stage prompt builders.",
+      "verification": "rg -n \"build_distill_prompt_with_candidates\" --type rust returns 6 lines, all in the defining file.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-08",
+      "module": "src/memory",
+      "files": [
+        "src/memory/dreaming/stages/tool_failure_distill.rs:454"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "tool_failure_distill::build_tool_failure_prompt",
+      "produced_location": "src/memory/dreaming/stages/tool_failure_distill.rs:454",
+      "consumer_location": "src/memory/dreaming/stages/tool_failure_distill.rs:270,603,621,639,660,662 (tests only)",
+      "decision": "CUT",
+      "rationale": "Same shape as sw-memory-07. Pure prompt builder used only in 6 test cases.",
+      "proposed_change": "Delete the pub fn and the 6 test usages.",
+      "risk": "None — production builds the prompt inline.",
+      "verification": "rg -n \"build_tool_failure_prompt\" --type rust returns 7 lines, all in the defining file.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-09",
+      "module": "src/memory",
+      "files": [
+        "src/memory/session_compactor/summary_engine.rs:142"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "summary_engine::chunk_messages",
+      "produced_location": "src/memory/session_compactor/summary_engine.rs:142",
+      "consumer_location": "src/memory/session_compactor/summary_engine.rs:320,328,341 (tests only)",
+      "decision": "CUT",
+      "rationale": "pub chunker used only by 4 in-file tests. The production summariser (session_compactor/post_turn_compress.rs) chunks via partition_fresh_tail_pairs, not this fn.",
+      "proposed_change": "Delete the pub fn and the 4 tests.",
+      "risk": "None.",
+      "verification": "rg -n \"chunk_messages\" --type rust returns 8 lines, all in the defining file.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-10",
+      "module": "src/memory",
+      "files": [
+        "src/memory/dreaming/validation.rs:69"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "validation::validate_frontmatter (single-note primitive)",
+      "produced_location": "src/memory/dreaming/validation.rs:69",
+      "consumer_location": "src/memory/dreaming/validation.rs:182,220,227,236,243 (tests only)",
+      "decision": "CUT",
+      "rationale": "Single-note primitive used only in 5 in-file tests. The aggregate runners run_l1_validation/run_l2_validation (lines 175,200) wrap it and are wired into the dream cycle, but the primitive itself is never called externally.",
+      "proposed_change": "Demote to private fn or delete the 4 single-note tests; the aggregate tests cover the same shape.",
+      "risk": "Low.",
+      "verification": "rg -n \"validate_frontmatter\" --type rust returns 6 lines, all in the defining file.",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-11",
+      "module": "src/memory",
+      "files": [
+        "src/memory/note_retrieval/builder.rs:57"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "NoteFactRetrieval::with_reranker",
+      "produced_location": "src/memory/note_retrieval/builder.rs:57",
+      "consumer_location": "src/memory/note_retrieval/tests.rs:527,620 (tests only); builder.rs:73 internal call from with_rerank_config",
+      "decision": "CUT",
+      "rationale": "Production wires via with_rerank_config (thinker/constructor.rs:218, builtin_tools/memory_search.rs:308, gateway/handlers/memory_config.rs:270). The with_reranker variant exists only because with_rerank_config calls it internally and tests use the direct variant.",
+      "proposed_change": "Demote with_reranker to private; tests can use RerankConfig directly.",
+      "risk": "Low — the 2 tests can be migrated to RerankConfig constructors with no semantic change.",
+      "verification": "rg -n \"with_reranker\\(\" --type rust returns 4 lines (2 test callers + 1 internal + 1 definition).",
+      "existing_review_ref": null
+    },
+    {
+      "id": "sw-memory-12",
+      "module": "src/memory",
+      "files": [
+        "src/memory/session_search_summary/dedup.rs:12",
+        "src/memory/session_search_summary/dedup.rs:25"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "session_search_summary::dedup::{ScoredCandidate, top_per_session}",
+      "produced_location": "src/memory/session_search_summary/dedup.rs:12,25",
+      "consumer_location": "src/memory/session_search_summary/dedup.rs (test helper + 1 test only)",
+      "decision": "CUT",
+      "rationale": "Leftover from an earlier ranking strategy. The summariser's actual dedup is done elsewhere (session_search_summary/filter.rs:11 FactSourceFilter, session_search_summary/mod.rs). This dedup.rs is not on the live /end-summary path.",
+      "proposed_change": "Delete src/memory/session_search_summary/dedup.rs.",
+      "risk": "Low — pure dead wood of an abandoned ranking strategy.",
+      "verification": "rg -n \"ScoredCandidate|top_per_session\" --type rust returns 7 lines, all in the defining file.",
+      "existing_review_ref": null
+    }
+  ],
+  "summary": {
+    "total_findings": 12,
+    "cut": 12,
+    "connect": 0,
+    "decide": 0,
+    "by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 10
+    },
+    "by_form": {
+      "1_producer_zero_callers": 12,
+      "2_stub_far_end": 0,
+      "3_inert_config": 0,
+      "4_client_ghost": 0,
+      "5_name_path_drift": 0,
+      "6_never_compiled_far_end": 0
+    }
+  }
+}
