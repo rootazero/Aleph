@@ -134,7 +134,11 @@ impl OpenAiCompatProvider {
     ///     .timeout_secs(180)
     ///     .build()?;
     /// ```
-    pub fn builder<S1, S2, S3>(name: S1, api_key: S2, base_url: S3) -> OpenAiCompatProviderBuilder
+    pub(crate) fn builder<S1, S2, S3>(
+        name: S1,
+        api_key: S2,
+        base_url: S3,
+    ) -> OpenAiCompatProviderBuilder
     where
         S1: Into<String>,
         S2: Into<String>,

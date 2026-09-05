@@ -41,6 +41,7 @@ mod provider;
 mod types;
 
 // Re-export public API
+#[cfg(test)]
 pub(crate) use builder::OpenAiCompatProviderBuilder;
 pub use provider::OpenAiCompatProvider;
 

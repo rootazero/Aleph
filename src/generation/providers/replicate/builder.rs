@@ -19,7 +19,9 @@ use super::constants::DEFAULT_TIMEOUT_SECS;
 ///
 /// # Example
 ///
-/// ```rust
+/// Crate-internal: reached through `create_provider`, never from outside
+/// the crate, so this example is illustrative and not compiled.
+/// ```rust,ignore
 /// use alephcore::generation::providers::ReplicateProvider;
 /// use alephcore::generation::GenerationType;
 ///

@@ -149,7 +149,10 @@ impl FalProviderBuilder {
 }
 
 impl FalProvider {
-    pub fn builder(name: impl Into<String>, api_key: impl Into<String>) -> FalProviderBuilder {
+    pub(crate) fn builder(
+        name: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> FalProviderBuilder {
         FalProviderBuilder::new(name, api_key)
     }
 

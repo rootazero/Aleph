@@ -45,6 +45,7 @@ mod submit_polling;
 mod types;
 
 // Re-export public types for backward compatibility
+#[cfg(test)]
 pub(crate) use builder::MidjourneyProviderBuilder;
 pub use provider::MidjourneyProvider;
 pub use types::{

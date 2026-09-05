@@ -45,6 +45,7 @@ mod provider;
 mod types;
 
 // Re-exports for backward compatibility
+#[cfg(test)]
 pub(crate) use builder::ReplicateProviderBuilder;
 pub use constants::{
     DEFAULT_ENDPOINT, DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, MODEL_FLUX_SCHNELL, MODEL_MUSICGEN,
