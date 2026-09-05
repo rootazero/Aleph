@@ -190,7 +190,7 @@ Aleph 内一个只盖十几个方法的 CDP 客户端（`tokio-tungstenite 0.26`
 - `input.rs`：照 Skyvern 的映射搬设计不搬代码——letterbox 坐标换算、修饰键位掩码、非打印键必须带 `windowsVirtualKeyCode`、滚轮累积与 rAF 合并、鼠标移动合并、`compositionend` / 粘贴 → `InsertText`。键盘只在容器聚焦时捕获，监听器挂元素不挂 window（Leptos 0.8 `window_event_listener` 不注册清理，记忆 `project-providers-preset-picker` / `project-channel-reachability-and-phone-i18n`）。
 - `chrome.rs`：地址栏（仅持有时可编辑）、前进/后退/刷新、tab 条（来自 state）、持有者横幅、「点击画面任意处即接管」覆盖层、介入摘要提示、agent 的 `request` 提示。
 - 位置（D5）：**不是独立视图，是右侧工作区栏的一个体**。宽屏聊天面已有 `WorkspacePanel`（`interfaces/webchat/src/components/workspace_panel.rs:1-21`）：`LayoutMode::Split` 时在右侧打开、聊天面让出约 40% 宽度（`views/chat/view.rs:189-200`、`:256-257`）；单 agent 模式的体是 `ArtifactsSurface`，team 模式是 deliverables / tasks 页签；`WorkspaceState`（`state/layout.rs:81`）已经记录每次工具调用的参数与结果（`record_tool_args` `:183`、`get_tool_payload` `:202`）。浏览器视图作为这个面板的又一个体接入：单 agent 模式加一个 Artifacts / Browser 的体切换，team 模式加一个 Browser 页签。上面四个文件的实现不变，只是挂载点从「并列视图」改为工作区体。手机端不做。
-- 与对话联动的五条规则（在对话里只定了「联动」二字，以下细则是**待用户确认的默认值**，plan 3 执行前须过目）：
+- 与对话联动的五条规则（2026-09-05 用户裁定「五条都按默认值」，plan 3 不重开）：
   - L1 **profile 跟随会话**：视图显示的是**当前会话的 agent 正在用的 profile**，取自 `WorkspaceState` 里记录的最近一次 `browser_*` 调用参数（缺省 `default`），不做全局 profile 选择器。
   - L2 **自动出现**：当前会话的 run 首次调用 `browser_*` 且该 profile 有活会话（`session_active`）时，若布局是 `ChatOnly` 则切到 `Split` 并选中 Browser 体；用户手动收起后本 run 内不再自动弹出。agent 的 `browser_control{request}` **必弹**并高亮提示。
   - L3 **transcript 可达**：聊天记录里的 `browser_*` 工具行可点击，点击 = 打开 Browser 体（不做「回到当时那一帧」）。
