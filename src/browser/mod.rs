@@ -1,6 +1,8 @@
 pub mod backend;
 pub(crate) mod chrome_mcp;
 pub(crate) mod chrome_mcp_backend;
+// TODO(plan-1 task 6): remove this allow. Consumers land in Task 5 (playwright_cli.rs) and Task 6 (manager.rs); until then this module has no non-test caller and `-D warnings` (justfile:486, CI:345) would fail.
+#[allow(dead_code)]
 pub(crate) mod chromium_launch;
 mod discovery;
 pub mod error;

@@ -131,6 +131,10 @@ pub(crate) fn endpoint_from_port_file(text: &str, pid: u32) -> Option<CdpEndpoin
 
 /// What Aleph records about a browser it launched.
 ///
+/// Chrome does not remove `DevToolsActivePort` on exit, so that file cannot
+/// answer "is this browser mine and still running" — this sidecar is the
+/// record that can.
+///
 /// These live in ONE registry directory, not beside each browser's profile.
 /// A profile may configure `user_data_dir` to anywhere on disk (the repo's own
 /// QA does), so a per-udd record puts itself outside anything a boot sweep can
@@ -140,7 +144,13 @@ pub(crate) fn endpoint_from_port_file(text: &str, pid: u32) -> Option<CdpEndpoin
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ChromiumSidecar {
     pub pid: u32,
-    pub http_url: String,
+    /// `None` until the port file parses. The record is written immediately
+    /// after the process is spawned — before the endpoint is known — so a
+    /// cancelled or crashed [`ChromiumChild::spawn`] still leaves a reapable
+    /// record (round-1 review finding F2); `reap_orphans` never reads this
+    /// field, it decides on `pid` + `user_data_dir` alone. `None` means "I do
+    /// not know yet" and must never be rendered as a usable endpoint.
+    pub http_url: Option<String>,
     /// The profile directory that process was launched with. Recorded rather
     /// than implied by the file's location, because the file is not stored
     /// there — and this is the value the orphan sweep matches against argv.
@@ -287,6 +297,14 @@ impl ChromiumChild {
                 detail: format!("{}: {e}", spec.binary.display()),
             })?;
         let pid = child.id();
+        // Record intent BEFORE the port is known (判据 §15): if this future is
+        // dropped at any await below (an outer timeout, a `select!`, a
+        // cancelled task) or Aleph crashes before the loop returns, this is
+        // the only trace that a Chromium process exists and needs reaping —
+        // `std::process::Child` does not kill on drop (round-1 review finding
+        // F2). The reaper decides on pid + user_data_dir alone, so an
+        // endpoint-less record is fully reapable.
+        write_sidecar_record(session_key, pid, &spec.user_data_dir, None).await;
 
         let started = Instant::now();
         loop {
@@ -375,39 +393,88 @@ impl ChromiumChild {
         }
     }
 
+    /// Rewrite this profile's sidecar now that the endpoint is known — see
+    /// [`write_sidecar_record`].
     async fn write_sidecar(&self) {
-        let path = match sidecar_path(&self.session_key) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(error = %e, "cannot resolve the chromium sidecar path");
-                return;
-            }
-        };
-        if let Some(dir) = path.parent() {
-            if let Err(e) = tokio::fs::create_dir_all(dir).await {
-                tracing::warn!(error = %e, "cannot create the chromium sidecar registry");
-                return;
-            }
+        write_sidecar_record(
+            &self.session_key,
+            self.endpoint.pid,
+            &self.user_data_dir,
+            Some(self.endpoint.http_url.clone()),
+        )
+        .await;
+    }
+}
+
+/// Write (or overwrite) one profile's sidecar record.
+///
+/// Called twice per successful launch: once immediately after the process is
+/// spawned (`http_url: None` — pid and `user_data_dir` are already known, the
+/// endpoint is not yet), and again once the port file parses (`http_url:
+/// Some(..)`). The reaper never reads `http_url` — it decides on `pid` +
+/// `user_data_dir` alone — so the early record is fully reapable (round-1
+/// review finding F2).
+///
+/// Atomic: writes to a `.tmp` sibling in the same directory, then renames
+/// over the target. `tokio::fs::write` alone is not atomic, and a crash
+/// mid-write would leave a truncated file that `reap_orphans` would then have
+/// to treat as unparseable — exactly the torn-write case round-1 review
+/// finding F5 named. `rename` within one directory is atomic on every
+/// platform this runs on.
+async fn write_sidecar_record(
+    session_key: &str,
+    pid: u32,
+    user_data_dir: &Path,
+    http_url: Option<String>,
+) {
+    let path = match sidecar_path(session_key) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot resolve the chromium sidecar path");
+            return;
         }
-        let body = match serde_json::to_string(&ChromiumSidecar {
-            pid: self.endpoint.pid,
-            http_url: self.endpoint.http_url.clone(),
-            user_data_dir: self.user_data_dir.clone(),
-            aleph_version: env!("ALEPH_VERSION").to_string(),
-        }) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(error = %e, "cannot serialize the chromium sidecar");
-                return;
-            }
-        };
-        if let Err(e) = tokio::fs::write(&path, body).await {
-            // Best-effort here, but NOT unobserved: a missing sidecar costs an
-            // orphan across a crash. The QA `attach` stage asserts the file
-            // exists and that its pid matches a live process (Task 9 step 6),
-            // because no unit test can see this.
-            tracing::warn!(error = %e, path = %path.display(), "cannot write the chromium sidecar");
+    };
+    if let Some(dir) = path.parent() {
+        if let Err(e) = tokio::fs::create_dir_all(dir).await {
+            tracing::warn!(error = %e, "cannot create the chromium sidecar registry");
+            return;
         }
+    }
+    let body = match serde_json::to_string(&ChromiumSidecar {
+        pid,
+        http_url,
+        user_data_dir: user_data_dir.to_path_buf(),
+        aleph_version: env!("ALEPH_VERSION").to_string(),
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot serialize the chromium sidecar");
+            return;
+        }
+    };
+    let tmp_path = {
+        let mut s = path.clone().into_os_string();
+        s.push(".tmp");
+        PathBuf::from(s)
+    };
+    // Best-effort here, but NOT unobserved: a missing sidecar costs an
+    // orphan across a crash. The QA `attach` stage asserts the file exists
+    // and that its pid matches a live process (Task 9 step 6), because no
+    // unit test can see this.
+    if let Err(e) = tokio::fs::write(&tmp_path, body).await {
+        tracing::warn!(
+            error = %e,
+            path = %tmp_path.display(),
+            "cannot write the chromium sidecar temp file"
+        );
+        return;
+    }
+    if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
+        tracing::warn!(
+            error = %e,
+            path = %path.display(),
+            "cannot rename the chromium sidecar into place"
+        );
     }
 }
 
@@ -435,10 +502,17 @@ impl ChromiumChild {
 ///
 /// Both effects are injected so the decision is testable without a browser;
 /// [`reap_orphans_now`] is the production wiring.
+///
+/// `kill` answers **`true`** when the process is gone or was killed, `false`
+/// when it is still alive and refused to die. The sidecar is deleted and the
+/// return count incremented ONLY on `true` — a refused kill must not be
+/// spent as a reap, because the record is the only way that browser can ever
+/// be found again (判据 §4: a guard must assert the effect landed, not that
+/// the call happened; round-1 review finding F1).
 pub(crate) fn reap_orphans(
     registry: &Path,
     argv_of: &dyn Fn(u32) -> ArgvProbe,
-    kill: &dyn Fn(u32),
+    kill: &dyn Fn(u32) -> bool,
 ) -> usize {
     let Ok(entries) = std::fs::read_dir(registry) else {
         // The dir not existing is the normal first-boot state, not a failure.
@@ -454,10 +528,19 @@ pub(crate) fn reap_orphans(
             continue;
         };
         let Ok(rec) = serde_json::from_str::<ChromiumSidecar>(&body) else {
-            // A record we cannot parse names no pid, so it can never be acted
-            // on; dropping it is the only way it stops being read every boot.
-            tracing::warn!(path = %path.display(), "unparseable chromium sidecar; dropping it");
-            let _ = std::fs::remove_file(&path);
+            // A record we cannot parse might name a browser that is still
+            // running: a torn write from a crash mid-write looks exactly like
+            // this, and deleting it forecloses every future boot's sweep from
+            // ever finding that process again (round-1 review finding F5).
+            // Rename it aside instead — an accumulating `.corrupt` file is
+            // cheap; an unfindable live browser is not.
+            tracing::warn!(path = %path.display(), "unparseable chromium sidecar; renaming aside");
+            let corrupt = {
+                let mut s = path.clone().into_os_string();
+                s.push(".corrupt");
+                PathBuf::from(s)
+            };
+            let _ = std::fs::rename(&path, &corrupt);
             continue;
         };
         match argv_of(rec.pid) {
@@ -467,9 +550,18 @@ pub(crate) fn reap_orphans(
                     dir = %rec.user_data_dir.display(),
                     "reaping orphaned chromium"
                 );
-                kill(rec.pid);
-                reaped += 1;
-                let _ = std::fs::remove_file(&path);
+                if kill(rec.pid) {
+                    reaped += 1;
+                    let _ = std::fs::remove_file(&path);
+                } else {
+                    // The kill was refused (still alive, EPERM or similar):
+                    // deleting the record now would make this browser
+                    // unfindable forever. Keep it so a later sweep can retry.
+                    tracing::warn!(
+                        pid = rec.pid,
+                        "chromium kill was refused; keeping the sidecar so it can be retried"
+                    );
+                }
             }
             // A pid that resolved to somebody ELSE's argv is provably not ours:
             // determinate, so the record goes and the process is left alone.
@@ -576,8 +668,15 @@ pub(crate) fn reap_orphans_now() -> usize {
             sysinfo::ProcessRefreshKind::nothing(),
             sysinfo::Process::kill,
         );
-        if killed != Some(true) {
-            tracing::warn!(pid, "orphaned chromium did not accept the kill");
+        match killed {
+            // `None`: the pid is no longer in the process table at all —
+            // already gone, which counts as "reaped" the same as a
+            // successful kill.
+            Some(true) | None => true,
+            Some(false) => {
+                tracing::warn!(pid, "orphaned chromium did not accept the kill");
+                false
+            }
         }
     })
 }
@@ -684,19 +783,36 @@ mod tests {
     fn the_sidecar_round_trips_and_records_the_dir_it_is_not_stored_in() {
         let json = serde_json::to_string(&ChromiumSidecar {
             pid: 4242,
-            http_url: "http://127.0.0.1:58363".into(),
+            http_url: Some("http://127.0.0.1:58363".into()),
             user_data_dir: PathBuf::from("/tmp/explicit-udd"),
             aleph_version: env!("ALEPH_VERSION").to_string(),
         })
         .expect("serialize");
         let back: ChromiumSidecar = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.pid, 4242);
-        assert_eq!(back.http_url, "http://127.0.0.1:58363");
+        assert_eq!(back.http_url, Some("http://127.0.0.1:58363".to_string()));
         // The whole point of the registry: the record lives in ONE directory
         // and names the udd, instead of living IN the udd where a profile that
         // configures its own path puts it outside anything a sweep walks.
         assert_eq!(back.user_data_dir, PathBuf::from("/tmp/explicit-udd"));
         assert_eq!(back.aleph_version, env!("ALEPH_VERSION"));
+    }
+
+    /// F2's whole point: the record written right after spawn, before the
+    /// port file has parsed, has no endpoint yet. `None` must round-trip as
+    /// `None` — never coerced into an empty string a later reader might treat
+    /// as a connectable (but empty) URL.
+    #[test]
+    fn a_sidecar_with_no_endpoint_yet_round_trips_as_none() {
+        let json = serde_json::to_string(&ChromiumSidecar {
+            pid: 4242,
+            http_url: None,
+            user_data_dir: PathBuf::from("/tmp/explicit-udd"),
+            aleph_version: env!("ALEPH_VERSION").to_string(),
+        })
+        .expect("serialize");
+        let back: ChromiumSidecar = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.http_url, None);
     }
 
     /// The containment property the registry inherits from `config_path_for`:
@@ -871,7 +987,7 @@ mod tests {
                 dir.path().join(format!("{profile}.json")),
                 serde_json::to_string(&ChromiumSidecar {
                     pid: *pid,
-                    http_url: "http://127.0.0.1:1".into(),
+                    http_url: Some("http://127.0.0.1:1".into()),
                     user_data_dir: PathBuf::from(udd),
                     aleph_version: env!("ALEPH_VERSION").to_string(),
                 })
@@ -923,7 +1039,10 @@ mod tests {
                 444 => ArgvProbe::Unreadable,
                 _ => ArgvProbe::Absent,
             },
-            &|pid| killed.borrow_mut().push(pid),
+            &|pid| {
+                killed.borrow_mut().push(pid);
+                true
+            },
         );
         assert_eq!(n, 1, "exactly the matching pid is reaped");
         assert_eq!(*killed.borrow(), vec![111]);
@@ -939,6 +1058,29 @@ mod tests {
             reg.path().join("opaque.json").exists(),
             "the record must survive an unreadable argv: it is the only way \
              this browser can ever be reaped"
+        );
+    }
+
+    /// A kill that is refused (the process is still alive; `sysinfo` returned
+    /// `false`, or an OS refusal like EPERM) must not be spent as a reap: the
+    /// browser is still running, so deleting the sidecar here would make it
+    /// unfindable forever — the same permanent-orphan outcome the
+    /// `Unreadable` arm exists to prevent, arriving through the kill path
+    /// instead (判据 §4 — the guard must assert the effect landed, not that
+    /// the call happened; round-1 review finding F1).
+    #[test]
+    fn a_refused_kill_is_not_counted_and_the_record_survives() {
+        let reg = registry_with(&[("default", 111, "/tmp/udd/default")]);
+        let n = reap_orphans(
+            reg.path(),
+            &|_| ArgvProbe::Argv(argv(&["/x/chrome", "--user-data-dir=/tmp/udd/default"])),
+            &|_pid| false,
+        );
+        assert_eq!(n, 0, "a refused kill must not be counted as reaped");
+        assert!(
+            reg.path().join("default.json").exists(),
+            "the record must survive a refused kill: it is the only way \
+             this browser can ever be found again"
         );
     }
 
@@ -960,7 +1102,8 @@ mod tests {
         let reg = registry_with(&[("default", 555, "/tmp/udd/default")]);
         let killed = std::cell::RefCell::new(Vec::new());
         let n = reap_orphans(reg.path(), &|_| ArgvProbe::Absent, &|pid| {
-            killed.borrow_mut().push(pid)
+            killed.borrow_mut().push(pid);
+            true
         });
         assert_eq!(n, 0, "a process that already exited must not be 'reaped'");
         assert!(killed.borrow().is_empty());
@@ -984,10 +1127,26 @@ mod tests {
         let reg = registry_with(&[("default", 444, "/tmp/udd/default")]);
         let killed = std::cell::RefCell::new(Vec::new());
         let n = reap_orphans(reg.path(), &|_| ArgvProbe::Unreadable, &|pid| {
-            killed.borrow_mut().push(pid)
+            killed.borrow_mut().push(pid);
+            true
         });
         assert_eq!(n, 0);
         assert!(killed.borrow().is_empty());
         assert!(reg.path().join("default.json").exists());
+    }
+
+    /// F4: `argv_probe` is the only classifier that runs in production —
+    /// every other test drives `reap_orphans` through an injected closure.
+    /// If `UpdateKind::Always` were ever dropped from the refresh kind,
+    /// `cmd()` would go empty and every probe would silently answer
+    /// `Unreadable` forever (判据 §2, §7) — the sweep would never reap
+    /// anything again, with a log line that reads like an ordinary Windows
+    /// quirk. Pin both ends of the real reader directly: our own live pid
+    /// must come back readable, and a pid that cannot exist must come back
+    /// `Absent`.
+    #[test]
+    fn argv_probe_reads_this_process_and_answers_absent_for_a_pid_that_cannot_exist() {
+        assert!(matches!(argv_probe(std::process::id()), ArgvProbe::Argv(v) if !v.is_empty()));
+        assert_eq!(argv_probe(u32::MAX), ArgvProbe::Absent);
     }
 }
