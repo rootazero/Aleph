@@ -232,7 +232,7 @@ impl PlaywrightCliDriver {
         session_key: &str,
         launch: &SessionLaunch,
     ) -> Result<(), BrowserError> {
-        let config_path = write_launch_config(session_key, launch).await?;
+        let config_path = write_launch_config(session_key).await?;
         let argv = open_argv(launch, &config_path);
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
         // Starting a browser is not a navigation and must not borrow the
