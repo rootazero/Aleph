@@ -309,7 +309,11 @@ impl StateDatabase {
     pub async fn mark_running_as_interrupted(&self) -> Result<u64, AlephError> {
         let now = chrono::Utc::now().timestamp();
         self.with_conn(move |conn| {
-            let count = conn
+            // `Connection::execute` returns `Result<usize>` (rows changed),
+            // not i64. Cast to i64 via try_from so an unexpected
+            // `usize > i64::MAX` (impossible per SQLite's row-count cap)
+            // is surfaced as a typed error rather than a silent truncation.
+            let count: usize = conn
                 .execute(
                     r#"
                     UPDATE agent_tasks
@@ -319,7 +323,12 @@ impl StateDatabase {
                     params![now],
                 )
                 .map_err(|e| AlephError::config(format!("Failed to mark tasks: {e}")))?;
-            super::i64_to_u64_count(count, "marked_tasks")
+            let count_i64 = i64::try_from(count).map_err(|_| {
+                AlephError::config(format!(
+                    "mark_running_as_interrupted: row count {count} exceeds i64::MAX"
+                ))
+            })?;
+            super::i64_to_u64_count(count_i64, "marked_tasks")
         })
         .await
     }

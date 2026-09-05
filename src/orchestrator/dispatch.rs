@@ -1205,8 +1205,12 @@ impl Orchestrator {
                 Ok(result) => result,
                 Err(panic_payload) => {
                     let msg = panic_message(&panic_payload);
+                    // `session_key` was moved into `harness.run(...)` above;
+                    // we cannot reference it again after that move. The
+                    // structured context for this log is already captured by
+                    // the tracing span on the spawned task, so the message
+                    // alone is sufficient.
                     tracing::error!(
-                        session_key = %session_key,
                         "harness task panicked; surfacing as FlowError::Internal: {msg}"
                     );
                     Err(FlowError::Internal(format!(
