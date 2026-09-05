@@ -349,6 +349,38 @@ impl ChromiumChild {
         }
     }
 
+    /// Build a `ChromiumChild` around a process this module did not spawn.
+    ///
+    /// The test seam for everything downstream of a launch. `spawn` is the only
+    /// other constructor and it launches a real browser, so without this every
+    /// caller that reasons about a live or dead child — `PlaywrightCliDriver`'s
+    /// whole relaunch path — is untestable, and an untestable path is where the
+    /// review found a `run` that killed live browsers while a full mutation
+    /// sweep of the pure predicate beside it stayed green.
+    ///
+    /// A test passes any process it can observe (`sleep` for alive, an exited
+    /// one for dead); nothing here assumes the child is a browser.
+    ///
+    /// `#[cfg(test)]` on purpose: this is `--lib` unit-test scaffolding, not an
+    /// injection point production code may use — a second way to obtain a
+    /// `ChromiumChild` that skips the port file would be a second answer to
+    /// "where does an endpoint come from". **Task 6's reaper tests consume this
+    /// same seam**; do not add a second one.
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        child: Child,
+        endpoint: CdpEndpoint,
+        user_data_dir: PathBuf,
+        session_key: &str,
+    ) -> Self {
+        Self {
+            child,
+            endpoint,
+            user_data_dir,
+            session_key: session_key.to_string(),
+        }
+    }
+
     pub(crate) const fn endpoint(&self) -> &CdpEndpoint {
         &self.endpoint
     }

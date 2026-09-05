@@ -45,6 +45,14 @@ pub struct PdfGenerateTool {
     /// `None` only where no browser subsystem exists (tests, ad-hoc
     /// construction); the registry always supplies it.
     pub playwright_config: Option<crate::browser::profile::PlaywrightCliConfig>,
+    /// Where the browser engine's Chromium comes from — the same
+    /// `[browser.runtime]` the browser tools resolve through.
+    ///
+    /// Separate from `playwright_config` because they answer different
+    /// questions (which CLI vs which browser) and the registry supplies them
+    /// from two different places on `BrowserSystemConfig`. `None` has the same
+    /// meaning as above.
+    pub browser_runtime: Option<crate::browser::profile::BrowserRuntimeConfig>,
 }
 
 impl PdfGenerateTool {
@@ -71,6 +79,7 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
         Self {
             tool_context_handle: None,
             playwright_config: None,
+            browser_runtime: None,
         }
     }
 
@@ -92,6 +101,22 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
         config: crate::browser::profile::PlaywrightCliConfig,
     ) -> Self {
         self.playwright_config = Some(config);
+        self
+    }
+
+    /// Adopt the browser subsystem's `[browser.runtime]` settings.
+    ///
+    /// The registry must call this for the same reason it must call
+    /// [`Self::with_playwright_config`], one layer down: this engine now
+    /// launches a Chromium of its own, so without it an operator's pinned
+    /// binary is honoured by the browser tools and silently ignored here —
+    /// two answers to "which Chromium", neither of them stated at runtime.
+    #[must_use]
+    pub fn with_browser_runtime(
+        mut self,
+        runtime: crate::browser::profile::BrowserRuntimeConfig,
+    ) -> Self {
+        self.browser_runtime = Some(runtime);
         self
     }
 
@@ -227,7 +252,13 @@ impl AlephTool for PdfGenerateTool {
 
         let result = match args.render_engine {
             RenderEngine::Browser => {
-                browser_engine::generate(&args, &output_path, self.playwright_config.as_ref()).await
+                browser_engine::generate(
+                    &args,
+                    &output_path,
+                    self.playwright_config.as_ref(),
+                    self.browser_runtime.as_ref(),
+                )
+                .await
             }
             RenderEngine::Native => {
                 // `native_engine::generate` is sync CPU+IO (markdown parse, font
@@ -249,6 +280,7 @@ impl AlephTool for PdfGenerateTool {
                         &args,
                         &output_path,
                         self.playwright_config.as_ref(),
+                        self.browser_runtime.as_ref(),
                     )
                     .await
                     {

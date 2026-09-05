@@ -265,6 +265,20 @@ impl ProfileManager {
         &self.config.playwright_cli
     }
 
+    /// The `[browser.runtime]` section — where this Aleph's Chromium comes from.
+    ///
+    /// The twin of [`Self::playwright_cli_config`], and it exists for the same
+    /// reason: `pdf_generate` builds a `PlaywrightCliDriver` of its own, and
+    /// that driver now launches a browser, so a construction site that
+    /// inherited the CLI settings but not the browser ones would honour an
+    /// operator's pin in one half of Aleph and ignore it in the other.
+    ///
+    /// ⚠️ Task 6 was told to add `ProfileManager` accessors. This is one of
+    /// them, added early because `pdf_generate` needed it; do not add a second.
+    pub const fn runtime_config(&self) -> &super::profile::BrowserRuntimeConfig {
+        &self.config.runtime
+    }
+
     /// Route a profile to its appropriate `BrowserBackend` instance.
     ///
     /// - `BrowserDriver::Managed`         → `PlaywrightCliBackend`
