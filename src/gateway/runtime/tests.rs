@@ -1142,8 +1142,19 @@ const CLAUDE_WORKING_LINE: &str = "\u{23F5} pretending to work esc to interrupt"
 /// out the line in `manager::flush_session` that feeds `foreground_fact()`
 /// into `SampleInput::program`, and this goes red while every other test in
 /// the file stays green.
+///
+/// 2026-09-06. Two of the three changes here are hygiene, NOT the fix, and
+/// saying which is which is the point: the `serial_test` group key (this drives
+/// a real shell on a real PTY, yet was the only PTY test in the file carrying
+/// no key at all) and the widened budget. With both applied it still failed,
+/// the same way it failed on 2026-09-04 (FL 附录 D.4.41) and every time since —
+/// agent and program identified, the chrome on the screen, `state: Idle`. It
+/// was never a timeout, so "it ran alone and passed" never distinguished
+/// starvation from a load-sensitive race; it was the latter. The fix is the
+/// fixture's leading newline below.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial(pty_global_manager)]
 async fn a_real_agent_started_after_spawn_is_identified() {
     let id = "t-runtime-foreground-identify";
     agents().remove(id);
@@ -1152,9 +1163,21 @@ async fn a_real_agent_started_after_spawn_is_identified() {
     // stays alive, so the probe has something to find.
     let dir = tempfile::tempdir().expect("tempdir");
     let fake = dir.path().join("claude");
+    // The leading newline is load-bearing, not cosmetic. The PTY line
+    // discipline echoes the typed command instantly while `sh` writes its
+    // prompt whenever it gets scheduled, so under a full-suite run the echo
+    // lands first and the prompt ends up on the NEXT line — the fake's chrome
+    // is then appended to it as `$ ⏵ pretending to work esc to interrupt`.
+    // `live_turn_working` is anchored `^\s*[⏸⏵]`, so a `$ ` prefix means it
+    // cannot match; the fake prints once and sleeps, so no later frame ever
+    // corrects the row and the entry stays `Idle` forever (observed
+    // 2026-09-06 in a full `--lib` run: identified agent + program, chrome on
+    // screen, `state: Idle`). Starting on a fresh line makes the chrome begin
+    // at column 0 whatever the shell left behind. This relaxes nothing the
+    // test asserts — the state still has to come from the real manifest.
     std::fs::write(
         &fake,
-        format!("#!/bin/sh\nprintf '%s\\n' '{CLAUDE_WORKING_LINE}'\nsleep 30\n"),
+        format!("#!/bin/sh\nprintf '\\n%s\\n' '{CLAUDE_WORKING_LINE}'\nsleep 30\n"),
     )
     .expect("write fake claude");
     {
@@ -1188,7 +1211,12 @@ async fn a_real_agent_started_after_spawn_is_identified() {
         .expect("write the command");
 
     let mut identified = None;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    // The budget bounds a WAIT, not the property: widening it cannot make a
+    // broken wire pass — nothing but the foreground probe can ever write
+    // `agent: Some("claude")` here — only stop a slow machine from being
+    // reported as a broken one. Kept for that reason alone; every observed
+    // failure of this test was an `Idle` verdict, never an exhausted deadline.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while std::time::Instant::now() < deadline {
         let now = chrono::Utc::now().timestamp_millis();
         let _ = crate::gateway::pty::manager::flush_session(&session, now);
