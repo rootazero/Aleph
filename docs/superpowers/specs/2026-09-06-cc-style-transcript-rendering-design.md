@@ -126,6 +126,16 @@ pub struct ContextBreakdown {
 - `trace.tool_output` 缺失 → 必须 `Err`。
 - `aleph-server prompt-size` 前后字节相等（presentation 没漏进 prompt）。
 
+### 4.4a 档案核对后的修正（2026-09-06，写 Plan A 前对照源码提取的接口档案）
+
+spec 初稿的四个前提与源码不符，按源码修正，Plan A 以此为准：
+
+1. **`file_ops` 没有 write/edit 臂**（只有 List/Move/Copy/Delete/Mkdir/Search/BatchMove/Organize/Stats）。挂载点是 `file_edit`、`file_write`、`apply_patch` 三个。另有两个内容写入者 `skill_manage`（写 SKILL.md）与 `node_file`（集群节点文件推送）**本轮不纳入**——前者是配置面、后者的字节不进对话；trait 谓词 `mutates_file_content()` 对它们保持 `false`，记入待办。
+2. **侧信道走既有的"提升"先例，不改工具 trait 返回类型**：工具在自己的 JSON 输出里放 `_presentation` 键；`apply_layer_two` 在把值扁平化成模型文本**之前**把它提升到 `ToolOutputMetadata.presentation`（与 `images` 同一条路）。持久化在 `SessionEvent::ToolResult`（事件日志本来就整体序列化 `ToolOutput`），**不是** trace 行；`trace.by_runs` 回放时按 `call_id` 从事件日志读回补进 `AgentTraceToolCallEnd.presentation`。harness 只把 `on_tool_call_done` 的 `result` 参数从 `Option<&Value>` 换成 `Option<&ToolOutput>`（每个调用点本就持有 `ToolOutput`，行数不变，R10 棘轮零增量）；`FlowStreamEvent::ToolCallDone` 增 `presentation` 字段；drain 处写到 wire `ToolResult.presentation`。
+3. **`file_write` 实际从不读旧文件**（`is_byte_equal_existing` 长度不等即短路）——写前捕获是新增逻辑，在同一把路径锁下读。
+4. **`LayerSize` 不在会话中保留，且生产路径给 prompt 管线的工具表是空的**（schema 走原生 tool_use）。因此：① 在 `cache.rs` 的稳定/动态分段构建上加"一次渲染同时测量"的变体，替换现有 `ALEPH_PROMPT_SIZE_TRACE` 的二次渲染；② 新增 `thinker::PromptSizeRegistry`（`CapabilitySlot`，每会话保留最新一份）；③ 工具 schema 字节在 orchestrator 组装本轮工具表处量；④ `provider_reported` 服务端留 `None`，客户端用已收到的实时 `ContextGauge` 填后再 `reconcile`。
+5. 协议 `ToolResult.metadata: Option<Value>` 零读零写 → **CUT**（`skip_serializing_if`，wire 字节不变）；网关侧 `ToolResult` 与协议侧字节相同 → 改为 `pub use aleph_protocol::ToolResult`（消一对孪生）。`RunSummary` 两份**没有任何转换函数**，wire 直接发网关结构、协议侧解析时静默丢字段——本轮只补齐两个字段并加键集对账测试，整体统一另议。
+
 ### 4.4 Phase A 熵减
 
 CUT `plugins/diff-viewer`（Extism，零引用）；协议 `RunSummary` 削弱版消失。`ReasoningBlock` 零生产者**不动**（超范围，记入 FEATURE_LOCATOR 附录 D 待裁）。
