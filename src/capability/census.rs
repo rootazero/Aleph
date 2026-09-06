@@ -1779,7 +1779,9 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     ///
     /// Rejects an identifier byte before the name (so `handle_plugins_install(`
     /// is not a call to `install`) and rejects a `.` (so `x.install(` — a method
-    /// on a value — is not a call to the module-level wrapper).
+    /// on a value — is not a call to the module-level wrapper). Also rejects a
+    /// `Self::` qualifier — see [`qualified_with_self`] for why that is not
+    /// merely "one more concrete qualifier" the way `Foo::install(` is.
     fn calls(line: &str, name: &str) -> bool {
         let bytes = line.as_bytes();
         let mut from = 0usize;
@@ -1787,12 +1789,44 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             let at = from + rel;
             let after = at + name.len();
             let ok_before = at == 0 || (!is_ident_byte(bytes[at - 1]) && bytes[at - 1] != b'.');
-            if ok_before && line[after..].starts_with('(') {
+            if ok_before && line[after..].starts_with('(') && !qualified_with_self(line, at) {
                 return true;
             }
             from = after;
         }
         false
+    }
+
+    /// Whether the call starting at byte offset `at` in `line` is qualified
+    /// with `Self::`.
+    ///
+    /// `capability_wrappers()` derives a wrapper's identity from where its OWN
+    /// definition lives — a bare `fn name` in some file that touches a
+    /// `CapabilitySlot` — and every wrapper this census has ever found is a
+    /// free function (verified: none of the 39-plus derived names are defined
+    /// inside an `impl` block today). `Foo::install(` is still a concrete,
+    /// checkable string even though this scan does not verify `Foo` itself;
+    /// `Self::install(` is not — `Self` names whatever type happens to
+    /// enclose the CALLER, which this census never records, so it can never
+    /// be checked against anything derived here. Counting it as a match makes
+    /// an unrelated method on an unrelated type collide with a real wrapper by
+    /// pure coincidence of spelling: `RuntimeManageTool::install` (a tool
+    /// dispatch method, nothing to do with a `CapabilitySlot`) collided with
+    /// `identity::ledger::install` (the actual wrapper `"install"` names) this
+    /// way and reported a false "conditional install with no decline" — a
+    /// `match` arm's OTHER arm is not a "governing alternative" for a
+    /// capability install that was never happening on that arm at all.
+    /// Excluding `Self::` is not "fix the call site to be qualified"
+    /// (`unqualified` below asks for that, and rightly, when the call really
+    /// might be the wrapper) — there is nothing to fix; the call was never a
+    /// call to this wrapper, so it is not counted as a match at all, the same
+    /// way an unrelated line that merely contains the substring is not.
+    fn qualified_with_self(line: &str, at: usize) -> bool {
+        let before = line[..at].trim_end();
+        let Some(prefix) = before.strip_suffix("Self::") else {
+            return false;
+        };
+        prefix.as_bytes().last().is_none_or(|b| !is_ident_byte(*b))
     }
 
     fn is_fn_definition(line: &str) -> bool {
