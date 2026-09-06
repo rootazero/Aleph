@@ -37,14 +37,10 @@ use crate::tool_metadata::DEFAULT_CODE_EXEC_TIMEOUT;
 use crate::tool_output::sanitize::sanitize_command_output;
 use crate::tools::AlephTool;
 
+use crate::utils::shell::STDIN_PIPE_THRESHOLD;
+
 use super::command_canonicalize::canonicalize_shell_cmd;
 use super::command_ledger::command_ledger;
-
-/// Threshold above which a shell script switches from `bash -c <script>`
-/// to `bash -s` reading the script from stdin. Linux's `ARG_MAX` for a
-/// single argv element (`MAX_ARG_STRLEN`) is typically 128 KiB; we keep a
-/// 4× margin to leave room for the rest of the argv vector plus env.
-const SHELL_STDIN_PIPE_THRESHOLD: usize = 32 * 1024;
 
 /// Wall-clock ceiling (seconds) applied to a **foreground** exec so the
 /// sandbox's own timeout fires *before* the 180s per-tool budget wrapper
@@ -91,29 +87,37 @@ pub enum Language {
 /// ([`RuntimeContext`](crate::thinker::runtime_context::RuntimeContext)) can
 /// state the shell the model will actually get, instead of guessing from the
 /// operator's `$SHELL` (a login shell the agent never uses, and unset on
-/// Windows). Single source with [`Language::runtime`] **and** with both
-/// `ExecInvocation`s in `build_shell_invocation`, which call this instead of
-/// repeating the literal — so the advertised shell cannot drift from the spawned
-/// one. Pinned by `advertised_shell_is_the_spawned_shell`.
+/// Windows). This is a **view of** [`crate::utils::shell::resolve`], never a
+/// second answer: `build_shell_invocation` spawns `resolve().program` and this
+/// returns `resolve().label`, which `utils::shell` pins to that file's stem.
+/// So the advertised shell cannot drift from the spawned one — the pair is
+/// held by `advertised_shell_is_the_spawned_shell` here and by
+/// `label_is_the_stem_of_the_resolved_program` there.
+///
+/// No longer `const`: on Windows the answer is a probe result (`pwsh` →
+/// `powershell` → `cmd`), and the old constant `"bash"` was simply false there.
 #[must_use]
-pub const fn shell_interpreter() -> &'static str {
-    Language::Shell.runtime()
+pub fn shell_interpreter() -> &'static str {
+    crate::utils::shell::resolve().label.as_str()
 }
 
 impl Language {
-    const fn runtime(&self) -> &'static str {
+    /// `(program, code flag)` for the languages spawned as
+    /// `<program> <flag> <code>`.
+    ///
+    /// `Shell` is absent **by construction**: its program *and* its argv are
+    /// resolved per platform at run time by [`build_shell_invocation`], so a
+    /// constant arm here could only be a Windows-side lie that nothing reads.
+    const fn interpreter(&self) -> Option<(&'static str, &'static str)> {
         match self {
-            Self::Python => "python3",
-            Self::JavaScript => "node",
-            Self::Shell => "bash",
-        }
-    }
-
-    const fn code_flag(&self) -> &'static str {
-        match self {
-            Self::Python => "-c",
-            Self::JavaScript => "-e",
-            Self::Shell => "-c",
+            // `node` stays a bare name: it is the same program under the same
+            // spelling everywhere, and Windows has no Store alias for it.
+            Self::JavaScript => Some(("node", "-e")),
+            // Absent by construction, both of them: the program is a probe
+            // result, not a literal. `Shell` resolves through
+            // `utils::shell::resolve`, `Python` through `utils::shell::python3`
+            // — a constant arm here could only be a Windows-side lie.
+            Self::Shell | Self::Python => None,
         }
     }
 }
@@ -271,13 +275,16 @@ impl CodeExecTool {
     /// sentence is SENT, not how many times it is written, and text behind a
     /// shared const still ships once per tool that references it.
     pub const DESCRIPTION: &'static str = r#"Execute code in a per-session sandboxed workspace. Supported languages:
-- python: runs via `python3 -c <code>`
-- javascript: runs via `node -e <code>`
-- shell: runs via `bash -c <code>` (or `bash -s` over stdin for scripts >32 KB)
+- python: the host's Python 3
+- javascript: `node -e <code>`
+- shell: the interpreter named in the Environment block's `- **Shell**:` line
+  — `bash` on Unix, PowerShell on Windows, where POSIX syntax does not apply
 
 Multi-line code is first-class in all three. Everything else — stateless
-processes, `working_dir`, `timeout` and exit 124, output caps, signal exit
-codes, escalation approvals — is exactly as `bash` documents it.
+processes, `working_dir`, `timeout` and exit 124, output caps, abnormal-exit
+annotation, escalation approvals — is exactly as `bash` documents it, and the
+`bash` description is also where the shell dialect for this host is spelled
+out.
 "#;
 
     /// Create a new code execution tool without a sandbox wired in yet.
@@ -479,16 +486,27 @@ struct ExecInvocation {
 fn build_exec_invocation(language: &Language, code: &str) -> ExecInvocation {
     match language {
         Language::Shell => build_shell_invocation(code),
-        Language::Python => ExecInvocation {
-            program: language.runtime().to_string(),
-            args: vec![language.code_flag().to_string(), code.to_string()],
-            stdin: None,
-        },
-        Language::JavaScript => ExecInvocation {
-            program: language.runtime().to_string(),
-            args: vec![language.code_flag().to_string(), code.to_string()],
-            stdin: None,
-        },
+        Language::Python => {
+            let py = crate::utils::shell::python3();
+            let mut args = py.leading.clone();
+            args.push("-c".to_string());
+            args.push(code.to_string());
+            ExecInvocation {
+                program: py.program.to_string_lossy().into_owned(),
+                args,
+                stdin: None,
+            }
+        }
+        Language::JavaScript => {
+            let (program, flag) = language
+                .interpreter()
+                .expect("JavaScript names its interpreter as a literal");
+            ExecInvocation {
+                program: program.to_string(),
+                args: vec![flag.to_string(), code.to_string()],
+                stdin: None,
+            }
+        }
     }
 }
 
@@ -502,59 +520,141 @@ fn build_shell_invocation(code: &str) -> ExecInvocation {
     }
     let script = canonical.script.into_owned();
 
-    if script.len() > SHELL_STDIN_PIPE_THRESHOLD {
+    // Resolved once per process. `program` is the ABSOLUTE path: the sandbox
+    // `env_clear()`s the child and hands it a rebuilt PATH, so a bare name
+    // would be resolved against an environment we constructed rather than the
+    // one we probed. `label` is the same object's prompt-facing half — see
+    // `shell_interpreter`.
+    let shell = crate::utils::shell::resolve();
+    let (args, stdin) = shell.kind.invocation(&script);
+
+    if stdin.is_some() {
         debug!(
             script_bytes = script.len(),
-            threshold = SHELL_STDIN_PIPE_THRESHOLD,
-            "code_exec: shell script exceeds threshold — piping via bash -s + stdin"
+            threshold = STDIN_PIPE_THRESHOLD,
+            shell = %shell.label,
+            "code_exec: shell script exceeds threshold — piping via stdin"
         );
-        ExecInvocation {
-            // The same expression the prompt advertises through
-            // `shell_interpreter()`, not a second "bash" literal that could drift
-            // from it — the doc on `shell_interpreter` promises they are one.
-            program: shell_interpreter().to_string(),
-            args: vec!["-s".to_string()],
-            stdin: Some(script.into_bytes()),
-        }
-    } else {
-        ExecInvocation {
-            program: shell_interpreter().to_string(),
-            args: vec!["-c".to_string(), script],
-            stdin: None,
-        }
+    }
+
+    ExecInvocation {
+        program: shell.program_string(),
+        args,
+        stdin,
     }
 }
 
 #[cfg(test)]
 mod shell_interpreter_tests {
-    use super::{build_shell_invocation, shell_interpreter, SHELL_STDIN_PIPE_THRESHOLD};
+    use super::{build_shell_invocation, shell_interpreter, STDIN_PIPE_THRESHOLD};
+    use crate::utils::shell::{resolve, ShellKind};
 
-    /// The prompt tells the model `- **Shell**: <shell_interpreter()>`. That claim
-    /// is only true if the spawn path uses the same value — on BOTH branches,
-    /// including the over-threshold stdin-pipe one.
+    /// The prompt tells the model `- **Shell**: <shell_interpreter()>`. That
+    /// claim is only true if the spawn path uses the same resolution — the
+    /// program spawned must be the resolved shell's own path, and the label the
+    /// prompt shows must be that file (pinned to its stem in `utils::shell`).
     #[test]
     fn advertised_shell_is_the_spawned_shell() {
-        assert_eq!(
-            build_shell_invocation("echo hi").program,
-            shell_interpreter()
-        );
-        let big = "x".repeat(SHELL_STDIN_PIPE_THRESHOLD + 1);
+        let expected = resolve().program_string();
+        assert_eq!(build_shell_invocation("echo hi").program, expected);
+        assert_eq!(shell_interpreter(), resolve().label);
+    }
+
+    /// A script over BOTH thresholds must still reach the shell whole — the
+    /// route differs, the delivery does not.
+    ///
+    /// Asserted as "argv or stdin carries it", not as one shape: bash pipes via
+    /// `-s`, PowerShell via `-Command -`, and `cmd` (the floor, which has no
+    /// stdin form) keeps it in argv. Pinning one shape here would go red on the
+    /// hosts that take the other route, which is how a guard ends up narrowed
+    /// to the platform its author happened to be on.
+    #[test]
+    fn over_threshold_script_still_reaches_the_shell() {
+        let big = "x".repeat(STDIN_PIPE_THRESHOLD + 1);
         let piped = build_shell_invocation(&big);
-        assert_eq!(piped.program, shell_interpreter());
-        assert!(piped.stdin.is_some(), "over-threshold must pipe via stdin");
+        assert_eq!(piped.program, resolve().program_string());
+
+        let in_argv = piped.args.iter().any(|a| a.contains(&big));
+        let in_stdin = piped
+            .stdin
+            .as_deref()
+            .is_some_and(|b| String::from_utf8_lossy(b).contains(&big));
+        assert!(
+            in_argv || in_stdin,
+            "the script must survive the route, whichever it is"
+        );
+
+        // The one shape that IS platform-specific and worth pinning: neither
+        // PowerShell arm may put a script this size on the command line, where
+        // `CreateProcess` would refuse to spawn it at all.
+        if matches!(
+            resolve().kind,
+            ShellKind::Pwsh | ShellKind::WindowsPowerShell
+        ) {
+            assert!(
+                in_stdin,
+                "an over-threshold PowerShell script must ride stdin"
+            );
+        }
     }
 }
 
-fn default_pass_env() -> Vec<String> {
-    vec![
-        "PATH".to_string(),
-        "HOME".to_string(),
-        "USER".to_string(),
-        "LANG".to_string(),
-        "LC_ALL".to_string(),
-        "TERM".to_string(),
-    ]
+/// Environment variable names copied from this process into the sandboxed
+/// child. The sandbox drivers `env_clear()` first, so this list is not a
+/// filter over an inherited environment — it IS the child's environment, and
+/// anything absent here is absent in the child.
+///
+/// The Windows arm is not "nice to have". MEASURED with the POSIX-only list:
+/// a Windows child saw `PATHEXT=".CPL"` (PowerShell's internal fallback, with
+/// `.EXE` absent) and an empty `TEMP` — so `.cmd` / `.ps1` / even `.exe`
+/// resolution and every temp-file API misbehaved, in the shape where the shell
+/// starts fine and individual commands fail for no visible reason.
+pub(crate) fn default_pass_env() -> Vec<String> {
+    const POSIX_PASS_ENV: &[&str] = &["PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM"];
+
+    #[cfg(windows)]
+    let names = POSIX_PASS_ENV.iter().chain(WINDOWS_PASS_ENV.iter());
+    #[cfg(not(windows))]
+    let names = POSIX_PASS_ENV.iter();
+
+    names.map(|name| (*name).to_string()).collect()
 }
+
+/// Windows' own baseline environment. Spelled in the canonical mixed case the
+/// OS uses; lookup and delivery are both case-insensitive on Windows
+/// (`std::env::var` goes through `GetEnvironmentVariableW`, and
+/// `std::process::Command`'s env map compares keys case-insensitively there),
+/// so a host that stores `SYSTEMROOT` is still found and still delivered once.
+#[cfg(windows)]
+const WINDOWS_PASS_ENV: &[&str] = &[
+    // Load-bearing: without `SystemRoot` the CRT cannot locate the system
+    // directory, so temp-file creation and most DLL loads fail.
+    "SystemRoot",
+    "windir",
+    // Load-bearing: `PATHEXT` is the list of extensions a bare command name may
+    // resolve to. Absent, the shell falls back to a stub that omits `.EXE`.
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramData",
+    "ProgramW6432",
+    "COMSPEC",
+    "SystemDrive",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USERNAME",
+    "COMPUTERNAME",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    // PowerShell resolves modules (including `Microsoft.PowerShell.*`) through
+    // this; without it a script that imports anything fails to find it.
+    "PSModulePath",
+];
 
 fn language_label(lang: &Language) -> String {
     match lang {
@@ -583,10 +683,49 @@ fn language_label(lang: &Language) -> String {
 /// Only universal POSIX signal semantics are annotated — never command-specific
 /// exit-code guesses (e.g. "grep exited 1 so no match"), which would mean
 /// pattern-matching the command string and violate R7 (LLM sovereignty).
+/// Annotate the handful of Windows abnormal-termination codes, the way
+/// `signal_name` annotates a POSIX signal death.
+///
+/// Windows has no signals, so a crash arrives through `ExitStatus::code()` as
+/// an ordinary (very negative) integer and reaches the model indistinguishable
+/// from a program's own exit code. `-1073741819` names nothing; "access
+/// violation" does.
+///
+/// The number is deliberately left ALONE — no Windows analogue of `128 + N`.
+/// That synthesis exists on POSIX only because `code()` is `None` there and
+/// something has to be invented; here the OS already gave us a code, and
+/// rewriting it would put a second spelling of the same fact in front of the
+/// model. This adds the sentence, not a new number.
+///
+/// Only codes that actually occur under an agent's commands are listed; an
+/// exhaustive NTSTATUS table would be a list nobody reads and nobody prunes.
+fn ntstatus_note(code: i32) -> Option<String> {
+    // Compared as u32: these are NTSTATUS values, and `ExitStatus::code()`
+    // hands them back reinterpreted as a negative i32.
+    #[allow(clippy::cast_sign_loss)]
+    let status = code as u32;
+    let meaning = match status {
+        0xC000_0005 => "access violation — the program dereferenced bad memory",
+        0xC000_0409 => {
+            "stack buffer overrun / __fastfail — usually a Rust panic=abort or a CRT assertion"
+        }
+        0xC000_013A => "terminated by Ctrl+C / Ctrl+Break",
+        0xC000_0094 => "integer divide by zero",
+        0xC000_008C => "array bounds exceeded",
+        0x8000_0003 => "breakpoint — a debugger trap reached with no debugger attached",
+        _ => return None,
+    };
+    Some(format!(
+        "Process terminated abnormally: {meaning} (Windows status 0x{status:08X}, surfaced as exit code {code})."
+    ))
+}
+
 fn resolve_exit_code(exit_code: Option<i32>, signal: Option<i32>) -> (i32, Option<String>) {
     match (exit_code, signal) {
-        // Normal exit (including a clean non-zero) — the code speaks for itself.
-        (Some(code), _) => (code, None),
+        // Normal exit (including a clean non-zero) — the code speaks for
+        // itself, unless it is one of the Windows crash codes below, which
+        // speak for the OS instead.
+        (Some(code), _) => (code, ntstatus_note(code)),
         // Killed by a signal: synthesise 128+N and explain it.
         (None, Some(sig)) => {
             let surfaced = 128 + sig;
@@ -891,11 +1030,56 @@ mod tests {
         }
     }
 
+    /// Expected `(program, args, stdin)` for a shell call whose *canonicalized*
+    /// script is `script`.
+    ///
+    /// Derived from the same `utils::shell` contract the production path uses,
+    /// so the tests below assert the peeling / routing they are about instead
+    /// of hard-coding `bash -c`, which is only one host's answer.
+    fn expected_shell_spawn(script: &str) -> (String, Vec<String>, Option<Vec<u8>>) {
+        let shell = crate::utils::shell::resolve();
+        let (args, stdin) = shell.kind.invocation(script);
+        (shell.program_string(), args, stdin)
+    }
+
     #[test]
     fn test_language_runtime() {
-        assert_eq!(Language::Python.runtime(), "python3");
-        assert_eq!(Language::JavaScript.runtime(), "node");
-        assert_eq!(Language::Shell.runtime(), "bash");
+        assert_eq!(Language::JavaScript.interpreter(), Some(("node", "-e")));
+        // Shell and Python deliberately have no constant interpreter — both are
+        // probe results. A literal arm here would be a Windows-side lie, which
+        // is what `Some(("python3", "-c"))` was: on Windows that name usually
+        // resolves to the Store alias, which exits 49 without running.
+        assert_eq!(Language::Shell.interpreter(), None);
+        assert_eq!(Language::Python.interpreter(), None);
+    }
+
+    /// The sandbox drivers `env_clear()` before `envs(..)`, so this list is the
+    /// child's whole environment. Two entries are load-bearing in a way that
+    /// fails silently rather than loudly, and both were MEASURED missing:
+    ///
+    /// * `PATHEXT` — the extensions a bare command name may resolve to.
+    ///   Without it the child inherited PowerShell's internal fallback
+    ///   `".CPL"`, i.e. `.EXE` was not resolvable and every bare command name
+    ///   "did not exist".
+    /// * `SystemRoot` — the CRT needs it to find the system directory; without
+    ///   it `TEMP` handling and DLL loading break inside the child.
+    #[cfg(windows)]
+    #[test]
+    fn windows_pass_env_carries_the_load_bearing_names() {
+        let names = default_pass_env();
+        for required in ["PATHEXT", "SystemRoot", "PATH"] {
+            assert!(
+                names.iter().any(|n| n.eq_ignore_ascii_case(required)),
+                "{required} must be passed to the sandboxed child"
+            );
+        }
+        // The real host may spell them in any case; `std::env::var` is
+        // case-insensitive on Windows, so our canonical spelling must still
+        // find a value here — otherwise we would pass the name and no value.
+        assert!(
+            std::env::var("SystemRoot").is_ok_and(|v| !v.is_empty()),
+            "canonical spelling must resolve against the host's own casing"
+        );
     }
 
     /// TDD RED: `timeout_seconds` is the canonical spelling; the legacy bare
@@ -1002,9 +1186,17 @@ mod tests {
 
         // Own content: the language table is code_exec's alone. `bash` never
         // mentions python or node, so cutting this would delete it outright.
+        // `python` is no longer spelled as a command line here — the program is
+        // a probe result (`utils::shell::python3`), and printing `python3 -c`
+        // would be this description asserting a name the host may not have.
+        // What must survive is the TABLE: three languages, each named.
         assert!(
-            d.contains("python3 -c") && d.contains("node -e"),
+            d.contains("- python:") && d.contains("- javascript:") && d.contains("- shell:"),
             "the language table is code_exec's own content and must stay"
+        );
+        assert!(
+            d.contains("node -e"),
+            "node is the one interpreter still named as a literal, because it is one"
         );
 
         // The pointer has to name the tool that actually carries the
@@ -1129,7 +1321,10 @@ mod tests {
         assert_eq!(calls.len(), 1, "sandbox should be invoked once");
         let cmd = &calls[0];
         assert_eq!(cmd.session_id, session);
-        assert_eq!(cmd.program, "python3");
+        assert_eq!(
+            cmd.program,
+            crate::utils::shell::python3().program.to_string_lossy()
+        );
         assert_eq!(
             cmd.args,
             vec!["-c".to_string(), "print('hello')".to_string()]
@@ -1281,9 +1476,10 @@ mod tests {
 
         let calls = mock.calls.lock().await;
         let cmd = &calls[0];
-        assert_eq!(cmd.program, "bash");
-        assert_eq!(cmd.args, vec!["-c".to_string(), "cargo test".to_string()]);
-        assert!(cmd.stdin.is_none());
+        let (program, args, stdin) = expected_shell_spawn("cargo test");
+        assert_eq!(cmd.program, program);
+        assert_eq!(cmd.args, args, "the wrapper must be peeled off the script");
+        assert_eq!(cmd.stdin, stdin);
     }
 
     #[tokio::test]
@@ -1314,19 +1510,18 @@ mod tests {
 
         let calls = mock.calls.lock().await;
         let cmd = &calls[0];
-        assert_eq!(
-            cmd.args,
-            vec!["-c".to_string(), "bash -c \"echo $(date)\"".to_string()]
-        );
+        let (_, args, _) = expected_shell_spawn("bash -c \"echo $(date)\"");
+        assert_eq!(cmd.args, args, "unpeelable wrapper must survive verbatim");
     }
 
     #[tokio::test]
     async fn large_shell_script_pipes_via_stdin() {
-        // ~40 KiB script. Below this we use `bash -c <script>`; above, we
-        // switch to `bash -s` and feed the script via stdin to dodge
-        // ARG_MAX limits on Linux (`MAX_ARG_STRLEN = 128 KiB`).
+        // ~40 KiB script. Under `bash` we switch from `-c <script>` to `-s` +
+        // stdin above the threshold, to dodge ARG_MAX on Linux
+        // (`MAX_ARG_STRLEN = 128 KiB`). PowerShell has no such branch, so the
+        // assertion below is on the shared contract, not on `-s`.
         let big_script = format!("# header\n{}\n", "echo hi\n".repeat(5_000));
-        assert!(big_script.len() > super::SHELL_STDIN_PIPE_THRESHOLD);
+        assert!(big_script.len() > STDIN_PIPE_THRESHOLD);
 
         let mock = MockSandbox::new(ok_output(""));
         let sandbox: Arc<dyn Sandbox> = mock.clone();
@@ -1351,12 +1546,14 @@ mod tests {
 
         let calls = mock.calls.lock().await;
         let cmd = &calls[0];
-        assert_eq!(cmd.program, "bash");
-        assert_eq!(cmd.args, vec!["-s".to_string()]);
+        // `canonicalize_shell_cmd` leaves a plain script untouched, so the
+        // expected spawn is the contract applied to the script itself.
+        let (program, args, stdin) = expected_shell_spawn(&big_script);
+        assert_eq!(cmd.program, program);
+        assert_eq!(cmd.args, args);
         assert_eq!(
-            cmd.stdin.as_deref(),
-            Some(big_script.as_bytes()),
-            "large script should arrive on stdin, not argv"
+            cmd.stdin, stdin,
+            "the whole script must reach the shell, by whichever route"
         );
     }
 
@@ -1386,7 +1583,10 @@ mod tests {
 
         let calls = mock.calls.lock().await;
         let cmd = &calls[0];
-        assert_eq!(cmd.program, "python3");
+        assert_eq!(
+            cmd.program,
+            crate::utils::shell::python3().program.to_string_lossy()
+        );
         // Python literally receives the string — no canonicalization.
         assert_eq!(
             cmd.args,
@@ -1729,6 +1929,30 @@ mod tests {
         assert_eq!(resolve_exit_code(Some(1), None), (1, None));
         // A present code wins even if a signal was also (spuriously) recorded.
         assert_eq!(resolve_exit_code(Some(2), Some(9)), (2, None));
+    }
+
+    /// Windows crash codes reach the model as bare negative integers, which
+    /// name nothing. Goes red if the table is emptied, if the annotation starts
+    /// rewriting the number instead of explaining it, or if an ordinary
+    /// non-zero exit starts collecting a note it should not have.
+    #[test]
+    fn windows_crash_codes_are_named_but_not_renumbered() {
+        // 0xC0000005 as i32 — an access violation.
+        let (code, note) = resolve_exit_code(Some(-1_073_741_819), None);
+        assert_eq!(code, -1_073_741_819, "the OS's number is left alone");
+        let note = note.expect("a crash code must carry an explanation");
+        assert!(note.contains("access violation"), "{note}");
+        assert!(note.contains("0xC0000005"), "names the status: {note}");
+
+        // 0xC0000409 — what a Rust `panic = abort` looks like here, and what
+        // rustc itself produced while this round was being verified.
+        let (_, note) = resolve_exit_code(Some(-1_073_740_791), None);
+        assert!(note.unwrap().contains("__fastfail"));
+
+        // An ordinary failure stays unannotated: a note on every non-zero exit
+        // would be noise, and would make the real ones invisible.
+        assert_eq!(resolve_exit_code(Some(1), None), (1, None));
+        assert_eq!(resolve_exit_code(Some(127), None), (127, None));
     }
 
     #[test]

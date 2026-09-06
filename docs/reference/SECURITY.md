@@ -1109,6 +1109,68 @@ the operator could not have removed.
   真的授出一次读别人终端屏幕的权限。全文在 `builtin_tools/terminal.rs` 的模块 doc 与
   `method_authz.rs` 的 `terminal` 条目 → [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md) §4
 
+### The managed browser's debug port (2026-09-05)
+
+Aleph now launches the managed driver's Chromium itself, with
+`--remote-debugging-port=0`, and hands the resulting endpoint to
+`playwright-cli attach --cdp`. Chrome binds that port to **loopback only**, and
+it is **unauthenticated**: any process running as this user can connect to it
+and drive the browser — read its cookies, navigate it, execute script in its
+pages. There is no token, and CDP has no concept of one.
+
+This is **not a regression**. Before the flip, `playwright-cli` was already
+launching Chrome with an unprompted random `--remote-debugging-port` on every
+single launch (measured, design spike STEP 2: launching with no config at all
+produced `--remote-debugging-port=58447`, which answered `/json/version` with a
+live `webSocketDebuggerUrl`). The difference is that Aleph now *knows* the port
+instead of the port existing and being undiscoverable. Stating it here rather
+than leaving it implicit: the security boundary for the managed browser is the
+**local user account**, exactly as it is for the PTY sessions above and for
+`aleph.lock`. A host where an untrusted local process runs is already outside
+Aleph's trust model.
+
+What follows from that, and is therefore NOT attempted: no per-connection auth
+on the debug port (CDP has none), no binding it to a unix socket (Chrome does
+not offer one), and no attempt to hide the port — Aleph records it on purpose,
+in `~/.aleph/data/browser/chromium/<profile>.json`, because a browser Aleph
+cannot find after a crash is a browser Aleph cannot kill. That file is readable
+by the same local user who could already drive the port, so it widens nothing.
+
+**Data at rest in the persistent profile, and why that conclusion does NOT
+extend to it (2026-09-06):** every managed launch's argv includes
+`--use-mock-keychain` — load-bearing, not incidental: without it, Chrome's
+first navigation in every page hangs forever on any HOME with no usable login
+Keychain (a launchd service, a sandboxed host, this repo's own scratch-HOME
+QA), because the OS credential-store call it would otherwise make never
+returns. The flag's cost is that Chrome then encrypts cookies and saved
+credentials with a constant, publicly-known key instead of one the OS
+keychain guards. Before this plan that only mattered for the lifetime of one
+launch — the profile lived in a per-launch tmp directory that was gone at
+process exit. This plan gave every Managed profile a durable
+`chromium-udd/<session_key>` directory that now survives restarts, so the
+same constant-key encryption now protects data that persists on disk instead
+of data that did not outlive the process. Unlike the debug-port paragraph
+above, this does **not** widen nothing: the directory is created (and
+re-asserted on every launch) owner-only (`0o700`), which keeps live access
+inside the same local-user boundary the debug port already relies on, but a
+backup or a synced copy of that directory is outside that boundary, and
+anyone who can read it decrypts the saved credentials without ever touching
+the OS keychain. `--use-mock-keychain` itself is not the thing to remove —
+doing so reopens the permanently-hung-navigation defect this plan exists to
+fix — so the directory permission is the mitigation available today, not the
+flag.
+
+⚠️ **What the local-user boundary does NOT cover, and it is an open finding, not
+a stated position:** `playwright-cli`'s session namespace is machine-global and
+Aleph names its session after the *profile*, so the common name is literally
+`default`. Two Aleph instances on one host — or one Aleph plus a developer's own
+`playwright-cli` — silently share one browser session, which means **one user's
+logged-in browser driven by another instance**. That is a collision *between
+principals the local-user boundary was never meant to merge*, so it is a real
+gap rather than a consequence of the boundary above. Mechanism, the measured
+evidence, the proposed `instance_tag` fix and its two-server falsifier are in
+[FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) §3.12 第七轮 ⑤.
+
 ---
 
 ## Command allowlist
@@ -2985,13 +3047,17 @@ attribution, and a bound workspace as the room's default cwd.
   claim in this document — a gate written as "is operator" and a gate written
   as "is not a member" agree on every human and disagree on every machine
   caller, and only the second one is what the code does.
-- **The workspace binding is a privilege, and it has five writers — four
-  gated, one exempt by invariant.** *(Was "four writers — three gated" until
-  2026-08-30; `project_manage(bind_workspace)` was the addition that made it
-  five, and it calls `ProjectStore::bind_workspace` directly rather than
-  routing through the RPC. A sentence that counts members goes quiet on the
-  day the set grows, which is why the authoritative census is a module doc
-  and not this number.)* Turning `workspace_path` into the room's
+- **The workspace binding is a privilege: every writer of `workspace_path`
+  that CHOOSES a directory is gated, and exactly one is exempt by
+  invariant.** *(This bullet used to carry the count itself, and it went
+  stale exactly the way a count does: it read "four writers — three gated"
+  from P2 until 2026-08-30, silently wrong from the day
+  `project_manage(bind_workspace)` landed calling
+  `ProjectStore::bind_workspace` directly rather than through the RPC. The
+  number is therefore no longer repeated here — the authoritative census is
+  `gateway::handlers::projects`'s module doc, and a copy of a count is a
+  trap whether or not it happens to be right today.)* Turning
+  `workspace_path` into the room's
   runtime cwd (a dormant display field waking up) retroactively made every
   writer of that column a directory-choice authority: `projects.add`,
   `projects.create_blank`, and `projects.bind_workspace` all carry the same
@@ -3021,7 +3087,7 @@ attribution, and a bound workspace as the room's default cwd.
   only when a path is actually NAMED, so **releasing** a binding stays
   reachable from a session that a bad binding broke.
 
-  The fifth writer is
+  The one exempt writer is
   `execution_engine::run_loop::inner`, which auto-registers a run's
   `workspace_override` into the catalogue so a CLI/programmatic cwd appears
   in the picker; it is exempt because it never *introduces* a directory — it
@@ -3038,9 +3104,10 @@ attribution, and a bound workspace as the room's default cwd.
   owner chose the directory through a gated verb; the member only inherits
   that choice. The full census lives in
   `gateway::handlers::projects`'s module doc, with a back-reference at the
-  exempt writer — and that doc now also records that both it and this bullet
-  sat at "four / three gated" for the whole time there were five, because a
-  count of members is prose and prose has no compiler.
+  exempt writer — and that doc also records that both it and this bullet sat
+  at "four / three gated" for the whole time there were five, because a count
+  of members is prose and prose has no compiler. Do not restore a count here:
+  read the census, or grep `workspace_path` and `bind_workspace`.
 - **Author attribution is display-grade, not signature-grade.** The
   `[name]` speaker labels a room prompt carries come from
   `SessionEvent::UserMessage.author_user_id`, stamped server-side from the
@@ -3212,9 +3279,10 @@ attribution, and a bound workspace as the room's default cwd.
      loudly (a human is there). The asymmetry is deliberate and documented
      at both sites.
   4. `[projects] allowed_roots` (the `fs.*` browse fence) is NOT layered
-     onto the three directory-choosing binding writers — the config-tier
-     gate above is the only fence. Layering it on would change existing
-     picker behaviour; a separate product decision.
+     onto the directory-choosing binding writers (whichever ones the census
+     currently lists — this line said "the three" while there were four) —
+     the tier gate above is the only fence. Layering it on would change
+     existing picker behaviour; a separate product decision.
   5. Teams created inside a room BEFORE the `teams.scope_id` column existed
      (2026-08-18, round-5) keep their pre-column semantics: the row cannot
      say whether it was made in a room, so it is not backfilled and stays

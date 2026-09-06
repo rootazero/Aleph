@@ -285,8 +285,16 @@ pub async fn execute_stop_hooks_arc(
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 
 /// Reject command strings that contain shell metacharacters which could be used
-/// to inject additional commands when passed to `sh -c`. Alphanumeric ASCII,
-/// whitespace, and common safe path/punctuation characters are allowed.
+/// to inject additional commands. Alphanumeric ASCII, whitespace, and common
+/// safe path/punctuation characters are allowed.
+///
+/// It gates **both** shells `shell_command` can pick, not just `sh -c`: every
+/// cmd.exe separator and expansion character — `&`, `|`, `<`, `>`, `^`, `(`,
+/// `)` and `%` — is absent from `SAFE` as well, so a string that passes here
+/// cannot spell a second command for either parser. That is charset
+/// inspection over the whole allowlist, not a sample; seven `SAFE`-only
+/// payloads were also run under `cmd /C` and none chained. Widening `SAFE`
+/// has to be re-argued against both parsers, not just against `sh`.
 ///
 /// Public so the `goal` tool can enforce the SAME rule at the boundary: a
 /// per-goal `gate_command` that would be rejected here is a gate that can never

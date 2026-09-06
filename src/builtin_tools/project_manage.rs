@@ -1164,8 +1164,9 @@ mod tests {
     async fn member_add_and_remove_are_each_audited_once_and_distinguishably() {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (log, mut rx) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
 
         let (tool, project, _store, _g) = fixture();
@@ -1205,8 +1206,11 @@ mod tests {
         // only what this test produced.
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            // Type-check only OUR rows: a foreign entry in this window is
-            // some other test's, and its event type is not this test's claim.
+            // The type assertion belongs INSIDE the filter. The comment above
+            // already says foreign rows land in this channel; asserting a
+            // property of THEM makes this test red for something it does not
+            // own (the same defect, measured on the `users.rs` twin
+            // 2026-09-05, 判据 §16).
             if entry.detail.contains(&project.id) {
                 assert_eq!(
                     entry.event_type,
@@ -1215,11 +1219,10 @@ mod tests {
                 details.push(entry.detail);
             }
         }
-        // Contract of `replace_global_for_test`: clear before releasing
-        // `_serial`, so a later non-audit test never finds a handle whose
-        // receiver has been dropped. Before the asserts, not after — a
-        // panicking assert would otherwise leave the dangling handle
-        // installed for the rest of the process.
+        // `replace_global_for_test`'s contract: clear before releasing the
+        // lock, so a later non-audit test never writes into a handle whose
+        // receiver is gone. Before the assertions, so a failing one still
+        // leaves the process clean.
         crate::security::audit::clear_global_for_test();
         assert_eq!(
             details.len(),

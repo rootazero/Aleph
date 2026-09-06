@@ -60,6 +60,62 @@ fn split_csv_models(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// The same tolerance as [`deserialize_models`], but an empty result is a
+/// value rather than an error.
+///
+/// Generation providers are the case: a client may legitimately configure one
+/// with no model at all (the Panel's "add custom provider" form sends
+/// `models: []` when the field is blank, and the server then restores the
+/// preset's default). Under the strict parser that payload does not lose the
+/// model — it fails the **whole request** with `models list cannot be empty`,
+/// because serde rejects the object, not the field.
+///
+/// It lives here, next to its strict sibling, because the generation config's
+/// `models` field is parsed twice — once from `config.toml` by `alephcore` and
+/// once from a JSON payload by [`super::generation::GenerationProviderConfigJson`]
+/// — and two parsers with two tolerances for one field is the shape where a
+/// value that survives the file gets rejected on the wire (判据 §1).
+///
+/// # Errors
+/// Returns a deserializer error only when the value is neither null, a string,
+/// nor a sequence of strings.
+pub fn deserialize_optional_models<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    struct OptionalModelsVisitor;
+
+    impl<'de> de::Visitor<'de> for OptionalModelsVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string, array of strings, or null")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Vec<String>, E> {
+            Ok(Vec::new())
+        }
+
+        fn visit_str<E: de::Error>(self, value: &str) -> Result<Vec<String>, E> {
+            Ok(split_csv_models(value))
+        }
+
+        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
+            let mut models = Vec::new();
+            while let Some(s) = seq.next_element::<String>()? {
+                models.extend(split_csv_models(&s));
+            }
+            Ok(models)
+        }
+    }
+
+    deserializer.deserialize_any(OptionalModelsVisitor)
+}
+
 /// Accepts `"a"`, `"a,b"`, `["a", "b"]`, or `["a,b"]`; rejects empty results.
 ///
 /// The `["a,b"]` shape is not hypothetical — legacy tool writes stored a single

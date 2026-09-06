@@ -31,8 +31,12 @@ const READ_CHUNK: usize = 8192;
 /// request spawns the user's default login shell at 80x24.
 #[derive(Debug, Clone, Default)]
 pub struct SpawnOptions {
-    /// Program to run. `None` → the platform default shell
-    /// (`$SHELL` / `/bin/sh` on Unix, `cmd.exe` on Windows).
+    /// Program to run. `None` → the platform default shell: the human's login
+    /// shell on Unix (`$SHELL`, else `/bin/sh`), and on Windows whatever
+    /// [`crate::utils::shell::resolve`] finds — `pwsh`, else Windows
+    /// PowerShell 5.1, else `cmd.exe`. See `default_shell_command` below
+    /// (named without an intra-doc link on purpose: it is private, and this
+    /// field is not, so a link would be a rustdoc warning).
     pub command: Option<String>,
     /// Arguments passed to `command` (ignored when `command` is `None`).
     pub args: Vec<String>,
@@ -109,7 +113,23 @@ pub struct PtySession {
     /// Writer into the child's stdin (the PTY master write side).
     writer: crate::sync_primitives::Mutex<Box<dyn Write + Send>>,
     /// Master handle, retained for resize (`TIOCSWINSZ` equivalent).
-    master: crate::sync_primitives::Mutex<Box<dyn MasterPty + Send>>,
+    ///
+    /// `None` once the child has exited AND its reader was still parked when
+    /// [`settle_exit`] looked — never for a live session, and not on the
+    /// platforms that end the read on their own.
+    ///
+    /// That conditional take is not tidiness, it is the only lever that ends
+    /// a parked reader: ConPTY does not close the pseudoconsole's output pipe
+    /// when the child dies, so the reader stays blocked in `read` until the
+    /// master is DROPPED. Measured on this machine 2026-09-05 — the reader
+    /// was still blocked 3 s after the child exited, and unblocked with EOF
+    /// **1.9 ms** after the master went away.
+    ///
+    /// Every reader of this field must therefore answer "the session is
+    /// over", never "resize failed": `closed` is set before the take, so the
+    /// `None` arm is unreachable for a live session and its message says
+    /// exactly that.
+    master: crate::sync_primitives::Mutex<Option<Box<dyn MasterPty + Send>>>,
     /// Independent killer split from the child so `close` can terminate it
     /// without racing the reader thread that owns the `Child`.
     killer: crate::sync_primitives::Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -162,8 +182,12 @@ impl PtySession {
         // Build the command (explicit program or the platform default shell).
         let (mut cmd, label) = match &opts.command {
             Some(prog) => (CommandBuilder::new(prog), prog.clone()),
-            None => (CommandBuilder::new_default_prog(), default_shell_label()),
+            None => default_shell_command(),
         };
+        // Still gated on the explicit arm, and not merely because `opts.args`
+        // is documented as ignored when `command` is `None`: on Unix that arm
+        // is a `new_default_prog` builder, whose `arg()` PANICS rather than
+        // erroring (portable-pty 0.8.1, `cmdbuilder.rs`).
         if opts.command.is_some() {
             cmd.args(&opts.args);
         }
@@ -208,7 +232,7 @@ impl PtySession {
             created_at: chrono::Utc::now().timestamp(),
             created_by: opts.created_by.clone(),
             writer: crate::sync_primitives::Mutex::new(writer),
-            master: crate::sync_primitives::Mutex::new(master),
+            master: crate::sync_primitives::Mutex::new(Some(master)),
             killer: crate::sync_primitives::Mutex::new(killer),
             closed: AtomicBool::new(false),
             screen: crate::sync_primitives::Mutex::new(screen),
@@ -237,7 +261,8 @@ impl PtySession {
         if self.closed.load(Ordering::SeqCst) {
             return Err("session closed".into());
         }
-        let m = self.master.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = self.master.lock().unwrap_or_else(|e| e.into_inner());
+        let m = guard.as_ref().ok_or("session closed")?;
         m.resize(PtySize {
             rows: rows.max(1),
             cols: cols.max(1),
@@ -245,6 +270,7 @@ impl PtySession {
             pixel_height: 0,
         })
         .map_err(|e| format!("resize failed: {e}"))?;
+        drop(guard);
         self.screen
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -320,7 +346,7 @@ impl PtySession {
             super::foreground::probe_due(
                 state.last_probe_at(),
                 now,
-                state.frame_since_probe(),
+                state.frame_budget_left(),
                 agent_known,
             )
         };
@@ -330,11 +356,13 @@ impl PtySession {
         // The master lock is taken and released inside `terminal_leader`.
         // Everything below this line reads the process table and holds
         // nothing.
-        let leader = self.terminal_leader().or_else(|| {
-            self.shell_pid
-                .and_then(super::foreground::deepest_newest_descendant)
-        });
-        let observed = leader.and_then(super::foreground::fact_for_pid);
+        let observed = match self.terminal_leader() {
+            Some(leader) => super::foreground::fact_for_pid(leader),
+            // The terminal would not say. On Windows that is EVERY probe.
+            None => self
+                .shell_pid
+                .and_then(super::foreground::foreground_fact_for_shell),
+        };
         self.foreground
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -347,9 +375,14 @@ impl PtySession {
     /// function so that "what may run under the master lock" is a question
     /// with a one-line answer rather than a promise in a comment. Anything
     /// that reads the process table goes in the caller, after this returns.
+    ///
+    /// A settled session has no master, and the `None` that produces means
+    /// what every other `None` here means — "I could not look" (判据 §8), not
+    /// "nothing is running there". The caller's fallback answers next, which
+    /// is the same thing that happens on Windows on every probe.
     fn terminal_leader(&self) -> Option<u32> {
         let master = self.master.lock().unwrap_or_else(|e| e.into_inner());
-        super::foreground::leader_from_terminal(&**master)
+        super::foreground::leader_from_terminal(&**master.as_ref()?)
     }
 
     /// How many probes this session has performed — the cost guard's
@@ -448,37 +481,145 @@ impl PtySession {
     }
 }
 
-/// The platform default shell label for display purposes only (the actual
-/// spawn uses `CommandBuilder::new_default_prog`).
-fn default_shell_label() -> String {
+/// The `(command, label)` pair for a spawn that named no program.
+///
+/// Which shell this session runs is ONE fact, so the spawn and the label are
+/// derived here together. They used to be two statements: the spawn called
+/// `CommandBuilder::new_default_prog()` while a separate `default_shell_label()`
+/// re-guessed what that would pick, under a doc comment conceding it was "for
+/// display purposes only". Nothing forced the guess to track the spawn, and the
+/// day the Windows default stopped being `%COMSPEC%` the guess would have gone
+/// on reporting `cmd.exe` for a `pwsh` session — 判据 §1, two statements of one
+/// fact where only one gets changed. `PtySession::shell` is not decoration: it
+/// is what `pty.list` shows and what `RuntimeAgentEntry` reads.
+///
+/// The two platform arms are asymmetric ON PURPOSE — see each. They are `cfg`
+/// blocks inside one item rather than two `#[cfg]`-gated items so this doc
+/// comment governs both: split into two items, the Windows one carries the
+/// contract and the Unix one silently has none.
+fn default_shell_command() -> (CommandBuilder, String) {
     #[cfg(windows)]
     {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+        use crate::utils::shell::ShellKind;
+
+        // Windows has no `$SHELL` holding a login shell, so `new_default_prog()`
+        // spawns `%COMSPEC%` — `cmd.exe`, which on Windows 11 is the legacy
+        // fallback rather than the shell a human expects a terminal to open in.
+        // `utils::shell::resolve()` walks pwsh → Windows PowerShell 5.1 →
+        // cmd.exe and returns an ABSOLUTE path, so the child cannot be
+        // re-resolved through a `PATH` other than the one we probed with.
+        let shell = crate::utils::shell::resolve();
+        let mut cmd = CommandBuilder::new(&shell.program);
+        match shell.kind {
+            // `-NoLogo` and nothing else. This is the HUMAN's interactive
+            // shell: their profile is wanted (so no `-NoProfile`) and it must
+            // accept typed input (so no `-NonInteractive`). The agent's
+            // script-running face — `ShellKind::invocation` — passes both of
+            // those flags; that is a different contract on the same binary,
+            // not an inconsistency to reconcile.
+            ShellKind::Pwsh | ShellKind::WindowsPowerShell => cmd.arg("-NoLogo"),
+            // `cmd.exe` has no banner switch for an interactive session, and
+            // `Bash` is unreachable here (`resolve()`'s Windows arm never
+            // yields it). Both take the argument-free spawn.
+            ShellKind::Cmd | ShellKind::Bash => {}
+        }
+        (cmd, shell.label.clone())
     }
     #[cfg(not(windows))]
     {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+        // Unix keeps `new_default_prog()`, which runs this user's own login
+        // shell. Do NOT route it through `utils::shell::resolve()`: that
+        // answers a different question — "which shell does the AGENT run its
+        // scripts under" — and on Unix always answers `bash`. This is the
+        // HUMAN's interactive terminal, and opening it in bash because that is
+        // what the agent uses would quietly ignore a zsh or fish user's actual
+        // shell. Someone who sees two shell resolvers and assumes one is
+        // redundant will delete the wrong one; that is what this paragraph is
+        // for.
+        //
+        // Residual, deliberately left: this label reads the SERVER process's
+        // `$SHELL`, while `new_default_prog()` reads the builder's own env —
+        // which portable-pty overwrites from the passwd database — so on a
+        // host where those disagree, so do these. Deriving the label from
+        // `CommandBuilder::get_shell()` would close it, and would also make
+        // the label `/bin/sh` on any account whose passwd shell is `/bin/sh`:
+        // the exact string `handlers/pty.rs`'s jail-bypass probe uses to
+        // recognise its own leaked session, which would turn that guard into a
+        // false positive. Not this change's bug; recorded so the next reader
+        // does not "fix" it there.
+        (
+            CommandBuilder::new_default_prog(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+        )
     }
 }
 
-/// Start the dedicated reader thread for a session. Feeds master output into
-/// the session's screen, then waits for child exit and emits `pty.exit`
-/// before removing the session from the manager.
+/// Start a session's two OS threads: one that feeds the screen, and one that
+/// waits for the child and settles the session when it exits.
+///
+/// # Why two, and why the settle is on the WAITER
+///
+/// "The child exited" and "the terminal reached EOF" are two facts, and this
+/// used to derive the first from the second: one thread read until `Ok(0)`,
+/// and only then ran `child.wait()` and everything downstream of it. On Unix
+/// that works, because the pty master reports EOF when the last slave fd
+/// closes. **On Windows it never fires at all**: ConPTY does not close the
+/// pseudoconsole's output pipe when the child dies, so the reader stayed
+/// blocked in `read` forever and `pty.exit`, `manager().remove` and
+/// `runtime::agents().remove` never ran — every terminal whose program
+/// exited stayed listed for the life of the process, and `manager.rs`'s
+/// `owner_of` already spelled out the consequence: "a client that never
+/// learns its shell died shows a live terminal forever." Measured before the
+/// fix: `pty.exit` after a child that exits in ~2 s arrived **never**, not
+/// late (20 s budget). One fact, one deriver (判据 §6) — and the deriver has
+/// to be the one the platform actually supplies.
+///
+/// Both halves of the current shape were measured on this machine on
+/// 2026-09-05 rather than assumed about ConPTY:
+///
+/// * `child.wait()` returns **promptly** on Windows — 2.07 s for a child that
+///   exits at ~2 s. So waiting on the child is a real signal there even
+///   though EOF is not.
+/// * the reader is still blocked 3 s after the child exits, and unblocks with
+///   EOF **1.9 ms** after the master is dropped. So [`settle_exit`] taking
+///   the master out of the session is not tidiness — it is the only thing
+///   that ends a parked reader thread and lets the session's screen be
+///   freed. It does that only for a reader that is still parked after
+///   [`READER_DRAIN_GRACE`]; where EOF works, nothing is taken and the
+///   sequence is byte-for-byte what it always was.
+///
+/// # Exactly once
+///
+/// The reader no longer settles anything; it only feeds and exits. So there
+/// is one settle site and it needs no latch. A child that closes its fds
+/// without exiting (EOF but still running) used to block in `child.wait()`
+/// anyway, so nothing regresses: the reader leaves, the waiter stays until
+/// the process really is gone.
+///
+/// The cost is one extra OS thread per session, parked in `child.wait()` and
+/// gone the moment the child is. Named because it is a real cost: PTY
+/// sessions are terminals a person opened, not a pool.
 fn spawn_reader(
     session: Arc<PtySession>,
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
     bus: Option<Arc<GatewayEventBus>>,
 ) {
+    // Never sent on — the reader's exit is signalled by DROPPING the sender,
+    // so the waiter's `recv_timeout` tells "reader gone" (`Disconnected`)
+    // from "reader still parked" (`Timeout`) without either side polling.
+    let (reader_done, reader_gone) = std::sync::mpsc::channel::<()>();
+    let reading = Arc::clone(&session);
     std::thread::Builder::new()
         .name(format!("pty-reader-{}", session.id))
         .spawn(move || {
+            let _reader_done = reader_done;
             let mut buf = [0u8; READ_CHUNK];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF: child closed the PTY
+                    Ok(0) => break, // EOF: the terminal is gone
                     Ok(n) => {
-                        session
+                        reading
                             .screen
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
@@ -488,37 +629,280 @@ fn spawn_reader(
                     Err(_) => break,
                 }
             }
-
-            let exit_code = child.wait().map_or(0, |s| s.exit_code());
-            session.closed.store(true, Ordering::SeqCst);
-            if let Some(bus) = &bus {
-                let ev = TopicEvent::new(
-                    aleph_protocol::pty::PTY_EXIT_TOPIC,
-                    json!({ "session_id": session.id, "exit_code": exit_code }),
-                );
-                let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
-            }
-            super::manager().remove(&session.id);
-            // Spec §5: the PTY session is gone, so its agent entry is gone.
-            // Here and not as a prune inside `RuntimeAgents::snapshot` —
-            // two mechanisms would be two answers to "is this session
-            // alive" (判据 §6), and only an explicit removal gives task 6 an
-            // edge to emit `runtime.agents.changed` on.
-            crate::gateway::runtime::agents().remove(&session.id);
-            // Task 6: the edge above IS the change — a removed row is
-            // exactly what `runtime.agents.list`'s next fetch will no longer
-            // show. Same helper `start_flush_loop` uses, called with `true`
-            // unconditionally: a removed row is always a change.
-            if let Some(bus) = &bus {
-                super::manager::publish_agents_changed_if(true, bus);
-            }
         })
         .ok();
+
+    std::thread::Builder::new()
+        .name(format!("pty-waiter-{}", session.id))
+        .spawn(move || {
+            let exit_code = child.wait().map_or(0, |s| s.exit_code());
+            settle_exit(&session, exit_code, bus.as_ref(), &reader_gone);
+        })
+        .ok();
+}
+
+/// How long a settling session waits for its reader to drain and end BEFORE
+/// reaching for the master.
+///
+/// This window is the whole reason the fix is not a regression on the
+/// platforms that already worked. `child.wait()` returns the moment the child
+/// dies, which is EARLIER than "the reader has fed the child's last bytes
+/// into the screen" — and the settle removes the session from the manager,
+/// which is what stops frames being published at all. Announcing first would
+/// therefore drop the tail of a program's output on Unix, where nothing was
+/// broken. So the waiter yields to the reader first, and only a reader that
+/// is still parked after this gets the master pulled out from under it.
+///
+/// Generous on purpose: on Unix the reader is already unblocked when the
+/// child exits and this costs microseconds, so the number only has to be
+/// larger than "drain a pipe buffer through an 8 KiB loop", which it is by
+/// orders of magnitude. On a platform that never EOFs it is paid once per
+/// session exit, and half a second of latency on a terminal disappearing is
+/// not a thing anyone can see.
+const READER_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long to then wait for the reader to notice the master is gone.
+/// Measured at 1.9 ms on Windows (see [`spawn_reader`]); this is that number
+/// with room, not a guess, and missing it only costs the thread its exit —
+/// the announcements below happen either way.
+const READER_UNBLOCK_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Everything that must happen exactly once when a session's child exits.
+///
+/// Ordering is load-bearing and reads top to bottom:
+///
+/// 1. `closed` first, so nothing accepts new input for a dead child and the
+///    `master.take()` below cannot be mistaken for a resize failure.
+/// 2. Give the reader [`READER_DRAIN_GRACE`] to finish and end on its own.
+///    On every platform that reports EOF this is where the story stops: the
+///    reader is already gone, the master is never touched, and the tail of
+///    the child's output reached the screen before anything below ran. That
+///    is the pre-existing behaviour, preserved deliberately.
+/// 3. Only if the reader is STILL parked — the ConPTY case, and equally a
+///    Unix session whose slave fd a grandchild is holding open — take the
+///    master. That is the lever that ends the read (~2 ms, measured), and it
+///    is applied as a remedy for a terminal that demonstrably did not EOF,
+///    not as routine teardown.
+/// 4. `pty.exit`, then the manager removal. The manager keeps the last
+///    `OWNER_RETENTION` sessions' owners precisely so this frame can still be
+///    addressed to the client whose shell just died — see `owner_of`.
+/// 5. The runtime row, then its change edge.
+fn settle_exit(
+    session: &Arc<PtySession>,
+    exit_code: u32,
+    bus: Option<&Arc<GatewayEventBus>>,
+    reader_gone: &std::sync::mpsc::Receiver<()>,
+) {
+    use std::sync::mpsc::RecvTimeoutError;
+
+    session.closed.store(true, Ordering::SeqCst);
+    // Nothing is ever sent, so `Ok` is unreachable and `Disconnected` is the
+    // reader's goodbye. Only `Timeout` means "still parked".
+    if matches!(
+        reader_gone.recv_timeout(READER_DRAIN_GRACE),
+        Err(RecvTimeoutError::Timeout)
+    ) {
+        // Taken under the lock, DROPPED outside it. The destructor is
+        // `ClosePseudoConsole` (or the platform's equivalent) and it is the
+        // one call here that can take its time; running it under the master
+        // lock would park `maybe_probe_foreground`'s `terminal_leader` on the
+        // flush thread behind a teardown, which is the shape this module's
+        // Locks doctrine exists to keep out.
+        let taken = session
+            .master
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        drop(taken);
+        let _ = reader_gone.recv_timeout(READER_UNBLOCK_GRACE);
+    }
+    if let Some(bus) = bus {
+        let ev = TopicEvent::new(
+            aleph_protocol::pty::PTY_EXIT_TOPIC,
+            json!({ "session_id": session.id, "exit_code": exit_code }),
+        );
+        let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
+    }
+    super::manager().remove(&session.id);
+    // Spec §5: the PTY session is gone, so its agent entry is gone.
+    // Here and not as a prune inside `RuntimeAgents::snapshot` —
+    // two mechanisms would be two answers to "is this session
+    // alive" (判据 §6), and only an explicit removal gives task 6 an
+    // edge to emit `runtime.agents.changed` on.
+    crate::gateway::runtime::agents().remove(&session.id);
+    // Task 6: the edge above IS the change — a removed row is
+    // exactly what `runtime.agents.list`'s next fetch will no longer
+    // show. Same helper `start_flush_loop` uses, called with `true`
+    // unconditionally: a removed row is always a change.
+    if let Some(bus) = bus {
+        super::manager::publish_agents_changed_if(true, bus);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A child that exits must settle the session — on a platform whose
+    /// terminal never reports EOF.
+    ///
+    /// This is the guard for the defect described on [`spawn_reader`]: the
+    /// settle used to hang off the read loop breaking, and on Windows that
+    /// break never comes, so `pty.exit` was published **never** (measured:
+    /// not once in 20 s for a child that exits in ~2 s). It asserts the two
+    /// halves separately because they fail separately:
+    ///
+    /// 1. **`pty.exit` is published.** Red on the old shape on Windows, green
+    ///    on Unix — the asymmetry is the point, and it is why this could sit
+    ///    broken behind a green suite.
+    /// 2. **The session is not still held by a thread.** `settle_exit` takes
+    ///    the master, the blocked reader gets EOF ~2 ms later and drops its
+    ///    `Arc`, so the count falls back to this test's own. Delete the take
+    ///    and assertion 1 still passes while the reader thread — and the
+    ///    session's whole screen and scrollback — leaks for the life of the
+    ///    process. A guard on the announcement alone would not see that.
+    ///
+    /// Both halves have been shown to go red, and by DIFFERENT mutations —
+    /// which is what says they are two guards and not one written twice
+    /// (measured 2026-09-05): delete the take and this one reports
+    /// `pty.exit at 3.13s, strong_count=2` — assertion 1 green, assertion 2
+    /// red; make the take unconditional and this one stays green while
+    /// `settle_leaves_the_master_alone_when_the_reader_already_ended` is the
+    /// one that fails.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn a_child_that_exits_settles_the_session_without_needing_terminal_eof() {
+        let bus =
+            crate::sync_primitives::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let mut rx = bus.subscribe();
+        let opts = SpawnOptions {
+            command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
+            args: if cfg!(windows) {
+                vec!["/c".into(), "echo BYE & ping -n 3 127.0.0.1 >nul".into()]
+            } else {
+                vec!["-c".into(), "printf BYE; sleep 1".into()]
+            },
+            rows: 6,
+            cols: 40,
+            ..Default::default()
+        };
+        let id = "t-settle-without-eof";
+        let t0 = std::time::Instant::now();
+        let session = PtySession::spawn(id.into(), &opts, Some(bus.clone())).expect("spawn");
+
+        let mut exit_at: Option<std::time::Duration> = None;
+        for _ in 0..1500 {
+            while let Ok(raw) = rx.try_recv() {
+                if raw.contains(aleph_protocol::pty::PTY_EXIT_TOPIC) && raw.contains(id) {
+                    exit_at = Some(t0.elapsed());
+                    break;
+                }
+            }
+            if exit_at.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            exit_at.is_some(),
+            "a child that exited must publish {} within 15s -- deriving \"the child \
+             exited\" from \"the terminal reached EOF\" makes this unreachable on any \
+             platform that does not supply the second fact (判据 §6)",
+            aleph_protocol::pty::PTY_EXIT_TOPIC
+        );
+
+        // The reader is unblocked by the master being taken, not by the exit
+        // announcement, so give it its own window rather than folding it into
+        // the one above.
+        let mut released = false;
+        for _ in 0..500 {
+            if crate::sync_primitives::Arc::strong_count(&session) == 1 {
+                released = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        eprintln!(
+            "settle: pty.exit at {exit_at:?}, strong_count={}",
+            crate::sync_primitives::Arc::strong_count(&session)
+        );
+        super::super::manager().remove(id);
+        crate::gateway::runtime::agents().remove(id);
+        assert!(
+            released,
+            "no thread may still hold the session after it settles: the reader is \
+             parked in a read that this platform may never end on its own, and the \
+             lever that ends it is `settle_exit` taking the master. Still held by {} \
+             other handle(s)",
+            crate::sync_primitives::Arc::strong_count(&session) - 1
+        );
+    }
+
+    /// The OTHER arm of [`settle_exit`], pinned on a machine that cannot
+    /// reach it by running a program.
+    ///
+    /// On Windows the reader is ALWAYS still parked when the child exits, so
+    /// the "reader already ended" branch — the one that leaves the master
+    /// alone and so keeps the tail of a program's output reaching the screen
+    /// on every platform that reports EOF — is unreachable here by any
+    /// command. Leaving it to "the platform that has EOF will cover it" is
+    /// the exact shape this round was sent to fix: a branch no machine in the
+    /// loop executes is a branch nobody can falsify. So it is driven
+    /// directly, with a sender dropped up front standing in for a reader that
+    /// has already gone.
+    ///
+    /// It goes red the moment the take stops being conditional — which is the
+    /// change that would silently truncate a child's last output everywhere
+    /// the old code worked.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn settle_leaves_the_master_alone_when_the_reader_already_ended() {
+        let opts = SpawnOptions {
+            command: Some(if cfg!(windows) { "cmd.exe" } else { "sh" }.to_string()),
+            args: if cfg!(windows) {
+                vec!["/c".into(), "ping -n 31 127.0.0.1 >nul".into()]
+            } else {
+                vec!["-c".into(), "sleep 30".into()]
+            },
+            rows: 6,
+            cols: 40,
+            ..Default::default()
+        };
+        let id = "t-settle-eof-arm";
+        let session = PtySession::spawn(id.into(), &opts, None).expect("spawn");
+
+        // A reader that has already ended: nothing is ever sent on this
+        // channel, so dropping the sender is exactly the goodbye the real
+        // reader thread gives.
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        drop(tx);
+        let t0 = std::time::Instant::now();
+        settle_exit(&session, 0, None, &rx);
+        let took = t0.elapsed();
+
+        let master_kept = session
+            .master
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some();
+        session.kill();
+        super::super::manager().remove(id);
+        crate::gateway::runtime::agents().remove(id);
+
+        assert!(
+            master_kept,
+            "a reader that has already ended needs no lever: taking the master here \
+             would close the terminal out from under a drain that had not finished, \
+             which is how a program's last lines get lost on every platform that \
+             does report EOF"
+        );
+        assert!(
+            took < READER_DRAIN_GRACE,
+            "a goodbye from the reader must be waited on, not slept through: \
+             `Disconnected` has to return at once or every session exit pays \
+             {READER_DRAIN_GRACE:?} of latency it does not owe (took {took:?})"
+        );
+    }
 
     /// End-to-end through a real PTY: bytes a child writes must reach the
     /// server's screen, and the snapshot must show them.

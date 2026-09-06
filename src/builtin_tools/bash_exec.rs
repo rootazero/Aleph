@@ -137,11 +137,32 @@ impl Default for BashExecTool {
     }
 }
 
-/// Implementation of `AlephTool` trait for `BashExecTool`
-#[async_trait]
-impl AlephTool for BashExecTool {
-    const NAME: &'static str = "bash";
-    const DESCRIPTION: &'static str = r#"Execute bash/shell commands in a per-session sandboxed workspace.
+// ---------------------------------------------------------------------------
+// `bash`'s DESCRIPTION, assembled from platform-invariant prose plus the three
+// slots where the two shells genuinely differ.
+//
+// The interpreter this tool spawns is `bash` on Unix and PowerShell 7 (`pwsh`)
+// on Windows, and most of what the model needs to know does not depend on
+// which: statelessness, `working_dir`, the timeout clamp, truncation,
+// capability escalation, BACKGROUND MODE. Two whole `#[cfg]`-ed copies of that
+// half would be one fact written twice, and the copy nobody compiles on their
+// own machine is the one that rots (判据 §1). So the shared prose exists once
+// and only three slots — preamble, search steer, exit-code contract — carry two
+// spellings. These are macros rather than consts because `concat!` takes
+// literals, and a const is not one.
+//
+// Both assemblies stay at or below the byte count the single string had (4_796
+// compiled bytes): `definitions.rs::CATALOG_DESCRIPTION_CEILING_BYTES` is a
+// flush ratchet over the whole catalogue and it has to hold on BOTH platforms,
+// so a Windows-only addition that fits on this developer's machine but not in
+// the ceiling would go red only for whoever builds on the other one.
+// ---------------------------------------------------------------------------
+
+/// Slot 1 (Unix): which shell, its inline-script idioms, and statelessness.
+#[cfg(not(windows))]
+macro_rules! bash_desc_preamble {
+    () => {
+        r#"Execute bash/shell commands in a per-session sandboxed workspace.
 
 Multi-line scripts are first-class — newlines, heredocs (`cat <<'EOF' ... EOF`),
 loops, and pipelines all work. If you need 10 commands in a row, write them as
@@ -153,12 +174,70 @@ Sessions are stateless: each call spawns a fresh bash process. `cd`, exported
 variables, `set -e`, `source`, etc. do NOT carry over to the next call. If you
 need cross-call state, write the state into a file under `working_dir` and
 read it back in the next script, or just put everything into one cmd.
+"#
+    };
+}
 
-A command you already ran this session comes back with an `advisory` field
+/// Slot 1 (Windows): which shell, and what a model that assumes bash gets
+/// wrong here.
+///
+/// It says "PowerShell", never "PowerShell 7", because this is a `const` and
+/// the interpreter is a *probe* result (`utils::shell::resolve`: `pwsh` →
+/// `powershell` → `cmd`). A const that named one of those would disagree with
+/// the `- **Shell**:` line in the same prompt on every host that resolved a
+/// different one — one fact, two spellings, and only the const can be wrong.
+/// So it points at that line instead of restating it, and spends its bytes on
+/// the delta that actually bites: MEASURED on `powershell` 5.1.28000.2704,
+/// `Write-Output a && Write-Output b` is a parse error at char 16, and so is
+/// the `? :` ternary; `pwsh` 7.6.5 accepts both.
+///
+/// The `2>/dev/null` line earns its bytes by being the only listed trap that
+/// fails SILENTLY — PowerShell creates the file, suppresses nothing and still
+/// exits 0, so nothing downstream ever goes red. The `&&` one fails loudly by
+/// comparison (though on 5.1 the parse error arrives in the host ANSI code
+/// page, before our UTF-8 prologue can have run, so "loudly" means mojibake).
+#[cfg(windows)]
+macro_rules! bash_desc_preamble {
+    () => {
+        r#"Execute PowerShell commands in a per-session sandboxed workspace; the
+Environment block's `- **Shell**:` line names which one, and if it says `cmd`
+none of this applies. NOT bash: POSIX syntax does not apply; GNU coreutils are
+absent.
+
+Works: `$( )`, backtick escapes, single-quoted paths with spaces, `@"..."@`
+here-strings. `&&`, `||` and `? :` need `pwsh` (7); under `powershell` (5.1)
+they are parse errors. Fails: `ls -la` (`ls` is Get-ChildItem, POSIX flags
+rejected); no `grep`/`sed`/`awk`/`python3` binaries. `npm` and
+`.cmd`/`.bat`/`.ps1` on PATH resolve (PATHEXT).
+
+`2>/dev/null` FAILS SILENTLY: PowerShell makes a literal file named
+`/dev/null`, suppresses nothing, and still exits 0. Write `2>$null`.
+
+Multi-line scripts are first-class: 10 commands in a row belong in ONE `cmd`,
+not 10 calls (one process, shared variables).
+
+Sessions are stateless: each call spawns a fresh PowerShell process — `cd`,
+`$env:` variables and dot-sourced files do NOT carry over. Keep it in a file,
+or in one cmd.
+"#
+    };
+}
+
+/// Slot 2 (shared): the repeat-command advisory.
+macro_rules! bash_desc_repeat_advisory {
+    () => {
+        r#"A command you already ran this session comes back with an `advisory` field
 flagging the repeat; a re-run returns the same result, so prefer BACKGROUND
 MODE's `wait`/`poll` for things that change over time.
+"#
+    };
+}
 
-SEARCH AND READ DO NOT BELONG HERE. `grep` and `find` beat `grep -r` / `rg` /
+/// Slot 3 (Unix): search and read belong in the purpose-built tools.
+#[cfg(not(windows))]
+macro_rules! bash_desc_search {
+    () => {
+        r#"SEARCH AND READ DO NOT BELONG HERE. `grep` and `find` beat `grep -r` / `rg` /
 `find` / `ls -R`: they obey .gitignore, skip `.git` and binaries, cap and page
 their output, and take several terms as ONE call via regex alternation
 (`grep{pattern: "foo|bar|baz"}`). A shell search does none of that — one
@@ -169,14 +248,37 @@ including for a file outside the workspace whose path you already know, and
 use `rg` rather than `grep` — it honours ignore files and skips binaries, so
 its output is roughly an order of magnitude smaller — and bound it with a
 `| head -n` or a `-m` cap.
+"#
+    };
+}
 
-`working_dir` (optional) resolves inside the session workspace; paths
+/// Slot 3 (Windows): the same steer, spelled for a host where the `grep` and
+/// `find` *binaries* do not exist — hence the parenthetical separating the
+/// Aleph tools from the programs the preamble just said are absent.
+#[cfg(windows)]
+macro_rules! bash_desc_search {
+    () => {
+        r#"SEARCH AND READ DO NOT BELONG HERE. The `grep` and `find` tools (Aleph's, not
+the absent binaries) obey .gitignore, skip `.git` and binaries, cap and page
+output, and take several terms as ONE call via alternation
+(`grep{pattern: "foo|bar|baz"}`). A shell search does none of that:
+`Select-String` pours node_modules/ and target/ into context. `file_read`
+beats `Get-Content`, even outside the workspace; `file_edit` beats rewriting
+a file.
+"#
+    };
+}
+
+/// Slot 4 (shared): `working_dir`, the timeout clamp, stripping and truncation.
+macro_rules! bash_desc_limits {
+    () => {
+        r#"`working_dir` (optional) resolves inside the session workspace; paths
 outside the workspace are denied by the sandbox. If omitted the call lands
 at the workspace root.
 
 `timeout` defaults to 60s. Foreground calls are clamped to ~170s (just under
 the 180s tool budget) so an over-long `timeout` returns a clean
-`exit_code = 124` (POSIX `timeout(1)` convention) with partial output
+`exit_code = 124` (the `timeout(1)` convention) with partial output
 preserved in `stdout` / `stderr` — even a runaway script tells you what it
 accomplished. For longer runs use BACKGROUND MODE below.
 
@@ -184,12 +286,46 @@ ANSI colour codes and stray binary control bytes are stripped automatically
 (no need for `--color=never` or `cat`); when a stream overflows its cap we
 keep both the head and the tail with a `…[N bytes elided]…` marker between
 them, and the response also carries `stdout_truncated_bytes` /
-`stderr_truncated_bytes` so you know exactly how much was elided. Signal
-deaths surface as `exit_code = 128 + N` with a `stderr` note naming the
+`stderr_truncated_bytes` so you know exactly how much was elided.
+"#
+    };
+}
+
+/// Slot 5 (Unix): signal deaths, which is how a POSIX child reports dying.
+#[cfg(not(windows))]
+macro_rules! bash_desc_exit_codes {
+    () => {
+        r#"Signal deaths surface as `exit_code = 128 + N` with a `stderr` note naming the
 signal — `137` (SIGKILL, usually OOM), `139` (SIGSEGV, a crash), `134`
 (SIGABRT, an assertion/panic abort).
+"#
+    };
+}
 
-Capability escalations (`allow_network`, `extra_writable_paths`) trigger an
+/// Slot 5 (Windows): PowerShell drops a native child's exit code unless asked,
+/// so the runtime appends an epilogue that propagates it — and that epilogue's
+/// own divergence from bash (the last NATIVE command wins, stickily) is a fact
+/// about THIS runtime that no amount of PowerShell knowledge supplies.
+///
+/// The named signals are gone from the retraction on purpose: once the text has
+/// said there are no POSIX signals, listing three that do not arrive is bytes
+/// spent on the empty set. Unix still names them, because there they happen.
+#[cfg(windows)]
+macro_rules! bash_desc_exit_codes {
+    () => {
+        r#"Exit codes: PowerShell drops a native child's code; our epilogue propagates it.
+Divergence from bash: the last NATIVE command's code wins even if a later
+cmdlet succeeded — `cmd /c exit 3; Write-Output done` reports 3, bash 0. Reset
+`$global:LASTEXITCODE = 0` if ignoring a failure. No POSIX signals: no
+`128 + N`.
+"#
+    };
+}
+
+/// Slot 6 (shared): capability escalation, BACKGROUND MODE, injected env.
+macro_rules! bash_desc_background {
+    () => {
+        r#"Capability escalations (`allow_network`, `extra_writable_paths`) trigger an
 approval prompt the first time per session; subsequent same-or-narrower
 requests reuse the grant. Forking is not one. When you
 escalate, pass `justification` with a one-line reason WHY (e.g. "clone the
@@ -209,7 +345,7 @@ ceiling: with no explicit `timeout` they get a generous 1-hour default
   after the wait window (default 60s, set `timeout` to extend up to 170s).
   Prefer `wait` over a tight `poll` loop — it costs no round-trips while
   the job runs.
-- `{"process_action": "kill", "process_id": N}` → terminate it (SIGKILL).
+- `{"process_action": "kill", "process_id": N}` → terminate it.
 - `{"process_action": "list"}` → enumerate this session's background processes.
 Background processes are scoped to your session; you cannot see or kill
 another session's processes, and each session may have at most 8 running at
@@ -218,9 +354,28 @@ another. Prefer foreground (blocking) execution for anything that finishes
 quickly — backgrounding is only worth it past ~the timeout ceiling.
 
 The child shell sees `ALEPH_SESSION_ID` (the per-session workspace key) and
-`ALEPH_TOOL_NAME=bash` so scripts can self-identify (e.g. `[[ -n
-"$ALEPH_SESSION_ID" ]] && ...`).
-"#;
+`ALEPH_TOOL_NAME=bash` so scripts can self-identify.
+"#
+    };
+}
+
+/// Implementation of `AlephTool` trait for `BashExecTool`
+#[async_trait]
+impl AlephTool for BashExecTool {
+    const NAME: &'static str = "bash";
+    const DESCRIPTION: &'static str = concat!(
+        bash_desc_preamble!(),
+        "\n",
+        bash_desc_repeat_advisory!(),
+        "\n",
+        bash_desc_search!(),
+        "\n",
+        bash_desc_limits!(),
+        "\n",
+        bash_desc_exit_codes!(),
+        "\n",
+        bash_desc_background!(),
+    );
 
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;
@@ -446,7 +601,7 @@ impl BashExecTool {
 
 /// Session label used to scope the process registry. Mirrors the JSON form the
 /// sandbox uses for its workspace key so the value is stable for a session.
-fn session_label() -> Option<String> {
+pub(crate) fn session_label() -> Option<String> {
     current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
 }
 
@@ -964,16 +1119,30 @@ mod tests {
             d.contains("do NOT carry over"),
             "should call out lost state"
         );
-        // Multi-line + heredoc encouragement
+        // Multi-line encouragement, plus the platform's inline-script idiom.
+        // "write one script, not ten calls" holds on both shells; the idiom
+        // that carries it does not — a heredoc is bash syntax and pwsh spells
+        // the same thing `@"..."@` — so only the shared half is asserted here.
         assert!(d.contains("Multi-line scripts"), "should bless multi-line");
+        #[cfg(not(windows))]
         assert!(d.contains("heredoc"), "should mention heredoc pattern");
-        // 32KB stdin auto-pipe
+        #[cfg(windows)]
+        assert!(
+            d.contains("here-string"),
+            "should mention the here-string pattern"
+        );
+        // 32KB stdin auto-pipe. The mechanism IS `bash -s` and there is no
+        // pwsh analogue, so this pair is asserted only where the promise is
+        // true: making the Windows description say it would be the string
+        // advertising a fallback the runtime does not have.
+        #[cfg(not(windows))]
         assert!(
             d.contains("32 KB") || d.contains("32KB"),
             "should mention the stdin-pipe threshold"
         );
+        #[cfg(not(windows))]
         assert!(d.contains("ARG_MAX"), "should explain why the pipe exists");
-        // Timeout + POSIX exit-code-124 contract
+        // Timeout + exit-code-124 contract
         assert!(
             d.contains("60s") || d.contains("60 seconds"),
             "default timeout"
@@ -988,6 +1157,38 @@ mod tests {
         assert!(
             d.contains("justification"),
             "should teach passing a justification when escalating"
+        );
+    }
+
+    /// Windows: the facts a model that already knows PowerShell still cannot
+    /// supply, because they are properties of THIS runtime rather than of the
+    /// language.
+    ///
+    /// `2>/dev/null` is the one that must survive every future edit. It is the
+    /// only listed trap that fails *silently* — pwsh creates a file literally
+    /// named `/dev/null`, suppresses nothing, and the command still exits 0 —
+    /// so a description that quietly loses the line produces no error
+    /// anywhere, just a model that believes it silenced stderr.
+    #[cfg(windows)]
+    #[test]
+    fn windows_description_carries_the_pwsh_traps() {
+        let d = <BashExecTool as AlephTool>::DESCRIPTION;
+        assert!(d.contains("pwsh"), "should name the interpreter it spawns");
+        assert!(
+            d.contains("2>/dev/null") && d.contains("2>$null"),
+            "should carry the silent-redirect trap AND the spelling that works"
+        );
+        assert!(
+            d.contains("LASTEXITCODE"),
+            "should teach resetting the sticky native exit code"
+        );
+        assert!(
+            d.contains("No POSIX signals"),
+            "should retract the `128 + N` contract, which is Unix-only"
+        );
+        assert!(
+            !d.contains("ARG_MAX") && !d.contains("bash -s"),
+            "the bash stdin-pipe fallback does not exist on this platform"
         );
     }
 

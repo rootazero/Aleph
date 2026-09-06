@@ -25,6 +25,8 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh pdf      # pdf_generate's browser engine, CLI off PATH
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
+./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP
+                                     # (unix only: pgrep)
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
@@ -51,6 +53,71 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                 # not asked again on the next one. Asserted on the
                                 # dead backend's request count, not on the answer:
                                 # ask-and-fail-over and don't-ask read identically
+
+./qa/generation_timeout/run.sh cap        # a configured `timeout_seconds` really cuts a real
+                                          # HTTP request, asserted on the PROVIDER's connection
+                                          # (the mock records that the server hung up, and when)
+                                          # rather than on the tool's error string, which four
+                                          # unrelated failures produce identically
+./qa/generation_timeout/run.sh auto       # "unset" lets the request outlive an 8s window —
+                                          # the negative arm, asserted on a request STILL OPEN,
+                                          # not on an absent log line. It falsifies "unset
+                                          # collapsed into a short cap"; it does NOT separate
+                                          # 120s from the provider's own default (that would
+                                          # cost two minutes for one bit, and the `None` arm of
+                                          # `WithRequestTimeout` carries it in-process)
+./qa/generation_timeout/run.sh deploy     # `~/.aleph/defaults.toml`'s generation timeout still
+                                          # reaches the client after the round MOVED that
+                                          # override out of `#[serde(default = …)]`. Nothing
+                                          # else in the suite watches that wire
+./qa/generation_timeout/run.sh precedence # an explicit provider timeout outranks the deployment
+                                          # override — without it, `deploy` green is also
+                                          # consistent with "the override always wins"
+./qa/generation_timeout/run.sh panel      # boot + hold: the Auto checkbox in a real browser.
+                                          # `just wasm` proves the form COMPILES to wasm32; only
+                                          # this shows the checked box omits the field from the
+                                          # payload and the key leaves config.toml
+#   DRIVEN 2026-09-06 (chrome-devtools MCP, all four steps): cold boot renders `超时: 自动` with
+#   the box checked and the slider disabled (its DOM value 60 is `unwrap_or(60)`'s parking spot,
+#   NOT a saved value — read the label, not the slider). Unchecking enables it; 180 + Save put
+#   `"timeout_seconds":180` on the wire and `timeout_seconds = 180` in config.toml. Re-checking
+#   Auto + Save sent a frame with NO `timeout_seconds` key at all (tap on
+#   `WebSocket.prototype.send`, installed via initScript before the app connects) and the key
+#   VANISHED from config.toml — not 0, not the old number. Reload comes back Auto, with the
+#   slider parked at 60 rather than the value just set (no key in config ⇒ `unwrap_or(60)`).
+#   A second pass carried the chain past config.toml to the SOCKET, both directions: saving the
+#   slider minimum (10s) then firing one `tools.invoke` produced THREE aborts at 10014/10001/
+#   10016 ms; re-checking Auto and firing the same call left it uncut — the mock held it the full
+#   60s and answered (`aborted:false, held_ms:60020`). All four boundaries between "the number a
+#   human dragged" and "what happened on the wire" are covered, with a measurement on each side.
+#   Gotcha for whoever drives this next: the page has THREE `input[type=range]` and TWO buttons
+#   reading 保存更改. Selecting either by text silently hits the wrong one (the first 保存更改
+#   belongs to 生成设置 and sends `generation_config.update`). Pick the button by nearest common
+#   ancestor with the timeout slider (depth 3, vs 7 for the settings one).
+#   MEASURED 2026-09-06 (12/12 assertions green, four phases, on a binary built from the tree
+#   it measured): `timeout_seconds` bounds each ATTEMPT, not the call. A 2s cap produced THREE
+#   aborted attempts of ~2s and a tool call that settled at ~7s, so an operator's wall-clock
+#   wait is about `timeout_seconds × attempts + backoff`. `cap`/`deploy` therefore assert the
+#   shape of EVERY attempt and never the retry count: the count is provider policy that may
+#   change, the per-attempt bound is the contract. The Panel's seconds field does not say any of
+#   this — an unfixed labelling question, not a defect in the knob.
+#
+#   FOUR harness lies were fixed before these greens counted, and every one of them made a
+#   WORKING server look broken:
+#     1. the boot precondition grepped a `tracing::info!` the default log filter never emits —
+#        it now reads the unconditional `println!` count, whose absence really does mean zero;
+#     2. the config carried no chat provider, so the server chose simulated mode, where
+#        `tools.invoke` is a `-32099` placeholder and every phase measured the boot mode;
+#     3. `kill` does not stop a native Windows child from Git Bash, so runs leaked servers that
+#        the next run then contended with — cleanup now uses `taskkill //F //T`;
+#     4. **the binary was not the code.** With `SKIP_BUILD=1`, six consecutive runs reported
+#        `cap`/`deploy` RED — no request ever cut — against a stale `target/debug/aleph-server`.
+#        Rebuilding, changing nothing else, turned all four phases green. That stale binary also
+#        produced two convincing phantom "product defects" (a hot-reload watcher on the real
+#        `~/.aleph`, and an unset timeout written back as `120`), neither of which reproduces on
+#        a current build — 120 was the serde default this feature's own round had REMOVED, so
+#        the old binary was reporting its own age. The fixture now refuses to run when any
+#        source file is newer than the binary (`HARNESS_STALE_BINARY`).
 
 ./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
@@ -315,8 +382,9 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # that actually differ. A second session emits no OSC 7, so its
                                  # answer can only be the probe's — without it "OSC 7 won" and
                                  # "the probe said nothing" are the same green.
-./qa/terminal/run.sh real        # a REAL agent binary found on PATH, run directly AND behind a
-                                 # real `npx`. `fake-claude` is a bash script NAMED `claude`, so it
+./qa/terminal/run.sh real        # UNIX ONLY (probe_alive.py needs pty.fork; SKIPS loudly elsewhere).
+                                 # A REAL agent binary found on PATH, run directly AND behind a
+                                 # real `npx`. The fake is a Node script NAMED `claude`, so it
                                  # can only ever cover the arm a stand-in covers by construction;
                                  # this covers the ones only a real install has — a node CLI the
                                  # kernel calls `node`, a CLI that rewrites `process.title`, and a
@@ -371,6 +439,58 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                  # never a PASS.
 ./qa/webview_compat/run.sh linux # the WebKitGTK half; its `flat-on-linux` step is manual and
                                  # that platform's SHELL_MARKER_JS arm is still unrun
+
+./qa/winshell/run.sh all         # ~28 s. WINDOWS ONLY (loud SKIP elsewhere, never a pass). The
+                                 # seven facts the pwsh-as-Windows-shell design rests on, asked of
+                                 # the HOST's PowerShell. No server, no config, no port, nothing
+                                 # under ~/.aleph — the only fixture here that boots nothing. It
+                                 # exists because those numbers were measured once in a chat
+                                 # window, and a number nobody can re-derive is a number nobody
+                                 # can check (判据 §18). Stages: resolve / encoding / exit /
+                                 # comment / length / profile / env, or `all`.
+                                 #   Nothing is copied: the prologue, the epilogue, the argv
+                                 # flags, the two separators joining them and the environment
+                                 # allowlist are DERIVED from src/utils/shell.rs and
+                                 # src/builtin_tools/code_exec.rs (`derive_ps_contract.mjs`; run it
+                                 # alone to see what it read). A hand copy would be a second
+                                 # statement of one fact. The ONE thing deliberately not derived
+                                 # is where pwsh lives — `resolve` walks PATH with PATHEXT itself,
+                                 # because reading the path out of the product would make the
+                                 # fixture agree with it by construction.
+                                 #   Every stage can be made to say NO:
+                                 # `QA_WINSHELL_FALSIFY=prologue|epilogue|join|length|profile|env|
+                                 # resolve` breaks exactly one input and the named stage goes red.
+                                 # All seven were run that way on 2026-09-05 and all seven did.
+                                 #   FLOOR: `FLOORS` in probe_pwsh.mjs — 18 gated checks for `all`;
+                                 # below that the run goes red even with zero failures, because a
+                                 # stage whose checks vanished prints a green summary too. OBSV
+                                 # lines are observations and are deliberately not counted. The
+                                 # floor earned itself on its first day: one run in eight came
+                                 # back 16/18 (a `profile` spawn died, and that stage aborts its
+                                 # arm rather than average over a failed spawn). Not reproduced in
+                                 # six runs since. `profile` now retries a broken spawn ONCE and
+                                 # prints how many needed it — a retry that is not counted is a
+                                 # failure hidden rather than survived.
+                                 #   ⚠️ Two instrument traps it is shaped around, both of which
+                                 # silently flip an answer the SAFE-LOOKING way: (1) a literal
+                                 # 中文 in the argv confounds the encoding measurement, so the
+                                 # non-ASCII string is built from code points; (2) Node's
+                                 # `spawnSync({env})` is NOT Rust's `env_clear()` — libuv copies
+                                 # eleven names (TEMP among them) out of the parent, so the `env`
+                                 # stage drives both arms through a pwsh launcher that calls
+                                 # `ProcessStartInfo.Environment.Clear()`. Measured: 3 variables
+                                 # the product's way vs 13 through Node, and only the first
+                                 # reproduces the empty TEMP.
+                                 #   Its first run corrected the tree it was written against: the
+                                 # `PS_PROLOGUE` doc comment says the code page is "a property of
+                                 # the invocation form, not of the host" (65001 via -Command, 936
+                                 # via stdin). Measured here, BOTH forms answer 936 without the
+                                 # prologue and both follow the console's code page. The
+                                 # conclusion survives — the prologue is more necessary, not less
+                                 # — but the stated reason does not reproduce. Stage 2's `2d`
+                                 # line reports that and does not gate on it: a wrong reason in a
+                                 # comment is a documentation defect, and gating it would turn a
+                                 # host that MATCHES the comment red for being correct.
 
 ./qa/rooms_channel_bind/run.sh   # §5.22 round-9: a channel GROUP conversation bound into a project
                                  # room. Three real identities, a webhook channel (the binding key is
@@ -978,6 +1098,38 @@ Related: `Config.channels` is a **map keyed by instance id**
 form shown in `webhook/mod.rs`'s own module doc does not parse — the server
 refuses to boot with `invalid type: sequence, expected a map`.
 
+## Known gap: tab identity does not survive a re-attach
+
+`browser_managed/attach` drives Aleph through `close` (a DISCONNECT under
+`attach --cdp` — Chrome and its tabs survive) and back through a re-attach that
+`playwright_cli.rs`'s `run` performs when `LaunchPolicy::Refuse` gets
+`NoSession` and the browser is still alive (Piece 4, `59dc20cce`). That
+re-attach reaches the SAME OS process — `attach`'s claim `"a later tool call
+re-attaches to the SAME browser process (not a relaunch)"` asserts exactly
+that, and it is green.
+
+What it does not assert, on purpose, is that the re-attached session finds the
+SAME tab it had before. Measured with a real Chrome and a real marker page:
+the fresh `attach --cdp` session's own `(current)`/listing-order idea of which
+tab is active is **not** inherited from before the disconnect, and the CLI's
+tab-listing order was observed to differ between the first attach and the
+re-attach in the same run — the original `about:blank` (always present, from
+`ChromiumLaunchSpec::argv`) and the profile's actual page traded places. So
+"pick whichever tab the CLI calls current" is neither reliably right nor
+reliably wrong; a candidate fix — select the LAST-listed tab, the fallback
+`tab_registry::active_tab`'s own doc endorses for a listing with no marker —
+was implemented, run against this exact repro, and picked the WRONG tab. That
+doc now carries this as a known exception.
+
+Fixing this needs Aleph's OWN persistent record of which tab a profile was
+last using (`ProfileManager::tab_registry`, in `manager.rs`) consulted at
+re-attach time — one layer above `playwright_cli.rs`, where the re-attach
+itself lives. Not attempted here: it is a real design question for the
+live-view round (plan 2), whose entire premise is a human and an agent
+sharing one browser, and reaching for it from inside this fix would have
+widened a narrowly-scoped change into that question. Tracked in
+`docs/reference/FEATURE_LOCATOR.md` §3.12 (附录 D.9.19).
+
 ---
 
 ## 每个装置在证明什么（由根 `CLAUDE.md` 子系统路由表迁入，2026-08-30）
@@ -1003,7 +1155,19 @@ refuses to boot with `invalid type: sequence, expected a map`.
   停机后把戳改成**降序**再重读——**生产数据上两序恒合，所以不打乱就等于没测**。断言：服务序不变 ·
   `session.truncate` 真的到达数据库 · 它留下的是**头部** · 两个 backend 销毁同一批行。
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
-  `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——**两个 driver 的每个动词都有效果断言**。
+  `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**两个 driver 的每个动词都有效果断言**。
+  `attach` 证的是 Aleph 自己启动 Chrome、`playwright-cli` 只 `attach --cdp` 上去；已知缺口见下方
+  "Known gap: tab identity does not survive a re-attach"。
+  **改启动链（`chromium_launch` / `chromium_resolve` / `playwright_launch` / `playwright_cli`）必须跑
+  `attach`**——它是唯一证明「**Aleph 起的**浏览器」而不是「某个浏览器」的阶段。它用 `pgrep -f`，所以
+  和这个目录里其它场景一样**只在 unix 上跑得动**；Windows 上它不是坏了，是没覆盖。
+  ⚠️ **这套装置的绿有一部分是环境属性，不是代码属性。** 2026-09-05 的启动链翻转发货了一个
+  `--use-mock-keychain` 缺失、因而**每个页面的第一次导航都永不派发**的 Chromium；整套装置之所以抓到它，
+  纯属 `qa/lib/scratch_home.sh` 重定向 `HOME` 的副作用——**用真 HOME 跑，没修的 argv 0.62 s 就导航完了**
+  （实测）。所以**去掉或收窄那个 HOME 重定向，整套装置会在缺陷完好无损的情况下变绿**。今天挡住这一类的
+  是 `attach` 里那条 argv 断言（`--use-mock-keychain` 在场、且在 `extra_args` 之后）与
+  `chromium_launch.rs` 的 `rposition` 单测，**不是任何场景自己的绿**。全文见
+  `docs/reference/FEATURE_LOCATOR.md` §3.12 第七轮 ①③。
 - **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
 - **`agents_viz`** — 改 `run.subagent_tree` 的产地 / relay / 可见性分类、`events.subscribe` 的过滤语义、
   执行清单三载体（`tool_call_completed` snapshot · `RunSummary.plan` · `chat.history.plan`）或 TUI/Panel
@@ -1030,10 +1194,23 @@ refuses to boot with `invalid type: sequence, expected a map`.
   - `cwd` — 三层来源用**三个真的不同的目录**；第二个会话不发 OSC 7，所以它的答案只可能来自探测。
     只有一个会话时，「OSC 7 赢了」和「探测什么都没说」是同一个绿。**故意不证**的：spawn 目录那一层
     （要让探测**失败**才能到达，从 wire 上安排不出来）、`program: null`、Panel 的渲染、以及另外 20 份 manifest。
-  - 装置的画面**不是手抄的**：`derive_chrome.py` 按 rule id 从 `claude.toml` 里取出字面量、拼成行、
-    再用 manifest 自己的正则回验；它**故意不判定哪条规则胜出**（那要在 Python 里重写一遍 region 与优先级
+  - 装置的画面**不是手抄的**：`derive_chrome.mjs` 按 rule id 从 `claude.toml` 里取出字面量、拼成行、
+    再用 manifest 自己的正则回验；它**故意不判定哪条规则胜出**（那要重写一遍 region 与优先级
     ——第二套引擎，判据 §1），胜者由运行时的 `terminal{explain}` 用**发货的引擎**报出规则 id 来断言。
-  - `real` — **`fake-claude` 只能覆盖一条臂**：它是个**名叫** `claude` 的 bash 脚本，所以"按名字认出来"
+    读 manifest 用的 `toml_min.mjs` 同理**不是 schema 的第二份表述**：它只答「这份文件说了什么」，
+    「这份 manifest 合不合法」由 `agent_detect::manifest::parse_manifest` 在运行时回答。
+  - **平台**（2026-09-05）：`identify` / `wait` / `quiet` / `cwd` 与 `panel` 布板在 **Unix 和 Windows
+    上都跑**。在那之前整套装置在 Windows 上是 UNRUN，原因不是设计而是**语言的意外**——驱动是
+    Python，而这台主机上**没装解释器**（PATH 上的 `python3` 是 WindowsApps 存根、exit 49；
+    `uv` 装着但还没有 managed 解释器）。`run.sh` 的 `PY_CMD` 因此按 Aleph 自己的顺序找
+    （真 `python3` → `uv run`，与 `bootstrap-runtime` 的 `DEFAULT_TARGETS` 一致），
+    **刻意不替操作员 `uv python install`**——一个中途悄悄下载运行时的装置是它自己的隐患。
+    **Windows 恰好是前台探测没有 `tcgetpgrp`、走树是全部答案的那个平台**，所以那是它最不该跑不了的
+    地方。`real` 与 `tui` **没搬**，理由是结构性的：`probe_alive.py` / `drive_tui.py` 用 `pty.fork`
+    驱动程序，Node 没有原生模块就没有 pty ⇒ 它们在跑不了的地方**响亮地 SKIP，不报 pass**（判据 §2）。
+    ⚠️ shell 交互的两种拼写收在 `drive_terminal.mjs` 的**一个** `SHELL` kit 里，不是逐调用点的分支——
+    逐点分支正是「Windows 那条臂安静地不再敲 agent、而阶段照样报出对照会话的行」的形状。
+  - `real` — **假 agent 只能覆盖一条臂**：它是个**名叫** `claude` 的 Node 脚本，所以"按名字认出来"
     这条臂是它按构造必然覆盖的那条，也是唯一一条。真实安装才有的三种形状它碰不到——内核把
     `#!/usr/bin/env node` 的 CLI 报成 `node`；重写了 `process.title` 的 CLI 让标题占了 `argv[0]` 的位置，
     而 macOS 会把**环境变量**渗进它后面的 `cmd()`；包装器自己留在进程组组长的位置、真 agent 是它的孩子。

@@ -131,12 +131,13 @@ fn default_user_data_dir_for(profile_name: &str) -> Result<String, BrowserError>
     // honour the per-profile isolation this whole module exists to
     // guarantee, and silently launching into `/tmp` is worse than a
     // visible error the operator can route around.
-    let root = crate::utils::paths::get_config_dir().map_err(|e| {
-        BrowserError::LaunchFailed(format!(
+    let root = crate::utils::paths::get_config_dir().map_err(|e| BrowserError::LaunchFailed {
+        stage: "chrome-mcp",
+        detail: format!(
             "cannot resolve Aleph home for chrome user-data-dir: {e} \
-             (refusing to fall back to /tmp/.aleph — that path is world-writable \
-             and a local attacker could symlink-redirect Chrome's profile)"
-        ))
+                 (refusing to fall back to /tmp/.aleph — that path is world-writable \
+                 and a local attacker could symlink-redirect Chrome's profile)"
+        ),
     })?;
     // BROWSER-R4-05: profile_name reaches us from operator config; without
     // sanitization a name like `/tmp/x` would replace the root via
@@ -575,7 +576,10 @@ impl ChromeMcpDriver {
             .stderr(Stdio::null())
             .no_window()
             .spawn()
-            .map_err(|e| BrowserError::LaunchFailed(format!("Failed to launch Chrome: {e}")))?;
+            .map_err(|e| BrowserError::LaunchFailed {
+                stage: "chrome-mcp",
+                detail: format!("Failed to launch Chrome: {e}"),
+            })?;
 
         // BROWSER-R4-01: record the bootstrap-launched PID so Drop can
         // SIGKILL it on daemon shutdown. The handle is intentionally
@@ -600,15 +604,17 @@ impl ChromeMcpDriver {
         tokio::time::sleep(Duration::from_millis(100)).await;
         match child.try_wait() {
             Ok(Some(status)) => {
-                return Err(BrowserError::LaunchFailed(format!(
-                    "Chrome exited immediately with status {status}"
-                )));
+                return Err(BrowserError::LaunchFailed {
+                    stage: "chrome-mcp",
+                    detail: format!("Chrome exited immediately with status {status}"),
+                });
             }
             Ok(None) => {}
             Err(e) => {
-                return Err(BrowserError::LaunchFailed(format!(
-                    "Failed to check Chrome process status: {e}"
-                )));
+                return Err(BrowserError::LaunchFailed {
+                    stage: "chrome-mcp",
+                    detail: format!("Failed to check Chrome process status: {e}"),
+                });
             }
         }
 

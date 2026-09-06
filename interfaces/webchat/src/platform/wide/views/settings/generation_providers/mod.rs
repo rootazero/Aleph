@@ -19,7 +19,7 @@ mod settings_panel;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{GenerationProviderEntry, GenerationProvidersApi};
+use crate::api::{GenerationProviderRow, GenerationProvidersApi, GenerationRowExt};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
@@ -69,7 +69,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
     let i18n = use_i18n();
 
     // State
-    let (providers, set_providers) = signal(Vec::<GenerationProviderEntry>::new());
+    let (providers, set_providers) = signal(Vec::<GenerationProviderRow>::new());
     let (catalog, set_catalog) = signal(PresetCatalog::default());
     let (selected_category, set_selected_category) = signal(GenerationType::Image);
     let (selected_provider_id, set_selected_provider_id) = signal(Option::<String>::None);
@@ -207,7 +207,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             .filter(|p| {
                 !preset_ids.contains(&p.name) && p.effective_generation_type() == Some(current_cat)
             })
-            .collect::<Vec<GenerationProviderEntry>>()
+            .collect::<Vec<GenerationProviderRow>>()
     };
 
     // Check if a preset is configured
@@ -492,7 +492,7 @@ fn CategoryTab(
 fn ProviderCard(
     preset: PresetProvider,
     is_configured: bool,
-    entry: Option<GenerationProviderEntry>,
+    entry: Option<GenerationProviderRow>,
     is_selected: bool,
     on_click: impl Fn() + 'static + Send,
 ) -> impl IntoView {
@@ -528,7 +528,7 @@ fn ProviderCard(
 #[component]
 fn ProviderDetailPanel(
     selected_id: ReadSignal<Option<String>>,
-    providers: ReadSignal<Vec<GenerationProviderEntry>>,
+    providers: ReadSignal<Vec<GenerationProviderRow>>,
     catalog: ReadSignal<PresetCatalog>,
     on_reload: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {

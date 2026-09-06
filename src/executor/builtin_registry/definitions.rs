@@ -250,6 +250,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: <crate::builtin_tools::list_models::ListModelsTool as crate::tools::AlephTool>::DESCRIPTION,
         requires_config: true, // Reads injected config + vault for provider/credential state
     },
+    // Reads the ledger + config from process-global paths, like `doctor`.
+    BuiltinToolDefinition {
+        name: "runtime_manage",
+        description: <crate::builtin_tools::runtime_manage::RuntimeManageTool as crate::tools::AlephTool>::DESCRIPTION,
+        requires_config: false,
+    },
     BuiltinToolDefinition {
         name: "self_manage",
         description: <crate::builtin_tools::self_manage::SelfManageTool as crate::tools::AlephTool>::DESCRIPTION,
@@ -1186,6 +1192,12 @@ pub fn create_tool_boxed(
         // list_models needs the injected config + vault handles (provider/credential
         // state), bound at BuiltinToolRegistry construction — not standalone here.
         "list_models" => None,
+        // runtime_manage reads the ledger + config from process-global paths
+        // (get_runtimes_dir / Config::load), like doctor — no injected handle
+        // needed, so it gets a real construction arm here.
+        "runtime_manage" => Some(Box::new(
+            crate::builtin_tools::runtime_manage::RuntimeManageTool::new(),
+        ) as Box<dyn AlephToolDyn>),
         // Media tools — require MediaPipeline
         "media_understand" => config
             .and_then(|c| c.media_pipeline.as_ref())
@@ -2605,18 +2617,39 @@ mod tests {
     /// `the_model_facing_copy_names_the_same_faces` pins this sentence
     /// verbatim, so the copy and the argument cannot drift apart.
     ///
-    /// 2026-09-06: raised for the `queries` multi-angle sentence added to
-    /// `SearchTool::DESCRIPTION` in afed93678 (743 -> 931 B). afed93678 bumped
-    /// this ceiling on its own lineage and the merge erased that bump while
-    /// keeping the text; its sibling `REGISTRY_SCHEMA_CEILING_BYTES` bump
-    /// survived. The three questions were answered there: the cap and the
-    /// parameter name are runtime facts of THIS server, no schema carries them
-    /// under progressive disclosure, and both are pinned by
-    /// `SearchTool::DESCRIPTION.contains(..)` guards beside the tool. Set from
-    /// the ratchet's own printed total (113907 B = 94311 catalog + 16613
-    /// registry-only + 1039 injected + 1944 bridge), not computed from the
-    /// prior ceiling plus a delta.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_907;
+    /// ⚠️ **This total is now PLATFORM-CONDITIONAL, and one number guards two
+    /// of them.** Since the Windows-shell round, `bash`'s DESCRIPTION is
+    /// assembled from `#[cfg]`-selected slots (`builtin_tools::bash_exec`), so
+    /// the catalogue sums to a different figure on Windows than on Unix — and
+    /// the run you happen to do only ever exercises the one that compiles for
+    /// you. The other is unmeasured, and the ceiling is flush by design, so
+    /// "green on my machine" is not evidence about it: a Windows-only addition
+    /// that fits here goes red for whoever builds on Linux, and vice versa.
+    /// Measured at the time of writing: `bash` is 4_770 B on Windows and
+    /// 4_740 B on Unix, against the 4_796 B the single string used to cost.
+    ///
+    /// So a future editor touching any `#[cfg]`-conditional description must
+    /// check **both** assemblies, not just the one their `cargo test` builds.
+    /// Without a Windows and a Linux runner to hand, extract the macro bodies
+    /// and sum them for each platform — a text-level count, since the compiler
+    /// only ever hands you one arm. And when raising this ceiling, say which
+    /// platform the new number was measured on: it bounds the max over
+    /// platforms, not the total on yours.
+    ///
+    /// 2026-09-06 (browser live-view plan-1, task 8): +387 B on Unix for
+    /// `runtime_manage`'s new DESCRIPTION (`runtime_manage` is not in
+    /// `default_core_tools()`, so this catalog line is the whole of what a
+    /// model reads before deciding whether to fetch its schema — the R8 tool
+    /// face of the `runtimes.*` RPC family). First draft measured 569 B; the
+    /// action semantics ("list shows what's installed", "install takes a
+    /// capability") duplicated the `RuntimeAction` enum's own variant docs
+    /// (the same fact twice, 判据 §1) and were cut, landing at 387 — under the
+    /// 400 B pruning threshold this plan sets before a raise is accepted.
+    /// 2026-09-06 merge with origin/main (Windows-shell round): re-measured
+    /// on macOS after the merge at 114_393 B (94_797 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge), not derived by
+    /// arithmetic over the two sides' ledgers.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_393;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3012,19 +3045,28 @@ mod tests {
     /// believing it had constrained one.
     ///
     /// Set flush against the measurement, as the rule above requires.
-    /// 2026-09-05: 104_302 -> 104_663 B (+361), all of it `search`
-    /// (2_050 -> 2_411): the `queries: Vec<String>` optional parameter and
-    /// its doc lines (multi-query fan-out; mutually exclusive with `query`).
-    /// Not read off a diff — the guard's own per-tool ledger names `search`
-    /// as the only row that moved. Against the three questions: (1) the
-    /// parameter's existence, shape and exclusivity with `query` are runtime
-    /// facts the schema is the only carrier of; (2) unguessable — nothing
-    /// else on the tool face says several questions can ride one call;
-    /// (3) `search` owns the web-search surface, and its prose/schema
-    /// pinning guard covers the new field. The single-query path's schema
-    /// bytes are unchanged; trimming the new doc lines would ship an array
-    /// parameter the model cannot tell from `query`.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_663;
+    /// 2026-09-06 (browser live-view plan-1, task 8): +528 B, all of it the
+    /// new `runtime_manage` entry (`RuntimeManageArgs`'s `action`/`capability`
+    /// fields plus the `RuntimeAction` enum's variant docs). The guard's own
+    /// per-tool ledger names it as the only row that moved.
+    ///
+    /// 2026-09-05: +361 B, all of it `search` (2_050 -> 2_411): the
+    /// `queries: Vec<String>` optional parameter and its doc lines
+    /// (multi-query fan-out; mutually exclusive with `query`). Not read off a
+    /// diff — the guard's own per-tool ledger names `search` as the only row
+    /// that moved. Against the three questions: (1) the parameter's
+    /// existence, shape and exclusivity with `query` are runtime facts the
+    /// schema is the only carrier of; (2) unguessable — nothing else on the
+    /// tool face says several questions can ride one call; (3) `search` owns
+    /// the web-search surface, and its prose/schema pinning guard covers the
+    /// new field. The single-query path's schema bytes are unchanged;
+    /// trimming the new doc lines would ship an array parameter the model
+    /// cannot tell from `query`.
+    ///
+    /// 2026-09-06 merge: both deltas stack on the 104_302 base, so the
+    /// ceiling is 104_302 + 528 + 361 = 105_191; re-measured on macOS after
+    /// the merge (the guard prints the total if this drifts).
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_191;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3094,6 +3136,7 @@ mod tests {
         ("read_config_guide", 854),
         ("recall_events", 553),
         ("remember", 1907),
+        ("runtime_manage", 528),
         ("scratchpad", 4014),
         ("search", 2411),
         ("self_config", 3553),

@@ -15,7 +15,7 @@ use super::args::{ContentFormat, PdfGenerateArgs, PdfGenerateOutput};
 use super::styles;
 use crate::browser::playwright_cli::PlaywrightCliDriver;
 use crate::browser::playwright_launch::{LaunchPolicy, SessionLaunch};
-use crate::browser::profile::PlaywrightCliConfig;
+use crate::browser::profile::{BrowserRuntimeConfig, PlaywrightCliConfig};
 use crate::builtin_tools::error::ToolError;
 
 fn file_url_from_path(path: &Path) -> String {
@@ -83,6 +83,7 @@ pub async fn generate(
     args: &PdfGenerateArgs,
     output_path: &Path,
     config: Option<&PlaywrightCliConfig>,
+    runtime: Option<&BrowserRuntimeConfig>,
 ) -> Result<PdfGenerateOutput, ToolError> {
     let html_doc = match args.format {
         ContentFormat::Markdown => build_html_document(&args.content, args.title.as_deref()),
@@ -110,8 +111,15 @@ pub async fn generate(
     debug!("pdf_generate wrote HTML to {}", tmp.path().display());
 
     // The operator's settings, not fresh defaults — see
-    // [`is_browser_engine_available`] for what inheriting nothing cost.
-    let driver = PlaywrightCliDriver::new(config.cloned().unwrap_or_default());
+    // [`is_browser_engine_available`] for what inheriting nothing cost. BOTH
+    // halves: this engine launches a Chromium of its own now, so a
+    // `[browser.runtime]` pin that the browser tools honour and this path did
+    // not would be a second, contradictory answer to "which Chromium does Aleph
+    // use", with nothing at runtime telling the operator which one they got.
+    let driver = PlaywrightCliDriver::new(
+        config.cloned().unwrap_or_default(),
+        runtime.cloned().unwrap_or_default(),
+    );
     let session = "aleph-pdf-gen";
     // PDF rendering wants no window; the launch is otherwise unconfigured.
     // Passing it is what lets the first call open the browser at all — until
@@ -119,28 +127,44 @@ pub async fn generate(
     // answered with "the browser is not open, please run open first", i.e.
     // this engine could never have produced a PDF.
     let launch = SessionLaunch::headless_default();
-    driver
-        .run(
-            session,
-            LaunchPolicy::OpenIfNeeded(&launch),
-            &["goto", &file_url],
-            Duration::from_secs(30),
-        )
-        .await
-        .map_err(|e| ToolError::Execution(format!("goto: {e}")))?;
-
     let out_str = output_path.to_string_lossy().to_string();
-    driver
-        .run(
-            session,
-            // The `goto` above already opened it; this call only needs the
-            // page that is now there.
-            LaunchPolicy::Refuse,
-            &["pdf", "--filename", &out_str],
-            Duration::from_secs(60),
-        )
-        .await
-        .map_err(|e| ToolError::Execution(format!("pdf: {e}")))?;
+    let rendered = async {
+        driver
+            .run(
+                session,
+                LaunchPolicy::OpenIfNeeded(&launch),
+                &["goto", &file_url],
+                Duration::from_secs(30),
+            )
+            .await
+            .map_err(|e| ToolError::Execution(format!("goto: {e}")))?;
+        driver
+            .run(
+                session,
+                // The `goto` above already opened it; this call only needs the
+                // page that is now there.
+                LaunchPolicy::Refuse,
+                &["pdf", "--filename", &out_str],
+                Duration::from_secs(60),
+            )
+            .await
+            .map_err(|e| ToolError::Execution(format!("pdf: {e}")))
+    }
+    .await;
+
+    // This driver dies with this function call, and `ChromiumChild` has no
+    // `Drop` — deliberately, so a browser can outlive Aleph and be reaped from
+    // the sidecar registry. So every launch here would leak a Chromium, and the
+    // orphan would keep the profile lock on `chromium-udd/aleph-pdf-gen`: the
+    // next call that has to launch loses to it and fails PERMANENTLY, not
+    // transiently. Hence: on every exit path, including the error one, which is
+    // why the two verbs run inside a block whose result is held rather than
+    // propagated with `?`.
+    let killed = driver.shutdown_all_chromium();
+    if killed > 0 {
+        debug!(killed, "pdf_generate shut down the browser it launched");
+    }
+    rendered?;
 
     info!(path = %output_path.display(), "PDF generated via playwright-cli");
 

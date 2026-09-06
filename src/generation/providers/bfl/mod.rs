@@ -70,6 +70,12 @@ impl std::fmt::Debug for BflProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for BflProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl BflProvider {
     pub fn new<S: Into<String>>(
         api_key: S,

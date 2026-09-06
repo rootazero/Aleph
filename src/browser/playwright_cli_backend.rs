@@ -169,7 +169,7 @@ impl BrowserBackend for PlaywrightCliBackend {
         // `tab-new` rejects it outright (`Unknown option: --headed`, exit 1),
         // so prepending it made every headed call a hard failure rather than a
         // degraded one. Headedness now rides on the launch, in
-        // `playwright_launch::open_argv`.
+        // `chromium_launch::ChromiumLaunchSpec::argv`.
         let _ = self
             .run_launching(&["tab-new", url], self.nav_timeout())
             .await?;
@@ -647,7 +647,10 @@ mod tests {
     use crate::browser::profile::PlaywrightCliConfig;
 
     fn test_backend() -> PlaywrightCliBackend {
-        let driver = Arc::new(PlaywrightCliDriver::new(PlaywrightCliConfig::default()));
+        let driver = Arc::new(PlaywrightCliDriver::new(
+            PlaywrightCliConfig::default(),
+            crate::browser::profile::BrowserRuntimeConfig::default(),
+        ));
         let guard = Arc::new(BrowserSsrfGuard::new(SsrfConfig::default()));
         PlaywrightCliBackend::new(driver, "test", guard, SessionLaunch::headless_default())
     }

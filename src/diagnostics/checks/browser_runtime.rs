@@ -477,7 +477,11 @@ mod tests {
             Ok(ChromiumProbe::Missing)
         ));
         assert!(
-            classify_chromium(Err(BrowserError::LaunchFailed("io".into()))).is_err(),
+            classify_chromium(Err(BrowserError::LaunchFailed {
+                stage: "chrome-mcp",
+                detail: "io".into()
+            }))
+            .is_err(),
             "a lookup that could not be performed is not the same as absence"
         );
         assert!(matches!(

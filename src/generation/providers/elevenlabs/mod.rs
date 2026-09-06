@@ -75,6 +75,12 @@ impl std::fmt::Debug for ElevenLabsProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for ElevenLabsProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl ElevenLabsProvider {
     /// Create a new `ElevenLabs` TTS Provider
     pub fn new<S: Into<String>>(

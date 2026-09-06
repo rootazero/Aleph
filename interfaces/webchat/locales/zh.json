@@ -1048,6 +1048,8 @@
       "stt_model_placeholder": "whisper-1",
       "test_connection": "测试连接",
       "testing": "测试中...",
+      "timeout_auto": "自动",
+      "timeout_auto_hint": "使用该 provider 自带的默认值",
       "timeout_label": "超时",
       "title": "生成提供商",
       "verified": "已验证",

@@ -31,7 +31,9 @@ use super::types::{ImagineRequest, MidjourneyMode, PROVIDER_NAME};
 ///
 /// # Example
 ///
-/// ```rust
+/// Crate-internal: reached through `create_provider`, never from outside
+/// the crate, so this example is illustrative and not compiled.
+/// ```rust,ignore
 /// use alephcore::generation::providers::{MidjourneyProvider, MidjourneyMode};
 /// use alephcore::generation::GenerationProvider;
 ///
@@ -105,10 +107,10 @@ impl MidjourneyProvider {
     /// let provider = MidjourneyProvider::builder("your-api-key")
     ///     .mode(MidjourneyMode::Relax)
     ///     .color("#FF0000")
-    ///     .timeout_secs(60)
+    ///     .timeout_secs(Some(60))
     ///     .build();
     /// ```
-    pub fn builder<S: Into<String>>(api_key: S) -> MidjourneyProviderBuilder {
+    pub(crate) fn builder<S: Into<String>>(api_key: S) -> MidjourneyProviderBuilder {
         MidjourneyProviderBuilder::new(api_key)
     }
 

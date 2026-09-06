@@ -373,6 +373,21 @@ pub async fn emit_ssrf_blocked(url_str: &str, reason: &str) {
 #[cfg(test)]
 pub(crate) static AUDIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Channel capacity for a test's own audit log.
+///
+/// Generous ON PURPOSE, and the size is the point. [`AUDIT_TEST_LOCK`]
+/// serialises the tests that ASSERT on audit rows; it does not stop every
+/// other test in the binary from PRODUCING them, and while an asserting test
+/// has its log installed those foreign rows go into THIS channel.
+/// [`SecurityAuditLog::log`] uses `try_send`, so a full channel silently
+/// DROPS -- and what it drops may be the asserting test's own row.
+///
+/// Measured 2026-09-05: at capacity 16, `authority_changes_are_audited` saw
+/// 2 of its own 3 rows inside a full `--lib` run and read that as the
+/// handler having failed to write one.
+#[cfg(test)]
+pub(crate) const TEST_LOG_CAPACITY: usize = 1024;
+
 /// Swap the installed handle (test-only — production installs exactly once).
 /// The caller must hold [`AUDIT_TEST_LOCK`] and MUST call
 /// [`clear_global_for_test`] before releasing it, so a later non-audit test

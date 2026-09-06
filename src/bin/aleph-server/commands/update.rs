@@ -246,11 +246,21 @@ fn run_installer() -> Result<(), Box<dyn Error>> {
         use std::process::Command;
         #[cfg(windows)]
         {
+            // Host choice (pwsh → powershell) lives in `utils::shell`; this
+            // site used to hardcode `powershell` with no fallback at all.
+            // `-ExecutionPolicy Bypass` stays: unlike our own `-Command`
+            // invocations it is running a downloaded `.ps1` *file*, which the
+            // machine policy would otherwise refuse.
+            let program = alephcore::utils::shell::powershell_host().map_or_else(
+                || std::path::PathBuf::from("powershell"),
+                |shell| shell.program.clone(),
+            );
             println!(
-                "Running the Windows installer:\n  powershell -File {}",
+                "Running the Windows installer:\n  {} -File {}",
+                program.display(),
                 temp_path.display()
             );
-            let mut c = Command::new("powershell");
+            let mut c = Command::new(program);
             c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
             c.arg(&temp_path);
             c

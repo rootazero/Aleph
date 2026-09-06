@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{GenerationProviderConfig, GenerationProvidersApi};
+use crate::api::{GenerationProviderConfigJson, GenerationProvidersApi};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
@@ -34,15 +34,15 @@ pub(super) fn AddCustomProviderPanel(
     let base_url = RwSignal::new(String::new());
     let edit_url = RwSignal::new(String::new());
     let form_model = RwSignal::new(String::new());
-    let timeout = RwSignal::new(60u64);
+    let timeout = RwSignal::new(Option::<u64>::None);
 
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
     let (add_error, set_add_error) = signal(Option::<String>::None);
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
 
-    let build_config = move || -> GenerationProviderConfig {
-        GenerationProviderConfig {
+    let build_config = move || -> GenerationProviderConfigJson {
+        GenerationProviderConfigJson {
             provider_type: provider_type.get(),
             api_key: {
                 let key = api_key.get();
@@ -52,7 +52,6 @@ pub(super) fn AddCustomProviderPanel(
                     Some(key)
                 }
             },
-            secret_name: None,
             base_url: {
                 let url = base_url.get();
                 let url = extract_base_url(&url);
@@ -83,7 +82,7 @@ pub(super) fn AddCustomProviderPanel(
             },
             enabled: true,
             color: "#808080".to_string(),
-            capabilities: vec![category],
+            capabilities: vec![category.as_str().to_string()],
             timeout_seconds: timeout.get(),
             verified: false,
             defaults: Default::default(),
@@ -99,10 +98,9 @@ pub(super) fn AddCustomProviderPanel(
         let ptype = config.provider_type.clone();
         let key = config.api_key.clone();
         let url = config.base_url.clone();
-        let mdl = config.models.first().cloned();
 
         spawn_local(async move {
-            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl, None).await
+            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, None).await
             {
                 Ok(result) => {
                     set_testing.set(false);
@@ -258,18 +256,39 @@ pub(super) fn AddCustomProviderPanel(
                     <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.edit_endpoint_hint)}</p>
                 </div>
 
-                // Timeout
+                // Timeout. "Auto" is a real state and not the slider's floor:
+                // checked omits the field from the payload entirely and the
+                // provider keeps its own default. A slider alone cannot say
+                // "unset" -- every position of it is a value (判据 §17).
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        {t!(i18n, settings.generation.timeout_label)} ": " {move || timeout.get()} "s"
+                        {t!(i18n, settings.generation.timeout_label)} ": "
+                        {move || timeout.get().map_or_else(
+                            || t_string!(i18n, settings.generation.timeout_auto).to_string(),
+                            |v| format!("{v}s"),
+                        )}
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer mb-2">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || timeout.get().is_none()
+                            on:change=move |ev| {
+                                timeout.set(if event_target_checked(&ev) { None } else { Some(60) });
+                            }
+                            class="w-4 h-4 rounded"
+                        />
+                        <span class="text-xs text-text-tertiary">
+                            {t!(i18n, settings.generation.timeout_auto_hint)}
+                        </span>
                     </label>
                     <input
                         type="range" min="10" max="300" step="10"
-                        value=move || timeout.get()
+                        disabled=move || timeout.get().is_none()
+                        prop:value=move || timeout.get().unwrap_or(60)
                         on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { timeout.set(v); }
+                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { timeout.set(Some(v)); }
                         }
-                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary disabled:opacity-40"
                     />
                 </div>
             </div>

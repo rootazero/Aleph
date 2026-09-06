@@ -2237,47 +2237,49 @@ mod tests {
     /// So the assertion is made immune to foreign entries rather than trying
     /// to prevent them: this test deactivates a principal whose id appears
     /// nowhere else in the process, and only entries naming that id are its
-    /// own. A future test that reuses [`RETRY_USER`] — or picks an id that
-    /// contains it as a substring — puts its own writes back inside this
-    /// assertion and makes it flaky again in exactly the old way.
+    /// own. A future test that reuses this test's principal id — a fresh
+    /// uuid per run — or picks an id that collides with it puts its own
+    /// writes back inside this assertion and makes it flaky again in exactly
+    /// the old way.
     #[tokio::test]
     async fn a_second_deactivation_burns_zero_tickets_and_writes_no_authority_change() {
-        /// Process-unique discriminator; see this test's doc comment. Audit
-        /// details interpolate the principal id verbatim, so substring
-        /// matching on this is what separates our rows from a sibling's.
-        const RETRY_USER: &str = "u-alice-retry-audit";
-
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // ⚠️ A UNIQUE principal, not the literal `u-alice`. The audit sink is
+        // process-global and the lock only serialises the tests that ASSERT on
+        // it, so sibling tests deactivating THEIR `u-alice` wrote rows this
+        // test could not tell from its own -- measured 2026-09-05, it read
+        // "burned 1 bootstrap ticket(s) for u-alice" from a test that had
+        // nothing to do with it. The other audit tests already key off a fresh
+        // uuid; this is that fix carried across (判据 §16).
+        let uid = format!("u-{}", uuid::Uuid::new_v4());
         let store = seeded_store();
-        store
-            .create_user(RETRY_USER, "Alice", UserRole::Member)
-            .unwrap();
+        store.create_user(&uid, "Alice", UserRole::Member).unwrap();
         let mgr =
             crate::gateway::security::device_token_manager::DeviceTokenManager::new(store.clone());
-        mgr.create_bootstrap_ticket(Some(600_000), Some(RETRY_USER))
+        mgr.create_bootstrap_ticket(Some(600_000), Some(&uid))
             .unwrap();
 
         handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": RETRY_USER, "status": "deactivated"}),
+                json!({"user_id": uid, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
         )
         .await;
 
-        // Install the audit handle only for the SECOND write. That rules out
-        // this test's OWN first write and nothing else — a sibling test's
-        // writes land here too, and are filtered by RETRY_USER below.
-        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        // Install the audit handle only for the SECOND write, so anything it
+        // receives came from the retry.
+        let (log, mut rx) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
         let resp = handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": RETRY_USER, "status": "deactivated"}),
+                json!({"user_id": uid, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
@@ -2285,11 +2287,13 @@ mod tests {
         .await;
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            details.push(entry.detail);
+            // Only this test's principal: everything else in the channel was
+            // written by whatever else the binary is running right now.
+            if entry.detail.contains(&uid) {
+                details.push(entry.detail);
+            }
         }
         crate::security::audit::clear_global_for_test();
-
-        let mine: Vec<&String> = details.iter().filter(|d| d.contains(RETRY_USER)).collect();
 
         assert_eq!(
             response_json(&resp)["revoked_bootstrap_tickets"],
@@ -2297,9 +2301,8 @@ mod tests {
             "the retry had nothing left to burn"
         );
         assert!(
-            mine.is_empty(),
-            "a retry that cut nothing must write no authority-change row at all: {mine:?} \
-             (every entry seen in the window, ours and foreign: {details:?})"
+            !details.iter().any(|d| d.contains("bootstrap ticket")),
+            "a retry that cut nothing must not write an authority-change row: {details:?}"
         );
     }
 
@@ -2311,8 +2314,9 @@ mod tests {
     async fn authority_changes_are_audited() {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (log, mut rx) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
 
         let store = seeded_store();
@@ -2346,11 +2350,11 @@ mod tests {
 
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            assert_eq!(
-                entry.event_type,
-                crate::security::audit::AuditEventType::AuthorityChange
-            );
-            details.push((entry.actor_user, entry.detail));
+            // NOT asserting the event type here: the channel also carries rows
+            // written by whatever else the binary is running, and their type is
+            // none of this test's business. The assertion moved below the
+            // filter, where every row is this test's own.
+            details.push((entry.event_type, entry.actor_user, entry.detail));
         }
         crate::security::audit::clear_global_for_test();
 
@@ -2361,8 +2365,12 @@ mod tests {
         // entries carry this test's scoped caller.
         let mine: Vec<String> = details
             .into_iter()
-            .filter(|(_, d)| d.contains(&new_id))
-            .map(|(actor, d)| {
+            .filter(|(_, _, d)| d.contains(&new_id))
+            .map(|(event_type, actor, d)| {
+                assert_eq!(
+                    event_type,
+                    crate::security::audit::AuditEventType::AuthorityChange
+                );
                 assert_eq!(actor.as_deref(), Some("u-owner"));
                 d
             })

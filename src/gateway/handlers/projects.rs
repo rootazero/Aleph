@@ -1525,8 +1525,9 @@ mod tests {
     async fn removing_a_non_member_writes_no_audit_row_and_names_nobody() {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (log, mut rx_audit) = crate::security::audit::SecurityAuditLog::new(16);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (log, mut rx_audit) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
 
         let (store, users, project, _guard) = room();
@@ -1563,11 +1564,10 @@ mod tests {
                 leaked.push(entry.detail);
             }
         }
-        // Contract of `replace_global_for_test`: clear before releasing
-        // `_serial`, so a later non-audit test never finds a handle whose
-        // receiver has been dropped. Before the asserts, not after — a
-        // panicking assert would otherwise leave the dangling handle
-        // installed for the rest of the process.
+        // `replace_global_for_test`'s contract: clear before releasing the
+        // lock, so a later non-audit test never writes into a handle whose
+        // receiver is gone. Before the assertion, so a failing one still
+        // leaves the process clean.
         crate::security::audit::clear_global_for_test();
         assert!(
             leaked.is_empty(),

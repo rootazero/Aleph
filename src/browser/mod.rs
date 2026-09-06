@@ -1,6 +1,8 @@
 pub mod backend;
 pub(crate) mod chrome_mcp;
 pub(crate) mod chrome_mcp_backend;
+pub(crate) mod chromium_launch;
+pub(crate) mod chromium_resolve;
 mod discovery;
 pub mod error;
 pub mod manager;
@@ -19,3 +21,6 @@ pub(crate) mod wait_probe;
 
 pub use discovery::find_chromium;
 pub use error::BrowserError;
+// Crate-internal: `live_endpoint` is `pub(crate)` too, and its first real
+// consumer (the live view, Plan 2) lives in this crate.
+pub(crate) use chromium_launch::CdpEndpoint;

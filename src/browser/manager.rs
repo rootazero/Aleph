@@ -69,6 +69,24 @@ fn apply_policy_to(handle: Option<&Weak<ProfileManager>>, policy: SsrfConfig) ->
     }
 }
 
+/// Stop the browsers of the manager the running daemon serves.
+///
+/// Shaped exactly like [`crate::builtin_tools::bash_exec::kill_all_running_background`],
+/// for the same reason its comment gives at the shutdown call site: an
+/// automatic teardown is best-effort once the runtime itself is being torn
+/// down, so the daemon calls this explicitly. Returns 0 — honestly — when no
+/// manager is published (a CLI process, a test, or before boot wired one up).
+pub fn shutdown_browsers_global() -> usize {
+    let handle = LIVE_MANAGER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    handle
+        .as_ref()
+        .and_then(Weak::upgrade)
+        .map_or(0, |mgr| mgr.shutdown_browsers())
+}
+
 /// Manages the lifecycle of browser profiles.
 pub struct ProfileManager {
     profiles: RwLock<HashMap<String, ManagedProfile>>,
@@ -93,8 +111,10 @@ impl ProfileManager {
     #[must_use]
     pub fn new(config: BrowserSystemConfig) -> Self {
         let ssrf_guard = ArcSwap::from_pointee(BrowserSsrfGuard::new(config.policy.clone()));
-        let playwright_cli_driver =
-            Arc::new(PlaywrightCliDriver::new(config.playwright_cli.clone()));
+        let playwright_cli_driver = Arc::new(PlaywrightCliDriver::new(
+            config.playwright_cli.clone(),
+            config.runtime.clone(),
+        ));
 
         let mut profiles = HashMap::new();
 
@@ -148,20 +168,6 @@ impl ProfileManager {
             );
         }
 
-        // Say so at boot when a profile sets something its driver cannot honor.
-        // Silently ignoring a configured field is the bug; a warning is the
-        // minimum honest answer while the managed driver has no equivalent.
-        for (name, p) in &profiles {
-            for field in unhonored_managed_fields(&p.config) {
-                tracing::warn!(
-                    profile = %name,
-                    field,
-                    "browser profile sets a field the managed (playwright-cli) driver cannot \
-                     honor — it is ignored; use an existing-session profile if you need it"
-                );
-            }
-        }
-
         // The Chrome MCP driver consults the profile map when it has to launch
         // Chrome itself (engine preference, proxy, user-data-dir, extra args).
         // Hand it the merged set — including the auto-injected "default"/"user"
@@ -198,6 +204,10 @@ impl ProfileManager {
     /// per `ProfileManager` instance. The reaper sweeps every `interval_secs`
     /// and tears down Chrome MCP sessions whose profile is past its idle
     /// timeout. Idempotent — subsequent calls are no-ops.
+    ///
+    /// It is also where the previous run's orphaned Chromium processes are
+    /// reaped — same argument as the live-config handle below: "the manager
+    /// whose reaper runs" is precisely "the manager the daemon serves from".
     ///
     /// Also publishes this manager as the process-global live-config target
     /// (see [`apply_policy_live`]). This is the daemon's one boot hook that
@@ -240,6 +250,49 @@ impl ProfileManager {
                 );
             }
         }
+        // Boot hook, and the only one that runs exactly once per SERVED
+        // manager (a `ProfileManager` built by a test or a CLI never claims the
+        // slot above). Anything Aleph launched before a crash is still running:
+        // Chrome does not exit when its parent does, and under `attach` the CLI
+        // was never its parent anyway.
+        //
+        // Detached because boot must not wait for it — nothing downstream
+        // reads the count.
+        tokio::spawn(async {
+            match Self::sweep_orphaned_chromium().await {
+                Ok(outcome) => {
+                    if outcome.reaped > 0 {
+                        tracing::info!(
+                            "reaped {} orphaned chromium process(es) from a previous run",
+                            outcome.reaped
+                        );
+                    }
+                    // Not one-shot: this fires on EVERY boot sweep for as
+                    // long as the count stays nonzero, not only the sweep
+                    // that first quarantined it (Final Review M6) — the
+                    // defect was that nothing ever said this again after
+                    // the initial rename.
+                    if outcome.corrupt_pending > 0 {
+                        tracing::warn!(
+                            "{} unparseable chromium sidecar(s) remain quarantined as \
+                             .corrupt — a live orphaned browser may be behind one and \
+                             unreapable until its own session key is relaunched",
+                            outcome.corrupt_pending
+                        );
+                    }
+                    if outcome.corrupt_superseded > 0 {
+                        tracing::info!(
+                            "cleared {} stale .corrupt sidecar(s), superseded by a fresher \
+                             record under the same session key",
+                            outcome.corrupt_superseded
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "the orphaned-chromium sweep did not complete")
+                }
+            }
+        });
         *slot = Some(Arc::downgrade(self));
         let weak = Arc::downgrade(self);
         let interval = std::time::Duration::from_secs(interval_secs.max(5));
@@ -262,6 +315,38 @@ impl ProfileManager {
         });
     }
 
+    /// The boot sweep's outward-reaching leaf: read the real sidecar registry
+    /// and kill whatever a previous process left running.
+    ///
+    /// Sealed under `cfg(test)` for the same reason
+    /// `PlaywrightCliDriver::provision_binary` is, and the seal is not
+    /// theoretical here: [`Self::spawn_idle_reaper`] **has a unit-test caller**
+    /// (`gateway::handlers::browser_config`), and this task is detached, so it
+    /// outlives the test body — including that test's `AlephHomeEnvGuard`. It
+    /// would therefore resolve the *developer's real* `$ALEPH_HOME` after the
+    /// guard restored it, and kill the Chromium of an Aleph they have running.
+    ///
+    /// What the seal costs is only the wire, not the decision: the decision is
+    /// covered against injected effects in `chromium_launch::reap_orphans`, and
+    /// the wire is pinned by `the_boot_hook_still_calls_the_orphan_sweep`.
+    ///
+    /// Off the async worker: the sweep does a `read_dir`, a `sysinfo` refresh
+    /// per record and possibly a kill, and `with_process_specifics` is
+    /// documented as syscall-heavy.
+    #[cfg(not(test))]
+    async fn sweep_orphaned_chromium(
+    ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
+        tokio::task::spawn_blocking(super::chromium_launch::reap_orphans_now).await
+    }
+
+    /// The sealed twin. See the production one above for why it is sealed.
+    #[cfg(test)]
+    #[allow(clippy::unused_async)]
+    async fn sweep_orphaned_chromium(
+    ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
+        Ok(super::chromium_launch::ReapOutcome::default())
+    }
+
     /// The managed driver's configuration, for the one consumer that runs a
     /// `playwright-cli` session of its own rather than through a profile:
     /// `pdf_generate`'s browser engine.
@@ -275,6 +360,20 @@ impl ProfileManager {
     #[must_use]
     pub const fn playwright_cli_config(&self) -> &PlaywrightCliConfig {
         &self.config.playwright_cli
+    }
+
+    /// The `[browser.runtime]` section — where this Aleph's Chromium comes from.
+    ///
+    /// The twin of [`Self::playwright_cli_config`], and it exists for the same
+    /// reason: `pdf_generate` builds a `PlaywrightCliDriver` of its own, and
+    /// that driver now launches a browser, so a construction site that
+    /// inherited the CLI settings but not the browser ones would honour an
+    /// operator's pin in one half of Aleph and ignore it in the other.
+    ///
+    /// ⚠️ Task 6 was told to add `ProfileManager` accessors. This is one of
+    /// them, added early because `pdf_generate` needed it; do not add a second.
+    pub const fn runtime_config(&self) -> &super::profile::BrowserRuntimeConfig {
+        &self.config.runtime
     }
 
     /// Route a profile to its appropriate `BrowserBackend` instance.
@@ -308,11 +407,11 @@ impl ProfileManager {
     ///
     /// - `ExistingSession` → tear down the Chrome MCP session. Liveness comes
     ///   from the driver's session map (the only place a session exists).
-    /// - `Managed` → `playwright-cli close`. This used to be documented as
-    ///   impossible ("the Playwright CLI exposes no stop-this-session
-    ///   command"), which is false: `close`, `close-all` and `kill-all` are all
-    ///   there. `idle_timeout_secs` was therefore accepted and never enforced
-    ///   for managed profiles.
+    /// - `Managed` → `playwright-cli close` (which now only disconnects the CLI
+    ///   session) **and then** killing Aleph's own Chromium. Under the previous
+    ///   arrangement `close` destroyed the browser the CLI had launched; under
+    ///   `attach --cdp` it leaves it running, so stopping at `close` would have
+    ///   reported a reaped profile over a browser that never went away.
     ///
     /// The close runs under [`LaunchPolicy::Refuse`]: a reaper that opened a
     /// browser in order to close it would be absurd, and the lazy launch makes
@@ -334,27 +433,64 @@ impl ProfileManager {
                 )
                 .await
             {
-                // Already gone is the same outcome as just-closed, and the
-                // registry must be cleared either way or the profile stays a
-                // reap candidate forever.
+                // Already gone is the same outcome as just-closed.
                 Ok(_) | Err(BrowserError::NoSession(_)) => {}
+                // Best-effort, and deliberately NOT a gate on the kill below.
+                // The CLI's session and the browser are two different things
+                // now; an error here is the CLI's opinion of its own session
+                // and says nothing about the process Aleph owns. Skipping the
+                // kill on it would make an unusable CLI — the state most
+                // likely to have leaked a browser in the first place — the one
+                // state in which Aleph refuses to reclaim it (判据 §8: a
+                // fail-closed answer must not be spent as a value).
                 Err(e) => {
-                    tracing::warn!(profile = %name, error = %e, "reap_idle: failed to close managed session");
-                    continue;
+                    tracing::warn!(profile = %name, error = %e, "reap_idle: could not close the managed cli session; stopping its browser anyway");
                 }
             }
+            // `close` under `attach --cdp` is a DISCONNECT: the browser, its
+            // pages and their state all survive it (measured). So this is the
+            // half that actually reclaims anything, and the only half the
+            // count may be earned by — reporting a reaped profile over a
+            // browser that never went away is the "success reported for a
+            // no-op" shape (判据 §11).
+            if self.playwright_cli_driver.shutdown_chromium(&name) {
+                reaped += 1;
+            } else {
+                tracing::warn!(profile = %name, "reap_idle: no chromium to stop for an idle managed profile");
+            }
             self.tab_registry.clear_profile(&name);
-            reaped += 1;
         }
         reaped
     }
 
-    /// `Managed` profiles idle past their timeout that plausibly still have a
-    /// browser.
+    /// `Managed` profiles idle past their timeout that Aleph has a browser
+    /// record for — alive **or** dead.
     ///
-    /// "Plausibly" is [`TabRegistry::has_tabs`] — the same approximation
-    /// [`Self::session_active`] uses, and the reason the close tolerates a
-    /// `NoSession` answer instead of trusting this predicate.
+    /// Exact, not approximate: the browser is Aleph's own child process, so
+    /// "does one exist" is `ChromiumChild::alive`. The `close` below still
+    /// tolerates `NoSession` because the CLI's session and the browser are now
+    /// two different things — the browser can be alive with no session attached.
+    ///
+    /// The dead half is not a courtesy. A Chromium that exited on its own
+    /// leaves three things behind that only this sweep clears while the daemon
+    /// runs — the child record in the driver's map, the sidecar file naming its
+    /// pid, and the profile's tab entries — so filtering on `alive` alone would
+    /// make "the browser died" mean "there is nothing here to reclaim".
+    ///
+    /// The filter below reads as `chromium_alive(name) || chromium_died(name)`,
+    /// and that is NOT because it behaves differently from a bare "does the
+    /// driver have a record for this profile at all" check — algebraically it
+    /// does not: [`PlaywrightCliDriver::chromium_died`] is defined as
+    /// `key_present && !alive`, so the disjunction reduces to exactly
+    /// `key_present`, in every state, not merely today's. It is written this
+    /// way because `PlaywrightCliDriver` never exposes a bare "has a record"
+    /// accessor — `chromium_alive` / `chromium_died` are the only two names it
+    /// hands out for this decision, and they are the vocabulary the rest of
+    /// this module already reasons in.
+    ///
+    /// Scoped to browsers **this** process launched, deliberately: a Chromium
+    /// left by a crashed daemon has no idle clock here to be past, and is the
+    /// boot sweep's to reclaim, not this sweep's.
     fn idle_managed_profiles(&self) -> Vec<String> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
         let now = std::time::Instant::now();
@@ -363,7 +499,8 @@ impl ProfileManager {
             .filter(|(name, p)| {
                 p.config.driver == BrowserDriver::Managed
                     && is_idle(p.last_activity, now, p.config.idle_timeout_secs)
-                    && self.tab_registry.has_tabs(name)
+                    && (self.playwright_cli_driver.chromium_alive(name)
+                        || self.playwright_cli_driver.chromium_died(name))
             })
             .map(|(name, _)| name.clone())
             .collect()
@@ -372,13 +509,16 @@ impl ProfileManager {
     /// Whether the profile currently has a live browser session, derived from
     /// the real session-tracking surfaces rather than a state flag:
     /// - `ExistingSession` → a Chrome MCP session exists in the driver.
-    /// - `Managed` → the tab registry has tracked tabs for the profile.
-    ///   Approximation: a managed session exists if tabs were used; the
-    ///   registry is reconciled against the live browser on each reaper sweep.
+    /// - `Managed` → Aleph's Chromium for the profile is running. Exact since
+    ///   the launch-chain flip; it used to be "the tab registry has tabs",
+    ///   which its own doc called an approximation. Exact about **this
+    ///   process's** browsers: one orphaned by a previous run reads as
+    ///   inactive until [`Self::spawn_idle_reaper`]'s boot sweep disposes of
+    ///   it, which is the sweep's job rather than this predicate's.
     pub fn session_active(&self, name: &str) -> bool {
         match self.get_driver(name) {
             Some(BrowserDriver::ExistingSession) => self.chrome_mcp_driver.has_session(name),
-            Some(BrowserDriver::Managed) => self.tab_registry.has_tabs(name),
+            Some(BrowserDriver::Managed) => self.playwright_cli_driver.chromium_alive(name),
             None => false,
         }
     }
@@ -501,6 +641,54 @@ impl ProfileManager {
         profiles.get(name).map(|p| p.config.clone())
     }
 
+    /// The live CDP endpoint of a `Managed` profile's browser, if it has one.
+    ///
+    /// The accessor spec §3.2 asks for. `ExistingSession` answers `None` by
+    /// construction: that browser is the user's own, Aleph never launched it,
+    /// and the live view is deliberately Managed-only — a Chrome the user
+    /// started is already on their screen.
+    ///
+    /// ⚠️ `None` is "**Aleph** has no browser for this profile", which is the
+    /// same sentence as "no browser is running" only after
+    /// [`Self::spawn_idle_reaper`]'s boot sweep: a Chromium orphaned by a
+    /// previous process lives in the sidecar registry, not in this driver's
+    /// map (判据 §8 — an absent record is not an absent process).
+    // The one allow this task adds, and it replaces two: `PlaywrightCliDriver`'s
+    // `endpoint` and `shutdown_chromium` each carried one naming Task 6, and
+    // both are consumed here now. This one is the head of that chain — nothing
+    // in this crate reads a live endpoint until Plan 2's live view does, and
+    // `--lib` (which does not compile `#[cfg(test)]`) sees only that. Delete it
+    // with the first non-test caller; if Plan 2 does not land, this is a CUT,
+    // not a permanent allow.
+    #[allow(dead_code)]
+    pub(crate) fn live_endpoint(&self, profile: &str) -> Option<super::CdpEndpoint> {
+        match self.get_driver(profile) {
+            Some(BrowserDriver::Managed) => self.playwright_cli_driver.endpoint(profile),
+            Some(BrowserDriver::ExistingSession) | None => None,
+        }
+    }
+
+    /// Kill every browser this manager launched. Returns how many were stopped.
+    ///
+    /// spec §3.6「退出时杀」. `std::process::Child` does not kill on drop, and
+    /// under `attach --cdp` the CLI was never the browser's parent — so without
+    /// this every restart leaves a Chromium running until the next boot sweep.
+    ///
+    /// **Must finish inside `SHUTDOWN_FAILSAFE` (5 s, `start/helpers.rs`),**
+    /// because one of its two call sites is the wedged-shutdown watchdog and
+    /// the `std::process::exit(0)` after it waits for nobody. What that buys
+    /// this function is a rule, not a budget: SIGKILL plus a bounded reap per
+    /// child, and **never a graceful handshake**. No SIGTERM-then-wait, no CDP
+    /// `Browser.close`, no round trip to a browser that may be the reason the
+    /// shutdown wedged in the first place. `Child::kill()` is immediate and
+    /// `Child::wait()` after a successful kill returns as soon as the kernel
+    /// reaps — microseconds, not a negotiation (see `ChromiumChild::shutdown`,
+    /// which skips the wait entirely when the kill did not succeed, precisely
+    /// so a child we could not signal cannot park this loop).
+    pub fn shutdown_browsers(&self) -> usize {
+        self.playwright_cli_driver.shutdown_all_chromium()
+    }
+
     /// Validate a URL against the SSRF policy.
     pub async fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
         self.ssrf_guard.load().check_url(url).await
@@ -545,6 +733,33 @@ impl ProfileManager {
     pub(crate) fn has_tracked_tabs(&self, profile: &str) -> bool {
         self.tab_registry.has_tabs(profile)
     }
+
+    /// Test-only: hand the managed driver a browser it did not launch, so the
+    /// reaper and the shutdown path can be exercised against a REAL pid without
+    /// a real Chromium.
+    ///
+    /// One line of forwarding onto [`PlaywrightCliDriver::insert_test_child`]
+    /// and [`ChromiumChild::from_parts`] — both of which say "do not add a
+    /// second one", and this is the one. Not `pub`, and `#[cfg(test)]`: a door
+    /// that lets something outside put a browser into the driver is a door that
+    /// goes around the launch chain.
+    #[cfg(test)]
+    pub(crate) fn insert_test_child(&self, profile: &str, child: std::process::Child) {
+        let endpoint = super::CdpEndpoint {
+            http_url: "http://127.0.0.1:1".into(),
+            ws_url: "ws://127.0.0.1:1/devtools/browser/test".into(),
+            pid: child.id(),
+        };
+        self.playwright_cli_driver.insert_test_child(
+            profile,
+            super::chromium_launch::ChromiumChild::from_parts(
+                child,
+                endpoint,
+                std::path::PathBuf::from("/tmp/aleph-test-udd"),
+                profile,
+            ),
+        );
+    }
 }
 
 /// Whether `last_activity` is older than `timeout_secs` as of `now`. Pure
@@ -561,38 +776,10 @@ fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_s
     now.saturating_duration_since(last_activity).as_secs() > timeout_secs
 }
 
-/// Fields this profile sets that the **managed** (playwright-cli) driver cannot
-/// honor — empty for an existing-session profile, which honors all of them.
-///
-/// This list used to name five fields. It named them because an earlier round
-/// looked for the settings among the CLI's *flags*, did not find them, and
-/// recorded "no equivalent exists" rather than guessing flag names — the right
-/// instinct, applied to the wrong surface. `playwright-cli open` takes
-/// `--config <file>`, whose documented schema carries `browser.userDataDir` and
-/// `browser.launchOptions` (Playwright's `LaunchOptions`, i.e. `proxy` and
-/// `args`); `--browser` selects the engine; and `close` ends a session. Four of
-/// the five are now wired — see [`super::playwright_launch`] and
-/// [`ProfileManager::reap_idle`].
-///
-/// What is left is genuinely unhonorable: `Brave` has no Playwright channel, so
-/// a managed Brave profile would silently get Chromium. Saying so at boot beats
-/// accepting the setting and dropping it.
-fn unhonored_managed_fields(cfg: &ProfileConfig) -> Vec<&'static str> {
-    if cfg.driver != BrowserDriver::Managed {
-        return Vec::new();
-    }
-    let mut fields = Vec::new();
-    if super::playwright_launch::browser_flag_value(&cfg.browser).is_none()
-        && cfg.browser != BrowserType::default()
-    {
-        fields.push("browser");
-    }
-    fields
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::paths::AlephHomeEnvGuard;
 
     #[test]
     fn test_manager_registers_profiles_from_config() {
@@ -637,9 +824,14 @@ mod tests {
         assert!(!manager.session_active("user"));
         assert!(!manager.session_active("nonexistent"));
 
-        // Managed approximation: tracked tabs imply a live session.
+        // Not an approximation any more: Aleph owns the browser process, so
+        // `session_active` asks it. A tracked tab says a tab was USED, which is
+        // a different fact and no longer stands in for a live browser.
         manager.touch_tab("default", "1");
-        assert!(manager.session_active("default"));
+        assert!(
+            !manager.session_active("default"),
+            "a tracked tab must not imply a browser that was never launched"
+        );
     }
 
     #[test]
@@ -825,53 +1017,390 @@ mod tests {
         assert!(!apply_policy_to(Some(&handle), open));
     }
 
-    /// The warning must name what is dropped and **nothing else**: a boot
-    /// warning about a setting that now works trains the operator to ignore
-    /// the warning.
+    /// The boot hook must actually call the orphan sweep.
+    ///
+    /// A SOURCE pin, and deliberately so: `sweep_orphaned_chromium`'s
+    /// production half is `cfg(not(test))` — it reads the real `$ALEPH_HOME`
+    /// and kills pids, so no unit test may run it — which leaves the wire
+    /// itself unobservable at runtime. Same shape and the same reason as
+    /// `both_daemon_exit_paths_reap_background_jobs_and_browsers`. Deleting the
+    /// call then fails a test by name, instead of silently letting every
+    /// crashed daemon's Chromium survive forever.
     #[test]
-    fn managed_profiles_name_the_fields_their_driver_drops() {
-        // Four of these reach the browser now — via `open --config` and
-        // `--browser` — so the only thing left to warn about is the engine
-        // Playwright has no channel for.
-        let cfg = ProfileConfig {
-            driver: BrowserDriver::Managed,
-            proxy: Some("socks5://127.0.0.1:1080".into()),
-            user_data_dir: Some("/tmp/p".into()),
-            extra_args: vec!["--disable-gpu".into()],
-            browser: BrowserType::Brave,
-            idle_timeout_secs: 60,
-            ..Default::default()
-        };
-        assert_eq!(unhonored_managed_fields(&cfg), vec!["browser"]);
+    fn the_boot_hook_still_calls_the_orphan_sweep() {
+        let src = include_str!("manager.rs").replace('\r', "");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] bound matched nothing — this test would then be \
+             reading its own source"
+        );
+        assert!(
+            production.contains("Self::sweep_orphaned_chromium()"),
+            "spawn_idle_reaper must still call the boot sweep"
+        );
+        assert!(
+            production.contains("chromium_launch::reap_orphans_now"),
+            "the sweep must reach chromium_launch::reap_orphans_now — it is the \
+             only thing that ever finds a browser a crashed daemon left running"
+        );
+    }
 
-        // …and an engine that DOES have a mapping is silent, so the warning
-        // tracks the mapping rather than "differs from the default".
-        for honored in [BrowserType::Chrome, BrowserType::Edge] {
-            let cfg = ProfileConfig {
-                driver: BrowserDriver::Managed,
-                browser: honored.clone(),
-                proxy: Some("socks5://127.0.0.1:1080".into()),
-                user_data_dir: Some("/tmp/p".into()),
-                extra_args: vec!["--disable-gpu".into()],
-                idle_timeout_secs: 60,
-                ..Default::default()
-            };
-            assert!(
-                unhonored_managed_fields(&cfg).is_empty(),
-                "{honored:?} is mapped and must not warn"
-            );
+    /// A `playwright-cli` stand-in that exits 0 for every verb and, when it is
+    /// asked to `close`, records whether `pid` was still alive at that moment.
+    ///
+    /// It is written *after* the stand-in browser is spawned, which is the only
+    /// reason it can name that pid — and naming it is the point: the marker is
+    /// how a unit test observes the ORDER of the reaper's two halves without
+    /// being able to step inside `reap_idle`.
+    #[cfg(unix)]
+    fn fake_cli_recording_close(
+        dir: &std::path::Path,
+        pid: u32,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let marker = dir.join("close-saw-a-live-browser");
+        let cli = dir.join("fake-playwright-cli");
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\n\
+                 case \" $* \" in\n\
+                 *\" close \"*) kill -0 {pid} 2>/dev/null && : > {marker:?} ;;\n\
+                 esac\n\
+                 exit 0\n",
+                marker = marker.to_string_lossy(),
+            ),
+        )
+        .expect("write the fake playwright-cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod the fake playwright-cli");
+        (cli, marker)
+    }
+
+    /// Move a profile's idle clock back so the reaper's timeout filter admits
+    /// it, without sleeping through a real timeout.
+    ///
+    /// `is_idle` reads the monotonic clock and `tokio::time::pause` does not
+    /// move that, so a test either waits or backdates. `checked_sub` because
+    /// the clock's origin can be more recent than the offset (see `is_idle`);
+    /// the caller asserts the profile really did become a candidate, so an
+    /// underflow fails loudly instead of turning the test green for the wrong
+    /// reason.
+    fn backdate(manager: &ProfileManager, profile: &str, ago: Duration) {
+        let mut profiles = manager.profiles.write().unwrap_or_else(|e| e.into_inner());
+        let entry = profiles.get_mut(profile).expect("profile exists");
+        if let Some(t) = std::time::Instant::now().checked_sub(ago) {
+            entry.last_activity = t;
         }
+    }
 
-        // A default managed profile sets none of them → silence.
-        assert!(unhonored_managed_fields(&ProfileConfig::default()).is_empty());
-        // The existing-session driver honors all of them → silence.
-        let existing = ProfileConfig {
-            driver: BrowserDriver::ExistingSession,
-            proxy: Some("socks5://127.0.0.1:1080".into()),
-            idle_timeout_secs: 60,
-            ..Default::default()
-        };
-        assert!(unhonored_managed_fields(&existing).is_empty());
+    /// A `BrowserSystemConfig` with one `Managed` profile that is idle the
+    /// instant it stops being touched.
+    fn managed_config(cli: Option<&std::path::Path>) -> BrowserSystemConfig {
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Managed,
+                idle_timeout_secs: 0,
+                ..Default::default()
+            },
+        );
+        config.playwright_cli.binary_path = cli.map(|p| p.to_string_lossy().into_owned());
+        config
+    }
+
+    /// The view accessor spec §3.2 asks for, and the one property that makes it
+    /// honest: an `ExistingSession` profile has no Aleph-owned browser, so it
+    /// must answer `None` rather than somebody else's endpoint. The live view is
+    /// Managed-only on purpose — a user's own Chrome is already visible to them.
+    ///
+    /// The `get_driver` assertion is not decoration. Without it the
+    /// `ExistingSession` arm is an empty guard: point it at the driver too and
+    /// the test stays green, because no browser exists either way. Pinning
+    /// *which* driver the profile has is what makes the arm falsifiable
+    /// (判据 §3 — a guard that has never been falsified is not a guard).
+    #[tokio::test]
+    async fn live_endpoint_is_none_without_a_browser_and_never_answers_for_existing_session() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        // Both auto-injected profiles exist (`ProfileManager::new`): `default`
+        // is Managed, `user` is ExistingSession.
+        assert_eq!(manager.get_driver("default"), Some(BrowserDriver::Managed));
+        assert_eq!(
+            manager.get_driver("user"),
+            Some(BrowserDriver::ExistingSession),
+            "precondition: `user` is the ExistingSession arm this asserts on"
+        );
+        assert!(manager.live_endpoint("default").is_none());
+        assert!(manager.live_endpoint("user").is_none());
+        assert!(manager.live_endpoint("no-such-profile").is_none());
+    }
+
+    /// The falsifying half of the test above.
+    ///
+    /// Asserting `None` for `user` on a manager that never launched anything
+    /// is an EMPTY guard: point the `ExistingSession` arm at the driver and it
+    /// stays green, because the driver has nothing to answer with either
+    /// (判据 §3 — a guard that cannot go red is not a guard). So give the
+    /// driver something to answer with, under that very profile's key, and the
+    /// arm has to be the thing that refuses.
+    ///
+    /// Not a contrived state: the driver's map is keyed by profile name, so a
+    /// profile that is `Managed` today and `ExistingSession` in tomorrow's
+    /// config is exactly this shape — and the live view showing Aleph's own
+    /// stale browser as "the user's Chrome" is the failure it would produce.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_endpoint_refuses_an_existing_session_profile_that_has_a_child_in_the_map() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        assert_eq!(
+            manager.get_driver("user"),
+            Some(BrowserDriver::ExistingSession),
+            "precondition: `user` is the arm under test"
+        );
+
+        let child = std::process::Command::new("sleep")
+            .arg("120")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        manager.insert_test_child("user", child);
+
+        assert!(
+            manager.live_endpoint("user").is_none(),
+            "the live view is Managed-only; an ExistingSession profile must not \
+             be handed an endpoint even when the driver has one under its key"
+        );
+        assert_eq!(
+            manager.shutdown_browsers(),
+            1,
+            "precondition: the driver really was holding a child to answer with"
+        );
+    }
+
+    /// `session_active` used to answer from the tab registry, which its own doc
+    /// called an approximation. Now that Aleph owns the process there is an
+    /// exact answer, and the approximation must be GONE rather than kept beside
+    /// it — two answers to "does this profile have a browser" is how they drift.
+    /// Concretely: tracking a tab must no longer make a browserless profile
+    /// report itself active.
+    #[tokio::test]
+    async fn a_tracked_tab_no_longer_fakes_a_live_managed_session() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        manager.touch_tab("default", "tab-1");
+        assert!(
+            manager.has_tracked_tabs("default"),
+            "precondition: the registry did record the tab"
+        );
+        assert!(
+            !manager.session_active("default"),
+            "no chromium was ever launched, so the profile is not active"
+        );
+    }
+
+    /// The reaper's Managed arm has two halves now, and the second one is the
+    /// point: under `attach`, `playwright-cli close` only DISCONNECTS (measured
+    /// — nine Chrome processes before and after). A reaper that stopped at
+    /// `close` would report a reaped profile and leave the browser running
+    /// forever. With no browser to begin with, the sweep must be a no-op and
+    /// must not invent one.
+    #[tokio::test]
+    async fn the_reaper_does_not_launch_a_browser_in_order_to_reap_one() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(managed_config(None));
+        // Past its timeout, so the sweep's answer is about the browser rather
+        // than about the clock.
+        backdate(&manager, "default", Duration::from_secs(2));
+        assert_eq!(manager.reap_idle().await, 0);
+        assert!(manager.live_endpoint("default").is_none());
+    }
+
+    /// spec §3.6 「退出时杀」. `std::process::Child` does NOT kill on drop, and
+    /// under `attach --cdp` the CLI was never the browser's parent — so without
+    /// an explicit stop every restart leaves a browser behind until the next
+    /// boot sweep finds it.
+    ///
+    /// The fake browser is a real `sleep` subprocess, because the thing being
+    /// tested is that a live pid stops being live. A mock child would assert
+    /// that a method was called (判据 §4: assert the effect arrived, not that
+    /// the call happened).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_browsers_kills_what_it_launched_and_says_how_many() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+
+        // Nothing launched → nothing to stop, and it must not pretend otherwise.
+        assert_eq!(manager.shutdown_browsers(), 0);
+
+        // A stand-in browser: long-lived, harmless, and observable by pid.
+        let child = std::process::Command::new("sleep")
+            .arg("120")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        let pid = child.id();
+        manager.insert_test_child("default", child);
+        assert!(
+            crate::utils::process_alive::is_process_alive(pid as i32),
+            "precondition: the stand-in is running"
+        );
+
+        assert_eq!(manager.shutdown_browsers(), 1);
+        assert!(
+            !crate::utils::process_alive::is_process_alive(pid as i32),
+            "the stand-in browser is still running after shutdown_browsers"
+        );
+        // Idempotent: a second stop finds nothing and says so.
+        assert_eq!(manager.shutdown_browsers(), 0);
+    }
+
+    /// The central behavioural claim of the launch-chain flip, asserted in the
+    /// only direction a unit test can speak to it: **Aleph's own reclamation
+    /// does not come from `close`.**
+    ///
+    /// The CLI here is a script that succeeds at everything, so the reaper's
+    /// first half runs to completion — and it records whether the browser was
+    /// still alive when it ran. Both facts together are the order: `close`
+    /// happened over a live browser (so the reaper did not kill first, which
+    /// would drop the CLI session's own teardown), and the browser is gone
+    /// afterwards (so something other than `close` reclaimed it).
+    ///
+    /// That the *external* `playwright-cli close` leaves the browser running
+    /// was measured in the spike (nine Chrome processes before and after) and
+    /// is not a property a unit test can hold; what it can hold is that Aleph
+    /// no longer depends on it doing anything.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reap_idle_closes_the_cli_session_then_kills_the_browser_close_left_running() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let child = std::process::Command::new("sleep")
+            .arg("120")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        let pid = child.id();
+        let (cli, close_saw_live_browser) = fake_cli_recording_close(tmp.path(), pid);
+
+        let manager = ProfileManager::new(managed_config(Some(&cli)));
+        manager.insert_test_child("default", child);
+        backdate(&manager, "default", Duration::from_secs(2));
+        assert_eq!(
+            manager.idle_managed_profiles(),
+            vec!["default".to_string()],
+            "precondition: an idle profile WITH a browser is a reap candidate"
+        );
+
+        assert_eq!(
+            manager.reap_idle().await,
+            1,
+            "the sweep reclaimed a browser and must say so"
+        );
+        assert!(
+            close_saw_live_browser.exists(),
+            "the cli `close` either did not run or ran after the kill"
+        );
+        assert!(
+            !crate::utils::process_alive::is_process_alive(pid as i32),
+            "`close` disconnects; only the kill reclaims — the browser is still running"
+        );
+        assert!(
+            manager.live_endpoint("default").is_none(),
+            "the reaped profile must not still advertise an endpoint"
+        );
+    }
+
+    /// A Managed browser that exited on its own is still the reaper's to clean
+    /// up — the flip to `chromium_alive` must not turn "died" into "nothing to
+    /// do here".
+    ///
+    /// Three different things outlive that browser and only this sweep clears
+    /// them while the daemon runs: the child record in the driver's map, the
+    /// sidecar file that names its pid on disk, and the profile's tab entries.
+    /// `chromium_died` exists as a concept distinct from "no browser" (Task 5)
+    /// for OTHER call sites (`run`'s pre-verb check reads it alone) — but the
+    /// candidate filter here admits both `chromium_alive` and `chromium_died`
+    /// profiles for a simpler reason than recognising two facts: `chromium_died`
+    /// is `key_present && !alive`, so the disjunction is exactly "Aleph has a
+    /// record for this profile at all", which is what "something to reclaim"
+    /// actually requires.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_browser_that_died_on_its_own_is_still_reclaimed() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let manager = ProfileManager::new(managed_config(None));
+
+        // A browser that is already gone: spawned, then reaped, so `try_wait`
+        // has a definite answer rather than a racy one.
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        child
+            .wait()
+            .expect("the stand-in browser exits immediately");
+        manager.insert_test_child("default", child);
+        manager.touch_tab("default", "tab-1");
+        backdate(&manager, "default", Duration::from_secs(2));
+
+        assert!(
+            !manager.session_active("default"),
+            "precondition: the browser really is gone"
+        );
+        assert!(
+            manager.has_tracked_tabs("default"),
+            "precondition: the registry has something to clear"
+        );
+
+        assert_eq!(
+            manager.reap_idle().await,
+            1,
+            "a dead browser's record, sidecar and tabs are still state to reclaim"
+        );
+        assert!(manager.live_endpoint("default").is_none());
+        assert!(
+            !manager.has_tracked_tabs("default"),
+            "the tab entries survived the sweep that was supposed to clear them"
+        );
+    }
+
+    /// A failed `close` is not a reason to keep a browser.
+    ///
+    /// The CLI is unavailable here (the sealed test twin refuses to install
+    /// one), so the first half of the reaper's Managed arm cannot even run. The
+    /// browser is still Aleph's child, and the CLI's opinion of its own session
+    /// says nothing about it — treating that `Err` as a reason to skip the kill
+    /// would make a broken CLI, the state most likely to have leaked a browser,
+    /// the one state where Aleph refuses to reclaim it (判据 §8).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_close_that_could_not_run_does_not_spare_the_browser() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let manager = ProfileManager::new(managed_config(None));
+        let child = std::process::Command::new("sleep")
+            .arg("120")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        let pid = child.id();
+        manager.insert_test_child("default", child);
+        backdate(&manager, "default", Duration::from_secs(2));
+
+        assert_eq!(manager.reap_idle().await, 1);
+        assert!(
+            !crate::utils::process_alive::is_process_alive(pid as i32),
+            "a browser survived a sweep because the cli could not be run"
+        );
     }
 
     #[test]

@@ -269,6 +269,23 @@ pub fn parse_tab_ids(tabs_text: &str) -> Vec<String> {
 /// post-navigation audit and the read-time SSRF re-check must vet the very tab
 /// whose content is then read, and after a `switch_tab` the last-listed tab is
 /// not that tab.
+///
+/// ⚠️ **Known exception, measured on real hardware (browser-live-view plan 1,
+/// round 2):** this "last-listed is the right guess" fallback does NOT hold
+/// across a `close`/re-attach cycle under `attach --cdp`. A fresh attach
+/// session's listing DOES carry the driver's own marker (so the fallback
+/// itself is not even reached in that case) — but that marker was observed to
+/// name the WRONG tab: the CLI's own idea of "current" after a fresh attach
+/// is drawn from CDP's target enumeration, not inherited from before the
+/// disconnect, and that enumeration's order was measured to differ between
+/// the first attach and the re-attach in the same run (the launch's own
+/// `about:blank` and the profile's actual page traded places). Picking
+/// "last-listed" as an override in that situation was tried and picked the
+/// wrong tab too. Recovering the right tab across a re-attach needs a
+/// persistent record kept ONE level up (`ProfileManager::tab_registry` in
+/// `manager.rs`), not a smarter read of any single listing — see
+/// `docs/reference/FEATURE_LOCATOR.md` §3.12 (附录 D.9.19) and
+/// `qa/README.md`'s "Known gap: tab identity does not survive a re-attach".
 #[must_use]
 pub fn active_tab(tabs_text: &str) -> Option<TabLine> {
     let mut last = None;

@@ -30,7 +30,9 @@ use tracing::{debug, info, warn};
 ///
 /// # Example
 ///
-/// ```rust
+/// Crate-internal: reached through `create_provider`, never from outside
+/// the crate, so this example is illustrative and not compiled.
+/// ```rust,ignore
 /// use alephcore::generation::providers::ReplicateProvider;
 /// use alephcore::generation::{GenerationProvider, GenerationType};
 ///
@@ -77,14 +79,16 @@ impl ReplicateProvider {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// Crate-internal: reached through `create_provider`, never from outside
+    /// the crate, so this example is illustrative and not compiled.
+    /// ```rust,ignore
     /// use alephcore::generation::providers::ReplicateProvider;
     ///
     /// let provider = ReplicateProvider::builder("r8_xxx")
     ///     .add_model("flux", "black-forest-labs/flux-schnell")
     ///     .build();
     /// ```
-    pub fn builder<S: Into<String>>(api_key: S) -> ReplicateProviderBuilder {
+    pub(crate) fn builder<S: Into<String>>(api_key: S) -> ReplicateProviderBuilder {
         ReplicateProviderBuilder::new(api_key)
     }
 

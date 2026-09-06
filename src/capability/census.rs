@@ -1779,11 +1779,47 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         (body.join("\n"), lines.len().saturating_sub(1))
     }
 
+    /// Whether the line at `at` sits directly inside an `impl` block — walk
+    /// outward to the nearest strictly-lower-indent line (skipping blank
+    /// lines and same-indent siblings like doc comments/attributes, which
+    /// rustfmt never dedents below the item they decorate) and ask whether
+    /// THAT line opens an `impl`.
+    ///
+    /// Backs [`capability_wrappers`]'s `in_impl` bucket, which pins the
+    /// premise [`qualified_with_self`] depends on (every wrapper is a free
+    /// function, so `Self::` can never be a real call to one) — see there
+    /// for why that premise being wrong would matter.
+    ///
+    /// ⚠️ Known blind spot, measured 2026-09-06: a multi-line `impl<T>\nwhere\n
+    /// T: Bar,\n{` puts the block's OWN opening line at the SAME indent as its
+    /// body (the header wraps onto `where` and a bare `{`), so the nearest
+    /// strictly-lower-indent line above a `fn` inside it is that bare `{`,
+    /// not the `impl` keyword — this reads as `false` (under-reports, the
+    /// direction M3 exists to prevent). `grep -rn "^impl" --include='*.rs'
+    /// src/ | grep -c where` was 0 on that date; if it is ever nonzero, this
+    /// needs a real fix, not another sentence.
+    fn is_inside_impl_block(lines: &[String], at: usize) -> bool {
+        let indent = indent_of(&lines[at]);
+        for line in lines[..at].iter().rev() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let li = indent_of(line);
+            if li < indent {
+                let t = line.trim_start();
+                return t.starts_with("impl ") || t.starts_with("impl<");
+            }
+        }
+        false
+    }
+
     /// Is `line` a call to the free/associated function `name`?
     ///
     /// Rejects an identifier byte before the name (so `handle_plugins_install(`
     /// is not a call to `install`) and rejects a `.` (so `x.install(` — a method
-    /// on a value — is not a call to the module-level wrapper).
+    /// on a value — is not a call to the module-level wrapper). Also rejects a
+    /// `Self::` qualifier — see [`qualified_with_self`] for why that is not
+    /// merely "one more concrete qualifier" the way `Foo::install(` is.
     fn calls(line: &str, name: &str) -> bool {
         let bytes = line.as_bytes();
         let mut from = 0usize;
@@ -1791,12 +1827,46 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             let at = from + rel;
             let after = at + name.len();
             let ok_before = at == 0 || (!is_ident_byte(bytes[at - 1]) && bytes[at - 1] != b'.');
-            if ok_before && line[after..].starts_with('(') {
+            if ok_before && line[after..].starts_with('(') && !qualified_with_self(line, at) {
                 return true;
             }
             from = after;
         }
         false
+    }
+
+    /// Whether the call starting at byte offset `at` in `line` is qualified
+    /// with `Self::`.
+    ///
+    /// `capability_wrappers()` derives a wrapper's identity from where its OWN
+    /// definition lives — a bare `fn name` in some file that touches a
+    /// `CapabilitySlot` — and every wrapper this census has ever found is a
+    /// free function: `CapWrappers::in_impl` is the pin on that, asserted
+    /// empty by `every_capability_wrapper_is_a_free_function` below (Final
+    /// Review M3) rather than a one-time manual count that a later wrapper
+    /// could quietly falsify. `Foo::install(` is still a concrete,
+    /// checkable string even though this scan does not verify `Foo` itself;
+    /// `Self::install(` is not — `Self` names whatever type happens to
+    /// enclose the CALLER, which this census never records, so it can never
+    /// be checked against anything derived here. Counting it as a match makes
+    /// an unrelated method on an unrelated type collide with a real wrapper by
+    /// pure coincidence of spelling: `RuntimeManageTool::install` (a tool
+    /// dispatch method, nothing to do with a `CapabilitySlot`) collided with
+    /// `identity::ledger::install` (the actual wrapper `"install"` names) this
+    /// way and reported a false "conditional install with no decline" — a
+    /// `match` arm's OTHER arm is not a "governing alternative" for a
+    /// capability install that was never happening on that arm at all.
+    /// Excluding `Self::` is not "fix the call site to be qualified"
+    /// (`unqualified` below asks for that, and rightly, when the call really
+    /// might be the wrapper) — there is nothing to fix; the call was never a
+    /// call to this wrapper, so it is not counted as a match at all, the same
+    /// way an unrelated line that merely contains the substring is not.
+    fn qualified_with_self(line: &str, at: usize) -> bool {
+        let before = line[..at].trim_end();
+        let Some(prefix) = before.strip_suffix("Self::") else {
+            return false;
+        };
+        prefix.as_bytes().last().is_none_or(|b| !is_ident_byte(*b))
     }
 
     fn is_fn_definition(line: &str) -> bool {
@@ -1897,6 +1967,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         declines: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
         /// decline-wrapper name -> the file that defines it.
         decline_file: std::collections::BTreeMap<String, String>,
+        /// Wrapper names whose OWN `fn` line sits inside an `impl` block —
+        /// as `"{file}::{name}"`, since two wrappers can share a bare name.
+        /// Expected empty; see [`qualified_with_self`] for what relies on it
+        /// staying that way (Final Review M3).
+        in_impl: std::collections::BTreeSet<String>,
     }
 
     fn capability_wrappers() -> CapWrappers {
@@ -1904,6 +1979,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             installs: std::collections::BTreeMap::new(),
             declines: std::collections::BTreeMap::new(),
             decline_file: std::collections::BTreeMap::new(),
+            in_impl: std::collections::BTreeSet::new(),
         };
         for (rel, text) in rust_sources_under(&manifest_src()) {
             if !text.contains("CapabilitySlot") {
@@ -1932,13 +2008,17 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 }
                 let (body, _) = block_at(&lines, i);
                 let installs = slots_touched(&body, &statics, "install", &rel);
+                let declines = slots_touched(&body, &statics, "decline", &rel);
+                if (!installs.is_empty() || !declines.is_empty()) && is_inside_impl_block(&lines, i)
+                {
+                    w.in_impl.insert(format!("{rel}::{name}"));
+                }
                 if !installs.is_empty() {
                     w.installs
                         .entry(name.to_string())
                         .or_default()
                         .extend(installs);
                 }
-                let declines = slots_touched(&body, &statics, "decline", &rel);
                 if !declines.is_empty() {
                     w.declines
                         .entry(name.to_string())
@@ -2645,6 +2725,102 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             }
         }
         out
+    }
+
+    /// Pins the premise [`qualified_with_self`] is built on: every capability
+    /// wrapper `capability_wrappers()` finds is a free function, so excluding
+    /// `Self::`-qualified call sites from `calls()` never hides a real call
+    /// to one of them (Final Review M3).
+    ///
+    /// Before this, that premise was a comment citing a one-time manual count
+    /// ("39-plus derived names, none inside an `impl` block today") with
+    /// nothing re-checking it. Writing the check found it was ALREADY false:
+    /// four wrappers are associated functions today —
+    /// `Config::set_effective_path`, `Config::decline_effective_path`,
+    /// `SharedTokenManager::set_global`, `PiiEngine::init`. Fixing that (make
+    /// them free functions, or teach the census to resolve `Self::` against
+    /// its enclosing `impl`) is out of scope for this pin and unrelated to
+    /// the plan this pin exists for — so they are a dated, named exception
+    /// list rather than silently making this test pass-always.
+    ///
+    /// By hand, on 2026-09-06, none of the four is exposed: `grep -rn
+    /// "Self::set_effective_path\|Self::decline_effective_path\|
+    /// Self::set_global"` finds nothing, and the two `Self::init(` hits
+    /// (`gateway/delivery_queue.rs`) are `DeliveryStore::init` — a same-named,
+    /// unrelated method colliding on the bare name `capability_wrappers()`
+    /// keys by, the file's own documented over-see working in the SAFE
+    /// direction here. That hand-check is exactly the kind of one-time count
+    /// this test exists to stop relying on for anything NEW: a fifth entry
+    /// below, or a `Self::`-qualified call appearing against any of the four
+    /// above, needs the same check redone before it is safe to widen this
+    /// list.
+    #[test]
+    fn every_capability_wrapper_is_a_free_function() {
+        let w = capability_wrappers();
+        let known_2026_09_06: std::collections::BTreeSet<&str> = [
+            "src/config/load.rs::decline_effective_path",
+            "src/config/load.rs::set_effective_path",
+            "src/gateway/security/shared_token.rs::set_global",
+            "src/pii/engine.rs::init",
+        ]
+        .into_iter()
+        .collect();
+        let new: Vec<&String> = w
+            .in_impl
+            .iter()
+            .filter(|e| !known_2026_09_06.contains(e.as_str()))
+            .collect();
+        assert!(
+            new.is_empty(),
+            "wrapper(s) newly defined inside an `impl` block, beyond the four measured \
+             2026-09-06: {new:?} — qualified_with_self's Self:: exclusion assumes every \
+             wrapper is a free function; a Self::-qualified call to one of these would be \
+             silently discarded as a non-match instead of counted. Check by hand whether \
+             anything calls the new one via Self:: before adding it to this test's list.",
+        );
+    }
+
+    /// Turns the "checked by hand on 2026-09-06" line in the test above into a
+    /// standing check, not a one-time count sitting in a comment: a licence
+    /// with no expiry that would fail by nobody looking at it again, exactly
+    /// the way this census answering "no caller" about something that has
+    /// one is supposed to be caught.
+    ///
+    /// `Self` resolves lexically to its enclosing `impl` block, so a
+    /// `Self::<name>(` call can only ever be a real call to one of these four
+    /// wrappers from inside the SAME FILE that defines it — searching
+    /// crate-wide would reproduce the exact bare-name over-see this census
+    /// already documents: `DeliveryStore::init`'s own `Self::init(` calls
+    /// (`gateway/delivery_queue.rs`, an unrelated type in a different file)
+    /// would show up as false hits here too if this were not scoped per file.
+    #[test]
+    fn none_of_the_grandfathered_impl_block_wrappers_is_called_via_self() {
+        let grandfathered = [
+            ("src/config/load.rs", "set_effective_path"),
+            ("src/config/load.rs", "decline_effective_path"),
+            ("src/gateway/security/shared_token.rs", "set_global"),
+            ("src/pii/engine.rs", "init"),
+        ];
+        let mut hits: Vec<String> = Vec::new();
+        for (rel, name) in grandfathered {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let (nums, lines) = prod_lines(&text);
+            let needle = format!("Self::{name}(");
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains(&needle) {
+                    hits.push(format!("{rel}:{}: {}", nums[i], line.trim()));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "a Self::-qualified call now exists against a grandfathered impl-block \
+             wrapper: {hits:?} — qualified_with_self's Self:: exclusion would silently \
+             discard it as a non-match instead of counting it. This needs the same \
+             by-hand check redone (see every_capability_wrapper_is_a_free_function's \
+             doc comment) before deciding what to do about it.",
+        );
     }
 
     /// Every handle installed inside a gated block is declined in that block's

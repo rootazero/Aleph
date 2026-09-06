@@ -27,7 +27,7 @@ use super::defaults::GenerationDefaults;
 /// enabled = true
 /// color = "#10a37f"
 /// capabilities = ["image"]
-/// timeout_seconds = 120
+/// timeout_seconds = 120   # optional -- omit and the provider keeps its own
 ///
 /// [generation.providers.dalle.defaults]
 /// width = 1024
@@ -58,20 +58,26 @@ pub struct GenerationProviderConfig {
     pub models: Vec<String>,
 
     /// Whether this provider is enabled
-    #[serde(default = "default_enabled")]
+    #[serde(default = "aleph_protocol::providers::default_generation_enabled")]
     pub enabled: bool,
 
     /// Brand color for UI theming (hex format)
-    #[serde(default = "default_color")]
+    #[serde(default = "aleph_protocol::providers::default_generation_color")]
     pub color: String,
 
     /// Supported generation types
     #[serde(default)]
     pub capabilities: Vec<GenerationType>,
 
-    /// Request timeout in seconds
-    #[serde(default = "default_timeout_seconds")]
-    pub timeout_seconds: u64,
+    /// Per-request timeout in seconds, or `None` when nothing has set one.
+    ///
+    /// `None` is not "120". It means the operator never chose, and each
+    /// provider keeps the default it tuned for its own API -- Imagen waits
+    /// 180 s, Replicate 300 s, Midjourney 30 s. Read it through
+    /// [`Self::request_timeout_secs`] rather than directly: the deployment-wide
+    /// `~/.aleph/defaults.toml` override applies in between.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 
     /// Default parameters for this provider
     #[serde(default)]
@@ -95,19 +101,6 @@ pub struct GenerationProviderConfig {
     pub voices_url: Option<String>,
 }
 
-const fn default_enabled() -> bool {
-    true
-}
-
-fn default_color() -> String {
-    "#808080".to_string()
-}
-
-fn default_timeout_seconds() -> u64 {
-    crate::config::defaults_override::get_defaults_override()
-        .generation_timeout_seconds()
-        .unwrap_or(120) // 2 minutes
-}
 
 impl Default for GenerationProviderConfig {
     fn default() -> Self {
@@ -116,10 +109,10 @@ impl Default for GenerationProviderConfig {
             api_key: None,
             base_url: None,
             models: Vec::new(),
-            enabled: true,
-            color: default_color(),
+            enabled: aleph_protocol::providers::default_generation_enabled(),
+            color: aleph_protocol::providers::default_generation_color(),
             capabilities: Vec::new(),
-            timeout_seconds: default_timeout_seconds(),
+            timeout_seconds: None,
             defaults: GenerationDefaults::default(),
             model_aliases: HashMap::new(),
             verified: false,
@@ -130,6 +123,36 @@ impl Default for GenerationProviderConfig {
 }
 
 impl GenerationProviderConfig {
+    /// The per-request cap to hand this provider's HTTP client, or `None` to
+    /// leave the default the provider chose for itself in place.
+    ///
+    /// Precedence, derived in exactly one place (判据 §12): explicit config >
+    /// the deployment's `~/.aleph/defaults.toml` override > the provider's own
+    /// default.
+    ///
+    /// That override used to reach the field through `#[serde(default = ...)]`,
+    /// which forced a third meaning onto it: a config that never mentioned the
+    /// knob deserialized as `120`, indistinguishable from one that asked for
+    /// 120. The factory therefore had to overwrite EVERY provider's tuned
+    /// default in order to honour the ones that had actually asked -- an
+    /// "I don't know" read as a value (判据 §8).
+    ///
+    /// # Why this stays `pub` with no caller outside `alephcore`
+    ///
+    /// P5 would narrow it to `pub(crate)`, and every call site today is in this
+    /// crate. It stays `pub` because [`Self::timeout_seconds`] is `pub`: hiding
+    /// the accessor hides it from exactly the reader who would otherwise take
+    /// the raw field and silently miss the `~/.aleph/defaults.toml` override.
+    /// Narrowing the accessor without narrowing the field it corrects does not
+    /// reduce what a caller knows -- it only removes the correct answer from
+    /// reach. Whoever narrows the field may narrow this in the same commit.
+    #[must_use]
+    pub fn request_timeout_secs(&self) -> Option<u64> {
+        self.timeout_seconds.or_else(|| {
+            crate::config::defaults_override::get_defaults_override().generation_timeout_seconds()
+        })
+    }
+
     /// Create a new provider config with the given type
     pub fn new<S: Into<String>>(provider_type: S) -> Self {
         Self {
@@ -169,7 +192,7 @@ impl GenerationProviderConfig {
         }
 
         // Validate timeout
-        if self.timeout_seconds == 0 {
+        if self.timeout_seconds == Some(0) {
             return Err(format!(
                 "generation.providers.{name}.timeout_seconds must be greater than 0"
             ));

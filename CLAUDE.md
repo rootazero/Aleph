@@ -147,7 +147,7 @@
 
 ```
 cargo test -p alephcore --lib --no-run
-cargo test -p alephcore --bins            # 唯一真跑而非 --no-run 的一条：--lib 带不到 src/bin/ 下的 94 条
+cargo test -p alephcore --bins            # 唯一真跑而非 --no-run 的一条：--lib 带不到 src/bin/ 下那些测试
                                           # （含钉住 boot 无条件 install_policy/install_ledger 的 census）
 cargo test -p alephcore --features test-helpers --test '*' --no-run   # --all-targets 只展开 target 不展开 feature
 cargo test -p aleph-panel --lib --no-run  # check 看不见它的 #[cfg(test)]；曾整程编译不过

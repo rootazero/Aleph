@@ -189,6 +189,12 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "runtime_manage",
+            crate::builtin_tools::runtime_manage::RuntimeManageTool::DESCRIPTION,
+            schema::<crate::builtin_tools::runtime_manage::RuntimeManageArgs>("runtime_manage"),
+        );
+        reg(
+            tools,
             "moa",
             crate::builtin_tools::moa_manage::MoaManageTool::DESCRIPTION,
             schema::<crate::builtin_tools::moa_manage::MoaManageArgs>("moa"),

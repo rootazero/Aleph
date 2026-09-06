@@ -119,11 +119,11 @@ pub struct SampleInput<'a> {
     /// The foreground process's name, from the probe. `None` = the probe
     /// could not look; it is never the shell standing in for a program.
     pub program: Option<&'a str>,
-    /// The foreground process's `argv[0]`, from the probe.
-    pub argv0: Option<&'a str>,
-    /// The foreground process's whole command line, from the probe. This is
-    /// what identifies `claude`, which runs as a Node script.
-    pub cmdline: Option<&'a str>,
+    /// The foreground process's whole argv, from the probe. This is what
+    /// identifies `claude`, which runs as a Node script. Empty = the probe
+    /// could not look; it is NOT a joined command line, because joining and
+    /// re-splitting loses a Windows image path (see `ForegroundFact::argv`).
+    pub argv: &'a [String],
     /// The session's live working directory. Sourced by the caller in a fixed
     /// order — see `flush_session`.
     pub cwd: &'a str,
@@ -222,7 +222,7 @@ impl RuntimeAgents {
     ///
     /// # What identifies the agent
     ///
-    /// The FOREGROUND PROCESS ([`SampleInput::program`] / `argv0` / `cmdline`,
+    /// The FOREGROUND PROCESS ([`SampleInput::program`] / `argv`,
     /// from `pty::foreground`), falling back to
     /// [`crate::gateway::pty::PtySession::shell`] — the spawn-time label —
     /// only when the probe could not answer.
@@ -272,8 +272,7 @@ impl RuntimeAgents {
             session_id,
             shell,
             program,
-            argv0,
-            cmdline,
+            argv,
             cwd,
             screen,
             process_exited,
@@ -291,7 +290,7 @@ impl RuntimeAgents {
         // `claude` as `bash`.
         let (program_name, agent) = match program {
             Some(name) => {
-                let resolved = agent_detect::normalized_program_name(name, argv0, cmdline);
+                let resolved = agent_detect::normalized_program_name(name, argv);
                 let agent = agent_detect::identify_agent(&resolved);
                 (Some(resolved), agent)
             }

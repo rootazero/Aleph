@@ -25,7 +25,7 @@ use crate::generation::{GenerationError, GenerationResult};
 /// let provider = MidjourneyProviderBuilder::new("your-api-key")
 ///     .mode(MidjourneyMode::Fast)
 ///     .color("#5865F2")
-///     .timeout_secs(60)
+///     .timeout_secs(Some(60))
 ///     .build();
 /// ```
 #[derive(Debug)]
@@ -95,15 +95,19 @@ impl MidjourneyProviderBuilder {
     ///
     /// * `secs` - Timeout duration in seconds
     #[must_use]
-    pub const fn timeout_secs(mut self, secs: u64) -> Self {
-        self.timeout_secs = secs;
+    pub const fn timeout_secs(mut self, secs: Option<u64>) -> Self {
+        // `None` = unconfigured. Keep the default this builder chose; the
+        // config field cannot express "unset" any other way.
+        if let Some(secs) = secs {
+            self.timeout_secs = secs;
+        }
         self
     }
 
     /// Build the `MidjourneyProvider`
     pub fn build(self) -> GenerationResult<MidjourneyProvider> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(self.timeout_secs))
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 

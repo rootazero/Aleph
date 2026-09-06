@@ -108,6 +108,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             // `verify` agent denies that whole family, and denying a pure read
             // to an agent whose job is reading would be backwards.
             "tool_usage",
+            // Runtime ledger's tool face (R8): `list` is a read, `install` is
+            // not — but this table is display-only (see this file's module
+            // doc), so its authorization lives in
+            // `method_authz::OPERATOR_TOOLS`, not here.
+            "runtime_manage",
             // Read-only agent panel over PTY sessions the caller owns on
             // this server — no PTY-ish group exists yet (herdr runtime port
             // is phase 1), so it is filed under this heading for lack of a

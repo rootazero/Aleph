@@ -29,7 +29,7 @@ pub(crate) use crate::api::sessions::{SessionListRow, SessionRowKnobs};
 /// Sort newest-first by `updated_at`; rows the server never stamped (`0`, the
 /// field's `#[serde(default)]`) sink to the bottom.
 pub(crate) fn sort_sessions_desc(mut rows: Vec<SessionListRow>) -> Vec<SessionListRow> {
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at));
     rows
 }
 

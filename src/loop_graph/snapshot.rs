@@ -307,8 +307,13 @@ impl SnapshotStore {
     /// Delete a snapshot by id. Returns whether anything was deleted.
     /// Snapshots are audit trails, NOT governance state — deletion is the
     /// operator's responsibility ("GDPR delete", "audit log retention cut").
-    /// Deliberately NOT exposed through the `loop_graph` tool today; only a
-    /// future admin RPC will reach it.
+    ///
+    /// `#[cfg(test)]`: it is deliberately NOT exposed through the
+    /// `loop_graph` tool, so its only caller today is this file's own test.
+    /// Gating says that out loud rather than shipping a DELETE that nothing in
+    /// production can reach; the admin RPC that wants it should un-gate it in
+    /// the same commit that adds the caller.
+    #[cfg(test)]
     pub(crate) fn delete_snapshot(&self, id: i64) -> Result<bool> {
         let n = self
             .lock()
