@@ -15,7 +15,22 @@ pub fn summarize_turn(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
     let mut read_paths = std::collections::HashSet::new();
     let mut edit_paths = std::collections::HashSet::new();
     let mut write_paths = std::collections::HashSet::new();
+    let mut any_terminal = false;
     for r in rows {
+        // Every field on the entry answers one question — what actually
+        // happened this turn — so every count is derived over the SAME row
+        // set: terminal (Ok/Err) rows only, matching `ToolGroup::headline`'s
+        // existing rule for duration. A `Pending` row is an outcome we
+        // explicitly refuse to vouch for (see `ToolRow::settle_resumed`),
+        // even when a resume/replay caller left a stale `ended_ms` on it;
+        // it must not be silently folded into "read"/"ran"/"edited"/
+        // "wrote" — all past-tense, completion-implying words — nor into
+        // `duration_ms`. Skip it entirely; understating is the fail-closed
+        // direction.
+        if !r.is_terminal() {
+            continue;
+        }
+        any_terminal = true;
         match r.summary.display_name.as_str() {
             "Bash" => e.commands += 1,
             "Read" => {
@@ -32,17 +47,15 @@ pub fn summarize_turn(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
         if let RowStatus::Err { .. } = r.status {
             e.failed += 1;
         }
-        // Only a terminal (Ok/Err) row's elapsed time is billed — matching
-        // `ToolGroup::headline`'s existing rule. A `Pending` row is an
-        // outcome we explicitly refuse to vouch for (see
-        // `ToolRow::settle_resumed`), even when a resume/replay caller left
-        // a stale `ended_ms` on it; counting that time would report
-        // duration for something we just said we cannot claim.
-        if r.is_terminal() {
-            if let (Some(s), Some(t)) = (r.started_ms, r.ended_ms) {
-                e.duration_ms += t.saturating_sub(s);
-            }
+        if let (Some(s), Some(t)) = (r.started_ms, r.ended_ms) {
+            e.duration_ms += t.saturating_sub(s);
         }
+    }
+    // Every row unresolved is "we don't know yet", not "nothing happened":
+    // a zeroed entry ("Ran 0 commands · 0s") would assert the latter.
+    // Additional to (not a replacement for) the MIN_TOOLS_FOR_SUMMARY gate.
+    if !any_terminal {
+        return None;
     }
     e.reads = read_paths.len() as u32;
     e.edits = edit_paths.len() as u32;
@@ -139,5 +152,27 @@ mod tests {
         let terminal = row("file_read", json!({"path": "b.rs"}), true); // 14_000ms, Ok
         let e = summarize_turn(&[pending, terminal]).unwrap();
         assert_eq!(e.duration_ms, 14_000, "the Pending row's stale ended_ms must not be billed");
+    }
+    #[test]
+    fn a_pending_read_beside_a_terminal_one_is_not_counted() {
+        // Every field on the entry must derive from the same row set
+        // (terminal rows) or the entry disagrees with itself about which
+        // rows it describes — "read 1 file" must not silently become
+        // "read 2 files" by counting a call whose outcome is unknown.
+        let pending_read = ToolRow::new("id", "file_read", &json!({"path": "a.rs"})); // default status: Pending
+        let terminal_read = row("file_read", json!({"path": "b.rs"}), true);
+        let e = summarize_turn(&[pending_read, terminal_read]).unwrap();
+        assert_eq!(e.reads, 1, "the Pending read must not be counted alongside the terminal one");
+    }
+    #[test]
+    fn a_turn_with_no_terminal_rows_is_unknown_not_a_zeroed_summary() {
+        // Zero completions and "we don't know yet" must not render the
+        // same: "Ran 0 commands · 0s" would assert nothing happened when
+        // the truth is unresolved. This is an ADDITIONAL condition on top
+        // of MIN_TOOLS_FOR_SUMMARY, not a replacement for it — two rows is
+        // still required, but two Pending rows are not enough.
+        let pending_a = ToolRow::new("id", "file_read", &json!({"path": "a.rs"}));
+        let pending_b = ToolRow::new("id", "file_edit", &json!({"file_path": "b.rs"}));
+        assert!(summarize_turn(&[pending_a, pending_b]).is_none());
     }
 }
