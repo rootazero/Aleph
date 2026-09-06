@@ -1755,7 +1755,7 @@ fn fixture_refs_in_test_bodies(
                             i += 2;
                             continue;
                         }
-                        if raw_chars[i] == '\u{0}' {
+                        if raw_chars[i] == '"' {
                             closed_at = Some(i + 1);
                             break;
                         }
