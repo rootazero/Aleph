@@ -188,22 +188,24 @@ pub fn diff_rows(change: &FileChange, expanded: bool) -> DiffRows {
     let budget = if expanded { LCS_CELL_BUDGET_EXPANDED } else { LCS_CELL_BUDGET_COLLAPSED };
     let limit = if expanded { EXPANDED_DIFF_ROWS } else { COLLAPSED_DIFF_ROWS };
     let mut all: Vec<DiffRow> = Vec::new();
-    let mut hunk_ends: Vec<usize> = Vec::with_capacity(change.hunks.len());
+    let mut hunk_starts: Vec<usize> = Vec::with_capacity(change.hunks.len());
     for h in &change.hunks {
+        hunk_starts.push(all.len());
         hunk_rows(h, budget, &mut all);
-        hunk_ends.push(all.len());
     }
     let total = all.len();
     if total <= limit {
         return DiffRows { rows: all, hidden_rows: 0, hidden_hunks: 0 };
     }
-    let shown_hunks = hunk_ends.iter().filter(|&&end| end <= limit).count()
-        + usize::from(hunk_ends.iter().any(|&end| end > limit) && limit > 0);
+    // A hunk is hidden only when its FIRST row falls at or past the cut —
+    // one whose start is still before `limit` has at least one visible row,
+    // even if the cut lands exactly on the next hunk's boundary.
+    let hidden_hunks = hunk_starts.iter().filter(|&&start| start >= limit).count();
     all.truncate(limit);
     DiffRows {
         rows: all,
         hidden_rows: total - limit,
-        hidden_hunks: change.hunks.len().saturating_sub(shown_hunks),
+        hidden_hunks,
     }
 }
 
@@ -261,6 +263,19 @@ mod tests {
         assert!(d.iter().all(|s| !s.emphasis) && a.iter().all(|s| !s.emphasis));
         let (d2, _) = word_spans("x y z", "x q z", 2); // budget too small for 5x5 tokens
         assert!(d2.iter().all(|s| !s.emphasis));
+    }
+
+    #[test]
+    fn a_hunk_ending_exactly_at_the_limit_leaves_the_next_hunk_fully_hidden() {
+        // hunk A is exactly COLLAPSED_DIFF_ROWS rows; hunk B is a distant,
+        // unrelated hunk that must be entirely invisible after truncation.
+        let a = Hunk { old_start: 1, new_start: 1, lines: vec![line(LineTag::Ctx, "a"), line(LineTag::Ctx, "b")] };
+        let b = Hunk { old_start: 50, new_start: 50, lines: vec![line(LineTag::Ctx, "c"), line(LineTag::Ctx, "d"), line(LineTag::Ctx, "e")] };
+        let c = change(vec![a, b]);
+        let r = diff_rows(&c, false);
+        assert_eq!(r.rows.len(), 2);
+        assert_eq!(r.hidden_rows, 3);
+        assert_eq!(r.hidden_hunks, 1, "hunk B has zero visible rows and must count as hidden");
     }
 
     #[test]
