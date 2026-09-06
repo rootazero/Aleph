@@ -533,6 +533,23 @@ fn census_finds_the_known_overrides_and_confines_them_to_builtin_tools() {
          files, so this census is once again scanning test doubles as production (an \
          `impl AlephToolDyn` in a test module can make it panic while pointing at a mock)"
     );
+    // Asserted on the ROOT scan too, not just the whole-crate one. The
+    // whole-crate assertion is a superset and would catch a general
+    // regression, but it would stay green while path-awareness broke for
+    // `src/builtin_tools/` alone — which is precisely the tree whose fixtures
+    // this census executes. `Scan::excluded` is checked on both scans; a
+    // number computed on one and asserted only on the other is the
+    // computed-but-unchecked shape this module exists to reject (判据 §2).
+    // Measured true at this commit: src/builtin_tools/ declares at least six
+    // parent-declared test modules (desktop/mod.rs:27, note_manage/mod.rs:38,
+    // pdf_generate/mod.rs:24, skill_reader/mod.rs:17, terminal.rs:784,
+    // agent_manage/mod.rs:32), so this cannot be a false red.
+    assert!(
+        root_scan.test_modules > 0,
+        "the src/builtin_tools/ scan took nothing from 0 parent-declared test modules, \
+         while the whole-crate scan found {whole_test_modules} — path-awareness has \
+         broken for exactly the tree this census executes fixtures from"
+    );
 
     let root_true: Vec<&str> = root_scan
         .occurrences
