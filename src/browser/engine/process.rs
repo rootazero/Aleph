@@ -198,8 +198,9 @@ pub(crate) fn argv_names_dir(argv: &[String], flag: &str, dir: &Path) -> bool {
 /// spawned (`http_url: None` — pid and `user_data_dir` are already known, the
 /// endpoint is not yet), and again once the port file parses (`http_url:
 /// Some(..)`). The reaper never reads `http_url` — it decides on `pid` +
-/// `user_data_dir` alone — so the early record is fully reapable (round-1
-/// review finding F2).
+/// `data_dir` + `engine` alone — so the early record is fully reapable
+/// (round-1 review finding F2). Same three inputs [`EngineSidecar`]'s own doc
+/// names; they are one fact and must not become two.
 ///
 /// Atomic: writes to a `.tmp` sibling in the same directory, then renames
 /// over the target. `tokio::fs::write` alone is not atomic, and a crash
@@ -236,7 +237,7 @@ pub(crate) async fn write_sidecar_record(
     }) {
         Ok(b) => b,
         Err(e) => {
-            tracing::warn!(error = %e, "cannot serialize the chromium sidecar");
+            tracing::warn!(error = %e, engine = engine.as_str(), "cannot serialize the sidecar");
             return;
         }
     };
@@ -253,7 +254,7 @@ pub(crate) async fn write_sidecar_record(
         tracing::warn!(
             error = %e,
             path = %tmp_path.display(),
-            "cannot write the chromium sidecar temp file"
+            "cannot write the sidecar temp file"
         );
         return;
     }
@@ -261,7 +262,7 @@ pub(crate) async fn write_sidecar_record(
         tracing::warn!(
             error = %e,
             path = %path.display(),
-            "cannot rename the chromium sidecar into place"
+            "cannot rename the sidecar into place"
         );
     }
 }
@@ -278,7 +279,7 @@ pub(crate) async fn write_sidecar_record(
 /// `Option` could not.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReapOutcome {
-    /// Orphaned chromium processes killed (or already gone) this sweep,
+    /// Orphaned browsers killed (or already gone) this sweep,
     /// their sidecar removed.
     pub reaped: usize,
     /// `.corrupt` sidecars seen this sweep whose session key has no fresh,
@@ -294,7 +295,7 @@ pub(crate) struct ReapOutcome {
     pub corrupt_superseded: usize,
 }
 
-/// Kill Chromium processes left behind by a previous Aleph.
+/// Kill browsers left behind by a previous Aleph — either engine.
 ///
 /// `registry` is [`sidecar_registry_dir`] — one directory holding one record
 /// per profile, whatever each profile's `user_data_dir` happens to be. That is
@@ -373,7 +374,7 @@ pub(crate) fn reap_orphans(
             // Rename it aside instead — an accumulating `.corrupt` file is
             // cheap; an unfindable live browser is not. The `.corrupt` arm
             // above is what keeps looking at it on every later sweep.
-            tracing::warn!(path = %path.display(), "unparseable chromium sidecar; renaming aside");
+            tracing::warn!(path = %path.display(), "unparseable sidecar; renaming aside");
             let corrupt = {
                 let mut s = path.clone().into_os_string();
                 s.push(".corrupt");
@@ -402,7 +403,8 @@ pub(crate) fn reap_orphans(
                     // unfindable forever. Keep it so a later sweep can retry.
                     tracing::warn!(
                         pid = rec.pid,
-                        "chromium kill was refused; keeping the sidecar so it can be retried"
+                        engine = rec.engine.as_str(),
+                        "kill was refused; keeping the sidecar so it can be retried"
                     );
                 }
             }
@@ -417,7 +419,8 @@ pub(crate) fn reap_orphans(
             // Present, argv unreadable: keep it. See the doc above.
             ArgvProbe::Unreadable => tracing::warn!(
                 pid = rec.pid,
-                "chromium sidecar kept: the process exists but its argv is unreadable"
+                engine = rec.engine.as_str(),
+                "sidecar kept: the process exists but its argv is unreadable"
             ),
         }
     }
@@ -500,10 +503,11 @@ struct ProcessFacts {
 /// is gone or was killed** and `false` when it is still alive and refused.
 ///
 /// Extracted from `reap_orphans_now`'s closure so the process-table kill has
-/// ONE author. It is deliberately **not** what
-/// [`super::chromium::ChromiumLauncher::kill`] uses: a launcher holds the
-/// `Child` and can `wait()` it, which is a stronger answer than a
-/// process-table scan and immune to pid recycling. Two paths, two questions.
+/// ONE author. It is deliberately **not** what [`terminate`] uses: a launcher
+/// holds the `Child` and can `wait()` it, which is a stronger answer than a
+/// process-table scan and immune to pid recycling. Two paths, two questions —
+/// and the reason [`EngineProcess::kill`] takes the [`Launched`] rather than a
+/// bare pid.
 ///
 /// `pub(crate)` rather than private only because Task 16's obscura sweep wiring
 /// is the second caller; if that task does not consume it, drop it to `fn`.
@@ -543,12 +547,31 @@ pub(crate) fn reap_orphans_now() -> ReapOutcome {
     let registry = match sidecar_registry_dir() {
         Ok(d) => d,
         Err(e) => {
-            tracing::warn!(error = %e, "cannot sweep orphaned chromium processes");
+            tracing::warn!(error = %e, "cannot sweep orphaned browsers");
             return ReapOutcome::default();
         }
     };
     reap_orphans(&registry, &argv_probe, &kill_by_pid)
 }
+
+/// The live handle to a launched process, shared and reap-once.
+///
+/// A named type rather than the spelling repeated at each site (R69): it
+/// appears in [`Launched`], [`try_reap`] and [`terminate`], and Task 16's
+/// obscura launcher is a fourth. Four spellings of one type is four places to
+/// disagree about whether the mutex is poison-tolerant.
+///
+/// **`crate::sync_primitives::Mutex`, not `std::sync::Mutex`.** Every lock in
+/// this module recovers with `unwrap_or_else(|e| e.into_inner())` — P7's
+/// idiom — because a panic while holding this guard must not turn a reapable
+/// browser into an unreapable one: the process is still out there either way,
+/// and a poisoned lock that refuses to open would strand it for the daemon's
+/// whole life.
+///
+/// `Option` because a successful reap empties it. That `None` is a
+/// determinate answer — "already reaped" — and is why [`terminate`] answers
+/// `Ok(true)` for it rather than signalling a pid the OS may have reissued.
+pub type ChildHandle = std::sync::Arc<crate::sync_primitives::Mutex<Option<Child>>>;
 
 /// One non-blocking attempt to reap a child we launched.
 ///
@@ -568,12 +591,9 @@ pub(crate) fn reap_orphans_now() -> ReapOutcome {
 /// died", and the caller's next move on false is to keep polling, which costs
 /// nothing and is the fail-closed direction (判据 §8).
 ///
-/// Takes the `Arc` rather than a guard so the caller cannot hold a `std`
-/// mutex across an `await` — the poll loop in `ChromiumLauncher::kill`
-/// sleeps between calls.
-pub(crate) fn try_reap(
-    child: &std::sync::Arc<crate::sync_primitives::Mutex<Option<Child>>>,
-) -> bool {
+/// Takes the [`ChildHandle`] rather than a guard so the caller cannot hold a
+/// mutex across an `await` — [`terminate`]'s poll loop sleeps between calls.
+pub(crate) fn try_reap(child: &ChildHandle) -> bool {
     let mut guard = child.lock().unwrap_or_else(|e| e.into_inner());
     let Some(handle) = guard.as_mut() else {
         // Already reaped by an earlier poll. Determinate, not an unknown.
@@ -669,8 +689,92 @@ pub struct Launched {
     /// `Option` because a successful reap empties it, and `Arc<Mutex<..>>`
     /// because Task 9's `EngineHandle` is shared and its shutdown may race a
     /// caller's own kill; the second one through finds `None` and answers
-    /// `true` without signalling anything.
-    pub child: std::sync::Arc<crate::sync_primitives::Mutex<Option<Child>>>,
+    /// `true` without signalling anything. See [`ChildHandle`].
+    pub child: ChildHandle,
+}
+
+/// Kill a launched browser and **confirm it was reaped** within `grace`.
+///
+/// **The one implementation of R19/R22, for every engine.** Both launchers
+/// delegate here rather than carrying a poll loop each: two copies of this
+/// would be two answers to "when may a browser be reported dead", free to
+/// drift the day one is edited (判据 §1), and the answer is not obvious enough
+/// to re-derive — each of the three outcomes below was argued for once.
+///
+/// # No SIGTERM phase
+///
+/// `Child::kill()` is SIGKILL and std offers nothing softer. More to the
+/// point, `manager.rs:677-687` states the rule for this exact path — *"SIGKILL
+/// plus a bounded reap per child, and never a graceful handshake. No
+/// SIGTERM-then-wait, no CDP `Browser.close`"* — because one of its callers is
+/// the wedged-daemon watchdog whose `std::process::exit(0)` waits for nobody,
+/// and a browser that wedged the shutdown is the last process to negotiate
+/// with.
+///
+/// # The three answers
+///
+/// * **`Ok(true)` on an empty handle.** Already reaped by an earlier caller:
+///   determinate, not unknown. The second caller through must NOT signal —
+///   the pid may have been reissued to somebody else's process since. This is
+///   also the answer Task 9's `EngineHandle::shutdown` needs: it deletes
+///   `launched.sidecar_path` only after a `true`, so answering `false` here
+///   would strand a record on every second shutdown, and a stranded record is
+///   an orphan the next boot's sweep will try to kill by a recycled pid.
+/// * **`Ok(true)` after [`try_reap`].** The child exited AND was waited on —
+///   two facts, and only the pair is safe to report (判据 §4). A signal alone
+///   is not a death.
+/// * **`Ok(false)` at the deadline.** Still there. The handle is deliberately
+///   LEFT IN PLACE so a later call can still reap it; emptying it here would
+///   discard the only thing that can ever `wait()` this child.
+///
+/// A refused signal is logged and then **decided by the reap loop anyway** —
+/// it is never reported as a death. `Err` from the signal is not a result.
+pub async fn terminate(launched: &Launched, grace: Duration) -> Result<bool, BrowserError> {
+    // 1. Signal, in one SHORT critical section. The guard must not be held
+    //    across the await below — a sync mutex held over a yield point is both
+    //    a clippy lint and a real way to park a tokio worker.
+    {
+        let mut slot = launched.child.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_mut() {
+            Some(child) => {
+                if let Err(e) = child.kill() {
+                    // Say which of the two happened rather than logging a kill
+                    // over a process that may still be running: an untrue log
+                    // line is what a reader spends as evidence. The reap loop
+                    // below still decides the answer, so a refused signal
+                    // cannot be reported as a death.
+                    tracing::warn!(
+                        pid = launched.pid,
+                        error = %e,
+                        "could not signal the browser; leaving it"
+                    );
+                }
+            }
+            // Already reaped by an earlier kill. Determinate, and the second
+            // caller through must not signal a pid the OS may have reissued.
+            None => return Ok(true),
+        }
+    }
+    // 2. Reap. `try_reap` is the effect (判据 §4). Polled rather than blocking
+    //    in `wait()`, because a kill can fail and `wait()` would then park this
+    //    worker until the process happened to exit on its own.
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        if try_reap(&launched.child) {
+            tracing::info!(pid = launched.pid, "browser shut down");
+            return Ok(true);
+        }
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!(
+                pid = launched.pid,
+                grace_secs = grace.as_secs(),
+                "browser did not exit within the kill grace; leaving the handle so a \
+                 later kill can still reap it"
+            );
+            return Ok(false);
+        }
+        tokio::time::sleep(KILL_POLL_INTERVAL.min(grace)).await;
+    }
 }
 
 /// Launch and kill, per engine.
@@ -693,14 +797,16 @@ pub trait EngineProcess: Send + Sync {
     /// Kill the process and **confirm it was reaped** within `grace`;
     /// `Ok(false)` means it is still there.
     ///
-    /// `grace` bounds the REAP, and there is no SIGTERM phase before it.
-    /// `std::process::Child::kill()` is SIGKILL and std offers nothing softer;
-    /// more to the point, `manager.rs:677-687` states the rule for this exact
-    /// path — *"SIGKILL plus a bounded reap per child, and never a graceful
-    /// handshake. No SIGTERM-then-wait, no CDP `Browser.close`"* — because one
-    /// of its two callers is the wedged-daemon watchdog whose
-    /// `std::process::exit(0)` waits for nobody, and a browser that wedged the
-    /// shutdown is the last process to negotiate with.
+    /// **Implement this by delegating to [`terminate`]** (R69), which is where
+    /// the contract — no SIGTERM phase, the three answers, why an empty handle
+    /// is `Ok(true)` — is stated and argued once. It is deliberately not
+    /// restated here: a trait doc and its only implementations saying the same
+    /// thing in two places is the shape that drifts (判据 §1), and the half
+    /// that goes stale is always the one nobody runs.
+    ///
+    /// The signature takes the [`Launched`] rather than a bare pid because the
+    /// [`ChildHandle`] inside it is the only thing that can `wait()` the
+    /// process — and a child killed without a wait stays a zombie.
     async fn kill(&self, launched: &Launched, grace: Duration) -> Result<bool, BrowserError>;
 }
 
@@ -1221,10 +1327,32 @@ mod tests {
         assert_eq!(rec.http_url.as_deref(), Some("http://127.0.0.1:58363"));
     }
 
-    /// The wire keys did not move. A record this build writes must still be
-    /// readable by the Aleph the operator may downgrade to — and, more
-    /// importantly, by the SAME sweep after a partial rollout, where a new
-    /// binary and an old one share one `$ALEPH_HOME`.
+    /// The wire keys did not move, so a record this build writes stays
+    /// readable by an Aleph the operator downgrades to.
+    ///
+    /// ⚠️ **Readable is not safe, and for obscura records it is worse than
+    /// unreadable.** `EngineSidecar` has no `deny_unknown_fields`, so an OLD
+    /// binary sharing one `$ALEPH_HOME` during a partial rollout parses an
+    /// obscura record happily — it simply ignores the `engine` key it has
+    /// never heard of. It then sweeps that record with the only switch it
+    /// knows, `--user-data-dir`, which cannot match obscura's `--storage-dir`
+    /// argv; the probe therefore lands on the `ArgvProbe::Argv(_)` arm — "this
+    /// pid is provably somebody else's" — and **deletes the record while the
+    /// obscura it names is still running**. That browser is then unfindable
+    /// forever: the record was the only thing that could name it.
+    ///
+    /// Note the direction. A record the old binary could NOT parse would be
+    /// renamed `.corrupt` and re-examined by every later sweep, so the loss
+    /// would be recoverable. Parseability is what makes this permanent — the
+    /// keys being frozen buys downgrade compatibility for Chromium records and
+    /// costs exactly this for obscura ones.
+    ///
+    /// No mitigation belongs here: the binary that does the damage has already
+    /// shipped and cannot be changed, and the fix (a registry leaf or filename
+    /// shape an old sweep does not walk) belongs to whoever writes obscura
+    /// sidecars — Task 16, carried there as a named open item. This test pins
+    /// the keys; this comment exists so the next reader does not mistake that
+    /// pinning for safety.
     #[test]
     fn a_new_sidecar_keeps_the_legacy_wire_keys() {
         let json = serde_json::to_string(&EngineSidecar {

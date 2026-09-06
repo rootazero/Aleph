@@ -26,8 +26,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use super::process::{
-    sidecar_path, try_reap, write_sidecar_record, CdpEndpoint, EngineProcess, LaunchRequest,
-    Launched, KILL_POLL_INTERVAL,
+    sidecar_path, terminate, write_sidecar_record, CdpEndpoint, EngineProcess, LaunchRequest,
+    Launched,
 };
 use super::Engine;
 use crate::browser::error::BrowserError;
@@ -449,7 +449,7 @@ impl ChromiumChild {
 /// field unreachable on this path: an Edge profile would launch Chromium and
 /// nothing would report that the setting had been ignored, which is a no-op
 /// that reports success (判据 §11) in a user-facing setting. Pinned by
-/// `the_launch_resolves_the_requests_own_browser_type`.
+/// `the_launch_source_still_names_the_requests_own_browser_type`.
 pub struct ChromiumLauncher {
     runtime: BrowserRuntimeConfig,
 }
@@ -522,55 +522,14 @@ impl EngineProcess for ChromiumLauncher {
         })
     }
 
+    /// R69: delegated, not re-implemented. The kill/reap contract lives in
+    /// [`terminate`] (`super::process`) so that this launcher and Task 16's
+    /// obscura launcher cannot drift about when a browser may be reported
+    /// dead. Nothing Chromium-specific happens on this path — the signal is
+    /// SIGKILL and the evidence is the reap, both of which are true of any
+    /// child process — so there is nothing left here to override.
     async fn kill(&self, launched: &Launched, grace: Duration) -> Result<bool, BrowserError> {
-        // 1. Signal, in one SHORT critical section. The guard must not be held
-        //    across the await below — a `std` mutex held over a yield point is
-        //    both a clippy lint and a real way to park a tokio worker.
-        {
-            let mut slot = launched.child.lock().unwrap_or_else(|e| e.into_inner());
-            match slot.as_mut() {
-                Some(child) => {
-                    if let Err(e) = child.kill() {
-                        // Say which of the two happened rather than logging a
-                        // kill over a process that may still be running: an
-                        // untrue log line is what a reader spends as evidence.
-                        // The reap loop below still decides the answer, so a
-                        // refused signal cannot be reported as a death.
-                        tracing::warn!(
-                            pid = launched.pid,
-                            error = %e,
-                            "could not signal the browser; leaving it"
-                        );
-                    }
-                }
-                // Already reaped by an earlier kill. Determinate, and the
-                // second caller through must not signal a pid the OS may have
-                // reissued since.
-                None => return Ok(true),
-            }
-        }
-        // 2. Reap. `try_reap` is the effect (判据 §4): the child exited AND
-        //    was waited on. Polled rather than blocking in `wait()`, because a
-        //    kill can fail and `wait()` would then park this worker until the
-        //    process happened to exit on its own — the same hazard
-        //    `ChromiumChild::shutdown` documents above.
-        let deadline = std::time::Instant::now() + grace;
-        loop {
-            if try_reap(&launched.child) {
-                tracing::info!(pid = launched.pid, "chromium shut down");
-                return Ok(true);
-            }
-            if std::time::Instant::now() >= deadline {
-                tracing::warn!(
-                    pid = launched.pid,
-                    grace_secs = grace.as_secs(),
-                    "chromium did not exit within the kill grace; leaving the handle so a \
-                     later kill can still reap it"
-                );
-                return Ok(false);
-            }
-            tokio::time::sleep(KILL_POLL_INTERVAL.min(grace)).await;
-        }
+        terminate(launched, grace).await
     }
 }
 
@@ -931,7 +890,14 @@ mod tests {
         );
     }
 
-    /// R68: the launch resolves the REQUEST's `BrowserType`, not a default.
+    /// R68: the launch SOURCE still names the request's `BrowserType`.
+    ///
+    /// The name says `source` and `names` rather than `resolves` because
+    /// the verb is the half that travels: a reader who greps a failure
+    /// sees the name long before this doc, and `resolves` would promise an
+    /// effect this cannot observe. Mirrors
+    /// `manager.rs`'s `the_boot_hook_still_calls_the_orphan_sweep`, which
+    /// is the same instrument for the same reason.
     ///
     /// **A SOURCE pin, and the report says so rather than implying more.**
     /// `launch` reaches `resolve_binary` only after `managed_cli_path` finds a
@@ -953,7 +919,7 @@ mod tests {
     /// read them would be reading the explanation as if it were the code
     /// (判据 §1: the comment is the side that lies).
     #[test]
-    fn the_launch_resolves_the_requests_own_browser_type() {
+    fn the_launch_source_still_names_the_requests_own_browser_type() {
         let src = include_str!("chromium.rs").replace('\r', "");
         let production = crate::utils::source_scan::production_prefix(&src);
         assert!(
