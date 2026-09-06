@@ -30,14 +30,12 @@ use crate::sync_primitives::Arc;
 const CHROMIUM: &str = "chromium";
 
 /// The subcommand that supplies it — the SAME argv the ledger's post-install
-/// action runs (`runtimes::specs`, the `playwright-cli` entry). Written once so
-/// the two paths cannot drift into installing different things.
-/// `pub(crate)`: `browser::error::ChromiumUnavailable`'s fix hint names this
-/// exact command (M8) and derives its text from here rather than typing a
-/// second copy of the argv — a literal-vs-literal comparison of two copies
-/// only proves they agree with each other, never that either still names a
-/// real command (判据 §10).
-pub(crate) const CHROMIUM_INSTALL_ARGS: &[&str] = &["install-browser", CHROMIUM];
+/// action runs. Owned by `browser::chromium_resolve` (M8 correction): that
+/// module is the lower layer, already depended on through the browser crate,
+/// so this tool consumes it from there instead of minting its own copy —
+/// `browser/error.rs` reaching UP into this module for it was the wrong
+/// direction (`tab_registry.rs`'s "not reach up into `builtin_tools`").
+use crate::browser::chromium_resolve::CHROMIUM_INSTALL_ARGS;
 
 // NO install timeout constant lives here, and its absence is the point.
 //

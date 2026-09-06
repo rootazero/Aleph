@@ -63,6 +63,20 @@ use super::profile::{BrowserRuntimeConfig, BrowserType};
 /// restate `6`.
 pub(crate) const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(6);
 
+/// The subcommand that installs Playwright's own Chromium — the SAME argv
+/// `runtime_manage`'s ledger-driven install runs and `browser::error`'s
+/// `ChromiumUnavailable` fix hint names, written once so the three cannot
+/// drift into naming different commands (判据 §10).
+///
+/// Lives HERE, not in `builtin_tools::runtime_manage`: this module is the
+/// lower layer both other call sites already depend on through the browser
+/// crate (`playwright_managed` below runs this exact argv plus `--dry-run`),
+/// so pulling it from here keeps every dependency pointing downward —
+/// `browser/error.rs` reaching UP into `builtin_tools` for it would be the
+/// same wrong direction `tab_registry.rs` already refuses ("not reach up
+/// into `builtin_tools`").
+pub(crate) const CHROMIUM_INSTALL_ARGS: &[&str] = &["install-browser", "chromium"];
+
 /// The header anchor of the browser block in `--dry-run` output.
 ///
 /// The trailing `v` matters: `chromium-headless-shell` starts with `chromium`,
@@ -425,7 +439,12 @@ pub(crate) async fn resolve_binary(
 /// usable executable" are all just "this route did not produce a browser".
 async fn playwright_managed(cli_binary: &Path) -> Result<PathBuf, String> {
     let mut cmd = Command::new(cli_binary);
-    cmd.args(["install-browser", "chromium", "--dry-run"])
+    let dry_run_args: Vec<&str> = CHROMIUM_INSTALL_ARGS
+        .iter()
+        .copied()
+        .chain(std::iter::once("--dry-run"))
+        .collect();
+    cmd.args(&dry_run_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

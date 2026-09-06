@@ -49,16 +49,21 @@ pub enum BrowserError {
     /// not its own rather than discovering that by being refused.
     ///
     /// The command text is `format!`-built from `CHROMIUM_INSTALL_ARGS`
-    /// (`runtime_manage.rs`), not typed out a second time: a literal here
-    /// compared against a literal in the test only proves the two agree with
-    /// each other, never that either still names a command that exists.
+    /// (`browser::chromium_resolve`), not typed out a second time: a literal
+    /// here compared against a literal in the test only proves the two agree
+    /// with each other, never that either still names a command that exists.
+    /// Sourced from `chromium_resolve`, not `builtin_tools::runtime_manage`
+    /// (M8's first pass got this backwards): `chromium_resolve` is the LOWER
+    /// layer — this module already depends on it for resolution — so this is
+    /// the direction that keeps `browser/` from reaching up into
+    /// `builtin_tools/` for a fact the lower layer already owns.
     #[error(
         "No Chromium for the managed browser driver ({tried}). \
              Run `playwright-cli {install_args}` yourself — a plain local \
              command, not an operator-gated tool. Operators can instead run \
              `runtime_manage{{action:\"install\", capability:\"chromium\"}}` or pin \
              one with [general.browser.runtime] binary_path.",
-        install_args = crate::builtin_tools::runtime_manage::CHROMIUM_INSTALL_ARGS.join(" ")
+        install_args = crate::browser::chromium_resolve::CHROMIUM_INSTALL_ARGS.join(" ")
     )]
     ChromiumUnavailable { tried: String },
 
@@ -142,7 +147,7 @@ mod tests {
             tried: "no system browser".to_string(),
         };
         let text = err.to_string();
-        let install_args = crate::builtin_tools::runtime_manage::CHROMIUM_INSTALL_ARGS.join(" ");
+        let install_args = crate::browser::chromium_resolve::CHROMIUM_INSTALL_ARGS.join(" ");
         let cli_marker = format!("playwright-cli {install_args}");
         let cli_at = text
             .find(&cli_marker)
