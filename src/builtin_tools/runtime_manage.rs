@@ -681,6 +681,25 @@ async fn install_chromium(
                     row.path.unwrap_or_default()
                 ),
             ),
+            // `chromium_row()`'s own "Unknown" prefix (判据 §16: the same two
+            // conditions — no `playwright-cli` on PATH, or the config could
+            // not be read — that make the doctor and `list` answer `unknown`
+            // rather than a verdict) is NOT the same fact as a verified
+            // "nothing resolves". Collapsing it into the same "no browser
+            // resolves" wording would tell the operator to go fix
+            // `binary_path`/`download_host` on a host where those were never
+            // even read (Final Review M2) — an instruction that answers a
+            // question nobody asked and hides the actual, checkable
+            // condition (a transient PATH or config read failure).
+            row if row.status.starts_with("Unknown") => install_output(
+                false,
+                format!(
+                    "`install-browser chromium` exited 0, but whether it resolves could not be \
+                     checked afterwards ({}). This is not the same as a failed install — retry \
+                     `runtime_manage{{action:\"list\"}}` once that condition clears.",
+                    row.status
+                ),
+            ),
             row => install_output(
                 false,
                 format!(
@@ -1474,6 +1493,74 @@ mod tests {
                 .iter()
                 .any(|d| d.name == <RuntimeManageTool as AlephTool>::NAME),
             "the tool the doctor points at must be in the catalogue"
+        );
+    }
+
+    /// M2: an unreadable config makes `chromium_row()` answer `Unknown (the
+    /// config could not be read: ...)`, not `Missing`. Before this fix,
+    /// `install_chromium`'s post-check only tested `row.path.is_some()`, so
+    /// this same row fell into the `else` arm and was reported as "no
+    /// browser resolves afterwards" — collapsing "I could not check" into a
+    /// verified negative, and sending the operator to fix
+    /// `[general.browser.runtime]` keys the resolver never even reached.
+    ///
+    /// Drives the real `install_chromium` (not a stub): a fake install CLI
+    /// that exits 0 immediately, against a scratch `$ALEPH_HOME` whose
+    /// `config.toml` is not valid TOML — the same "unreadable config" state
+    /// `Config::load()` reports as an `Err`, reached here through the exact
+    /// path `chromium_row()` takes, not a mocked-up status string.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_config_that_cannot_be_read_after_install_is_reported_as_unknown_not_missing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        std::fs::write(home.path().join("config.toml"), b"this is not { valid toml")
+            .expect("write malformed config");
+
+        // Precondition: the fixture actually reaches the row this test is
+        // about — `chromium_row()`'s own "Unknown" prefix — not some other
+        // shape of failure.
+        let row = chromium_row().await;
+        assert!(
+            row.status.starts_with("Unknown"),
+            "fixture does not reproduce an Unknown row: {}",
+            row.status
+        );
+
+        let fake_cli = home.path().join("fake-playwright-cli");
+        std::fs::write(&fake_cli, "#!/bin/sh\nexit 0\n").expect("write fake cli");
+        std::fs::set_permissions(&fake_cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake cli");
+
+        let out = install_chromium(
+            &Arc::new(LiveTail::new()),
+            &(Arc::new(FixedCliLocator(fake_cli)) as Arc<dyn ChromiumInstallCli>),
+        )
+        .await;
+
+        assert!(
+            !out.success,
+            "an unreadable config cannot be reported as a successful install: {}",
+            out.stderr
+        );
+        assert!(
+            out.stderr.contains("could not be checked"),
+            "an unreadable-config row must say the post-install check itself was \
+             inconclusive, not that the browser is missing: {}",
+            out.stderr
+        );
+        assert!(
+            !out.stderr.contains("no browser resolves afterwards"),
+            "must not spend 'unknown' as a definite negative: {}",
+            out.stderr
+        );
+        assert!(
+            !out.stderr.contains("Check [general.browser.runtime]"),
+            "must not send the operator to fix config keys the resolver never \
+             reached: {}",
+            out.stderr
         );
     }
 }
