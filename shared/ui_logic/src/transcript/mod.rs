@@ -17,3 +17,9 @@ pub use fold::{
     fold, wrap_physical, FoldAnchor, FoldBody, FoldPolicy, Folded, DEFAULT_COLLAPSED_ROWS,
     FALLBACK_WIDTH,
 };
+
+mod summarize;
+pub use summarize::{
+    clip_one_line, display_name, humanize, summarize, CallSummary, ARGS_CLIP, DISPLAY_NAMES,
+    PREFERRED_ARG_KEYS,
+};
