@@ -58,13 +58,23 @@ pub const NO_BOX_CODE: i64 = -32000;
 /// Prefix, not the whole string: Chrome has shipped this both with and without a trailing period.
 pub const NO_BOX_MESSAGE: &str = "Could not compute box model";
 
-/// `pierce` asks the peer to descend into OOPIF documents and shadow roots.
+/// `pierce` asks the peer to descend into a SAME-ORIGIN (same-process) iframe's content document
+/// and into shadow roots. It does NOT reach an out-of-process iframe.
+///
+/// Measured on real Chrome (Task 0, `t0-u3-pierce.mjs`): a same-origin child — same host and
+/// port as the parent, different path — comes back flattened under `pierce:true` (1
+/// `contentDocument`, the child's own `#probe` node present, 101 nodes total); the cross-origin
+/// (OOPIF) child measured the same way does not (0 `contentDocument`s, `#probe` absent, 87 nodes)
+/// — the same same-process-only split `DOMSnapshot.captureSnapshot` and `Page.getFrameTree` show
+/// below. An OOPIF child has its own target and its own session; nothing about `pierce` changes
+/// that.
 ///
 /// ⚠️ obscura's `DOM.getDocument` handler reads only `depth` — `pierce` is accepted but never
-/// honoured (measured against real obscura 0.2.2: its DOM domain only ever serialises the
-/// top-level page's tree, and obscura has no OOPIF concept at all — `Target.setAutoAttach` is a
-/// literal `Ok({})` no-op there). This wrapper sends whatever `pierce` the caller asks for, but a
-/// caller on obscura must not expect a pierced result back.
+/// honoured, for either split (measured against real obscura 0.2.2: its DOM domain only ever
+/// serialises the top-level page's own tree, sourced from `state.dom` and never crossing into a
+/// child `FrameRealm` even when that child is same-origin and already loaded). This wrapper sends
+/// whatever `pierce` the caller asks for, but a caller on obscura must not expect a pierced result
+/// back under any split.
 ///
 /// Even on Chrome, piercing has a limit this wrapper does not paper over: `DOMSnapshot.
 /// captureSnapshot` does not span out-of-process iframes either — a parent session's call returns

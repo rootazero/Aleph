@@ -182,6 +182,28 @@ async fn target_close_without_a_success_field_is_a_decode_error() {
     }
 }
 
+/// A DIFFERENT refusal from the one above: here `success` is PRESENT but not a boolean. The two
+/// tests together are what actually exercises both stages of `close_target`'s guard —
+/// `field(...)?` (missing key, covered above) and `.as_bool().ok_or_else(...)` (present but wrong
+/// type, covered here). Without this one, a future edit that collapses both stages into a single
+/// `.unwrap_or(true)` — keeping `field(...)?` intact — ships green: `field()` alone already fails
+/// closed on a missing key, so only a present-but-non-boolean value can tell the two stages apart.
+#[tokio::test]
+async fn target_close_with_a_non_boolean_success_is_a_decode_error() {
+    let (_server, conn) = replying("Target.closeTarget", json!({ "success": "true" })).await;
+    let err = target::close_target(&conn, &TargetId("T-1".to_string()))
+        .await
+        .expect_err("a `success` that is not a boolean says nothing about whether the tab closed");
+    match err {
+        CdpError::Decode(text) => assert!(text.contains("success"), "names the field: {text}"),
+        other => panic!(
+            "must be Decode, never Ok(true) — a caller that reads 'closed' from a value it never \
+             actually checked would drop the tab from its table while the tab is still open \
+             (判据 §8). Got {other:?}"
+        ),
+    }
+}
+
 #[tokio::test]
 async fn target_activate_and_discover_send_exactly_their_arguments() {
     let voids = parse(fixture!("chrome-void.json"));
@@ -1087,6 +1109,7 @@ async fn network_cookies_parse_from_both_engines_and_survive_a_round_trip() {
 
     // Set the Chrome batch straight back, and check the wire form.
     let raw = parse(fixture!("chrome-Network.getAllCookies.json"));
+    let raw_cookies: Vec<Value> = raw["cookies"].as_array().expect("cookies array").clone();
     let (_server, conn) = replying("Network.getAllCookies", raw).await;
     let cookies = network::get_all_cookies(&conn, Some(&session()))
         .await
@@ -1102,17 +1125,56 @@ async fn network_cookies_parse_from_both_engines_and_survive_a_round_trip() {
         cookies.len(),
         "nothing was dropped on the way out"
     );
-    for (c, w) in cookies.iter().zip(sent_cookies) {
-        assert_eq!(w["name"], json!(c.name));
-        assert_eq!(w["domain"], json!(c.domain));
-        assert_eq!(w["path"], json!(c.path));
-        assert_eq!(
-            w.get("sameSite").and_then(Value::as_str),
-            c.same_site.as_deref(),
-            "sameSite is written only when we have one: an absent key means 'do not set', an \
-             empty string is a value the peer rejects"
-        );
+    assert_eq!(
+        raw_cookies.len(),
+        sent_cookies.len(),
+        "one fixture, parsed once"
+    );
+    for (i, w) in sent_cookies.iter().enumerate() {
+        assert_cookie_round_trips(w, &raw_cookies[i], &format!("chrome #{i}"));
     }
+}
+
+/// Every field `Cookie` carries, checked against `source` — the UNTOUCHED fixture JSON, never a
+/// re-serialisation of the `Cookie` value that produced `w`. Comparing the wire form to
+/// `serde_json::to_value` of that same struct would let a mutation that silently drops a field
+/// from `Cookie`'s own `Serialize` impl (e.g. `#[serde(skip_serializing)]` on `secure`) pass,
+/// because both sides of that comparison would come from the identical, now-broken impl — the
+/// fixture JSON has no such dependency on this crate's code, so it is the only ground truth
+/// independent of the thing being tested (verified: this is exactly the mutation the review round
+/// applied, and it goes red here — see the mutation log in the task report).
+///
+/// Rust has no compile-time enumeration of a struct's own fields without a third-party derive
+/// macro (forbidden here, R3), so this list is written out once, in this one function, rather
+/// than at each call site that needs a fidelity check.
+fn assert_cookie_round_trips(w: &Value, source: &Value, ctx: &str) {
+    assert_eq!(w.get("name"), source.get("name"), "{ctx}: name");
+    assert_eq!(w.get("value"), source.get("value"), "{ctx}: value");
+    assert_eq!(w.get("domain"), source.get("domain"), "{ctx}: domain");
+    assert_eq!(w.get("path"), source.get("path"), "{ctx}: path");
+    assert_eq!(
+        w.get("expires").and_then(Value::as_f64),
+        source.get("expires").and_then(Value::as_f64),
+        "{ctx}: expires — including CDP's own -1 for a session cookie, which is a value, not \
+         something to drop"
+    );
+    assert_eq!(
+        w.get("httpOnly").and_then(Value::as_bool),
+        source.get("httpOnly").and_then(Value::as_bool),
+        "{ctx}: httpOnly must round-trip, not silently downgrade to false"
+    );
+    assert_eq!(
+        w.get("secure").and_then(Value::as_bool),
+        source.get("secure").and_then(Value::as_bool),
+        "{ctx}: secure must round-trip — a silent downgrade to non-Secure is exactly what this \
+         assertion exists to catch"
+    );
+    assert_eq!(
+        w.get("sameSite").and_then(Value::as_str),
+        source.get("sameSite").and_then(Value::as_str),
+        "{ctx}: sameSite is written only when the source had one: an absent key means 'do not \
+         set', an empty string is a value the peer rejects"
+    );
 }
 
 #[tokio::test]
@@ -1478,7 +1540,27 @@ async fn call_void(conn: &CdpConnection, s: &SessionId, method: &str) -> Result<
 // expression of "how many fixtures exist", and 判据 §5's "list from the type that owns the fact"
 // says the fixtures directory itself is that owner), it walks the directory and the test sources
 // and fails BY NAME on anything neither `fixture!(...)` nor a raw `include_str!`/`include_bytes!`
-// ever names.
+// ever names FROM INSIDE a `#[test]`/`#[tokio::test]` function body.
+//
+// What this guard actually checks, precisely (a fix-round correction — the first version's name
+// overclaimed): a fixture counts as "read" only when its name is named by one of the three
+// markers on a line that (a) is not part of a `//`/`///` comment, and (b) sits lexically inside
+// the body of an item this file itself marks `#[test]` or `#[tokio::test]` — not merely anywhere
+// in the file. Both restrictions were added after the review round's own extractor found a
+// counter-example for each: (a) was proven by the review round's own probe — the FIRST version of
+// this file's `fixture_refs_in` pulled a phantom fixture named `"name"` out of the doc comment
+// two functions below this one, which literally contains the text `fixture!("name")` as prose;
+// (b) matters because a module-scope `const X: &str = include_str!("fixtures/orphan.json");` that
+// no test ever reads would otherwise be counted as a reader with nobody actually exercising it.
+//
+// Known, deliberate limit (do not "fix" this — it fails SAFE, never silently green): the walk
+// below only reads TOP-LEVEL files directly under `tests/` (`tests/*.rs`), and the marker match is
+// the literal text `include_str!("fixtures/` — a compiled test binary at `tests/<dir>/main.rs`
+// that reaches a fixture via `include_str!("../fixtures/…")` (a different relative path, and not
+// even visited by this walk) would be reported as an unread fixture even though a real test reads
+// it. That is a false RED, never a false green — the whole hazard this guard exists to catch is
+// the opposite direction (a fixture that reads as "covered" when nothing really reads it), so a
+// noisy false alarm here is the safe failure mode, not a defect to paper over.
 #[test]
 fn every_fixture_file_under_tests_fixtures_has_a_reader() {
     let crate_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -1507,7 +1589,7 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
         }
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        referenced.extend(fixture_refs_in(&text));
+        referenced.extend(fixture_refs_in_test_bodies(&text));
     }
 
     let unread: Vec<&String> = fixture_files
@@ -1517,32 +1599,129 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
     assert!(
         unread.is_empty(),
         "these fixture files under tests/fixtures/ are never read by any fixture!(...) or raw \
-         include_str!/include_bytes! in tests/*.rs, so nothing will notice when they rot: \
-         {unread:?}"
+         include_str!/include_bytes! inside a #[test]/#[tokio::test] body in tests/*.rs, so \
+         nothing will notice when they rot: {unread:?}"
     );
 }
 
 /// Every `fixture!("name")` invocation and every raw `include_str!("fixtures/name")` /
-/// `include_bytes!("fixtures/name")`, so this guard stays correct for a future test file that
-/// does not go through the `fixture!` macro at all.
-fn fixture_refs_in(source: &str) -> std::collections::HashSet<String> {
+/// `include_bytes!("fixtures/name")` that sits lexically inside the body of a `#[test]` or
+/// `#[tokio::test]` item in `source` — never a match found in a comment, and never a match found
+/// in a module-scope binding or helper function no test actually calls into.
+///
+/// This is a line-oriented heuristic, not a real Rust parser (adding one — `syn`/`proc-macro2` —
+/// for a test-only guard would be a third-party dependency this crate does not otherwise need,
+/// R3). It tracks brace depth and the most recently seen `#[test]`/`#[tokio::test]` attribute to
+/// know which function body each line falls inside; see `strip_line_comment` for the comment-vs-
+/// string-literal handling. It is deliberately conservative in one direction only: a fixture
+/// reference that is real but sits outside this heuristic's notion of "inside a test" (the
+/// deferred limit documented on the test above) is reported UNREAD, never silently accepted —
+/// fail-red, not fail-green, is the only safe direction for a guard whose entire job is catching
+/// silence.
+fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String> {
     let mut found = std::collections::HashSet::new();
-    for marker in [
-        "fixture!(\"",
-        "include_str!(\"fixtures/",
-        "include_bytes!(\"fixtures/",
-    ] {
-        let mut rest = source;
-        while let Some(start) = rest.find(marker) {
-            let after = &rest[start + marker.len()..];
-            match after.find('"') {
-                Some(end) => {
-                    found.insert(after[..end].to_string());
-                    rest = &after[end + 1..];
+
+    let mut depth: i64 = 0;
+    // `Some(d)`: currently inside a test fn's body, which opened bringing depth to `d + 1`; we
+    // are still inside it for as long as depth stays above `d`, and leave it the moment depth
+    // drops back to `d` (that function's own closing brace).
+    let mut test_fn_active_depth: Option<i64> = None;
+    // Saw `#[test]` or `#[tokio::test]` and have not yet reached the `fn` it belongs to.
+    let mut pending_test_attr = false;
+    // Saw a `fn` keyword and are waiting for the `{` that opens ITS body; carries whether that
+    // fn was preceded by a test attribute.
+    let mut awaiting_fn_open: Option<bool> = None;
+
+    for raw_line in source.lines() {
+        let line = strip_line_comment(raw_line);
+        let trimmed = line.trim();
+
+        if trimmed == "#[test]" || trimmed.contains("#[tokio::test]") || trimmed.contains("#[test]")
+        {
+            pending_test_attr = true;
+        }
+        if awaiting_fn_open.is_none() && line.contains("fn ") {
+            awaiting_fn_open = Some(pending_test_attr);
+            pending_test_attr = false;
+        }
+
+        // Char-by-char so the brace that opens a just-seen `fn`'s body lands at the right depth
+        // even when the signature and the `{` share one line (this file's own style).
+        for ch in line.chars() {
+            match ch {
+                '{' => {
+                    depth += 1;
+                    if let Some(is_test) = awaiting_fn_open.take() {
+                        if is_test {
+                            test_fn_active_depth = Some(depth - 1);
+                        }
+                    }
                 }
-                None => break,
+                '}' => {
+                    depth -= 1;
+                    if let Some(d) = test_fn_active_depth {
+                        if depth <= d {
+                            test_fn_active_depth = None;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if test_fn_active_depth.is_some() {
+            for marker in [
+                "fixture!(\"",
+                "include_str!(\"fixtures/",
+                "include_bytes!(\"fixtures/",
+            ] {
+                let mut rest = line.as_str();
+                while let Some(start) = rest.find(marker) {
+                    let after = &rest[start + marker.len()..];
+                    match after.find('"') {
+                        Some(end) => {
+                            found.insert(after[..end].to_string());
+                            rest = &after[end + 1..];
+                        }
+                        None => break,
+                    }
+                }
             }
         }
     }
     found
+}
+
+/// Remove a trailing `//` comment from one line (this covers `///` doc comments too, since they
+/// begin with `//`). Tracks whether we are inside a `"..."` string literal so a URL such as
+/// `"https://example.test/"` is not misread as a comment start. Best-effort: does not handle raw
+/// strings, byte strings, or char literals — this crate's own test files use none of those.
+fn strip_line_comment(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(c);
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'/') {
+            break;
+        }
+        out.push(c);
+    }
+    out
 }
