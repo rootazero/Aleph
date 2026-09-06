@@ -801,13 +801,18 @@ mod tests {
         };
         let extra_len = with_extra.extra_args.len();
         let argv = with_extra.argv();
+        // `rposition`, not `position`: Chrome resolves a duplicated switch to
+        // its LAST occurrence, so the occurrence that decides behaviour is
+        // the one this assertion must be about. With no duplicate present
+        // (this test's `extra_args` has none) the two agree — the duplicate
+        // case that actually distinguishes them lives in the next test.
         let keychain_idx = argv
             .iter()
-            .position(|a| a == "--use-mock-keychain")
+            .rposition(|a| a == "--use-mock-keychain")
             .expect("--use-mock-keychain must be present");
         let store_idx = argv
             .iter()
-            .position(|a| a == "--password-store=basic")
+            .rposition(|a| a == "--password-store=basic")
             .expect("--password-store=basic must be present");
         assert!(
             keychain_idx >= extra_len,
@@ -816,6 +821,39 @@ mod tests {
         assert!(
             store_idx >= extra_len,
             "--password-store=basic came before extra_args ended: {argv:?}"
+        );
+    }
+
+    /// The teeth `rposition` exists for: swapping `position` → `rposition`
+    /// above changes nothing when `extra_args` carries no duplicate (there is
+    /// only one occurrence, so both functions agree) — that guard alone would
+    /// be trivially true. Here `extra_args` ALREADY contains
+    /// `--use-mock-keychain`, simulating an operator's own duplicate, and the
+    /// assertion must still hold: the disjunction must find OUR occurrence —
+    /// the one Chrome actually honours, being last — not the operator's
+    /// earlier one. `position` would find the operator's copy here (an index
+    /// inside `extra_args`) and this test would wrongly redden even though
+    /// the launch is correct; that is the false failure `rposition` fixes.
+    #[test]
+    fn an_operators_duplicate_use_mock_keychain_does_not_hide_ours() {
+        let with_extra = ChromiumLaunchSpec {
+            extra_args: vec!["--use-mock-keychain".into()],
+            ..spec()
+        };
+        let extra_len = with_extra.extra_args.len();
+        let argv = with_extra.argv();
+        assert_eq!(
+            argv.iter().filter(|a| *a == "--use-mock-keychain").count(),
+            2,
+            "expected the operator's duplicate plus ours: {argv:?}"
+        );
+        let winning_idx = argv
+            .iter()
+            .rposition(|a| a == "--use-mock-keychain")
+            .expect("--use-mock-keychain must be present");
+        assert!(
+            winning_idx >= extra_len,
+            "the operator's duplicate in extra_args, not ours, would win: {argv:?}"
         );
     }
 
