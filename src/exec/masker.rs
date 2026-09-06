@@ -455,7 +455,10 @@ MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
              count must be withheld, not shipped: {:?}",
             change.hunks
         );
-        assert_eq!(change.unavailable, Some(aleph_protocol::Unavailable::Redacted));
+        assert_eq!(
+            change.unavailable,
+            Some(aleph_protocol::Unavailable::Redacted)
+        );
         assert_eq!(
             (change.added, change.removed),
             (4, 0),

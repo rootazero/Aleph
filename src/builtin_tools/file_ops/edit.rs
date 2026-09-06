@@ -414,7 +414,8 @@ impl FileEditTool {
         info!(replacements, fuzzy, crlf, path = %path_str, "FileEditTool: edit complete");
         notify_tool_result("file_edit", &message, true);
 
-        let change = super::diff::compute_file_change(&path_str, Some(&content), Some(&new_content));
+        let change =
+            super::diff::compute_file_change(&path_str, Some(&content), Some(&new_content));
         let presentation = Some(super::diff::presentation_for(vec![change]));
 
         Ok(FileEditOutput {

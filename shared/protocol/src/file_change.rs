@@ -141,9 +141,18 @@ mod tests {
                     old_start: 10,
                     new_start: 10,
                     lines: vec![
-                        HunkLine { tag: LineTag::Ctx, text: "fn a() {".into() },
-                        HunkLine { tag: LineTag::Del, text: "    1".into() },
-                        HunkLine { tag: LineTag::Add, text: "    2".into() },
+                        HunkLine {
+                            tag: LineTag::Ctx,
+                            text: "fn a() {".into(),
+                        },
+                        HunkLine {
+                            tag: LineTag::Del,
+                            text: "    1".into(),
+                        },
+                        HunkLine {
+                            tag: LineTag::Add,
+                            text: "    2".into(),
+                        },
                     ],
                 }],
                 added: 1,

@@ -36,18 +36,18 @@ pub(crate) fn compute_file_change(
         (Some(_), None) => FileChangeKind::Deleted,
         (Some(_), Some(_)) => FileChangeKind::Modified,
         (None, None) => {
-            return FileChange::unavailable(
-                path,
-                FileChangeKind::Modified,
-                Unavailable::ToolFailed,
-            )
+            return FileChange::unavailable(path, FileChangeKind::Modified, Unavailable::ToolFailed)
         }
     };
     let old = before.unwrap_or("");
     let new = after.unwrap_or("");
     if old.len() > MAX_DIFF_INPUT_BYTES || new.len() > MAX_DIFF_INPUT_BYTES {
         let mut c = FileChange::unavailable(path, kind, Unavailable::TooLarge);
-        c.added = if before.is_none() { count_lines(new) } else { 0 };
+        c.added = if before.is_none() {
+            count_lines(new)
+        } else {
+            0
+        };
         c.removed = if after.is_none() { count_lines(old) } else { 0 };
         return c;
     }
@@ -65,8 +65,14 @@ pub(crate) fn compute_file_change(
             for change in diff.iter_changes(op) {
                 let tag = match change.tag() {
                     ChangeTag::Equal => LineTag::Ctx,
-                    ChangeTag::Delete => { removed += 1; LineTag::Del }
-                    ChangeTag::Insert => { added += 1; LineTag::Add }
+                    ChangeTag::Delete => {
+                        removed += 1;
+                        LineTag::Del
+                    }
+                    ChangeTag::Insert => {
+                        added += 1;
+                        LineTag::Add
+                    }
                 };
                 let text = change.value().trim_end_matches(['\n', '\r']).to_string();
                 lines.push(HunkLine { tag, text });
@@ -138,7 +144,9 @@ mod tests {
     #[test]
     fn a_huge_change_keeps_stats_but_drops_hunks_as_too_large() {
         let old = (1..=1000).map(|i| format!("{i}\n")).collect::<String>();
-        let new = (1..=1000).map(|i| format!("{}\n", i * 2)).collect::<String>();
+        let new = (1..=1000)
+            .map(|i| format!("{}\n", i * 2))
+            .collect::<String>();
         let c = compute_file_change("a", Some(&old), Some(&new));
         assert_eq!(c.unavailable, Some(Unavailable::TooLarge));
         assert!(c.hunks.is_empty());

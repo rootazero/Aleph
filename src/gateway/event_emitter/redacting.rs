@@ -609,29 +609,33 @@ mod tests {
         const BODY: &str = "MIIEowIBAAKCAQEAvGqZ0Ym3nQKBgQDR8Xk2LqTf9Nc1sVbWpQ7hJZmKdEyRtUiO";
 
         let (inner, outer) = wrapped();
-        let result = crate::gateway::event_emitter::types::ToolResult::success(
-            "Wrote 1704 bytes to id_rsa",
-        )
-        .with_presentation(Some(Presentation::FileChanges {
-            changes: vec![FileChange {
-                path: "id_rsa".to_string(),
-                kind: FileChangeKind::Created,
-                hunks: vec![Hunk {
-                    old_start: 1,
-                    new_start: 1,
-                    lines: ["-----BEGIN RSA PRIVATE KEY-----", BODY, BODY, "-----END RSA PRIVATE KEY-----"]
-                        .into_iter()
-                        .map(|t| HunkLine {
-                            tag: LineTag::Add,
-                            text: t.to_string(),
-                        })
-                        .collect(),
-                }],
-                added: 4,
-                removed: 0,
-                unavailable: None,
-            }],
-        }));
+        let result =
+            crate::gateway::event_emitter::types::ToolResult::success("Wrote 1704 bytes to id_rsa")
+                .with_presentation(Some(Presentation::FileChanges {
+                    changes: vec![FileChange {
+                        path: "id_rsa".to_string(),
+                        kind: FileChangeKind::Created,
+                        hunks: vec![Hunk {
+                            old_start: 1,
+                            new_start: 1,
+                            lines: [
+                                "-----BEGIN RSA PRIVATE KEY-----",
+                                BODY,
+                                BODY,
+                                "-----END RSA PRIVATE KEY-----",
+                            ]
+                            .into_iter()
+                            .map(|t| HunkLine {
+                                tag: LineTag::Add,
+                                text: t.to_string(),
+                            })
+                            .collect(),
+                        }],
+                        added: 4,
+                        removed: 0,
+                        unavailable: None,
+                    }],
+                }));
         outer
             .emit(StreamEvent::ToolEnd {
                 run_id: "r".into(),

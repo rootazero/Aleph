@@ -442,7 +442,10 @@ make several coordinated edits at once."#;
         pending.insert(resolved.clone(), None);
         Ok(Planned {
             src: path.to_string(),
-            effect: Effect::Delete { path: resolved, old },
+            effect: Effect::Delete {
+                path: resolved,
+                old,
+            },
         })
     }
 
@@ -785,8 +788,11 @@ impl Planned {
                 let byte_count = body.len();
                 match crate::utils::atomic_write::atomic_write_file(&path, &body).await {
                     Ok(()) => {
-                        let change =
-                            super::diff::compute_file_change(&path.to_string_lossy(), None, Some(&body));
+                        let change = super::diff::compute_file_change(
+                            &path.to_string_lossy(),
+                            None,
+                            Some(&body),
+                        );
                         FileOutcome {
                             path: path.display().to_string(),
                             op: "add",
@@ -808,9 +814,11 @@ impl Planned {
             Effect::Delete { path, old } => match tokio::fs::remove_file(&path).await {
                 Ok(()) => {
                     let change = match &old {
-                        Some(text) => {
-                            super::diff::compute_file_change(&path.to_string_lossy(), Some(text), None)
-                        }
+                        Some(text) => super::diff::compute_file_change(
+                            &path.to_string_lossy(),
+                            Some(text),
+                            None,
+                        ),
                         // The pre-image could not be read as text (oversized,
                         // binary, non-UTF-8, or an I/O error) — report the gap
                         // explicitly rather than rendering an empty change

@@ -1862,12 +1862,18 @@ mod tests {
         let out = svc
             .apply_layer_two(
                 "file_edit",
-                ToolOutput { value, metadata: Default::default() },
+                ToolOutput {
+                    value,
+                    metadata: Default::default(),
+                },
                 std::time::Instant::now() + std::time::Duration::from_secs(5),
             )
             .await;
         let text = out.value.as_str().expect("layer two flattens to text");
-        assert!(!text.contains(sentinel), "presentation leaked into model text: {text}");
+        assert!(
+            !text.contains(sentinel),
+            "presentation leaked into model text: {text}"
+        );
         assert!(!text.contains("_presentation"));
         assert!(
             matches!(out.metadata.presentation, Some(aleph_protocol::Presentation::FileChanges { ref changes }) if changes.len() == 1)

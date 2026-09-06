@@ -89,7 +89,10 @@ impl ContextBreakdown {
     }
     #[must_use]
     pub fn tool_bytes(&self) -> u64 {
-        self.tools.iter().map(|t| t.schema_bytes + t.description_bytes).sum()
+        self.tools
+            .iter()
+            .map(|t| t.schema_bytes + t.description_bytes)
+            .sum()
     }
 }
 
@@ -128,10 +131,24 @@ mod tests {
             session_key: "k".into(),
             turn: 3,
             layers: vec![
-                LayerSizeView { name: "identity".into(), bytes: 10, tokens: 3, zone: "stable".into() },
-                LayerSizeView { name: "tools".into(), bytes: 5, tokens: 2, zone: "stable".into() },
+                LayerSizeView {
+                    name: "identity".into(),
+                    bytes: 10,
+                    tokens: 3,
+                    zone: "stable".into(),
+                },
+                LayerSizeView {
+                    name: "tools".into(),
+                    bytes: 5,
+                    tokens: 2,
+                    zone: "stable".into(),
+                },
             ],
-            tools: vec![ToolSchemaSize { name: "grep".into(), schema_bytes: 100, description_bytes: 20 }],
+            tools: vec![ToolSchemaSize {
+                name: "grep".into(),
+                schema_bytes: 100,
+                description_bytes: 20,
+            }],
             messages_tokens: None,
             provider_reported: None,
             context_window: None,
@@ -140,9 +157,15 @@ mod tests {
         assert_eq!(b.layer_bytes(), 15);
         assert_eq!(b.tool_bytes(), 120);
         let v = serde_json::to_value(&b).unwrap();
-        assert!(v.get("provider_reported").is_none(), "None is elided, not 0");
+        assert!(
+            v.get("provider_reported").is_none(),
+            "None is elided, not 0"
+        );
         // 0 would read as "the whole dynamic half was cut".
-        assert!(v.get("dynamic_bytes_sent").is_none(), "absence is absent, not 0");
+        assert!(
+            v.get("dynamic_bytes_sent").is_none(),
+            "absence is absent, not 0"
+        );
         let back: ContextBreakdown = serde_json::from_value(v).unwrap();
         assert_eq!(back, b);
     }
@@ -168,7 +191,14 @@ mod tests {
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(v["source"], "persisted");
-        for k in ["tool_call_id", "text", "offset", "total_bytes", "truncated", "source"] {
+        for k in [
+            "tool_call_id",
+            "text",
+            "offset",
+            "total_bytes",
+            "truncated",
+            "source",
+        ] {
             assert!(v.get(k).is_some(), "missing key {k}");
         }
     }

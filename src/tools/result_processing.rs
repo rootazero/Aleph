@@ -998,7 +998,10 @@ mod tests {
         assert!(hoist_presentation(&mut s).is_none());
         let mut bad = serde_json::json!({"_presentation": {"kind": "nope"}});
         assert!(hoist_presentation(&mut bad).is_none());
-        assert!(bad.get("_presentation").is_none(), "a malformed payload is still removed from the model text");
+        assert!(
+            bad.get("_presentation").is_none(),
+            "a malformed payload is still removed from the model text"
+        );
     }
 
     // ---------------------------------------------------------------

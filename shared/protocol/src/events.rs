@@ -1240,8 +1240,9 @@ mod tests {
         assert_eq!(s.context_tokens, 12_345);
         assert_eq!(s.context_window, 200_000);
         let legacy: RunSummary = serde_json::from_value(
-            serde_json::json!({"total_tokens": 1, "tool_calls": 0, "loops": 1})
-        ).unwrap();
+            serde_json::json!({"total_tokens": 1, "tool_calls": 0, "loops": 1}),
+        )
+        .unwrap();
         assert_eq!(legacy.context_window, 0);
     }
 
@@ -1251,8 +1252,9 @@ mod tests {
         let v = serde_json::to_value(&r).unwrap();
         assert!(v.get("presentation").is_none());
         let legacy: ToolResult = serde_json::from_value(
-            serde_json::json!({"success": true, "output": "x", "error": null})
-        ).unwrap();
+            serde_json::json!({"success": true, "output": "x", "error": null}),
+        )
+        .unwrap();
         assert!(legacy.presentation.is_none());
     }
 }
