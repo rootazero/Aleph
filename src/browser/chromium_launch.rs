@@ -594,13 +594,41 @@ async fn write_sidecar_record(
     }
 }
 
+/// What one [`reap_orphans`] pass did. Not a bare `usize`: before this (Final
+/// Review M6), a `.corrupt` sidecar was renamed aside and then never looked
+/// at again by anything — the sweep's own extension filter skipped it on
+/// every future boot, so a live orphaned Chromium behind one stayed
+/// unreapable and utterly unmentioned, forever. The rename was always
+/// correct (deleting on an unparseable record risks the same live-browser
+/// loss `Unreadable` protects against); the silence was the defect. A bare
+/// count cannot say "N reaped" and "M corrupt, still unresolved" at once, so
+/// this carries both, the same way [`ArgvProbe`] carries three states an
+/// `Option` could not.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReapOutcome {
+    /// Orphaned chromium processes killed (or already gone) this sweep,
+    /// their sidecar removed.
+    pub reaped: usize,
+    /// `.corrupt` sidecars seen this sweep whose session key has no fresh,
+    /// parseable sidecar written since — genuinely unresolved. If a live
+    /// orphaned browser sits behind one, it stays unreapable, and this
+    /// number is the thing that says so instead of silence.
+    pub corrupt_pending: usize,
+    /// `.corrupt` sidecars removed this sweep because a fresh sidecar has
+    /// since been written under the SAME session key — the same
+    /// determinate-supersession rule a recycled pid or an absent process is
+    /// dropped under (not a time-based guess): something else has already
+    /// moved on for that key, so whatever this record once meant is stale.
+    pub corrupt_superseded: usize,
+}
+
 /// Kill Chromium processes left behind by a previous Aleph.
 ///
 /// `registry` is [`sidecar_registry_dir`] — one directory holding one record
 /// per profile, whatever each profile's `user_data_dir` happens to be. That is
 /// why the sweep can be a single walk (判据 §12: the set has one derivation).
 ///
-/// Four outcomes per record, and they are deliberately NOT collapsed:
+/// Four outcomes per PARSEABLE record, and they are deliberately NOT collapsed:
 ///
 /// * [`ArgvProbe::Argv`] naming our directory → it is ours: kill it, drop the
 ///   record;
@@ -616,6 +644,8 @@ async fn write_sidecar_record(
 ///   another process's command line — i.e. the platform spec §3.6 already flags
 ///   as unexercised is exactly the one where the wrong answer would be permanent.
 ///
+/// A fifth, for records that never parsed at all: see [`ReapOutcome`].
+///
 /// Both effects are injected so the decision is testable without a browser;
 /// [`reap_orphans_now`] is the production wiring.
 ///
@@ -629,15 +659,35 @@ pub(crate) fn reap_orphans(
     registry: &Path,
     argv_of: &dyn Fn(u32) -> ArgvProbe,
     kill: &dyn Fn(u32) -> bool,
-) -> usize {
+) -> ReapOutcome {
     let Ok(entries) = std::fs::read_dir(registry) else {
         // The dir not existing is the normal first-boot state, not a failure.
-        return 0;
+        return ReapOutcome::default();
     };
-    let mut reaped = 0;
+    let mut outcome = ReapOutcome::default();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_none_or(|e| e != SIDECAR_EXT) {
+        let ext = path.extension().and_then(|e| e.to_str());
+        if ext == Some("corrupt") {
+            // Superseded once a fresh sidecar exists for the SAME key —
+            // existence alone is the signal, the same way a recycled pid's
+            // argv is a determinate answer without needing to inspect it
+            // further. Not parseability: a second torn write under the same
+            // key is a different, pre-existing hazard this sweep does not
+            // also need to solve to close M6.
+            let name = path.to_string_lossy();
+            let Some(original) = name.strip_suffix(".corrupt") else {
+                continue; // `ext == Some("corrupt")` already guarantees this
+            };
+            if Path::new(original).exists() {
+                let _ = std::fs::remove_file(&path);
+                outcome.corrupt_superseded += 1;
+            } else {
+                outcome.corrupt_pending += 1;
+            }
+            continue;
+        }
+        if ext != Some(SIDECAR_EXT) {
             continue;
         }
         let Ok(body) = std::fs::read_to_string(&path) else {
@@ -649,7 +699,8 @@ pub(crate) fn reap_orphans(
             // this, and deleting it forecloses every future boot's sweep from
             // ever finding that process again (round-1 review finding F5).
             // Rename it aside instead — an accumulating `.corrupt` file is
-            // cheap; an unfindable live browser is not.
+            // cheap; an unfindable live browser is not. The `.corrupt` arm
+            // above is what keeps looking at it on every later sweep.
             tracing::warn!(path = %path.display(), "unparseable chromium sidecar; renaming aside");
             let corrupt = {
                 let mut s = path.clone().into_os_string();
@@ -657,6 +708,7 @@ pub(crate) fn reap_orphans(
                 PathBuf::from(s)
             };
             let _ = std::fs::rename(&path, &corrupt);
+            outcome.corrupt_pending += 1;
             continue;
         };
         match argv_of(rec.pid) {
@@ -667,7 +719,7 @@ pub(crate) fn reap_orphans(
                     "reaping orphaned chromium"
                 );
                 if kill(rec.pid) {
-                    reaped += 1;
+                    outcome.reaped += 1;
                     let _ = std::fs::remove_file(&path);
                 } else {
                     // The kill was refused (still alive, EPERM or similar):
@@ -694,7 +746,7 @@ pub(crate) fn reap_orphans(
             ),
         }
     }
-    reaped
+    outcome
 }
 
 /// The real process-table reader: **the argv vector, not a joined line**.
@@ -784,12 +836,12 @@ struct ProcessFacts {
 /// This form exempts only the cfg that cannot answer, and leaves
 /// `cargo clippy -p alephcore --lib -- -D warnings` fully honest.
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) fn reap_orphans_now() -> usize {
+pub(crate) fn reap_orphans_now() -> ReapOutcome {
     let registry = match sidecar_registry_dir() {
         Ok(d) => d,
         Err(e) => {
             tracing::warn!(error = %e, "cannot sweep orphaned chromium processes");
-            return 0;
+            return ReapOutcome::default();
         }
     };
     reap_orphans(&registry, &argv_probe, &|pid| {
@@ -1284,7 +1336,7 @@ mod tests {
                 true
             },
         );
-        assert_eq!(n, 1, "exactly the matching pid is reaped");
+        assert_eq!(n.reaped, 1, "exactly the matching pid is reaped");
         assert_eq!(*killed.borrow(), vec![111]);
 
         // Killed -> record gone.
@@ -1316,7 +1368,7 @@ mod tests {
             &|_| ArgvProbe::Argv(argv(&["/x/chrome", "--user-data-dir=/tmp/udd/default"])),
             &|_pid| false,
         );
-        assert_eq!(n, 0, "a refused kill must not be counted as reaped");
+        assert_eq!(n.reaped, 0, "a refused kill must not be counted as reaped");
         assert!(
             reg.path().join("default.json").exists(),
             "the record must survive a refused kill: it is the only way \
@@ -1345,7 +1397,10 @@ mod tests {
             killed.borrow_mut().push(pid);
             true
         });
-        assert_eq!(n, 0, "a process that already exited must not be 'reaped'");
+        assert_eq!(
+            n.reaped, 0,
+            "a process that already exited must not be 'reaped'"
+        );
         assert!(killed.borrow().is_empty());
         assert!(!reg.path().join("default.json").exists());
     }
@@ -1370,9 +1425,92 @@ mod tests {
             killed.borrow_mut().push(pid);
             true
         });
-        assert_eq!(n, 0);
+        assert_eq!(n.reaped, 0);
         assert!(killed.borrow().is_empty());
         assert!(reg.path().join("default.json").exists());
+    }
+
+    /// M6: an unparseable sidecar is quarantined to `.corrupt` AND counted
+    /// `corrupt_pending` in the SAME sweep that creates it — before this fix,
+    /// the count did not exist at all and the file was never looked at again
+    /// by anything.
+    #[test]
+    fn an_unparseable_sidecar_is_quarantined_and_counted_pending_immediately() {
+        let reg = registry_with(&[]);
+        std::fs::write(reg.path().join("default.json"), b"not valid json").expect("write");
+        let n = reap_orphans(reg.path(), &|_| ArgvProbe::Absent, &|_| true);
+        assert_eq!(n.reaped, 0);
+        assert_eq!(
+            n.corrupt_pending, 1,
+            "the fresh quarantine must be counted, not silent"
+        );
+        assert_eq!(n.corrupt_superseded, 0);
+        assert!(
+            !reg.path().join("default.json").exists(),
+            "the unparseable record must still be renamed aside"
+        );
+        assert!(
+            reg.path().join("default.json.corrupt").exists(),
+            "renamed to .corrupt, not deleted — a live browser might be behind it"
+        );
+    }
+
+    /// M6: a `.corrupt` sidecar with no fresh sibling is kept AND counted —
+    /// the sweep must not go back to silence just because the file has been
+    /// seen once already. Nothing has resolved this key since the previous
+    /// sweep quarantined it, so it stays exactly where it was.
+    #[test]
+    fn a_corrupt_sidecar_with_no_fresh_sibling_stays_pending_across_sweeps() {
+        let reg = registry_with(&[]);
+        std::fs::write(
+            reg.path().join("default.json.corrupt"),
+            b"leftover from a torn write",
+        )
+        .expect("write");
+        let n = reap_orphans(reg.path(), &|_| ArgvProbe::Absent, &|_| true);
+        assert_eq!(n.reaped, 0);
+        assert_eq!(
+            n.corrupt_pending, 1,
+            "an unresolved corrupt sidecar must stay counted"
+        );
+        assert_eq!(n.corrupt_superseded, 0);
+        assert!(
+            reg.path().join("default.json.corrupt").exists(),
+            "nothing resolved this key since it was quarantined — must not be deleted blind"
+        );
+    }
+
+    /// M6: once a fresh, parseable sidecar exists for the SAME session key,
+    /// the stale `.corrupt` sibling is superseded — the same determinate
+    /// rule a recycled pid or an absent process is dropped under, not a
+    /// time-based guess. Existence of the fresh record is the whole signal:
+    /// this fixture's fresh sidecar names a pid `reap_orphans` will itself
+    /// keep (`ArgvProbe::Unreadable`), proving the two decisions are
+    /// independent — superseding the `.corrupt` file must not depend on
+    /// what happens to its sibling in the SAME sweep.
+    #[test]
+    fn a_corrupt_sidecar_is_superseded_once_a_fresh_sidecar_exists_for_the_same_key() {
+        let reg = registry_with(&[("default", 444, "/tmp/udd/default")]);
+        std::fs::write(
+            reg.path().join("default.json.corrupt"),
+            b"leftover from a torn write",
+        )
+        .expect("write");
+        let n = reap_orphans(reg.path(), &|_| ArgvProbe::Unreadable, &|_| true);
+        assert_eq!(
+            n.corrupt_superseded, 1,
+            "a fresh sibling must supersede the stale corrupt file"
+        );
+        assert_eq!(n.corrupt_pending, 0);
+        assert!(
+            !reg.path().join("default.json.corrupt").exists(),
+            "superseded means removed, not kept alongside the fresh record"
+        );
+        assert!(
+            reg.path().join("default.json").exists(),
+            "the fresh sidecar's own fate (Unreadable -> keep) is unrelated to its \
+             stale sibling being superseded"
+        );
     }
 
     /// F4: `argv_probe` is the only classifier that runs in production —

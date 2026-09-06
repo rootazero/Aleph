@@ -260,9 +260,33 @@ impl ProfileManager {
         // reads the count.
         tokio::spawn(async {
             match Self::sweep_orphaned_chromium().await {
-                Ok(0) => {}
-                Ok(n) => {
-                    tracing::info!("reaped {n} orphaned chromium process(es) from a previous run");
+                Ok(outcome) => {
+                    if outcome.reaped > 0 {
+                        tracing::info!(
+                            "reaped {} orphaned chromium process(es) from a previous run",
+                            outcome.reaped
+                        );
+                    }
+                    // Not one-shot: this fires on EVERY boot sweep for as
+                    // long as the count stays nonzero, not only the sweep
+                    // that first quarantined it (Final Review M6) — the
+                    // defect was that nothing ever said this again after
+                    // the initial rename.
+                    if outcome.corrupt_pending > 0 {
+                        tracing::warn!(
+                            "{} unparseable chromium sidecar(s) remain quarantined as \
+                             .corrupt — a live orphaned browser may be behind one and \
+                             unreapable until its own session key is relaunched",
+                            outcome.corrupt_pending
+                        );
+                    }
+                    if outcome.corrupt_superseded > 0 {
+                        tracing::info!(
+                            "cleared {} stale .corrupt sidecar(s), superseded by a fresher \
+                             record under the same session key",
+                            outcome.corrupt_superseded
+                        );
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "the orphaned-chromium sweep did not complete")
@@ -310,15 +334,17 @@ impl ProfileManager {
     /// per record and possibly a kill, and `with_process_specifics` is
     /// documented as syscall-heavy.
     #[cfg(not(test))]
-    async fn sweep_orphaned_chromium() -> Result<usize, tokio::task::JoinError> {
+    async fn sweep_orphaned_chromium(
+    ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
         tokio::task::spawn_blocking(super::chromium_launch::reap_orphans_now).await
     }
 
     /// The sealed twin. See the production one above for why it is sealed.
     #[cfg(test)]
     #[allow(clippy::unused_async)]
-    async fn sweep_orphaned_chromium() -> Result<usize, tokio::task::JoinError> {
-        Ok(0)
+    async fn sweep_orphaned_chromium(
+    ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
+        Ok(super::chromium_launch::ReapOutcome::default())
     }
 
     /// The managed driver's configuration, for the one consumer that runs a
