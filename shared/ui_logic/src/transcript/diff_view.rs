@@ -35,9 +35,20 @@ pub struct DiffRows {
 }
 
 /// `+12 -3`, or the unavailable reason when there are no hunks to show.
+///
+/// A `TooLarge` change with `added == 0 && removed == 0` is one whose stats
+/// were never computed at all (the server's byte-size cap on a `Modified`
+/// change learns no per-side line counts) — never a diff with zero real
+/// changes, since the server's hunk-count cap only ever trips on a diff
+/// that has changes. So that specific zero is rendered as unavailable, not
+/// as a lying `+0 -0`; any other `TooLarge` (non-zero stats, from the
+/// hunk-count cap) still shows its exact counts.
 #[must_use]
 pub fn stats_label(change: &FileChange) -> String {
     match change.unavailable {
+        Some(Unavailable::TooLarge) if change.added == 0 && change.removed == 0 => {
+            "diff unavailable: too large to compute".into()
+        }
         Some(Unavailable::TooLarge) | None => format!("+{} -{}", change.added, change.removed),
         Some(Unavailable::Binary) => "diff unavailable: binary".into(),
         Some(Unavailable::PreImageUnavailable) => "diff unavailable: previous content unreadable".into(),
@@ -287,5 +298,16 @@ mod tests {
         assert_eq!(stats_label(&c), "+12 -3", "TooLarge keeps exact stats");
         c.unavailable = Some(Unavailable::PreImageUnavailable);
         assert!(stats_label(&c).starts_with("diff unavailable"));
+    }
+
+    #[test]
+    fn stats_label_does_not_render_a_too_large_diffs_unknown_stats_as_plus_zero() {
+        // `change()` defaults added/removed to 0 — the byte-size-cap
+        // Modified case, where the stats were never computed.
+        let mut c = change(vec![]);
+        c.unavailable = Some(Unavailable::TooLarge);
+        let label = stats_label(&c);
+        assert!(!label.contains("+0"), "zero stats under TooLarge must not read as +0 -0: {label}");
+        assert!(label.starts_with("diff unavailable"));
     }
 }

@@ -8,7 +8,16 @@ use aleph_protocol::file_change::{
 };
 use similar::{ChangeTag, TextDiff};
 
-/// Pre-images larger than this are not diffed (stats still counted by lines).
+/// Pre-images larger than this are not diffed. For `Created`/`Deleted` the
+/// line count of the one existing side is still exact (it is trivially all
+/// added or all removed). For `Modified`, neither side's line count is a
+/// real stat on its own, so `added`/`removed` are reported as `0` —
+/// **`0` under `Unavailable::TooLarge` always means "not computed", never
+/// "no changes"**: the hunk-count cap further down only ever trips on a
+/// diff that has real changes, so a genuinely too-large diff can never
+/// legitimately show `0`/`0`. `shared-ui-logic::transcript::diff_view::
+/// stats_label` relies on this invariant to avoid rendering `+0 -0` for a
+/// diff it could not compute.
 pub(crate) const MAX_DIFF_INPUT_BYTES: usize = 2 * 1024 * 1024;
 
 fn count_lines(s: &str) -> u32 {
@@ -17,12 +26,22 @@ fn count_lines(s: &str) -> u32 {
 
 /// `before == None` → Created; `after == None` → Deleted; both → Modified.
 /// Both `None` is a programming error and yields `ToolFailed`.
-pub(crate) fn compute_file_change(path: &str, before: Option<&str>, after: Option<&str>) -> FileChange {
+pub(crate) fn compute_file_change(
+    path: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> FileChange {
     let kind = match (before, after) {
         (None, Some(_)) => FileChangeKind::Created,
         (Some(_), None) => FileChangeKind::Deleted,
         (Some(_), Some(_)) => FileChangeKind::Modified,
-        (None, None) => return FileChange::unavailable(path, FileChangeKind::Modified, Unavailable::ToolFailed),
+        (None, None) => {
+            return FileChange::unavailable(
+                path,
+                FileChangeKind::Modified,
+                Unavailable::ToolFailed,
+            )
+        }
     };
     let old = before.unwrap_or("");
     let new = after.unwrap_or("");
@@ -60,7 +79,14 @@ pub(crate) fn compute_file_change(path: &str, before: Option<&str>, after: Optio
             lines,
         });
     }
-    let mut change = FileChange { path: path.to_string(), kind, hunks, added, removed, unavailable: None };
+    let mut change = FileChange {
+        path: path.to_string(),
+        kind,
+        hunks,
+        added,
+        removed,
+        unavailable: None,
+    };
     if total_lines > MAX_HUNK_LINES {
         change.hunks.clear();
         change.unavailable = Some(Unavailable::TooLarge);
@@ -131,5 +157,29 @@ mod tests {
         assert!(c.hunks.is_empty());
         assert_eq!((c.added, c.removed), (0, 0));
         assert!(c.unavailable.is_none());
+    }
+
+    #[test]
+    fn a_modified_change_over_the_byte_cap_reports_too_large_with_unknown_zero_stats() {
+        // Both sides are `Some` and both exceed `MAX_DIFF_INPUT_BYTES`, the
+        // realistic case for this cap (editing an already-large file).
+        let old = "a".repeat(MAX_DIFF_INPUT_BYTES + 1);
+        let new = "b".repeat(MAX_DIFF_INPUT_BYTES + 1);
+        let c = compute_file_change("big.txt", Some(&old), Some(&new));
+        assert_eq!(c.kind, FileChangeKind::Modified);
+        assert_eq!(c.unavailable, Some(Unavailable::TooLarge));
+        assert!(c.hunks.is_empty());
+        // Neither side's line count is a real stat here — both are 0,
+        // meaning "not computed", per the invariant documented on
+        // `MAX_DIFF_INPUT_BYTES`.
+        assert_eq!((c.added, c.removed), (0, 0));
+    }
+
+    #[test]
+    fn both_sides_missing_is_a_programming_error_reported_as_tool_failed() {
+        let c = compute_file_change("a", None, None);
+        assert_eq!(c.unavailable, Some(Unavailable::ToolFailed));
+        assert!(c.hunks.is_empty());
+        assert_eq!((c.added, c.removed), (0, 0));
     }
 }
