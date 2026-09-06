@@ -49,8 +49,14 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     tool_name: call.tool_name,
                     input: call.input,
                     duration_ms: call.duration_ms,
-                    // `LoopTraceEvent` carries no presentation; `trace.by_runs`
-                    // enriches it from the session event store at replay time.
+                    // `LoopTraceEvent` carries no presentation, so a trace row
+                    // never stores one. `trace.by_runs` fills this hole at
+                    // replay time from the session event store, joining on
+                    // `tool_id` == `SessionEvent::ToolResult.call_id`
+                    // (`handlers::trace_replay::presentations_for_session`) —
+                    // best effort: no diff when that store is absent or
+                    // unreadable, and what it serves is masked, unlike the
+                    // event log it comes from.
                     presentation: None,
                 },
                 result: match result {

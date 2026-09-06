@@ -51,7 +51,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::exec::masker::{mask_json_strings, SecretMasker};
+use crate::exec::masker::{mask_json_strings, mask_presentation, SecretMasker};
 use crate::gateway::event_emitter::types::{EventEmitError, StreamEvent};
 use crate::gateway::event_emitter::EventEmitter;
 
@@ -76,56 +76,15 @@ impl RedactingEmitter {
 
     /// Mask every text leaf of the `tool_end` UI side-channel.
     ///
-    /// `HunkLine.text` is **file content verbatim** — every added and deleted
-    /// line of whatever the tool wrote. A `file_write` / `file_edit` touching a
-    /// `.env`, a config carrying a token, or a key file puts that credential
-    /// here in plaintext, and it is the *same string* `result.output` gets
-    /// masked for, on the *same frame*. Skipping this walk masks a secret in
-    /// one field and ships it in another — so this is not cosmetic and must not
-    /// be optimised away as redundant with the two text fields.
-    ///
-    /// `FileChange.path` is masked too, deliberately, for the reason the trace
-    /// leg already settled (see `unattended_redacting_sink`'s module doc): an
-    /// identifier-shaped field costs one regex pass that will not match, and
-    /// that is cheaper than a rule which needs a person to re-classify each new
-    /// field correctly. It is also not ours to promise that a path is never
-    /// credential-shaped — `[[security.mask_patterns]]` lets an operator
-    /// install arbitrary regexes, and an operator masking their own internal
-    /// format has no reason to expect one field on this frame to be exempt.
-    ///
-    /// Every level destructures **without `..`**, so a new text-bearing field
-    /// on `Presentation` / `FileChange` / `Hunk` / `HunkLine` is a compile
-    /// error here. That is the axis `emit`'s variant-by-variant exhaustiveness
-    /// cannot see: `presentation` arrived as a new *field* on an *existing*
-    /// variant, which no amount of arm-level exhaustiveness would have caught.
+    /// The walk itself lives in [`crate::exec::masker::mask_presentation`],
+    /// beside `mask_json_strings` and for the same reason: the replay leg
+    /// (`gateway::handlers::trace_replay::handle_by_runs`) serves the SAME
+    /// presentation out of the event log, and two hand-written walks would be
+    /// two answers to "which leaves are secret-bearing". Its doc carries why
+    /// `path` is masked too and why every level destructures without `..`.
     fn mask_presentation(&self, presentation: Option<&mut aleph_protocol::Presentation>) {
-        let Some(presentation) = presentation else {
-            return;
-        };
-        match presentation {
-            aleph_protocol::Presentation::FileChanges { changes } => {
-                for aleph_protocol::FileChange {
-                    path,
-                    kind: _,
-                    hunks,
-                    added: _,
-                    removed: _,
-                    unavailable: _,
-                } in changes.iter_mut()
-                {
-                    *path = self.mask(path);
-                    for aleph_protocol::Hunk {
-                        old_start: _,
-                        new_start: _,
-                        lines,
-                    } in hunks.iter_mut()
-                    {
-                        for aleph_protocol::HunkLine { tag: _, text } in lines.iter_mut() {
-                            *text = self.mask(text);
-                        }
-                    }
-                }
-            }
+        if let Some(presentation) = presentation {
+            mask_presentation(&self.masker, presentation);
         }
     }
 }

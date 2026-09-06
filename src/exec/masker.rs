@@ -159,6 +159,69 @@ pub fn mask_json_strings(masker: &SecretMasker, value: &mut serde_json::Value) -
     }
 }
 
+/// Mask every text leaf of a [`aleph_protocol::Presentation`] — the structured
+/// UI side-channel a file-mutating tool attaches to its result.
+///
+/// `HunkLine.text` is **file content verbatim** — every added and deleted line
+/// of whatever the tool wrote. A `file_write` / `file_edit` touching a `.env`,
+/// a config carrying a token, or a key file puts that credential here in
+/// plaintext, and on the live `tool_end` frame it is the *same string*
+/// `result.output` gets masked for, on the *same frame*. Skipping this walk
+/// masks a secret in one field and ships it in another — so this is not
+/// cosmetic and must not be optimised away as redundant with the text fields
+/// beside it.
+///
+/// `FileChange.path` is masked too, deliberately, for the reason the trace leg
+/// already settled (see `unattended_redacting_sink`'s module doc): an
+/// identifier-shaped field costs one regex pass that will not match, and that
+/// is cheaper than a rule which needs a person to re-classify each new field
+/// correctly. It is also not ours to promise that a path is never
+/// credential-shaped — `[[security.mask_patterns]]` lets an operator install
+/// arbitrary regexes, and an operator masking their own internal format has no
+/// reason to expect one field on one frame to be exempt.
+///
+/// Every level destructures **without `..`** and the variant match has no
+/// wildcard, so a new text-bearing field on `Presentation` / `FileChange` /
+/// `Hunk` / `HunkLine` — and a second `Presentation` variant — is a compile
+/// error here. That is the axis a caller's variant-by-variant exhaustiveness
+/// cannot see: `presentation` itself arrived as a new *field* on an *existing*
+/// `StreamEvent` variant, which no amount of arm-level exhaustiveness caught.
+///
+/// Single source for the two surfaces that carry a presentation to a human:
+/// the live `tool_end` frame (`gateway::event_emitter::RedactingEmitter`) and
+/// the replayed `tool_call_completed`
+/// (`gateway::handlers::trace_replay::handle_by_runs`, which reads it out of
+/// the deliberately-unmasked `session_events` log). They must agree byte for
+/// byte — the same diff reaches the same person down both, and one masked copy
+/// plus one clear copy is not redaction.
+pub fn mask_presentation(masker: &SecretMasker, presentation: &mut aleph_protocol::Presentation) {
+    match presentation {
+        aleph_protocol::Presentation::FileChanges { changes } => {
+            for aleph_protocol::FileChange {
+                path,
+                kind: _,
+                hunks,
+                added: _,
+                removed: _,
+                unavailable: _,
+            } in changes.iter_mut()
+            {
+                *path = masker.mask(path);
+                for aleph_protocol::Hunk {
+                    old_start: _,
+                    new_start: _,
+                    lines,
+                } in hunks.iter_mut()
+                {
+                    for aleph_protocol::HunkLine { tag: _, text } in lines.iter_mut() {
+                        *text = masker.mask(text);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
