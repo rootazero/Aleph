@@ -23,3 +23,11 @@ pub use summarize::{
     clip_one_line, display_name, humanize, summarize, CallSummary, ARGS_CLIP, DISPLAY_NAMES,
     PREFERRED_ARG_KEYS,
 };
+
+mod group;
+mod view_model;
+pub use group::{group_entries, MAX_GAP_TEXT, MIN_GROUP};
+pub use view_model::{
+    RowBody, RowStatus, ToolGroup, ToolRow, TranscriptEntry, TurnSummaryEntry,
+    READ_ONLY_DISPLAY_NAMES,
+};
