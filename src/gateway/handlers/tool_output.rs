@@ -87,7 +87,29 @@ struct Params {
 /// empty slice with `truncated: true`, and a client looping `while truncated`
 /// never advances — each iteration costing a whole blob read and a whole
 /// masking pass. Rounding up costs at most `len_utf8() - 1` extra bytes on the
-/// last character and guarantees progress whenever `limit >= 1`.
+/// last character.
+///
+/// # The floor lives here, not at the call site
+///
+/// `limit: 0` reaches the same livelock through a different door, and by the
+/// easiest route there is: at any boundary-aligned offset — which is *every*
+/// offset a previous page reported as its own `start + len`, and 0 — it gives
+/// `start == end` and an empty page that still says `truncated`. So `limit` is
+/// floored at 1 **in this function**.
+///
+/// That placement is the point. This doc is where the progress property is
+/// claimed, so this is where it has to be enforced: a floor applied by the one
+/// caller would leave the claim above true only under a precondition stated
+/// nowhere, and the second caller would break it silently (判据 §12 — the
+/// guarantee and its enforcement derive at one place). The *ceiling* stays with
+/// the caller for the mirror-image reason: `MAX_TOOL_OUTPUT_PAGE_BYTES` is a
+/// resource policy about how much one response may carry, not a fact about
+/// whether this loop terminates.
+///
+/// A floored `limit: 0` serves one character rather than refusing. Refusing
+/// would be defensible, but it makes a wire error out of an input with an
+/// obvious honest reading, and a client that sends it is not attacking
+/// anything — it is looping.
 ///
 /// Returning `start` (rather than echoing the requested offset) is the other
 /// half: `ToolOutputPage`'s own contract is `offset + text.len() <
@@ -105,7 +127,7 @@ fn page(text: &str, offset: u64, limit: u64) -> (String, u64, bool) {
         start -= 1;
     }
     // `text.len()` is always a boundary, so this terminates at or before it.
-    let mut end = offset.saturating_add(limit).min(total) as usize;
+    let mut end = offset.saturating_add(limit.max(1)).min(total) as usize;
     while !text.is_char_boundary(end) {
         end += 1;
     }
@@ -249,6 +271,9 @@ pub async fn handle_tool_output(
 
     let (full, source) = resolve_source(text, call_id);
     let masked = crate::exec::masker::SecretMasker::new().mask(&full);
+    // Ceiling only. The FLOOR (`limit: 0`, which a client can send and nothing
+    // upstream rejects) belongs to [`page`], which is what claims to make
+    // progress — see its doc for why the two bounds live in different places.
     let limit = params
         .limit
         .unwrap_or(MAX_TOOL_OUTPUT_PAGE_BYTES)
@@ -723,6 +748,76 @@ mod tests {
         assert_eq!(
             seen, two_byte_first,
             "paging by 1 byte must terminate whole"
+        );
+    }
+
+    /// The livelock's other door, and the easier one to walk through: `limit: 0`
+    /// at a **boundary-aligned** offset — which is every offset a previous page
+    /// reported as its own `start + len`, and 0.
+    ///
+    /// Both of the tests above use `limit >= 1`, so neither can see this: it
+    /// needs no multi-byte character at all, just a zero.
+    #[test]
+    fn a_zero_limit_still_advances() {
+        let (slice, start, more) = page("hello", 0, 0);
+        assert_eq!(slice, "h", "limit 0 is floored to one character, not empty");
+        assert_eq!(start, 0);
+        assert!(more, "and it still says the rest follows");
+
+        // Boundary-aligned mid-string, the shape a paging client reaches.
+        let (slice, start, more) = page("hello", 3, 0);
+        assert_eq!(slice, "l");
+        assert_eq!(start, 3);
+        assert!(more);
+
+        // A whole character, not a byte, when the floor lands on a wide one.
+        let (slice, _, _) = page("élan", 0, 0);
+        assert_eq!(slice, "é");
+
+        // Terminates: the loop below spins forever without the floor.
+        let text = "hello";
+        let mut at = 0u64;
+        let mut seen = String::new();
+        for _ in 0..32 {
+            let (slice, start, more) = page(text, at, 0);
+            assert!(
+                !slice.is_empty(),
+                "an empty page with more to come is the livelock itself"
+            );
+            seen.push_str(&slice);
+            at = start + slice.len() as u64;
+            if !more {
+                break;
+            }
+        }
+        assert_eq!(seen, text, "limit 0 must tile the whole string");
+    }
+
+    /// The floor end to end, because `Params.limit` is an `Option<u64>` with no
+    /// validation upstream: `{"limit": 0}` off the wire reaches `page` as a
+    /// zero, and the handler applies only a ceiling.
+    #[tokio::test]
+    async fn a_zero_limit_off_the_wire_still_returns_bytes() {
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-tool-output-zero-limit");
+        seed_session(&sessions, &key, "u-alice").await;
+        seed_result(&key, 1, "c-zero", json!("hello world")).await;
+
+        let served = parse(
+            call(
+                &key,
+                sessions,
+                json!({ "tool_call_id": "c-zero", "limit": 0 }),
+            )
+            .await,
+        );
+        assert_eq!(served.text, "h", "a zero limit serves one character");
+        assert_eq!(served.offset, 0);
+        assert_eq!(served.total_bytes, 11);
+        assert!(
+            served.truncated,
+            "the client is told to keep going — and now it can"
         );
     }
 }

@@ -1325,11 +1325,27 @@ mod tests {
     /// to run on the path `canonicalize()` resolved to, which is what
     /// `read_call_blob` does.
     ///
-    /// Symlink creation needs elevation on Windows without Developer Mode
-    /// (measured on this host: "Administrator privilege required"), so this
-    /// probes and says so rather than asserting nothing quietly. It is a real
-    /// assertion on Linux, macOS and any host where the probe succeeds.
+    /// # Why this is `ignore`d on Windows rather than only probed
+    ///
+    /// Symlink creation needs `SeCreateSymbolicLinkPrivilege` — elevation, or
+    /// Developer Mode — and this host has neither (measured: "Administrator
+    /// privilege required for this operation"). The runtime probe below is
+    /// honest but **invisible**: libtest captures stderr and prints it only for
+    /// failing tests, and nothing in this repo's `justfile` passes
+    /// `--nocapture` to the `alephcore` suite. So on such a host the assertion
+    /// would silently never run while the summary said `ok`.
+    ///
+    /// `cfg_attr(windows, ignore)` puts it in the summary as `1 ignored`
+    /// instead. A test that cannot fail and cannot be seen not running is worse
+    /// than either. Deliberately NOT a bare `#[ignore]`: that would also
+    /// disable it on Linux and macOS, which are where it is the actual
+    /// evidence. The probe stays as belt and braces for a Windows runner that
+    /// DOES have the privilege and runs with `--ignored`.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "needs SeCreateSymbolicLinkPrivilege / Developer Mode"
+    )]
     fn a_symlink_is_judged_by_what_it_resolves_to() {
         let (_scratch, store, base) = test_store("read_blob_symlink");
         let victim = base.join("toolu_v_bash.txt");
