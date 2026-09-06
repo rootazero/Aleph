@@ -279,7 +279,7 @@ impl HarnessCallback for CapturingCallback {
     fn on_tool_call_done(
         &mut self,
         id: &str,
-        _result: Option<&serde_json::Value>,
+        _result: Option<&crate::session::events::ToolOutput>,
         error: Option<&str>,
         _duration_ms: u64,
     ) {

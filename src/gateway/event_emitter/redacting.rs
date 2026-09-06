@@ -73,6 +73,61 @@ impl RedactingEmitter {
     fn mask(&self, text: &str) -> String {
         self.masker.mask(text)
     }
+
+    /// Mask every text leaf of the `tool_end` UI side-channel.
+    ///
+    /// `HunkLine.text` is **file content verbatim** — every added and deleted
+    /// line of whatever the tool wrote. A `file_write` / `file_edit` touching a
+    /// `.env`, a config carrying a token, or a key file puts that credential
+    /// here in plaintext, and it is the *same string* `result.output` gets
+    /// masked for, on the *same frame*. Skipping this walk masks a secret in
+    /// one field and ships it in another — so this is not cosmetic and must not
+    /// be optimised away as redundant with the two text fields.
+    ///
+    /// `FileChange.path` is masked too, deliberately, for the reason the trace
+    /// leg already settled (see `unattended_redacting_sink`'s module doc): an
+    /// identifier-shaped field costs one regex pass that will not match, and
+    /// that is cheaper than a rule which needs a person to re-classify each new
+    /// field correctly. It is also not ours to promise that a path is never
+    /// credential-shaped — `[[security.mask_patterns]]` lets an operator
+    /// install arbitrary regexes, and an operator masking their own internal
+    /// format has no reason to expect one field on this frame to be exempt.
+    ///
+    /// Every level destructures **without `..`**, so a new text-bearing field
+    /// on `Presentation` / `FileChange` / `Hunk` / `HunkLine` is a compile
+    /// error here. That is the axis `emit`'s variant-by-variant exhaustiveness
+    /// cannot see: `presentation` arrived as a new *field* on an *existing*
+    /// variant, which no amount of arm-level exhaustiveness would have caught.
+    fn mask_presentation(&self, presentation: Option<&mut aleph_protocol::Presentation>) {
+        let Some(presentation) = presentation else {
+            return;
+        };
+        match presentation {
+            aleph_protocol::Presentation::FileChanges { changes } => {
+                for aleph_protocol::FileChange {
+                    path,
+                    kind: _,
+                    hunks,
+                    added: _,
+                    removed: _,
+                    unavailable: _,
+                } in changes.iter_mut()
+                {
+                    *path = self.mask(path);
+                    for aleph_protocol::Hunk {
+                        old_start: _,
+                        new_start: _,
+                        lines,
+                    } in hunks.iter_mut()
+                    {
+                        for aleph_protocol::HunkLine { tag: _, text } in lines.iter_mut() {
+                            *text = self.mask(text);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -162,6 +217,13 @@ impl EventEmitter for RedactingEmitter {
             } => {
                 result.output = result.output.map(|o| self.mask(&o));
                 result.error = result.error.map(|e| self.mask(&e));
+                // The structured diff is masked through the SAME masker as the
+                // two text fields above — its hunk lines are file content
+                // verbatim, so leaving them alone would ship in one field the
+                // credential we just stripped from another on this very frame.
+                // See [`RedactingEmitter::mask_presentation`] for why `path` is
+                // masked too and why the walk destructures without `..`.
+                self.mask_presentation(result.presentation.as_mut());
                 StreamEvent::ToolEnd {
                     run_id,
                     seq,
@@ -471,5 +533,90 @@ mod tests {
                  above still claims it was masked upstream"
             );
         }
+    }
+
+    /// `ToolResult.presentation` is a **second copy of file content** on the
+    /// same frame as `result.output`: `HunkLine.text` is the written line
+    /// verbatim, so a `file_write` into a `.env` puts the credential here even
+    /// when the tool's own prose summary never mentions it.
+    ///
+    /// This shipped unmasked for exactly as long as it took to notice: the
+    /// variant-level exhaustiveness at the top of `emit` guards against a new
+    /// *variant*, and `presentation` arrived as a new *field* on an existing
+    /// one — an axis that guard structurally cannot see. The assertion below
+    /// is deliberately on the *emitted* frame, not on `mask_presentation` in
+    /// isolation, so deleting the call from the `ToolEnd` arm turns it red.
+    #[tokio::test]
+    async fn a_credential_inside_a_presentation_hunk_line_is_masked() {
+        use aleph_protocol::{FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation};
+
+        let (inner, outer) = wrapped();
+        let result = crate::gateway::event_emitter::types::ToolResult::success("Wrote .env")
+            .with_presentation(Some(Presentation::FileChanges {
+                changes: vec![FileChange {
+                    // The path is masked too, so a secret-shaped path is not the
+                    // one field on the frame that escapes. This one is ordinary
+                    // and must survive unchanged.
+                    path: ".env".to_string(),
+                    kind: FileChangeKind::Modified,
+                    hunks: vec![Hunk {
+                        old_start: 1,
+                        new_start: 1,
+                        lines: vec![
+                            HunkLine {
+                                tag: LineTag::Del,
+                                text: "AWS_ACCESS_KEY_ID=OLD".to_string(),
+                            },
+                            HunkLine {
+                                tag: LineTag::Add,
+                                text: format!("AWS_ACCESS_KEY_ID={KEY}"),
+                            },
+                        ],
+                    }],
+                    added: 1,
+                    removed: 1,
+                    unavailable: None,
+                }],
+            }));
+        outer
+            .emit(StreamEvent::ToolEnd {
+                run_id: "r".into(),
+                seq: 1,
+                tool_id: "t1".into(),
+                result,
+                duration_ms: 1,
+            })
+            .await
+            .unwrap();
+
+        let events = inner.events().await;
+        let StreamEvent::ToolEnd { result, .. } = &events[0] else {
+            panic!("expected ToolEnd, got {:?}", events[0]);
+        };
+        let Some(Presentation::FileChanges { changes }) = result.presentation.as_ref() else {
+            panic!("presentation vanished: {result:?}");
+        };
+        let hunk_text: String = changes[0].hunks[0]
+            .lines
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !hunk_text.contains(KEY),
+            "credential reached the wire inside a diff hunk: {hunk_text}"
+        );
+        assert!(
+            hunk_text.contains("REDACTED"),
+            "the masker did not fire at all, so this test would pass on any \
+             string that merely lacks the key: {hunk_text}"
+        );
+        // The structure around the masked text is untouched — masking is a
+        // substring replacement, so line counts, tags and stats still describe
+        // the same change.
+        assert_eq!(changes[0].path, ".env", "an ordinary path is not mangled");
+        assert_eq!(changes[0].hunks[0].lines.len(), 2);
+        assert_eq!(changes[0].added, 1);
+        assert_eq!(changes[0].removed, 1);
     }
 }

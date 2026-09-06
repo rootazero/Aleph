@@ -1003,6 +1003,41 @@ mod tests {
         assert_eq!(result.error, Some("something went wrong".to_string()));
     }
 
+    /// The POPULATED wire shape of the `presentation` side-channel — the half
+    /// `tool_result_presentation_is_optional_and_elided_when_none` (below)
+    /// cannot see, because eliding a key proves nothing about the key's
+    /// contents. A client keyed on `result.presentation.kind` is reading these
+    /// literals, so they are fixed here rather than at whichever renderer
+    /// happens to read them first.
+    #[test]
+    fn a_populated_tool_result_presentation_serializes_as_a_tagged_file_changes() {
+        use crate::file_change::{FileChange, FileChangeKind, Presentation};
+
+        let with = ToolResult::success("Edited src/a.rs").with_presentation(Some(
+            Presentation::FileChanges {
+                changes: vec![FileChange {
+                    path: "src/a.rs".to_string(),
+                    kind: FileChangeKind::Modified,
+                    hunks: Vec::new(),
+                    added: 2,
+                    removed: 1,
+                    unavailable: None,
+                }],
+            },
+        ));
+        let json = serde_json::to_value(&with).expect("serializes");
+        assert_eq!(json["presentation"]["kind"], "file_changes");
+        assert_eq!(json["presentation"]["changes"][0]["path"], "src/a.rs");
+        assert_eq!(json["presentation"]["changes"][0]["kind"], "modified");
+        assert_eq!(
+            json["output"], "Edited src/a.rs",
+            "the model-facing text is untouched by the side-channel"
+        );
+
+        let back: ToolResult = serde_json::from_value(json).expect("round-trips");
+        assert_eq!(back.presentation, with.presentation);
+    }
+
     #[test]
     fn run_retrying_deserializes_from_gateway_frame_shape() {
         // Wire-compat guard: this is the exact params shape the gateway's

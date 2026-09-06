@@ -16,7 +16,10 @@ use tokio::sync::broadcast;
 /// * `on_delta(text)` → `FlowStreamEvent::Delta(text)`
 /// * `on_reasoning(text)` → `FlowStreamEvent::Reasoning(text)`
 /// * `on_tool_call_start(id, name, args)` → `FlowStreamEvent::ToolCallStart { id, name, args }`
-/// * `on_tool_call_done(id, result, error, duration_ms)` → `FlowStreamEvent::ToolCallDone { id, result, error, duration_ms }`
+/// * `on_tool_call_done(id, result, error, duration_ms)` → `FlowStreamEvent::ToolCallDone
+///   { id, result, error, duration_ms, presentation }` — `result` arrives as the whole
+///   `ToolOutput`, so this is the seam that splits it: `value` onto `result`, and
+///   `metadata.presentation` onto the out-of-band `presentation` the loop never inspects
 /// * `on_context_usage(tokens, total)` → `FlowStreamEvent::ContextGauge
 ///   { context_tokens, context_window, total_tokens }` (window pre-resolved
 ///   at construction; suppressed when either side is 0)
@@ -163,15 +166,16 @@ impl HarnessCallback for BroadcastCallback {
     fn on_tool_call_done(
         &mut self,
         id: &str,
-        result: Option<&serde_json::Value>,
+        result: Option<&crate::session::events::ToolOutput>,
         error: Option<&str>,
         duration_ms: u64,
     ) {
         let _ = self.tx.send(FlowStreamEvent::ToolCallDone {
             id: id.to_string(),
-            result: result.cloned(),
+            result: result.map(|o| o.value.clone()),
             error: error.map(|s| s.to_string()),
             duration_ms,
+            presentation: result.and_then(|o| o.metadata.presentation.clone()),
         });
     }
 

@@ -138,6 +138,7 @@ pub(crate) async fn emit_flow_event(
             result,
             error,
             duration_ms,
+            presentation,
         } => {
             {
                 // Latch the terminal execution list. This drain is in-process
@@ -172,7 +173,12 @@ pub(crate) async fn emit_flow_event(
                         other => other.to_string(),
                     })
                     .unwrap_or_default();
+                // The presentation rides beside `output`, never inside it: it
+                // was hoisted out of the tool's JSON before the model-facing
+                // text was built, so re-encoding it here would put it back in
+                // front of the model (R9).
                 crate::gateway::event_emitter::ToolResult::success(output)
+                    .with_presentation(presentation)
             };
             let seq = emitter.next_seq();
             emitter
@@ -868,6 +874,7 @@ mod tests {
                 result: Some(result),
                 error: None,
                 duration_ms: 3,
+                presentation: None,
             },
             &emitter,
             "run-plan",
@@ -942,6 +949,7 @@ mod tests {
                 result: None,
                 error: Some("permission denied".to_string()),
                 duration_ms: 1,
+                presentation: None,
             },
             &emitter,
             "run-err",
@@ -979,6 +987,7 @@ mod tests {
                 })),
                 error: None,
                 duration_ms: 1,
+                presentation: None,
             },
             &emitter,
             "run-x",
@@ -1013,6 +1022,7 @@ mod tests {
                 result: Some(serde_json::json!("results")),
                 error: None,
                 duration_ms: 137,
+                presentation: None,
             },
             &emitter,
             "run-2",
@@ -1029,6 +1039,103 @@ mod tests {
         // (previously hardcoded to 0 here, only available at RunComplete).
         match &events[1] {
             StreamEvent::ToolEnd { duration_ms, .. } => assert_eq!(*duration_ms, 137),
+            other => panic!("expected ToolEnd, got {other:?}"),
+        }
+    }
+
+    /// The UI side-channel reaches the live frame BESIDE the text, not inside
+    /// it. Two halves, and the second is the one that would rot silently: a
+    /// drain that folded the presentation back into `output` would still make
+    /// `presentation.is_some()` false-ish assertions pass on the wire shape
+    /// while re-encoding the diff in front of the model's own transcript view.
+    #[tokio::test]
+    async fn tool_end_carries_the_presentation_beside_the_plain_text_output() {
+        use aleph_protocol::{FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation};
+
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        emit_flow_event(
+            FlowStreamEvent::ToolCallDone {
+                id: "edit-1".to_string(),
+                result: Some(serde_json::Value::String("Edited src/a.rs".to_string())),
+                error: None,
+                duration_ms: 12,
+                presentation: Some(Presentation::FileChanges {
+                    changes: vec![FileChange {
+                        path: "src/a.rs".to_string(),
+                        kind: FileChangeKind::Modified,
+                        hunks: vec![Hunk {
+                            old_start: 10,
+                            new_start: 10,
+                            lines: vec![HunkLine {
+                                tag: LineTag::Add,
+                                text: "let x = 1;".to_string(),
+                            }],
+                        }],
+                        added: 1,
+                        removed: 0,
+                        unavailable: None,
+                    }],
+                }),
+            },
+            &emitter,
+            "run-pres",
+            &state,
+        )
+        .await
+        .expect("done ok");
+
+        let events = inner.events().await;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StreamEvent::ToolEnd { result, .. } => {
+                assert_eq!(
+                    result.output.as_deref(),
+                    Some("Edited src/a.rs"),
+                    "the model-facing text passes through verbatim — the \
+                     presentation must not be re-encoded into it"
+                );
+                let Some(Presentation::FileChanges { changes }) = result.presentation.as_ref()
+                else {
+                    panic!("presentation did not reach the live frame: {result:?}");
+                };
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].path, "src/a.rs");
+                assert_eq!(changes[0].hunks.len(), 1, "hunks survive the drain");
+            }
+            other => panic!("expected ToolEnd, got {other:?}"),
+        }
+    }
+
+    /// The negative half: an error has no presentation to carry, and the
+    /// error arm must not invent one.
+    #[tokio::test]
+    async fn a_failed_tool_call_carries_no_presentation() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        emit_flow_event(
+            FlowStreamEvent::ToolCallDone {
+                id: "edit-2".to_string(),
+                result: None,
+                error: Some("permission denied".to_string()),
+                duration_ms: 4,
+                presentation: None,
+            },
+            &emitter,
+            "run-pres-err",
+            &state,
+        )
+        .await
+        .expect("done ok");
+
+        let events = inner.events().await;
+        match &events[0] {
+            StreamEvent::ToolEnd { result, .. } => {
+                assert!(!result.success);
+                assert!(result.presentation.is_none());
+            }
             other => panic!("expected ToolEnd, got {other:?}"),
         }
     }

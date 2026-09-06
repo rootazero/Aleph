@@ -407,35 +407,19 @@ impl StreamEvent {
     }
 }
 
-/// Result of a tool execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-    pub success: bool,
-    pub output: Option<String>,
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Value>,
-}
-
-impl ToolResult {
-    pub fn success(output: impl Into<String>) -> Self {
-        Self {
-            success: true,
-            output: Some(output.into()),
-            error: None,
-            metadata: None,
-        }
-    }
-
-    pub fn error(error: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            output: None,
-            error: Some(error.into()),
-            metadata: None,
-        }
-    }
-}
+/// Result of a tool execution — the wire type itself, not a gateway twin.
+///
+/// This used to be a parallel struct declared here. It was not a byte-identical
+/// copy: it carried a `metadata: Option<Value>` the protocol type never had, and
+/// that field had **zero writers** — the only mentions in the crate were its own
+/// declaration and the two `metadata: None` lines in the constructors below, so
+/// `skip_serializing_if` meant it never once reached the wire. It is gone rather
+/// than pushed into `aleph_protocol`, which does not take fields on speculation.
+///
+/// Re-exported (not re-declared) so `StreamEvent::ToolEnd` and the protocol
+/// frame cannot drift, and so `presentation` — the UI side-channel the drain
+/// sets from `ToolOutputMetadata::presentation` — is the same field on both.
+pub use aleph_protocol::ToolResult;
 
 /// Summary of a completed agent run.
 ///
