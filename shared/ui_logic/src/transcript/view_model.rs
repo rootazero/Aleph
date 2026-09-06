@@ -44,7 +44,17 @@ pub struct ToolRow {
 }
 
 /// Display names whose calls are read-only (they group; Edit/Write/Bash never do).
-pub const READ_ONLY_DISPLAY_NAMES: &[&str] = &["Read", "Grep", "Find", "Fetch", "Search", "Files", "Memory", "Context", "Tools"];
+///
+/// `"Files"` (`file_ops`) is deliberately absent: `file_ops` multiplexes
+/// read-only actions (list/search) with destructive ones (delete/move) —
+/// see `src/security/dangerous_tools.rs`'s registration of `file_ops` as
+/// dangerous, precisely because the danger lives in an argument, not the
+/// tool name. `ToolRow` carries only the rendered `CallSummary`, not the
+/// structured args, so `is_read_only` cannot tell a `list` call from a
+/// `delete` call here — grouping a delete as "explored" would lie, while
+/// failing to group a genuinely read-only call merely under-groups. Fail
+/// closed: leave it out.
+pub const READ_ONLY_DISPLAY_NAMES: &[&str] = &["Read", "Grep", "Find", "Fetch", "Search", "Memory", "Context", "Tools"];
 
 impl ToolRow {
     #[must_use]
@@ -192,6 +202,18 @@ mod tests {
         r.ended_ms = Some(9);
         r.settle_resumed();
         assert_eq!(r.status, RowStatus::Pending);
+    }
+
+    #[test]
+    fn a_file_ops_row_is_not_read_only() {
+        // file_ops multiplexes read-only (list/search) and destructive
+        // (delete/move) actions behind one tool name; ToolRow only carries
+        // the rendered display name, not the args, so it cannot tell them
+        // apart here. Grouping a delete as "explored" would lie — fail
+        // closed by never treating file_ops as read-only.
+        let r = ToolRow::new("c1", "file_ops", &json!({"action": "delete", "path": "a.rs"}));
+        assert_eq!(r.summary.display_name, "Files");
+        assert!(!r.is_read_only());
     }
 
     #[test]
