@@ -1620,13 +1620,15 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
             Ok(refs) => referenced.extend(refs),
             Err(e) => panic!(
                 "{}:{}: this guard cannot reliably scan this file — a {} literal opens here and \
-                 does not close on the same physical line, and `fixture_refs_in_test_bodies` \
-                 tracks no state across lines, so it cannot tell what the file's brace structure \
-                 means past this point. This is not a ban on multi-line literals: teach the \
-                 scanner to track {} state across lines (see its own doc) before adding one here.",
+                 never closes anywhere in the rest of the source, so `fixture_refs_in_test_bodies` \
+                 (which DOES track a literal across physical lines already — see its own doc) \
+                 cannot tell what the file's brace structure means past this point. This is not a \
+                 ban on multi-line literals: a `\\`-continued message or any other literal \
+                 spanning several lines scans correctly; only one with no close anywhere is \
+                 refused. If this really is unclosed, fix the literal; if the scanner is wrong \
+                 about that, teach it a new closing form (see its own doc).",
                 path.display(),
                 e.line,
-                e.kind,
                 e.kind
             ),
         }
@@ -1753,7 +1755,7 @@ fn fixture_refs_in_test_bodies(
                             i += 2;
                             continue;
                         }
-                        if raw_chars[i] == '"' {
+                        if raw_chars[i] == '\u{0}' {
                             closed_at = Some(i + 1);
                             break;
                         }
