@@ -989,75 +989,6 @@ mod tests {
         );
     }
 
-    /// I2: `register` must ATTACH the live tail, not merely hold a clone of
-    /// it. Before the fix, `poll` on a still-running install job answered
-    /// `partial: None` unconditionally — `attach_live` was never called — so
-    /// `bash{process_action:"poll"}`, the verb this tool's own message names,
-    /// showed nothing for a 150 MB download in progress.
-    ///
-    /// The job here pushes into the SAME `Arc<LiveTail>` passed to `register`
-    /// and then blocks on a oneshot this test controls, so "still running"
-    /// is exact rather than a timing guess.
-    #[tokio::test]
-    async fn a_running_install_jobs_partial_output_is_visible_to_poll() {
-        use crate::builtin_tools::process_registry::{process_registry, PollOutcome};
-        use crate::sandbox::context::SESSION_ID;
-        use crate::sandbox::live_tail::LiveStream;
-
-        let home = tempfile::tempdir().expect("tempdir");
-        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
-        let session =
-            crate::routing::session_key::SessionKey::ephemeral("runtime-manage-live-tail-rt");
-
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-        let live = Arc::new(LiveTail::new());
-        let live_for_job = live.clone();
-
-        let (id, caller) = SESSION_ID
-            .scope(session, async {
-                let id = RegistrySpawner::register(
-                    format!("{INSTALL_JOB_PREFIX}chromium"),
-                    live,
-                    async move {
-                        live_for_job.push(LiveStream::Stdout, b"downloading chromium...");
-                        let _ = release_rx.await;
-                        install_output(true, "stub".into())
-                    },
-                )
-                .expect("the registry had a free slot");
-                let caller = crate::builtin_tools::bash_exec::session_label();
-                (id, caller)
-            })
-            .await;
-
-        // The push happens on a separate tokio task; give it a bounded chance
-        // to run before asserting, rather than a fixed sleep.
-        let mut partial = None;
-        for _ in 0..200 {
-            if let PollOutcome::Running {
-                partial: Some(p), ..
-            } = process_registry().poll(id, caller.as_deref())
-            {
-                if !p.stdout.is_empty() {
-                    partial = Some(p);
-                    break;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-
-        let partial = partial.expect(
-            "poll never saw a non-empty live tail for a job that pushed to it — \
-             attach_live was not called, or the wrong tail was attached",
-        );
-        assert!(
-            String::from_utf8_lossy(&partial.stdout).contains("downloading chromium"),
-            "poll must see the job's own output while it is still running: {partial:?}"
-        );
-
-        let _ = release_tx.send(());
-    }
-
     /// The non-chromium branch takes the SAME path. It is the one that used to
     /// be worse than the download: `ensure_capability` runs npm global installs
     /// and `curl … | sh` bootstrap scripts with no timeout of its own at all.
@@ -1171,12 +1102,17 @@ mod tests {
 
     /// I1 (round 2): the `tokio::select!` tee inside `install_chromium` is
     /// what actually makes `bash{process_action:"poll"}` show bytes for a
-    /// running chromium install. Round 1's
-    /// `a_running_install_jobs_partial_output_is_visible_to_poll` proved
-    /// `attach_live` wiring, but its job pushed into the live tail ITSELF —
-    /// that guard stays green even if the tee inside `install_chromium` were
-    /// deleted outright (判据 §4: it asserts the call happened, not that the
-    /// effect arrived). This one runs the REAL `RegistrySpawner` →
+    /// running chromium install. Round 1's own attempt at proving this
+    /// (`a_running_install_jobs_partial_output_is_visible_to_poll`, deleted
+    /// under Final Review M4) only proved `RegistrySpawner::register`'s
+    /// `attach_live` wiring — its job pushed into the live tail ITSELF, so
+    /// that guard stayed green even with the tee inside `install_chromium`
+    /// deleted outright (判据 §4: it asserted the call happened, not that the
+    /// effect arrived — confirmed by the final reviewer's own mutation, not
+    /// merely inferred). Deleting it loses nothing: `register`'s ONLY
+    /// production caller for install jobs is `RegistrySpawner::spawn` below,
+    /// the exact path THIS test drives, so a regression in `register`'s own
+    /// wiring fails this test too. This one runs the REAL `RegistrySpawner` →
     /// `run_install` → `install_chromium` chain against a fake CLI script
     /// that writes a known marker to stdout AND stderr, so the tee is the
     /// only thing that could have put those bytes where `poll` reads them.
