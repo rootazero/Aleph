@@ -7,13 +7,6 @@ use aleph_protocol::ToolResult;
 
 use super::summarize::{summarize, CallSummary};
 
-// TEMP until Task 8 lands `affordance::fmt_duration_ms`; Task 8 deletes this.
-mod affordance_stub {
-    pub fn fmt_duration_ms(ms: u64) -> String {
-        format!("{:.1}s", ms as f64 / 1000.0)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowStatus {
     /// Requested, not yet started (or restored from a log with no start
@@ -140,7 +133,7 @@ impl ToolGroup {
             _ => 0,
         }).sum();
         let noun = if n == 1 { "call" } else { "calls" };
-        let dur = if total_ms > 0 { format!(" · {}", affordance_stub::fmt_duration_ms(total_ms)) } else { String::new() };
+        let dur = if total_ms > 0 { format!(" · {}", super::affordance::fmt_duration_ms(total_ms)) } else { String::new() };
         format!("Explored {n} {noun}{dur}")
     }
 }

@@ -44,3 +44,13 @@ pub use md_enhance::{
     enhance, find_path_refs, linkify_bare_urls, trim_url, AdmonitionKind, Block, Enhanced,
     PathRef, KNOWN_EXTENSIONS, MERMAID_PLACEHOLDER_PREFIX,
 };
+
+mod affordance;
+mod context;
+mod turn_summary;
+pub use affordance::{
+    expand_hint, fmt_duration_ms, spinner_frame, verb, worked_for, Locale, Modality,
+    SPINNER_FRAMES, SPINNER_PERIOD_MS, VERBS_EN, VERBS_ZH, VERB_REROLL_MS,
+};
+pub use context::{reconcile, ContextRow, ContextRows, PROVIDER_TOLERANCE};
+pub use turn_summary::{summarize_turn, turn_summary_text, MIN_TOOLS_FOR_SUMMARY};
