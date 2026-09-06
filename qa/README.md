@@ -25,6 +25,7 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh pdf      # pdf_generate's browser engine, CLI off PATH
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
+./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
@@ -978,6 +979,38 @@ Related: `Config.channels` is a **map keyed by instance id**
 form shown in `webhook/mod.rs`'s own module doc does not parse — the server
 refuses to boot with `invalid type: sequence, expected a map`.
 
+## Known gap: tab identity does not survive a re-attach
+
+`browser_managed/attach` drives Aleph through `close` (a DISCONNECT under
+`attach --cdp` — Chrome and its tabs survive) and back through a re-attach that
+`playwright_cli.rs`'s `run` performs when `LaunchPolicy::Refuse` gets
+`NoSession` and the browser is still alive (Piece 4, `59dc20cce`). That
+re-attach reaches the SAME OS process — `attach`'s claim `"a later tool call
+re-attaches to the SAME browser process (not a relaunch)"` asserts exactly
+that, and it is green.
+
+What it does not assert, on purpose, is that the re-attached session finds the
+SAME tab it had before. Measured with a real Chrome and a real marker page:
+the fresh `attach --cdp` session's own `(current)`/listing-order idea of which
+tab is active is **not** inherited from before the disconnect, and the CLI's
+tab-listing order was observed to differ between the first attach and the
+re-attach in the same run — the original `about:blank` (always present, from
+`ChromiumLaunchSpec::argv`) and the profile's actual page traded places. So
+"pick whichever tab the CLI calls current" is neither reliably right nor
+reliably wrong; a candidate fix — select the LAST-listed tab, the fallback
+`tab_registry::active_tab`'s own doc endorses for a listing with no marker —
+was implemented, run against this exact repro, and picked the WRONG tab. That
+doc now carries this as a known exception.
+
+Fixing this needs Aleph's OWN persistent record of which tab a profile was
+last using (`ProfileManager::tab_registry`, in `manager.rs`) consulted at
+re-attach time — one layer above `playwright_cli.rs`, where the re-attach
+itself lives. Not attempted here: it is a real design question for the
+live-view round (plan 2), whose entire premise is a human and an agent
+sharing one browser, and reaching for it from inside this fix would have
+widened a narrowly-scoped change into that question. Tracked in
+`docs/reference/FEATURE_LOCATOR.md` §3.12 (附录 D.9.19).
+
 ---
 
 ## 每个装置在证明什么（由根 `CLAUDE.md` 子系统路由表迁入，2026-08-30）
@@ -1003,7 +1036,9 @@ refuses to boot with `invalid type: sequence, expected a map`.
   停机后把戳改成**降序**再重读——**生产数据上两序恒合，所以不打乱就等于没测**。断言：服务序不变 ·
   `session.truncate` 真的到达数据库 · 它留下的是**头部** · 两个 backend 销毁同一批行。
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
-  `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload}`——**两个 driver 的每个动词都有效果断言**。
+  `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**两个 driver 的每个动词都有效果断言**。
+  `attach` 证的是 Aleph 自己启动 Chrome、`playwright-cli` 只 `attach --cdp` 上去；已知缺口见下方
+  "Known gap: tab identity does not survive a re-attach"。
 - **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
 - **`agents_viz`** — 改 `run.subagent_tree` 的产地 / relay / 可见性分类、`events.subscribe` 的过滤语义、
   执行清单三载体（`tool_call_completed` snapshot · `RunSummary.plan` · `chat.history.plan`）或 TUI/Panel

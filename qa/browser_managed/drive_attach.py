@@ -67,6 +67,30 @@ def chrome_pids(udd):
     return [p for p in out.stdout.split() if p.strip()]
 
 
+def chrome_main_pid(udd):
+    """Of the pids carrying our --user-data-dir, the ONE that is Aleph's own
+    top-level launch — not a renderer/GPU/utility/zygote helper. Every Chrome
+    CHILD process is invoked with --type=<kind>; only the top-level browser
+    process (built from ChromiumLaunchSpec::argv) has no --type= at all, so
+    that is what distinguishes it. Returns (pid, full command line) or
+    (None, "") if none of the matched pids qualifies.
+
+    M4 (round 2): the previous version asserted on pids[0] — whichever pid
+    `pgrep` happened to list first, unordered — and helper processes carry
+    the SAME --user-data-dir flag as the main process but a DIFFERENT argv
+    (no --use-mock-keychain). This machine has had as many as nine stray
+    Chromes alive at once; pids[0] being the main process was a coin flip
+    the fixture happened to keep landing heads on, not a guarantee."""
+    for pid in chrome_pids(udd):
+        proc = subprocess.run(
+            ["ps", "-p", pid, "-o", "command="],
+            capture_output=True, text=True,
+        )
+        if "--type=" not in proc.stdout:
+            return pid, proc.stdout
+    return None, ""
+
+
 async def main():
     async with ws_connect(args.url) as ws:
         rpc = Rpc(ws)
@@ -157,16 +181,13 @@ async def main():
         #     HOME while checks 1-5 above stay green, because the missing flag
         #     does not stop the process from existing — only from ever
         #     answering `Page.navigate`.
-        argv_text = ""
-        if pids:
-            argv_proc = subprocess.run(
-                ["ps", "-p", pids[0], "-o", "command="],
-                capture_output=True, text=True,
-            )
-            argv_text = argv_proc.stdout
+        #     M4 (round 2): must be THE main process, not `pids[0]` — an
+        #     arbitrary member of the pgrep match set that can just as well be
+        #     a renderer/GPU helper (same --user-data-dir, different argv).
+        main_pid, argv_text = chrome_main_pid(args.expect_user_data_dir)
         check(
             "Aleph's chromium argv carries --use-mock-keychain",
-            "--use-mock-keychain" in argv_text,
+            main_pid is not None and "--use-mock-keychain" in argv_text,
             argv_text.strip()[:300],
         )
 
@@ -216,10 +237,27 @@ async def main():
 
         # 7. And the CLI can find its way back, which is what makes a reaped or
         #    crashed CLI cost nothing.
+        #
+        #    Split in two (M5, round 2), so this suite does not carry a
+        #    standing-red claim: the re-attach reaching the SAME browser
+        #    process — not a relaunch — is what Piece 4 (`59dc20cce`) actually
+        #    delivers, and that is what is asserted here. Which TAB that
+        #    re-attached session treats as "current" is a separate,
+        #    undelivered question — a real subprocess with a real marker page
+        #    proved the CLI's tab-listing order differs between the first
+        #    attach and this re-attach (neither "always first" nor "always
+        #    last") — so it is a named, booked gap (FEATURE_LOCATOR §3.12,
+        #    qa/README.md), not an assertion here. Asserting `args.marker in
+        #    body` would leave this claim permanently red, which trains
+        #    readers to scroll past red rather than fix it.
         ok, body = await rpc.invoke("browser_snapshot", {"profile": "default", "max_chars": 2000})
+        reattached_pids = chrome_pids(args.expect_user_data_dir)
         check(
-            "a later tool call re-attaches and still sees the page",
-            ok and isinstance(body, dict) and body.get("success") and args.marker in json.dumps(body),
+            "a later tool call re-attaches to the SAME browser process (not a relaunch)",
+            ok
+            and isinstance(body, dict)
+            and body.get("success")
+            and str(sidecar.get("pid")) in reattached_pids,
             json.dumps(body)[:200],
         )
 
