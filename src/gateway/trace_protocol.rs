@@ -49,6 +49,8 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     tool_name: call.tool_name,
                     input: call.input,
                     duration_ms: call.duration_ms,
+                    // `LoopTraceEvent` carries no presentation; `trace.by_runs`
+                    // enriches it from the session event store at replay time.
                     presentation: None,
                 },
                 result: match result {
