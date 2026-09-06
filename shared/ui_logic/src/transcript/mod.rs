@@ -31,3 +31,10 @@ pub use view_model::{
     RowBody, RowStatus, ToolGroup, ToolRow, TranscriptEntry, TurnSummaryEntry,
     READ_ONLY_DISPLAY_NAMES,
 };
+
+mod diff_view;
+pub use diff_view::{
+    diff_rows, stats_label, word_spans, DiffRow, DiffRows, Span, COLLAPSED_DIFF_ROWS,
+    EXPANDED_DIFF_ROWS, LCS_CELL_BUDGET_COLLAPSED, LCS_CELL_BUDGET_EXPANDED,
+    MAX_INLINE_LINE_CHARS,
+};

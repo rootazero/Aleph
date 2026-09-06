@@ -1,0 +1,276 @@
+//! From a wire `FileChange` to paintable rows. Unified layout only (spec
+//! R-3 / §5): every row has an old/new line number, a tag, and spans where
+//! `emphasis` marks the changed words of a paired Del/Add line (a second
+//! LCS over tokens — pi-cc-extensions `diff-inline.ts`), budgeted so a
+//! minified file never costs a quadratic table.
+
+use aleph_protocol::file_change::{FileChange, Hunk, LineTag, Unavailable};
+
+pub const COLLAPSED_DIFF_ROWS: usize = 2;
+pub const EXPANDED_DIFF_ROWS: usize = 400;
+pub const LCS_CELL_BUDGET_COLLAPSED: usize = 200_000;
+pub const LCS_CELL_BUDGET_EXPANDED: usize = 1_000_000;
+/// Lines longer than this get no inline spans (guards minified files).
+pub const MAX_INLINE_LINE_CHARS: usize = 700;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    pub text: String,
+    pub emphasis: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffRow {
+    pub old_no: Option<u32>,
+    pub new_no: Option<u32>,
+    pub tag: LineTag,
+    pub spans: Vec<Span>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiffRows {
+    pub rows: Vec<DiffRow>,
+    pub hidden_rows: usize,
+    pub hidden_hunks: usize,
+}
+
+/// `+12 -3`, or the unavailable reason when there are no hunks to show.
+#[must_use]
+pub fn stats_label(change: &FileChange) -> String {
+    match change.unavailable {
+        Some(Unavailable::TooLarge) | None => format!("+{} -{}", change.added, change.removed),
+        Some(Unavailable::Binary) => "diff unavailable: binary".into(),
+        Some(Unavailable::PreImageUnavailable) => "diff unavailable: previous content unreadable".into(),
+        Some(Unavailable::Encoding) => "diff unavailable: encoding".into(),
+        Some(Unavailable::ToolFailed) => "diff unavailable: tool failed".into(),
+    }
+}
+
+/// Tokens: identifier runs, whitespace runs, single punctuation chars.
+fn tokenize(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < s.len() {
+        let c = s[i..].chars().next().unwrap();
+        let class = if c.is_alphanumeric() || c == '_' { 0 } else if c.is_whitespace() { 1 } else { 2 };
+        let start = i;
+        i += c.len_utf8();
+        if class != 2 {
+            while i < s.len() {
+                let d = s[i..].chars().next().unwrap();
+                let dc = if d.is_alphanumeric() || d == '_' { 0 } else if d.is_whitespace() { 1 } else { 2 };
+                if dc != class { break; }
+                i += d.len_utf8();
+            }
+        }
+        out.push(&s[start..i]);
+    }
+    out
+}
+
+/// LCS over tokens; returns per-side `changed` flags. `None` when over budget.
+fn token_lcs_changed(a: &[&str], b: &[&str], cell_budget: usize) -> Option<(Vec<bool>, Vec<bool>)> {
+    let (n, m) = (a.len(), b.len());
+    if n.saturating_mul(m) > cell_budget {
+        return None;
+    }
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] { dp[i + 1][j + 1] + 1 } else { dp[i + 1][j].max(dp[i][j + 1]) };
+        }
+    }
+    let mut ca = vec![true; n];
+    let mut cb = vec![true; m];
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if a[i] == b[j] {
+            ca[i] = false;
+            cb[j] = false;
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    Some((ca, cb))
+}
+
+fn spans_from(tokens: &[&str], changed: &[bool]) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::new();
+    for (t, &c) in tokens.iter().zip(changed) {
+        // Whitespace never carries emphasis on its own (pi trims spans).
+        let c = c && !t.trim().is_empty();
+        match out.last_mut() {
+            Some(last) if last.emphasis == c => last.text.push_str(t),
+            _ => out.push(Span { text: (*t).to_string(), emphasis: c }),
+        }
+    }
+    out
+}
+
+fn plain(text: &str) -> Vec<Span> {
+    vec![Span { text: text.to_string(), emphasis: false }]
+}
+
+/// Word-level spans for a paired removed/added line. Falls back to plain
+/// spans when either line is too long or the token table is over budget.
+#[must_use]
+pub fn word_spans(del: &str, add: &str, cell_budget: usize) -> (Vec<Span>, Vec<Span>) {
+    if del == add || del.chars().count() > MAX_INLINE_LINE_CHARS || add.chars().count() > MAX_INLINE_LINE_CHARS {
+        return (plain(del), plain(add));
+    }
+    let (ta, tb) = (tokenize(del), tokenize(add));
+    match token_lcs_changed(&ta, &tb, cell_budget) {
+        Some((ca, cb)) => (spans_from(&ta, &ca), spans_from(&tb, &cb)),
+        None => (plain(del), plain(add)),
+    }
+}
+
+fn hunk_rows(h: &Hunk, budget: usize, out: &mut Vec<DiffRow>) {
+    let (mut old_no, mut new_no) = (h.old_start, h.new_start);
+    let mut i = 0;
+    while i < h.lines.len() {
+        let l = &h.lines[i];
+        match l.tag {
+            LineTag::Ctx => {
+                out.push(DiffRow { old_no: Some(old_no), new_no: Some(new_no), tag: LineTag::Ctx, spans: plain(&l.text) });
+                old_no += 1;
+                new_no += 1;
+                i += 1;
+            }
+            LineTag::Del => {
+                // Pair a Del run with the Add run that immediately follows it.
+                let del_start = i;
+                while i < h.lines.len() && h.lines[i].tag == LineTag::Del { i += 1; }
+                let add_start = i;
+                while i < h.lines.len() && h.lines[i].tag == LineTag::Add { i += 1; }
+                let dels = &h.lines[del_start..add_start];
+                let adds = &h.lines[add_start..i];
+                let pairs = dels.len().max(adds.len());
+                let mut pending_adds: Vec<Vec<Span>> = Vec::with_capacity(adds.len());
+                for k in 0..pairs {
+                    match (dels.get(k), adds.get(k)) {
+                        (Some(d), Some(a)) => {
+                            let (ds, as_) = word_spans(&d.text, &a.text, budget);
+                            out.push(DiffRow { old_no: Some(old_no), new_no: None, tag: LineTag::Del, spans: ds });
+                            old_no += 1;
+                            pending_adds.push(as_);
+                        }
+                        (Some(d), None) => {
+                            out.push(DiffRow { old_no: Some(old_no), new_no: None, tag: LineTag::Del, spans: plain(&d.text) });
+                            old_no += 1;
+                        }
+                        (None, Some(a)) => pending_adds.push(plain(&a.text)),
+                        (None, None) => {}
+                    }
+                }
+                for spans in pending_adds {
+                    out.push(DiffRow { old_no: None, new_no: Some(new_no), tag: LineTag::Add, spans });
+                    new_no += 1;
+                }
+            }
+            LineTag::Add => {
+                out.push(DiffRow { old_no: None, new_no: Some(new_no), tag: LineTag::Add, spans: plain(&l.text) });
+                new_no += 1;
+                i += 1;
+            }
+        }
+    }
+}
+
+/// All rows (expanded) or the first `COLLAPSED_DIFF_ROWS` (collapsed), with
+/// exact hidden counts so the hint can say `… +N rows · M hunks`.
+#[must_use]
+pub fn diff_rows(change: &FileChange, expanded: bool) -> DiffRows {
+    let budget = if expanded { LCS_CELL_BUDGET_EXPANDED } else { LCS_CELL_BUDGET_COLLAPSED };
+    let limit = if expanded { EXPANDED_DIFF_ROWS } else { COLLAPSED_DIFF_ROWS };
+    let mut all: Vec<DiffRow> = Vec::new();
+    let mut hunk_ends: Vec<usize> = Vec::with_capacity(change.hunks.len());
+    for h in &change.hunks {
+        hunk_rows(h, budget, &mut all);
+        hunk_ends.push(all.len());
+    }
+    let total = all.len();
+    if total <= limit {
+        return DiffRows { rows: all, hidden_rows: 0, hidden_hunks: 0 };
+    }
+    let shown_hunks = hunk_ends.iter().filter(|&&end| end <= limit).count()
+        + usize::from(hunk_ends.iter().any(|&end| end > limit) && limit > 0);
+    all.truncate(limit);
+    DiffRows {
+        rows: all,
+        hidden_rows: total - limit,
+        hidden_hunks: change.hunks.len().saturating_sub(shown_hunks),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aleph_protocol::file_change::{FileChangeKind, HunkLine};
+
+    fn line(tag: LineTag, s: &str) -> HunkLine { HunkLine { tag, text: s.into() } }
+
+    fn change(hunks: Vec<Hunk>) -> FileChange {
+        FileChange { path: "a.rs".into(), kind: FileChangeKind::Modified, hunks, added: 0, removed: 0, unavailable: None }
+    }
+
+    #[test]
+    fn paired_del_add_get_word_emphasis_only_on_the_changed_tokens() {
+        let (d, a) = word_spans("let x = foo(1);", "let x = bar(1);", LCS_CELL_BUDGET_EXPANDED);
+        let em_d: Vec<&str> = d.iter().filter(|s| s.emphasis).map(|s| s.text.as_str()).collect();
+        let em_a: Vec<&str> = a.iter().filter(|s| s.emphasis).map(|s| s.text.as_str()).collect();
+        assert_eq!(em_d, vec!["foo"]);
+        assert_eq!(em_a, vec!["bar"]);
+    }
+
+    #[test]
+    fn line_numbers_advance_per_side_and_dels_precede_adds() {
+        let c = change(vec![Hunk { old_start: 10, new_start: 10, lines: vec![
+            line(LineTag::Ctx, "a"), line(LineTag::Del, "b"), line(LineTag::Del, "c"),
+            line(LineTag::Add, "B"), line(LineTag::Ctx, "d"),
+        ]}]);
+        let r = diff_rows(&c, true);
+        let nums: Vec<(Option<u32>, Option<u32>, LineTag)> = r.rows.iter().map(|x| (x.old_no, x.new_no, x.tag)).collect();
+        assert_eq!(nums, vec![
+            (Some(10), Some(10), LineTag::Ctx),
+            (Some(11), None, LineTag::Del),
+            (Some(12), None, LineTag::Del),
+            (None, Some(11), LineTag::Add),
+            (Some(13), Some(12), LineTag::Ctx),
+        ]);
+    }
+
+    #[test]
+    fn collapsed_shows_two_rows_and_counts_hidden_rows_and_hunks() {
+        let h = |start: u32| Hunk { old_start: start, new_start: start, lines: vec![line(LineTag::Ctx, "x"), line(LineTag::Add, "y"), line(LineTag::Ctx, "z")] };
+        let c = change(vec![h(1), h(50), h(90)]);
+        let r = diff_rows(&c, false);
+        assert_eq!(r.rows.len(), 2);
+        assert_eq!(r.hidden_rows, 7);
+        assert_eq!(r.hidden_hunks, 2);
+    }
+
+    #[test]
+    fn over_budget_or_overlong_lines_fall_back_to_plain_spans() {
+        let long = "a ".repeat(400); // 800 chars > MAX_INLINE_LINE_CHARS
+        let (d, a) = word_spans(&long, &format!("{long}b"), LCS_CELL_BUDGET_EXPANDED);
+        assert!(d.iter().all(|s| !s.emphasis) && a.iter().all(|s| !s.emphasis));
+        let (d2, _) = word_spans("x y z", "x q z", 2); // budget too small for 5x5 tokens
+        assert!(d2.iter().all(|s| !s.emphasis));
+    }
+
+    #[test]
+    fn stats_label_reports_counts_or_the_unavailable_reason() {
+        let mut c = change(vec![]);
+        c.added = 12; c.removed = 3;
+        assert_eq!(stats_label(&c), "+12 -3");
+        c.unavailable = Some(Unavailable::TooLarge);
+        assert_eq!(stats_label(&c), "+12 -3", "TooLarge keeps exact stats");
+        c.unavailable = Some(Unavailable::PreImageUnavailable);
+        assert!(stats_label(&c).starts_with("diff unavailable"));
+    }
+}
