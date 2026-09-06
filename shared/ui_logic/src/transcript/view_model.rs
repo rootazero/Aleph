@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn an_error_result_carries_its_message() {
-        let mut r = ToolRow::new("c1", "shell_exec", &json!({"command": "false"}));
+        let mut r = ToolRow::new("c1", "bash", &json!({"command": "false"}));
         r.finish(&ToolResult::error("exit 1"), 7, 7);
         assert!(matches!(r.status, RowStatus::Err { ref message, .. } if message == "exit 1"));
         assert!(r.is_terminal());
