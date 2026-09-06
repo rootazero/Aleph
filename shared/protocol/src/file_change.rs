@@ -61,6 +61,25 @@ pub enum Unavailable {
     Encoding,
     /// The tool itself failed; nothing was written.
     ToolFailed,
+    /// A secret pattern spanned more than one hunk line, so the hunks were
+    /// dropped rather than shown. `added` / `removed` are still exact.
+    ///
+    /// The masker that guards this frame works per line, and the one
+    /// multi-line pattern in `secret_patterns.rs` (`-----BEGIN … PRIVATE
+    /// KEY----- … -----END`) needs both markers in one string — so a `.pem`
+    /// written one base64 chunk per line matches nothing per line and used to
+    /// ship whole. The masked replacement for that pattern *contains
+    /// newlines*, so a join-mask-split would change the line count and make
+    /// `old_start` / `new_start` / `added` / `removed` lie. Dropping the hunks
+    /// is the honest answer: the stats are still true, and "I have the counts
+    /// but cannot show you the diff" is something a renderer can say, where a
+    /// silently corrupted diff is not.
+    ///
+    /// NOT a synonym for any of the reasons above: nothing failed, nothing was
+    /// too large, and the content decoded fine. Reusing one of those would be
+    /// a wrong label, which this enum's closed-set contract costs more than a
+    /// missing one.
+    Redacted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

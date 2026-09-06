@@ -54,6 +54,12 @@ pub fn stats_label(change: &FileChange) -> String {
         Some(Unavailable::PreImageUnavailable) => "diff unavailable: previous content unreadable".into(),
         Some(Unavailable::Encoding) => "diff unavailable: encoding".into(),
         Some(Unavailable::ToolFailed) => "diff unavailable: tool failed".into(),
+        // Says WHY, not just that it is gone: the stats beside it are exact,
+        // and a reader who is told only "unavailable" would reasonably wonder
+        // whether the write itself went wrong. Nothing went wrong — the server
+        // withheld a diff whose lines could not be masked without corrupting
+        // the line counts.
+        Some(Unavailable::Redacted) => "diff unavailable: contained a secret".into(),
     }
 }
 

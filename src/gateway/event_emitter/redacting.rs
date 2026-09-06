@@ -52,7 +52,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::exec::masker::{mask_json_strings, mask_presentation, SecretMasker};
-use crate::gateway::event_emitter::types::{EventEmitError, StreamEvent};
+use crate::gateway::event_emitter::types::{EventEmitError, StreamEvent, ToolResult};
 use crate::gateway::event_emitter::EventEmitter;
 
 /// Decorates an `EventEmitter`, masking secrets in every text-bearing variant.
@@ -72,20 +72,6 @@ impl RedactingEmitter {
 
     fn mask(&self, text: &str) -> String {
         self.masker.mask(text)
-    }
-
-    /// Mask every text leaf of the `tool_end` UI side-channel.
-    ///
-    /// The walk itself lives in [`crate::exec::masker::mask_presentation`],
-    /// beside `mask_json_strings` and for the same reason: the replay leg
-    /// (`gateway::handlers::trace_replay::handle_by_runs`) serves the SAME
-    /// presentation out of the event log, and two hand-written walks would be
-    /// two answers to "which leaves are secret-bearing". Its doc carries why
-    /// `path` is masked too and why every level destructures without `..`.
-    fn mask_presentation(&self, presentation: Option<&mut aleph_protocol::Presentation>) {
-        if let Some(presentation) = presentation {
-            mask_presentation(&self.masker, presentation);
-        }
     }
 }
 
@@ -167,27 +153,47 @@ impl EventEmitter for RedactingEmitter {
                 tool_id,
                 progress: self.mask(&progress),
             },
+            // `result` is destructured field-by-field rather than bound whole,
+            // and that is the axis the arm list below cannot see. `ToolEnd`'s
+            // own five fields are all bound here, so a new field ON THE VARIANT
+            // is already a compile error — but `presentation`, the field this
+            // walk exists for, arrived on `ToolResult`, a type NESTED inside
+            // the variant. Binding `result` whole would let the next
+            // text-bearing field on that type (a `stderr`, a second
+            // side-channel) ship unmasked exactly as `presentation` did.
             StreamEvent::ToolEnd {
                 run_id,
                 seq,
                 tool_id,
-                mut result,
+                result:
+                    ToolResult {
+                        success,
+                        output,
+                        error,
+                        mut presentation,
+                    },
                 duration_ms,
             } => {
-                result.output = result.output.map(|o| self.mask(&o));
-                result.error = result.error.map(|e| self.mask(&e));
                 // The structured diff is masked through the SAME masker as the
-                // two text fields above — its hunk lines are file content
+                // two text fields beside it — its hunk lines are file content
                 // verbatim, so leaving them alone would ship in one field the
                 // credential we just stripped from another on this very frame.
-                // See [`RedactingEmitter::mask_presentation`] for why `path` is
-                // masked too and why the walk destructures without `..`.
-                self.mask_presentation(result.presentation.as_mut());
+                // See [`mask_presentation`] for why `path` is masked too, why
+                // every level destructures without `..`, and why a multi-line
+                // secret degrades the change instead of being masked in place.
+                if let Some(p) = presentation.as_mut() {
+                    mask_presentation(&self.masker, p);
+                }
                 StreamEvent::ToolEnd {
                     run_id,
                     seq,
                     tool_id,
-                    result,
+                    result: ToolResult {
+                        success,
+                        output: output.map(|o| self.mask(&o)),
+                        error: error.map(|e| self.mask(&e)),
+                        presentation,
+                    },
                     duration_ms,
                 }
             }
@@ -499,12 +505,18 @@ mod tests {
     /// verbatim, so a `file_write` into a `.env` puts the credential here even
     /// when the tool's own prose summary never mentions it.
     ///
-    /// This shipped unmasked for exactly as long as it took to notice: the
-    /// variant-level exhaustiveness at the top of `emit` guards against a new
-    /// *variant*, and `presentation` arrived as a new *field* on an existing
-    /// one — an axis that guard structurally cannot see. The assertion below
-    /// is deliberately on the *emitted* frame, not on `mask_presentation` in
-    /// isolation, so deleting the call from the `ToolEnd` arm turns it red.
+    /// This shipped unmasked for exactly as long as it took to notice, and the
+    /// axis is worth naming precisely because it is where the next one will
+    /// arrive: `emit`'s arms guard against a new *variant*, and the `ToolEnd`
+    /// arm binds all five of that variant's own fields, so a new field on the
+    /// variant is a compile error too. `presentation` arrived on
+    /// **`ToolResult`, a type nested inside** the variant — the one level
+    /// neither guard reached. The arm now destructures `ToolResult` field by
+    /// field as well, so that level is closed.
+    ///
+    /// The assertion below is deliberately on the *emitted* frame, not on
+    /// `mask_presentation` in isolation, so deleting the call from the
+    /// `ToolEnd` arm turns it red.
     #[tokio::test]
     async fn a_credential_inside_a_presentation_hunk_line_is_masked() {
         use aleph_protocol::{FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation};
@@ -577,5 +589,86 @@ mod tests {
         assert_eq!(changes[0].hunks[0].lines.len(), 2);
         assert_eq!(changes[0].added, 1);
         assert_eq!(changes[0].removed, 1);
+    }
+
+    /// The narrower form the same defect survived in: `SecretMasker` is pure
+    /// regex and its ONLY multi-line pattern needs both PEM markers inside one
+    /// string, while a `.pem` is one base64 chunk per line. So a per-line walk
+    /// matched nothing, and the other half of the frame could not cover for it
+    /// — `file_write`'s `output` is only `"Wrote N bytes to <path>"`, which is
+    /// why the key exists on this frame ONLY inside the hunks.
+    ///
+    /// Asserted on the emitted frame, like its sibling above: the question is
+    /// what leaves the emitter, not what the walk does in isolation.
+    #[tokio::test]
+    async fn a_private_key_written_across_hunk_lines_leaves_no_diff_on_the_frame() {
+        use aleph_protocol::{
+            FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation, Unavailable,
+        };
+
+        const BODY: &str = "MIIEowIBAAKCAQEAvGqZ0Ym3nQKBgQDR8Xk2LqTf9Nc1sVbWpQ7hJZmKdEyRtUiO";
+
+        let (inner, outer) = wrapped();
+        let result = crate::gateway::event_emitter::types::ToolResult::success(
+            "Wrote 1704 bytes to id_rsa",
+        )
+        .with_presentation(Some(Presentation::FileChanges {
+            changes: vec![FileChange {
+                path: "id_rsa".to_string(),
+                kind: FileChangeKind::Created,
+                hunks: vec![Hunk {
+                    old_start: 1,
+                    new_start: 1,
+                    lines: ["-----BEGIN RSA PRIVATE KEY-----", BODY, BODY, "-----END RSA PRIVATE KEY-----"]
+                        .into_iter()
+                        .map(|t| HunkLine {
+                            tag: LineTag::Add,
+                            text: t.to_string(),
+                        })
+                        .collect(),
+                }],
+                added: 4,
+                removed: 0,
+                unavailable: None,
+            }],
+        }));
+        outer
+            .emit(StreamEvent::ToolEnd {
+                run_id: "r".into(),
+                seq: 1,
+                tool_id: "t1".into(),
+                result,
+                duration_ms: 1,
+            })
+            .await
+            .unwrap();
+
+        let events = inner.events().await;
+        let StreamEvent::ToolEnd { result, .. } = &events[0] else {
+            panic!("expected ToolEnd, got {:?}", events[0]);
+        };
+        let Some(Presentation::FileChanges { changes }) = result.presentation.as_ref() else {
+            panic!("presentation vanished: {result:?}");
+        };
+        assert!(
+            changes[0].hunks.is_empty(),
+            "the key body is still on the wire: {:?}",
+            changes[0].hunks
+        );
+        assert_eq!(
+            changes[0].unavailable,
+            Some(Unavailable::Redacted),
+            "a withheld diff must say WHY — a bare empty hunk list reads as \
+             'this change touched nothing'"
+        );
+        assert_eq!(
+            (changes[0].added, changes[0].removed),
+            (4, 0),
+            "the counts were never in doubt and stay exact"
+        );
+        assert!(
+            !format!("{:?}", result.presentation).contains(BODY),
+            "no fragment of the key body may survive anywhere on the frame"
+        );
     }
 }
