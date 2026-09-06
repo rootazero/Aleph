@@ -87,16 +87,16 @@ impl ToolRow {
         };
     }
 
-    /// A row restored from a log arrives without a start event. If it has a
-    /// result it is settled; if it has none it stays `Pending` — never a
-    /// spinner that turns forever (pi `resolveToolVisualState`).
+    /// A row restored from a log arrives without a start event. `Running`
+    /// never survives resume: it always settles to `Pending` — "unknown",
+    /// never a fabricated success — even when `ended_ms` happens to be set
+    /// (a resume/replay caller can set that field directly without calling
+    /// `finish`, and this method must not read that as a completed call it
+    /// never actually observed). Never a spinner that turns forever (pi
+    /// `resolveToolVisualState`).
     pub fn settle_resumed(&mut self) {
-        if let RowStatus::Running { .. } = self.status {
-            if self.ended_ms.is_some() {
-                self.status = RowStatus::Ok { duration_ms: 0 };
-            } else {
-                self.status = RowStatus::Pending;
-            }
+        if matches!(self.status, RowStatus::Running { .. }) {
+            self.status = RowStatus::Pending;
         }
     }
 
@@ -118,8 +118,10 @@ pub struct ToolGroup {
 }
 
 impl ToolGroup {
-    /// `Explored 4 files · 0.8s` — files = distinct paths in the rows' arg
-    /// text (for Read/Grep/Find), otherwise the row count.
+    /// `Explored 4 calls · 0.8s` — `n` is the row count (not distinct file
+    /// paths) and the duration is the sum of each row's `Ok`/`Err`
+    /// duration; the ` · duration` suffix is omitted while that sum is
+    /// still zero (no row has finished yet).
     #[must_use]
     pub fn headline(&self) -> String {
         let n = self.rows.len();
@@ -176,6 +178,18 @@ mod tests {
     fn a_resumed_row_without_a_result_is_pending_not_spinning() {
         let mut r = ToolRow::new("c1", "grep", &json!({"pattern": "x"}));
         r.status = RowStatus::Running { since_ms: 5 }; // what a naive replay would set
+        r.settle_resumed();
+        assert_eq!(r.status, RowStatus::Pending);
+    }
+
+    #[test]
+    fn a_running_row_with_ended_ms_set_still_settles_to_pending_not_a_fabricated_ok() {
+        // A resume/replay caller can set `ended_ms` directly (the field is
+        // `pub`) without ever calling `finish` with a real `ToolResult`.
+        // `settle_resumed` must not read that as "it must have succeeded".
+        let mut r = ToolRow::new("c1", "grep", &json!({"pattern": "x"}));
+        r.status = RowStatus::Running { since_ms: 5 };
+        r.ended_ms = Some(9);
         r.settle_resumed();
         assert_eq!(r.status, RowStatus::Pending);
     }
