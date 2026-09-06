@@ -50,10 +50,25 @@ impl LocalTranscription {
 ///
 /// Unlike every arm of `create_provider`, this path has no provider object
 /// with a tuned default of its own to fall back to -- it builds the client
-/// here -- so the fallback has to be named here. This is the value the path
-/// used to receive from `timeout_seconds`' since-removed serde default, kept
-/// deliberately generous: the endpoint is local, but a cold model load is not
-/// fast.
+/// here -- so the fallback has to be named here.
+///
+/// # This number is inherited, not measured
+///
+/// It is exactly what the path used to receive from `timeout_seconds`' since
+/// removed `#[serde(default)]`, carried over so that making the field an
+/// `Option` changed no behaviour here. **Nobody has timed a cold model load
+/// against a real BYO endpoint** (mlx-audio and friends) to say 120 is right;
+/// it is the incumbent, and replacing an unmeasured number with a different
+/// unmeasured number would be a behaviour change wearing a fix's clothes.
+///
+/// What would move it: a measurement of first-request latency on a cold local
+/// endpoint. Too low and a cold load is reported to the user as a failed
+/// request that would have succeeded; too high and a hung endpoint holds the
+/// turn for two minutes before saying so. An operator who has measured their
+/// own endpoint does not need this constant changed -- they set
+/// `timeout_seconds` on the `local` provider entry, or
+/// `generation_timeout_seconds` in `~/.aleph/defaults.toml`, both of which
+/// reach here through [`GenerationProviderConfig::request_timeout_secs`].
 const DEFAULT_LOCAL_VOICE_TIMEOUT_SECS: u64 = 120;
 
 /// Shared hardened client (`generation::providers::http`) honoring the entry's

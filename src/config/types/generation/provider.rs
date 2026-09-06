@@ -58,11 +58,11 @@ pub struct GenerationProviderConfig {
     pub models: Vec<String>,
 
     /// Whether this provider is enabled
-    #[serde(default = "default_enabled")]
+    #[serde(default = "aleph_protocol::providers::default_generation_enabled")]
     pub enabled: bool,
 
     /// Brand color for UI theming (hex format)
-    #[serde(default = "default_color")]
+    #[serde(default = "aleph_protocol::providers::default_generation_color")]
     pub color: String,
 
     /// Supported generation types
@@ -101,13 +101,6 @@ pub struct GenerationProviderConfig {
     pub voices_url: Option<String>,
 }
 
-const fn default_enabled() -> bool {
-    true
-}
-
-fn default_color() -> String {
-    "#808080".to_string()
-}
 
 impl Default for GenerationProviderConfig {
     fn default() -> Self {
@@ -116,8 +109,8 @@ impl Default for GenerationProviderConfig {
             api_key: None,
             base_url: None,
             models: Vec::new(),
-            enabled: true,
-            color: default_color(),
+            enabled: aleph_protocol::providers::default_generation_enabled(),
+            color: aleph_protocol::providers::default_generation_color(),
             capabilities: Vec::new(),
             timeout_seconds: None,
             defaults: GenerationDefaults::default(),
@@ -143,6 +136,16 @@ impl GenerationProviderConfig {
     /// 120. The factory therefore had to overwrite EVERY provider's tuned
     /// default in order to honour the ones that had actually asked -- an
     /// "I don't know" read as a value (判据 §8).
+    ///
+    /// # Why this stays `pub` with no caller outside `alephcore`
+    ///
+    /// P5 would narrow it to `pub(crate)`, and every call site today is in this
+    /// crate. It stays `pub` because [`Self::timeout_seconds`] is `pub`: hiding
+    /// the accessor hides it from exactly the reader who would otherwise take
+    /// the raw field and silently miss the `~/.aleph/defaults.toml` override.
+    /// Narrowing the accessor without narrowing the field it corrects does not
+    /// reduce what a caller knows -- it only removes the correct answer from
+    /// reach. Whoever narrows the field may narrow this in the same commit.
     #[must_use]
     pub fn request_timeout_secs(&self) -> Option<u64> {
         self.timeout_seconds.or_else(|| {

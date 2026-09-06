@@ -52,6 +52,71 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                 # dead backend's request count, not on the answer:
                                 # ask-and-fail-over and don't-ask read identically
 
+./qa/generation_timeout/run.sh cap        # a configured `timeout_seconds` really cuts a real
+                                          # HTTP request, asserted on the PROVIDER's connection
+                                          # (the mock records that the server hung up, and when)
+                                          # rather than on the tool's error string, which four
+                                          # unrelated failures produce identically
+./qa/generation_timeout/run.sh auto       # "unset" lets the request outlive an 8s window —
+                                          # the negative arm, asserted on a request STILL OPEN,
+                                          # not on an absent log line. It falsifies "unset
+                                          # collapsed into a short cap"; it does NOT separate
+                                          # 120s from the provider's own default (that would
+                                          # cost two minutes for one bit, and the `None` arm of
+                                          # `WithRequestTimeout` carries it in-process)
+./qa/generation_timeout/run.sh deploy     # `~/.aleph/defaults.toml`'s generation timeout still
+                                          # reaches the client after the round MOVED that
+                                          # override out of `#[serde(default = …)]`. Nothing
+                                          # else in the suite watches that wire
+./qa/generation_timeout/run.sh precedence # an explicit provider timeout outranks the deployment
+                                          # override — without it, `deploy` green is also
+                                          # consistent with "the override always wins"
+./qa/generation_timeout/run.sh panel      # boot + hold: the Auto checkbox in a real browser.
+                                          # `just wasm` proves the form COMPILES to wasm32; only
+                                          # this shows the checked box omits the field from the
+                                          # payload and the key leaves config.toml
+#   DRIVEN 2026-09-06 (chrome-devtools MCP, all four steps): cold boot renders `超时: 自动` with
+#   the box checked and the slider disabled (its DOM value 60 is `unwrap_or(60)`'s parking spot,
+#   NOT a saved value — read the label, not the slider). Unchecking enables it; 180 + Save put
+#   `"timeout_seconds":180` on the wire and `timeout_seconds = 180` in config.toml. Re-checking
+#   Auto + Save sent a frame with NO `timeout_seconds` key at all (tap on
+#   `WebSocket.prototype.send`, installed via initScript before the app connects) and the key
+#   VANISHED from config.toml — not 0, not the old number. Reload comes back Auto, with the
+#   slider parked at 60 rather than the value just set (no key in config ⇒ `unwrap_or(60)`).
+#   A second pass carried the chain past config.toml to the SOCKET, both directions: saving the
+#   slider minimum (10s) then firing one `tools.invoke` produced THREE aborts at 10014/10001/
+#   10016 ms; re-checking Auto and firing the same call left it uncut — the mock held it the full
+#   60s and answered (`aborted:false, held_ms:60020`). All four boundaries between "the number a
+#   human dragged" and "what happened on the wire" are covered, with a measurement on each side.
+#   Gotcha for whoever drives this next: the page has THREE `input[type=range]` and TWO buttons
+#   reading 保存更改. Selecting either by text silently hits the wrong one (the first 保存更改
+#   belongs to 生成设置 and sends `generation_config.update`). Pick the button by nearest common
+#   ancestor with the timeout slider (depth 3, vs 7 for the settings one).
+#   MEASURED 2026-09-06 (12/12 assertions green, four phases, on a binary built from the tree
+#   it measured): `timeout_seconds` bounds each ATTEMPT, not the call. A 2s cap produced THREE
+#   aborted attempts of ~2s and a tool call that settled at ~7s, so an operator's wall-clock
+#   wait is about `timeout_seconds × attempts + backoff`. `cap`/`deploy` therefore assert the
+#   shape of EVERY attempt and never the retry count: the count is provider policy that may
+#   change, the per-attempt bound is the contract. The Panel's seconds field does not say any of
+#   this — an unfixed labelling question, not a defect in the knob.
+#
+#   FOUR harness lies were fixed before these greens counted, and every one of them made a
+#   WORKING server look broken:
+#     1. the boot precondition grepped a `tracing::info!` the default log filter never emits —
+#        it now reads the unconditional `println!` count, whose absence really does mean zero;
+#     2. the config carried no chat provider, so the server chose simulated mode, where
+#        `tools.invoke` is a `-32099` placeholder and every phase measured the boot mode;
+#     3. `kill` does not stop a native Windows child from Git Bash, so runs leaked servers that
+#        the next run then contended with — cleanup now uses `taskkill //F //T`;
+#     4. **the binary was not the code.** With `SKIP_BUILD=1`, six consecutive runs reported
+#        `cap`/`deploy` RED — no request ever cut — against a stale `target/debug/aleph-server`.
+#        Rebuilding, changing nothing else, turned all four phases green. That stale binary also
+#        produced two convincing phantom "product defects" (a hot-reload watcher on the real
+#        `~/.aleph`, and an unset timeout written back as `120`), neither of which reproduces on
+#        a current build — 120 was the serde default this feature's own round had REMOVED, so
+#        the old binary was reporting its own age. The fixture now refuses to run when any
+#        source file is newer than the binary (`HARNESS_STALE_BINARY`).
+
 ./qa/announce/run.sh outlive     # a background bash job outlives its run -> a fresh run is driven
 ./qa/announce/run.sh collected   # the model collected it itself -> no turn is spent
 ./qa/announce/run.sh midrun      # the run is still alive -> absorbed as steering, ONE run

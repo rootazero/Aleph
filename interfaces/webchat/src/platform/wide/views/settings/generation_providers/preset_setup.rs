@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{GenerationProviderConfig, GenerationProvidersApi};
+use crate::api::{GenerationProviderConfigJson, GenerationProvidersApi};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::i18n::{t, t_string, use_i18n};
@@ -41,8 +41,8 @@ pub(super) fn PresetSetupPanel(
         let provider_type = provider_type.clone();
         let color = color;
         let capabilities = capabilities;
-        move || -> GenerationProviderConfig {
-            GenerationProviderConfig {
+        move || -> GenerationProviderConfigJson {
+            GenerationProviderConfigJson {
                 provider_type: provider_type.clone(),
                 api_key: {
                     let key = api_key.get();
@@ -52,7 +52,6 @@ pub(super) fn PresetSetupPanel(
                         Some(key)
                     }
                 },
-                secret_name: None,
                 base_url: {
                     let url = base_url.get();
                     if url.is_empty() {
@@ -76,7 +75,7 @@ pub(super) fn PresetSetupPanel(
                 },
                 enabled: true,
                 color: color.clone(),
-                capabilities: capabilities.clone(),
+                capabilities: capabilities.iter().map(|c| c.as_str().to_string()).collect(),
                 // A preset knows the endpoint, not the operator's patience.
                 // `None` lets the provider's own tuned default stand instead of
                 // pinning every preset-created provider to a generic 120 s.
@@ -96,7 +95,6 @@ pub(super) fn PresetSetupPanel(
             let ptype = provider_type.clone();
             let key = api_key.get();
             let url = base_url.get();
-            let mdl = form_model.get();
 
             spawn_local(async move {
                 match GenerationProvidersApi::test_connection(
@@ -104,7 +102,6 @@ pub(super) fn PresetSetupPanel(
                     &ptype,
                     if key.is_empty() { None } else { Some(key) },
                     if url.is_empty() { None } else { Some(url) },
-                    if mdl.is_empty() { None } else { Some(mdl) },
                     None, // New provider — no name yet
                 )
                 .await

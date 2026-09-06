@@ -28,14 +28,14 @@
 
 use leptos::prelude::*;
 
-use crate::api::GenerationProviderEntry;
+use crate::api::GenerationProviderRow;
 use crate::components::preset_picker::{PickerRow, PresetPicker};
 use crate::components::provider_badge::BadgeState;
 use crate::generation::GenerationType;
 use crate::preset_providers::{PresetCatalog, PresetProvider};
 
 /// True when the operator has a config section for this preset id.
-pub(super) fn is_configured(providers: &[GenerationProviderEntry], id: &str) -> bool {
+pub(super) fn is_configured(providers: &[GenerationProviderRow], id: &str) -> bool {
     providers.iter().any(|p| p.name == id)
 }
 
@@ -48,7 +48,7 @@ pub(super) fn is_configured(providers: &[GenerationProviderEntry], id: &str) -> 
 /// again to be set up again.
 pub(super) fn listed(
     catalog: &PresetCatalog,
-    providers: &[GenerationProviderEntry],
+    providers: &[GenerationProviderRow],
     category: GenerationType,
 ) -> Vec<PresetProvider> {
     catalog
@@ -65,7 +65,7 @@ pub(super) fn listed(
 /// disclosure is still browsing.
 pub(super) fn offerable(
     catalog: &PresetCatalog,
-    providers: &[GenerationProviderEntry],
+    providers: &[GenerationProviderRow],
     category: GenerationType,
     query: &str,
 ) -> Vec<PickerRow> {
@@ -96,7 +96,7 @@ pub(super) fn offerable(
 /// unconfigured one opens the setup form under the `__preset__` key the right
 /// pane routes on. Identical to what clicking a card in the panel does — the
 /// picker selects, it never writes config.
-pub(super) fn chosen_target(providers: &[GenerationProviderEntry], id: &str) -> String {
+pub(super) fn chosen_target(providers: &[GenerationProviderRow], id: &str) -> String {
     if is_configured(providers, id) {
         id.to_string()
     } else {
@@ -108,7 +108,7 @@ pub(super) fn chosen_target(providers: &[GenerationProviderEntry], id: &str) -> 
 #[component]
 pub(super) fn CategoryPicker(
     catalog: ReadSignal<PresetCatalog>,
-    providers: ReadSignal<Vec<GenerationProviderEntry>>,
+    providers: ReadSignal<Vec<GenerationProviderRow>>,
     category: ReadSignal<GenerationType>,
     selected: WriteSignal<Option<String>>,
     show_add_form: WriteSignal<bool>,
@@ -155,7 +155,7 @@ mod tests {
     /// serde rather than a struct literal so the fields this partition does not
     /// care about cannot go stale as the config grows. Only the ones without a
     /// serde default are spelled out.
-    fn configured(name: &str) -> GenerationProviderEntry {
+    fn configured(name: &str) -> GenerationProviderRow {
         serde_json::from_value(serde_json::json!({
             "name": name,
             "is_default_for": [],

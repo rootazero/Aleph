@@ -61,44 +61,17 @@ where
     deserializer.deserialize_any(ModelsVisitor)
 }
 
-/// Deserializer for optional models field (used by `GenerationProviderConfig`).
-/// Accepts String, Vec<String>, or null/missing. Empty vec is valid.
-pub fn deserialize_optional_models<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    struct OptionalModelsVisitor;
-
-    impl<'de> de::Visitor<'de> for OptionalModelsVisitor {
-        type Value = Vec<String>;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a string, array of strings, or null")
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Vec<String>, E> {
-            Ok(Vec::new())
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Vec<String>, E> {
-            Ok(Vec::new())
-        }
-
-        fn visit_str<E: de::Error>(self, value: &str) -> Result<Vec<String>, E> {
-            Ok(split_csv_models(value))
-        }
-
-        fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
-            let mut models = Vec::new();
-            while let Some(s) = seq.next_element::<String>()? {
-                models.extend(split_csv_models(&s));
-            }
-            Ok(models)
-        }
-    }
-
-    deserializer.deserialize_any(OptionalModelsVisitor)
-}
+/// Deserializer for the optional models field (used by
+/// `GenerationProviderConfig`). Accepts String, Vec<String>, or null/missing;
+/// an empty vec is a value, not an error.
+///
+/// Re-exported from `aleph_protocol` rather than implemented here. That same
+/// field is parsed twice — out of `config.toml` by this crate, and out of a
+/// JSON payload by `GenerationProviderConfigJson` — and the Panel is forbidden
+/// from depending on `alephcore`, so a copy on this side would be a second
+/// tolerance for one field: a value the file accepts and the wire rejects
+/// (判据 §1). The tests below still exercise it through this path.
+pub use aleph_protocol::providers::deserialize_optional_models;
 
 #[cfg(test)]
 mod tests {

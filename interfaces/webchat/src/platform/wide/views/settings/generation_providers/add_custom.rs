@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{GenerationProviderConfig, GenerationProvidersApi};
+use crate::api::{GenerationProviderConfigJson, GenerationProvidersApi};
 use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
@@ -41,8 +41,8 @@ pub(super) fn AddCustomProviderPanel(
     let (add_error, set_add_error) = signal(Option::<String>::None);
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
 
-    let build_config = move || -> GenerationProviderConfig {
-        GenerationProviderConfig {
+    let build_config = move || -> GenerationProviderConfigJson {
+        GenerationProviderConfigJson {
             provider_type: provider_type.get(),
             api_key: {
                 let key = api_key.get();
@@ -52,7 +52,6 @@ pub(super) fn AddCustomProviderPanel(
                     Some(key)
                 }
             },
-            secret_name: None,
             base_url: {
                 let url = base_url.get();
                 let url = extract_base_url(&url);
@@ -83,7 +82,7 @@ pub(super) fn AddCustomProviderPanel(
             },
             enabled: true,
             color: "#808080".to_string(),
-            capabilities: vec![category],
+            capabilities: vec![category.as_str().to_string()],
             timeout_seconds: timeout.get(),
             verified: false,
             defaults: Default::default(),
@@ -99,10 +98,9 @@ pub(super) fn AddCustomProviderPanel(
         let ptype = config.provider_type.clone();
         let key = config.api_key.clone();
         let url = config.base_url.clone();
-        let mdl = config.models.first().cloned();
 
         spawn_local(async move {
-            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl, None).await
+            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, None).await
             {
                 Ok(result) => {
                     set_testing.set(false);
@@ -273,7 +271,7 @@ pub(super) fn AddCustomProviderPanel(
                     <label class="flex items-center gap-2 cursor-pointer mb-2">
                         <input
                             type="checkbox"
-                            checked=move || timeout.get().is_none()
+                            prop:checked=move || timeout.get().is_none()
                             on:change=move |ev| {
                                 timeout.set(if event_target_checked(&ev) { None } else { Some(60) });
                             }
@@ -286,7 +284,7 @@ pub(super) fn AddCustomProviderPanel(
                     <input
                         type="range" min="10" max="300" step="10"
                         disabled=move || timeout.get().is_none()
-                        value=move || timeout.get().unwrap_or(60)
+                        prop:value=move || timeout.get().unwrap_or(60)
                         on:input=move |ev| {
                             if let Ok(v) = event_target_value(&ev).parse::<u64>() { timeout.set(Some(v)); }
                         }
