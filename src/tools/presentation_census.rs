@@ -4,7 +4,10 @@
 //!    attach `_presentation` when run against a fixture — and every fixture
 //!    must name a registered tool that answers true. A new mutating tool
 //!    without a fixture is RED, a fixture for a tool that stopped mutating is
-//!    RED. Derived from the registry, not from a list of names (判据 §3/§5).
+//!    RED. The mutating set is derived by scanning the trait impls that own
+//!    `mutates_file_content`, not from a list of names (判据 §3/§5) — see
+//!    "Why (1) is a source scan" below. The registry is consulted only to
+//!    execute the fixtures and to cross-check the names the scan read.
 //! 2. Every registered builtin renders a non-blank row label through the REAL
 //!    `shared_ui_logic::transcript::display_name` — called, not re-derived
 //!    here (判据 §1/§10: a scraper of that table's source is a second
@@ -67,6 +70,13 @@
 //! invisible otherwise), and the excluded file's own raw occurrence count is
 //! pinned to [`SELF_OCCURRENCE_COUNT`] so a real override added here later
 //! cannot hide behind the exemption.
+//!
+//! Both scanners also take nothing from files their PARENT declares
+//! `#[cfg(test)] mod <stem>;` — those carry no `#[cfg(test)]` of their own, so
+//! a text-only partition hands back the whole file as production and the
+//! census scans test doubles as though they shipped. That skip is counted and
+//! asserted `> 0` (not pinned to a number, which would be bumped on reflex);
+//! see [`production_of`].
 
 use std::path::Path;
 
@@ -81,9 +91,10 @@ const PRESENTATION_FIXTURES: &[(&str, fn(&Path) -> Value)] = &[
         std::fs::write(&p, "alpha\nbeta\n").unwrap();
         json!({"file_path": p.to_string_lossy(), "old_string": "beta", "new_string": "BETA"})
     }),
-    ("file_write", |dir| {
-        json!({"file_path": dir.join("w.txt").to_string_lossy(), "content": "new\n"})
-    }),
+    (
+        "file_write",
+        |dir| json!({"file_path": dir.join("w.txt").to_string_lossy(), "content": "new\n"}),
+    ),
     ("apply_patch", |dir| {
         let p = dir.join("p.txt");
         std::fs::write(&p, "one\ntwo\n").unwrap();
@@ -129,12 +140,59 @@ async fn registry() -> crate::executor::BuiltinToolRegistry {
 // `mutates_file_content` source scan
 // =============================================================================
 
+/// The production text of one walked file, and whether the walk took nothing
+/// from it because its PARENT declares it `#[cfg(test)] mod <stem>;`.
+///
+/// Shared by both scanners so they cannot disagree about what counts as
+/// production. `production_text` is the path-aware helper
+/// [`crate::utils::source_scan`] documents as the one a directory-walking
+/// census should call: `production_prefix` partitions on an `#[cfg(test)]`
+/// *inside* the file, so a whole-file test module — which carries none, its
+/// parent applies one — came back as 100% production and was scanned as if it
+/// shipped. `src/tools/server/tests.rs` already holds an
+/// `impl AlephToolDyn for DynamicMockTool`, one method away from making this
+/// census panic while pointing at a test double.
+///
+/// The skip flag asks the owning predicate, `declared_as_a_test_module` — the
+/// same one `production_text` consults — rather than inferring the answer from
+/// the returned text. An earlier version of this function inferred it: empty
+/// text, non-blank file, and no `#[cfg(test)]` marker anywhere in the source.
+/// That reasoning was sound and the flag it produced had no false positives,
+/// but it was a SECOND reading of the marker that decides where test code
+/// begins, free to drift from the first — and `source_scan`'s own
+/// `no_module_hand_rolls_the_cfg_test_prefix_cut` caught it as exactly that.
+/// It was also strictly worse: it missed a file that is parent-declared AND
+/// carries a `#[cfg(test)]` of its own (`src/gateway/runtime/tests.rs` is one),
+/// so the count it produced was silently low. Asking the owner is smaller,
+/// exact, and leaves one author for the question.
+///
+/// The two calls read the same file's parent twice, which is the price of not
+/// re-deriving `production_text`'s own branch here. It is a test-only walk;
+/// correctness of the count outranks one small extra read per file.
+///
+/// The guard this census relies on for `production_text` staying path-aware is
+/// `utils::source_scan::tests::test_text_sees_a_whole_file_test_module_that_cfg_test_portion_cannot`
+/// — named here because it lives in the other file, so someone refactoring
+/// `source_scan` who greps for its dependants finds this call site instead of
+/// reading it as a test with no beneficiary.
+fn production_of(rel_path: &str, raw: &str) -> (String, bool) {
+    let path = Path::new(rel_path);
+    let parent_declared = crate::utils::source_scan::declared_as_a_test_module(path);
+    (
+        crate::utils::source_scan::production_text(path, raw),
+        parent_declared,
+    )
+}
+
 /// One `fn mutates_file_content` occurrence, classified by the block it sits in.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 enum Occurrence {
     /// `impl AlephTool for X` or `impl AlephToolDyn for X` (`X` a concrete,
     /// non-generic type) — an actual tool's own answer.
-    ConcreteOverride { tool_name: String, returns_true: bool },
+    ConcreteOverride {
+        tool_name: String,
+        returns_true: bool,
+    },
     /// `impl<T: AlephTool> AlephToolDyn for T` (or any other generic/blanket
     /// impl) — forwards to something else, names no tool of its own.
     Blanket,
@@ -154,6 +212,14 @@ struct Scan {
     /// skipped something else — or nothing at all, if `SELF_PATH` is a typo
     /// (判据 §1, §3).
     excluded: usize,
+    /// How many files the walk took nothing from because their parent declares
+    /// them a test module (see [`production_of`]). Asserted `> 0` rather than
+    /// pinned to a number: the failure that matters is the mechanism silently
+    /// ceasing to match, and an exact count would go red on every new test
+    /// module anywhere in the crate until someone bumped it on reflex — the
+    /// shape [`SELF_OCCURRENCE_COUNT`] can afford only because it is pinned to
+    /// one named file.
+    test_modules: usize,
 }
 
 /// Every `fn mutates_file_content` occurrence under `root`, classified —
@@ -172,26 +238,44 @@ struct Scan {
 /// the assertions that turn "the scan found nothing odd" into "the scan
 /// looked at something and can prove it."
 fn scan_mutates_file_content(root: &Path) -> Scan {
-    let mut out = Scan { occurrences: Vec::new(), excluded: 0 };
+    let mut out = Scan {
+        occurrences: Vec::new(),
+        excluded: 0,
+        test_modules: 0,
+    };
     for (rel_path, raw) in crate::utils::source_scan::rust_sources_under(root) {
         if rel_path == SELF_PATH {
             out.excluded += 1;
             continue;
         }
-        let text = crate::utils::source_scan::strip_comment_lines(
-            &crate::utils::source_scan::production_prefix(&raw),
-        );
+        let (production, parent_declared) = production_of(&rel_path, &raw);
+        if parent_declared {
+            out.test_modules += 1;
+        }
+        let text = crate::utils::source_scan::strip_comment_lines(&production);
         for (idx, _) in text.match_indices("fn mutates_file_content") {
-            out.occurrences.push(classify_occurrence(&rel_path, &text, idx));
+            out.occurrences
+                .push(classify_occurrence(&rel_path, &text, idx));
         }
     }
     out
 }
 
-/// Raw occurrence count of the scan needle in `rel_path`'s own production
-/// text, bypassing classification entirely. Used only to keep
-/// [`SELF_OCCURRENCE_COUNT`] honest — never by [`scan_mutates_file_content`]
-/// itself, which excludes the file outright.
+/// Raw occurrence count of the scan needle in `rel_path`'s own text, bypassing
+/// classification entirely. Used only to keep [`SELF_OCCURRENCE_COUNT`] honest
+/// — never by [`scan_mutates_file_content`], which excludes the file outright.
+///
+/// # Why this one keeps `production_prefix` while both scanners moved to `production_text`
+///
+/// Do not "unify" the three call sites. This module is itself declared
+/// `#[cfg(test)] mod presentation_census;` by `src/tools/mod.rs`, so it IS a
+/// parent-declared test module: `production_text` answers the empty string for
+/// it, every time, forever. Ask it here and the needle count is 0 by
+/// construction, [`SELF_OCCURRENCE_COUNT`] has to become 0 to match, and the
+/// fourth self-check turns into a predicate that cannot go red (判据 §2) —
+/// exactly the guard it exists to be. The scanners want "what ships"; this
+/// wants "what is written in this one file", and those are different
+/// questions that happen to share a helper.
 fn raw_occurrence_count(root: &Path, rel_path: &str) -> Option<usize> {
     crate::utils::source_scan::rust_sources_under(root)
         .into_iter()
@@ -204,7 +288,10 @@ fn raw_occurrence_count(root: &Path, rel_path: &str) -> Option<usize> {
         })
 }
 
-/// Where marker `search` for is nearest to (and before) `idx`, if at all.
+/// Byte offset of the last occurrence of `needle` in `head`, if any.
+///
+/// `head` is the text BEFORE the occurrence being classified, so "last in
+/// `head`" is "nearest preceding candidate".
 fn nearest_preceding(head: &str, needle: &str) -> Option<usize> {
     head.rfind(needle)
 }
@@ -230,7 +317,10 @@ fn classify_occurrence(rel_path: &str, text: &str, idx: usize) -> Occurrence {
     if let Some(p) = nearest_preceding(head, "trait AlephTool") {
         candidates.push((p, Marker::TraitDecl));
     }
-    // Closest (largest byte offset) first.
+    // Ascending by offset — the `pop()` below is what takes the closest
+    // (largest offset) candidate first. Do not "fix" this sort to descending
+    // to match the walk order: `pop()` would then hand back the FURTHEST
+    // header first and the classifier would invert.
     candidates.sort_by_key(|(p, _)| *p);
 
     while let Some((start, marker)) = candidates.pop() {
@@ -260,7 +350,10 @@ fn classify_occurrence(rel_path: &str, text: &str, idx: usize) -> Occurrence {
                          census cannot name the tool this override belongs to"
                     )
                 });
-                Occurrence::ConcreteOverride { tool_name, returns_true }
+                Occurrence::ConcreteOverride {
+                    tool_name,
+                    returns_true,
+                }
             }
         };
     }
@@ -415,20 +508,40 @@ fn census_finds_the_known_overrides_and_confines_them_to_builtin_tools() {
          puts the unrecognised-shape panic back, and one that matches more than intended \
          blinds the census to a real override"
     );
+    // Narrow by construction: every rel_path in this walk begins
+    // `src/builtin_tools/`, and SELF_PATH does not, so only moving this module
+    // under that root can turn it red. Kept as the statement of that fact, not
+    // as a live "and nothing else" check — `whole_excluded == 1` above is the
+    // one that can catch a SELF_PATH typo.
     assert_eq!(
         root_excluded, 0,
         "the src/builtin_tools/-scoped scan excluded {root_excluded} file(s), expected 0 \
-         — this module does not live under that root, so anything skipped there means \
-         SELF_PATH is matching a file it was never meant to skip"
+         — this module does not live under that root, so SELF_PATH now matches a file \
+         inside it: either this module moved, or SELF_PATH was edited to something that \
+         matches one"
+    );
+
+    // The path-aware skip fired. `> 0` rather than a pinned count on purpose:
+    // what must never silently change is that whole-file test modules are
+    // recognised AT ALL, and a pinned number would go red on every new test
+    // module in the crate until someone bumped it without looking.
+    let whole_test_modules = whole_scan.test_modules;
+    assert!(
+        whole_test_modules > 0,
+        "the whole-crate scan took nothing from 0 parent-declared test modules — \
+         source_scan::production_text has stopped recognising `#[cfg(test)] mod <stem>;` \
+         files, so this census is once again scanning test doubles as production (an \
+         `impl AlephToolDyn` in a test module can make it panic while pointing at a mock)"
     );
 
     let root_true: Vec<&str> = root_scan
         .occurrences
         .iter()
         .filter_map(|o| match o {
-            Occurrence::ConcreteOverride { tool_name, returns_true: true } => {
-                Some(tool_name.as_str())
-            }
+            Occurrence::ConcreteOverride {
+                tool_name,
+                returns_true: true,
+            } => Some(tool_name.as_str()),
             _ => None,
         })
         .collect();
@@ -467,8 +580,11 @@ fn census_finds_the_known_overrides_and_confines_them_to_builtin_tools() {
          (AlephTool::mutates_file_content, AlephToolDyn::mutates_file_content) — the \
          trait shape changed, update this census's classifier"
     );
-    let blankets =
-        whole_scan.occurrences.iter().filter(|o| matches!(o, Occurrence::Blanket)).count();
+    let blankets = whole_scan
+        .occurrences
+        .iter()
+        .filter(|o| matches!(o, Occurrence::Blanket))
+        .count();
     assert_eq!(
         blankets, 1,
         "expected exactly the one blanket `impl<T: AlephTool> AlephToolDyn for T` \
@@ -487,7 +603,10 @@ async fn every_content_mutating_tool_attaches_a_presentation_and_every_fixture_n
         .occurrences
         .into_iter()
         .filter_map(|o| match o {
-            Occurrence::ConcreteOverride { tool_name, returns_true: true } => Some(tool_name),
+            Occurrence::ConcreteOverride {
+                tool_name,
+                returns_true: true,
+            } => Some(tool_name),
             _ => None,
         })
         .collect();
@@ -499,9 +618,29 @@ async fn every_content_mutating_tool_attaches_a_presentation_and_every_fixture_n
     // The scan reads each tool's own `NAME` const; cross-check it against the
     // registry's dispatch key so a `NAME` typo or drift is caught here rather
     // than the fixture below simply failing to find the tool.
+    //
+    // Yes, this is registry-derived, and yes, that is the shape that misfired
+    // in census 2's ghosts direction. It is safe HERE for a reason that does
+    // not transfer: this census does not merely ask whether a name exists, it
+    // EXECUTES the tool a few lines below through `reg.execute_tool`. Census 1
+    // is registry-coupled by necessity — there is no source-derived way to run
+    // a tool — so this assertion adds no exposure the fixture loop does not
+    // already have; it only converts a confusing downstream failure ("fixture
+    // failed: unknown tool") into a clear upstream one. The ghosts direction
+    // had a choice and took the source-derived side because it only needed to
+    // know a name was declared.
+    //
+    // What this DOES mean: if a future content-mutating tool is config-gated
+    // the way `memory_search` and `note_manage` are, this goes red about a
+    // fixture setting. The fix then is to widen `registry()`'s config so the
+    // tool is present to be executed — not to weaken this assertion, which
+    // would leave the fixture loop failing anyway with a worse message.
     let registered: std::collections::HashSet<String> =
         reg.unified_tools().map(|t| t.name.clone()).collect();
-    let unregistered: Vec<&String> = mutating.iter().filter(|n| !registered.contains(*n)).collect();
+    let unregistered: Vec<&String> = mutating
+        .iter()
+        .filter(|n| !registered.contains(*n))
+        .collect();
     assert!(
         unregistered.is_empty(),
         "tool(s) whose own NAME const claims mutates_file_content=true are not registered \
@@ -533,6 +672,13 @@ async fn every_content_mutating_tool_attaches_a_presentation_and_every_fixture_n
         // `FsScope` (see the fixture's own comment); `file_edit`/`file_write`
         // pass absolute paths, which resolve unaffected by any scope. Scoping
         // every fixture uniformly is simpler than special-casing one.
+        //
+        // `FsScope` and not `std::env::set_current_dir`: the scope is a
+        // `tokio::task_local!` (`src/tools/fs_scope.rs:78`), so it is visible
+        // only to this future. The CWD is per-PROCESS, and `cargo test` runs
+        // these tests in threads of one process — changing it here would
+        // reach into every other test running concurrently. Never swap this
+        // for a CWD change.
         let scope = crate::tools::fs_scope::FsScope::workspace(dir.path().to_path_buf());
         let out = crate::tools::fs_scope::with_fs_scope(Some(scope), reg.execute_tool(name, args))
             .await
@@ -563,10 +709,17 @@ async fn every_content_mutating_tool_attaches_a_presentation_and_every_fixture_n
 /// appearing somewhere under `src/` — that is a finding to investigate, not a
 /// probe to delete.
 ///
-/// Note this is an array-valued const, so [`scan_const_strings`] does not
-/// collect it: the value after `=` is `&[`, not a string literal. Were that
-/// ever to change, the probes below would go RED (the spellings would resolve
-/// — to this very declaration), never silently green.
+/// Two independent reasons this declaration cannot satisfy its own probe.
+/// It is array-valued, so [`parse_const_string`] rejects it (the text after
+/// `=` is `&[`, not a string literal); and this whole file is a
+/// parent-declared test module (`#[cfg(test)] mod presentation_census;` in
+/// `src/tools/mod.rs`), so [`production_of`] hands the scan nothing from it in
+/// the first place. The second reason arrived with the path-aware scan and
+/// supersedes the first: even a plain `const X: &str = "shell_exec";` written
+/// here would now go unseen, so do not read this probe as guarding against a
+/// spelling revived *inside this file* — it guards against one revived in
+/// production code, which is the only place it could mislead a reader of
+/// `DISPLAY_NAMES`.
 const DEAD_SPELLINGS: &[&str] = &["shell_exec", "web_search"];
 
 /// Inputs that `display_name` must render BLANK — the falsification probe for
@@ -608,11 +761,24 @@ struct ConstString {
     file: String,
 }
 
+/// One [`scan_const_strings`] walk.
+struct ConstScan {
+    consts: Vec<ConstString>,
+    /// Files the walk took nothing from because their parent declares them a
+    /// test module. Same meaning, and the same `> 0` treatment, as
+    /// [`Scan::test_modules`].
+    test_modules: usize,
+}
+
 /// Every `const <IDENT>: <ty> = "<literal>";` under `root`, through the same
 /// pipeline the `mutates_file_content` scan uses (`rust_sources_under` +
-/// `production_prefix` + `strip_comment_lines`) — so a name that appears only
-/// in a doc comment or only inside a `#[cfg(test)]` item does not count as a
-/// declaration.
+/// [`production_of`] + `strip_comment_lines`) — so a name that appears only in
+/// a doc comment, only inside a `#[cfg(test)]` item, or only in a file whose
+/// parent declares it `#[cfg(test)] mod <stem>;` does not count as a
+/// declaration. That third case is not free: it needs the path-aware
+/// `production_text`, and asking `production_prefix` instead collected test
+/// fixtures such as `src/builtin_tools/desktop/tests.rs`'s `const SECRET` as
+/// though they were production.
 ///
 /// # Why the ghosts direction reads source rather than a registry instance
 ///
@@ -635,16 +801,21 @@ struct ConstString {
 /// still not resolve. Escaped quotes inside a value are not handled (the value
 /// would be truncated at the escape) — no tool name contains one, and the
 /// failure direction is a missing entry, never a fabricated one.
-fn scan_const_strings(root: &Path) -> Vec<ConstString> {
+fn scan_const_strings(root: &Path) -> ConstScan {
     const KEYWORD: &str = "const ";
-    let mut out = Vec::new();
+    let mut out = ConstScan {
+        consts: Vec::new(),
+        test_modules: 0,
+    };
     for (rel_path, raw) in crate::utils::source_scan::rust_sources_under(root) {
-        let text = crate::utils::source_scan::strip_comment_lines(
-            &crate::utils::source_scan::production_prefix(&raw),
-        );
+        let (production, parent_declared) = production_of(&rel_path, &raw);
+        if parent_declared {
+            out.test_modules += 1;
+        }
+        let text = crate::utils::source_scan::strip_comment_lines(&production);
         for (idx, _) in text.match_indices(KEYWORD) {
             if let Some(decl) = parse_const_string(&rel_path, &text[idx + KEYWORD.len()..]) {
-                out.push(decl);
+                out.consts.push(decl);
             }
         }
     }
@@ -678,6 +849,94 @@ fn parse_const_string(file: &str, after: &str) -> Option<ConstString> {
         value: literal[..end].to_string(),
         file: file.to_string(),
     })
+}
+
+/// [`parse_const_string`] falsified directly, in both directions.
+///
+/// The two live probes around it are asymmetric: an under-match turns `ghosts`
+/// red with the lost key named, so that direction is well covered. An
+/// OVER-match is not — a spurious `ConstString` can only ever help a key
+/// resolve, nothing bounds the collection's size or shape, and
+/// [`DEAD_SPELLINGS`] notices only if the over-match happens to produce one of
+/// two exact values out of an unbounded space. So the parser is the one thing
+/// in this module whose correctness otherwise rests on an argument.
+///
+/// Each rejected case is a shape that reaches the parser in this repo today,
+/// not an invented one: `const fn` (`fs_scope.rs:53`), an initializer-less
+/// associated const (`tools/traits.rs`), an array-typed const whose `[u8; 4]`
+/// puts a `;` before the `=`, and a non-literal initializer.
+#[test]
+fn parse_const_string_accepts_the_two_tool_name_shapes_and_rejects_the_rest() {
+    let parse = |after: &str| parse_const_string("f.rs", after).map(|c| (c.ident, c.value));
+
+    // Accepted: the two shapes tool names are actually written in.
+    assert_eq!(
+        parse("NAME: &'static str = \"file_read\";"),
+        Some(("NAME".to_string(), "file_read".to_string())),
+        "an associated `NAME` const is the shape most builtins use"
+    );
+    assert_eq!(
+        parse("SUBAGENT_TOOL_NAME: &str = \"subagent\";"),
+        Some(("SUBAGENT_TOOL_NAME".to_string(), "subagent".to_string())),
+        "a free const naming a tool is the shape `src/agents/subagent_tool` uses"
+    );
+
+    // Rejected: shapes that must not contribute a tool name.
+    assert_eq!(
+        parse("fn workspace(base: PathBuf) -> Self {"),
+        None,
+        "`const fn`"
+    );
+    // Followed by real text, so this exercises the `;`-before-`=` guard rather
+    // than the trivial "no `=` anywhere" path: in a real file the parser sees
+    // the rest of the source after the declaration, and the next `=` belongs
+    // to some later statement.
+    assert_eq!(
+        parse(
+            "NAME: &'static str;\n    fn name(&self) -> &str { Self::NAME }\n\
+               const OTHER: &str = \"stolen\";"
+        ),
+        None,
+        "initializer-less associated const must not capture a later statement's literal"
+    );
+    assert_eq!(
+        parse("BUF: [u8; 4] = [0; 4];"),
+        None,
+        "array type, and a `;` before the `=`"
+    );
+    assert_eq!(parse("COUNT: usize = 7;"), None, "non-string initializer");
+    assert_eq!(
+        parse("LIST: &[&str] = &[\"a\"];"),
+        None,
+        "array-valued — the probe consts"
+    );
+    assert_eq!(
+        parse("X: &str = OTHER;"),
+        None,
+        "initialised from another const, not a literal"
+    );
+
+    // Boundaries of the literal itself.
+    assert_eq!(
+        parse("X: &str = \"\";").map(|(_, v)| v),
+        Some(String::new()),
+        "an empty literal parses as an empty value rather than failing — it matches no \
+         DISPLAY_NAMES key, since a blank key is rejected separately"
+    );
+    assert_eq!(
+        parse("X: &str = \"a\\\"b\";").map(|(_, v)| v),
+        Some("a\\".to_string()),
+        "a value containing an escaped quote TRUNCATES at that quote, keeping the \
+         backslash. Pinned as known behaviour, not endorsed: no tool name contains one, \
+         and the failure direction is a value that matches no key (a false ghost, which \
+         is red) rather than a fabricated match"
+    );
+    assert_eq!(
+        parse("X: &str = r\"y\";"),
+        None,
+        "a raw string is not parsed — same safe direction: it can only fail to resolve a \
+         key, never invent one"
+    );
 }
 
 /// Asserted against the REAL table and the REAL lookup, both called from the
@@ -733,8 +992,11 @@ async fn every_registered_tool_resolves_to_a_display_label() {
     // lookup is a `find`, so only the first copy can ever render, and an
     // edit to any later one changes nothing while looking like it did.
     let mut seen = std::collections::HashSet::new();
-    let duplicates: Vec<&str> =
-        DISPLAY_NAMES.iter().map(|(n, _)| *n).filter(|n| !seen.insert(*n)).collect();
+    let duplicates: Vec<&str> = DISPLAY_NAMES
+        .iter()
+        .map(|(n, _)| *n)
+        .filter(|n| !seen.insert(*n))
+        .collect();
     assert!(
         duplicates.is_empty(),
         "DISPLAY_NAMES has duplicate key(s): {duplicates:?} — the lookup is a `find`, so \
@@ -749,11 +1011,25 @@ async fn every_registered_tool_resolves_to_a_display_label() {
     // declared. Asking a `BuiltinToolConfig::default()` instance instead made
     // this fire on `memory_search` / `note_manage` / `tool_search` /
     // `subagent` — four live tools — which is a misfire, not a finding.
-    let consts = scan_const_strings(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"));
+    let scan = scan_const_strings(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"));
+    assert!(
+        scan.test_modules > 0,
+        "the const scan took nothing from 0 parent-declared test modules — \
+         source_scan::production_text has stopped recognising `#[cfg(test)] mod <stem>;` \
+         files, so a DISPLAY_NAMES key can now be kept alive by a const in a test fixture"
+    );
+
+    // One relation, used by the check and by its probe below — the same
+    // discipline `renders_blank` applies to direction B. Two spellings of
+    // "does this value resolve" would be free to drift, and then the probe
+    // would be falsifying something other than what the check asserts
+    // (判据 §9).
+    let resolves = |key: &str| scan.consts.iter().any(|c| c.value == key);
+
     let ghosts: Vec<&str> = DISPLAY_NAMES
         .iter()
         .map(|(n, _)| *n)
-        .filter(|key| !consts.iter().any(|c| c.value == *key))
+        .filter(|key| !resolves(key))
         .collect();
     // Asserted BEFORE the negative probes on purpose: `consts` is the input to
     // both, so a broken walk that returned nothing would make the probes pass
@@ -768,18 +1044,27 @@ async fn every_registered_tool_resolves_to_a_display_label() {
 
     // ---- Direction A, falsified. Without these, the rewrite above would be a
     // predicate nobody has ever seen go red.
-    let resolved_dead: Vec<String> = consts
+    let resolved_dead: Vec<&str> = DEAD_SPELLINGS
         .iter()
-        .filter(|c| DEAD_SPELLINGS.contains(&c.value.as_str()))
-        .map(|c| format!("`{}` declared as `{}` in {}", c.value, c.ident, c.file))
+        .copied()
+        .filter(|dead| resolves(dead))
         .collect();
-    assert!(
-        resolved_dead.is_empty(),
-        "a DEAD_SPELLINGS probe resolved: {resolved_dead:?} — these are the spellings the \
-         ghosts direction caught in Task 4 (the real names are `bash` and `search`). If a \
-         legacy alias const has appeared, report it and decide whether the probe or the \
-         alias is wrong; do not just drop the probe"
-    );
+    if !resolved_dead.is_empty() {
+        // Only on failure: name the declarations, so the report is actionable
+        // rather than "one exists somewhere".
+        let sites: Vec<String> = scan
+            .consts
+            .iter()
+            .filter(|c| resolved_dead.contains(&c.value.as_str()))
+            .map(|c| format!("`{}` declared as `{}` in {}", c.value, c.ident, c.file))
+            .collect();
+        panic!(
+            "a DEAD_SPELLINGS probe resolved: {sites:?} — these are the spellings the \
+             ghosts direction caught in Task 4 (the real names are `bash` and `search`). \
+             If a legacy alias const has appeared, report it and decide whether the probe \
+             or the alias is wrong; do not just drop the probe"
+        );
+    }
 
     // ---- Direction B: nothing we can name renders a blank label. Whatever
     // path a name takes — explicit entry, MCP `Server · Tool` split, or
@@ -805,7 +1090,10 @@ async fn every_registered_tool_resolves_to_a_display_label() {
     // fixture does not enable AND that has no curated label — one of the ~95
     // that take the `humanize` path.
     let registered: Vec<String> = reg.unified_tools().map(|t| t.name.clone()).collect();
-    assert!(!registered.is_empty(), "vacuity: the registry reported no tools at all");
+    assert!(
+        !registered.is_empty(),
+        "vacuity: the registry reported no tools at all"
+    );
     let mut label_inputs: Vec<&str> = registered.iter().map(String::as_str).collect();
     label_inputs.extend(DISPLAY_NAMES.iter().map(|(n, _)| *n));
     label_inputs.sort_unstable();
@@ -817,8 +1105,11 @@ async fn every_registered_tool_resolves_to_a_display_label() {
     // and `trim()` there have to be the same `trim()`.
     let renders_blank = |name: &str| display_name(name).trim().is_empty();
 
-    let blank: Vec<&str> =
-        label_inputs.iter().copied().filter(|name| renders_blank(name)).collect();
+    let blank: Vec<&str> = label_inputs
+        .iter()
+        .copied()
+        .filter(|name| renders_blank(name))
+        .collect();
     assert!(
         blank.is_empty(),
         "name(s) whose display_name() renders blank — the row would carry no label at \
@@ -830,8 +1121,11 @@ async fn every_registered_tool_resolves_to_a_display_label() {
     // capable of producing the failure it guards against. Without it, a
     // refactor that made blank labels impossible would leave that assertion
     // permanently green and indistinguishable from a working guard (判据 §2).
-    let unfalsifiable: Vec<&str> =
-        BLANK_LABEL_PROBES.iter().copied().filter(|p| !renders_blank(p)).collect();
+    let unfalsifiable: Vec<&str> = BLANK_LABEL_PROBES
+        .iter()
+        .copied()
+        .filter(|p| !renders_blank(p))
+        .collect();
     assert!(
         unfalsifiable.is_empty(),
         "BLANK_LABEL_PROBES that no longer render blank: {unfalsifiable:?} — display_name \

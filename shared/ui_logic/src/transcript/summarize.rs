@@ -13,10 +13,19 @@ pub const ARGS_CLIP: usize = 100;
 
 /// Aleph tool name → row label. Anything not listed is humanised.
 /// The alephcore census (`presentation_census.rs`) calls this table and
-/// [`display_name`] directly and asserts: every key here names a registered
-/// tool, no key is duplicated, no half of an entry is blank, every registered
-/// tool renders a non-blank label, and every content-mutating tool has an
-/// explicit entry rather than the fallback.
+/// [`display_name`] directly and asserts: every key here is declared as some
+/// `const IDENT: ty = "<key>"` in alephcore's production source, no key is
+/// duplicated, no half of an entry is blank, nothing it can name renders a
+/// blank label, and every content-mutating tool has an explicit entry rather
+/// than the fallback.
+///
+/// Note what the first one is NOT: "names a currently-registered tool". It
+/// was, until that phrasing misfired on `memory_search`, `note_manage`,
+/// `tool_search` and `subagent` — four live tools absent from the census's own
+/// narrow fixture config, or registered by a subsystem it does not boot. A
+/// guard that cannot tell a dead key from a config setting reports on the
+/// fixture, so the check reads source instead. Do not "restore" the
+/// stronger-sounding claim; it is the one that was wrong.
 ///
 /// Keys verified against the live registry (`src/builtin_tools/`,
 /// `src/tools/tool_search.rs`, `src/agents/subagent_tool/mod.rs`) — see
