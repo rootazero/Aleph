@@ -1562,8 +1562,23 @@ async fn call_void(conn: &CdpConnection, s: &SessionId, method: &str) -> Result<
 // fail-green" claim below, which was not true until this was fixed. A permanent regression,
 // `o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal`, drives the scanner directly against
 // this exact shape. See `fixture_refs_in_test_bodies`'s own doc for the fix (string/char/raw-
-// string-aware brace counting) and its one remaining, undefended gap (a string literal, of any
-// kind, that spans multiple physical source lines).
+// string-aware brace counting).
+//
+// A THIRD fix-round correction: the class this scanner cannot handle at all — a string literal
+// (raw or plain) that spans multiple physical lines — used to be a documented-but-undefended gap,
+// claimed true only because no such literal existed yet under `crates/aleph-cdp/tests/`. That
+// claim was WRONG the moment it was checked properly: `tests/session.rs` already has one (a
+// `\`-continued assert message, lines 33-39), predating this fix entirely. A first attempt at this
+// round refused any string that fails to close on its own line — and immediately broke on exactly
+// that pre-existing, perfectly legitimate literal, which is precisely the trade the controller
+// warned against ("someone would delete the literal to appease it"). `fixture_refs_in_test_bodies`
+// now TRACKS a string or raw string across physical lines (a small `carry`/`OpenLiteral` state
+// machine) until it finds the real close, so a `\`-continued message or any other multi-line
+// literal scans correctly — and refuses only the case that is genuinely unrecoverable: a literal
+// that never closes ANYWHERE in the rest of the source. That refusal fails BY NAME — naming the
+// file and the 1-based line the literal starts on — rather than silently continuing with a scan
+// it can no longer trust. A permanent regression, `scanner_refuses_a_file_it_cannot_reliably_
+// scan`, proves the refusal still fires for the case it exists to catch.
 //
 // Known, deliberate limit (do not "fix" this — it fails SAFE, never silently green): the walk
 // below only reads TOP-LEVEL files directly under `tests/` (`tests/*.rs`), and the marker match is
@@ -1601,7 +1616,20 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
         }
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        referenced.extend(fixture_refs_in_test_bodies(&text));
+        match fixture_refs_in_test_bodies(&text) {
+            Ok(refs) => referenced.extend(refs),
+            Err(e) => panic!(
+                "{}:{}: this guard cannot reliably scan this file — a {} literal opens here and \
+                 does not close on the same physical line, and `fixture_refs_in_test_bodies` \
+                 tracks no state across lines, so it cannot tell what the file's brace structure \
+                 means past this point. This is not a ban on multi-line literals: teach the \
+                 scanner to track {} state across lines (see its own doc) before adding one here.",
+                path.display(),
+                e.line,
+                e.kind,
+                e.kind
+            ),
+        }
     }
 
     let unread: Vec<&String> = fixture_files
@@ -1614,6 +1642,28 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
          include_str!/include_bytes! inside a #[test]/#[tokio::test] body in tests/*.rs, so \
          nothing will notice when they rot: {unread:?}"
     );
+}
+
+/// The scanner refused to keep going: it reached a `"…"` or raw-string opener that never closes
+/// anywhere in the rest of the source, so it cannot tell what the file's real brace structure is
+/// past that point. `line` is 1-based and names where the literal STARTS.
+#[derive(Debug)]
+struct UnterminatedLiteral {
+    line: usize,
+    kind: &'static str,
+}
+
+/// A string or raw string that opened but did not close on the physical line where it started.
+/// `hashes: None` is a plain string; `Some(n)` is a raw string opened with `n` `#`s. Carried
+/// across lines by `fixture_refs_in_test_bodies` until the matching close is found — see that
+/// function's own doc for why this exists (a `\`-continued long message is common, real, and
+/// already present in this exact crate at the time of this fix — `tests/session.rs`'s own assert
+/// message — so refusing on "did not close on THIS line" alone would refuse a file that scans
+/// perfectly well; only a literal that never closes ANYWHERE in the rest of the source is truly
+/// unrecoverable for this heuristic).
+struct OpenLiteral {
+    start_line: usize,
+    hashes: Option<usize>,
 }
 
 /// Every `fixture!("name")` invocation and every raw `include_str!("fixtures/name")` /
@@ -1637,23 +1687,39 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
 /// running depth the way the bug above did. See `strip_line_comment` for the separate
 /// comment-vs-string-literal handling applied before this runs.
 ///
-/// Known, undefended gap, narrower than it was before this fix but not eliminated: this scanner
-/// processes one physical source LINE at a time with no state carried across lines, so a string
-/// literal — raw or plain — that itself spans multiple physical lines is not recognised as one
-/// unbroken literal; its later lines are scanned as ordinary code, and a `{`/`}` on one of them
-/// would reproduce the exact bug this fix closes for the single-line case. Acceptable today only
-/// because no multi-line string literal of any kind exists anywhere under
-/// `crates/aleph-cdp/tests/` (checked at the time of this fix), not because the gap cannot be
-/// reached — see `o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal`'s own doc for why its
-/// regression fixture is deliberately built from single-line literals only, to avoid tripping over
-/// this exact gap in a NEW way while testing the fix for the old one.
+/// A string or raw string literal CAN span multiple physical lines, and this function tracks it
+/// correctly across them via `carry`/`OpenLiteral`: a `\`-continued message (the common Rust idiom
+/// for wrapping a long string across several lines with no embedded newline) or a literal
+/// containing a real embedded newline are both followed to their actual close, with none of their
+/// content — braces included — miscounted as code in between. This is not a cosmetic nicety: a
+/// naive "refuse the moment a line ends without closing" version of this fix was tried first and
+/// broke immediately, on a literal that already existed in this exact crate before this fix
+/// (`tests/session.rs`'s own `\`-wrapped assert message) — refusing a file that scans perfectly
+/// well is exactly the failure mode the redesign avoids.
+///
+/// What genuinely cannot be told apart from a real block-structure problem is a literal that opens
+/// and then never closes ANYWHERE in the rest of the source — which, for a file that actually
+/// compiles, should not happen, but this function does not assume that and does not guess: it
+/// returns `Err(UnterminatedLiteral)` naming the 1-based line the literal STARTS on, and
+/// `every_fixture_file_under_tests_fixtures_has_a_reader` turns that into a panic naming the file
+/// too. This is not a ban on multi-line literals (a check that failed merely because one exists
+/// would misfire on every legitimate wrapped string in this crate, as the paragraph above proves
+/// it would); it is a declaration that a literal with no close anywhere is not something this
+/// heuristic can reason about, made loudly, rather than a false GREEN made silently.
+/// `scanner_refuses_a_file_it_cannot_reliably_scan` is the permanent regression proving this path
+/// fires. `o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal`'s own doc explains why ITS
+/// fake source is still built from single-line literals only — that test is about the single-line
+/// brace fix, not this refusal, and deliberately avoiding the one construction this function
+/// cannot resolve keeps the two tests independent.
 ///
 /// It is deliberately conservative in one direction only: a fixture reference that is real but
 /// sits outside this heuristic's notion of "inside a test" (the deferred limit documented on the
-/// test above, and the raw-string gap just above) is reported UNREAD, never silently accepted —
-/// fail-red, not fail-green, is the only safe direction for a guard whose entire job is catching
-/// silence.
-fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String> {
+/// test above) is reported UNREAD, never silently accepted, and a file with a literal that never
+/// closes is refused outright rather than scanned partially — fail-red or fail-closed, never
+/// fail-green, is the only safe direction for a guard whose entire job is catching silence.
+fn fixture_refs_in_test_bodies(
+    source: &str,
+) -> Result<std::collections::HashSet<String>, UnterminatedLiteral> {
     let mut found = std::collections::HashSet::new();
 
     let mut depth: i64 = 0;
@@ -1666,9 +1732,61 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
     // Saw a `fn` keyword and are waiting for the `{` that opens ITS body; carries whether that
     // fn was preceded by a test attribute.
     let mut awaiting_fn_open: Option<bool> = None;
+    // A literal left open at the end of the previous line, still being searched for its close.
+    let mut carry: Option<OpenLiteral> = None;
 
-    for raw_line in source.lines() {
-        let line = strip_line_comment(raw_line);
+    for (line_idx, raw_line) in source.lines().enumerate() {
+        let line_no = line_idx + 1;
+        let raw_chars: Vec<char> = raw_line.chars().collect();
+
+        // `start_idx` is where NORMAL processing may resume on this line — 0 unless a literal
+        // carried over from a previous line closes partway through this one. The consumed prefix
+        // (string content) never reaches comment-stripping, brace-counting, or marker-scanning:
+        // it was never real source structure to begin with.
+        let start_idx = if let Some(open) = &carry {
+            let mut i = 0usize;
+            let mut closed_at = None;
+            match open.hashes {
+                None => {
+                    while i < raw_chars.len() {
+                        if raw_chars[i] == '\\' {
+                            i += 2;
+                            continue;
+                        }
+                        if raw_chars[i] == '"' {
+                            closed_at = Some(i + 1);
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                Some(hashes) => {
+                    while i < raw_chars.len() {
+                        if raw_chars[i] == '"'
+                            && (1..=hashes).all(|k| raw_chars.get(i + k) == Some(&'#'))
+                        {
+                            closed_at = Some(i + 1 + hashes);
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            match closed_at {
+                Some(end) => {
+                    carry = None;
+                    end
+                }
+                // Still open — remains carried into the NEXT line; nothing else on this line
+                // could possibly be real code, so skip straight to it.
+                None => continue,
+            }
+        } else {
+            0
+        };
+
+        let remainder: String = raw_chars[start_idx..].iter().collect();
+        let line = strip_line_comment(&remainder);
         let trimmed = line.trim();
 
         if trimmed == "#[test]" || trimmed.contains("#[tokio::test]") || trimmed.contains("#[test]")
@@ -1686,15 +1804,18 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
         // false-GREEN bug this function's own doc describes.
         let chars: Vec<char> = line.chars().collect();
         let mut idx = 0;
+        // Set when a NEW literal opens on this line and does not close before the line ends —
+        // `carry` is then populated below and marker-scanning is skipped for this line, since
+        // whatever text follows the opener is string content, not code, and might coincidentally
+        // contain a marker-looking substring.
+        let mut opened_unclosed_literal = false;
         while idx < chars.len() {
             let ch = chars[idx];
             if ch == 'r' {
                 // A raw string prefix: `r`, zero or more `#`, then `"`. Content is verbatim until
                 // a `"` immediately followed by the SAME number of `#`. Checked cheaply: a
                 // handful of extra lookahead characters, only spent when the line actually starts
-                // one. Only single-line raw strings are recognised — see this function's own doc
-                // for why a raw (or plain) string spanning multiple physical source lines is a
-                // separate, still-open gap.
+                // one.
                 let mut lookahead = idx + 1;
                 let mut hashes = 0usize;
                 while chars.get(lookahead) == Some(&'#') {
@@ -1714,10 +1835,13 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
                         }
                         idx += 1;
                     }
-                    // `closed == false` means the raw string does not end on this line — the
-                    // multi-line gap above. Nothing more can be done for this line; the loop
-                    // condition (`idx < chars.len()`) already ends it.
-                    let _ = closed;
+                    if !closed {
+                        carry = Some(OpenLiteral {
+                            start_line: line_no,
+                            hashes: Some(hashes),
+                        });
+                        opened_unclosed_literal = true;
+                    }
                     continue;
                 }
                 // `r` not followed by `#`*`"` — an ordinary identifier character (e.g. a variable
@@ -1725,8 +1849,15 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
             }
             if ch == '"' {
                 // Skip to the matching close quote, honouring `\`-escapes, so nothing inside —
-                // brace or otherwise — is counted.
+                // brace or otherwise — is counted. Every escape is treated as exactly 2
+                // characters (backslash + one more), which is correct for `\\`, `\"`, `\'`, `\n`,
+                // `\r`, `\t`, `\0` but WRONG for `\xNN` (4 chars total) or `\u{…}` (variable
+                // length) — a `{` inside either would be miscounted as a real brace. Checked at
+                // the time of this fix: neither appears anywhere under `crates/aleph-cdp/tests/`
+                // today (`rg -F '\x' `/`rg -F '\u{'` — no real hits), so this is a documented gap,
+                // not a silently reached one.
                 idx += 1;
+                let mut closed = false;
                 while idx < chars.len() {
                     if chars[idx] == '\\' {
                         idx += 2;
@@ -1734,9 +1865,17 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
                     }
                     if chars[idx] == '"' {
                         idx += 1;
+                        closed = true;
                         break;
                     }
                     idx += 1;
+                }
+                if !closed {
+                    carry = Some(OpenLiteral {
+                        start_line: line_no,
+                        hashes: None,
+                    });
+                    opened_unclosed_literal = true;
                 }
                 continue;
             }
@@ -1747,6 +1886,8 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
                 // be treated as opening a literal: doing so would swallow the rest of the line
                 // looking for a closing `'` that a lifetime never has, which is the exact same
                 // class of false-GREEN bug this fix exists to close, just moved to a new trigger.
+                // Lifetimes never span lines the way strings do, so there is no carry-over case
+                // to handle here.
                 let is_escape = chars.get(idx + 1) == Some(&'\\');
                 let close_at = if is_escape { idx + 3 } else { idx + 2 };
                 if chars.get(close_at) == Some(&'\'') {
@@ -1778,7 +1919,7 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
             idx += 1;
         }
 
-        if test_fn_active_depth.is_some() {
+        if !opened_unclosed_literal && test_fn_active_depth.is_some() {
             for marker in [
                 "fixture!(\"",
                 "include_str!(\"fixtures/",
@@ -1798,7 +1939,23 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
             }
         }
     }
-    found
+
+    if let Some(open) = carry {
+        // Reached the end of the whole source still inside a literal that never closed anywhere
+        // — this scanner cannot tell what the file's real brace structure is past that point, so
+        // it refuses rather than guesses. See `every_fixture_file_under_tests_fixtures_has_a_
+        // reader` for how this is surfaced (fails BY NAME, naming the file and this line) and
+        // `scanner_refuses_a_file_it_cannot_reliably_scan` for the permanent regression.
+        return Err(UnterminatedLiteral {
+            line: open.start_line,
+            kind: if open.hashes.is_some() {
+                "raw string"
+            } else {
+                "string"
+            },
+        });
+    }
+    Ok(found)
 }
 
 /// Permanent regression for the false-GREEN this scanner once had: a `{`/`}` sitting inside a
@@ -1844,7 +2001,8 @@ fn o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal() {
     }
 
     let with_stray_brace = synthetic_source("    let s = \"{\";");
-    let found = fixture_refs_in_test_bodies(&with_stray_brace);
+    let found = fixture_refs_in_test_bodies(&with_stray_brace)
+        .expect("a stray brace inside a string closes on the same line — this must still scan");
     assert!(
         found.contains("legit-fixture.json"),
         "a fixture genuinely referenced inside the test body must still be found: {found:?}"
@@ -1861,7 +2019,8 @@ fn o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal() {
     // really about the stray brace's effect on depth tracking, not an accident of how this
     // particular non-test fn happens to be placed.
     let without_stray_brace = synthetic_source("    let s = \"x\";");
-    let control_found = fixture_refs_in_test_bodies(&without_stray_brace);
+    let control_found = fixture_refs_in_test_bodies(&without_stray_brace)
+        .expect("no stray brace at all — this must scan cleanly");
     assert!(
         control_found.contains("legit-fixture.json"),
         "control: the test-body fixture must still be found with no stray brace: {control_found:?}"
@@ -1870,6 +2029,86 @@ fn o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal() {
         !control_found.contains("should-not-be-read.json"),
         "control: the non-test fn's fixture must be unread with no stray brace too — the same \
          correct answer as the stray-brace case above: {control_found:?}"
+    );
+}
+
+/// Permanent regression proving `fixture_refs_in_test_bodies` correctly FOLLOWS a legitimate
+/// multi-line string literal to its real close, rather than either (a) miscounting its later
+/// lines as code (the original false-GREEN bug) or (b) refusing the whole file just because a
+/// literal happens to span more than one physical line (the failure mode a first attempt at this
+/// fix produced — see the crate-wide comment above `every_fixture_file_under_tests_fixtures_has_
+/// a_reader` for the real, pre-existing example, `tests/session.rs`, that proved a same-line-only
+/// refusal wrong).
+///
+/// The fake source has a `\`-continued assert-style message spanning three physical lines, a
+/// brace-containing string on one of the CONTINUATION lines (to prove braces inside a tracked
+/// multi-line literal are still correctly ignored, not just the ones on the opening line), and a
+/// fixture reference both before and after the multi-line literal — both must be found, and the
+/// scan must succeed (`Ok`), not refuse.
+#[test]
+fn scanner_follows_a_legitimate_multiline_literal_to_its_close() {
+    let source = [
+        "#[test]",
+        "fn wraps_a_long_message() {",
+        "    let _ = fixture!(\"before.json\");",
+        "    assert!(",
+        "        true,",
+        "        \"a long message that wraps across several physical lines, one of which has a \\",
+        "         brace in it: { not a real block } and this line closes the string\"",
+        "    );",
+        "    let _ = fixture!(\"after.json\");",
+        "}",
+    ]
+    .join("\n");
+
+    let found = fixture_refs_in_test_bodies(&source).expect(
+        "a `\\`-continued multi-line message — the same shape tests/session.rs already uses — \
+         must scan cleanly, not be refused",
+    );
+    assert!(
+        found.contains("before.json") && found.contains("after.json"),
+        "fixtures referenced both before and after the multi-line literal must both be found: \
+         {found:?}"
+    );
+}
+
+/// Permanent regression proving the fail-closed refusal fires for the one case that is genuinely
+/// unrecoverable: a string literal that opens and never closes ANYWHERE in the rest of the
+/// source (not merely "not on this line" — the test above proves that case now scans correctly).
+/// `fixture_refs_in_test_bodies` must return `Err` naming the line it STARTS on, never silently
+/// continue as if nothing were wrong once it reaches true end-of-source still inside it.
+///
+/// The fake source is built the same way as the tests above (single-line array elements joined at
+/// runtime) for the same reason: a literal multi-line or raw string embedded directly in THIS
+/// file would itself trip this very refusal when the real guard, `every_fixture_file_under_tests_
+/// fixtures_has_a_reader`, scans `tests/methods.rs` — which would make the test that proves the
+/// refusal works also poison the whole suite. No line after the opener contains any `"` at all,
+/// so the cross-line tracker genuinely never finds a close, all the way to the end of the source —
+/// unlike an earlier, wrong version of this test, whose second line contained a bare `"` that the
+/// cross-line tracker (correctly) found as a close, which would make this test assert a refusal
+/// that no longer happens.
+#[test]
+fn scanner_refuses_a_file_it_cannot_reliably_scan() {
+    let source = [
+        "fn some_fn() {",
+        "    let s = \"never closes anywhere in this source",
+        "    let _ = 1 + 2;",
+        "}",
+    ]
+    .join("\n");
+
+    let err = fixture_refs_in_test_bodies(&source).expect_err(
+        "a string literal that never closes anywhere in the source must be refused, not scanned \
+         past as if nothing were wrong",
+    );
+    assert_eq!(
+        err.line, 2,
+        "must name the line the unterminated literal STARTS on, so a person fixing it knows \
+         exactly where to look: {err:?}"
+    );
+    assert_eq!(
+        err.kind, "string",
+        "must say which kind of literal it is: {err:?}"
     );
 }
 
