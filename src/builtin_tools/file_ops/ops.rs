@@ -171,6 +171,10 @@ pub(super) struct WriteOutcome {
     /// rename was therefore skipped. The file's `mtime` is preserved on
     /// `unchanged == true`; on `false` the rename overwrote it.
     pub unchanged: bool,
+    /// Old content when the file existed and was UTF-8 text; `None` = did not exist.
+    pub previous: Option<String>,
+    /// The file existed but could not be read as text (binary / too large / IO).
+    pub pre_image_unreadable: bool,
 }
 
 /// Execute a write operation.
@@ -201,6 +205,20 @@ pub(super) async fn execute_write(
     // instances.
     let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
 
+    // Pre-image for the diff side-channel. Read under the same lock the
+    // write holds, so the diff describes exactly the bytes we replace.
+    let (previous, pre_image_unreadable) = match tokio::fs::metadata(&canonical).await {
+        Err(_) => (None, false), // does not exist → Created
+        Ok(meta) if meta.len() > super::diff::MAX_DIFF_INPUT_BYTES as u64 => (None, true),
+        Ok(_) => match tokio::fs::read(&canonical).await {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => (Some(text), false),
+                Err(_) => (None, true),
+            },
+            Err(_) => (None, true),
+        },
+    };
+
     // Create parent directories if needed
     if create_parents {
         if let Some(parent) = canonical.parent() {
@@ -226,6 +244,8 @@ pub(super) async fn execute_write(
             canonical,
             bytes,
             unchanged: true,
+            previous,
+            pre_image_unreadable,
         });
     }
 
@@ -241,6 +261,8 @@ pub(super) async fn execute_write(
         canonical,
         bytes,
         unchanged: false,
+        previous,
+        pre_image_unreadable,
     })
 }
 

@@ -63,6 +63,9 @@ pub struct FileWriteOutput {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unchanged: bool,
     pub message: String,
+    /// UI side-channel; hoisted out before the model sees this output.
+    #[serde(rename = "_presentation", skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<aleph_protocol::Presentation>,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,12 +189,28 @@ impl AlephTool for FileWriteTool {
                 } else {
                     format!("Wrote {} bytes to {}", outcome.bytes, path)
                 };
+                let change = if outcome.pre_image_unreadable {
+                    aleph_protocol::FileChange::unavailable(
+                        outcome.canonical.to_string_lossy(),
+                        aleph_protocol::FileChangeKind::Modified,
+                        aleph_protocol::Unavailable::PreImageUnavailable,
+                    )
+                } else {
+                    super::diff::compute_file_change(
+                        &outcome.canonical.to_string_lossy(),
+                        outcome.previous.as_deref(),
+                        Some(&args.content),
+                    )
+                };
+                let presentation = Some(super::diff::presentation_for(vec![change]));
+
                 let write_output = FileWriteOutput {
                     success: true,
                     path,
                     bytes_written: outcome.bytes,
                     unchanged: outcome.unchanged,
                     message,
+                    presentation,
                 };
                 notify_tool_result(Self::NAME, &write_output.message, true);
                 Ok(write_output)
@@ -202,6 +221,10 @@ impl AlephTool for FileWriteTool {
                 Err(e.into())
             }
         }
+    }
+
+    fn mutates_file_content(&self) -> bool {
+        true
     }
 }
 
@@ -299,5 +322,86 @@ mod tests {
         assert!(out.success);
         assert!(!out.unchanged);
         assert_eq!(fs::read_to_string(&file).unwrap(), "first");
+    }
+
+    // ========================================================================
+    // `_presentation` side-channel — the FileChange diff attached for the UI.
+    // ========================================================================
+
+    /// A brand-new file's presentation is a single Created change whose
+    /// `added` count equals the line count written.
+    #[tokio::test]
+    async fn new_file_write_attaches_a_created_presentation() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("new.txt");
+
+        let tool = FileWriteTool::new();
+        let out = AlephTool::call(
+            &tool,
+            FileWriteArgs {
+                file_path: file.to_string_lossy().to_string(),
+                content: "one\ntwo\nthree\n".to_string(),
+                create_parents: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let v = serde_json::to_value(&out).unwrap();
+        let change = &v["_presentation"]["changes"][0];
+        assert_eq!(change["kind"], "created");
+        assert_eq!(change["added"], 3);
+    }
+
+    /// Overwriting an existing file's presentation is a Modified change with
+    /// real hunks, computed against the pre-image read under the write lock.
+    #[tokio::test]
+    async fn overwrite_attaches_a_modified_presentation_with_hunks() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("existing.txt");
+        fs::write(&file, "one\ntwo\nthree\n").unwrap();
+
+        let tool = FileWriteTool::new();
+        let out = AlephTool::call(
+            &tool,
+            FileWriteArgs {
+                file_path: file.to_string_lossy().to_string(),
+                content: "one\nTWO\nthree\n".to_string(),
+                create_parents: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let v = serde_json::to_value(&out).unwrap();
+        let change = &v["_presentation"]["changes"][0];
+        assert_eq!(change["kind"], "modified");
+        assert!(!change["hunks"].as_array().unwrap().is_empty());
+    }
+
+    /// A binary pre-image cannot be diffed — the write still succeeds, but
+    /// the presentation reports `pre_image_unavailable` rather than lying
+    /// about the old content.
+    #[tokio::test]
+    async fn binary_pre_image_reports_unavailable() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("bin.dat");
+        fs::write(&file, [0xff, 0xfe, 0x00]).unwrap();
+
+        let tool = FileWriteTool::new();
+        let out = AlephTool::call(
+            &tool,
+            FileWriteArgs {
+                file_path: file.to_string_lossy().to_string(),
+                content: "now text\n".to_string(),
+                create_parents: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let v = serde_json::to_value(&out).unwrap();
+        let change = &v["_presentation"]["changes"][0];
+        assert_eq!(change["unavailable"], "pre_image_unavailable");
     }
 }
