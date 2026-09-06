@@ -347,7 +347,13 @@ mod tests {
     fn construction_check_quadrants_of_the_private_network_switch() {
         use super::HostVerdict;
         // Default policy: refuse the blocked classes.
-        for host in ["127.0.0.1", "10.0.0.5", "192.168.1.8", "localhost", "box.local"] {
+        for host in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "192.168.1.8",
+            "localhost",
+            "box.local",
+        ] {
             assert!(
                 matches!(
                     super::classify_ssrf_target_host(host, false),
@@ -357,7 +363,13 @@ mod tests {
             );
         }
         // Opt-in: the same hosts become warn-worthy allows.
-        for host in ["127.0.0.1", "10.0.0.5", "192.168.1.8", "localhost", "box.local"] {
+        for host in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "192.168.1.8",
+            "localhost",
+            "box.local",
+        ] {
             assert_eq!(
                 super::classify_ssrf_target_host(host, true),
                 HostVerdict::AllowUnderPrivateNetworkOptIn,
@@ -421,13 +433,19 @@ mod tests {
     /// operator read a working refusal as a missing backend (判据 §8).
     #[test]
     fn the_private_upstream_gate_opens_and_closes() {
-        for host in [
-            "127.0.0.1",
-            "10.0.0.5",
-            "localhost",
-            "169.254.169.254",
-            "0177.0.0.1",
-        ] {
+        // The classes the switch is actually for: refused by default, reachable
+        // once the operator opts in.
+        //
+        // `169.254.169.254` and `0177.0.0.1` used to sit in this same list,
+        // back when the gate was two-state and `true` waived everything
+        // (f53e6adb8). afed93678 turned cloud metadata and legacy IP literals
+        // into floors that no policy lifts — `classify_ssrf_target_host`
+        // rejects them BEFORE consulting `allow_private_network`, deliberately
+        // ("Checked before the blocklist so a legacy literal never benefits
+        // from the opt-in") — and this list was never re-split. It is split
+        // below, not relaxed: making this loop green by moving the check after
+        // the switch would open the SSRF hole afed93678 closed.
+        for host in ["127.0.0.1", "10.0.0.5", "localhost"] {
             assert!(
                 reject_ssrf_target_host("T", host, false).is_err(),
                 "{host} must be refused by default"
@@ -435,6 +453,20 @@ mod tests {
             assert!(
                 reject_ssrf_target_host("T", host, true).is_ok(),
                 "{host} must be reachable once the operator opts in"
+            );
+        }
+        // A gate's two directions must both be asked, but they do not have to
+        // answer the same way: for a floor, BOTH answers are "refused". Asking
+        // only the `false` half here would leave "does the opt-in lift it?"
+        // unasked, which is the question that matters.
+        for host in ["169.254.169.254", "0177.0.0.1"] {
+            assert!(
+                reject_ssrf_target_host("T", host, false).is_err(),
+                "{host} is a floor, refused by default"
+            );
+            assert!(
+                reject_ssrf_target_host("T", host, true).is_err(),
+                "{host} is a floor no policy lifts: the opt-in must not reach it"
             );
         }
         // The opener is not a bypass of anything else: a public host was
