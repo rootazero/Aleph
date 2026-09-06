@@ -24,7 +24,7 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::context::budget::pressure::{chars_for_token_budget, estimate_tokens_smart};
 use crate::context::retrieval::IndexOutcome;
 use crate::session::events::ToolImage;
-use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
+use crate::tools::result_store::{extract_persisted_path, ToolResultStore};
 
 const MAX_INLINE_IMAGE_BASE64_CHARS: usize = (20usize * 1024 * 1024).div_ceil(3) * 4;
 
@@ -337,7 +337,7 @@ pub(crate) fn recovery_footer(
 ) -> Option<(String, Option<PathBuf>)> {
     let store = store?;
     let marker = store.persist_if_large(tool_call_id, tool_name, full, threshold)?;
-    let path = extract_persisted_ref(&marker).and_then(parse_marker_path);
+    let path = extract_persisted_path(&marker).map(PathBuf::from);
     // Index the offloaded blob so the model can BM25-retrieve only the relevant
     // slices via `ctx_search` instead of re-reading the whole file (which would
     // defeat the offload). Best-effort: on failure the bare persist marker still
@@ -678,15 +678,6 @@ fn char_byte_offset(text: &str, n: usize) -> usize {
     text.char_indices()
         .nth(n)
         .map_or(text.len(), |(byte_idx, _)| byte_idx)
-}
-
-fn parse_marker_path(line: &str) -> Option<PathBuf> {
-    // Marker format: "[Full output persisted: <path> (<n> tokens, <tool>)]".
-    let prefix = "[Full output persisted: ";
-    let start = line.find(prefix)? + prefix.len();
-    let rest = &line[start..];
-    let end = rest.find(" (")?;
-    Some(PathBuf::from(rest[..end].to_string()))
 }
 
 #[cfg(test)]
@@ -1219,10 +1210,16 @@ mod tests {
         );
     }
 
+    /// The parse itself now lives beside the writer
+    /// (`result_store::extract_persisted_path`); this keeps the assertion that
+    /// THIS module's `recovery_footer` still gets a path back out of the marker
+    /// it just produced, which is the part `recovery_footer`'s callers rely on.
     #[test]
     fn parse_marker_path_roundtrip() {
         let marker = "[Full output persisted: /tmp/aleph/x.txt (1234 tokens, bash)]";
-        let path = parse_marker_path(marker).expect("parse");
+        let path = extract_persisted_path(marker)
+            .map(PathBuf::from)
+            .expect("parse");
         assert_eq!(path, PathBuf::from("/tmp/aleph/x.txt"));
     }
 

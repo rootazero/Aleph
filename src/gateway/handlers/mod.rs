@@ -128,6 +128,7 @@ pub mod subagent;
 pub mod system_info;
 pub mod task_error;
 pub mod teams;
+pub mod tool_output;
 pub mod tools_cancel;
 pub mod tools_invoke;
 pub mod tools_visibility;
@@ -844,6 +845,16 @@ impl HandlerRegistry {
         });
         registry.register("trace.get", |req| async move {
             service_unavailable(req, "trace.get requires state database (boot phase 2)")
+        });
+        // Its sibling needs no state database — only a SessionStore, which
+        // this stateless phase-1 registry does not hold either. The Simulated
+        // execution branch never reaches `register_trace_handlers`, so without
+        // this line the method would not exist at all there.
+        registry.register("trace.tool_output", |req| async move {
+            service_unavailable(
+                req,
+                "trace.tool_output requires SessionStore (boot phase 2)",
+            )
         });
         registry.register("gateway.identity.get", |req| async move {
             service_unavailable(

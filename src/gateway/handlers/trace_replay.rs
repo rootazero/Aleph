@@ -25,6 +25,12 @@
 //!   back open for members and owner-scoped HERE instead, see
 //!   [`handle_by_runs`].
 //!
+//! The family has a fourth member that does NOT live in this file and reads no
+//! trace table: [`trace.tool_output`](super::tool_output) serves one call's
+//! untruncated output out of `session_events`. It is the family's second
+//! member-open carve-out and is KeyChecked by the same predicate; its ruling is
+//! recorded beside its entry in `method_admin.rs`.
+//!
 //! ## The operator's half is ratified, and audited (human ruling, 2026-08-07)
 //!
 //! Admin-gating `trace.list`/`trace.get` decides WHO may read; it says nothing

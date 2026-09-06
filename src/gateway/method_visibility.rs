@@ -277,9 +277,19 @@
 //!   as `[]` — the same shape an unknown or trace-less run has always
 //!   produced. Its siblings `trace.list`/`trace.get` are NOT in this table
 //!   because they are not member-reachable at all: the `trace.` prefix is
-//!   admin-gated in `method_admin.rs` and only `trace.by_runs` is carved out
-//!   (`trace.list` was its own enumeration oracle — every `task_id` in the
-//!   process — and the Panel calls neither).
+//!   admin-gated in `method_admin.rs` and carved out for exactly two methods
+//!   (`trace.by_runs` and `trace.tool_output`, both below), while `trace.list`
+//!   was its own enumeration oracle — every `task_id` in the process — and the
+//!   Panel calls neither.
+//! - `trace.tool_output` → **KeyChecked**. Same family, same shape, different
+//!   store: it addresses one `tool_call_id` inside the named session's own
+//!   `session_events` log, so no intersection step is needed — the log is
+//!   keyed by session, and a call id belonging to another session is simply
+//!   not among the rows it read. It serves that session's own tool output
+//!   untruncated, which is a SUBSET of the class `trace.by_runs` already
+//!   serves (this table's line above records that a persisted trace is a full
+//!   transcript, tool outputs included), masked on the way out because
+//!   `session_events` is unmasked by design.
 //! - `group_chat.list` → **ListFiltered**; `group_chat.continue`/`mention`/
 //!   `history`/`end` → **KeyChecked**. These sessions are NOT keyed by a
 //!   `SessionKey` (`GroupChatSession::source_session_key` is the sentinel
@@ -613,6 +623,10 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     ("exec.grants.list", Treatment::ListFiltered),
     ("exec.grant.revoke", Treatment::KeyChecked),
     ("trace.by_runs", Treatment::KeyChecked),
+    // Its sibling reads no trace table at all: it addresses one tool call in
+    // the named session's own event log, and the log is keyed by session, so
+    // the KeyCheck on that session is the whole predicate.
+    ("trace.tool_output", Treatment::KeyChecked),
     ("group_chat.list", Treatment::ListFiltered),
     ("group_chat.continue", Treatment::KeyChecked),
     ("group_chat.mention", Treatment::KeyChecked),

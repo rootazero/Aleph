@@ -468,6 +468,7 @@ mod tests {
         ("trace.by_runs", Class::Open),
         ("trace.get", Class::Admin),
         ("trace.list", Class::Admin),
+        ("trace.tool_output", Class::Open),
         ("users.create", Class::Admin),
         // A dossier over ANOTHER principal's holdings. Admin, and
         // deliberately not a `MEMBER_CARVE_OUTS` entry beside `users.me` /

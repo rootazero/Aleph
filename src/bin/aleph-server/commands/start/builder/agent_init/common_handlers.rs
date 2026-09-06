@@ -16,10 +16,15 @@ use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::GatewayConfig as FullGatewayConfig;
 use alephcore::gateway::GatewayServer;
 
-/// Register `trace.list` / `trace.get` / `trace.by_runs`. When a state database
-/// is present they replay durable traces; otherwise they return
-/// SERVICE_UNAVAILABLE with an environment-specific reason. Extracted verbatim
-/// from the real-execution branch of `agent_init/mod.rs`.
+/// Register the `trace.` family. `trace.list` / `trace.get` / `trace.by_runs`
+/// replay durable traces when a state database is present; otherwise they
+/// return SERVICE_UNAVAILABLE with an environment-specific reason. Extracted
+/// verbatim from the real-execution branch of `agent_init/mod.rs`.
+///
+/// `trace.tool_output` is registered OUTSIDE that branch: it reads the session
+/// event log through a process-wide handle and needs no state database, so
+/// putting it inside would make a perfectly serviceable method unavailable on
+/// every no-DB boot for a dependency it does not have.
 ///
 /// ⚠️ **Ordering**: `trace.list`/`trace.get` capture the server's
 /// `SecurityAuditLog` here so they can record cross-user content reads (human
@@ -36,6 +41,21 @@ pub(super) fn register_trace_handlers(
     session_store: Arc<dyn alephcore::gateway::session_store::SessionStore>,
 ) {
     let audit_log = server.audit_log();
+
+    // The one member-reachable sibling that is not a trace read at all: it
+    // serves the addressed session's OWN untruncated tool output out of the
+    // session event log, KeyChecked in the handler exactly as `trace.by_runs`
+    // is. Registered unconditionally — see this function's doc.
+    let tool_output_sessions = session_store.clone();
+    server
+        .handlers_mut()
+        .register("trace.tool_output", move |req| {
+            let sessions = tool_output_sessions.clone();
+            async move {
+                alephcore::gateway::handlers::tool_output::handle_tool_output(req, sessions).await
+            }
+        });
+
     // Phase-2 always overrides phase-1 to guarantee a deterministic response.
     // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
     // a tighter, environment-specific reason — never the phase-1 generic.
