@@ -6,12 +6,16 @@
 //! over the ~30 methods Aleph actually calls, so adding a domain is a deliberate act rather than a
 //! codegen side effect (R3).
 
+mod connection;
 mod error;
+mod events;
 mod ids;
 
 // The fake CDP peer other crates test against. Feature-gated so no production build carries it.
 #[cfg(feature = "testkit")]
 pub mod testkit;
 
+pub use connection::{CdpConnection, ConnectOptions, DEFAULT_COMMAND_TIMEOUT};
 pub use error::{CdpError, CloseReason, Result};
+pub use events::{CdpEvent, EVENT_CHANNEL_CAPACITY};
 pub use ids::{SessionId, TargetId};
