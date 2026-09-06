@@ -145,7 +145,7 @@ ProfileManager::get_backend (manager.rs:383)     ← 唯一路由点，保留
 
 ### 3.3 一次 `browser_snapshot` 的路径
 
-Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibility,opacity,cursor,overflow], includeDOMRects:true}`：一次调用跨 frame、几何由引擎自报、**不经页面 JS**（页面无法用改写的 `getBoundingClientRect` 骗它）。obscura 过渡取数器 = `DOM.getDocument{depth:-1,pierce:true}` + 并发 `DOM.getBoxModel`（M11 证实诚实）+ 一次 `Runtime.evaluate` 按文档序取五个样式位（两次遍历用节点数 + 首尾 `backendNodeId` 校验，不一致重取一次，再不一致把 `computed` 置 `None`——**未知不写成可见**）。**上游 PR 合入并被账本钉住后删掉这个取数器**，两引擎共用 `DOMSnapshot` 一条取数路径。之后进同一个 `PageState` 构建器；返回现有 `SnapshotOutput`，`page_url`/`page_title` 一并接上。
+Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibility,opacity,cursor], includeDOMRects:true}`（`overflow` 与 `shadow_root` 在计划审查中因零消费者被 CUT）：一次调用跨 frame、几何由引擎自报、**不经页面 JS**（页面无法用改写的 `getBoundingClientRect` 骗它）。obscura 过渡取数器 = `DOM.getDocument{depth:-1,pierce:true}` + 并发 `DOM.getBoxModel`（M11 证实诚实）+ 一次 `Runtime.evaluate` 按文档序取五个样式位（两次遍历用节点数 + 首尾 `backendNodeId` 校验，不一致重取一次，再不一致把 `computed` 置 `None`——**未知不写成可见**）。**上游 PR 合入并被账本钉住后删掉这个取数器**，两引擎共用 `DOMSnapshot` 一条取数路径。之后进同一个 `PageState` 构建器；返回现有 `SnapshotOutput`，`page_url`/`page_title` 一并接上。
 
 ### 3.4 三处刻意的结构决定
 
@@ -202,7 +202,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 - `RefId = "e{n}"`；身份键 `(frame_id, loader_id, backend_node_id)`；**同一文档内跨快照保持同号**（DOM 变动不改号，模型不用重学编号）；主 frame `loader_id` 变（导航）⇒ 整表清空。
 - `RefTable` 住在 `EngineHandle` 的 per-tab 状态里，记每个 ref 的铸造代数；`PageState.generation` 每次捕获 +1。
 - 解析：旧代数、同文档 ⇒ 允许，经 `DOM.resolveNode(backendNodeId)`；失败 ⇒ `StaleRef{ref, reason: NodeGone}`；文档已换 ⇒ `StaleRef{reason: Navigated}`。错误文本带一句「重新 snapshot」（A2：模型看见并自愈）。
-- `snapshot.rs:96` 的 `matches("[ref=")` 字面量删掉，`ref_count` 由 backend 报（`SnapshotOutput` 加 `ref_count: usize`）。
+- `snapshot.rs:96` 的 `matches("[ref=")` 字面量删掉，`ref_count` 由 backend 报（`SnapshotOutput` 加 `ref_count: usize`）；ref 只给渲染出来的节点铸造，所以 `ref_count` 恒等于文本树里 `[ref=` 的个数（测试断言）。
 
 ### 4.4 动作目标
 
@@ -293,6 +293,7 @@ cdp_command_timeout_secs = 30              # 新；CDP 驱动对两引擎的按�
 [general.browser.obscura]                  # 新
 binary_path = ""                           # 覆盖账本
 variant = "default"                        # "default" | "stealth"
+download_host = "https://github.com"       # GitHub Release 镜像；与 runtime.download_host（Playwright CDN 镜像）是两个事实、两个键
 
 [general.browser.profiles.<name>]
 engine = "obscura"                         # 新；缺省取 default_engine
@@ -375,7 +376,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 |---|---|---|
 | **T0** | §11 的待实测项（半天内的探针，结果写回本 spec §11） | 设计里唯一没数字的格子先填 |
 | **S1** | `crates/aleph-cdp` + 假服务端测试 | 零 Aleph 依赖，可独立验证 |
-| **S2** | `engine/{process,chromium}.rs` 上提 + `EngineSidecar` + 配置两轴 + 加载期校验 | 只搬不改行为；`qa/browser_managed` 八场景必须照旧全绿 |
+| **S2** | `engine/{process,chromium}.rs` 上提 + `EngineSidecar` + 配置两轴 + 加载期校验 | 只搬不改行为；`qa/browser_managed` 全部场景（HEAD 上是十个，不是本文别处曾写的八个）必须照旧全绿 |
 | **S3** | `CdpBackend` 在 **Chromium** 上实现 28 方法 + `page_state`（Chromium 取数器）+ ref 表；`driver=cdp` 与 `driver=playwright_cli` 跑同一套 `qa/browser_managed` | **先在有对照物的引擎上建驱动**：playwright-cli 在同一个 Chrome 上的行为是现成的 oracle，驱动的缺陷在这里暴露比在 obscura 上便宜 |
 | **S4** | obscura：`RuntimeSpec` + `GithubRelease` + `ObscuraChild` + 过渡取数器 + 能力表 + doctor；`qa/browser_dual {provision,open,snapshot,click,stall,reap,caps}` | 只加引擎适配，不再动驱动 |
 | **S5** | `switch_engine` + `MigrationState` + `browser_open{engine}`；`qa/browser_dual switch` | 两引擎都能单独跑之后才有「切」 |
