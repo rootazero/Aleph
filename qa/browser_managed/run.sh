@@ -35,6 +35,27 @@ esac
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 SHARED="$HERE/../busy_input"
+
+# `attach` drives drive_attach.py, so it is the scenario that owns that
+# driver's own unit tests — a preflight, before the build or a real browser
+# launch, so a broken driver fails in seconds instead of after Chrome has
+# already started. Fail-closed on any non-zero exit; a discovery that
+# silently matches ZERO tests must not read as success either (that "looked
+# nowhere" shape is exactly what let the unit test go unexecuted before this).
+if [ "$SCENARIO" = "attach" ]; then
+  UNIT_OUT="$(python3 -m unittest discover -s "$HERE" -p 'test_*.py' 2>&1)"
+  UNIT_RC=$?
+  echo "$UNIT_OUT"
+  if [ "$UNIT_RC" -ne 0 ]; then
+    echo "FAIL: qa/browser_managed unit tests failed — see above, not launching anything" >&2
+    exit 1
+  fi
+  if ! echo "$UNIT_OUT" | grep -qE "Ran [1-9][0-9]* tests?"; then
+    echo "FAIL: unittest discover found zero tests under $HERE — a silent 'looked nowhere', not a pass" >&2
+    exit 1
+  fi
+fi
+
 QA_ROOT="${QA_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/aleph-qa-browser-XXXXXX")}"
 KEEP="${KEEP:-0}"
 
