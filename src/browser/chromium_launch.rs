@@ -418,6 +418,33 @@ impl ChromiumChild {
         }
     }
 
+    /// Kill the process only — do NOT touch the by-key sidecar record.
+    ///
+    /// For exactly one caller: `ensure_chromium`'s "cannot happen while the
+    /// per-session lock is held" arm, which fires only if the map already
+    /// held a child for this SAME session key at the moment a brand-new one
+    /// was inserted. [`Self::shutdown`]'s sidecar deletion is keyed by
+    /// `session_key`, not by pid — calling it there would delete the record
+    /// the just-inserted, live child wrote for itself one line above,
+    /// making the NEW browser unreapable across a crash forever (Final
+    /// Review M1). This kills the stale process and leaves every record
+    /// alone.
+    pub(crate) fn kill_only(mut self) {
+        let pid = self.endpoint.pid;
+        match self.child.kill() {
+            Ok(()) => {
+                let _ = self.child.wait();
+                tracing::info!(
+                    pid,
+                    "stale chromium (replaced under its own session key) killed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(pid, error = %e, "could not kill stale chromium; leaving it")
+            }
+        }
+    }
+
     /// Kill the browser and clear its registry record.
     ///
     /// `wait()` runs **only after a successful `kill()`**. It is a blocking
@@ -957,8 +984,17 @@ mod tests {
 
     /// The containment property the registry inherits from `config_path_for`:
     /// one component under the state dir, whatever the profile is called.
+    ///
+    /// Needs its own `$ALEPH_HOME` (like every test below that resolves the
+    /// registry path) — otherwise it races `kill_only`'s sidecar test for
+    /// the ambient env var: `dir` and `p` are two separate resolutions of
+    /// the same env var, and without holding the lock across both, another
+    /// thread's guard can flip `$ALEPH_HOME` in between them, making `dir`
+    /// and `p`'s parent name two different homes instead of the same one.
     #[test]
     fn a_sidecar_path_is_one_component_under_the_registry() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let dir = sidecar_registry_dir().expect("home resolves");
         for hostile in [
             "default",
@@ -1288,5 +1324,61 @@ mod tests {
     fn argv_probe_reads_this_process_and_answers_absent_for_a_pid_that_cannot_exist() {
         assert!(matches!(argv_probe(std::process::id()), ArgvProbe::Argv(v) if !v.is_empty()));
         assert_eq!(argv_probe(u32::MAX), ArgvProbe::Absent);
+    }
+
+    /// Final Review M1: `kill_only` exists precisely because `shutdown`'s
+    /// sidecar deletion is keyed by `session_key`, not by pid — and the one
+    /// caller (`ensure_chromium`'s "cannot happen" arm) fires only when a
+    /// DIFFERENT, brand-new child was just inserted under that SAME key,
+    /// one line before. `shutdown` there would delete the record the new,
+    /// live child just wrote for itself. Modelled directly: write a sidecar
+    /// under `session_key` (standing in for "the new child's own record"),
+    /// kill a stand-in stale child under that same key, and require the
+    /// sidecar to survive.
+    #[cfg(unix)]
+    #[test]
+    fn kill_only_kills_the_process_and_never_touches_the_sidecar() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let session = "kill-only-guard";
+        let sidecar = sidecar_path(session).expect("home resolves");
+        std::fs::create_dir_all(sidecar.parent().expect("sidecar has a parent"))
+            .expect("create sidecar dir");
+        std::fs::write(&sidecar, br#"{"pretend":"the NEW child's own record"}"#)
+            .expect("write sidecar fixture");
+
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn the stand-in stale browser");
+        let pid = child.id();
+        let stale = ChromiumChild::from_parts(
+            child,
+            CdpEndpoint {
+                http_url: "http://127.0.0.1:1".into(),
+                ws_url: "ws://127.0.0.1:1/devtools/browser/x".into(),
+                pid,
+            },
+            std::path::PathBuf::from("/tmp/udd-does-not-matter"),
+            session,
+        );
+
+        stale.kill_only();
+
+        let still_there = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .expect("kill -0");
+        assert!(
+            !still_there.success(),
+            "kill_only must actually kill the stale process"
+        );
+        assert!(
+            sidecar.exists(),
+            "kill_only must not delete the by-key sidecar — that record belongs to \
+             whatever child is CURRENTLY installed under this session key, not to \
+             the stale one being killed"
+        );
     }
 }

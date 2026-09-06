@@ -458,7 +458,11 @@ impl PlaywrightCliDriver {
         if let Some(previous) = map.insert(session_key.to_string(), child) {
             // Cannot happen while the per-session lock is held; if it ever
             // does, the previous browser is leaked unless it is killed here.
-            previous.shutdown();
+            // NOT `shutdown()`: its sidecar deletion is keyed by
+            // `session_key`, the SAME key the child inserted one line above
+            // just wrote its own record under — that would delete the NEW,
+            // live browser's only reclaim record (Final Review M1).
+            previous.kill_only();
         }
         Ok(endpoint)
     }
