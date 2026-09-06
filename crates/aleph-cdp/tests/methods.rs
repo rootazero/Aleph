@@ -1818,23 +1818,33 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
 /// protect — see this function's own doc for that gap, which is separate from the one this test
 /// covers and is left undefended for the same documented reason (nothing under
 /// `crates/aleph-cdp/tests/` uses a multi-line or raw string literal today).
+///
+/// Includes a CONTROL — identical source, minus the stray brace — asserting the SAME outcome
+/// (the non-test fn's fixture is unread either way, because a real test never reads it in either
+/// version). Together the two say "the stray brace is what mattered", not merely "this one input
+/// happens to come back unread": without the control, this test would pass just as well if
+/// `fixture_refs_in_test_bodies` always returned an empty set, which proves nothing about the
+/// brace specifically.
 #[test]
 fn o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal() {
-    let source = [
-        "#[test]",
-        "fn has_a_stray_brace_in_a_string() {",
-        "    let s = \"{\";",
-        "    let _ = s;",
-        "    let _ = fixture!(\"legit-fixture.json\");",
-        "}",
-        "",
-        "fn not_a_test_fn() {",
-        "    let _ = include_str!(\"fixtures/should-not-be-read.json\");",
-        "}",
-    ]
-    .join("\n");
+    fn synthetic_source(brace_line: &str) -> String {
+        [
+            "#[test]",
+            "fn has_a_stray_brace_in_a_string() {",
+            brace_line,
+            "    let _ = s;",
+            "    let _ = fixture!(\"legit-fixture.json\");",
+            "}",
+            "",
+            "fn not_a_test_fn() {",
+            "    let _ = include_str!(\"fixtures/should-not-be-read.json\");",
+            "}",
+        ]
+        .join("\n")
+    }
 
-    let found = fixture_refs_in_test_bodies(&source);
+    let with_stray_brace = synthetic_source("    let s = \"{\";");
+    let found = fixture_refs_in_test_bodies(&with_stray_brace);
     assert!(
         found.contains("legit-fixture.json"),
         "a fixture genuinely referenced inside the test body must still be found: {found:?}"
@@ -1844,6 +1854,22 @@ fn o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal() {
         "a fixture referenced only from a NON-test fn placed after a stray string-literal brace \
          must NOT be counted as read — if it is, the brace-depth tracker is once again leaking \
          `test_fn_active_depth` across the stray brace the way the original bug did: {found:?}"
+    );
+
+    // Control: identical structure, no stray brace (`"x"` has no brace to miscount at all). The
+    // non-test fn's fixture must be reported unread here too — proving the assertion above is
+    // really about the stray brace's effect on depth tracking, not an accident of how this
+    // particular non-test fn happens to be placed.
+    let without_stray_brace = synthetic_source("    let s = \"x\";");
+    let control_found = fixture_refs_in_test_bodies(&without_stray_brace);
+    assert!(
+        control_found.contains("legit-fixture.json"),
+        "control: the test-body fixture must still be found with no stray brace: {control_found:?}"
+    );
+    assert!(
+        !control_found.contains("should-not-be-read.json"),
+        "control: the non-test fn's fixture must be unread with no stray brace too — the same \
+         correct answer as the stray-brace case above: {control_found:?}"
     );
 }
 
