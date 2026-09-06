@@ -22,12 +22,15 @@ impl CdpConnection {
                 json!({ "targetId": target.as_str(), "flatten": true }),
             )
             .await?;
-        // A reply with no sessionId is "we do not know which session", never an empty one: an
-        // empty session id would address the browser, so every later call would quietly act on
-        // the wrong thing instead of failing (判据 §8).
+        // A reply with no sessionId — or an empty one — is "we do not know which session", never
+        // an empty session: an empty session id would address the browser, so every later call
+        // would quietly act on the wrong thing instead of failing (判据 §8). The `filter` rejects
+        // `Some("")` the same way `and_then` already rejects a missing key, so both collapse into
+        // the one error below rather than one of them silently becoming `Ok(SessionId(""))`.
         let id = reply
             .get("sessionId")
             .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| {
                 CdpError::Decode(format!(
                     "Target.attachToTarget({target}): reply carried no sessionId: {reply}"

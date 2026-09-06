@@ -126,6 +126,42 @@ async fn attach_without_a_session_id_is_a_decode_error_not_an_invented_session()
 }
 
 #[tokio::test]
+async fn attach_with_an_empty_session_id_is_a_decode_error_not_an_invented_session() {
+    // A reply that HAS a `sessionId` key, but the value is an empty string — distinct from the
+    // missing-key case above. An empty session id addresses the browser, not the page, so a
+    // caller that got `Ok(SessionId(""))` here would have every later page-scoped call silently
+    // land on the wrong target instead of failing.
+    let server = FakeCdpServer::start(scripted(vec![(
+        "Target.attachToTarget",
+        Responder::Reply(json!({ "sessionId": "" })),
+    )]))
+    .await;
+    let conn = connect(&server).await;
+
+    let err = conn
+        .attach(&TargetId("T-4".to_string()))
+        .await
+        .expect_err("an empty session id is not a session");
+    match err {
+        CdpError::Decode(text) => {
+            assert!(
+                text.contains("Target.attachToTarget"),
+                "names the method: {text}"
+            );
+            assert!(
+                text.contains("T-4"),
+                "names the target it was trying to attach to: {text}"
+            );
+        }
+        other => panic!(
+            "an empty sessionId must be Decode — never Ok(SessionId(\"\")), which addresses the \
+             browser instead of the page and would send every later call to the wrong target \
+             with nothing anywhere to say so (判据 §8). Got {other:?}"
+        ),
+    }
+}
+
+#[tokio::test]
 async fn attach_passes_a_peer_refusal_through_as_a_protocol_error() {
     let server = FakeCdpServer::start(scripted(vec![(
         "Target.attachToTarget",
@@ -205,6 +241,33 @@ async fn connect_and_attach_lets_a_test_choose_the_session_id_first() {
         SessionId("chosen-1".to_string()),
         "an override registered BEFORE the helper wins; the helper only fills in a reply when the \
          table has none, so a test that needs two distinct sessions is not stuck with one"
+    );
+}
+
+#[tokio::test]
+async fn connect_and_attach_ignores_a_session_id_scripted_via_the_constructor() {
+    // Unlike the test above (which uses `on`, i.e. the override table), this scripts
+    // Target.attachToTarget through the CONSTRUCTOR's `scripted()` table — the documented
+    // asymmetry is that this does NOT win: `connect_and_attach` inserts its own default into the
+    // override table (via `or_insert_with`, since nothing has called `on` yet), and `resolve()`
+    // consults overrides before the constructor's closure. A test that scripted the session id
+    // this way instead of with `on` would otherwise get FAKE_SESSION_ID silently, with no error
+    // anywhere to say its own script was never consulted.
+    let server = FakeCdpServer::start(scripted(vec![(
+        "Target.attachToTarget",
+        Responder::Reply(json!({ "sessionId": "constructor-scripted" })),
+    )]))
+    .await;
+
+    let (_conn, session) = server.connect_and_attach().await;
+    assert_eq!(
+        session,
+        SessionId(aleph_cdp::testkit::FAKE_SESSION_ID.to_string()),
+        "connect_and_attach's own default — installed into the override table — must win over a \
+         Target.attachToTarget entry supplied only through the constructor's `scripted()` table; \
+         getting \"constructor-scripted\" here would mean resolve()'s override-first ordering \
+         silently reversed, which downstream tasks (9, 12, 13, 17, 19) rely on when they use `on` \
+         to pick a session id"
     );
 }
 
