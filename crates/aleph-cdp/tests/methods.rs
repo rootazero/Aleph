@@ -1553,6 +1553,16 @@ async fn call_void(conn: &CdpConnection, s: &SessionId, method: &str) -> Result<
 // (b) matters because a module-scope `const X: &str = include_str!("fixtures/orphan.json");` that
 // no test ever reads would otherwise be counted as a reader with nobody actually exercising it.
 //
+// A SECOND fix-round correction, distinct from (a)/(b) above: the brace-depth tracker that
+// implements (b) originally counted every `{`/`}` character, including ones sitting inside a
+// STRING or CHAR literal (e.g. a stray `let s = "{";` inside a test body). That left `depth`
+// permanently off by one, so the test fn's own closing brace never brought it back to baseline —
+// every fixture referenced by any LATER function in the file, test or not, was then wrongly
+// counted as read. This WAS a false GREEN, in direct contradiction of the "fail-red, not
+// fail-green" claim below, which was not true until this was fixed. See `fixture_refs_in_test_
+// bodies`'s own doc for the fix (string/char-literal-aware brace counting) and its one remaining,
+// undefended gap (raw strings).
+//
 // Known, deliberate limit (do not "fix" this — it fails SAFE, never silently green): the walk
 // below only reads TOP-LEVEL files directly under `tests/` (`tests/*.rs`), and the marker match is
 // the literal text `include_str!("fixtures/` — a compiled test binary at `tests/<dir>/main.rs`
@@ -1606,16 +1616,31 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
 
 /// Every `fixture!("name")` invocation and every raw `include_str!("fixtures/name")` /
 /// `include_bytes!("fixtures/name")` that sits lexically inside the body of a `#[test]` or
-/// `#[tokio::test]` item in `source` — never a match found in a comment, and never a match found
-/// in a module-scope binding or helper function no test actually calls into.
+/// `#[tokio::test]` item in `source` — never a match found in a comment, never a match found in a
+/// module-scope binding or helper function no test actually calls into, and never a match that
+/// only *appears* to be inside a test body because a `{`/`}` sitting inside a STRING or CHAR
+/// literal earlier in the file was miscounted as real source structure (a fix-round correction:
+/// the first version of this function counted every brace character regardless of context, so a
+/// single `let s = "{";` inside a test's own body left `depth` permanently off by one — the test
+/// fn's real closing brace could then never bring it back down to baseline, and every fixture
+/// referenced by any LATER function in the file, test or not, was wrongly counted as read).
 ///
 /// This is a line-oriented heuristic, not a real Rust parser (adding one — `syn`/`proc-macro2` —
 /// for a test-only guard would be a third-party dependency this crate does not otherwise need,
 /// R3). It tracks brace depth and the most recently seen `#[test]`/`#[tokio::test]` attribute to
-/// know which function body each line falls inside; see `strip_line_comment` for the comment-vs-
-/// string-literal handling. It is deliberately conservative in one direction only: a fixture
-/// reference that is real but sits outside this heuristic's notion of "inside a test" (the
-/// deferred limit documented on the test above) is reported UNREAD, never silently accepted —
+/// know which function body each line falls inside, skipping the CONTENTS of `"…"` string
+/// literals and simple `'…'` char literals (but not a bare lifetime like `'a`, which this
+/// function's own source uses in identifiers — see the inline comment on that distinction) when
+/// counting braces, so neither can throw off the running depth the way the bug above did. See
+/// `strip_line_comment` for the separate comment-vs-string-literal handling applied before this
+/// runs. Known, undefended gap: raw strings (`r"…"`, `r#"…"#`) are not recognised, so a `{`/`}`
+/// inside one would hit the same class of bug this fix just closed — acceptable today only
+/// because zero exist anywhere under `crates/aleph-cdp/tests/` (checked at the time of this fix:
+/// `rg 'r#*"' crates/aleph-cdp/tests` has no real hits), not because the gap cannot be reached.
+///
+/// It is deliberately conservative in one direction only: a fixture reference that is real but
+/// sits outside this heuristic's notion of "inside a test" (the deferred limit documented on the
+/// test above, and the raw-string gap just above) is reported UNREAD, never silently accepted —
 /// fail-red, not fail-green, is the only safe direction for a guard whose entire job is catching
 /// silence.
 fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String> {
@@ -1645,9 +1670,47 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
             pending_test_attr = false;
         }
 
-        // Char-by-char so the brace that opens a just-seen `fn`'s body lands at the right depth
-        // even when the signature and the `{` share one line (this file's own style).
-        for ch in line.chars() {
+        // Index-based, not `for ch in line.chars()`, because a string or char literal needs
+        // variable-length lookahead/skip so its `{`/`}` (and, for a char literal, its closing
+        // `'`) are never counted as real source structure — that skip is the whole fix for the
+        // false-GREEN bug this function's own doc describes.
+        let chars: Vec<char> = line.chars().collect();
+        let mut idx = 0;
+        while idx < chars.len() {
+            let ch = chars[idx];
+            if ch == '"' {
+                // Skip to the matching close quote, honouring `\`-escapes, so nothing inside —
+                // brace or otherwise — is counted.
+                idx += 1;
+                while idx < chars.len() {
+                    if chars[idx] == '\\' {
+                        idx += 2;
+                        continue;
+                    }
+                    if chars[idx] == '"' {
+                        idx += 1;
+                        break;
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+            if ch == '\'' {
+                // A char literal closes within two characters (`'x'`) or three (`'\x'`, a simple
+                // escape) — anything else is a LIFETIME (`'a`, `'static`, …), which this file's
+                // own test signatures use (`&'static str` in a sibling file) and which must NOT
+                // be treated as opening a literal: doing so would swallow the rest of the line
+                // looking for a closing `'` that a lifetime never has, which is the exact same
+                // class of false-GREEN bug this fix exists to close, just moved to a new trigger.
+                let is_escape = chars.get(idx + 1) == Some(&'\\');
+                let close_at = if is_escape { idx + 3 } else { idx + 2 };
+                if chars.get(close_at) == Some(&'\'') {
+                    idx = close_at + 1;
+                    continue;
+                }
+                // Not a char literal by this heuristic — fall through and treat the `'` as an
+                // ordinary character (it is never `{`/`}`, so this is safe either way).
+            }
             match ch {
                 '{' => {
                     depth += 1;
@@ -1667,6 +1730,7 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
                 }
                 _ => {}
             }
+            idx += 1;
         }
 
         if test_fn_active_depth.is_some() {
