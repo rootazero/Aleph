@@ -1851,13 +1851,15 @@ fn fixture_refs_in_test_bodies(
             }
             if ch == '"' {
                 // Skip to the matching close quote, honouring `\`-escapes, so nothing inside —
-                // brace or otherwise — is counted. Every escape is treated as exactly 2
-                // characters (backslash + one more), which is correct for `\\`, `\"`, `\'`, `\n`,
-                // `\r`, `\t`, `\0` but WRONG for `\xNN` (4 chars total) or `\u{…}` (variable
-                // length) — a `{` inside either would be miscounted as a real brace. Checked at
-                // the time of this fix: neither appears anywhere under `crates/aleph-cdp/tests/`
-                // today (`rg -F '\x' `/`rg -F '\u{'` — no real hits), so this is a documented gap,
-                // not a silently reached one.
+                // brace or otherwise — is counted (this loop never counts braces at all; it only
+                // watches for `\` and `"`). Every escape is treated as exactly 2 characters
+                // (backslash + one more), which is the wrong WIDTH for `\xNN` (4 chars total) or
+                // `\u{…}` (variable length) — but measured to have no effect on where the close is
+                // found: neither escape's own bytes (hex digits, `u`, `x`, `{`, `}`) can be
+                // mistaken for a `"` or a `\`, so the search still lands on the true closing quote
+                // either way, just by stepping through the extra bytes one at a time instead of
+                // jumping the escape's real width. Checked: neither form appears anywhere under
+                // `crates/aleph-cdp/tests/` today, but the gap is inert even where it exists.
                 idx += 1;
                 let mut closed = false;
                 while idx < chars.len() {
