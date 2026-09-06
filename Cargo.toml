@@ -165,6 +165,9 @@ serde = { version = "1.0", features = ["derive"] }
 # so without this a misplaced section is indistinguishable from a working one.
 # Serde-only: its two deps (serde, serde_core) are already in the tree.
 serde_ignored = "0.1"
+# Line-level diffs for the FileChange presentation side-channel. Same 2.x the
+# Panel already pins — `cargo tree -p alephcore -i similar` must show one copy.
+similar = { version = "2", default-features = false, features = ["text"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
 # Screen-text agent-state detection (ported from herdr, Apache-2.0). Consumed

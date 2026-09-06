@@ -491,6 +491,7 @@ dependencies = [
  "sha2",
  "sha3",
  "shellexpand",
+ "similar",
  "siphasher 1.0.3",
  "sqlite-vec",
  "strip-ansi-escapes",
