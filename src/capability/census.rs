@@ -1775,6 +1775,40 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         (body.join("\n"), lines.len().saturating_sub(1))
     }
 
+    /// Whether the line at `at` sits directly inside an `impl` block — walk
+    /// outward to the nearest strictly-lower-indent line (skipping blank
+    /// lines and same-indent siblings like doc comments/attributes, which
+    /// rustfmt never dedents below the item they decorate) and ask whether
+    /// THAT line opens an `impl`.
+    ///
+    /// Backs [`capability_wrappers`]'s `in_impl` bucket, which pins the
+    /// premise [`qualified_with_self`] depends on (every wrapper is a free
+    /// function, so `Self::` can never be a real call to one) — see there
+    /// for why that premise being wrong would matter.
+    ///
+    /// ⚠️ Known blind spot, measured 2026-09-06: a multi-line `impl<T>\nwhere\n
+    /// T: Bar,\n{` puts the block's OWN opening line at the SAME indent as its
+    /// body (the header wraps onto `where` and a bare `{`), so the nearest
+    /// strictly-lower-indent line above a `fn` inside it is that bare `{`,
+    /// not the `impl` keyword — this reads as `false` (under-reports, the
+    /// direction M3 exists to prevent). `grep -rn "^impl" --include='*.rs'
+    /// src/ | grep -c where` was 0 on that date; if it is ever nonzero, this
+    /// needs a real fix, not another sentence.
+    fn is_inside_impl_block(lines: &[String], at: usize) -> bool {
+        let indent = indent_of(&lines[at]);
+        for line in lines[..at].iter().rev() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let li = indent_of(line);
+            if li < indent {
+                let t = line.trim_start();
+                return t.starts_with("impl ") || t.starts_with("impl<");
+            }
+        }
+        false
+    }
+
     /// Is `line` a call to the free/associated function `name`?
     ///
     /// Rejects an identifier byte before the name (so `handle_plugins_install(`
@@ -1803,8 +1837,10 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
     /// `capability_wrappers()` derives a wrapper's identity from where its OWN
     /// definition lives — a bare `fn name` in some file that touches a
     /// `CapabilitySlot` — and every wrapper this census has ever found is a
-    /// free function (verified: none of the 39-plus derived names are defined
-    /// inside an `impl` block today). `Foo::install(` is still a concrete,
+    /// free function: `CapWrappers::in_impl` is the pin on that, asserted
+    /// empty by `every_capability_wrapper_is_a_free_function` below (Final
+    /// Review M3) rather than a one-time manual count that a later wrapper
+    /// could quietly falsify. `Foo::install(` is still a concrete,
     /// checkable string even though this scan does not verify `Foo` itself;
     /// `Self::install(` is not — `Self` names whatever type happens to
     /// enclose the CALLER, which this census never records, so it can never
@@ -1927,6 +1963,11 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         declines: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
         /// decline-wrapper name -> the file that defines it.
         decline_file: std::collections::BTreeMap<String, String>,
+        /// Wrapper names whose OWN `fn` line sits inside an `impl` block —
+        /// as `"{file}::{name}"`, since two wrappers can share a bare name.
+        /// Expected empty; see [`qualified_with_self`] for what relies on it
+        /// staying that way (Final Review M3).
+        in_impl: std::collections::BTreeSet<String>,
     }
 
     fn capability_wrappers() -> CapWrappers {
@@ -1934,6 +1975,7 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             installs: std::collections::BTreeMap::new(),
             declines: std::collections::BTreeMap::new(),
             decline_file: std::collections::BTreeMap::new(),
+            in_impl: std::collections::BTreeSet::new(),
         };
         for (rel, text) in rust_sources_under(&manifest_src()) {
             if !text.contains("CapabilitySlot") {
@@ -1962,13 +2004,17 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
                 }
                 let (body, _) = block_at(&lines, i);
                 let installs = slots_touched(&body, &statics, "install", &rel);
+                let declines = slots_touched(&body, &statics, "decline", &rel);
+                if (!installs.is_empty() || !declines.is_empty()) && is_inside_impl_block(&lines, i)
+                {
+                    w.in_impl.insert(format!("{rel}::{name}"));
+                }
                 if !installs.is_empty() {
                     w.installs
                         .entry(name.to_string())
                         .or_default()
                         .extend(installs);
                 }
-                let declines = slots_touched(&body, &statics, "decline", &rel);
                 if !declines.is_empty() {
                     w.declines
                         .entry(name.to_string())
@@ -2675,6 +2721,59 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
             }
         }
         out
+    }
+
+    /// Pins the premise [`qualified_with_self`] is built on: every capability
+    /// wrapper `capability_wrappers()` finds is a free function, so excluding
+    /// `Self::`-qualified call sites from `calls()` never hides a real call
+    /// to one of them (Final Review M3).
+    ///
+    /// Before this, that premise was a comment citing a one-time manual count
+    /// ("39-plus derived names, none inside an `impl` block today") with
+    /// nothing re-checking it. Writing the check found it was ALREADY false:
+    /// four wrappers are associated functions today —
+    /// `Config::set_effective_path`, `Config::decline_effective_path`,
+    /// `SharedTokenManager::set_global`, `PiiEngine::init`. Fixing that (make
+    /// them free functions, or teach the census to resolve `Self::` against
+    /// its enclosing `impl`) is out of scope for this pin and unrelated to
+    /// the plan this pin exists for — so they are a dated, named exception
+    /// list rather than silently making this test pass-always.
+    ///
+    /// By hand, on 2026-09-06, none of the four is exposed: `grep -rn
+    /// "Self::set_effective_path\|Self::decline_effective_path\|
+    /// Self::set_global"` finds nothing, and the two `Self::init(` hits
+    /// (`gateway/delivery_queue.rs`) are `DeliveryStore::init` — a same-named,
+    /// unrelated method colliding on the bare name `capability_wrappers()`
+    /// keys by, the file's own documented over-see working in the SAFE
+    /// direction here. That hand-check is exactly the kind of one-time count
+    /// this test exists to stop relying on for anything NEW: a fifth entry
+    /// below, or a `Self::`-qualified call appearing against any of the four
+    /// above, needs the same check redone before it is safe to widen this
+    /// list.
+    #[test]
+    fn every_capability_wrapper_is_a_free_function() {
+        let w = capability_wrappers();
+        let known_2026_09_06: std::collections::BTreeSet<&str> = [
+            "src/config/load.rs::decline_effective_path",
+            "src/config/load.rs::set_effective_path",
+            "src/gateway/security/shared_token.rs::set_global",
+            "src/pii/engine.rs::init",
+        ]
+        .into_iter()
+        .collect();
+        let new: Vec<&String> = w
+            .in_impl
+            .iter()
+            .filter(|e| !known_2026_09_06.contains(e.as_str()))
+            .collect();
+        assert!(
+            new.is_empty(),
+            "wrapper(s) newly defined inside an `impl` block, beyond the four measured \
+             2026-09-06: {new:?} — qualified_with_self's Self:: exclusion assumes every \
+             wrapper is a free function; a Self::-qualified call to one of these would be \
+             silently discarded as a non-match instead of counted. Check by hand whether \
+             anything calls the new one via Self:: before adding it to this test's list.",
+        );
     }
 
     /// Every handle installed inside a gated block is declined in that block's
