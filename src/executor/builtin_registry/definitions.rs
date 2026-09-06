@@ -2604,7 +2604,19 @@ mod tests {
     /// them and puts its winner to the one active-principal predicate, and
     /// `the_model_facing_copy_names_the_same_faces` pins this sentence
     /// verbatim, so the copy and the argument cannot drift apart.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_719;
+    ///
+    /// 2026-09-06: raised for the `queries` multi-angle sentence added to
+    /// `SearchTool::DESCRIPTION` in afed93678 (743 -> 931 B). afed93678 bumped
+    /// this ceiling on its own lineage and the merge erased that bump while
+    /// keeping the text; its sibling `REGISTRY_SCHEMA_CEILING_BYTES` bump
+    /// survived. The three questions were answered there: the cap and the
+    /// parameter name are runtime facts of THIS server, no schema carries them
+    /// under progressive disclosure, and both are pinned by
+    /// `SearchTool::DESCRIPTION.contains(..)` guards beside the tool. Set from
+    /// the ratchet's own printed total (113907 B = 94311 catalog + 16613
+    /// registry-only + 1039 injected + 1944 bridge), not computed from the
+    /// prior ceiling plus a delta.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 113_907;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
