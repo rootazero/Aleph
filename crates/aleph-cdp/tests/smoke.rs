@@ -94,6 +94,20 @@ async fn fake_server_can_report_a_protocol_error_and_can_push_an_unsolicited_eve
     );
 }
 
+/// D2: `push_event` must fail loudly, not silently no-op, when there are zero connections to
+/// deliver to. A caller can reach this deterministically by never connecting a client at all (the
+/// race window the reviewer found — calling `push_event` right after `connect_async` returns but
+/// before the server's own `accept_async` has registered the connection — is not needed to prove
+/// the same zero-connections state; it is just one way to reach it). The danger this guards
+/// against: a report-success no-op here would make the FIRST negative event assertion someone
+/// writes in Task 2 or 3 ("no event arrived") pass for entirely the wrong reason.
+#[tokio::test]
+#[should_panic(expected = "zero connections")]
+async fn push_event_fails_loudly_when_there_are_no_connections() {
+    let server = FakeCdpServer::start(scripted(vec![])).await;
+    server.push_event(json!({ "method": "Nobody.home", "params": {} }));
+}
+
 #[tokio::test]
 async fn fake_server_drop_socket_ends_the_stream() {
     let server = FakeCdpServer::start(scripted(vec![])).await;

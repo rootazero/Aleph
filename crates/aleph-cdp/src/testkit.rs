@@ -50,6 +50,20 @@ pub fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// What the fake does with one client frame.
+///
+/// Every variant here is plain data; what actually runs when a frame arrives is the *closure*
+/// that produces one (the constructor's closure passed to [`FakeCdpServer::start`], or the one
+/// built by [`scripted`]/[`scripted_slow`]). That closure runs SYNCHRONOUSLY inside the
+/// connection's own reader-loop task (`resolve`, called from `serve_ws`), on whichever tokio
+/// worker thread is currently polling it. **Never call a blocking primitive there** — no
+/// `std::thread::sleep`, no blocking I/O, no tight spin loop. Confirmed empirically while writing
+/// this crate's fix round: a responder closure that blocks its worker thread can starve
+/// [`FakeCdpServer::shutdown`]'s own 2s timeout on that SAME worker, identically at 2 and 8 total
+/// worker threads on a 10-core machine — the number of OTHER idle threads does not help, because a
+/// blocked thread cannot service the tokio timer/task wakeups tied to it. If a responder needs to
+/// wait, express it as an async value instead: [`Responder::Delay`] for "answers later" and
+/// [`Responder::Hang`] for "never answers" — both are genuinely-pending futures that cost no
+/// thread and cannot starve anything else in the runtime.
 #[derive(Clone, Debug)]
 pub enum Responder {
     /// Answer `{"id": …, "result": <value>}`.
@@ -65,22 +79,30 @@ pub enum Responder {
     Event(Value),
     /// Receive the frame, record it, and never reply, ever — no error, no event, no close.
     ///
-    /// Added in the fix round that added `shutdown`'s falsifier test (C1): none of the other five
-    /// variants can represent "the peer is unresponsive to this command" — `Drop` closes the
-    /// socket (a `Disconnected`, not a `Timeout`, from a real client's point of view), and `Delay`
-    /// always eventually answers. A real CDP peer that has wedged looks exactly like this, and
-    /// `CdpConnection`'s own per-command timeout (spec §3.4.2, `CdpError::Timeout`) has no other
-    /// way to be exercised against this fake — expect Tasks 2/3 to use this for that.
+    /// `Delay` says "the peer is slow"; `Hang` says "the peer never answers". They are distinct
+    /// facts a caller needs to tell apart: none of the other five variants can represent an
+    /// unresponsive peer — `Drop` closes the socket (a `Disconnected`, not a `Timeout`, from a
+    /// real client's point of view), and `Delay` always eventually answers, however long the
+    /// delay. A real CDP peer that has wedged looks exactly like `Hang`, and `CdpConnection`'s own
+    /// per-command timeout (spec §3.4.2, `CdpError::Timeout`) has no other way to be exercised
+    /// against this fake — expect Tasks 2/3 to use this for that.
     ///
-    /// Implemented as a genuinely-pending future (`std::future::pending`), not a blocking sleep:
-    /// it parks the connection's task cooperatively, costing no thread and not interfering with
-    /// any other task's timers — unlike a responder that calls a blocking primitive, which is a
-    /// tokio-wide hazard this crate must never introduce (see `shutdown`'s doc comment).
+    /// This is a recorded, deliberate amendment to the union this crate's testkit exposes (added
+    /// in the fix round that added `shutdown`'s falsifier test, C1), not a drift: an equivalent
+    /// long `Delay(Duration::from_secs(3600), ...)` was considered and rejected, because a magic
+    /// duration is a value the next reader can "fix" by shortening it, silently turning a wedge
+    /// into a slow reply with the guard still reporting green. `Hang` cannot be tuned into
+    /// something else, and it already has a consumer (`shutdown_panics_naming_a_connection_task_
+    /// that_will_not_end` in `tests/smoke.rs`), so it is not a zero-consumer abstraction.
+    ///
+    /// Implemented as a genuinely-pending future (`std::future::pending`), never a blocking sleep:
+    /// see this enum's own top-level doc for why a responder must never block its worker thread.
     Hang,
 }
 
 /// Build a responder from a method table. Any method not in the table answers `Reply({})`, which
-/// is what a void CDP method returns.
+/// is what a void CDP method returns. See [`Responder`]'s doc for what belongs in that table and
+/// what must never be — in particular, never a closure/entry that blocks its thread.
 pub fn scripted(
     entries: Vec<(&'static str, Responder)>,
 ) -> impl Fn(&Value) -> Responder + Send + Sync + 'static {
@@ -143,6 +165,11 @@ pub struct FakeCdpServer {
 }
 
 impl FakeCdpServer {
+    /// Bind an ephemeral loopback port and start accepting. `responder` answers any method the
+    /// per-method override table (see [`on`](FakeCdpServer::on)) does not.
+    ///
+    /// `responder` is called SYNCHRONOUSLY on the connection's own tokio worker thread for every
+    /// frame — see [`Responder`]'s doc for why it must never block that thread.
     pub async fn start(
         responder: impl Fn(&Value) -> Responder + Send + Sync + 'static,
     ) -> FakeCdpServer {
@@ -204,7 +231,8 @@ impl FakeCdpServer {
     ///
     /// The override table is consulted before the constructor's closure, so this always wins. That
     /// order is the point: a test builds the server once and then says what THIS case answers,
-    /// instead of rebuilding a whole script per case.
+    /// instead of rebuilding a whole script per case. See [`Responder`]'s doc before reaching for
+    /// [`Responder::Delay`]/[`Responder::Hang`] versus a blocking wait of your own.
     pub fn on(&self, method: &str, responder: Responder) {
         lock(&self.overrides).insert(method.to_string(), responder);
     }
@@ -252,8 +280,25 @@ impl FakeCdpServer {
 
     /// Push an unsolicited event frame to every connected client, in line behind everything
     /// already queued for that connection.
+    ///
+    /// Panics if there are zero connections. A caller can reach this with an empty `conns` list
+    /// by racing `connect_async`: `ConnHandles` is only pushed once `accept_async`'s handshake
+    /// completes (see `serve_ws`), which happens strictly after the TCP connect a caller's own
+    /// `connect_async` call returns from. Pushing an event to nobody and reporting success would
+    /// be a report-success no-op inside the very instrument other tests measure with — the danger
+    /// is a later NEGATIVE assertion ("no event arrived") that would then pass for entirely the
+    /// wrong reason. Fail by name instead: a test that races this finds out immediately, with a
+    /// message that says what happened, rather than getting a silently-empty push that looks like
+    /// a passing test until someone writes the wrong kind of assertion against it.
     pub fn push_event(&self, event: Value) {
-        for c in lock(&self.conns).iter() {
+        let conns = lock(&self.conns);
+        assert!(
+            !conns.is_empty(),
+            "FakeCdpServer::push_event: zero connections to push {event} to — either no client \
+             has connected yet, or this raced accept_async's registration; await a reply from the \
+             client first so this call has somewhere to deliver the event"
+        );
+        for c in conns.iter() {
             let _ = c.out_tx.send(Message::text(event.to_string()));
         }
     }
@@ -266,10 +311,26 @@ impl FakeCdpServer {
         }
     }
 
-    /// Stop accepting, close every socket, and wait until each connection task has fully ended
-    /// (both the reader loop and the writer it spawned — see `serve_ws`'s trailing `writer.await`
-    /// — so joining a connection task really does mean that socket is closed, not just that its
-    /// reader stopped).
+    /// Stop accepting, close every socket, and wait until each connection task has fully ended.
+    ///
+    /// "Fully" is a specific, code-level guarantee, not a timing claim: `serve_ws` does
+    /// `writer.abort(); writer.await;` before its own task (the one `shutdown` joins here) can
+    /// return, so "a connection is closed" gets the same derivation on both of its halves (reader
+    /// and writer) instead of one being inferred from the other. By construction, by the time
+    /// `shutdown` returns, BOTH split halves of every websocket (`src`, owned by the joined task,
+    /// and `sink`, owned by the `writer` task it awaits) have been dropped, and the OS-level close
+    /// (the TCP FIN) has already been issued — a fact about Rust's `.await` ordering, not
+    /// something that needs a race to observe.
+    ///
+    /// What this does NOT and CANNOT guarantee: how quickly a REMOTE peer's own runtime notices
+    /// that FIN and reports it to a caller of `ws.next()`. Measured directly while writing this
+    /// fix round: a client-side check right after `shutdown()` returns, with no wait at all, saw
+    /// the socket as "not yet closed" on roughly 90% of 30 runs — identically whether or not
+    /// `writer` was awaited (2/30 vs 1/30 "already closed" at 0ms; 30/30 "already closed" for BOTH
+    /// at a 1ms bound) — because that observation is dominated by the CLIENT's own reactor
+    /// granularity, not by anything the server controls. The guarantee this function makes is
+    /// that the server has released everything by the time it returns; it is not, and cannot be,
+    /// a guarantee about how fast a peer finds out.
     ///
     /// The wait is what makes this different from letting the value drop: when it returns, the
     /// client has already observed the close, so a test can assert on a pending call's error
@@ -483,7 +544,11 @@ fn dispatch<'a>(
                 true
             }
             Responder::Drop => {
-                let _ = ctl_tx.send(());
+                // Returning `false` alone already ends the read loop (`if !dispatch(...).await {
+                // break; }` in serve_ws), which then aborts+joins `writer` and drops the socket.
+                // A `ctl_tx.send(())` here was dead code — a fix-round review confirmed removing
+                // it changes no test's behaviour (`responder_drop_closes_the_socket_for_the_
+                // scripted_method` and `fake_server_drop_socket_ends_the_stream` both stay green).
                 false
             }
             Responder::Delay(d, inner) => {
