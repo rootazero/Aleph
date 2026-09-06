@@ -263,6 +263,42 @@ pub(crate) fn argv_names_dir(argv: &[String], dir: &Path) -> bool {
     })
 }
 
+/// Restrict a chromium user-data-dir to owner-only, if the platform has a
+/// bit for it.
+///
+/// `argv()` passes `--use-mock-keychain` (load-bearing — see its own doc
+/// comment), so every cookie/credential Chrome writes under here is
+/// encrypted with a constant, publicly-known key rather than one the OS
+/// keychain guards. The directory permission bit is the ONLY thing standing
+/// between another local account and that plaintext-equivalent data, for a
+/// udd that — unlike the old per-launch tmp profile — now persists across
+/// restarts for every Managed profile (Final Review M7).
+///
+/// Re-asserted unconditionally on every `spawn`, not just on first create: a
+/// udd from before this fix existed would otherwise keep whatever mode
+/// `create_dir_all` gave it (umask-dependent, not owner-only) forever.
+///
+/// Windows has no equivalent bit this crate sets today (ACLs are a separate,
+/// larger mechanism) — deliberately a no-op there, not an omission.
+async fn restrict_udd_to_owner(dir: &Path) -> Result<(), BrowserError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .await
+            .map_err(|e| BrowserError::LaunchFailed {
+                stage: "spawn",
+                detail: format!(
+                    "cannot restrict the chromium user-data-dir {} to owner-only: {e}",
+                    dir.display()
+                ),
+            })?;
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
 /// One Chromium process owned by this Aleph.
 pub(crate) struct ChromiumChild {
     child: Child,
@@ -291,6 +327,7 @@ impl ChromiumChild {
                     spec.user_data_dir.display()
                 ),
             })?;
+        restrict_udd_to_owner(&spec.user_data_dir).await?;
         // A leftover file from the PREVIOUS launch would be read as this one's
         // endpoint — a port that is either closed or, worse, somebody else's.
         let port_file = spec.user_data_dir.join(DEVTOOLS_PORT_FILE);
@@ -809,6 +846,33 @@ mod tests {
                 "--remote-debugging-port=0",
                 "about:blank",
             ]
+        );
+    }
+
+    /// M7: the udd directory must end up owner-only, whatever mode it
+    /// started with — `--use-mock-keychain` (below) means the directory
+    /// permission bit is the only thing standing between another local
+    /// account and the plaintext-equivalent cookie/credential data Chrome
+    /// writes under it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restrict_udd_to_owner_locks_down_a_directory_created_wide_open() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("udd");
+        std::fs::create_dir(&dir).expect("create dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod wide open");
+
+        restrict_udd_to_owner(&dir)
+            .await
+            .expect("restrict succeeds");
+
+        let mode = std::fs::metadata(&dir).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "udd must end up owner-only regardless of the mode create_dir_all gave it"
         );
     }
 

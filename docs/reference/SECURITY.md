@@ -1136,6 +1136,30 @@ in `~/.aleph/data/browser/chromium/<profile>.json`, because a browser Aleph
 cannot find after a crash is a browser Aleph cannot kill. That file is readable
 by the same local user who could already drive the port, so it widens nothing.
 
+**Data at rest in the persistent profile, and why that conclusion does NOT
+extend to it (2026-09-06):** every managed launch's argv includes
+`--use-mock-keychain` — load-bearing, not incidental: without it, Chrome's
+first navigation in every page hangs forever on any HOME with no usable login
+Keychain (a launchd service, a sandboxed host, this repo's own scratch-HOME
+QA), because the OS credential-store call it would otherwise make never
+returns. The flag's cost is that Chrome then encrypts cookies and saved
+credentials with a constant, publicly-known key instead of one the OS
+keychain guards. Before this plan that only mattered for the lifetime of one
+launch — the profile lived in a per-launch tmp directory that was gone at
+process exit. This plan gave every Managed profile a durable
+`chromium-udd/<session_key>` directory that now survives restarts, so the
+same constant-key encryption now protects data that persists on disk instead
+of data that did not outlive the process. Unlike the debug-port paragraph
+above, this does **not** widen nothing: the directory is created (and
+re-asserted on every launch) owner-only (`0o700`), which keeps live access
+inside the same local-user boundary the debug port already relies on, but a
+backup or a synced copy of that directory is outside that boundary, and
+anyone who can read it decrypts the saved credentials without ever touching
+the OS keychain. `--use-mock-keychain` itself is not the thing to remove —
+doing so reopens the permanently-hung-navigation defect this plan exists to
+fix — so the directory permission is the mitigation available today, not the
+flag.
+
 ⚠️ **What the local-user boundary does NOT cover, and it is an open finding, not
 a stated position:** `playwright-cli`'s session namespace is machine-global and
 Aleph names its session after the *profile*, so the common name is literally
