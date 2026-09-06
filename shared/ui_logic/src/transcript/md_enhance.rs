@@ -137,11 +137,25 @@ pub fn find_path_refs(line: &str) -> Vec<PathRef> {
 
 fn normalize_multiline_links(md: &str) -> String {
     // `[label\n  more](url)` → `[label more](url)`; fenced code exempt.
+    // Invariant: a fence marker line is always emitted as its own line and
+    // is never appended to a pending unclosed-link label. So a fence
+    // marker line flushes any pending label first (as its own line, since
+    // it's stored without its trailing `\n`), then toggles fence state and
+    // is emitted unchanged — before the label-continuation logic below
+    // ever gets a chance to swallow it.
     let mut out = String::with_capacity(md.len());
     let mut in_fence = false;
     let mut pending: Option<String> = None;
     for line in md.split_inclusive('\n') {
-        if line.trim_start().starts_with("```") { in_fence = !in_fence; }
+        if line.trim_start().starts_with("```") {
+            if let Some(p) = pending.take() {
+                out.push_str(&p);
+                out.push('\n');
+            }
+            in_fence = !in_fence;
+            out.push_str(line);
+            continue;
+        }
         if let Some(mut p) = pending.take() {
             if !in_fence && !line.contains(']') && !line.trim().is_empty() {
                 p.push(' ');
@@ -214,12 +228,12 @@ pub fn enhance(markdown: &str, streaming: bool) -> Enhanced {
                     if let Some(kind) = AdmonitionKind::parse(inner[..close].trim()) {
                         let mut body: Vec<String> = Vec::new();
                         let first = inner[close + 1..].trim();
-                        if !first.is_empty() { body.push(first.to_string()); }
+                        if !first.is_empty() { body.push(linkify_bare_urls(first)); }
                         while let Some(next) = lines.peek() {
                             let n = next.trim_start();
                             let Some(q) = n.strip_prefix('>') else { break };
                             if q.trim_start().starts_with("[!") { break; }
-                            body.push(q.trim().to_string());
+                            body.push(linkify_bare_urls(q.trim()));
                             lines.next();
                         }
                         while body.last().is_some_and(|s| s.is_empty()) { body.pop(); }
@@ -307,5 +321,28 @@ mod tests {
     fn multiline_link_labels_are_joined_even_while_streaming() {
         let e = enhance("前缀 [\n](https://example.com)", true);
         assert_eq!(e.markdown, "前缀 [](https://example.com)");
+    }
+
+    #[test]
+    fn admonition_bodies_get_bare_url_autolink_like_ordinary_lines_do() {
+        let e = enhance("> [!NOTE] see https://example.com/x", false);
+        assert_eq!(
+            e.markdown,
+            "> **[!NOTE]** see [https://example.com/x](https://example.com/x)\n\n"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_link_bracket_before_a_fence_does_not_fuse_onto_the_fence_marker() {
+        let src = "[abc\n```\nx\n```\n";
+        // The fence marker line must survive `normalize_multiline_links` as
+        // its own line, not fused onto the abandoned `[abc` label.
+        assert_eq!(normalize_multiline_links(src), src);
+        // And `enhance` must therefore still treat the fence body as fenced
+        // (untouched, not run through admonition/URL-linkify handling) and
+        // parity must not flip: the real closing fence must not be
+        // misread as a second opener.
+        let e = enhance(src, false);
+        assert_eq!(e.markdown, "[abc\n```\nx\n```\n");
     }
 }
