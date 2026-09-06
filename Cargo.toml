@@ -359,6 +359,14 @@ tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
 aleph-protocol = { path = "shared/protocol" }
+# Test-only: `src/tools/presentation_census.rs` calls the REAL `display_name`
+# / `DISPLAY_NAMES` instead of scraping their source. `default-features =
+# false` is required — this crate's `default` is `["wasm"]` and would pull
+# wasm-bindgen / web-sys into alephcore's test build. With defaults off it
+# adds no new crates to the graph (same spelling `interfaces/tui` uses), and
+# there is no cycle: shared-ui-logic depends on aleph-protocol, never on
+# alephcore.
+shared-ui-logic = { path = "shared/ui_logic", default-features = false }
 proptest = "1.4"
 rand = "0.10"
 http-body-util = "0.1"

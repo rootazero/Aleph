@@ -389,6 +389,7 @@ pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
 /// so the model-facing text (built from `value` right after) never carries
 /// it. Only a top-level object key is honoured — a nested one is a tool bug
 /// the census (`presentation_census`) will name.
+#[must_use]
 pub fn hoist_presentation(value: &mut serde_json::Value) -> Option<aleph_protocol::Presentation> {
     let obj = value.as_object_mut()?;
     let raw = obj.remove(aleph_protocol::PRESENTATION_KEY)?;

@@ -57,6 +57,16 @@ pub mod turn_budget;
 mod types;
 pub mod usage;
 
+// Source-level + registry census: content-mutating builtins must attach a UI
+// presentation, and every registered tool must have a row label (or a
+// deliberate ruling that it doesn't need one). Test-only, so it is gated here
+// rather than carrying a `#[cfg(test)]` inside the file — an attribute above
+// a `mod` gates whatever item follows it, and inserting a new one between the
+// attribute and its intended target is a documented way to silently move the
+// gate.
+#[cfg(test)]
+mod presentation_census;
+
 // Markdown skill system
 pub mod markdown_skill;
 

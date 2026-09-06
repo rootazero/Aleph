@@ -12,8 +12,11 @@ use serde_json::Value;
 pub const ARGS_CLIP: usize = 100;
 
 /// Aleph tool name → row label. Anything not listed is humanised.
-/// The alephcore census (`presentation_census.rs`) asserts every registered
-/// builtin either appears here or in its explicit fallback list.
+/// The alephcore census (`presentation_census.rs`) calls this table and
+/// [`display_name`] directly and asserts: every key here names a registered
+/// tool, no key is duplicated, no half of an entry is blank, every registered
+/// tool renders a non-blank label, and every content-mutating tool has an
+/// explicit entry rather than the fallback.
 ///
 /// Keys verified against the live registry (`src/builtin_tools/`,
 /// `src/tools/tool_search.rs`, `src/agents/subagent_tool/mod.rs`) — see
