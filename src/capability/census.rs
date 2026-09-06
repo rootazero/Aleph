@@ -779,7 +779,7 @@ mod tests {
     /// the SUM, never a bare count of either side, because that is the form
     /// that survives further migration: `raw` and `slots` move against each
     /// other as handles migrate (today: 1 raw, all of it
-    /// `route_handle::GLOBAL`, + 46 slots), and only the sum is invariant.
+    /// `route_handle::GLOBAL`, + 48 slots), and only the sum is invariant.
     ///
     /// Neither of those two assertions can see the exemption ITSELF growing:
     /// widen the filter below to also swallow a second raw handle and
@@ -812,15 +812,19 @@ mod tests {
         );
         assert_eq!(
             raw + slots,
-            48,
+            49,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             48. Never assert either side alone: raw shrinks and slots grows as \
+             49. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
-             investigate before editing this number. Last moved 2026-09-04: \
-             47 -> 48 when `heartbeat/service` was added, so `users.update`'s \
-             deactivation freeze had a fourth subsystem to reach.",
+             investigate before editing this number. Last moved 2026-09-06: \
+             48 -> 49. NOT a new capability handle. Two lineages each added one \
+             slot and each bumped this constant by one from a DIFFERENT base \
+             (b359f75e4 added `search::handle::GLOBAL_SEARCH_HANDLE`, 46 -> 47; \
+             bb2c5ed4c added `tasks::heartbeat::GLOBAL_HEARTBEAT`, 47 -> 48). \
+             The text merge kept both slots and only one of the two bumps. Both \
+             slots are in `ALL_SLOTS`.",
             raw + slots
         );
 
