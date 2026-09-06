@@ -39,7 +39,7 @@ pub enum BrowserError {
         "No Chromium for the managed browser driver ({tried}). \
              Run `playwright-cli install-browser chromium`, ask me to run \
              `runtime_manage{{action:\"install\", capability:\"chromium\"}}`, \
-             or pin one with [browser.runtime] binary_path."
+             or pin one with [general.browser.runtime] binary_path."
     )]
     ChromiumUnavailable { tried: String },
 

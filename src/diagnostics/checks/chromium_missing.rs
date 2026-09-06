@@ -59,8 +59,8 @@ fn missing_finding(tried: impl std::fmt::Display) -> Finding {
     .with_fix_hint(
         "Run `playwright-cli install-browser chromium`, ask Aleph to run \
          `runtime_manage{action:\"install\", capability:\"chromium\"}`, or pin an \
-         installed browser with [browser.runtime] binary_path. On a network that \
-         blocks Playwright's CDN, set [browser.runtime] download_host to a mirror first.",
+         installed browser with [general.browser.runtime] binary_path. On a network that \
+         blocks Playwright's CDN, set [general.browser.runtime] download_host to a mirror first.",
     )
 }
 

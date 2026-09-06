@@ -404,4 +404,95 @@ mod tests {
             );
         }
     }
+
+    /// Final-review I1 (`31c963e3b..`): six operator-facing sentences named
+    /// `[browser.runtime]`, a section `Config` has never had — the real path
+    /// is `[general.browser.runtime]` (`GeneralConfig::browser` is not
+    /// `#[serde(flatten)]`, so there is no top-level `browser` table). Because
+    /// `Config` does not `deny_unknown_fields`, the wrong sentence parses,
+    /// saves, and reaches nothing: an operator who follows it exactly gets a
+    /// config that keeps failing the same check it was written to fix.
+    ///
+    /// Pinned here rather than as a fresh string comparison (判据 §10 — that
+    /// would only prove two literals agree with each other, not that either
+    /// names something real): every bracketed, `browser`-mentioning path
+    /// found in these four files is deserialized as a real `Config` fragment
+    /// through THIS module's own dead-key scanner, the same one
+    /// `core/config-parse` uses to answer "is this key actually read" for an
+    /// operator's real file. A path that reaches no field reports itself as
+    /// dead here exactly the way it would in a live config.
+    fn browser_paths_named_in_operator_facing_text() -> Vec<(&'static str, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = Vec::new();
+        for rel in [
+            "src/browser/error.rs",
+            "src/browser/chromium_resolve.rs",
+            "src/diagnostics/checks/chromium_missing.rs",
+            "src/builtin_tools/runtime_manage.rs",
+        ] {
+            let text = std::fs::read_to_string(root.join(rel))
+                .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let bytes = text.as_bytes();
+            let mut i = 0usize;
+            // NOT "find the next `]` anywhere after this `[`" — these files'
+            // `#[error(...)]` attributes wrap multi-line strings that
+            // themselves contain the target `[general.browser.runtime]`, so
+            // the attribute's own opening `[` would greedily pair with the
+            // FIRST `]` it finds, which is the section path's closing
+            // bracket, not the attribute's — silently swallowing the real
+            // site into a giant, filtered-out candidate (measured: this is
+            // exactly why the first version of this scan found 6 sites, not
+            // 7, and missed `error.rs` entirely). Instead: a `[` only starts
+            // a candidate if it is IMMEDIATELY followed by a contiguous run
+            // of lowercase/`_`/`.` bytes that ends in `]`, checked without
+            // ever searching past unrelated brackets.
+            while let Some(off) = text[i..].find('[') {
+                let start = i + off;
+                let mut j = start + 1;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_lowercase() || bytes[j] == b'_' || bytes[j] == b'.')
+                {
+                    j += 1;
+                }
+                if j > start + 1 && bytes.get(j) == Some(&b']') {
+                    let candidate = &text[start + 1..j];
+                    if candidate.contains("browser") {
+                        found.push((rel, candidate.to_string()));
+                    }
+                }
+                i = start + 1;
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_operator_facing_browser_config_path_is_actually_read() {
+        let found = browser_paths_named_in_operator_facing_text();
+        assert!(
+            found.len() >= 7,
+            "derived only {} operator-facing browser config paths across the \
+             four known sites; 7 were measured on 2026-09-06 (one file states \
+             the section twice). A scan that stopped matching makes this \
+             guard pass by finding nothing: {found:?}",
+            found.len()
+        );
+        let mut wrong: Vec<String> = Vec::new();
+        for (rel, path) in &found {
+            let toml = format!("[{path}]\nbinary_path = \"/nonexistent\"\ndownload_host = \"https://example.invalid\"\n");
+            let (_config, dead): (crate::config::Config, Vec<String>) =
+                deserialize_reporting_dead_keys(&toml).unwrap_or_else(|e| {
+                    panic!("{rel} names {path:?}, which is not even valid TOML syntax: {e}")
+                });
+            if !dead.is_empty() {
+                wrong.push(format!("{rel} says [{path}] — reaches nothing: {dead:?}"));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "these operator-facing sentences name a config path Config does \
+             not read (parses, saves, fixes nothing):\n  {}",
+            wrong.join("\n  ")
+        );
+    }
 }

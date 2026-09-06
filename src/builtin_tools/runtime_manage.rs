@@ -685,7 +685,7 @@ async fn install_chromium(
                 false,
                 format!(
                     "`install-browser chromium` exited 0 but no browser resolves afterwards ({}). \
-                     Check [browser.runtime] binary_path and download_host.",
+                     Check [general.browser.runtime] binary_path and download_host.",
                     row.status
                 ),
             ),
@@ -695,7 +695,7 @@ async fn install_chromium(
             false,
             format!(
                 "chromium install failed (exit {}): {}. If this network blocks Playwright's \
-                 CDN, set [browser.runtime] download_host to a mirror and try again.",
+                 CDN, set [general.browser.runtime] download_host to a mirror and try again.",
                 status.code().unwrap_or(-1),
                 String::from_utf8_lossy(&stderr_buf).trim()
             ),

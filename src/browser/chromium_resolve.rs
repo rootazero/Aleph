@@ -126,7 +126,7 @@ pub(crate) enum ChromiumSource {
 impl ChromiumSource {
     pub(crate) const fn label(self) -> &'static str {
         match self {
-            Self::Pinned => "pinned by [browser.runtime] binary_path",
+            Self::Pinned => "pinned by [general.browser.runtime] binary_path",
             Self::System => "a system Chromium-family browser",
             Self::PlaywrightManaged => "Playwright's managed Chromium",
         }
@@ -316,7 +316,7 @@ pub(crate) async fn resolve_binary(
             });
         }
         return Err(BrowserError::ChromiumUnavailable {
-            tried: format!("[browser.runtime] binary_path = {pin:?} does not exist"),
+            tried: format!("[general.browser.runtime] binary_path = {pin:?} does not exist"),
         });
     }
 
