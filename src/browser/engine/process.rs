@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Engine;
 use crate::browser::error::BrowserError;
+use crate::browser::profile::BrowserType;
 
 /// Extension every sidecar record is written with.
 const SIDECAR_EXT: &str = "json";
@@ -617,6 +618,21 @@ pub struct LaunchRequest {
     pub data_dir: PathBuf,
     pub headless: bool,
     pub proxy: Option<String>,
+    /// Chromium only: **which member of the Chromium family** to resolve on
+    /// disk — the profile's own `browser` field
+    /// (`super::super::profile::BrowserProfile`). obscura ignores it, the same
+    /// way Chromium ignores `stealth` below; the two engines each carry the
+    /// other's inapplicable knobs rather than the request splitting in two.
+    ///
+    /// **Carried rather than defaulted at the point of use (R68).** Resolving
+    /// `BrowserType::default()` inside the launcher would make this field
+    /// unreachable on the Cdp path: a profile configured for Brave or Edge
+    /// would silently get Chromium, with nothing anywhere reporting that the
+    /// operator's setting had been ignored — a no-op that reports success
+    /// (判据 §11), in a user-facing setting. The request is the only thing that
+    /// knows which profile it belongs to, so it is the only thing that can
+    /// answer this.
+    pub browser: BrowserType,
     /// obscura only (`--allow-private-network`, spec §6.2): passed **only**
     /// when this profile's network policy already permits private ranges.
     /// Chromium has no such switch; Aleph's own SSRF guard is the gate there.

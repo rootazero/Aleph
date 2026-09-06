@@ -31,7 +31,7 @@ use super::process::{
 };
 use super::Engine;
 use crate::browser::error::BrowserError;
-use crate::browser::profile::{BrowserRuntimeConfig, BrowserType};
+use crate::browser::profile::BrowserRuntimeConfig;
 use crate::utils::no_window::NoWindow;
 
 /// How long the `DevToolsActivePort` file may take to appear before the launch
@@ -441,12 +441,15 @@ impl ChromiumChild {
 /// re-packages the result and nothing else. (Compare `ChromiumChild::from_parts`'
 /// doc, which refuses a second endpoint source.)
 ///
-/// ⚠️ [`LaunchRequest`] (`super::process`) carries no `BrowserType` field, so
-/// [`Self::launch`] always resolves for [`BrowserType::default()`] (Chromium)
-/// — mirroring `diagnostics/checks/chromium_missing.rs:164`. A profile's own
-/// `browser` field (Chrome/Brave/Edge) is therefore unreachable on this path
-/// until a later task threads it through `LaunchRequest`; flagged in the
-/// Task 5 report rather than silently worked around.
+/// **Which** Chromium is the request's to say, not this type's (R68).
+/// [`Self::launch`] resolves for `req.browser`, so a profile configured for
+/// Chrome, Brave or Edge reaches `chromium_resolve::resolve_binary` as itself
+/// — the same way `playwright_cli.rs:421` passes `&launch.browser`. Resolving
+/// `BrowserType::default()` here instead would make the profile's `browser`
+/// field unreachable on this path: an Edge profile would launch Chromium and
+/// nothing would report that the setting had been ignored, which is a no-op
+/// that reports success (判据 §11) in a user-facing setting. Pinned by
+/// `the_launch_resolves_the_requests_own_browser_type`.
 pub struct ChromiumLauncher {
     runtime: BrowserRuntimeConfig,
 }
@@ -493,12 +496,12 @@ impl EngineProcess for ChromiumLauncher {
             .ok_or_else(|| BrowserError::ChromiumUnavailable {
                 tried: "no playwright-cli found on PATH or in the runtime ledger".to_string(),
             })?;
-        let resolved = crate::browser::chromium_resolve::resolve_binary(
-            &self.runtime,
-            &BrowserType::default(),
-            &cli,
-        )
-        .await?;
+        // R68: the REQUEST's browser, never `BrowserType::default()` — see the
+        // type's doc comment. This is the only place a profile's `browser`
+        // field can reach the resolver on this path.
+        let resolved =
+            crate::browser::chromium_resolve::resolve_binary(&self.runtime, &req.browser, &cli)
+                .await?;
         let spec = ChromiumLaunchSpec {
             binary: resolved.path,
             user_data_dir: req.data_dir.clone(),
@@ -925,6 +928,57 @@ mod tests {
                 .expect("second kill"),
             "an already-reaped launch is gone, and a zero grace must not turn \
              that determinate answer into a false"
+        );
+    }
+
+    /// R68: the launch resolves the REQUEST's `BrowserType`, not a default.
+    ///
+    /// **A SOURCE pin, and the report says so rather than implying more.**
+    /// `launch` reaches `resolve_binary` only after `managed_cli_path` finds a
+    /// real `playwright-cli`, and `resolve_binary` then walks the filesystem
+    /// for an installed browser — so no unit test can observe the argument
+    /// arriving without a provisioned toolchain and a browser on disk. Same
+    /// shape and the same justification as
+    /// `manager.rs`'s `the_boot_hook_still_calls_the_orphan_sweep`.
+    ///
+    /// What this therefore proves is that the argument EXPRESSION is
+    /// `&req.browser`, not that the resolver honoured it. That is exactly the
+    /// regression being guarded: the defect it replaces was a literal
+    /// `&BrowserType::default()` at this call, which no runtime assertion in
+    /// this crate could ever have caught either.
+    ///
+    /// Comment lines are stripped before the negative assertion, because both
+    /// the type's doc comment and the call's own comment name
+    /// `BrowserType::default()` in order to say "never this" — a census that
+    /// read them would be reading the explanation as if it were the code
+    /// (判据 §1: the comment is the side that lies).
+    #[test]
+    fn the_launch_resolves_the_requests_own_browser_type() {
+        let src = include_str!("chromium.rs").replace('\r', "");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] bound matched nothing — this test would then be \
+             reading its own source"
+        );
+
+        let code: String = production
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let flat = code.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert!(
+            flat.contains("resolve_binary(&self.runtime, &req.browser, &cli)"),
+            "the chromium launch must resolve the request's own BrowserType — \
+             without it a profile set to Brave or Edge silently launches \
+             Chromium and nothing reports the setting was ignored"
+        );
+        assert!(
+            !flat.contains("BrowserType::default()"),
+            "a BrowserType::default() survives in production code; the \
+             profile's browser field is unreachable again"
         );
     }
 }
