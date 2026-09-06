@@ -10,6 +10,7 @@ mod connection;
 mod error;
 mod events;
 mod ids;
+pub mod methods;
 mod session;
 
 // The fake CDP peer other crates test against. Feature-gated so no production build carries it.
