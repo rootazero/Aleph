@@ -111,6 +111,22 @@ impl AlephHomeEnvGuard {
             previous,
         }
     }
+
+    /// Lock and REMOVE `$ALEPH_HOME` for the guard's lifetime, restoring
+    /// whatever it was on drop. For a test that needs `get_config_dir()` to
+    /// have no override at all — not a test-supplied one either — because it
+    /// is proving the "neither ALEPH_HOME nor HOME resolves" failure mode.
+    pub(crate) fn acquire_and_clear() -> Self {
+        let lock = ALEPH_HOME_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("ALEPH_HOME");
+        std::env::remove_var("ALEPH_HOME");
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
 }
 
 #[cfg(test)]

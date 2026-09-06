@@ -18,6 +18,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::runtimes::ledger::{CapabilityLedger, CapabilityStatus};
 use crate::runtimes::specs::EnvFromConfig;
@@ -142,7 +143,7 @@ impl RuntimeManageTool {
     pub fn new() -> Self {
         Self {
             locator: Arc::new(RealChromiumLocator),
-            spawner: Arc::new(RegistrySpawner),
+            spawner: Arc::new(RegistrySpawner::new()),
         }
     }
 
@@ -150,7 +151,7 @@ impl RuntimeManageTool {
     pub(crate) fn with_locator(locator: Arc<dyn ChromiumLocator>) -> Self {
         Self {
             locator,
-            spawner: Arc::new(RegistrySpawner),
+            spawner: Arc::new(RegistrySpawner::new()),
         }
     }
 
@@ -287,14 +288,33 @@ impl RuntimeManageTool {
                 // reported for a no-op": here a REAL effect gets reported as a
                 // failure.
                 let mut out = Self::list(locator).await;
+                // M3: `list`'s OWN verdict, not just its message, must be read
+                // before it is overwritten below — `list`'s ledger-failure arm
+                // answers `ok:false` with `runtimes: []`, and `[]` is only
+                // entitled to mean "I don't know" here, never "there are
+                // none" (判据 §8). Silently keeping that `[]` under `ok:true`
+                // would render an unreadable ledger as an empty one.
+                let list_failed = !out.ok;
+                let list_failure_reason = std::mem::take(&mut out.message);
                 out.ok = true;
-                out.message = format!(
-                    "Installing {name} in the background as job {job_id}. It downloads over the \
-                     network and will not finish inside a tool call, so poll it with \
-                     `bash{{process_action:\"wait\", process_id:{job_id}}}` (or \
-                     `process_action:\"poll\"` for a non-blocking peek). This tool's `list` \
-                     action also reports the job while it runs."
-                );
+                out.message = if list_failed {
+                    format!(
+                        "Installing {name} in the background as job {job_id}. It downloads over \
+                         the network and will not finish inside a tool call, so poll it with \
+                         `bash{{process_action:\"wait\", process_id:{job_id}}}` (or \
+                         `process_action:\"poll\"` for a non-blocking peek). The current runtime \
+                         list could not also be read ({list_failure_reason}) — the empty \
+                         `runtimes` below means UNKNOWN, not \"nothing installed\"."
+                    )
+                } else {
+                    format!(
+                        "Installing {name} in the background as job {job_id}. It downloads over \
+                         the network and will not finish inside a tool call, so poll it with \
+                         `bash{{process_action:\"wait\", process_id:{job_id}}}` (or \
+                         `process_action:\"poll\"` for a non-blocking peek). This tool's `list` \
+                         action also reports the job while it runs."
+                    )
+                };
                 out
             }
             Err(why) => RuntimeManageOutput {
@@ -336,10 +356,55 @@ pub(crate) trait InstallSpawner: Send + Sync {
     fn spawn(&self, capability: &str) -> Result<u64, String>;
 }
 
+/// Where [`install_chromium`] finds the `playwright-cli` binary to run
+/// `install-browser chromium` with.
+///
+/// Injected for the same reason [`ChromiumLocator`]/[`InstallSpawner`] are —
+/// and its absence was round 1's I2 finding wearing a second costume: the
+/// production answer (`probes::browser::managed_cli_path`) does a `which`
+/// PATH walk plus a ledger read, with no seam, so a test that wants to prove
+/// `install_chromium`'s real effect — the `tokio::select!` tee that makes
+/// `bash{process_action:"poll"}` show bytes — had no way to run a REAL
+/// subprocess and had to supply its own pushing closure instead, which stays
+/// green whether or not the tee itself ever runs (判据 §4). This seam lets a
+/// test point `install_chromium` at a trivial, test-written script.
+#[async_trait]
+pub(crate) trait ChromiumInstallCli: Send + Sync {
+    async fn cli_path(&self) -> Option<PathBuf>;
+}
+
+/// The production answer: the same PATH walk `chromium_row` and the doctor's
+/// twin probe use.
+pub(crate) struct RealChromiumInstallCli;
+
+#[async_trait]
+impl ChromiumInstallCli for RealChromiumInstallCli {
+    async fn cli_path(&self) -> Option<PathBuf> {
+        tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
+            .await
+            .unwrap_or(None)
+    }
+}
+
 /// The production spawner: the same registry `bash {background: true}` uses.
-pub(crate) struct RegistrySpawner;
+pub(crate) struct RegistrySpawner {
+    cli_locator: Arc<dyn ChromiumInstallCli>,
+}
 
 impl RegistrySpawner {
+    pub(crate) fn new() -> Self {
+        Self {
+            cli_locator: Arc::new(RealChromiumInstallCli),
+        }
+    }
+
+    /// The test seam: a `RegistrySpawner` that resolves the chromium install
+    /// CLI to a test-controlled path instead of walking the real PATH.
+    #[cfg(test)]
+    pub(crate) fn with_cli_locator(cli_locator: Arc<dyn ChromiumInstallCli>) -> Self {
+        Self { cli_locator }
+    }
+
     /// The registration half, separated from the work.
     ///
     /// Two reasons. **The label must match byte for byte.**
@@ -421,10 +486,11 @@ impl InstallSpawner for RegistrySpawner {
         let cap = capability.to_string();
         let live = Arc::new(LiveTail::new());
         let live_for_job = live.clone();
+        let cli_locator = self.cli_locator.clone();
         Self::register(
             format!("{INSTALL_JOB_PREFIX}{capability}"),
             live,
-            async move { run_install(&cap, &live_for_job).await },
+            async move { run_install(&cap, &live_for_job, &cli_locator).await },
         )
     }
 }
@@ -442,9 +508,10 @@ impl InstallSpawner for RegistrySpawner {
 async fn run_install(
     capability: &str,
     live: &Arc<LiveTail>,
+    cli_locator: &Arc<dyn ChromiumInstallCli>,
 ) -> crate::builtin_tools::code_exec::CodeExecOutput {
     if capability == CHROMIUM {
-        install_chromium(live).await
+        install_chromium(live, cli_locator).await
     } else {
         // `ensure_capability`'s subprocesses (curl|sh installers, npm global
         // installs, each OS's own bootstrap script) live several layers down
@@ -518,10 +585,11 @@ async fn chromium_row() -> RuntimeRow {
 
 /// Run the same command the ledger's post-install action runs, with the same
 /// environment.
-async fn install_chromium(live: &Arc<LiveTail>) -> crate::builtin_tools::code_exec::CodeExecOutput {
-    let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
-        .await
-        .unwrap_or(None);
+async fn install_chromium(
+    live: &Arc<LiveTail>,
+    cli_locator: &Arc<dyn ChromiumInstallCli>,
+) -> crate::builtin_tools::code_exec::CodeExecOutput {
+    let cli = cli_locator.cli_path().await;
     let Some(cli) = cli else {
         return install_output(
             false,
@@ -557,17 +625,16 @@ async fn install_chromium(live: &Arc<LiveTail>) -> crate::builtin_tools::code_ex
         Err(e) => return install_output(false, format!("chromium install could not run: {e}")),
     };
 
-    // Tee both streams into `live` as they arrive, and keep the bytes whole
-    // too: the failure message below still needs the complete stderr, which a
-    // ring only retains a tail of.
-    // Only stderr is read below (the failure message); stdout is teed into
-    // `live` the same as stderr but not otherwise consumed here.
-    let (_stdout_buf, stderr_buf) = {
+    // Tee both streams into `live` as they arrive. Only stderr is also kept
+    // whole (the failure message below needs the complete text, which a ring
+    // only retains a tail of) — stdout is teed and drained without being
+    // retained: this download's stdout can run to the same order of
+    // magnitude as the download itself, and nothing here reads it back.
+    let stderr_buf = {
         use crate::sandbox::live_tail::LiveStream;
         use tokio::io::AsyncReadExt;
         let mut stdout_pipe = child.stdout.take().expect("stdout was piped above");
         let mut stderr_pipe = child.stderr.take().expect("stderr was piped above");
-        let mut stdout_buf = Vec::new();
         let mut stderr_buf = Vec::new();
         let mut out_open = true;
         let mut err_open = true;
@@ -578,10 +645,7 @@ async fn install_chromium(live: &Arc<LiveTail>) -> crate::builtin_tools::code_ex
                 n = stdout_pipe.read(&mut out_chunk), if out_open => {
                     match n {
                         Ok(0) | Err(_) => out_open = false,
-                        Ok(n) => {
-                            live.push(LiveStream::Stdout, &out_chunk[..n]);
-                            stdout_buf.extend_from_slice(&out_chunk[..n]);
-                        }
+                        Ok(n) => live.push(LiveStream::Stdout, &out_chunk[..n]),
                     }
                 }
                 n = stderr_pipe.read(&mut err_chunk), if err_open => {
@@ -595,7 +659,7 @@ async fn install_chromium(live: &Arc<LiveTail>) -> crate::builtin_tools::code_ex
                 }
             }
         }
-        (stdout_buf, stderr_buf)
+        stderr_buf
     };
     let status = match child.wait().await {
         Ok(s) => s,
@@ -794,6 +858,21 @@ mod tests {
     /// what awaiting the actual installer would cost).
     #[tokio::test]
     async fn install_returns_a_job_id_immediately_instead_of_awaiting_the_download() {
+        // `install`'s success arm calls `Self::list`, which calls the REAL
+        // `Self::ledger()` unconditionally before ever consulting the
+        // (stubbed) locator below — so without its own isolated
+        // `$ALEPH_HOME`, this test's `Self::ledger()` call implicitly shares
+        // the ambient environment with whatever else `cargo test` is running
+        // concurrently. Measured: green alone, red running the whole module
+        // once `a_failing_ledger_still_reports_ok_for_a_real_spawn` started
+        // reliably clearing `$HOME`/`$ALEPH_HOME` for its own duration — that
+        // test's ledger-failure branch returns `runtimes: []` before ever
+        // calling `locator.locate()`, so this test's own locator delay was
+        // silently skipped and its elapsed-time assertion went red for a
+        // reason that had nothing to do with what it names.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+
         let locator_delay = std::time::Duration::from_millis(200);
         let spawner = StubSpawner::ok(42);
         let tool = RuntimeManageTool::with_parts(
@@ -846,21 +925,18 @@ mod tests {
     /// home directory at all — `CapabilityLedger::load_or_create` itself never
     /// errors; a missing or corrupted file degrades to a fresh in-memory
     /// ledger. So the failure is reproduced the way `get_config_dir` actually
-    /// produces it: no `$ALEPH_HOME` and no `$HOME`. `HomeEnvGuard` is the
-    /// established, mutex-guarded way this binary's tests touch `$HOME`
-    /// (`runtimes::post_install`) — reused here rather than hand-rolled
-    /// (判据 §16), and only the HOME lock is taken (never nested with
-    /// `AlephHomeEnvGuard`), so this cannot join the ABBA hazard
-    /// `HomeEnvGuards` exists to prevent.
+    /// produces it: no `$ALEPH_HOME` and no `$HOME`.
+    ///
+    /// `HomeEnvGuards::acquire_and_clear` (not a bare `HomeEnvGuard` plus an
+    /// assertion that `$ALEPH_HOME` happens to be unset, which is what this
+    /// test used to do): `cargo test`'s default parallel execution runs this
+    /// alongside OTHER tests in this same module that legitimately set
+    /// `$ALEPH_HOME` under their own guard, on a separate mutex — measured
+    /// red running the whole module, green only in isolation, which is
+    /// exactly the ABBA-adjacent race `HomeEnvGuards` exists to close.
     #[tokio::test]
     async fn a_failing_ledger_still_reports_ok_for_a_real_spawn() {
-        let _home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire();
-        assert!(
-            std::env::var_os("ALEPH_HOME").is_none(),
-            "this test needs ALEPH_HOME unset too, or get_config_dir() would \
-             still resolve through it and the ledger would load fine"
-        );
-        std::env::remove_var("HOME");
+        let _guard = crate::runtimes::post_install::HomeEnvGuards::acquire_and_clear();
 
         let spawner = StubSpawner::ok(99);
         let out = tool(spawner.clone())
@@ -880,6 +956,16 @@ mod tests {
         assert!(
             out.message.contains("99"),
             "the job id must still reach the model: {}",
+            out.message
+        );
+        // M3: the empty `runtimes` this response carries (inherited from
+        // `list`'s own failed ledger read) must not be silently readable as
+        // "there is nothing installed" — the message must say it is unknown.
+        assert!(out.runtimes.is_empty(), "{:?}", out.runtimes);
+        assert!(
+            out.message.contains("UNKNOWN") || out.message.contains("could not"),
+            "an empty `runtimes` next to a failed ledger read must say it is \
+             unknown, not silently pass as \"there are none\": {}",
             out.message
         );
     }
@@ -1051,6 +1137,110 @@ mod tests {
                 supported_here: true,
             }
         }
+    }
+
+    /// The I1 seam: resolves the chromium install CLI to a fixed,
+    /// test-written path instead of walking the real PATH.
+    struct FixedCliLocator(std::path::PathBuf);
+
+    #[async_trait]
+    impl ChromiumInstallCli for FixedCliLocator {
+        async fn cli_path(&self) -> Option<std::path::PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// I1 (round 2): the `tokio::select!` tee inside `install_chromium` is
+    /// what actually makes `bash{process_action:"poll"}` show bytes for a
+    /// running chromium install. Round 1's
+    /// `a_running_install_jobs_partial_output_is_visible_to_poll` proved
+    /// `attach_live` wiring, but its job pushed into the live tail ITSELF —
+    /// that guard stays green even if the tee inside `install_chromium` were
+    /// deleted outright (判据 §4: it asserts the call happened, not that the
+    /// effect arrived). This one runs the REAL `RegistrySpawner` →
+    /// `run_install` → `install_chromium` chain against a fake CLI script
+    /// that writes a known marker to stdout AND stderr, so the tee is the
+    /// only thing that could have put those bytes where `poll` reads them.
+    ///
+    /// The fake CLI exits 1 (a plain argument-style failure) so the test does
+    /// not also have to fake `chromium_row`'s post-install verification
+    /// (`Config::load` + the real resolver) — the tee runs identically
+    /// whether the child ultimately succeeds or fails.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn install_chromiums_real_subprocess_output_reaches_poll_through_the_tee() {
+        use crate::builtin_tools::process_registry::{process_registry, PollOutcome};
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cli = tmp.path().join("fake-playwright-cli");
+        const MARKER: &str = "AlephI1TeeMarker-c3f1a9";
+        // The `sleep` is load-bearing: without it the script exits before the
+        // test's poll loop ever runs, and the marker would only ever be
+        // observable through the FINISHED result — which proves nothing about
+        // the tee, since `stderr_buf` reaches the final message regardless of
+        // whether `live.push` is ever called. The sleep holds the job
+        // `Running` long enough that the ONLY way to see the marker in that
+        // window is through the live tail the tee writes into.
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\necho '{MARKER} stdout'\necho '{MARKER} stderr' >&2\nsleep 1\nexit 1\n"
+            ),
+        )
+        .expect("write fake cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake cli");
+
+        let spawner = RegistrySpawner::with_cli_locator(Arc::new(FixedCliLocator(cli)));
+        let job_id = spawner
+            .spawn(CHROMIUM)
+            .expect("the registry had a free slot");
+
+        // Poll until the tee has pushed the marker into the STILL-RUNNING
+        // job's live tail. `Done` is deliberately NOT accepted as proof here:
+        // the finished `CodeExecOutput` carries the complete stderr text
+        // regardless of whether `live.push` was ever called (it is built from
+        // the same accumulated buffer, not from the tail), so treating it as
+        // a satisfying answer would let a deleted tee still pass.
+        let mut saw_marker_while_running = false;
+        let mut finished_without_ever_seeing_it = false;
+        for _ in 0..400 {
+            match process_registry().poll(job_id, None) {
+                PollOutcome::Running {
+                    partial: Some(p), ..
+                } => {
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&p.stdout),
+                        String::from_utf8_lossy(&p.stderr)
+                    );
+                    if text.contains(MARKER) {
+                        saw_marker_while_running = true;
+                        break;
+                    }
+                }
+                PollOutcome::Done(_) => {
+                    finished_without_ever_seeing_it = true;
+                    break;
+                }
+                _ => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            !finished_without_ever_seeing_it,
+            "the job finished before the live tail ever showed the marker — \
+             the 1s sleep in the fake CLI should have made that impossible \
+             unless the tee itself never ran"
+        );
+        assert!(
+            saw_marker_while_running,
+            "poll never showed the fake CLI's own output through the live \
+             tail while the job was still running — the tee inside \
+             install_chromium did not reach it, or the wrong live tail was \
+             attached"
+        );
     }
 
     /// The catalogue face and the RPC face answer from the same table. A tool

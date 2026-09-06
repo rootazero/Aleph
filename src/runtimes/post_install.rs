@@ -240,6 +240,13 @@ impl HomeEnvGuard {
         std::env::set_var("HOME", value);
         guard
     }
+
+    /// Lock, snapshot, then REMOVE `$HOME` for the guard's lifetime.
+    pub(crate) fn acquire_and_clear() -> Self {
+        let guard = Self::acquire();
+        std::env::remove_var("HOME");
+        guard
+    }
 }
 
 #[cfg(test)]
@@ -286,6 +293,27 @@ impl HomeEnvGuards {
         // ALEPH_HOME first — the one and only order.
         let aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(aleph_home);
         let home = HomeEnvGuard::acquire_and_set(home);
+        Self {
+            _home: home,
+            _aleph_home: aleph_home,
+        }
+    }
+
+    /// Lock both, then REMOVE `$ALEPH_HOME` and `$HOME` for the guard's
+    /// lifetime — for a test that needs `get_config_dir()` to fail outright
+    /// (no fallback of any kind), which only happens when neither resolves.
+    ///
+    /// Taking `HomeEnvGuard` alone for this — as this codebase's own
+    /// `runtime_manage` ledger-failure test once did — races: `HOME_LOCK` and
+    /// `ALEPH_HOME_TEST_GUARD` are separate mutexes, so a test elsewhere in
+    /// the same binary that legitimately sets `$ALEPH_HOME` under its OWN
+    /// guard can supply the very fallback the `$HOME`-only test is trying to
+    /// rule out, whenever `cargo test`'s default parallel execution overlaps
+    /// them. Measured: green in isolation, red running the whole module.
+    pub(crate) fn acquire_and_clear() -> Self {
+        // Same fixed order as `acquire_and_set` — ALEPH_HOME first.
+        let aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_clear();
+        let home = HomeEnvGuard::acquire_and_clear();
         Self {
             _home: home,
             _aleph_home: aleph_home,
