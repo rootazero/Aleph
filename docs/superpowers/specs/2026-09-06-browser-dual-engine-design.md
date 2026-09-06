@@ -171,7 +171,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 
 | 层 | 谁产 | 内容 |
 |---|---|---|
-| `RawDom` | 每引擎一个取数器 | `engine`、`viewport{w,h,scroll_x,scroll_y,content_w,content_h,dpr}`、扁平化的各 frame（主 frame 在前，子 frame 带父偏移与 `frame_id/loader_id`）；每节点 `backend_node_id`、`parent`、tag、attrs、文本、`rect: Option<Rect>`（**`None` = 不生成盒**，唯一诚实的「不可见」表达）、`computed: Option<{display_none, visibility_hidden, opacity_zero, cursor_pointer, overflow_clip}>`、`shadow_root`、`is_clickable_hint: Option<bool>`（Chrome `DOMSnapshot` 给的） |
+| `RawDom` | 每引擎一个取数器 | `engine`、`viewport{w,h,scroll_x,scroll_y,content_w,content_h,dpr}`、扁平化的各 frame（主 frame 在前，子 frame 带父偏移与 `frame_id/loader_id`）；每节点 `backend_node_id`、`parent`、tag、attrs、文本、`rect: Option<Rect>`（**`None` = 这个引擎没给盒**，计入 `no_box`；它单独**不**判定不可见——Part 5 在 obscura 上量到行内 `<a>`/`<span>` 零四边形而 M11 在 HN 上量到真实盒，两次测量不一致，可见性不能压在它上面，见 §11 U9）、`computed: Option<{display_none, visibility_hidden, opacity_zero, cursor_pointer, overflow_clip}>`、`shadow_root`、`is_clickable_hint: Option<bool>`（Chrome `DOMSnapshot` 给的） |
 | `PageState` | **唯一**构建器 `PageState::build(raw, &mut RefTable)` | `engine`、`generation`、url、title、viewport、前序节点表：`role`（`role` 属性 → tag 映射表）、`name`（accname-lite：`aria-labelledby` → `aria-label` → `<label for>`/包裹 label/placeholder → `alt`/`title` → 可见后代文本 ≤80 字）、`value`、状态位（disabled/checked/expanded/selected/required/readonly/focused）、`rect`（页面坐标整数）、`interactive`、`visible`、`text`（自身文本）、`ref: Option<RefId>` |
 | 模型面 | 渲染器 `render_text(&PageState)` / `to_json` | 缩进文本树（默认观察）；完整 JSON 经 `browser_snapshot{format:"json"}` 取得，走与文本同一条 `bound_content` → `redact_wrap` → `offload_full_content` 路径（offload 后可由 `ctx_search` 取回）。工具结果今天没有图片之外的附件通道，所以「附件」的诚实实现是这个第二种 `format`，不是一个没有渲染者的字段（判据 §17） |
 
@@ -195,7 +195,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
   - textbox "Search" [ref=e612] @589,1144 153x21 [placeholder=Search…]
 ```
 
-几何只印在交互节点上；`visible=false` 的节点不进文本树，但 JSON 里保留并标 `visible:false`。头行的 `no_box`（无盒节点/总节点）与 `fetch`（这次取数的耗时，毫秒；撞上屏障时它就是那 25 s——取数器分不出屏障与普通延迟，所以标签只说它测到了什么）是给模型的两个运行时事实，不是判断。
+几何只印在交互节点上；`visible=false` 的节点不进文本树，但 JSON 里保留并标 `visible:false`。可见性以 `computed` 为准；`computed` 缺失（取数校验失败）时才回落到 `rect.is_some()`；可见但无盒的节点照常进树、有 ref、只是不印 `@x,y wxh`。头行的 `no_box`（无盒节点/总节点）与 `fetch`（这次取数的耗时，毫秒；撞上屏障时它就是那 25 s——取数器分不出屏障与普通延迟，所以标签只说它测到了什么）是给模型的两个运行时事实，不是判断。
 
 ### 4.3 ref 与代数（约定第一次有代码）
 
@@ -360,7 +360,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 | `open` | 就绪门（`/json/version` **且**能导航）对两引擎都成立；`--use-mock-keychain` 断言原样保留 |
 | `snapshot` | 两引擎对同一本地页面产出的树在几何之外语义相同；头行 `engine` 正确 |
 | `click` | ref / `Coordinates` 两张脸各自改变 URL；旧代 ref 在导航后报 `StaleRef` |
-| `stall` | 本地页面内置 20 s 忙循环脚本（不依赖 Wikipedia）；工具结果带 `EngineBusy` 且引擎事后仍活着、未被 60 s 断头台杀掉 |
+| `stall` | obscura 约 5 s 就会杀掉页面自己的忙循环任务（Part 5 实测 `autonomous browser task exceeded its task budget`），合成不出 20 s 屏障；本阶段用 `cdp_command_timeout_secs = 3` + 一个阻塞 ≥4 s 的本地页面证明「超时 → `EngineBusy` → 引擎仍活着、不重发」这条路径 |
 | `switch` | 源引擎设 cookie → 切换 → 目标引擎 `getAllCookies` 里有它、当前 URL 恢复、源进程已退出 |
 | `reap` | `kill -9` server 后重启，obscura 孤儿被清扫，Chromium 孤儿不误杀 |
 | `caps` | 能力表逐项证伪 |
@@ -425,7 +425,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 
 | # | 问题 | 怎么测 | 影响 |
 |---|---|---|---|
-| U1 | obscura `--port 0` 是否支持、stdout 是否宣告端点 | `obscura serve --port 0`，看 stdout 与 `/json/version` | §6.2 两个备选选哪个 |
+| U1 | ~~obscura `--port 0` 是否支持~~ **已答（Part 5 真机）**：绑到临时端口后 banner 与 `/json/version` 都报 `ws://127.0.0.1:0`，且 banner 在 bind 前打印（恒真）⇒ 只走「Aleph 分配端口 + 归属核验」 | 已测 | §6.2 只剩第二支 |
 | U2 | obscura 对 `display:none` 元素 `getBoxModel` 返回什么（诚实失败 / 常量四边形 / 空盒） | HN 上对隐藏元素调用并比对源码 `dom.rs:322-327` 的回落分支 | 过渡取数器要不要识别常量四边形 |
 | U3 | obscura `DOM.getDocument{pierce:true}` 是否带 iframe 内容 | 本地含 iframe 的页面 | 过渡取数器的 frame 扁平化 |
 | U4 | Chromium `DOMSnapshot.captureSnapshot` 在 OOPIF 上的 `documents[]` 偏移 | 本地跨源 iframe 页面 | Chromium 取数器的偏移计算 |
@@ -433,6 +433,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 | U6 | obscura `Network.setCookies` 对 `sameSite`/`expires` 字段的接受度 | 往返一组 cookie | 迁移保真 |
 | U7 | `browser_managed` 的 `open`/`tools` 在 `driver=cdp` 下的基线（S3 前先跑一次 playwright 全场景基线记录） | 现有脚本 | 对齐 QA 的基线 |
 | U8 | 上游 PR 的最小 diff（`domsnapshot.rs` 读 `PreparedRender::layout()`）能否不改 `Page` 的公开面 | 在克隆里试改并跑 `render-repros` | D-C 的落地成本 |
+| U9 | obscura 对行内元素（`<a>`/`<span>`）在哪些放置下给出真实盒：body 直下 / `<p>` 内 / `<td>` 内 / 显式 block 父元素内，对照 Chrome 与 HN（M11） | T0 探针 | §4.1 的 `no_box` 语义与上游 issue 的措辞 |
 
 ---
 
