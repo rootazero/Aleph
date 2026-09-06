@@ -1,8 +1,17 @@
 //! Newtypes for the two CDP identifiers this crate routes on.
 //!
-//! Both are `#[serde(transparent)]`: a `sessionId` on the wire is a bare JSON string, and a struct
-//! that serialised as `{"0": "…"}` would be a silently wrong frame that the peer answers with a
-//! parse error rather than a refusal we can read.
+//! Both are `#[serde(transparent)]`. For a single-field tuple struct like these, serde's derive
+//! already serialises the wire form as the bare inner value (`"S1"`, not `{"0": "S1"}`) via
+//! `serialize_newtype_struct`/`deserialize_newtype_struct` — the attribute does not change that
+//! for either of these types today, and `ids_are_transparent_over_serde_and_errors_name_what_failed`
+//! in `tests/smoke.rs` only proves the shape serde already gives newtypes for free, not something
+//! this attribute adds (verified: removing `#[serde(transparent)]` from `SessionId` still passes
+//! that test). What the attribute actually buys, verified by compiling a two-field version of this
+//! struct: `#[serde(transparent)]` requires "at most one transparent field", so it turns "someone
+//! adds a second field to `SessionId`/`TargetId` later" into a compile error
+//! (`#[serde(transparent)] requires struct to have at most one transparent field`) instead of a
+//! silent wire-format change to `{"0": "…", "1": …}` that a peer would answer with an opaque parse
+//! error rather than a refusal we could read. Kept for that reason, not for the wire shape itself.
 
 use std::fmt;
 

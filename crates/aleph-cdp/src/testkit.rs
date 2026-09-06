@@ -63,6 +63,20 @@ pub enum Responder {
     Drop,
     /// Send this event frame instead of a reply (the request goes unanswered).
     Event(Value),
+    /// Receive the frame, record it, and never reply, ever — no error, no event, no close.
+    ///
+    /// Added in the fix round that added `shutdown`'s falsifier test (C1): none of the other five
+    /// variants can represent "the peer is unresponsive to this command" — `Drop` closes the
+    /// socket (a `Disconnected`, not a `Timeout`, from a real client's point of view), and `Delay`
+    /// always eventually answers. A real CDP peer that has wedged looks exactly like this, and
+    /// `CdpConnection`'s own per-command timeout (spec §3.4.2, `CdpError::Timeout`) has no other
+    /// way to be exercised against this fake — expect Tasks 2/3 to use this for that.
+    ///
+    /// Implemented as a genuinely-pending future (`std::future::pending`), not a blocking sleep:
+    /// it parks the connection's task cooperatively, costing no thread and not interfering with
+    /// any other task's timers — unlike a responder that calls a blocking primitive, which is a
+    /// tokio-wide hazard this crate must never introduce (see `shutdown`'s doc comment).
+    Hang,
 }
 
 /// Build a responder from a method table. Any method not in the table answers `Reply({})`, which
@@ -252,20 +266,46 @@ impl FakeCdpServer {
         }
     }
 
-    /// Stop accepting, close every socket, and wait until each connection task has ended.
+    /// Stop accepting, close every socket, and wait until each connection task has fully ended
+    /// (both the reader loop and the writer it spawned — see `serve_ws`'s trailing `writer.await`
+    /// — so joining a connection task really does mean that socket is closed, not just that its
+    /// reader stopped).
     ///
     /// The wait is what makes this different from letting the value drop: when it returns, the
     /// client has already observed the close, so a test can assert on a pending call's error
-    /// without racing the runtime. Bounded at 2s per task so a wedged task fails the test rather
-    /// than hanging it.
+    /// without racing the runtime. Each connection task gets a 2s budget. A timeout that expires
+    /// is the answer "I do not know whether it stopped" — it must never be read as "it stopped"
+    /// (判据 §8), so this panics loudly, naming which connection task is still wedged, rather than
+    /// returning as if the wait had succeeded. A connection task that itself panicked is also
+    /// surfaced loudly rather than swallowed: this is a test double, so failing loudly on its own
+    /// bug is exactly what keeps a wedged or broken fake from silently passing a downstream test.
+    ///
+    /// This budget catches a connection task that is legitimately, cooperatively stuck (pending
+    /// forever on a future that never wakes it — e.g. `Responder::Hang`, which is what
+    /// `shutdown_panics_naming_a_connection_task_that_will_not_end` uses to prove this). It does
+    /// NOT reliably catch a task that blocks its worker thread synchronously (e.g. calling
+    /// `std::thread::sleep` or any non-yielding blocking call from inside a responder closure):
+    /// that kind of task can starve the very timer this budget depends on, on the same worker
+    /// thread, which is a tokio-wide hazard and not specific to this function. Nothing in this
+    /// crate does that, and any responder added later must not either.
     pub async fn shutdown(self) {
         self.accept_task.abort();
         for c in lock(&self.conns).iter() {
             let _ = c.ctl_tx.send(());
         }
         let tasks: Vec<JoinHandle<()>> = lock(&self.conn_tasks).drain(..).collect();
-        for task in tasks {
-            let _ = tokio::time::timeout(Duration::from_secs(2), task).await;
+        for (i, task) in tasks.into_iter().enumerate() {
+            match tokio::time::timeout(Duration::from_secs(2), task).await {
+                Ok(Ok(())) => {}
+                Ok(Err(join_err)) => {
+                    panic!("FakeCdpServer::shutdown: connection task {i} panicked: {join_err}")
+                }
+                Err(_elapsed) => panic!(
+                    "FakeCdpServer::shutdown: connection task {i} did not end within 2s — a \
+                     timeout that expired means we do not know whether it stopped, which must \
+                     never be reported as a clean shutdown"
+                ),
+            }
         }
     }
 }
@@ -387,6 +427,15 @@ async fn serve_ws(stream: TcpStream, ctx: ServerCtx) {
         }
     }
     writer.abort();
+    // `shutdown` joins the OUTER task that runs `serve_stream` (and, for a websocket, this
+    // function) — not `writer` directly. If this returned right after `writer.abort()`, joining
+    // the outer task would prove only that the reader loop ended, not that the socket's write
+    // half (owned by `writer`, holding `sink`) is actually gone: C3's gap. Awaiting `writer` here
+    // makes "the outer task ended" mean "both halves of the socket ended", which is the property
+    // `shutdown`'s contract claims and later tasks (2, 3, 4, 9, 12, 13, 17, 19) depend on. An
+    // aborted task resolves to a cancelled `JoinError`, which is the expected, not-a-bug outcome
+    // of the abort just above — nothing else can legitimately produce it here.
+    let _ = writer.await;
 }
 
 /// Overrides first, then the constructor's closure. One order, in one place.
@@ -449,6 +498,14 @@ fn dispatch<'a>(
                     dispatch(*inner, &frame, &out_tx, &ctl_tx).await;
                 });
                 true
+            }
+            Responder::Hang => {
+                // Never resolves and never wakes: this parks the connection's own poll (no
+                // thread held, unlike a blocking sleep), so the read loop cannot observe `ctl_rx`
+                // again until this connection is dropped/aborted from outside (e.g. by
+                // `drop_socket` or `shutdown`, both of which act on the socket, not on this task).
+                std::future::pending::<()>().await;
+                unreachable!("a pending future never resolves")
             }
         }
     })

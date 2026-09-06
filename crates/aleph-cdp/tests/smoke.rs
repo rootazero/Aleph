@@ -344,6 +344,228 @@ async fn shutdown_ends_every_open_socket() {
     }
 }
 
+/// The falsifier `shutdown`'s contract needs and did not have: a no-op body (or one that aborts
+/// but never joins) leaves every other test in this file green, because `shutdown(self)` consumes
+/// `self` either way and `Drop` runs regardless — nothing observable *after* `shutdown` returns
+/// can tell a no-op apart from a real wait. So this test does not observe shutdown's aftermath; it
+/// makes `shutdown` itself the thing under test, by wedging one connection task past its 2s
+/// budget (via `Responder::Hang`, which never replies and never advances) and asserting
+/// `shutdown` reports that loudly instead of returning as if it had waited. Confirmed manually: a
+/// no-op `shutdown` body leaves this test hanging forever rather than failing fast, and a body
+/// that aborts every task but never joins them makes this test fail the "names the timeout"
+/// assertion instead of panicking with it — either way, this test cannot pass against a body that
+/// does not genuinely wait and genuinely fail loudly on a wedge.
+///
+/// `Responder::Hang` (not a blocking sleep) is deliberate: a synchronous blocking call inside a
+/// responder closure would starve the very tokio timer this test — and `shutdown`'s own budget —
+/// depends on, on whichever worker thread happens to run it (confirmed empirically while writing
+/// this test: it made `shutdown`'s 2s timeout silently wait the full blocking duration instead of
+/// firing, regardless of worker thread count). `Hang` avoids that entirely: it is a genuinely
+/// pending future, so it costs no thread and cannot starve anything.
+#[tokio::test]
+async fn shutdown_panics_naming_a_connection_task_that_will_not_end() {
+    let server = FakeCdpServer::start(scripted(vec![("Wedge.me", Responder::Hang)])).await;
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(server.ws_url().as_str())
+        .await
+        .expect("connect");
+    ws.send(Message::text(
+        json!({ "id": 1, "method": "Wedge.me", "params": {} }).to_string(),
+    ))
+    .await
+    .expect("send the frame that enters Responder::Hang");
+
+    // The frame must actually have reached the server's dispatch before racing `shutdown` against
+    // it, or `ctl_rx`'s signal could win a scheduling race against a frame nothing has looked at
+    // yet — the connection would then close cleanly and this test would pass for the wrong
+    // reason. `received_for` is this test's own proof the wedge is real, independent of `shutdown`.
+    let observed = tokio::time::timeout(Duration::from_secs(2), async {
+        while server.received_for("Wedge.me").is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    assert!(
+        observed.is_ok(),
+        "the server never received the frame that should have wedged its connection task"
+    );
+
+    // `shutdown` is expected to panic, so it runs on its own task: a panic inside a spawned tokio
+    // task is captured as a `JoinError` here rather than aborting the whole test process.
+    let outcome = tokio::spawn(server.shutdown()).await;
+
+    let join_err = outcome.expect_err(
+        "shutdown must panic rather than return once a connection task is wedged past its \
+         budget — a no-op or abort-only body cannot produce this",
+    );
+    assert!(
+        join_err.is_panic(),
+        "shutdown's task ended some other way than panicking: {join_err}"
+    );
+    let panic_payload = join_err.into_panic();
+    let message = panic_payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic_payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(
+        message.contains("did not end within 2s"),
+        "the panic names the timeout that actually fired, not just 'something failed': {message}"
+    );
+    assert!(
+        message.contains("connection task 0"),
+        "the panic names WHICH task is wedged: {message}"
+    );
+}
+
+/// `Responder::Drop` had zero occurrences in this file before this fix round — it was implemented
+/// and behaved correctly, but nothing falsified it. Red condition: if `dispatch`'s `Drop` arm
+/// stopped closing the connection (e.g. only stopped answering without ending the socket), this
+/// would time out instead of observing the stream end.
+#[tokio::test]
+async fn responder_drop_closes_the_socket_for_the_scripted_method() {
+    let server = FakeCdpServer::start(scripted(vec![("Die.now", Responder::Drop)])).await;
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(server.ws_url().as_str())
+        .await
+        .expect("connect");
+    ws.send(Message::text(
+        json!({ "id": 1, "method": "Die.now", "params": {} }).to_string(),
+    ))
+    .await
+    .expect("send");
+
+    let ended = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match ws.next().await {
+                None | Some(Err(_)) => return true,
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await;
+    assert_eq!(
+        ended,
+        Ok(true),
+        "Responder::Drop for the scripted method must close the socket, not just skip a reply"
+    );
+}
+
+/// `Responder::Event` (as a per-method script, distinct from the free-standing `push_event`
+/// already covered elsewhere) had zero occurrences before this fix round. Red condition: if
+/// `dispatch`'s `Event` arm also sent a reply for the request (a bug that would make a caller
+/// under test see an answer that should never come), the second assertion catches it; if it sent
+/// the wrong payload or attached an `id`, the first assertion catches it.
+#[tokio::test]
+async fn responder_event_answers_with_an_event_and_leaves_the_request_unanswered() {
+    let server = FakeCdpServer::start(scripted(vec![(
+        "Watch.me",
+        Responder::Event(json!({ "method": "Watch.fired", "params": { "ok": true } })),
+    )]))
+    .await;
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(server.ws_url().as_str())
+        .await
+        .expect("connect");
+    ws.send(Message::text(
+        json!({ "id": 1, "method": "Watch.me", "params": {} }).to_string(),
+    ))
+    .await
+    .expect("send");
+
+    let first = next_json(&mut ws).await;
+    assert_eq!(
+        first["method"],
+        json!("Watch.fired"),
+        "the event frame arrives instead of a reply: {first}"
+    );
+    assert_eq!(first["params"]["ok"], json!(true));
+    assert!(
+        first.get("id").is_none(),
+        "an event frame carries no id: {first}"
+    );
+
+    let extra = tokio::time::timeout(Duration::from_millis(200), ws.next()).await;
+    assert!(
+        extra.is_err(),
+        "Responder::Event must not ALSO send a reply for the request that triggered it: got {extra:?}"
+    );
+}
+
+/// `received_for` had only an incidental, single-method use before this fix round (as this fix
+/// round's own shutdown test's synchronization check) — nothing had verified it actually filters
+/// by method, preserves arrival order, or answers empty (not everything, not a panic) for a
+/// method never sent.
+#[tokio::test]
+async fn received_for_filters_by_method_and_preserves_arrival_order() {
+    let server = FakeCdpServer::start(scripted(vec![])).await;
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(server.ws_url().as_str())
+        .await
+        .expect("connect");
+
+    for (id, method) in [
+        (1, "A.one"),
+        (2, "B.two"),
+        (3, "A.one"),
+        (4, "B.two"),
+        (5, "A.one"),
+    ] {
+        ws.send(Message::text(
+            json!({ "id": id, "method": method, "params": {} }).to_string(),
+        ))
+        .await
+        .expect("send");
+        let _ = next_json(&mut ws).await; // drain the reply so sends do not pile up unread
+    }
+
+    let a_frames = server.received_for("A.one");
+    assert_eq!(
+        a_frames.len(),
+        3,
+        "received_for must return exactly the frames for that method, no more no fewer: {a_frames:?}"
+    );
+    let ids: Vec<i64> = a_frames.iter().map(|f| f["id"].as_i64().unwrap()).collect();
+    assert_eq!(
+        ids,
+        vec![1, 3, 5],
+        "in arrival order, not sorted, reversed, or deduplicated: {ids:?}"
+    );
+
+    assert_eq!(server.received_for("B.two").len(), 2);
+    assert!(
+        server.received_for("Nope.method").is_empty(),
+        "a method never sent must filter to an empty list, not panic or return everything"
+    );
+}
+
+/// `last_params` had zero occurrences before this fix round.
+#[tokio::test]
+async fn last_params_returns_the_most_recent_params_and_none_when_never_sent() {
+    let server = FakeCdpServer::start(scripted(vec![])).await;
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(server.ws_url().as_str())
+        .await
+        .expect("connect");
+
+    assert_eq!(
+        server.last_params("Set.value"),
+        None,
+        "a method never sent must answer None, not an empty object — reading None as 'sent with \
+         no params' is exactly the confusion 判据 §8 warns about"
+    );
+
+    for (id, value) in [(1, "first"), (2, "second")] {
+        ws.send(Message::text(
+            json!({ "id": id, "method": "Set.value", "params": { "value": value } }).to_string(),
+        ))
+        .await
+        .expect("send");
+        let _ = next_json(&mut ws).await;
+    }
+
+    assert_eq!(
+        server.last_params("Set.value"),
+        Some(json!({ "value": "second" })),
+        "last_params must return the LAST call's params, not the first"
+    );
+}
+
 #[tokio::test]
 async fn ids_are_transparent_over_serde_and_errors_name_what_failed() {
     // ids.rs
