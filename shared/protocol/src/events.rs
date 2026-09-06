@@ -283,6 +283,9 @@ pub struct ModelInfo {
     /// Original model requested, if different from `model`.
     #[serde(default)]
     pub original_model: Option<String>,
+    /// Per-model context window, when the server resolved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
 }
 
 /// Suggested action for handling AI uncertainty
@@ -382,6 +385,10 @@ pub struct AgentTraceToolCallEnd {
     pub tool_name: String,
     pub input: Value,
     pub duration_ms: u64,
+    /// Same side-channel as `ToolResult.presentation`, so `trace.by_runs`
+    /// replays the diff a live `tool_end` carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<crate::file_change::Presentation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -739,8 +746,10 @@ pub struct ToolResult {
     pub success: bool,
     pub output: Option<String>,
     pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Value>,
+    /// UI side-channel (structured diff etc.). Never part of the model text.
+    /// `default` so an older server's frame still parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<crate::file_change::Presentation>,
 }
 
 impl ToolResult {
@@ -749,7 +758,7 @@ impl ToolResult {
             success: true,
             output: Some(output.into()),
             error: None,
-            metadata: None,
+            presentation: None,
         }
     }
 
@@ -758,8 +767,14 @@ impl ToolResult {
             success: false,
             output: None,
             error: Some(error.into()),
-            metadata: None,
+            presentation: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_presentation(mut self, p: Option<crate::file_change::Presentation>) -> Self {
+        self.presentation = p;
+        self
     }
 }
 
@@ -809,6 +824,12 @@ pub struct RunSummary {
     /// `total_tokens`; surfaces cache hit ratio + reasoning spend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_breakdown: Option<TokenBreakdownView>,
+    /// Context-window occupancy after the latest turn (gauge numerator).
+    #[serde(default)]
+    pub context_tokens: u32,
+    /// Per-model context window (gauge denominator). 0 = unknown.
+    #[serde(default)]
+    pub context_window: u32,
     /// Best-effort USD estimate. `None` when the pricing module had no
     /// rate for this provider/model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1102,6 +1123,7 @@ mod tests {
                     tool_name: "read_file".to_string(),
                     input: serde_json::json!({"path": "README.md"}),
                     duration_ms: 12,
+                    presentation: None,
                 },
                 result: AgentTraceToolResult::Success {
                     output: serde_json::json!({"ok": true}),
@@ -1169,5 +1191,33 @@ mod tests {
         ] {
             assert!(v.get(k).is_some(), "missing {k}");
         }
+    }
+
+    #[test]
+    fn run_summary_carries_the_gauge_fields_the_gateway_twin_sends() {
+        // Wire-compat: the gateway struct serializes these two; before this
+        // field existed the protocol copy silently dropped them.
+        let v = serde_json::json!({
+            "total_tokens": 1, "tool_calls": 0, "loops": 1,
+            "context_tokens": 12_345, "context_window": 200_000
+        });
+        let s: RunSummary = serde_json::from_value(v).unwrap();
+        assert_eq!(s.context_tokens, 12_345);
+        assert_eq!(s.context_window, 200_000);
+        let legacy: RunSummary = serde_json::from_value(
+            serde_json::json!({"total_tokens": 1, "tool_calls": 0, "loops": 1})
+        ).unwrap();
+        assert_eq!(legacy.context_window, 0);
+    }
+
+    #[test]
+    fn tool_result_presentation_is_optional_and_elided_when_none() {
+        let r = ToolResult::success("ok");
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("presentation").is_none());
+        let legacy: ToolResult = serde_json::from_value(
+            serde_json::json!({"success": true, "output": "x", "error": null})
+        ).unwrap();
+        assert!(legacy.presentation.is_none());
     }
 }

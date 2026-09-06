@@ -49,6 +49,7 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     tool_name: call.tool_name,
                     input: call.input,
                     duration_ms: call.duration_ms,
+                    presentation: None,
                 },
                 result: match result {
                     crate::tools::runtime::ToolResult::Success { output } => {

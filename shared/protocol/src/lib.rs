@@ -22,12 +22,14 @@ pub mod canvas;
 pub mod channel_pairing;
 pub mod channels;
 pub mod commands;
+pub mod context_breakdown;
 pub mod cron;
 pub mod desktop_bridge;
 pub mod devices;
 pub mod dreaming;
 pub mod events;
 pub mod extension_usage;
+pub mod file_change;
 mod ids;
 pub mod json_canvas;
 pub mod jsonrpc;
@@ -65,6 +67,13 @@ pub use events::{
     AgentTraceState, AgentTraceTextKind, AgentTraceToolCallEnd, AgentTraceToolCallStart,
     AgentTraceToolResult, AgentTraceTurnMetrics, AgentTraceTurnOutcome, AskUserOption,
     AskUserQuestion, RunSummary, StreamEvent, TokenBreakdownView, ToolResult,
+};
+pub use context_breakdown::{
+    ContextBreakdown, LayerSizeView, ToolOutputPage, ToolOutputSource, ToolSchemaSize, UsageTokens,
+};
+pub use file_change::{
+    FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation, Unavailable,
+    PRESENTATION_KEY,
 };
 pub use jsonrpc::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
