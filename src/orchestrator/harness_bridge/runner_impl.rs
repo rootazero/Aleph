@@ -549,7 +549,18 @@ impl HarnessRunner for AgentHarnessRunner {
             )
             .await
         {
-            Some((s, parts, recall)) => (Some(s), Some(parts), recall),
+            Some((s, parts, recall, layer_sizes)) => {
+                // The prompt for THIS turn was just measured; publish it for
+                // `context.breakdown`. Only this call site records — the
+                // static-overhead estimate below builds a different prompt on
+                // purpose and must not overwrite the real one.
+                if let Some(reg) =
+                    crate::thinker::prompt_size_registry::global_prompt_size_registry()
+                {
+                    reg.record_layers(&session_id.to_key_string(), layer_sizes);
+                }
+                (Some(s), Some(parts), recall)
+            }
             None => (None, None, None),
         };
 
@@ -575,6 +586,34 @@ impl HarnessRunner for AgentHarnessRunner {
         // default when the caller supplies None.
         // rust-doctor-disable-next-line excessive-clone
         let tools = tool_service_override.unwrap_or_else(|| self.tool_service.clone());
+        // Tool bytes for `context.breakdown`, taken here and not as a prompt
+        // layer: production assembles the system prompt with an EMPTY tools
+        // slice because schemas travel as native `tool_use`
+        // (`prompt_build.rs`'s note at `:577`), so a layer could never see
+        // them and the two figures cannot double-count.
+        //
+        // This is the same `Arc<dyn ToolService>` that becomes `deps.tools`
+        // three statements below, and `metadata_schema()` is the same call
+        // `harness/agent/think.rs` makes to build the request's tool list —
+        // one producer, read twice, not a second derivation. (The assembly
+        // itself happens inside `src/harness/`, which R10 locks; asking the
+        // service here is how the bridge observes it without reaching in.)
+        // The trait contract says implementations cache and return an `Arc`
+        // for O(1) per-turn cloning, so the extra call is a clone.
+        if let Some(reg) = crate::thinker::prompt_size_registry::global_prompt_size_registry() {
+            let sizes = tools
+                .metadata_schema()
+                .iter()
+                .map(|t| {
+                    (
+                        t.name.clone(),
+                        serde_json::to_string(&t.parameters).map_or(0, |s| s.len() as u64),
+                        t.description.len() as u64,
+                    )
+                })
+                .collect();
+            reg.record_tools(&session_id.to_key_string(), sizes);
+        }
         // Wire the platform-specific power capability so the harness can
         // inhibit idle sleep for the duration of each Think→Act turn.
         // rust-doctor-disable-next-line excessive-clone
@@ -1360,7 +1399,12 @@ impl HarnessRunner for AgentHarnessRunner {
                     &crate::thinker::TurnEnvelope::none(),
                 )
                 .await
-                .map(|(s, _parts, _recall)| s)
+                // `_layer_sizes` is dropped, not recorded: this prompt is
+                // built with an empty envelope and no history to price a
+                // cacheable per-(agent, model) overhead. It is NOT the
+                // session's prompt, and reporting it as one would hand
+                // `context.breakdown` a weakened copy of the real layout.
+                .map(|(s, _parts, _recall, _layer_sizes)| s)
                 .unwrap_or_default();
             let sp_tokens =
                 crate::context::budget::pressure::estimate_tokens_aware(&system_prompt, ratio);

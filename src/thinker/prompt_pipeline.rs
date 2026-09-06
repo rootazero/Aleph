@@ -61,17 +61,80 @@ impl PromptPipeline {
         Self { layers }
     }
 
+    /// The ONE traversal. Every public assembly / measurement entry point on
+    /// this type delegates here; none of them walks `self.layers` itself.
+    ///
+    /// `mode = None` means "do not apply the mode filter" (the path-only
+    /// [`Self::execute`]); `stability = None` means "both zones".
+    ///
+    /// # Why a scratch buffer
+    ///
+    /// Each layer renders into `section`, which is then measured and appended.
+    /// Five near-identical loops used to live here — four building text
+    /// (`execute`, `execute_with_mode`, and the two stability-filtered ones)
+    /// and one measuring it (`layer_breakdown`) — which is 判据 §1 in the very
+    /// module that answers "what is in the prompt": only one of the five could
+    /// be right about that once they drifted. Collapsing them makes
+    /// `sum(sizes.bytes) == output.len()` true by construction instead of by
+    /// test.
+    ///
+    /// The four text builders used to inject straight into the ACCUMULATING
+    /// buffer. Routing them through a scratch buffer is byte-neutral only
+    /// while no layer's `inject` reads the buffer it is handed. Measured
+    /// 2026-09-06: all 39 `impl PromptLayer` live under `src/thinker/` and
+    /// every one of them only ever calls `push_str` / `push` on it — no read,
+    /// no `write!`, and the buffer is never passed on to a helper. But that is
+    /// a statement about today's layers, not a property of the trait (判据
+    /// §5), so `the_collapsed_traversal_matches_a_direct_append` re-derives it
+    /// on every run, across every path/mode/stability combination, against a
+    /// reference loop that keeps the old semantics. R9: if that test ever goes
+    /// red, the prompt changed — do not adjust the test.
+    fn execute_filtered_measured(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: Option<PromptMode>,
+        stability: Option<LayerStability>,
+        cap: usize,
+    ) -> (String, Vec<LayerSize>) {
+        let mut output = String::with_capacity(cap);
+        let mut sizes = Vec::new();
+        let mut section = String::new();
+        for layer in &self.layers {
+            if !layer.paths().contains(&path) {
+                continue;
+            }
+            if mode.is_some_and(|m| !layer.supports_mode(m)) {
+                continue;
+            }
+            if stability.is_some_and(|s| layer.stability() != s) {
+                continue;
+            }
+            section.clear();
+            layer.inject(&mut section, input);
+            if section.is_empty() {
+                continue;
+            }
+            sizes.push(LayerSize {
+                priority: layer.priority(),
+                name: layer.name(),
+                stability: layer.stability(),
+                chars: section.chars().count(),
+                bytes: section.len(),
+                // Canonical prose anchor; CJK/code auto-densify.
+                tokens: estimate_tokens_aware(&section, DEFAULT_PROSE_RATIO),
+            });
+            output.push_str(&section);
+        }
+        (output, sizes)
+    }
+
     /// Execute the pipeline for the given `path` and `input`.
     ///
     /// Returns the assembled system prompt string.
     pub fn execute(&self, path: AssemblyPath, input: &LayerInput) -> String {
-        let mut output = String::with_capacity(16384);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
+        self.execute_filtered_measured(path, input, None, None, 16384)
+            .0
     }
 
     /// Execute pipeline with mode filtering (path + mode).
@@ -81,13 +144,8 @@ impl PromptPipeline {
         input: &LayerInput,
         mode: PromptMode,
     ) -> String {
-        let mut output = String::with_capacity(16384);
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.supports_mode(mode) {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
+        self.execute_filtered_measured(path, input, Some(mode), None, 16384)
+            .0
     }
 
     /// Execute only stable layers with mode filtering.
@@ -97,16 +155,20 @@ impl PromptPipeline {
         input: &LayerInput,
         mode: PromptMode,
     ) -> String {
-        let mut output = String::with_capacity(16384);
-        for layer in &self.layers {
-            if layer.paths().contains(&path)
-                && layer.supports_mode(mode)
-                && layer.stability() == LayerStability::Stable
-            {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
+        self.execute_stable_with_mode_measured(path, input, mode).0
+    }
+
+    /// [`Self::execute_stable_with_mode`] that also reports each layer's size.
+    ///
+    /// One pass: the section is rendered once, measured, then appended — so
+    /// the reported bytes ARE the bytes this call returns.
+    pub fn execute_stable_with_mode_measured(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> (String, Vec<LayerSize>) {
+        self.execute_filtered_measured(path, input, Some(mode), Some(LayerStability::Stable), 16384)
     }
 
     /// Execute only dynamic layers with mode filtering.
@@ -116,16 +178,17 @@ impl PromptPipeline {
         input: &LayerInput,
         mode: PromptMode,
     ) -> String {
-        let mut output = String::with_capacity(4096);
-        for layer in &self.layers {
-            if layer.paths().contains(&path)
-                && layer.supports_mode(mode)
-                && layer.stability() == LayerStability::Dynamic
-            {
-                layer.inject(&mut output, input);
-            }
-        }
-        output
+        self.execute_dynamic_with_mode_measured(path, input, mode).0
+    }
+
+    /// [`Self::execute_dynamic_with_mode`] that also reports each layer's size.
+    pub fn execute_dynamic_with_mode_measured(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> (String, Vec<LayerSize>) {
+        self.execute_filtered_measured(path, input, Some(mode), Some(LayerStability::Dynamic), 4096)
     }
 
     /// Return `(priority, name, stability)` for each layer, sorted by priority.
@@ -139,37 +202,20 @@ impl PromptPipeline {
     /// Measure each active layer's contribution for the given path/mode/input,
     /// WITHOUT budget truncation — the introspection twin of the (pruned) `assemble`.
     ///
-    /// Mirrors `assemble`'s section-collection phase (same path + mode filter,
-    /// same `!section.is_empty()` skip) but keeps the per-layer sizes that
-    /// `assemble` discards. Use it to see which layers dominate the prompt
-    /// before tuning their content or mode gating. Layers are already stored in
-    /// priority order, so the result is assembly order.
+    /// Now the same traversal [`Self::execute_with_mode`] runs, with the text
+    /// dropped instead of the sizes: the two used to be separate loops that
+    /// could disagree about what the prompt contains. The discarded `String`
+    /// costs one assembly on the diagnostic paths that call this (the
+    /// `prompt-size` CLI command and the prompt-contract tests); the
+    /// per-request path takes the `*_measured` entries above and keeps both.
     pub fn layer_breakdown(
         &self,
         path: AssemblyPath,
         input: &LayerInput,
         mode: PromptMode,
     ) -> Vec<LayerSize> {
-        let mut out = Vec::new();
-        let mut section = String::new();
-        for layer in &self.layers {
-            if layer.paths().contains(&path) && layer.supports_mode(mode) {
-                section.clear();
-                layer.inject(&mut section, input);
-                if !section.is_empty() {
-                    out.push(LayerSize {
-                        priority: layer.priority(),
-                        name: layer.name(),
-                        stability: layer.stability(),
-                        chars: section.chars().count(),
-                        bytes: section.len(),
-                        // Canonical prose anchor; CJK/code auto-densify.
-                        tokens: estimate_tokens_aware(&section, DEFAULT_PROSE_RATIO),
-                    });
-                }
-            }
-        }
-        out
+        self.execute_filtered_measured(path, input, Some(mode), None, 16384)
+            .1
     }
 
     /// Names of registered layers that contribute **nothing** for this
@@ -914,5 +960,195 @@ mod stability_tests {
             assembled.len(),
             "sum of per-layer bytes must equal the assembled prompt byte length"
         );
+    }
+
+    // --- R9: the collapse must not move a single prompt byte ---------------
+
+    /// Every `AssemblyPath`, derived from the type rather than listed.
+    ///
+    /// The `match` is what makes this a derivation: add a variant and this
+    /// function stops COMPILING, so the byte-identity sweep below cannot go
+    /// quiet on a path nobody remembered to append (判据 §5).
+    fn every_assembly_path() -> Vec<AssemblyPath> {
+        let all = vec![AssemblyPath::Basic, AssemblyPath::Cached];
+        for p in &all {
+            match p {
+                AssemblyPath::Basic | AssemblyPath::Cached => {}
+            }
+        }
+        all
+    }
+
+    /// Every `PromptMode`, on the same terms as `every_assembly_path`.
+    fn every_prompt_mode() -> Vec<PromptMode> {
+        let all = vec![PromptMode::Full, PromptMode::Compact, PromptMode::Minimal];
+        for m in &all {
+            match m {
+                PromptMode::Full | PromptMode::Compact | PromptMode::Minimal => {}
+            }
+        }
+        all
+    }
+
+    /// The traversal as it was written BEFORE the collapse: each layer injects
+    /// straight into the accumulating output buffer, with no scratch buffer
+    /// and no `is_empty` skip.
+    ///
+    /// Kept deliberately as a second implementation — the one case where 判据
+    /// §1 does not apply, because its whole job is to disagree with the
+    /// production one if the production one ever changes what it emits.
+    fn reference_direct_append(
+        pipeline: &PromptPipeline,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: Option<PromptMode>,
+        stability: Option<LayerStability>,
+    ) -> String {
+        let mut output = String::new();
+        for layer in &pipeline.layers {
+            if !layer.paths().contains(&path) {
+                continue;
+            }
+            if mode.is_some_and(|m| !layer.supports_mode(m)) {
+                continue;
+            }
+            if stability.is_some_and(|s| layer.stability() != s) {
+                continue;
+            }
+            layer.inject(&mut output, input);
+        }
+        output
+    }
+
+    /// R9 GUARD — the model-facing bytes are unchanged by the collapse.
+    ///
+    /// The four public text entry points used to inject into the accumulating
+    /// buffer; they now render into a scratch buffer and append it. That is
+    /// byte-neutral **iff** no layer's `inject` reads the buffer it is handed.
+    /// This asserts that property directly, on the real `default_layers()`, for
+    /// every path × mode × stability-filter combination the pipeline supports
+    /// — not on one fixed input.
+    ///
+    /// A future layer that reads its output buffer (`out.is_empty()`,
+    /// `out.contains(..)`, a trailing-newline fixup) is exactly what this
+    /// catches. If it goes red, the prompt CHANGED: fix the layer or the
+    /// collapse, never this test.
+    #[test]
+    fn the_collapsed_traversal_matches_a_direct_append() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+
+        for path in every_assembly_path() {
+            for mode in every_prompt_mode() {
+                let input = LayerInput::basic(&config, &tools).with_mode(mode);
+
+                assert_eq!(
+                    pipeline.execute_with_mode(path, &input, mode),
+                    reference_direct_append(&pipeline, path, &input, Some(mode), None),
+                    "execute_with_mode moved bytes at {path:?}/{mode:?}"
+                );
+                assert_eq!(
+                    pipeline.execute_stable_with_mode(path, &input, mode),
+                    reference_direct_append(
+                        &pipeline,
+                        path,
+                        &input,
+                        Some(mode),
+                        Some(LayerStability::Stable)
+                    ),
+                    "execute_stable_with_mode moved bytes at {path:?}/{mode:?}"
+                );
+                assert_eq!(
+                    pipeline.execute_dynamic_with_mode(path, &input, mode),
+                    reference_direct_append(
+                        &pipeline,
+                        path,
+                        &input,
+                        Some(mode),
+                        Some(LayerStability::Dynamic)
+                    ),
+                    "execute_dynamic_with_mode moved bytes at {path:?}/{mode:?}"
+                );
+            }
+
+            // `execute` applies no mode filter at all — its own arm, because
+            // `Some(Full)` is not the same predicate as `None` for any layer
+            // whose `supports_mode(Full)` is false.
+            let input = LayerInput::basic(&config, &tools);
+            assert_eq!(
+                pipeline.execute(path, &input),
+                reference_direct_append(&pipeline, path, &input, None, None),
+                "execute moved bytes at {path:?}"
+            );
+        }
+    }
+
+    /// The measured entries report the bytes they actually returned, for every
+    /// combination — the property the collapse buys by construction, pinned so
+    /// a future re-split cannot quietly take it away.
+    #[test]
+    fn measured_sizes_account_for_every_returned_byte() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+
+        for path in every_assembly_path() {
+            for mode in every_prompt_mode() {
+                let input = LayerInput::basic(&config, &tools).with_mode(mode);
+                for (label, (text, sizes)) in [
+                    (
+                        "stable",
+                        pipeline.execute_stable_with_mode_measured(path, &input, mode),
+                    ),
+                    (
+                        "dynamic",
+                        pipeline.execute_dynamic_with_mode_measured(path, &input, mode),
+                    ),
+                ] {
+                    let sum: usize = sizes.iter().map(|l| l.bytes).sum();
+                    assert_eq!(
+                        sum,
+                        text.len(),
+                        "{label} sizes must sum to the returned bytes at {path:?}/{mode:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The two halves of the cached split still concatenate to the full
+    /// assembly when both are taken from the MEASURED entries — the property
+    /// `build_system_prompt_cached_with_mode_measured` relies on when it hands
+    /// `stable_sizes ++ dynamic_sizes` to the registry as one ordered list.
+    #[test]
+    fn measured_stable_plus_dynamic_reconstructs_full() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+
+        for path in every_assembly_path() {
+            for mode in every_prompt_mode() {
+                let input = LayerInput::basic(&config, &tools).with_mode(mode);
+                let (stable, stable_sizes) =
+                    pipeline.execute_stable_with_mode_measured(path, &input, mode);
+                let (dynamic, dynamic_sizes) =
+                    pipeline.execute_dynamic_with_mode_measured(path, &input, mode);
+                assert_eq!(
+                    format!("{stable}{dynamic}"),
+                    pipeline.execute_with_mode(path, &input, mode),
+                    "measured halves must reconstruct the full assembly at {path:?}/{mode:?}"
+                );
+                let joined: Vec<u32> = stable_sizes
+                    .iter()
+                    .chain(dynamic_sizes.iter())
+                    .map(|l| l.priority)
+                    .collect();
+                assert!(
+                    joined.windows(2).all(|w| w[0] <= w[1]),
+                    "stable ++ dynamic must already be in assembly order at {path:?}/{mode:?}"
+                );
+            }
+        }
     }
 }

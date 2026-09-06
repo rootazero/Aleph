@@ -622,6 +622,11 @@ pub const SCOPED_METHODS: &[(&str, Treatment)] = &[
     // the empty-key fleet-approval rule above.
     ("exec.grants.list", Treatment::ListFiltered),
     ("exec.grant.revoke", Treatment::KeyChecked),
+    // The measured layout of one named session's last prompt. Addressed by
+    // session key and gated on that key alone: the registry is written under
+    // the same key string, so a caller who cannot see the session never
+    // reaches a record for it.
+    ("context.breakdown", Treatment::KeyChecked),
     ("trace.by_runs", Treatment::KeyChecked),
     // Its sibling reads no trace table at all: it addresses one tool call in
     // the named session's own event log, and the log is keyed by session, so

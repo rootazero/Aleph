@@ -148,6 +148,12 @@ mod tests {
         ("config.update_tool_permissions", Class::Admin),
         ("config.validate", Class::Admin),
         ("connect", Class::Open),
+        // Reports the measured layout of the addressed session's OWN last
+        // prompt — caller's-own-data, and the server half of the `/context`
+        // view. Owner-scoped in its handler (`method_visibility`: KeyChecked),
+        // and `context.` is not an `ADMIN_PREFIXES` family, so no
+        // `MEMBER_CARVE_OUTS` entry is needed to keep it reachable.
+        ("context.breakdown", Class::Open),
         ("cron.create", Class::Admin),
         ("cron.delete", Class::Admin),
         ("cron.get", Class::Admin),

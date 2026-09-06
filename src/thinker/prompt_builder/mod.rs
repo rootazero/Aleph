@@ -14,8 +14,7 @@ use crate::tools::info::ToolInfo;
 use super::identity_files::IdentityFiles;
 use super::prompt_budget::TokenBudget;
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability};
-use super::prompt_mode::PromptMode;
-use super::prompt_pipeline::PromptPipeline;
+use super::prompt_pipeline::{LayerSize, PromptPipeline};
 
 /// System prompt part with optional cache flag
 ///
@@ -369,7 +368,11 @@ impl PromptBuilder {
     pub fn build_system_prompt(&self, tools: &[ToolInfo]) -> String {
         let path = AssemblyPath::Basic;
         let input = self.build_basic_input(tools);
-        maybe_trace_prompt_size(&self.pipeline, path, &input, PromptMode::Full);
+        // No `maybe_trace_prompt_size` here: this entry is `#[cfg(test)]`, so
+        // it never runs in the daemon the `ALEPH_PROMPT_SIZE_TRACE` gate
+        // exists for, and the only way to feed it sizes without a second full
+        // render would be a public measured twin of `execute` with no other
+        // caller. The two production entries trace.
         let mut prompt = self.pipeline.execute(path, &input);
         self.append_basic_welds(&mut prompt);
         crate::thinker::prompt_budget::fit_dynamic_suffix_with_content(
@@ -388,27 +391,26 @@ impl PromptBuilder {
 /// Optional prompt-size introspection (hermes `prompt_size.py` analogue).
 ///
 /// When the `ALEPH_PROMPT_SIZE_TRACE` env var is set, logs each active layer's
-/// char/token contribution for the prompt about to be built (largest first) so
-/// prompt bloat is visible while tuning. Off by default = zero overhead on the
-/// hot path; reuses [`PromptPipeline::layer_breakdown`] so no live state is
-/// duplicated.
+/// char/token contribution for the prompt just built (largest first) so prompt
+/// bloat is visible while tuning. Off by default = zero overhead on the hot
+/// path.
+///
+/// Takes the sizes the caller already measured while assembling. It used to
+/// call `PromptPipeline::layer_breakdown` itself, which re-ran every layer — a
+/// second full render of the same prompt, and a second answer to "what is in
+/// it" that was free to disagree with the first (判据 §1). The sizes now come
+/// from the one traversal that produced the bytes.
 ///
 /// Called from **both** production entry points — `build_system_prompt_parts`
-/// (Basic, sub-agent) and `build_system_prompt_cached_with_mode` (Cached, main
-/// loop). It used to hang off the Basic path only, which meant the trace never
-/// fired for the prompt that actually matters. `mode` must be the mode the
-/// caller is about to assemble with, or the breakdown reports layers the
-/// prompt won't contain.
-fn maybe_trace_prompt_size(
-    pipeline: &PromptPipeline,
-    path: AssemblyPath,
-    input: &LayerInput,
-    mode: PromptMode,
-) {
+/// (Basic, sub-agent) and `build_system_prompt_cached_with_mode_measured`
+/// (Cached, main loop). It used to hang off the Basic path only, which meant
+/// the trace never fired for the prompt that actually matters. `path` is
+/// carried only to label the log line.
+fn maybe_trace_prompt_size(path: AssemblyPath, sizes: &[LayerSize]) {
     if std::env::var_os("ALEPH_PROMPT_SIZE_TRACE").is_none() {
         return;
     }
-    let mut bd = pipeline.layer_breakdown(path, input, mode);
+    let mut bd = sizes.to_vec();
     bd.sort_by_key(|l| std::cmp::Reverse(l.chars));
     let total_chars: usize = bd.iter().map(|l| l.chars).sum();
     let total_tokens: usize = bd.iter().map(|l| l.tokens).sum();

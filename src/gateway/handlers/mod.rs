@@ -57,6 +57,7 @@ pub mod cluster;
 pub mod commands;
 pub mod config;
 pub mod connect;
+pub mod context_breakdown;
 pub mod cron;
 pub mod daemon_control;
 pub mod debug;
@@ -474,6 +475,17 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "chat.clear requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+
+        // Prompt breakdown (requires SessionStore -- placeholder). Phase-2
+        // registration lives beside `session.usage` in the start builder; this
+        // line is what keeps the method EXISTING, with a reason, on any boot
+        // path that never reaches it. Fail-closed with a reason, never absent.
+        registry.register("context.breakdown", |req| async move {
+            service_unavailable(
+                req,
+                "context.breakdown requires SessionStore (boot phase 2)",
             )
         });
 

@@ -812,14 +812,17 @@ mod tests {
         );
         assert_eq!(
             raw + slots,
-            48,
+            49,
             "capability handle total drifted: {raw} raw + {slots} slots = {}, not \
-             48. Never assert either side alone: raw shrinks and slots grows as \
+             49. Never assert either side alone: raw shrinks and slots grows as \
              migration proceeds, so only the SUM is stable. A drift here means \
              either a census recogniser regressed (see the module doc's \
              recogniser blind spots) or a handle genuinely left the corpus — \
-             investigate before editing this number. Last moved 2026-09-04: \
-             47 -> 48 when `heartbeat/service` was added, so `users.update`'s \
+             investigate before editing this number. Last moved 2026-09-06: \
+             48 -> 49 when `thinker/prompt-size-registry` was added, so \
+             `context.breakdown` could report the prompt that was actually \
+             sent instead of re-deriving it. Before that, 2026-09-04: 47 -> 48 \
+             when `heartbeat/service` was added, so `users.update`'s \
              deactivation freeze had a fourth subsystem to reach.",
             raw + slots
         );

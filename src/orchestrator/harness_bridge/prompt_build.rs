@@ -248,6 +248,17 @@ impl AgentHarnessRunner {
     /// codex initial-context / hermes frozen-system-prompt parity). The
     /// curated envelope stays in the Stable prefix — it is session-scoped
     /// and rarely changes.
+    ///
+    /// The fourth tuple element is the measured per-layer size of the prompt
+    /// this call just assembled, for `context.breakdown`. It is RETURNED
+    /// rather than recorded here on purpose: this method has two callers and
+    /// only one of them is a real turn. The other
+    /// (`runner_impl::estimate_context`) builds a deliberately different
+    /// prompt — empty `TurnEnvelope`, no session summaries, no manifest — to
+    /// price a static overhead, and recording that as "your session's prompt"
+    /// would report a weakened copy of the real one as the fact (判据 §1).
+    /// The caller that knows which kind of build it asked for is the caller
+    /// that records.
     // rust-doctor-disable-next-line high-cyclomatic-complexity
     pub(crate) async fn build_system_prompt(
         &self,
@@ -271,6 +282,7 @@ impl AgentHarnessRunner {
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
         Option<String>,
+        Vec<crate::thinker::prompt_pipeline::LayerSize>,
     )> {
         use crate::providers::message::UnifiedMessage;
         use crate::thinker::prompt_builder::{PromptBuilder, PromptConfig};
@@ -761,7 +773,12 @@ impl AgentHarnessRunner {
         // of their inputs, so re-rendering stays byte-stable across runs when
         // nothing changed — the provider-side prefix cache is unaffected — and
         // a byte change now happens exactly when the content genuinely changed.
-        let parts = builder.build_system_prompt_cached_with_mode(&[], self.default_prompt_mode);
+        // `_measured` rather than the plain entry: the per-layer sizes are
+        // captured in the SAME traversal that produces these bytes, so
+        // `context.breakdown` reports the prompt that was sent instead of a
+        // later re-render (see `prompt_size_registry`'s module doc).
+        let (parts, layer_sizes) =
+            builder.build_system_prompt_cached_with_mode_measured(&[], self.default_prompt_mode);
         let prompt_build_phase_ms = prompt_build_phase_start.elapsed().as_millis() as u64;
         let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
@@ -799,7 +816,7 @@ impl AgentHarnessRunner {
             total_ms = prompt_build_start.elapsed().as_millis() as u64,
             "system prompt assembled"
         );
-        Some((prompt, parts, recall_context))
+        Some((prompt, parts, recall_context, layer_sizes))
     }
 }
 
