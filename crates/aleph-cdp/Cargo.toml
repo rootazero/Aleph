@@ -1,0 +1,46 @@
+[package]
+name = "aleph-cdp"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+description = "Chrome DevTools Protocol transport: one websocket, many sessions, per-command timeout."
+
+# Zero Aleph dependencies on purpose (spec §3.1): this crate must not learn about profiles,
+# engines or tools.
+# tokio-tungstenite and futures-util are NOT in [workspace.dependencies]; alephcore declares them
+# in its own [dependencies] (Cargo.toml:286-287). base64 IS a workspace dependency (Cargo.toml:79,
+# consumed by alephcore at :205 as { workspace = true }) but is written out here too, so this
+# manifest reads like crates/agent-detect/Cargo.toml, which takes every dependency literally.
+# Matching the exact version strings is what keeps one copy of each in the lockfile.
+[dependencies]
+tokio = { version = "1.35", features = ["rt", "sync", "time", "macros", "net", "io-util"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+# One call site, in the read loop's disconnect path (connection.rs): why a socket died is the one
+# event nobody can reconstruct from a return value, because by then every pending call has already
+# been answered with Disconnected. If that call site ever goes, this goes with it — an unused
+# dependency is the same defect this manifest refuses `url` for.
+tracing = "0.1"
+# Page.captureScreenshot / Page.printToPDF hand back base64; methods::page returns Vec<u8>.
+base64 = "0.22"
+
+[features]
+# `FakeCdpServer` lives in src/ rather than tests/ because alephcore's own unit tests drive the
+# CDP backend against it (Tasks 9, 12, 13, 19) and a `tests/support/mod.rs` is not reachable from
+# another crate. The feature keeps it out of every production build: with resolver = "2"
+# (root Cargo.toml:5) a dev-dependency's features are NOT unified into the normal dependency
+# graph, so alephcore shipping `aleph-cdp` in `[dependencies]` does not ship the fake.
+testkit = []
+
+[dev-dependencies]
+# `io-util` is for the hand-written HTTP GET in tests/smoke.rs that checks /json/version.
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
+# Self dev-dependency: turns `testkit` on for this crate's OWN integration tests without a flag,
+# so `cargo test -p aleph-cdp` cannot silently skip a test target. Cargo permits dev-dependency
+# cycles precisely because they do not affect the lib build. See Step 3's fallback if this
+# workspace's cargo refuses it.
+aleph-cdp = { path = ".", features = ["testkit"] }

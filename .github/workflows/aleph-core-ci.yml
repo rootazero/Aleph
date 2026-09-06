@@ -340,7 +340,7 @@ jobs:
         run: choco install protoc
 
       - name: Check formatting
-        run: cargo fmt -p alephcore -p aleph-desktop -p aleph-desktop-macos -p aleph-desktop-linux -p aleph-desktop-windows -- --check
+        run: cargo fmt -p alephcore -p aleph-cdp -p aleph-desktop -p aleph-desktop-macos -p aleph-desktop-linux -p aleph-desktop-windows -- --check
       - name: Clippy
         run: cargo clippy -p alephcore -p aleph-desktop -- -D warnings
 

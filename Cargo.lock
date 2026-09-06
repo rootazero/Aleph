@@ -123,6 +123,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-cdp"
+version = "26.9.1"
+dependencies = [
+ "aleph-cdp",
+ "base64 0.22.1",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tracing",
+]
+
+[[package]]
 name = "aleph-cli"
 version = "26.9.1"
 dependencies = [
