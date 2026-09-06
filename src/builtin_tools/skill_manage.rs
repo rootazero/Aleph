@@ -117,7 +117,7 @@ impl SkillManageOutput {
     }
 }
 
-/// Frontmatter composed for `create` — serialized through `serde_yml` so
+/// Frontmatter composed for `create` — serialized through `crate::yaml` so
 /// arbitrary names/descriptions can never break out of the YAML block.
 #[derive(Serialize)]
 struct ComposedFrontmatter<'a> {
@@ -135,20 +135,23 @@ struct ComposedFrontmatter<'a> {
 /// terminator is not a stable fact:
 ///
 /// * `serde_yaml` 0.9 documented `to_string(&point) == "x: 1.0\ny: 2.0\n"`.
-/// * `serde_yml` 0.0.13 forwards to `noyalib`, whose `write_mapping` writes
-///   `\n` *between* entries only and whose `document_start` / `document_end`
-///   both default to `false`. Measured: `"name: n\ndescription: d"` — no
-///   trailing newline and no document markers.
+/// * `serde_yml` 0.0.13 (forwarding to `noyalib`) wrote `\n` *between* entries
+///   only: measured `"name: n\ndescription: d"` — no trailing newline.
+/// * `yaml_serde` 0.10.7, the backend today, measured
+///   `"name: n\ndescription: d\n"` — trailing newline, no document markers.
 ///
-/// So the emitter's output is normalised rather than interpolated as-is: any
-/// document markers it may frame the block with are stripped, then exactly one
-/// `\n` is appended, so the fence starts its own line whatever the emitter did.
+/// Three backends, three answers, one of which already broke this function
+/// once. So the emitter's output is normalised rather than interpolated as-is:
+/// any document markers it may frame the block with are stripped, every
+/// trailing newline is trimmed, then exactly one `\n` is appended — so the
+/// fence starts its own line whatever the emitter did. Do not "simplify" this
+/// to trust the current backend's trailing newline.
 ///
 /// `memory::notes::note::helpers::yaml_extra_block` is the other site that
 /// splices this emitter's output into a `---` fence; it already normalises the
 /// same way. Keep the two answering this question the same way.
 fn compose_skill_md(fm: &ComposedFrontmatter<'_>, body: &str) -> Result<String> {
-    let yaml = serde_yml::to_string(fm)
+    let yaml = crate::yaml::to_string(fm)
         .map_err(|e| AlephError::tool(format!("Failed to compose frontmatter: {e}")))?;
     let block = yaml
         .strip_prefix("---\n")
@@ -990,11 +993,13 @@ mod tests {
     /// whatever the YAML emitter does with its last line's terminator.
     ///
     /// `serde_yaml` 0.9 documented `to_string(&point) == "x: 1.0\ny: 2.0\n"`.
-    /// `serde_yml` 0.0.13 forwards to `noyalib`, whose `write_mapping` emits
-    /// `\n` *between* entries only and whose `document_start` / `document_end`
-    /// both default to `false`; measured, it returns
-    /// `"name: n\ndescription: d"` — no trailing newline, no document
-    /// markers. `create` used to interpolate that straight into
+    /// `serde_yml` 0.0.13 (forwarding to `noyalib`) emitted `\n` *between*
+    /// entries only; measured, it returned `"name: n\ndescription: d"` — no
+    /// trailing newline, no document markers. `yaml_serde` 0.10.7, the backend
+    /// today, measures `"name: n\ndescription: d\n"` — the newline is back,
+    /// which is precisely why this test asserts the *composed document*
+    /// instead of the emitter's bytes. `create` used to interpolate the
+    /// emitter output straight into
     /// `format!("---\n{yaml}---\n\n{body}\n")`, which produced
     /// `description: d---`: a line that does not `trim()` to `---`, so the
     /// fence never closed and *every* `skill_manage(action='create')` died on

@@ -104,8 +104,8 @@ pub(super) struct Frontmatter {
 }
 
 /// Accept a YAML date field as either a quoted string, a native YAML date
-/// (which `serde_yml` may surface as a Tagged value or other scalar depending
-/// on version), or null. Re-serialize non-string variants and strip
+/// (which `crate::yaml` may surface as a Tagged value or other scalar
+/// depending on version), or null. Re-serialize non-string variants and strip
 /// surrounding quotes/whitespace so downstream callers always receive a clean
 /// `YYYY-MM-DD`-shaped string (or `None` for empty/null).
 fn deserialize_optional_date_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
@@ -113,12 +113,12 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::Deserialize;
-    let v = serde_yml::Value::deserialize(d)?;
+    let v = crate::yaml::Value::deserialize(d)?;
     Ok(match v {
-        serde_yml::Value::Null => None,
-        serde_yml::Value::String(s) => Some(s),
+        crate::yaml::Value::Null => None,
+        crate::yaml::Value::String(s) => Some(s),
         other => {
-            let s = serde_yml::to_string(&other)
+            let s = crate::yaml::to_string(&other)
                 .map_err(serde::de::Error::custom)?
                 .trim()
                 .trim_matches(|c: char| c == '\'' || c == '"' || c.is_whitespace())
@@ -172,7 +172,7 @@ pub(super) const KNOWN_FRONTMATTER_KEYS: &[&str] = &[
 ///
 /// `BTreeMap` (not `HashMap`): the emission order must be deterministic, or
 /// every rewrite would shuffle the header and churn `content_hash`.
-pub type ExtraFrontmatter = std::collections::BTreeMap<String, serde_yml::Value>;
+pub type ExtraFrontmatter = std::collections::BTreeMap<String, crate::yaml::Value>;
 
 /// Collect the frontmatter keys `Frontmatter` does not model.
 ///
@@ -182,13 +182,20 @@ pub type ExtraFrontmatter = std::collections::BTreeMap<String, serde_yml::Value>
 /// sees a native YAML date — a silent behaviour change on the parse path this
 /// module's own regression tests were written to pin.
 fn collect_extra_frontmatter(yaml: &str) -> ExtraFrontmatter {
-    let Ok(serde_yml::Value::Mapping(map)) = serde_yml::from_str::<serde_yml::Value>(yaml) else {
+    let Ok(crate::yaml::Value::Mapping(map)) = crate::yaml::from_str::<crate::yaml::Value>(yaml)
+    else {
         return ExtraFrontmatter::new();
     };
     map.into_iter()
         .filter_map(|(k, v)| {
-            // noyalib's `Mapping` iterates owned `(String, Value)` pairs —
-            // the key is already a plain String, not a `Value::String`.
+            // `crate::yaml`'s `Mapping` is keyed by `Value`, not by `String`,
+            // so a key is a passthrough candidate only when it is a plain
+            // string scalar. `ExtraFrontmatter` is keyed by `String` and the
+            // re-emitter writes `key: value` lines, so a non-string key
+            // (`1: x`, `[a]: x`) has nowhere to go; it is dropped rather than
+            // stringified, because stringifying would change the key on the
+            // round-trip and a changed key is worse than an absent one.
+            let k = k.as_str()?.to_owned();
             if KNOWN_FRONTMATTER_KEYS.contains(&k.as_str()) {
                 None
             } else {
@@ -232,7 +239,7 @@ pub fn split_frontmatter(
     let yaml_str = &after_open[..yaml_end];
     let body = after_open[body_start..].trim().to_string();
 
-    let fm: Frontmatter = serde_yml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
+    let fm: Frontmatter = crate::yaml::from_str(yaml_str).map_err(|e| AlephError::ConfigError {
         message: format!("Failed to parse YAML frontmatter: {e}"),
         suggestion: None,
     })?;

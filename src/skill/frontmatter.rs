@@ -138,8 +138,8 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
 /// Two shapes exist in the wild and both must work. Aleph's own convention is
 /// a YAML sequence, but every skill authored for upstream Claude Code writes a
 /// single comma-separated scalar (`allowed-tools: Read, Grep, Bash(cargo *)`).
-/// Deserialising into a strict `Vec<String>` would make `serde_yml` reject the
-/// frontmatter outright, and that does **not** degrade to "the declaration was
+/// Deserialising into a strict `Vec<String>` would make the YAML parser
+/// reject the frontmatter outright, and that does **not** degrade to "the declaration was
 /// ignored": it fails the whole parse, and the directory scan then drops the
 /// SKILL.md. A skill would vanish because of a key it does not even need. So
 /// the field is taken as raw YAML — the same leniency `automation:` uses, and
@@ -184,17 +184,17 @@ pub fn split(content: &str) -> Result<(String, String), NoFrontmatter> {
 /// every reader.
 #[must_use]
 pub fn normalize_allowed_tools(
-    raw: Option<&serde_yml::Value>,
+    raw: Option<&crate::yaml::Value>,
     skill_name: &str,
 ) -> Option<Vec<String>> {
     let value = raw?;
     let names: Vec<String> = match value {
-        serde_yml::Value::Null => return None,
-        serde_yml::Value::Sequence(items) => items
+        crate::yaml::Value::Null => return None,
+        crate::yaml::Value::Sequence(items) => items
             .iter()
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect(),
-        serde_yml::Value::String(s) => {
+        crate::yaml::Value::String(s) => {
             // Empty entries are dropped rather than forwarded as unknown
             // names: a trailing comma is a typo, and costing the author their
             // slash command over one would be a worse answer than they asked
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn allowed_tools_accepts_a_sequence() {
-        let v: serde_yml::Value = serde_yml::from_str("[grep, file_read]").unwrap();
+        let v: crate::yaml::Value = crate::yaml::from_str("[grep, file_read]").unwrap();
         assert_eq!(
             normalize_allowed_tools(Some(&v), "s"),
             Some(vec!["grep".to_string(), "file_read".to_string()])
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn allowed_tools_accepts_the_upstream_comma_scalar() {
-        let v = serde_yml::Value::String("Read, Grep, Bash(cargo run -- *)".to_string());
+        let v = crate::yaml::Value::String("Read, Grep, Bash(cargo run -- *)".to_string());
         assert_eq!(
             normalize_allowed_tools(Some(&v), "s"),
             Some(vec![
@@ -340,8 +340,8 @@ mod tests {
     #[test]
     fn allowed_tools_distinguishes_absent_from_empty() {
         assert!(normalize_allowed_tools(None, "s").is_none());
-        assert!(normalize_allowed_tools(Some(&serde_yml::Value::Null), "s").is_none());
-        let empty: serde_yml::Value = serde_yml::from_str("[]").unwrap();
+        assert!(normalize_allowed_tools(Some(&crate::yaml::Value::Null), "s").is_none());
+        let empty: crate::yaml::Value = crate::yaml::from_str("[]").unwrap();
         assert_eq!(normalize_allowed_tools(Some(&empty), "s"), Some(vec![]));
     }
 
@@ -350,7 +350,7 @@ mod tests {
     /// not cost the author the tool it precedes.
     #[test]
     fn allowed_tools_tolerates_a_trailing_comma() {
-        let v = serde_yml::Value::String("Read,".to_string());
+        let v = crate::yaml::Value::String("Read,".to_string());
         assert_eq!(
             normalize_allowed_tools(Some(&v), "s"),
             Some(vec!["Read".to_string()]),
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn allowed_tools_scalar_naming_no_tool_is_a_typo_not_a_deny_all() {
         for raw in [",", ",,", " , ", "   ", ""] {
-            let v = serde_yml::Value::String(raw.to_string());
+            let v = crate::yaml::Value::String(raw.to_string());
             assert_eq!(
                 normalize_allowed_tools(Some(&v), "s"),
                 None,
@@ -382,7 +382,7 @@ mod tests {
 
         // Contrast, deliberately in the same test: the empty *sequence* is a
         // declaration and keeps meaning deny-all.
-        let empty_seq: serde_yml::Value = serde_yml::from_str("[]").unwrap();
+        let empty_seq: crate::yaml::Value = crate::yaml::from_str("[]").unwrap();
         assert_eq!(
             normalize_allowed_tools(Some(&empty_seq), "s"),
             Some(vec![]),
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn allowed_tools_unusable_shape_reads_as_no_declaration() {
-        let v: serde_yml::Value = serde_yml::from_str("{read: yes}").unwrap();
+        let v: crate::yaml::Value = crate::yaml::from_str("{read: yes}").unwrap();
         assert!(normalize_allowed_tools(Some(&v), "s").is_none());
     }
 
@@ -552,7 +552,8 @@ mod tests {
                 continue;
             };
             let code = code_lines(&path, &content);
-            if !(code.contains("serde_yml::from_str") || code.contains("serde_yml::from_value")) {
+            if !(code.contains("crate::yaml::from_str") || code.contains("crate::yaml::from_value"))
+            {
                 continue;
             }
             if !code.contains("allowed_tools") {

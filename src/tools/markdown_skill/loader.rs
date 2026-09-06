@@ -271,7 +271,7 @@ mod tests {
         // `\`-continuations, and a `\<newline>` in a Rust string eats the
         // newline *and the next line's leading whitespace* — so the fixture's
         // YAML arrived as `metadata:` (null) with `requires:` / `bins:`
-        // promoted to top level, `serde_yml` refused it, and this test was red
+        // promoted to top level, the YAML parser refused it, and this test was red
         // on main before the frontmatter unification touched anything. The
         // splitter, old and new, produces the same (broken) YAML from it.
         fs::write(

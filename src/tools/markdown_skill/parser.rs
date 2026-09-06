@@ -26,7 +26,7 @@ pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
 
     // 2. Parse YAML frontmatter
     let mut spec: AlephSkillSpec =
-        serde_yml::from_str(&frontmatter).context("Failed to parse skill frontmatter")?;
+        crate::yaml::from_str(&frontmatter).context("Failed to parse skill frontmatter")?;
 
     // 3. Attach markdown content
     spec.markdown_content = markdown;

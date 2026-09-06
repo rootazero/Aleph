@@ -24,7 +24,7 @@ pub enum SkillParseError {
     /// The content does not contain a YAML frontmatter block.
     NoFrontmatter,
     /// The YAML frontmatter could not be parsed.
-    Yaml(serde_yml::Error),
+    Yaml(crate::yaml::Error),
     /// The frontmatter `name` is empty or whitespace-only, so it cannot
     /// produce a usable skill id.
     EmptyName,
@@ -91,8 +91,8 @@ impl From<std::io::Error> for SkillParseError {
     }
 }
 
-impl From<serde_yml::Error> for SkillParseError {
-    fn from(e: serde_yml::Error) -> Self {
+impl From<crate::yaml::Error> for SkillParseError {
+    fn from(e: crate::yaml::Error) -> Self {
         Self::Yaml(e)
     }
 }
@@ -144,13 +144,13 @@ struct RawFrontmatter {
     /// `the_kebab_key_matches_this_structs_wire_key` below pins the two
     /// together.
     #[serde(default)]
-    allowed_tools: Option<serde_yml::Value>,
+    allowed_tools: Option<crate::yaml::Value>,
     /// Declared scheduled automation (the hermes "blueprint" pattern).
     /// Deserialised leniently as raw YAML so a malformed block degrades to a
     /// parse WARNING (typos must surface — hermes lesson) instead of failing
     /// the whole skill.
     #[serde(default)]
-    automation: Option<serde_yml::Value>,
+    automation: Option<crate::yaml::Value>,
 }
 
 /// The strict shape of the `automation:` frontmatter block.
@@ -203,7 +203,7 @@ struct RawInstallSpec {
 /// shell snippets well under 1 MiB; anything bigger is either a binary blob
 /// or a malicious payload. Cap is applied BEFORE `read_to_string` so the
 /// scanner can't allocate the full bytes only to reject them. Also bounds
-/// the ReDoS / billion-laughs window for the subsequent `serde_yml` pass,
+/// the ReDoS / billion-laughs window for the subsequent `crate::yaml` pass,
 /// which has no explicit recursion limit and accepts arbitrary nested
 /// mappings + alias expansions.
 pub const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
@@ -415,7 +415,7 @@ pub fn parse_skill_content(
     source: SkillSource,
 ) -> Result<SkillManifest, SkillParseError> {
     let (yaml_str, body_str) = split_frontmatter(content_str)?;
-    let raw: RawFrontmatter = serde_yml::from_str(&yaml_str)?;
+    let raw: RawFrontmatter = crate::yaml::from_str(&yaml_str)?;
 
     // Build the id from the name with a strict charset transform: any
     // non-alphanumeric character collapses to a hyphen, runs collapse, and
@@ -605,7 +605,7 @@ fn apply_metadata(manifest: &mut SkillManifest, raw: &RawFrontmatter) {
     // skill itself. The schedule string is not validated here; `cron_manage`
     // create is the single validator.
     if let Some(block) = raw.automation.clone() {
-        match serde_yml::from_value::<RawAutomation>(block) {
+        match crate::yaml::from_value::<RawAutomation>(block) {
             Ok(auto) if !auto.schedule.trim().is_empty() => {
                 manifest.set_automation(crate::domain::skill::AutomationSpec {
                     schedule: auto.schedule,
@@ -1090,7 +1090,7 @@ Body."#;
     /// installed `rust-doctor/SKILL.md`.
     ///
     /// The assertion that matters is that the skill *parses at all*: a strict
-    /// `Vec<String>` field makes `serde_yml` reject the frontmatter, and a
+    /// `Vec<String>` field makes the YAML parser reject the frontmatter, and a
     /// rejected frontmatter is a skill that no longer exists. The names being
     /// unusable is the registrar's problem, not the parser's.
     #[test]
@@ -1306,5 +1306,158 @@ Content."#;
             SkillParseError::EmptyName => {} // expected
             other => panic!("expected EmptyName, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // The YAML 1.1 / 1.2 boundary
+    // -----------------------------------------------------------------
+
+    /// Where the backing YAML parser draws the boolean line, pinned.
+    ///
+    /// YAML **1.1** resolves bare `yes` / `no` / `on` / `off` to booleans
+    /// (the "Norway problem"); YAML **1.2**'s core schema resolves only
+    /// `true` / `false` and leaves the rest as strings. Which one we get is a
+    /// property of whatever crate `crate::yaml` aliases, and this repo has
+    /// changed that crate three times (`serde_yaml` -> `serde_yml` ->
+    /// `yaml_serde`). It is not a property anyone can read off a call site.
+    ///
+    /// Measured on `yaml_serde` 0.10.7 (`libyaml-rs` 0.3.0), which is what
+    /// this assertion encodes:
+    ///
+    /// ```text
+    /// "name: NO"          => Mapping {"name": String("NO")}
+    /// "description: off"  => Mapping {"description": String("off")}
+    /// "when-to-use: yes"  => Mapping {"when-to-use": String("yes")}
+    /// "allowed-tools: no" => Mapping {"allowed-tools": String("no")}
+    /// ```
+    ///
+    /// libyaml is a YAML 1.1 *event* parser, but scalar **resolution** happens
+    /// in the serde layer above it, and that layer implements the 1.2 core
+    /// schema. So the tag-resolution behaviour here is 1.2 even though the
+    /// tokenizer is 1.1 — which is exactly the kind of claim that must be
+    /// measured rather than inferred from the backend's lineage.
+    ///
+    /// This goes red the day a backend swap moves scalar resolution to true
+    /// YAML 1.1. That is not a cosmetic red: see
+    /// [`a_frontmatter_record_survives_yaml_1_1_boolean_spellings`] for the
+    /// blast radius.
+    #[test]
+    fn yaml_1_1_boundary_bare_no_off_yes_resolve_as_strings_not_booleans() {
+        type Doc = std::collections::BTreeMap<String, crate::yaml::Value>;
+
+        for (src, key, text) in [
+            ("name: NO", "name", "NO"),
+            ("description: off", "description", "off"),
+            ("when-to-use: yes", "when-to-use", "yes"),
+            ("allowed-tools: no", "allowed-tools", "no"),
+            ("x: On", "x", "On"),
+            ("x: Off", "x", "Off"),
+        ] {
+            let doc: Doc = crate::yaml::from_str(src)
+                .unwrap_or_else(|e| panic!("{src:?} must parse at all: {e}"));
+            let v = doc
+                .get(key)
+                .unwrap_or_else(|| panic!("{src:?} lost its key"));
+            assert_eq!(
+                v.as_str(),
+                Some(text),
+                "{src:?} resolved to {v:?}, not the string {text:?} — the YAML backend has \
+                 moved to YAML 1.1 scalar resolution. Every `String` / `Option<String>` field \
+                 in `RawFrontmatter` that receives one of these spellings is now a type error \
+                 that fails the WHOLE record, and `scan_directory` drops that SKILL.md: one \
+                 field value silently deleting an unrelated skill. Decide deliberately — do \
+                 not just update this expectation"
+            );
+        }
+
+        // Positive control. Without it, an "everything is a string" backend
+        // (one that resolved nothing at all) would satisfy every assertion
+        // above and this test would prove nothing about where the line is.
+        let doc: Doc = crate::yaml::from_str("flag: true\nother: false").expect("bools parse");
+        assert_eq!(
+            doc["flag"].as_bool(),
+            Some(true),
+            "`true` must still resolve to a boolean — if it does not, the assertions above are \
+             vacuous rather than passing"
+        );
+        assert_eq!(doc["other"].as_bool(), Some(false));
+    }
+
+    /// The blast radius the test above is guarding, stated as a record parse.
+    ///
+    /// `RawFrontmatter.name` and `.description` are required `String`s and the
+    /// rest are `Option<String>`. serde has no "this one field was the wrong
+    /// type, skip it" mode: a boolean arriving at a `String` field fails
+    /// `parse_skill_content`, which fails `parse_skill_file`, and
+    /// `scan_directory` then drops the SKILL.md entirely. That is the same
+    /// shape [`crate::skill::frontmatter::normalize_allowed_tools`] exists to
+    /// prevent for `allowed-tools:` — one unrelated field value deleting a
+    /// whole skill.
+    ///
+    /// Measured on `yaml_serde` 0.10.7: every case below is `Ok`, with the
+    /// field holding the literal source text (`name: "NO"`,
+    /// `description: "off"`, `when_to_use: Some("yes")`).
+    ///
+    /// Decision recorded here rather than left implicit: **no leniency was
+    /// added to `RawFrontmatter`.** A `#[serde(deserialize_with = ...)]`
+    /// coercion on each string field would today be a branch that can never
+    /// be taken — an always-true predicate wearing a safety mask. If this
+    /// test ever goes red, that is when the decision gets made, with the
+    /// failure in hand.
+    #[test]
+    fn a_frontmatter_record_survives_yaml_1_1_boolean_spellings() {
+        for (yaml, check) in [
+            (
+                "name: NO\ndescription: d\n",
+                (|r: &RawFrontmatter| r.name == "NO") as fn(&RawFrontmatter) -> bool,
+            ),
+            ("name: n\ndescription: off\n", |r| r.description == "off"),
+            ("name: n\ndescription: d\nwhen-to-use: yes\n", |r| {
+                r.when_to_use.as_deref() == Some("yes")
+            }),
+            ("name: n\ndescription: d\nemoji: y\n", |r| {
+                r.emoji.as_deref() == Some("y")
+            }),
+            ("name: n\ndescription: d\nversion: 1.0\n", |r| {
+                r.version.as_deref() == Some("1.0")
+            }),
+        ] {
+            let raw: RawFrontmatter = crate::yaml::from_str(yaml).unwrap_or_else(|e| {
+                panic!(
+                    "frontmatter {yaml:?} no longer deserializes: {e}. This is not one bad \
+                     field — the whole record failed, so `scan_directory` now drops this \
+                     SKILL.md. See the sibling test `yaml_1_1_boundary_bare_no_off_yes_resolve_as_strings_not_booleans`"
+                )
+            });
+            assert!(check(&raw), "field value not preserved verbatim: {raw:?}");
+        }
+
+        // `allowed-tools:` is the one field taken as raw `Value`, so a bare
+        // `no` reaches `normalize_allowed_tools` instead of failing the record
+        // — and this is the one place where the 1.1/1.2 line is observable in
+        // an outcome rather than only in a `Value`. Measured, both branches:
+        //
+        // * 1.2 resolution (today): `String("no")` takes the comma-scalar arm
+        //   and yields `Some(["no"])` — a declaration naming one tool called
+        //   `no`. `register_skills` cannot resolve that name, so the skill
+        //   loses its slash command; it stays visible and `skill_read`-able.
+        // * 1.1 resolution: `Bool(false)` takes the `other` arm, warns, and
+        //   yields `None` — no declaration, full tool surface.
+        //
+        // Different, and deliberately not equalised: `allowed-tools: no` is a
+        // nonsense declaration under either reading, both degradations are
+        // survivable, and the property that actually matters — the skill is
+        // not deleted — holds on both. Asserted here so a backend swap shows
+        // up as a decision instead of a silent change of outcome.
+        let raw: RawFrontmatter =
+            crate::yaml::from_str("name: n\ndescription: d\nallowed-tools: no\n")
+                .expect("`allowed-tools: no` must not fail the record");
+        assert_eq!(
+            crate::skill::frontmatter::normalize_allowed_tools(raw.allowed_tools.as_ref(), "n"),
+            Some(vec!["no".to_string()]),
+            "under YAML 1.2 scalar resolution a bare `no` is the string \"no\", so it reads as \
+             a one-name declaration. If this is now `None`, the backend resolves it as a \
+             boolean and the comment above describes the branch you are on"
+        );
     }
 }

@@ -43,8 +43,8 @@ use crate::extension::types::{HookEvent, McpServerConfig};
 ///    shape.
 ///
 /// The strict `Vec<String>` was also actively harmful: an upstream skill
-/// writing `allowed-tools: Read, Grep, Bash(cargo *)` made `serde_yml` reject
-/// the whole frontmatter, so the skill was dropped from the plugin over a key
+/// writing `allowed-tools: Read, Grep, Bash(cargo *)` made the YAML parser
+/// reject the whole frontmatter, so the skill was dropped from the plugin over a key
 /// this path never read. Removing the field removes that failure mode outright
 /// — the container has no `deny_unknown_fields`, so the key is now ignored.
 #[derive(Debug, Default, Deserialize)]
@@ -152,7 +152,7 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
         return Ok((T::default(), body));
     }
 
-    let fm: T = serde_yml::from_str(fm_str)
+    let fm: T = crate::yaml::from_str(fm_str)
         .with_context(|| "Failed to parse YAML frontmatter".to_string())?;
     Ok((fm, body))
 }
@@ -929,8 +929,8 @@ mod tests {
     /// comma-separated scalar, not a YAML sequence.
     ///
     /// `SkillFm` used to carry `#[serde(rename = "allowed-tools")]
-    /// Option<Vec<String>>`. A scalar there makes `serde_yml` reject the whole
-    /// frontmatter, `parse_skill_registration` returns `Err`, and
+    /// Option<Vec<String>>`. A scalar there makes the YAML parser reject the
+    /// whole frontmatter, `parse_skill_registration` returns `Err`, and
     /// `scan_component_dir` drops the file with a warn — the skill vanishes
     /// because of a key this path never read. Its sibling in the same
     /// directory was unaffected, which is precisely what made it invisible:
