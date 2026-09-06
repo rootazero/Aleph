@@ -53,6 +53,19 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The reason reported when we must say `Disconnected` but `fail_all` has not recorded a cause
+/// yet — e.g. the writer's own channel died on a half-open socket before the reader noticed, or
+/// before `Inner::drop` ran. This must never default to `LocalClose`: that variant is a specific
+/// claim that Aleph closed the socket, and asserting it here would blame us for a peer we do not
+/// yet know anything about — a claim the engine-failure diagnosis downstream would then read as
+/// fact. `TransportError` says plainly that the cause is unknown instead of asserting agency we
+/// do not have.
+fn unknown_close_reason() -> CloseReason {
+    CloseReason::TransportError(
+        "close reason unknown: the writer ended before the reader recorded a cause".to_string(),
+    )
+}
+
 struct Pending {
     /// Kept so the error can name the verb. A `Timeout` that does not say which method is stuck
     /// tells the model nothing it can act on.
@@ -107,6 +120,107 @@ impl Shared {
 
     fn reason(&self) -> Option<CloseReason> {
         self.closed.borrow().clone()
+    }
+
+    /// Call immediately after inserting a pending entry, passing that entry's own id.
+    ///
+    /// Closes a sub-microsecond TOCTOU: `call_with_timeout` checks `reason()` before inserting
+    /// into `pending` so it can fail fast on an already-dead socket, but nothing holds a lock
+    /// across that check and the insert. If `fail_all` runs — and finishes draining `pending` —
+    /// in that exact window, it drains a table that does not contain this call's entry yet
+    /// (the insert hasn't happened), so this entry is never touched by that drain. Nothing else
+    /// will ever resolve it: `fail_all` only runs once more, from `Inner::drop`, which may not
+    /// happen for as long as this `CdpConnection` handle lives. Without this recheck the call
+    /// would sit out its entire timeout budget and report `Timeout` — while `closed()` already
+    /// knows, correctly, that the connection is `Disconnected`. That is exactly the wrong-fact
+    /// failure mode R63 exists to prevent, reached by interleaving instead of by deleting a guard.
+    ///
+    /// Returns `Some(reason)` when the race was hit — the entry has already been removed, by this
+    /// call, so the caller must not touch `pending` again for `id` and must report `Disconnected`
+    /// immediately rather than proceed to send the frame or await a reply that will never come
+    /// from `fail_all`'s drain (it already ran) nor from the peer (the caller may not even still
+    /// be connected to receive it).
+    fn recheck_after_insert(&self, id: u64) -> Option<CloseReason> {
+        let reason = self.reason()?;
+        lock(&self.pending).remove(&id);
+        Some(reason)
+    }
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+
+    fn new_shared() -> Shared {
+        let (events_tx, _rx) = broadcast::channel(1);
+        let (closed_tx, _initial) = watch::channel(None);
+        Shared {
+            pending: Mutex::new(HashMap::new()),
+            events_tx,
+            closed: closed_tx,
+        }
+    }
+
+    /// Proves `recheck_after_insert` is load-bearing without reproducing the real race's exact
+    /// (sub-microsecond, multi-thread-runtime-only) timing: it drives the same sequence of state
+    /// transitions the race produces — `fail_all` running and draining a table that does not yet
+    /// contain this entry, because the entry is inserted only afterward, exactly as it would be
+    /// if `call_with_timeout`'s insert landed just after `fail_all`'s drain — and checks that the
+    /// recheck catches what the drain could not have.
+    #[test]
+    fn recheck_after_insert_catches_a_reason_set_before_the_entry_existed() {
+        let shared = new_shared();
+
+        // `fail_all` runs (and drains) while the table is still empty — standing in for the
+        // window between `call_with_timeout`'s initial guard and its insert.
+        shared.fail_all(CloseReason::PeerClosed);
+
+        // The insert that, in the real race, lands just too late to be part of that drain.
+        let (tx, rx) = oneshot::channel();
+        lock(&shared.pending).insert(
+            7,
+            Pending {
+                method: "Late.op".to_string(),
+                tx,
+            },
+        );
+
+        let caught = shared.recheck_after_insert(7);
+        assert_eq!(
+            caught,
+            Some(CloseReason::PeerClosed),
+            "the recheck must surface the reason that was already recorded before this entry existed"
+        );
+        assert!(
+            lock(&shared.pending).get(&7).is_none(),
+            "the recheck must remove its own entry — nothing else will, since fail_all already ran"
+        );
+        // Without the recheck, this oneshot has no other sender left to resolve it: `fail_all`
+        // already drained (and cannot see this entry to drain again), so the receiver would sit
+        // forever. Dropping it here only stands in for the caller reporting `Disconnected`
+        // immediately instead of awaiting it.
+        drop(rx);
+    }
+
+    /// The recheck must be a true no-op on a live connection: it must not remove an entry, or
+    /// report a reason, that was never set.
+    #[test]
+    fn recheck_after_insert_does_nothing_on_a_live_connection() {
+        let shared = new_shared();
+        let (tx, _rx) = oneshot::channel();
+        lock(&shared.pending).insert(
+            1,
+            Pending {
+                method: "Live.op".to_string(),
+                tx,
+            },
+        );
+
+        assert_eq!(shared.recheck_after_insert(1), None);
+        assert!(
+            lock(&shared.pending).get(&1).is_some(),
+            "a live connection's entry must survive the recheck untouched"
+        );
     }
 }
 
@@ -241,6 +355,11 @@ impl CdpConnection {
                 tx,
             },
         );
+        // Closes the TOCTOU between the guard above and this insert — see
+        // `Shared::recheck_after_insert`'s own doc for why this cannot be skipped.
+        if let Some(reason) = self.inner.shared.recheck_after_insert(id) {
+            return Err(CdpError::Disconnected(reason));
+        }
 
         let mut frame = json!({
             "id": id,
@@ -265,7 +384,7 @@ impl CdpConnection {
                 self.inner
                     .shared
                     .reason()
-                    .unwrap_or(CloseReason::LocalClose),
+                    .unwrap_or_else(unknown_close_reason),
             ));
         }
 
@@ -278,7 +397,7 @@ impl CdpConnection {
                 self.inner
                     .shared
                     .reason()
-                    .unwrap_or(CloseReason::LocalClose),
+                    .unwrap_or_else(unknown_close_reason),
             )),
             Err(_elapsed) => {
                 // Forget the slot so a late reply is discarded rather than handed to the next
@@ -298,6 +417,18 @@ impl CdpConnection {
         self.inner.shared.closed.subscribe()
     }
 
+    /// Requests a close; does not wait for the socket to actually go down.
+    ///
+    /// Two things happen here, both synchronously: a websocket Close frame is queued for the
+    /// writer task, and `LocalClose` is recorded as this connection's close reason (so a pending
+    /// or later call fails fast — see `call_with_timeout`). Neither one is a wait: the writer may
+    /// not have flushed the frame by the time this `async fn` returns (`self.inner.outgoing` is
+    /// only queued into, never awaited on here), and the reader task's `select!` is not nudged by
+    /// this call — only `Inner::drop`'s `shutdown` watch does that — so the read loop stays
+    /// parked on `src.next()` until the peer actually answers the close frame or the last handle
+    /// is dropped. A caller needing a guarantee that the socket is fully down when this returns
+    /// does not have one from this method; that ordering belongs to whoever owns shutdown
+    /// sequencing (Task 9).
     pub async fn close(&self) {
         let _ = self.inner.outgoing.send(Message::Close(None));
         self.inner.shared.fail_all(CloseReason::LocalClose);
@@ -347,7 +478,19 @@ fn handle_frame(shared: &Shared, msg: Message) {
                     pending.method
                 ))),
             },
-            None => Ok(frame.get("result").cloned().unwrap_or_else(|| json!({}))),
+            // A present `result` key answers the call, even an empty `{}` — that is a real CDP
+            // shape (Task 0's `<engine>-void.json` fixtures) for a method with nothing to return.
+            // But a frame with NEITHER `result` NOR `error` is not that: it is a protocol
+            // violation, and treating it as `Ok({})` would hand Task 4's typed wrappers a
+            // fabricated success for a reply the peer never actually gave. Fail closed instead:
+            // an ambiguous frame is "we do not know", never "it worked" (判据 §8).
+            None => match frame.get("result") {
+                Some(result) => Ok(result.clone()),
+                None => Err(CdpError::Decode(format!(
+                    "{}: reply id {id} carries neither `result` nor `error`: {frame}",
+                    pending.method
+                ))),
+            },
         };
         let _ = pending.tx.send(outcome);
         return;

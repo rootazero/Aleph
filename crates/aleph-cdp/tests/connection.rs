@@ -294,6 +294,34 @@ async fn a_protocol_error_becomes_cdp_error_protocol_naming_the_method() {
 }
 
 #[tokio::test]
+async fn a_reply_with_neither_result_nor_error_becomes_a_decode_error() {
+    let server = FakeCdpServer::start(scripted(vec![(
+        "Malformed.op",
+        // `Responder::Event` sends its value verbatim rather than wrapping it into a proper
+        // reply — used here to construct a reply-shaped frame (it carries `id`) that is missing
+        // BOTH `result` and `error`, a protocol violation no real CDP peer should produce but
+        // that the client must never read as a success.
+        Responder::Event(json!({ "id": 1 })),
+    )]))
+    .await;
+    let conn = CdpConnection::connect(server.ws_url().as_str(), ConnectOptions::default())
+        .await
+        .expect("connect");
+
+    let err = conn
+        .call(None, "Malformed.op", json!({}))
+        .await
+        .expect_err("neither result nor error must never be treated as success");
+    match err {
+        CdpError::Decode(text) => {
+            assert!(text.contains("Malformed.op"), "names the method: {text}");
+            assert!(text.contains('1'), "names the id: {text}");
+        }
+        other => panic!("expected Decode, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn call_uses_the_command_timeout_from_connect_options() {
     assert_eq!(
         ConnectOptions::default().command_timeout,
