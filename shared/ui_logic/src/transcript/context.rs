@@ -49,10 +49,21 @@ pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
         Some(u) => {
             let reported = u.input + u.cache_read + u.cache_creation;
             let diff = (reported as f64 - ours as f64).abs();
-            if diff > (ours as f64 * PROVIDER_TOLERANCE).max(32.0) {
-                Some(reported)
-            } else {
-                Some(ours)
+            let disagrees = diff > (ours as f64 * PROVIDER_TOLERANCE).max(32.0);
+            match (disagrees, reported >= ours) {
+                (false, _) => Some(ours),
+                (true, true) => Some(reported),
+                // The provider counted LESS than our measured parts,
+                // beyond tolerance: the two measurements contradict each
+                // other. Trusting `reported` would show rows that outweigh
+                // their own total (the lie this function exists to
+                // prevent); trusting `ours` would silently overrule the
+                // provider, the authoritative account of what was actually
+                // billed. The honest answer is "we don't know" — the same
+                // answer given when the provider reports nothing at all.
+                // Parts BELOW the total (the normal case) still keep their
+                // `Other` remainder; only parts ABOVE it is unresolvable.
+                (true, false) => None,
             }
         }
         None => None, // unknown after compaction: render `?`, not our sum
@@ -106,16 +117,37 @@ mod tests {
         assert_eq!(r.other, 0);
     }
     #[test]
-    fn a_provider_total_smaller_than_the_parts_saturates_other_to_zero_never_negative() {
-        // Fail-closed in the other direction: when the provider reports
-        // LESS than our measured sum, `Other` must not go negative — it
-        // saturates to 0 rather than lying with a negative remainder. The
-        // displayed rows will sum above `total` in this case; that is the
-        // provider disagreeing downward, not a bug in the reconciliation.
-        let r = reconcile(&breakdown(Some(UsageTokens { input: 100, output: 0, cache_read: 0, cache_creation: 0 })));
-        assert_eq!(r.total, Some(100));
+    fn a_provider_total_smaller_than_the_parts_beyond_tolerance_means_unknown() {
+        // A downward disagreement past tolerance means our two
+        // measurements CONTRADICT each other — trusting the reported
+        // total would show rows that outweigh it (the exact lie this
+        // function exists to prevent); trusting our sum would silently
+        // overrule the provider, which is the authoritative account of
+        // what was actually billed. The honest answer is "we don't know":
+        // `total`/`percent` go to `None`, exactly as when the provider
+        // reports nothing at all, and no `Other` row is emitted. Every
+        // itemized row is kept exactly as measured — reconciliation only
+        // withholds the total/percent judgment, never the parts.
+        let b = breakdown(Some(UsageTokens { input: 100, output: 0, cache_read: 0, cache_creation: 0 }));
+        let r = reconcile(&b);
+        assert_eq!(r.total, None);
+        assert_eq!(r.percent, None);
         assert_eq!(r.other, 0);
         assert!(r.rows.iter().all(|x| x.label != "Other"));
+        assert_eq!(r.rows.len(), 3, "System/Tools/Messages rows survive untouched");
+        assert_eq!(r.rows[0], ContextRow { label: "System".into(), tokens: 1000, bytes: Some(4000) });
+        assert_eq!(r.rows[1], ContextRow { label: "Tools (1 schemas)".into(), tokens: 100, bytes: Some(400) });
+        assert_eq!(r.rows[2], ContextRow { label: "Messages".into(), tokens: 500, bytes: None });
+    }
+    #[test]
+    fn a_downward_disagreement_exactly_at_the_tolerance_boundary_keeps_our_total() {
+        // ours = 1600, so the threshold is max(1600*0.001, 32.0) = 32.0.
+        // A diff of EXACTLY 32 must not count as disagreeing (`diff >
+        // threshold` is strict) — this is still the ordinary within-
+        // tolerance case, not the new unknown-total case.
+        let r = reconcile(&breakdown(Some(UsageTokens { input: 1568, output: 0, cache_read: 0, cache_creation: 0 })));
+        assert_eq!(r.total, Some(1600));
+        assert_eq!(r.other, 0);
     }
     #[test]
     fn no_context_window_known_means_no_percent_even_with_a_known_total() {
