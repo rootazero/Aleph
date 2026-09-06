@@ -74,8 +74,8 @@ const REQUIRED = [
   // reader: dom_box_model_parses_both_engines
   [`${CDP}/chrome-DOM.getBoxModel.json`,
     ["model.content", "model.padding", "model.border", "model.margin", "model.width", "model.height"],
-    (v) => (v.model.content.length === 8 || "content quad must have 8 numbers")
-        && ((Number.isInteger(v.model.width) && Number.isInteger(v.model.height))
+    (v) => (v.model?.content?.length === 8 || "content quad must have 8 numbers")
+        && ((Number.isInteger(v.model?.width) && Number.isInteger(v.model?.height))
             || "width/height must be integers (aleph-cdp types them i64)")],
   // readers: the_no_box_matcher_is_the_code_and_message_chrome_actually_sends,
   //          dom_get_box_model_answers_none_for_the_refusal_chrome_actually_sent
@@ -116,8 +116,8 @@ const REQUIRED = [
   [`${CDP}/obscura-DOM.getDocument.json`, ["root.nodeId", "root.backendNodeId", "root.nodeName"]],
   // reader: dom_box_model_parses_both_engines
   [`${CDP}/obscura-DOM.getBoxModel.json`, ["model.content", "model.width", "model.height"],
-    (v) => (v.model.content.length === 8 || "content quad must have 8 numbers")
-        && ((Number.isInteger(v.model.width) && Number.isInteger(v.model.height))
+    (v) => (v.model?.content?.length === 8 || "content quad must have 8 numbers")
+        && ((Number.isInteger(v.model?.width) && Number.isInteger(v.model?.height))
             || "width/height must be integers (aleph-cdp types them i64)")],
   // reader: runtime_evaluate_returns_the_value_and_always_asks_for_it_by_value
   [`${CDP}/obscura-Runtime.evaluate.json`, ["result.type"]],
@@ -138,19 +138,19 @@ const REQUIRED = [
   // captureSnapshot call; documents.length MUST be 2 for this fixture to mean anything)
   [`${PAGE}/local-sameorigin-iframe.domsnapshot.json`,
     ["documents.1.documentURL", "documents.1.layout.bounds"],
-    (v) => v.documents.length === 2
+    (v) => v.documents?.length === 2
       || "a same-origin iframe capture must be exactly two documents (one call, in-process)"],
   // reader: Part 3 Task 11 (OOPIF path, parent half — one document only; the child is invisible
   // to this call, which is the whole point of this fixture)
   [`${PAGE}/local-oopif-parent.domsnapshot.json`,
     ["documents.0.documentURL", "documents.0.layout.bounds"],
-    (v) => v.documents.length === 1
+    (v) => v.documents?.length === 1
       || "an OOPIF parent capture must be exactly one document (the child lives in a different renderer)"],
   // reader: Part 3 Task 11 (OOPIF path, child half — the child's OWN captureSnapshot on its own
   // auto-attached session, coordinates left frame-local exactly as CDP returned them, no shift)
   [`${PAGE}/local-oopif-child.domsnapshot.json`,
     ["documents.0.documentURL", "documents.0.layout.bounds"],
-    (v) => v.documents.length === 1
+    (v) => v.documents?.length === 1
       || "an OOPIF child's own capture must be exactly one document"],
 ];
 
@@ -171,7 +171,16 @@ for (const [file, keys, pred] of REQUIRED) {
   catch (e) { fail(`${rel}: not JSON (${e.message})`); continue; }
   for (const k of keys) if (dig(v, k) === undefined) fail(`${rel}: missing ${k}`);
   if (pred) {
-    const r = pred(v);
+    // F1 (review round 1): a predicate that dereferences a key it does not itself guard
+    // (`v.model.content`, `v.documents.length`) throws on a missing/wrong-typed key, and an
+    // uncaught throw here used to abort the WHOLE scan — every entry after the first crash was
+    // never checked, and the operator saw a stack trace instead of the failure list. Catching it
+    // turns that into a named FAIL and lets the scan continue, which is what "every predicate must
+    // survive a missing or wrong-typed key" requires structurally, independent of whether any one
+    // predicate remembers to use optional chaining.
+    let r;
+    try { r = pred(v); }
+    catch (e) { r = `predicate threw ${e.constructor.name}: ${e.message}`; }
     if (r !== true) fail(`${rel}: ${r === false ? "predicate failed" : r}`);
   }
 }
