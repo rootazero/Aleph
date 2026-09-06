@@ -11,3 +11,9 @@ mod theme_tokens;
 pub use theme_tokens::{
     mix_rgb, SemanticColor, ALL_SEMANTIC_COLORS, DIFF_EMPHASIS_MIX, DIFF_ROW_MIX,
 };
+
+mod fold;
+pub use fold::{
+    fold, wrap_physical, FoldAnchor, FoldBody, FoldPolicy, Folded, DEFAULT_COLLAPSED_ROWS,
+    FALLBACK_WIDTH,
+};
