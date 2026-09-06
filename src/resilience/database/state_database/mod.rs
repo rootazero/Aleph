@@ -8,27 +8,27 @@ use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
-/// Direct extern declaration of the sqlite-vec auto-extension entrypoint.
-///
-/// The upstream `sqlite-vec` crate exposes `sqlite3_vec_init` with an
-/// argument-less stub (`pub fn sqlite3_vec_init();`), but the real C symbol
-/// has the canonical 3-arg SQLite extension signature declared in
-/// `sqlite-vec.h`:
-///
-/// ```c
-/// int sqlite3_vec_init(sqlite3 *db,
-///                      char **pzErrMsg,
-///                      const sqlite3_api_routines *pApi);
-/// ```
-///
-/// Declaring the symbol ourselves with the correct signature makes the
-/// **linker** enforce ABI compatibility: a future sqlite-vec release that
-/// adds attributes, changes arity, or changes the calling convention will
-/// fail to link here instead of silently corrupting the stack on every
-/// extension load. The previous implementation used
-/// `std::mem::transmute(sqlite3_vec_init as *const ())` to bridge the
-/// 0-arg stub and the 3-arg real signature — that erased the contract.
 unsafe extern "C" {
+    /// Direct extern declaration of the sqlite-vec auto-extension entrypoint.
+    ///
+    /// The upstream `sqlite-vec` crate exposes `sqlite3_vec_init` with an
+    /// argument-less stub (`pub fn sqlite3_vec_init();`), but the real C symbol
+    /// has the canonical 3-arg SQLite extension signature declared in
+    /// `sqlite-vec.h`:
+    ///
+    /// ```c
+    /// int sqlite3_vec_init(sqlite3 *db,
+    ///                      char **pzErrMsg,
+    ///                      const sqlite3_api_routines *pApi);
+    /// ```
+    ///
+    /// Declaring the symbol ourselves with the correct signature makes the
+    /// **linker** enforce ABI compatibility: a future sqlite-vec release that
+    /// adds attributes, changes arity, or changes the calling convention will
+    /// fail to link here instead of silently corrupting the stack on every
+    /// extension load. The previous implementation used
+    /// `std::mem::transmute(sqlite3_vec_init as *const ())` to bridge the
+    /// 0-arg stub and the 3-arg real signature — that erased the contract.
     fn sqlite3_vec_init(
         db: *mut rusqlite::ffi::sqlite3,
         pz_err_msg: *mut *mut std::ffi::c_char,
