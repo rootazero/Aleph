@@ -1559,9 +1559,11 @@ async fn call_void(conn: &CdpConnection, s: &SessionId, method: &str) -> Result<
 // permanently off by one, so the test fn's own closing brace never brought it back to baseline —
 // every fixture referenced by any LATER function in the file, test or not, was then wrongly
 // counted as read. This WAS a false GREEN, in direct contradiction of the "fail-red, not
-// fail-green" claim below, which was not true until this was fixed. See `fixture_refs_in_test_
-// bodies`'s own doc for the fix (string/char-literal-aware brace counting) and its one remaining,
-// undefended gap (raw strings).
+// fail-green" claim below, which was not true until this was fixed. A permanent regression,
+// `o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal`, drives the scanner directly against
+// this exact shape. See `fixture_refs_in_test_bodies`'s own doc for the fix (string/char/raw-
+// string-aware brace counting) and its one remaining, undefended gap (a string literal, of any
+// kind, that spans multiple physical source lines).
 //
 // Known, deliberate limit (do not "fix" this — it fails SAFE, never silently green): the walk
 // below only reads TOP-LEVEL files directly under `tests/` (`tests/*.rs`), and the marker match is
@@ -1629,14 +1631,22 @@ fn every_fixture_file_under_tests_fixtures_has_a_reader() {
 /// for a test-only guard would be a third-party dependency this crate does not otherwise need,
 /// R3). It tracks brace depth and the most recently seen `#[test]`/`#[tokio::test]` attribute to
 /// know which function body each line falls inside, skipping the CONTENTS of `"…"` string
-/// literals and simple `'…'` char literals (but not a bare lifetime like `'a`, which this
-/// function's own source uses in identifiers — see the inline comment on that distinction) when
-/// counting braces, so neither can throw off the running depth the way the bug above did. See
-/// `strip_line_comment` for the separate comment-vs-string-literal handling applied before this
-/// runs. Known, undefended gap: raw strings (`r"…"`, `r#"…"#`) are not recognised, so a `{`/`}`
-/// inside one would hit the same class of bug this fix just closed — acceptable today only
-/// because zero exist anywhere under `crates/aleph-cdp/tests/` (checked at the time of this fix:
-/// `rg 'r#*"' crates/aleph-cdp/tests` has no real hits), not because the gap cannot be reached.
+/// literals (plain AND raw, `r"…"`/`r#"…"#`/`r##"…"##`/…) and simple `'…'` char literals (but not
+/// a bare lifetime like `'a`, which this function's own source uses in identifiers — see the
+/// inline comment on that distinction) when counting braces, so none of them can throw off the
+/// running depth the way the bug above did. See `strip_line_comment` for the separate
+/// comment-vs-string-literal handling applied before this runs.
+///
+/// Known, undefended gap, narrower than it was before this fix but not eliminated: this scanner
+/// processes one physical source LINE at a time with no state carried across lines, so a string
+/// literal — raw or plain — that itself spans multiple physical lines is not recognised as one
+/// unbroken literal; its later lines are scanned as ordinary code, and a `{`/`}` on one of them
+/// would reproduce the exact bug this fix closes for the single-line case. Acceptable today only
+/// because no multi-line string literal of any kind exists anywhere under
+/// `crates/aleph-cdp/tests/` (checked at the time of this fix), not because the gap cannot be
+/// reached — see `o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal`'s own doc for why its
+/// regression fixture is deliberately built from single-line literals only, to avoid tripping over
+/// this exact gap in a NEW way while testing the fix for the old one.
 ///
 /// It is deliberately conservative in one direction only: a fixture reference that is real but
 /// sits outside this heuristic's notion of "inside a test" (the deferred limit documented on the
@@ -1678,6 +1688,41 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
         let mut idx = 0;
         while idx < chars.len() {
             let ch = chars[idx];
+            if ch == 'r' {
+                // A raw string prefix: `r`, zero or more `#`, then `"`. Content is verbatim until
+                // a `"` immediately followed by the SAME number of `#`. Checked cheaply: a
+                // handful of extra lookahead characters, only spent when the line actually starts
+                // one. Only single-line raw strings are recognised — see this function's own doc
+                // for why a raw (or plain) string spanning multiple physical source lines is a
+                // separate, still-open gap.
+                let mut lookahead = idx + 1;
+                let mut hashes = 0usize;
+                while chars.get(lookahead) == Some(&'#') {
+                    hashes += 1;
+                    lookahead += 1;
+                }
+                if chars.get(lookahead) == Some(&'"') {
+                    idx = lookahead + 1;
+                    let mut closed = false;
+                    while idx < chars.len() {
+                        if chars[idx] == '"'
+                            && (1..=hashes).all(|k| chars.get(idx + k) == Some(&'#'))
+                        {
+                            idx += 1 + hashes;
+                            closed = true;
+                            break;
+                        }
+                        idx += 1;
+                    }
+                    // `closed == false` means the raw string does not end on this line — the
+                    // multi-line gap above. Nothing more can be done for this line; the loop
+                    // condition (`idx < chars.len()`) already ends it.
+                    let _ = closed;
+                    continue;
+                }
+                // `r` not followed by `#`*`"` — an ordinary identifier character (e.g. a variable
+                // named `r`, or the start of `reply`); fall through and treat it as one.
+            }
             if ch == '"' {
                 // Skip to the matching close quote, honouring `\`-escapes, so nothing inside —
                 // brace or otherwise — is counted.
@@ -1754,6 +1799,52 @@ fn fixture_refs_in_test_bodies(source: &str) -> std::collections::HashSet<String
         }
     }
     found
+}
+
+/// Permanent regression for the false-GREEN this scanner once had: a `{`/`}` sitting inside a
+/// STRING literal in a `#[test]` body left the brace-depth tracker permanently off by one (the
+/// string's own `{` had no counterpart the tracker could see), so the test fn's REAL closing
+/// brace could never bring depth back to baseline, and every fixture referenced by any LATER
+/// function in the file — test or not — was wrongly counted as read.
+///
+/// Drives `fixture_refs_in_test_bodies` directly against exactly that shape, so no throwaway
+/// fixture file or extra function needs to exist in the real suite for this hole to stay closed —
+/// the scanner is unit-tested here on a literal source string instead. The fake source is
+/// assembled from an array of single-line string literals rather than one multi-line or raw
+/// string literal: `fixture_refs_in_test_bodies` (like `strip_line_comment`) processes one
+/// physical source line at a time with no state carried across lines, so a string literal that
+/// itself spans multiple physical lines in THIS file would not be recognised as a single
+/// unbroken string when this file is, in turn, scanned by the very guard this test exists to
+/// protect — see this function's own doc for that gap, which is separate from the one this test
+/// covers and is left undefended for the same documented reason (nothing under
+/// `crates/aleph-cdp/tests/` uses a multi-line or raw string literal today).
+#[test]
+fn o2_guard_is_not_fooled_by_a_brace_inside_a_string_literal() {
+    let source = [
+        "#[test]",
+        "fn has_a_stray_brace_in_a_string() {",
+        "    let s = \"{\";",
+        "    let _ = s;",
+        "    let _ = fixture!(\"legit-fixture.json\");",
+        "}",
+        "",
+        "fn not_a_test_fn() {",
+        "    let _ = include_str!(\"fixtures/should-not-be-read.json\");",
+        "}",
+    ]
+    .join("\n");
+
+    let found = fixture_refs_in_test_bodies(&source);
+    assert!(
+        found.contains("legit-fixture.json"),
+        "a fixture genuinely referenced inside the test body must still be found: {found:?}"
+    );
+    assert!(
+        !found.contains("should-not-be-read.json"),
+        "a fixture referenced only from a NON-test fn placed after a stray string-literal brace \
+         must NOT be counted as read — if it is, the brace-depth tracker is once again leaking \
+         `test_fn_active_depth` across the stray brace the way the original bug did: {found:?}"
+    );
 }
 
 /// Remove a trailing `//` comment from one line (this covers `///` doc comments too, since they
