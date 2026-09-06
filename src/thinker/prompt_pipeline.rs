@@ -19,7 +19,15 @@ use super::prompt_mode::PromptMode;
 use crate::context::budget::pressure::{estimate_tokens_aware, DEFAULT_PROSE_RATIO};
 
 /// One layer's contribution to the assembled prompt, for size introspection
-/// and budget tuning. Produced by [`PromptPipeline::layer_breakdown`].
+/// and budget tuning.
+///
+/// Produced by the single traversal [`PromptPipeline::execute_filtered_measured`]
+/// and surfaced through [`PromptPipeline::layer_breakdown`] (sizes only) and
+/// the two `*_measured` entries (text + sizes). From there it is carried in
+/// `thinker::prompt_builder::PromptLayout`, stored in
+/// `thinker::prompt_size_registry`, and projected onto
+/// `aleph_protocol::LayerSizeView` for `context.breakdown` — so a change to
+/// these fields is a change to a wire-visible surface, not a local one.
 #[derive(Debug, Clone)]
 pub struct LayerSize {
     pub priority: u32,
@@ -61,8 +69,19 @@ impl PromptPipeline {
         Self { layers }
     }
 
-    /// The ONE traversal. Every public assembly / measurement entry point on
-    /// this type delegates here; none of them walks `self.layers` itself.
+    /// The ONE traversal that produces prompt TEXT, and the one that measures
+    /// it. Every entry point that assembles bytes or reports their sizes
+    /// delegates here — `execute`, `execute_with_mode`, the two zone-filtered
+    /// pairs, and `layer_breakdown`.
+    ///
+    /// Two functions in this file still walk `self.layers` themselves and are
+    /// not covered by that claim, deliberately: [`Self::silent_layers`] reports
+    /// the COMPLEMENT (layers that contribute nothing, including ones the
+    /// filter excluded before they ran), and [`Self::layer_sections`]
+    /// (`#[cfg(test)]`) keeps each layer's rendered text. Folding either in
+    /// would make the per-request path allocate a `String` per layer or carry a
+    /// third channel no caller reads. They answer different questions; they are
+    /// not a second answer to this one.
     ///
     /// `mode = None` means "do not apply the mode filter" (the path-only
     /// [`Self::execute`]); `stability = None` means "both zones".
@@ -81,14 +100,21 @@ impl PromptPipeline {
     /// The four text builders used to inject straight into the ACCUMULATING
     /// buffer. Routing them through a scratch buffer is byte-neutral only
     /// while no layer's `inject` reads the buffer it is handed. Measured
-    /// 2026-09-06: all 39 `impl PromptLayer` live under `src/thinker/` and
-    /// every one of them only ever calls `push_str` / `push` on it — no read,
-    /// no `write!`, and the buffer is never passed on to a helper. But that is
-    /// a statement about today's layers, not a property of the trait (判据
-    /// §5), so `the_collapsed_traversal_matches_a_direct_append` re-derives it
-    /// on every run, across every path/mode/stability combination, against a
-    /// reference loop that keeps the old semantics. R9: if that test ever goes
-    /// red, the prompt changed — do not adjust the test.
+    /// 2026-09-06: **38** production `impl PromptLayer` live under
+    /// `src/thinker/layers/` (a 39th, `StubLayer`, is in this file's test
+    /// module and never enters `default_layers()`), and every one of them only
+    /// ever calls `push_str` / `push` on it — no read, no `write!`, and the
+    /// buffer is never passed on to a helper.
+    ///
+    /// ⚠️ That figure has been measured three times and been wrong twice (53,
+    /// then 39). Each correction came from re-measuring, never from reading
+    /// the previous number — if you need it, count it again.
+    ///
+    /// The count is a statement about today's layers, not a property of the
+    /// trait (判据 §5), so `the_collapsed_traversal_matches_a_direct_append`
+    /// re-derives the PROPERTY on every run, across every path/mode/stability
+    /// combination, against a reference loop that keeps the old semantics. R9:
+    /// if that test ever goes red, the prompt changed — do not adjust the test.
     fn execute_filtered_measured(
         &self,
         path: AssemblyPath,
@@ -964,11 +990,15 @@ mod stability_tests {
 
     // --- R9: the collapse must not move a single prompt byte ---------------
 
-    /// Every `AssemblyPath`, derived from the type rather than listed.
+    /// Every `AssemblyPath` the sweep runs over.
     ///
-    /// The `match` is what makes this a derivation: add a variant and this
-    /// function stops COMPILING, so the byte-identity sweep below cannot go
-    /// quiet on a path nobody remembered to append (判据 §5).
+    /// The exhaustive `match` **forces a decision**: add a variant and this
+    /// function stops compiling, so nobody adds a path without being made to
+    /// look here. It does NOT prove membership — a `NewVariant => {}` arm
+    /// satisfies the compiler while leaving `all` short, and the sweep would
+    /// then narrow silently. Closing that would need a `const ALL` on the enum
+    /// itself (or a derive macro this workspace does not carry); the honest
+    /// statement is the weaker one, so it is the one written here.
     fn every_assembly_path() -> Vec<AssemblyPath> {
         let all = vec![AssemblyPath::Basic, AssemblyPath::Cached];
         for p in &all {
@@ -979,7 +1009,8 @@ mod stability_tests {
         all
     }
 
-    /// Every `PromptMode`, on the same terms as `every_assembly_path`.
+    /// Every `PromptMode`, on the same terms as `every_assembly_path` — a
+    /// forced decision, not a proof of membership.
     fn every_prompt_mode() -> Vec<PromptMode> {
         let all = vec![PromptMode::Full, PromptMode::Compact, PromptMode::Minimal];
         for m in &all {
@@ -988,6 +1019,25 @@ mod stability_tests {
             }
         }
         all
+    }
+
+    /// A `ResolvedContext` shaped like a real gateway turn's.
+    ///
+    /// Without one, ~14 layers return at their `let Some(ctx) = input.context`
+    /// gate and never execute a body, so a sweep run only on a bare
+    /// `LayerInput` exercises a fraction of the layers it appears to cover.
+    /// Fields are fixed stand-ins, never live collection: a developer's `cwd`
+    /// or hostname must not decide what this test compares.
+    fn contextful() -> crate::thinker::context::ResolvedContext {
+        use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
+        let paradigm = InteractionParadigm::WebRich;
+        let mut ctx = crate::thinker::context::ContextAggregator::resolve(
+            &InteractionManifest::new(paradigm),
+            &crate::thinker::security_context::SecurityContext::for_paradigm(paradigm),
+        );
+        ctx.approval_tier = Some(crate::config::types::policies::ExecTier::default());
+        ctx.session_mode = Some(crate::config::types::policies::SessionMode::default());
+        ctx
     }
 
     /// The traversal as it was written BEFORE the collapse: each layer injects
@@ -1033,55 +1083,102 @@ mod stability_tests {
     /// `out.contains(..)`, a trailing-newline fixup) is exactly what this
     /// catches. If it goes red, the prompt CHANGED: fix the layer or the
     /// collapse, never this test.
+    ///
+    /// The input is varied over `{bare, with a ResolvedContext}` as well as
+    /// path × mode: a bare `LayerInput` leaves ~14 layers returning at their
+    /// context gate, so without the second dimension this sweep would look
+    /// exhaustive while never entering their bodies.
     #[test]
     fn the_collapsed_traversal_matches_a_direct_append() {
         let pipeline = PromptPipeline::default_layers();
         let config = PromptConfig::default();
         let tools = vec![];
+        let context = contextful();
 
-        for path in every_assembly_path() {
-            for mode in every_prompt_mode() {
-                let input = LayerInput::basic(&config, &tools).with_mode(mode);
+        for with_context in [false, true] {
+            let shape = if with_context { "contextful" } else { "bare" };
+            for path in every_assembly_path() {
+                for mode in every_prompt_mode() {
+                    let input = LayerInput::basic(&config, &tools).with_mode(mode);
+                    let input = if with_context {
+                        input.with_resolved_context_opt(Some(&context))
+                    } else {
+                        input
+                    };
 
+                    assert_eq!(
+                        pipeline.execute_with_mode(path, &input, mode),
+                        reference_direct_append(&pipeline, path, &input, Some(mode), None),
+                        "execute_with_mode moved bytes at {path:?}/{mode:?}/{shape}"
+                    );
+                    assert_eq!(
+                        pipeline.execute_stable_with_mode(path, &input, mode),
+                        reference_direct_append(
+                            &pipeline,
+                            path,
+                            &input,
+                            Some(mode),
+                            Some(LayerStability::Stable)
+                        ),
+                        "execute_stable_with_mode moved bytes at {path:?}/{mode:?}/{shape}"
+                    );
+                    assert_eq!(
+                        pipeline.execute_dynamic_with_mode(path, &input, mode),
+                        reference_direct_append(
+                            &pipeline,
+                            path,
+                            &input,
+                            Some(mode),
+                            Some(LayerStability::Dynamic)
+                        ),
+                        "execute_dynamic_with_mode moved bytes at {path:?}/{mode:?}/{shape}"
+                    );
+                }
+
+                // `execute` applies no mode filter at all — its own arm, because
+                // `Some(Full)` is not the same predicate as `None` for any layer
+                // whose `supports_mode(Full)` is false.
+                let input = LayerInput::basic(&config, &tools);
+                let input = if with_context {
+                    input.with_resolved_context_opt(Some(&context))
+                } else {
+                    input
+                };
                 assert_eq!(
-                    pipeline.execute_with_mode(path, &input, mode),
-                    reference_direct_append(&pipeline, path, &input, Some(mode), None),
-                    "execute_with_mode moved bytes at {path:?}/{mode:?}"
-                );
-                assert_eq!(
-                    pipeline.execute_stable_with_mode(path, &input, mode),
-                    reference_direct_append(
-                        &pipeline,
-                        path,
-                        &input,
-                        Some(mode),
-                        Some(LayerStability::Stable)
-                    ),
-                    "execute_stable_with_mode moved bytes at {path:?}/{mode:?}"
-                );
-                assert_eq!(
-                    pipeline.execute_dynamic_with_mode(path, &input, mode),
-                    reference_direct_append(
-                        &pipeline,
-                        path,
-                        &input,
-                        Some(mode),
-                        Some(LayerStability::Dynamic)
-                    ),
-                    "execute_dynamic_with_mode moved bytes at {path:?}/{mode:?}"
+                    pipeline.execute(path, &input),
+                    reference_direct_append(&pipeline, path, &input, None, None),
+                    "execute moved bytes at {path:?}/{shape}"
                 );
             }
-
-            // `execute` applies no mode filter at all — its own arm, because
-            // `Some(Full)` is not the same predicate as `None` for any layer
-            // whose `supports_mode(Full)` is false.
-            let input = LayerInput::basic(&config, &tools);
-            assert_eq!(
-                pipeline.execute(path, &input),
-                reference_direct_append(&pipeline, path, &input, None, None),
-                "execute moved bytes at {path:?}"
-            );
         }
+    }
+
+    /// Self-guard for the dimension above: the contextful input must actually
+    /// wake layers the bare one leaves silent. Without this, a
+    /// `ResolvedContext` that stopped satisfying the layers' gates would make
+    /// the second half of the sweep a duplicate of the first, and nothing
+    /// would say so.
+    #[test]
+    fn the_contextful_input_exercises_strictly_more_layers() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let context = contextful();
+
+        let bare = LayerInput::basic(&config, &tools);
+        let rich = LayerInput::basic(&config, &tools).with_resolved_context_opt(Some(&context));
+        let names = |input: &LayerInput| {
+            pipeline
+                .layer_breakdown(AssemblyPath::Cached, input, PromptMode::Full)
+                .into_iter()
+                .map(|l| l.name)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let (bare, rich) = (names(&bare), names(&rich));
+        assert!(
+            bare.is_subset(&rich) && rich.len() > bare.len(),
+            "the contextful input must be a strict superset: bare={bare:?} rich={rich:?}"
+        );
     }
 
     /// The measured entries report the bytes they actually returned, for every

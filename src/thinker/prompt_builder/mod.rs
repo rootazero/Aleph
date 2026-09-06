@@ -29,6 +29,34 @@ pub struct SystemPromptPart {
     pub cache: bool,
 }
 
+/// What one assembled prompt was made of, measured while it was assembled.
+///
+/// Produced by [`PromptBuilder::build_system_prompt_cached_with_mode_measured`]
+/// and carried to `thinker::prompt_size_registry` for `context.breakdown`.
+///
+/// The two fields answer different halves of one question and are deliberately
+/// not derivable from each other: `layers` attributes bytes to the layer that
+/// emitted them, which only exists BEFORE the budget trim; `dynamic_bytes_sent`
+/// is what survived it. Keeping only the first would overstate an over-budget
+/// prompt; keeping only the second would lose the attribution the feature is
+/// for.
+#[derive(Debug, Clone)]
+pub struct PromptLayout {
+    /// Per-layer sizes of the UNTRIMMED assembly, in assembly order
+    /// (`stable ++ dynamic`).
+    pub layers: Vec<LayerSize>,
+    /// Byte length of the dynamic half after
+    /// [`prompt_budget::fit_dynamic_suffix_with_content`](crate::thinker::prompt_budget::fit_dynamic_suffix_with_content)
+    /// — i.e. what the model actually received for that half. Equal to the sum
+    /// of the Dynamic-zone `layers` bytes whenever the budget did not bite.
+    ///
+    /// The stable prefix has no counterpart here because it is a protected
+    /// floor that the trim never touches; adding a field that always equalled
+    /// its layer sum would be a second answer to a question `layers` already
+    /// answers (判据 §1).
+    pub dynamic_bytes_sent: u64,
+}
+
 /// Configuration for prompt building
 ///
 /// Every field here MUST have a production writer. Fields whose only writer was

@@ -26,6 +26,18 @@ pub struct ContextRows {
     pub other: u64,
 }
 
+/// ⚠️ **The caller must fill `b.provider_reported` before calling this.** The
+/// server's `context.breakdown` always sends it as `None` — it measures the
+/// prompt, and only the provider's response carries the provider's count — and
+/// with `None` this function returns `total: None` and `percent: None` by
+/// design ("unknown", never our own sum dressed as the provider's). So a client
+/// that pipes the RPC response straight in gets rows with no total and no
+/// percent bar. Fill it from the live `ContextGauge` first.
+///
+/// ⚠️ The layer rows describe the prompt BEFORE the system-prompt budget trim.
+/// `b.dynamic_bytes_sent` is the authoritative size of the dynamic half as
+/// sent; this function does not adjust the rows by it, so a view that wants the
+/// sent size must read that field.
 #[must_use]
 pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
     let mut rows: Vec<ContextRow> = b
@@ -92,6 +104,7 @@ mod tests {
             messages_tokens: Some(500),
             provider_reported: provider,
             context_window: Some(200_000),
+            dynamic_bytes_sent: None,
         }
     }
     #[test]

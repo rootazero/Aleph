@@ -47,10 +47,39 @@ pub struct ContextBreakdown {
     pub messages_tokens: Option<u64>,
     /// `None` right after a compaction until a fresh response arrives — a
     /// first-class "unknown", rendered as `?`, never as 0.
+    ///
+    /// ⚠️ The Aleph gateway's `context.breakdown` **always** sends `None` here:
+    /// it measures the prompt, and only the provider's own response carries the
+    /// provider's count. A client that wants a total must fill this from the
+    /// live `ContextGauge` it already receives BEFORE calling `reconcile` —
+    /// `reconcile` returns `total: None` and `percent: None` whenever this is
+    /// `None`, so rendering the server's response verbatim yields rows with no
+    /// total and no percent bar. That is correct behaviour on both sides; the
+    /// requirement simply lives between them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_reported: Option<UsageTokens>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
+    /// Byte length of the prompt's DYNAMIC half **as actually sent** — i.e.
+    /// after the system-prompt token budget's head/tail trim (which also
+    /// appends a model-visible truncation notice).
+    ///
+    /// `layers` describes the assembly BEFORE that trim, because that is where
+    /// per-layer attribution exists — once the suffix is cut there is no way to
+    /// say which layer lost which bytes. **This field, not the rows, is the
+    /// authoritative size of the dynamic half.** It can differ from the sum of
+    /// the `zone == "dynamic"` rows in either direction: smaller when the trim
+    /// bit (the rows then overstate what the model received), larger when the
+    /// server welded a post-pipeline block that no layer owns. The stable
+    /// prefix is a protected floor the trim never touches, so
+    /// `Σ(stable rows) + dynamic_bytes_sent` is the size of the prompt that was
+    /// actually sent.
+    ///
+    /// `None` means the record carries no prompt measurement at all (the turn
+    /// built no system prompt) — never "nothing was trimmed"; for that, compare
+    /// against the dynamic rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_bytes_sent: Option<u64>,
 }
 
 impl ContextBreakdown {
@@ -106,13 +135,25 @@ mod tests {
             messages_tokens: None,
             provider_reported: None,
             context_window: None,
+            dynamic_bytes_sent: None,
         };
         assert_eq!(b.layer_bytes(), 15);
         assert_eq!(b.tool_bytes(), 120);
         let v = serde_json::to_value(&b).unwrap();
         assert!(v.get("provider_reported").is_none(), "None is elided, not 0");
+        // 0 would read as "the whole dynamic half was cut".
+        assert!(v.get("dynamic_bytes_sent").is_none(), "absence is absent, not 0");
         let back: ContextBreakdown = serde_json::from_value(v).unwrap();
         assert_eq!(back, b);
+    }
+
+    /// A payload written before `dynamic_bytes_sent` existed must still parse:
+    /// the field is additive and `#[serde(default)]`.
+    #[test]
+    fn a_payload_without_the_trim_field_still_parses() {
+        let v = serde_json::json!({ "session_key": "k", "turn": 1, "layers": [], "tools": [] });
+        let b: ContextBreakdown = serde_json::from_value(v).unwrap();
+        assert_eq!(b.dynamic_bytes_sent, None);
     }
 
     #[test]
