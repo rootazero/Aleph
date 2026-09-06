@@ -117,6 +117,11 @@ pub struct ToolOutputMetadata {
     /// into the prompt. Empty for the overwhelming majority of tool calls.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ToolImage>,
+    /// Structured UI presentation (file diffs) hoisted out of the tool's
+    /// JSON by `apply_layer_two` BEFORE the value is flattened to model text.
+    /// Rides `session_events` for replay and the callback for the live frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<aleph_protocol::Presentation>,
 }
 
 /// A single out-of-band image attached to a tool result (base64 + MIME).

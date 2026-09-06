@@ -384,6 +384,23 @@ pub fn hoist_inline_images(value: &mut serde_json::Value) -> Vec<ToolImage> {
     images
 }
 
+/// Lift the UI presentation a tool attached under
+/// [`aleph_protocol::PRESENTATION_KEY`] out of its JSON and REMOVE the key,
+/// so the model-facing text (built from `value` right after) never carries
+/// it. Only a top-level object key is honoured — a nested one is a tool bug
+/// the census (`presentation_census`) will name.
+pub fn hoist_presentation(value: &mut serde_json::Value) -> Option<aleph_protocol::Presentation> {
+    let obj = value.as_object_mut()?;
+    let raw = obj.remove(aleph_protocol::PRESENTATION_KEY)?;
+    match serde_json::from_value::<aleph_protocol::Presentation>(raw) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(error = %e, "tool attached a `_presentation` that is not a Presentation; dropped");
+            None
+        }
+    }
+}
+
 /// Recursion bound for [`hoist_walk`]. Tool results are serialized from Rust
 /// structs or MCP payloads — both shallow — so this only guards against
 /// pathologically deep JSON (e.g. a page that smuggled a nested document into
@@ -968,6 +985,28 @@ mod tests {
         // A tiny image_base64 (< 256) is not treated as a screenshot.
         let mut small = serde_json::json!({ "image_base64": "abc", "format": "png" });
         assert!(hoist_inline_images(&mut small).is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // hoist_presentation — the UI diff side-channel
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hoist_presentation_removes_the_key_and_returns_the_typed_value() {
+        let p = aleph_protocol::Presentation::FileChanges { changes: vec![] };
+        let mut v = serde_json::json!({"success": true, "_presentation": serde_json::to_value(&p).unwrap()});
+        assert_eq!(hoist_presentation(&mut v), Some(p));
+        assert!(v.get("_presentation").is_none());
+        assert_eq!(v["success"], true);
+    }
+
+    #[test]
+    fn hoist_presentation_is_none_for_strings_and_for_a_malformed_payload() {
+        let mut s = serde_json::json!("plain text");
+        assert!(hoist_presentation(&mut s).is_none());
+        let mut bad = serde_json::json!({"_presentation": {"kind": "nope"}});
+        assert!(hoist_presentation(&mut bad).is_none());
+        assert!(bad.get("_presentation").is_none(), "a malformed payload is still removed from the model text");
     }
 
     // ---------------------------------------------------------------
