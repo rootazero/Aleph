@@ -1109,6 +1109,44 @@ the operator could not have removed.
   真的授出一次读别人终端屏幕的权限。全文在 `builtin_tools/terminal.rs` 的模块 doc 与
   `method_authz.rs` 的 `terminal` 条目 → [TERMINAL_RUNTIME.md](TERMINAL_RUNTIME.md) §4
 
+### The managed browser's debug port (2026-09-05)
+
+Aleph now launches the managed driver's Chromium itself, with
+`--remote-debugging-port=0`, and hands the resulting endpoint to
+`playwright-cli attach --cdp`. Chrome binds that port to **loopback only**, and
+it is **unauthenticated**: any process running as this user can connect to it
+and drive the browser — read its cookies, navigate it, execute script in its
+pages. There is no token, and CDP has no concept of one.
+
+This is **not a regression**. Before the flip, `playwright-cli` was already
+launching Chrome with an unprompted random `--remote-debugging-port` on every
+single launch (measured, design spike STEP 2: launching with no config at all
+produced `--remote-debugging-port=58447`, which answered `/json/version` with a
+live `webSocketDebuggerUrl`). The difference is that Aleph now *knows* the port
+instead of the port existing and being undiscoverable. Stating it here rather
+than leaving it implicit: the security boundary for the managed browser is the
+**local user account**, exactly as it is for the PTY sessions above and for
+`aleph.lock`. A host where an untrusted local process runs is already outside
+Aleph's trust model.
+
+What follows from that, and is therefore NOT attempted: no per-connection auth
+on the debug port (CDP has none), no binding it to a unix socket (Chrome does
+not offer one), and no attempt to hide the port — Aleph records it on purpose,
+in `~/.aleph/data/browser/chromium/<profile>.json`, because a browser Aleph
+cannot find after a crash is a browser Aleph cannot kill. That file is readable
+by the same local user who could already drive the port, so it widens nothing.
+
+⚠️ **What the local-user boundary does NOT cover, and it is an open finding, not
+a stated position:** `playwright-cli`'s session namespace is machine-global and
+Aleph names its session after the *profile*, so the common name is literally
+`default`. Two Aleph instances on one host — or one Aleph plus a developer's own
+`playwright-cli` — silently share one browser session, which means **one user's
+logged-in browser driven by another instance**. That is a collision *between
+principals the local-user boundary was never meant to merge*, so it is a real
+gap rather than a consequence of the boundary above. Mechanism, the measured
+evidence, the proposed `instance_tag` fix and its two-server falsifier are in
+[FEATURE_LOCATOR.md](FEATURE_LOCATOR.md) §3.12 第七轮 ⑤.
+
 ---
 
 ## Command allowlist

@@ -26,6 +26,7 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh existing # the OTHER driver (Chrome DevTools MCP)
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 ./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP
+                                     # (unix only: pgrep)
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
@@ -1039,6 +1040,16 @@ widened a narrowly-scoped change into that question. Tracked in
   `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**两个 driver 的每个动词都有效果断言**。
   `attach` 证的是 Aleph 自己启动 Chrome、`playwright-cli` 只 `attach --cdp` 上去；已知缺口见下方
   "Known gap: tab identity does not survive a re-attach"。
+  **改启动链（`chromium_launch` / `chromium_resolve` / `playwright_launch` / `playwright_cli`）必须跑
+  `attach`**——它是唯一证明「**Aleph 起的**浏览器」而不是「某个浏览器」的阶段。它用 `pgrep -f`，所以
+  和这个目录里其它场景一样**只在 unix 上跑得动**；Windows 上它不是坏了，是没覆盖。
+  ⚠️ **这套装置的绿有一部分是环境属性，不是代码属性。** 2026-09-05 的启动链翻转发货了一个
+  `--use-mock-keychain` 缺失、因而**每个页面的第一次导航都永不派发**的 Chromium；整套装置之所以抓到它，
+  纯属 `qa/lib/scratch_home.sh` 重定向 `HOME` 的副作用——**用真 HOME 跑，没修的 argv 0.62 s 就导航完了**
+  （实测）。所以**去掉或收窄那个 HOME 重定向，整套装置会在缺陷完好无损的情况下变绿**。今天挡住这一类的
+  是 `attach` 里那条 argv 断言（`--use-mock-keychain` 在场、且在 `extra_args` 之后）与
+  `chromium_launch.rs` 的 `rposition` 单测，**不是任何场景自己的绿**。全文见
+  `docs/reference/FEATURE_LOCATOR.md` §3.12 第七轮 ①③。
 - **`btw_tui`** — 改 `/btw` 的到达顺序或退休面前先读 FEATURE_LOCATOR §4.14 的机制图，再跑 `{frames,promote}`。
 - **`agents_viz`** — 改 `run.subagent_tree` 的产地 / relay / 可见性分类、`events.subscribe` 的过滤语义、
   执行清单三载体（`tool_call_completed` snapshot · `RunSummary.plan` · `chat.history.plan`）或 TUI/Panel
