@@ -2776,6 +2776,49 @@ impl S { fn method(&mut self, cfg: &Cfg) { let _ = cfg; } }
         );
     }
 
+    /// Turns the "checked by hand on 2026-09-06" line in the test above into a
+    /// standing check, not a one-time count sitting in a comment: a licence
+    /// with no expiry that would fail by nobody looking at it again, exactly
+    /// the way this census answering "no caller" about something that has
+    /// one is supposed to be caught.
+    ///
+    /// `Self` resolves lexically to its enclosing `impl` block, so a
+    /// `Self::<name>(` call can only ever be a real call to one of these four
+    /// wrappers from inside the SAME FILE that defines it — searching
+    /// crate-wide would reproduce the exact bare-name over-see this census
+    /// already documents: `DeliveryStore::init`'s own `Self::init(` calls
+    /// (`gateway/delivery_queue.rs`, an unrelated type in a different file)
+    /// would show up as false hits here too if this were not scoped per file.
+    #[test]
+    fn none_of_the_grandfathered_impl_block_wrappers_is_called_via_self() {
+        let grandfathered = [
+            ("src/config/load.rs", "set_effective_path"),
+            ("src/config/load.rs", "decline_effective_path"),
+            ("src/gateway/security/shared_token.rs", "set_global"),
+            ("src/pii/engine.rs", "init"),
+        ];
+        let mut hits: Vec<String> = Vec::new();
+        for (rel, name) in grandfathered {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let (nums, lines) = prod_lines(&text);
+            let needle = format!("Self::{name}(");
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains(&needle) {
+                    hits.push(format!("{rel}:{}: {}", nums[i], line.trim()));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "a Self::-qualified call now exists against a grandfathered impl-block \
+             wrapper: {hits:?} — qualified_with_self's Self:: exclusion would silently \
+             discard it as a non-match instead of counting it. This needs the same \
+             by-hand check redone (see every_capability_wrapper_is_a_free_function's \
+             doc comment) before deciding what to do about it.",
+        );
+    }
+
     /// Every handle installed inside a gated block is declined in that block's
     /// `else`, slot by slot.
     ///

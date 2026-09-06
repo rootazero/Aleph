@@ -75,6 +75,13 @@ pub(crate) const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(6);
 /// `browser/error.rs` reaching UP into `builtin_tools` for it would be the
 /// same wrong direction `tab_registry.rs` already refuses ("not reach up
 /// into `builtin_tools`").
+///
+/// The literal `"chromium"` here, NOT `runtime_manage::CHROMIUM`: that const
+/// is Aleph's own capability name (`capability == CHROMIUM`,
+/// `runtime_manage.rs`), this one is playwright-cli's browser id — the same
+/// six letters today, owned by two different systems (us; an upstream CLI),
+/// and linking them would silently rename one the day the other's owner
+/// changes it.
 pub(crate) const CHROMIUM_INSTALL_ARGS: &[&str] = &["install-browser", "chromium"];
 
 /// The header anchor of the browser block in `--dry-run` output.
