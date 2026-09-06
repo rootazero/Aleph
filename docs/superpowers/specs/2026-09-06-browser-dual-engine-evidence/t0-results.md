@@ -8,7 +8,7 @@ not committed). Re-run: `bash probes/t0-run.sh`.
 |---|---|
 | U1 | confirms R14: `--port 0` yields no ownable endpoint (banner said "ws://127.0.0.1:0/devtools/browser", which names port 0 — not a port at all), while an Aleph-picked port (52432) answers /json/version 200 and its listener pid IS the launched pid. The banner is evidence, never an endpoint (it also did name the requested port on the fixed-port run) ⇒ §6.2 keeps only «Aleph allocates the port + verifies ownership». |
 | U2 | obscura: `display:none` ⇒ a box IS returned, content quad [0,0,0,0,0,0,0,0] (4 distinct quads across the four not-laid-out cases) — a getBoxModel failure is NOT a visibility signal on this engine; the interim fetcher must read `computed.display_none`. · chrome: `display:none` ⇒ honest failure, error text "Could not compute box model." (only some fail). |
-| U3 | obscura: `pierce:true` does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 88 nodes; frame host src "{\"src\":\"http://localhost:19001/t0-frame.html\",\"w\":400}") ⇒ the interim fetcher must attach a session per frame. · chrome: `pierce:true` does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 87 nodes; frame host src "{\"src\":\"http://localhost:19001/t0-frame.html\",\"w\":400}") ⇒ the interim fetcher must attach a session per frame. |
+| U3 | SAME-ORIGIN: obscura same-origin (load confirmed via contentDocument.title="T0 child frame"): pierce:true does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 88 nodes) — confirmed via obscura source (read-only, /Volumes/TBU4/Github/obscura): DOM.getDocument's handler (obscura-cdp/src/domains/dom.rs:96-103) reads only `depth`, never `pierce` — unimplemented, not merely unhonoured. serialize_node (dom.rs:454-520) walks a single DomTree with no contentDocument or frame-crossing branch, sourced from Page::with_dom -> ObscuraJsRuntime::with_dom -> state.dom (obscura-js/src/runtime.rs:3311-3312), the TOP-LEVEL page's own document only — even though a child iframe genuinely has its own separate DOM tree internally (FrameRealm, obscura-js/src/frame.rs:34). No code path branches on origin, so same-origin and cross-origin behave identically: neither is reachable from DOM.getDocument. \|\| CROSS-ORIGIN: NOT APPLICABLE on obscura: confirmed via source that obscura has no out-of-process (or even per-frame-target) concept at all — Target.setAutoAttach is a literal Ok({}) no-op that never registers anything (obscura-cdp/src/domains/target.rs:240), and Target.getTargets / Target.attachedToTarget only ever represent top-level "page" targets (target.rs:47-64, 100-140); an iframe — same-origin or cross-origin — is never its own CDP target, because every frame shares one V8 isolate by construction ("Staying in one isolate is what lets same-origin frames share objects with their parent", obscura-js/src/frame.rs:20-21). There is no cross-origin/same-origin distinction in obscura's process model to measure, so this half is retired as not-applicable rather than left dangling as unmeasured. · SAME-ORIGIN: chrome same-origin (in-process child, load confirmed via contentDocument.title="T0 child frame"): pierce:true DOES carry iframe content (1 contentDocument(s), child `#probe` present, 101 nodes, 3 carry a frameId) ⇒ the interim fetcher CAN flatten a same-process child from this one call. \|\| CROSS-ORIGIN: chrome cross-origin OOPIF (load confirmed via the child's own session, document.title="T0 child frame"): pierce:true does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 87 nodes) ⇒ the interim fetcher must attach a session per frame for cross-origin children. |
 | U4 | Chrome same-origin (in-process) child: documents[1] bounds are FRAME-LOCAL — #probe reads [30,40,150,20] against a frame-local expectation of [30,40,150,20] ⇒ `fetch_chromium`'s same-process path must add the parent iframe's own rect as the child's offset. · confirmed: the parent session's own captureSnapshot sees only its own document (contentDocumentIndex is empty for the iframe's owner node, i.e. nothing on the parent side points at the child at all). The child's OWN captureSnapshot (its own session) returns its own document with #probe at [30,40,150,20] — exactly frame-local, matching the static page. Join key: parent iframe node's `frameId` = "69F3C410D5C580F9AAD324EC395F5E1D", OOPIF target's `targetId` = "69F3C410D5C580F9AAD324EC395F5E1D", child's own document `frameId` = "69F3C410D5C580F9AAD324EC395F5E1D" — all three are the SAME value ⇒ `fetch_chromium` places a child by matching the parent DOM node's `frameId` (from DOM.getDocument, since DOMSnapshot's own node has no such field) against the auto-attached child target's `targetId`, which is also the child's own document `frameId`. `fetch_chromium` must therefore: (1) enumerate iframe sub-targets via Target.setAutoAttach, (2) capture each child session's own DOMSnapshot separately, (3) place each child's frame-local bounds by adding the OWNER `<iframe>` element's own rect (from the PARENT's snapshot, looked up by this join key) as the offset — the same arithmetic as the same-origin path, just sourced from two separate captures instead of one. |
 | U5 | obscura: Input.dispatchMouseEvent takes VIEWPORT coordinates (hit at y=785 with scrollY=1548, miss at y=2333) ⇒ `ActionTarget::Coordinates` (page coords) converts by subtracting scroll. · chrome: Input.dispatchMouseEvent takes VIEWPORT coordinates (hit at y=785 with scrollY=1556, miss at y=2341) ⇒ `ActionTarget::Coordinates` (page coords) converts by subtracting scroll. |
 | U6 | obscura: 8/8 cookies came back; sameSite kept for [t0_lax,t0_strict,t0_none_insecure]; `expires` round-trips; fields present on a returned cookie: ["name","value","domain","path","expires","size","httpOnly","secure","session","sameSite","sameParty","sourceScheme","sourcePort","priority"]. · chrome: 7/8 cookies came back; sameSite kept for [t0_lax,t0_strict]; `expires` round-trips; fields present on a returned cookie: ["name","value","domain","path","expires","size","httpOnly","secure","session","priority","sourceScheme","sourcePort"]. |
@@ -163,7 +163,7 @@ not committed). Re-run: `bash probes/t0-run.sh`.
 ```json
 {
   "engine": "obscura",
-  "wsUrl": "ws://127.0.0.1:52831/devtools/browser",
+  "wsUrl": "ws://127.0.0.1:55108/devtools/browser",
   "files": [
     {
       "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/crates/aleph-cdp/tests/fixtures/obscura-Browser.getVersion.json",
@@ -195,10 +195,10 @@ not committed). Re-run: `bash probes/t0-run.sh`.
     },
     {
       "path": "/Volumes/TBU4/Workspace/Aleph/.claude/worktrees/browser-dual-engine/src/browser/engine/fixtures/t0-support-matrix.json",
-      "bytes": 10024
+      "bytes": 10062
     }
   ],
-  "totalBytes": 46422,
+  "totalBytes": 46460,
   "oversize": [],
   "unsupported": [
     [
@@ -225,8 +225,8 @@ not committed). Re-run: `bash probes/t0-run.sh`.
     [
       "Page.javascriptDialogOpening",
       {
-        "protocol": "no event within 4s",
-        "effect": false
+        "protocol": "no event within 4s (wait expired, not a measured absence)",
+        "effect": null
       }
     ],
     [
@@ -249,7 +249,7 @@ not committed). Re-run: `bash probes/t0-run.sh`.
     "DOM.setAttributeValue",
     "DOM.removeNode"
   ],
-  "verdict": "obscura: 8 fixtures, 46422 bytes total, 6 method(s) not answered: {\"Page.bringToFront\":{\"protocol\":\"Unknown Page method: bringToFront\",\"effect\":null},\"DOM.setFileInputFiles\":{\"protocol\":\"DOM.setFileInputFiles is disabled. Restart with `obscura serve --allow-file-access` to enable local file uploads.\",\"effect\":null},\"Network.emulateNetworkConditions\":{\"protocol\":\"Unknown Network method: emulateNetworkConditions\",\"effect\":null},\"Page.javascriptDialogOpening\":{\"protocol\":\"no event within 4s\",\"effect\":false},\"Page.handleJavaScriptDialog\":{\"protocol\":\"not reachable: no dialog event\",\"effect\":null},\"Input.dispatchDragEvent\":{\"protocol\":\"Unknown Input method: dispatchDragEvent\",\"effect\":false}}"
+  "verdict": "obscura: 8 fixtures, 46460 bytes total, 6 method(s) not answered: {\"Page.bringToFront\":{\"protocol\":\"Unknown Page method: bringToFront\",\"effect\":null},\"DOM.setFileInputFiles\":{\"protocol\":\"DOM.setFileInputFiles is disabled. Restart with `obscura serve --allow-file-access` to enable local file uploads.\",\"effect\":null},\"Network.emulateNetworkConditions\":{\"protocol\":\"Unknown Network method: emulateNetworkConditions\",\"effect\":null},\"Page.javascriptDialogOpening\":{\"protocol\":\"no event within 4s (wait expired, not a measured absence)\",\"effect\":null},\"Page.handleJavaScriptDialog\":{\"protocol\":\"not reachable: no dialog event\",\"effect\":null},\"Input.dispatchDragEvent\":{\"protocol\":\"Unknown Input method: dispatchDragEvent\",\"effect\":false}}"
 }
 ```
 
@@ -1021,54 +1021,38 @@ not committed). Re-run: `bash probes/t0-run.sh`.
 {
   "u": "U3",
   "engine": "chrome",
-  "childUrl": "http://localhost:19001/t0-frame.html",
-  "families": {
-    "parent": [
-      "127.0.0.1",
-      "::1"
-    ],
-    "child": [
-      "127.0.0.1",
-      "::1"
-    ]
+  "sameOrigin": {
+    "childUrl": "http://127.0.0.1:18999/t0-frame.html",
+    "loadCheck": {
+      "src": "http://127.0.0.1:18999/t0-frame.html",
+      "contentDocumentTitle": "T0 child frame",
+      "accessError": null
+    },
+    "childLoaded": true,
+    "ok": true,
+    "nodes": 101,
+    "contentDocuments": 1,
+    "shadowRoots": 7,
+    "nodesWithFrameId": 3,
+    "sawChildProbe": true,
+    "sawChildLink": true,
+    "verdict": "chrome same-origin (in-process child, load confirmed via contentDocument.title=\"T0 child frame\"): pierce:true DOES carry iframe content (1 contentDocument(s), child `#probe` present, 101 nodes, 3 carry a frameId) ⇒ the interim fetcher CAN flatten a same-process child from this one call."
   },
-  "ok": true,
-  "nodes": 87,
-  "contentDocuments": 0,
-  "shadowRoots": 7,
-  "nodesWithFrameId": 2,
-  "sawChildProbe": false,
-  "sawChildLink": false,
-  "ids": [
-    "banner",
-    "home",
-    "external",
-    "main",
-    "title",
-    "para",
-    "q",
-    "placeholder",
-    "go",
-    "check",
-    "sel",
-    "select-options",
-    "notes",
-    "textarea-placeholder-break",
-    "file",
-    "file-upload-button",
-    "hidden-none",
-    "hidden-vis",
-    "zero-size",
-    "offscreen",
-    "opacity-zero",
-    "clip",
-    "list",
-    "spacer",
-    "deep-target",
-    "frame-host"
-  ],
-  "frameHost": "{\"src\":\"http://localhost:19001/t0-frame.html\",\"w\":400}",
-  "verdict": "chrome: `pierce:true` does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 87 nodes; frame host src \"{\\\"src\\\":\\\"http://localhost:19001/t0-frame.html\\\",\\\"w\\\":400}\") ⇒ the interim fetcher must attach a session per frame."
+  "crossOrigin": {
+    "childUrl": "http://localhost:19001/t0-frame.html",
+    "childSessionId": "26A6BC62A8E5AA03A7917B69E337F956",
+    "childOwnSessionTitle": "T0 child frame",
+    "childLoaded": true,
+    "frameHostCosmetic": "{\"src\":\"http://localhost:19001/t0-frame.html\",\"w\":400}",
+    "ok": true,
+    "nodes": 87,
+    "contentDocuments": 0,
+    "shadowRoots": 7,
+    "nodesWithFrameId": 2,
+    "sawChildProbe": false,
+    "verdict": "chrome cross-origin OOPIF (load confirmed via the child's own session, document.title=\"T0 child frame\"): pierce:true does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 87 nodes) ⇒ the interim fetcher must attach a session per frame for cross-origin children."
+  },
+  "verdict": "SAME-ORIGIN: chrome same-origin (in-process child, load confirmed via contentDocument.title=\"T0 child frame\"): pierce:true DOES carry iframe content (1 contentDocument(s), child `#probe` present, 101 nodes, 3 carry a frameId) ⇒ the interim fetcher CAN flatten a same-process child from this one call. || CROSS-ORIGIN: chrome cross-origin OOPIF (load confirmed via the child's own session, document.title=\"T0 child frame\"): pierce:true does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 87 nodes) ⇒ the interim fetcher must attach a session per frame for cross-origin children."
 }
 ```
 
@@ -1078,50 +1062,38 @@ not committed). Re-run: `bash probes/t0-run.sh`.
 {
   "u": "U3",
   "engine": "obscura",
-  "childUrl": "http://localhost:19001/t0-frame.html",
-  "families": {
-    "parent": [
-      "127.0.0.1",
-      "::1"
-    ],
-    "child": [
-      "127.0.0.1",
-      "::1"
-    ]
+  "sameOrigin": {
+    "childUrl": "http://127.0.0.1:18999/t0-frame.html",
+    "loadCheck": {
+      "src": "http://127.0.0.1:18999/t0-frame.html",
+      "contentDocumentTitle": "T0 child frame",
+      "accessError": null
+    },
+    "childLoaded": true,
+    "ok": true,
+    "nodes": 88,
+    "contentDocuments": 0,
+    "shadowRoots": 0,
+    "nodesWithFrameId": 0,
+    "sawChildProbe": false,
+    "sawChildLink": false,
+    "verdict": "obscura same-origin (load confirmed via contentDocument.title=\"T0 child frame\"): pierce:true does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 88 nodes) — confirmed via obscura source (read-only, /Volumes/TBU4/Github/obscura): DOM.getDocument's handler (obscura-cdp/src/domains/dom.rs:96-103) reads only `depth`, never `pierce` — unimplemented, not merely unhonoured. serialize_node (dom.rs:454-520) walks a single DomTree with no contentDocument or frame-crossing branch, sourced from Page::with_dom -> ObscuraJsRuntime::with_dom -> state.dom (obscura-js/src/runtime.rs:3311-3312), the TOP-LEVEL page's own document only — even though a child iframe genuinely has its own separate DOM tree internally (FrameRealm, obscura-js/src/frame.rs:34). No code path branches on origin, so same-origin and cross-origin behave identically: neither is reachable from DOM.getDocument."
   },
-  "ok": true,
-  "nodes": 88,
-  "contentDocuments": 0,
-  "shadowRoots": 0,
-  "nodesWithFrameId": 0,
-  "sawChildProbe": false,
-  "sawChildLink": false,
-  "ids": [
-    "banner",
-    "home",
-    "external",
-    "main",
-    "title",
-    "para",
-    "q",
-    "go",
-    "check",
-    "sel",
-    "notes",
-    "file",
-    "hidden-none",
-    "hidden-vis",
-    "zero-size",
-    "offscreen",
-    "opacity-zero",
-    "clip",
-    "list",
-    "spacer",
-    "deep-target",
-    "frame-host"
-  ],
-  "frameHost": "{\"src\":\"http://localhost:19001/t0-frame.html\",\"w\":400}",
-  "verdict": "obscura: `pierce:true` does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 88 nodes; frame host src \"{\\\"src\\\":\\\"http://localhost:19001/t0-frame.html\\\",\\\"w\\\":400}\") ⇒ the interim fetcher must attach a session per frame."
+  "crossOrigin": {
+    "childUrl": "http://localhost:19001/t0-frame.html",
+    "childSessionId": null,
+    "childOwnSessionTitle": null,
+    "childLoaded": null,
+    "frameHostCosmetic": "{\"src\":\"http://localhost:19001/t0-frame.html\",\"w\":400}",
+    "ok": true,
+    "nodes": 88,
+    "contentDocuments": 0,
+    "shadowRoots": 0,
+    "nodesWithFrameId": 0,
+    "sawChildProbe": false,
+    "verdict": "NOT APPLICABLE on obscura: confirmed via source that obscura has no out-of-process (or even per-frame-target) concept at all — Target.setAutoAttach is a literal Ok({}) no-op that never registers anything (obscura-cdp/src/domains/target.rs:240), and Target.getTargets / Target.attachedToTarget only ever represent top-level \"page\" targets (target.rs:47-64, 100-140); an iframe — same-origin or cross-origin — is never its own CDP target, because every frame shares one V8 isolate by construction (\"Staying in one isolate is what lets same-origin frames share objects with their parent\", obscura-js/src/frame.rs:20-21). There is no cross-origin/same-origin distinction in obscura's process model to measure, so this half is retired as not-applicable rather than left dangling as unmeasured."
+  },
+  "verdict": "SAME-ORIGIN: obscura same-origin (load confirmed via contentDocument.title=\"T0 child frame\"): pierce:true does NOT carry iframe content (0 contentDocument(s), child `#probe` absent, 88 nodes) — confirmed via obscura source (read-only, /Volumes/TBU4/Github/obscura): DOM.getDocument's handler (obscura-cdp/src/domains/dom.rs:96-103) reads only `depth`, never `pierce` — unimplemented, not merely unhonoured. serialize_node (dom.rs:454-520) walks a single DomTree with no contentDocument or frame-crossing branch, sourced from Page::with_dom -> ObscuraJsRuntime::with_dom -> state.dom (obscura-js/src/runtime.rs:3311-3312), the TOP-LEVEL page's own document only — even though a child iframe genuinely has its own separate DOM tree internally (FrameRealm, obscura-js/src/frame.rs:34). No code path branches on origin, so same-origin and cross-origin behave identically: neither is reachable from DOM.getDocument. || CROSS-ORIGIN: NOT APPLICABLE on obscura: confirmed via source that obscura has no out-of-process (or even per-frame-target) concept at all — Target.setAutoAttach is a literal Ok({}) no-op that never registers anything (obscura-cdp/src/domains/target.rs:240), and Target.getTargets / Target.attachedToTarget only ever represent top-level \"page\" targets (target.rs:47-64, 100-140); an iframe — same-origin or cross-origin — is never its own CDP target, because every frame shares one V8 isolate by construction (\"Staying in one isolate is what lets same-origin frames share objects with their parent\", obscura-js/src/frame.rs:20-21). There is no cross-origin/same-origin distinction in obscura's process model to measure, so this half is retired as not-applicable rather than left dangling as unmeasured."
 }
 ```
 

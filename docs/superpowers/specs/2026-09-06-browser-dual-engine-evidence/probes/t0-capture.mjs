@@ -276,7 +276,15 @@ await record("DOMSnapshot.captureSnapshot", "DOMSnapshot.captureSnapshot",
   c.call("Runtime.evaluate", { expression: "setTimeout(function(){ alert('t0'); }, 0)", returnByValue: true },
          sessionId, 5000).catch(() => {});
   const opened = await dlg;
-  matrix["Page.javascriptDialogOpening"] = { protocol: opened ? "ok" : "no event within 4s", effect: opened ? true : false };
+  // P5 (fix round 2): "the 4s wait expired with no event" is NOT a measured no-op — it is exactly
+  // the unknown the Global Constraints reserve `null` for. `effect: false` may only be written
+  // after a flag was successfully read back and was NOT set (see `setEffect` above); this branch
+  // never reads anything back, it only times out, so `effect` must stay `null` here too, matching
+  // that rule instead of contradicting it.
+  matrix["Page.javascriptDialogOpening"] = {
+    protocol: opened ? "ok" : "no event within 4s (wait expired, not a measured absence)",
+    effect: opened ? true : null,
+  };
   if (opened) await record("Page.handleJavaScriptDialog", "Page.handleJavaScriptDialog", { accept: true }, { void: true });
   else matrix["Page.handleJavaScriptDialog"] = { protocol: "not reachable: no dialog event", effect: null };
 }

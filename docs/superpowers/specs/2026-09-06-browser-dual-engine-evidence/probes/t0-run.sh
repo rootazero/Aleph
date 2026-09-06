@@ -2,8 +2,18 @@
 # Run every T0 probe and park the raw JSON outside the repo. Not a test; never enters qa/.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT="${T0_OUT:-/private/tmp/claude-502/-Volumes-TBU4-Workspace-Aleph/cfd2843f-43bd-4fe1-9d69-577277c06fcb/scratchpad/t0-raw}"
+# P1 (fix round 2): a committed script must never default to a session-scoped absolute path --
+# t0-lib.mjs:27-30 says exactly that about OBSCURA/CHROME, and this file used to contradict its
+# own sibling by hardcoding one session's scratchpad here. `${TMPDIR:-/tmp}` is set by the OS on
+# every machine this script could run on; `T0_OUT` still overrides for anyone who wants a specific
+# location (e.g. this session's own scratchpad).
+OUT="${T0_OUT:-${TMPDIR:-/tmp}/aleph-t0-raw}"
 mkdir -p "$OUT"
+if [ -n "${T0_OUT:-}" ]; then
+  echo "T0_OUT set; writing raw probe output under: $OUT" >&2
+else
+  echo "T0_OUT not set; writing raw probe output under: $OUT" >&2
+fi
 run() { # run <name> <script> [args...]
   local name="$1"; shift
   echo "== $name"

@@ -23,6 +23,54 @@ import { launchEngine, newPage, tryCall, parentUrl, childUrl, serveStatic, PROBE
 
 const engine = process.argv[2] ?? "obscura";
 const CHILD_TITLE = "T0 child frame"; // <title> in t0-frame.html — the positive-load anchor.
+
+// Controller-directed source investigation (fix round 2, obscura checked out read-only at
+// /Volumes/TBU4/Github/obscura), answering exactly why obscura's pierce:true returns no child
+// document even for a same-origin child whose load is positively confirmed:
+//
+// Q1 (is `pierce` honoured?) — no: `DOM.getDocument`'s handler
+// (obscura-cdp/src/domains/dom.rs:96-103) reads only `depth` from `params`; there is no
+// `params.get("pierce")` anywhere in the file. Unimplemented, not merely unhonoured.
+//
+// Q2 (does ANY call path expose a child frame's content?) — not through the DOM domain:
+// `serialize_node` (dom.rs:454-520) walks a single `DomTree` with no `contentDocument` field and
+// no frame-crossing branch at all, and that tree comes from `Page::with_dom` ->
+// `ObscuraJsRuntime::with_dom` -> `state.dom` (obscura-js/src/runtime.rs:3311-3312), the
+// TOP-LEVEL page's own document only. A child iframe genuinely has its OWN separate DOM tree
+// internally (`FrameRealm`, obscura-js/src/frame.rs:34 — "its own DOM tree") — the DOM CDP
+// domain simply never reaches it, for ANY origin, because no code path in dom.rs branches on
+// origin at all. (`Page.getFrameTree` is a separate story — obscura-cdp/src/domains/page.rs's
+// `frame_tree()`/`child_frame_values()` DO walk `page.frames: Vec<FrameRealm>` and report real
+// child frame ids/urls; this is source-read only, not measured by any probe in this task, and is
+// left for whoever next touches obscura frame handling.)
+//
+// Q3 (does obscura have an out-of-process-iframe concept at all?) — no: `Target.setAutoAttach` is
+// a literal `Ok({})` no-op (obscura-cdp/src/domains/target.rs:240) that never registers anything,
+// and `Target.getTargets`/`Target.attachedToTarget` only ever represent top-level "page" targets
+// (domains/target.rs:47-64, 100-140) — an iframe, same-origin or cross-origin, is NEVER its own
+// CDP target on obscura, because every frame shares one V8 isolate by construction ("Staying in
+// one isolate is what lets same-origin frames share objects with their parent",
+// obscura-js/src/frame.rs:20-21). The origin split that matters for Chrome (a process boundary)
+// therefore does not exist as a category in obscura's DOM/Target domains at all.
+const OBSCURA_PIERCE_SOURCE_NOTE =
+  "confirmed via obscura source (read-only, /Volumes/TBU4/Github/obscura): DOM.getDocument's "
+  + "handler (obscura-cdp/src/domains/dom.rs:96-103) reads only `depth`, never `pierce` — "
+  + "unimplemented, not merely unhonoured. serialize_node (dom.rs:454-520) walks a single DomTree "
+  + "with no contentDocument or frame-crossing branch, sourced from Page::with_dom -> "
+  + "ObscuraJsRuntime::with_dom -> state.dom (obscura-js/src/runtime.rs:3311-3312), the TOP-LEVEL "
+  + "page's own document only — even though a child iframe genuinely has its own separate DOM "
+  + "tree internally (FrameRealm, obscura-js/src/frame.rs:34). No code path branches on origin, "
+  + "so same-origin and cross-origin behave identically: neither is reachable from DOM.getDocument.";
+const OBSCURA_NO_OOPIF_SOURCE_NOTE =
+  "NOT APPLICABLE on obscura: confirmed via source that obscura has no out-of-process (or even "
+  + "per-frame-target) concept at all — Target.setAutoAttach is a literal Ok({}) no-op that never "
+  + "registers anything (obscura-cdp/src/domains/target.rs:240), and Target.getTargets / "
+  + "Target.attachedToTarget only ever represent top-level \"page\" targets (target.rs:47-64, "
+  + "100-140); an iframe — same-origin or cross-origin — is never its own CDP target, because "
+  + "every frame shares one V8 isolate by construction (\"Staying in one isolate is what lets "
+  + "same-origin frames share objects with their parent\", obscura-js/src/frame.rs:20-21). There "
+  + "is no cross-origin/same-origin distinction in obscura's process model to measure, so this "
+  + "half is retired as not-applicable rather than left dangling as unmeasured.";
 const parent = await serveStatic(PROBE_DIR, PARENT_PORT);
 const child = await serveStatic(PROBE_DIR, CHILD_PORT);
 const e = await launchEngine(engine);
@@ -98,10 +146,16 @@ out.sameOrigin = { childUrl: sameOriginChildUrl };
           + "child `#probe` present, " + out.sameOrigin.nodes + " nodes, "
           + out.sameOrigin.nodesWithFrameId + " carry a frameId) ⇒ the interim fetcher CAN flatten "
           + "a same-process child from this one call."
-        : "UNEXPECTED — " + engine + " same-origin (load confirmed): pierce:true does NOT carry "
-          + "iframe content (" + out.sameOrigin.contentDocuments + " contentDocument(s), child "
-          + "`#probe` absent, " + out.sameOrigin.nodes + " nodes) despite the child being "
-          + "in-process and loaded; report to the controller before relying on this half.";
+        : engine === "obscura"
+          ? engine + " same-origin (load confirmed via contentDocument.title="
+            + JSON.stringify(out.sameOrigin.loadCheck.contentDocumentTitle) + "): pierce:true does "
+            + "NOT carry iframe content (" + out.sameOrigin.contentDocuments
+            + " contentDocument(s), child `#probe` absent, " + out.sameOrigin.nodes + " nodes) — "
+            + OBSCURA_PIERCE_SOURCE_NOTE
+          : "UNEXPECTED — " + engine + " same-origin (load confirmed): pierce:true does NOT carry "
+            + "iframe content (" + out.sameOrigin.contentDocuments + " contentDocument(s), child "
+            + "`#probe` absent, " + out.sameOrigin.nodes + " nodes) despite the child being "
+            + "in-process and loaded; report to the controller before relying on this half.";
   c.close();
 }
 
@@ -163,9 +217,11 @@ out.crossOrigin = { childUrl: childUrl() };
   }
 
   out.crossOrigin.verdict = out.crossOrigin.childLoaded === null
-    ? "UNMEASURED: no OOPIF child session was auto-attached on " + engine
-      + " (childSessionId=null) — could not independently confirm the child loaded, so this half "
-      + "is not a finding about pierce either way. Cosmetic frameHost=" + JSON.stringify(out.crossOrigin.frameHostCosmetic) + "."
+    ? engine === "obscura"
+      ? OBSCURA_NO_OOPIF_SOURCE_NOTE
+      : "UNMEASURED: no OOPIF child session was auto-attached on " + engine
+        + " (childSessionId=null) — could not independently confirm the child loaded, so this half "
+        + "is not a finding about pierce either way. Cosmetic frameHost=" + JSON.stringify(out.crossOrigin.frameHostCosmetic) + "."
     : out.crossOrigin.childLoaded === false
       ? "UNMEASURED: the cross-origin child's own session answered document.title="
         + JSON.stringify(out.crossOrigin.childOwnSessionTitle) + ", not " + JSON.stringify(CHILD_TITLE)

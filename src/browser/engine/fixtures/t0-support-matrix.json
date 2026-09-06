@@ -443,8 +443,8 @@
       "effect": null
     },
     "Page.javascriptDialogOpening": {
-      "protocol": "no event within 4s",
-      "effect": false
+      "protocol": "no event within 4s (wait expired, not a measured absence)",
+      "effect": null
     },
     "Page.handleJavaScriptDialog": {
       "protocol": "not reachable: no dialog event",

@@ -125,7 +125,41 @@ const REQUIRED = [
   [`${CDP}/obscura-Network.getAllCookies.json`, ["cookies"]],
   // ---- cross-engine support record (R48: lives beside its one reader, src/browser/engine/) ----
   // reader: the_support_matrix_records_both_engines
-  [`${ENGINE}/t0-support-matrix.json`, ["chrome", "obscura"]],
+  //
+  // P2 (fix round 2): `{"chrome":{},"obscura":{}}` used to pass this entry — the two required
+  // keys alone assert nothing about R37's `{label: {protocol, effect}}` shape, so the check could
+  // not fail on the thing it appears to check (判据 §3). The predicate below asserts what Task
+  // 16's own test will need: both engines present with the SAME label set (a label recorded for
+  // one engine and not the other is exactly the kind of silent asymmetry this file exists to
+  // catch), and every row carrying a `protocol` string plus an `effect` that is strictly
+  // `true`/`false`/`null` — nothing else (a stray string or `0`/`undefined` there would silently
+  // break Task 16's `effect != Some(false)` comparison).
+  [`${ENGINE}/t0-support-matrix.json`, ["chrome", "obscura"], (v) => {
+    const { chrome, obscura } = v;
+    if (typeof chrome !== "object" || chrome === null) return "chrome half must be an object";
+    if (typeof obscura !== "object" || obscura === null) return "obscura half must be an object";
+    const chromeLabels = Object.keys(chrome).sort();
+    const obscuraLabels = Object.keys(obscura).sort();
+    if (chromeLabels.length === 0) return "chrome half has no labels";
+    if (obscuraLabels.length === 0) return "obscura half has no labels";
+    if (chromeLabels.join(" ") !== obscuraLabels.join(" ")) {
+      const onlyChrome = chromeLabels.filter((l) => !(l in obscura));
+      const onlyObscura = obscuraLabels.filter((l) => !(l in chrome));
+      return "label sets differ — only on chrome: " + JSON.stringify(onlyChrome)
+        + "; only on obscura: " + JSON.stringify(onlyObscura);
+    }
+    for (const [engineName, rows] of [["chrome", chrome], ["obscura", obscura]]) {
+      for (const [label, row] of Object.entries(rows)) {
+        if (typeof row?.protocol !== "string") {
+          return `${engineName}.${label}.protocol must be a string, got ${JSON.stringify(row?.protocol)}`;
+        }
+        if (row?.effect !== true && row?.effect !== false && row?.effect !== null) {
+          return `${engineName}.${label}.effect must be true|false|null, got ${JSON.stringify(row?.effect)}`;
+        }
+      }
+    }
+    return true;
+  }],
   // ---- page_state fixtures: all read by Part 3's Task 11, none by any aleph-cdp test ----
   [`${PAGE}/hn-chromium.domsnapshot.json`, ["documents.0.layout.bounds", "strings"]],
   // R57 (controller ruling, 2026-09-06): DOMSnapshot.captureSnapshot spans same-process frames
