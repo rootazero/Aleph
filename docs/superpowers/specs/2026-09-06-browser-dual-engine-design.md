@@ -173,7 +173,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 |---|---|---|
 | `RawDom` | 每引擎一个取数器 | `engine`、`viewport{w,h,scroll_x,scroll_y,content_w,content_h,dpr}`、扁平化的各 frame（主 frame 在前，子 frame 带父偏移与 `frame_id/loader_id`）；每节点 `backend_node_id`、`parent`、tag、attrs、文本、`rect: Option<Rect>`（**`None` = 不生成盒**，唯一诚实的「不可见」表达）、`computed: Option<{display_none, visibility_hidden, opacity_zero, cursor_pointer, overflow_clip}>`、`shadow_root`、`is_clickable_hint: Option<bool>`（Chrome `DOMSnapshot` 给的） |
 | `PageState` | **唯一**构建器 `PageState::build(raw, &mut RefTable)` | `engine`、`generation`、url、title、viewport、前序节点表：`role`（`role` 属性 → tag 映射表）、`name`（accname-lite：`aria-labelledby` → `aria-label` → `<label for>`/包裹 label/placeholder → `alt`/`title` → 可见后代文本 ≤80 字）、`value`、状态位（disabled/checked/expanded/selected/required/readonly/focused）、`rect`（页面坐标整数）、`interactive`、`visible`、`text`（自身文本）、`ref: Option<RefId>` |
-| 模型面 | 渲染器 `render_text(&PageState, budget)` | 缩进文本树（默认观察）；完整 JSON 作 `Attachment`（mime `application/vnd.aleph.page-state+json`，与上一份 spec 元素拾取器的 `browser-element+json` 同族） |
+| 模型面 | 渲染器 `render_text(&PageState)` / `to_json` | 缩进文本树（默认观察）；完整 JSON 经 `browser_snapshot{format:"json"}` 取得，走与文本同一条 `bound_content` → `redact_wrap` → `offload_full_content` 路径（offload 后可由 `ctx_search` 取回）。工具结果今天没有图片之外的附件通道，所以「附件」的诚实实现是这个第二种 `format`，不是一个没有渲染者的字段（判据 §17） |
 
 **取数器只有两个，其中一个有死期**（§3.3）。
 
@@ -184,7 +184,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 每行一个节点——**行形状** ⇒ 现有 `bound_content`（按行截断，`mod.rs:278-282`）、`redact_wrap`（注入栅栏，`mod.rs:340`）、`offload_full_content`（`mod.rs:414`）全部原样复用，**不需要第二套预算推导**。
 
 ```
-# engine=obscura gen=7 url=https://news.ycombinator.com/ viewport=1280x800 scroll=0,0 doc=1280x1173 no_box=12/703 waited=0s
+# engine=obscura gen=7 url=https://news.ycombinator.com/ viewport=1280x800 scroll=0,0 doc=1280x1173 no_box=12/703 fetch=142ms
 - banner
   - link "Hacker News" [ref=e1] @130,11 83x15 /url: https://news.ycombinator.com/
   - link "new" [ref=e2] @218,11 24x15 /url: newest
@@ -195,7 +195,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
   - textbox "Search" [ref=e612] @589,1144 153x21 [placeholder=Search…]
 ```
 
-几何只印在交互节点上；`visible=false` 的节点不进文本树，但 JSON 里保留并标 `visible:false`。头行的 `no_box`（无盒节点/总节点）与 `waited`（捕获期间的屏障等待秒数）是给模型的两个运行时事实，不是判断。
+几何只印在交互节点上；`visible=false` 的节点不进文本树，但 JSON 里保留并标 `visible:false`。头行的 `no_box`（无盒节点/总节点）与 `fetch`（这次取数的耗时，毫秒；撞上屏障时它就是那 25 s——取数器分不出屏障与普通延迟，所以标签只说它测到了什么）是给模型的两个运行时事实，不是判断。
 
 ### 4.3 ref 与代数（约定第一次有代码）
 
@@ -210,7 +210,7 @@ Chromium 取数器 = `DOMSnapshot.captureSnapshot{computedStyles:[display,visibi
 
 ### 4.5 刻意不做
 
-SoM 截图标注（文本树已带几何，YAGNI）；`Accessibility.*` 域一律不读（两引擎行为不一致且 obscura fail-open）；「渲染异常」判定（R7——只把 `engine`、`no_box`、`waited` 印在头行和 JSON 里，判断留给模型）；结构 diff（BrowserOS 用行 diff，本轮连行 diff 也不做，模型自己对比）。
+SoM 截图标注（文本树已带几何，YAGNI）；`Accessibility.*` 域一律不读（两引擎行为不一致且 obscura fail-open）；「渲染异常」判定（R7——只把 `engine`、`no_box`、`fetch` 印在头行和 JSON 里，判断留给模型）；结构 diff（BrowserOS 用行 diff，本轮连行 diff 也不做，模型自己对比）。
 
 ---
 
@@ -339,7 +339,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 
 - 不给模型任何裸 CDP 动词；`browser_exec` 仍只经 `Arc<dyn BrowserBackend>`。
 - `network_policy`：同一函数、同一调用点（导航前的 `&str` 检查 + `make_backend_and_tab_guarded` 的重定向复检）；`Fetch.*` 子资源拦截两引擎都有但**本轮不做**——今天的契约也没管子资源，加了就是新能力不是连线。
-- `secret_guard`：`type_text` / `fill_form` 同一扫描；`Coordinates` 点击不带文本，但进同一审批门（`ActionType` 表加 `switch_engine` 一行，默认放行——它不比 `browser_open` 更危险，别造第二道没有把手的门）。
+- `secret_guard`：`type_text` / `fill_form` 同一扫描；`Coordinates` 点击不带文本，但进同一审批门（`ActionType` 表加 `BrowserSwitchEngine` 一行，**默认与 `BrowserOpen` 相同**——curated 表里是 `Ask`（`src/approval/config.rs:328`）；它启动一个新浏览器进程，与 open 同级，不更宽也不更严，别造第二道没有把手的门）。
 - 页面派生的文本树与 JSON 附件都走现有注入栅栏（`ContentSource::BrowserContent`）；obscura 的 `--allow-private-network` 只由 profile 的网络策略开；`--allow-file-access` 永不给。
 - 截图落盘走现有受保护位置 denylist；孤儿清扫按 argv token 精确匹配，不做子串。
 - `Runtime.evaluate` 上 `returnByValue:true`：值不是通话记录（`backend.rs:45-58` 的契约天然满足）。
@@ -365,7 +365,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 | `reap` | `kill -9` server 后重启，obscura 孤儿被清扫，Chromium 孤儿不误杀 |
 | `caps` | 能力表逐项证伪 |
 
-外加：`qa/browser_managed/run.sh` 八场景在 Chromium 上以 `driver=cdp` 跑一遍（**对齐**）、以 `driver=playwright_cli` 再跑一遍（**回归**）。
+外加：`qa/browser_managed/run.sh` 中与驱动相关的场景（`open`、`tools`）在 Chromium 上以 `driver=cdp` 跑一遍（**对齐**）；全部场景以 `driver=playwright_cli` 再跑一遍（**回归**）。`ambient`/`attach`/`pdf`/`existing`/`headed` 五个场景测的是 playwright-cli 与 MCP 服务器自身，在 `cdp` 下通过等于什么都没测，脚本对它们**明确拒绝**而不是绿。
 
 ---
 
@@ -431,7 +431,7 @@ driver = "cdp"                             # 新默认；旧值 managed_cli / ch
 | U4 | Chromium `DOMSnapshot.captureSnapshot` 在 OOPIF 上的 `documents[]` 偏移 | 本地跨源 iframe 页面 | Chromium 取数器的偏移计算 |
 | U5 | obscura `Input.dispatchMouseEvent` 的坐标空间是视口还是页面 | 滚动后点击一个已知 rect 的元素 | `Coordinates` 折算 |
 | U6 | obscura `Network.setCookies` 对 `sameSite`/`expires` 字段的接受度 | 往返一组 cookie | 迁移保真 |
-| U7 | `browser_managed` 八场景在 `driver=cdp` 下的基线（S3 前先跑一次 playwright 基线记录） | 现有脚本 | 对齐 QA 的基线 |
+| U7 | `browser_managed` 的 `open`/`tools` 在 `driver=cdp` 下的基线（S3 前先跑一次 playwright 全场景基线记录） | 现有脚本 | 对齐 QA 的基线 |
 | U8 | 上游 PR 的最小 diff（`domsnapshot.rs` 读 `PreparedRender::layout()`）能否不改 `Page` 的公开面 | 在克隆里试改并跑 `render-repros` | D-C 的落地成本 |
 
 ---
