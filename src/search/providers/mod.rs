@@ -33,3 +33,5 @@ pub use tavily::TavilyFactory;
 
 #[cfg(test)]
 mod capability_census;
+#[cfg(test)]
+mod error_funnel_census;

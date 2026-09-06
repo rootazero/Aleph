@@ -39,7 +39,38 @@ fn parse_osc7_cwd(payload: &str) -> Option<String> {
         .filter(|c| !c.is_control())
         .take(OSC_PAYLOAD_MAX_CHARS)
         .collect();
-    (!decoded.is_empty()).then_some(decoded)
+    (!decoded.is_empty()).then(|| strip_uri_drive_slash(&decoded))
+}
+
+/// `/C:/Users/x` -> `C:/Users/x`.
+///
+/// RFC 8089 spells a Windows path in a `file:` URI with the drive letter INSIDE
+/// the path component, so a correct emitter sends `file:///C:/Users/x` and the
+/// host/path split above hands back a leading `/` that belongs to the URI and
+/// not to the path. Every Windows terminal that emits OSC 7 sends that form, and
+/// `/C:/Users/x` is a path no Windows API accepts — so before 2026-09-05 the
+/// live cwd of any Windows session that reported one was unusable.
+///
+/// NOT `#[cfg(windows)]`, and that is deliberate twice over: this function reads
+/// a URI, which is a platform-independent spelling (a Unix Aleph attached to a
+/// remote Windows shell sees the same bytes), and a branch that compiles on no
+/// machine the developer runs is a branch nobody can falsify — the same
+/// reasoning `foreground::foreground_fact_for_shell` records.
+///
+/// The test is narrow on purpose: `/` + one ASCII letter + `:` + a separator.
+/// A Unix directory literally called `/C:` exists in principle, and requiring
+/// the separator is what keeps this from renaming it.
+fn strip_uri_drive_slash(path: &str) -> String {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 4
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && (bytes[3] == b'/' || bytes[3] == b'\\')
+    {
+        return path[1..].to_owned();
+    }
+    path.to_owned()
 }
 
 /// Percent-decoding, bytes first.

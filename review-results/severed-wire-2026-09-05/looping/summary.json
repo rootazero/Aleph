@@ -1,0 +1,31 @@
+{
+  "audit": "severed-wire-audit",
+  "date": "2026-09-05",
+  "module": "src/looping",
+  "files_scanned": [
+    "src/looping/mod.rs",
+    "src/looping/pursuit.rs",
+    "src/looping/types.rs"
+  ],
+  "method": "PRODUCED-CONSUMED symbol parity (rg across src/, src/bin/, interfaces/, shared/, desktop/, crates/), read-before-write triage. No prior audit for this module — fresh review, every claim re-verified with fresh rg.",
+  "findings": [
+    {
+      "id": "sw-looping-1",
+      "module": "src/looping",
+      "files": [
+        "src/looping/pursuit.rs:33"
+      ],
+      "severity": "low",
+      "form": 1,
+      "produced": "pub fn should_fire(state: &LoopState, tokens_now: u64, now_ms: u64) -> bool — convenience predicate wrapping state.is_active() && !exhausted(state, tokens_now, now_ms)",
+      "produced_location": "src/looping/pursuit.rs:33",
+      "consumer_location": "none found in production; only 9 #[cfg(test)] consumers inside src/looping/pursuit.rs (lines 240, 246, 253, 260, 267, 274, 281, 438, 440) plus 1 doc-comment mention in src/looping/mod.rs:385 (no call)",
+      "decision": "DECIDE",
+      "rationale": "pub fn on a lib-crate public API with zero production callers. dead_code lint does not flag it because it is pub. The function is a one-liner sugar over is_active()+exhausted(); production paths (try_claim_tick, rearm_after_*) inline the same predicate or call exhausted directly. alephcore is a lib with external dependents (shared/client, interfaces/cli, interfaces/tui, interfaces/webchat per their Cargo.tomls) — none currently import looping::pursuit::should_fire, but the change is a public-API removal in a lib crate. Following the audit pattern of sw-md-2 (markdown, 2026-09-05) for lib-crate pub-but-unused, this is DECIDE rather than blanket CUT — the cost of keeping is one definition line plus ~9 test lines; the cost of removing is risk to any external importer not audited here.",
+      "proposed_change": "None in this review. Optional follow-up: (1) verify with `rg -n 'looping::pursuit::should_fire' .` across the full org workspace to confirm zero external importers; (2) then CUT pursuit.rs:33-35 plus the 9 lines of test that exercise only it (or rewrite the test cases to exercise is_active()+exhausted() directly, which is what production does).",
+      "risk": "Keeping is zero-risk (no callers, no compile cost, no documentation loss). Removing is low-risk contingent on the external-consumer sweep above; the function's only observable behavior is the well-known is_active()+exhausted() composition.",
+      "verification": "rg -n '\\bshould_fire\\b' --type rust  →  still 9 hits inside src/looping/pursuit.rs tests + the unrelated naked_loop_planner_should_fire in src/gateway/execution_engine/execute.rs + 1 docstring comment in src/looping/mod.rs. rg -n 'pursuit::should_fire|looping::pursuit::should_fire' --type rust  →  0 hits. After any change: cargo test -p alephcore --lib looping.",
+      "existing_review_ref": null
+    }
+  ]
+}

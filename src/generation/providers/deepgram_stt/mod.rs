@@ -60,6 +60,12 @@ impl std::fmt::Debug for DeepgramSttProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for DeepgramSttProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl DeepgramSttProvider {
     /// Construct a new Deepgram STT provider.
     pub fn new<S: Into<String>>(

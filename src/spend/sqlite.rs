@@ -123,6 +123,18 @@ impl SpendLedger for SqliteSpendLedger {
             Delta::Partial(usd) => (usd, 0, 1),
             Delta::Unpriced => (0.0, 1, 0),
         };
+        // NaN / ±inf in the USD column silently disables the spend ceiling
+        // (IEEE 754 NaN comparisons are false, so `spent >= limit` is false
+        // forever once a corrupt row lands). Mirror the InMemory backend's
+        // guard: coerce to 0.0 + bump unpriced_calls so the 'this call had
+        // a price it couldn't represent' signal is loud and the ceiling
+        // continues to evaluate against a real number.
+        let (delta_usd, delta_unpriced, delta_partial): (f64, i64, i64) = if !delta_usd.is_finite()
+        {
+            (0.0, delta_unpriced.saturating_add(1), delta_partial)
+        } else {
+            (delta_usd, delta_unpriced, delta_partial)
+        };
         let key = principal.as_key().to_string();
         let updated_at = chrono::Utc::now().timestamp_millis();
 
@@ -235,7 +247,11 @@ impl SpendLedger for SqliteSpendLedger {
         })
     }
 
-    fn total_for(&self, period_start_ms: i64) -> anyhow::Result<Spent> {
+    fn total_for(
+        &self,
+        window_start_ms: i64,
+        coarse_ancestor_start_ms: i64,
+    ) -> anyhow::Result<Spent> {
         // Deliberately not cached, and deliberately not a stored `@org` row
         // — see the module this trait lives in
         // (`crate::spend::SpendLedger`) and the plan: a stored aggregate is
@@ -243,12 +259,22 @@ impl SpendLedger for SqliteSpendLedger {
         // and the two drift the first time a write lands on one and not the
         // other. `SUM()` over zero matching rows is `NULL`, hence the
         // `Option` columns.
+        //
+        // The WHERE clause is the trait's fail-closed window rule (spend
+        // I-1), identical to the in-memory backend's: every row keyed
+        // inside the current window (`period_start >= window_start_ms`,
+        // which also catches rows recorded under a finer old policy after
+        // a hot `SpendPeriod` switch, e.g. Day → Month), plus the row
+        // keyed at the start of the coarsest period containing the window
+        // (`period_start = coarse_ancestor_start_ms`, which catches a
+        // coarser old policy, e.g. Month → Day). See the trait method's
+        // doc for why the deliberate over-count is the chosen direction.
         let conn = self.store.conn.lock().unwrap_or_else(|e| e.into_inner());
         let (usd, unpriced_calls, partial_calls): (Option<f64>, Option<i64>, Option<i64>) = conn
             .query_row(
                 "SELECT SUM(usd), SUM(unpriced_calls), SUM(partial_calls) \
-             FROM spend_ledger WHERE period_start = ?1",
-                rusqlite::params![period_start_ms],
+             FROM spend_ledger WHERE period_start >= ?1 OR period_start = ?2",
+                rusqlite::params![window_start_ms, coarse_ancestor_start_ms],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
 
@@ -256,7 +282,7 @@ impl SpendLedger for SqliteSpendLedger {
             usd: usd.unwrap_or(0.0),
             unpriced_calls: unpriced_calls.unwrap_or(0) as u64,
             partial_calls: partial_calls.unwrap_or(0) as u64,
-            period_start_ms,
+            period_start_ms: window_start_ms,
             // See `Spent::period_end_ms`'s doc.
             period_end_ms: None,
         })

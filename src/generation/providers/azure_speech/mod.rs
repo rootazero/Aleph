@@ -125,7 +125,9 @@ impl AzureSpeechProvider {
     /// Apply the provider's configured `timeout_seconds` (rebuilds the shared
     /// hardened client with the new per-request cap). Factory-only; existing
     /// call sites keep the 60 s default.
-    pub fn with_timeout(mut self, secs: u64) -> GenerationResult<Self> {
+    pub fn with_timeout(mut self, secs: Option<u64>) -> GenerationResult<Self> {
+        // `None` = unconfigured; keep this provider's own default.
+        let Some(secs) = secs else { return Ok(self) };
         self.timeout = Duration::from_secs(secs.max(1));
         self.client = super::http::voice_http_client(self.timeout)
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;

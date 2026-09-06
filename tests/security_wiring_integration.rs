@@ -28,7 +28,7 @@ async fn tool_call_placeholder_resolves_end_to_end() {
     let (guard, audit_rx) = RuntimeSecurityGuard::new_with_audit(SecurityGuardConfig::default());
     let guard = Arc::new(guard);
     let store = Arc::new(SecurityStore::in_memory().unwrap());
-    let drain = spawn_audit_drain(audit_rx, store.clone());
+    let drain = spawn_audit_drain(audit_rx, store.clone(), guard.audit_dropped_counter());
 
     let resolver: Option<Arc<dyn AsyncSecretResolver>> = Some(Arc::new(StubResolver));
     let pii = PiiSecretsGuardrail::with_guard_and_resolver(guard.clone(), resolver);

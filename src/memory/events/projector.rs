@@ -1,17 +1,14 @@
 //! Memory Event Sourcing — Event Projector
 //!
-//! [`EventProjector`] folds a stream of [`super::MemoryEvent`]s into a
+//! [`fold_events_to_note`] folds a stream of [`super::MemoryEvent`]s into a
 //! current-state [`crate::memory::context::MemoryFact`] projection.
-//! Used both for rebuilding read-side state and for time-travel queries.
-
-use crate::sync_primitives::Arc;
+//! Used for rebuilding read-side state and for time-travel queries.
 
 use crate::error::AlephError;
 use crate::memory::context::{
     compute_parent_path, FactSpecificity, MemoryFact, MemoryLayer, TemporalScope,
 };
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
-use crate::resilience::database::StateDatabase;
 
 /// Folds a stream of memory events into a current-state `MemoryFact`.
 ///
@@ -22,228 +19,163 @@ use crate::resilience::database::StateDatabase;
 ///
 /// ## Pure fold
 ///
-/// [`EventProjector::fold_events_to_note`] is a **pure function** — no I/O,
-/// no side effects. This makes it trivially testable and deterministic.
-///
-/// ## Projection from store
-///
-/// [`EventProjector::rebuild_fact`] and [`EventProjector::rebuild_fact_at`]
-/// load events from the [`StateDatabase`] and then delegate to the pure fold.
-pub struct EventProjector {
-    db: Arc<StateDatabase>,
-}
-
-impl EventProjector {
-    /// Create a new projector backed by the given event store.
-    #[must_use]
-    pub const fn new(db: Arc<StateDatabase>) -> Self {
-        Self { db }
+/// This function is a **pure function** — no I/O, no side effects. This
+/// makes it trivially testable and deterministic. Callers that need to
+/// load events from the store should read them via
+/// [`crate::resilience::database::StateDatabase::get_memory_events_for_fact`]
+/// (or `get_memory_events_until` for time-travel) and pass the slice in.
+#[allow(clippy::too_many_lines)]
+// rust-doctor-disable-next-line high-cyclomatic-complexity
+pub fn fold_events_to_note(
+    events: &[MemoryEventEnvelope],
+) -> Result<Option<MemoryFact>, AlephError> {
+    if events.is_empty() {
+        return Ok(None);
     }
 
-    /// Pure fold: replay a sequence of events into a `MemoryFact`.
-    ///
-    /// Returns `Ok(None)` if:
-    /// - The event list is empty
-    /// - The fact was permanently deleted (`NoteDeleted`)
-    ///
-    /// Events must be ordered by sequence number (ascending).
-    /// A `NoteCreated` or `NoteMigrated` event must appear before any
-    /// mutation events; if a mutation arrives before initialization,
-    /// it is silently skipped.
-    // rust-doctor-disable-next-line high-cyclomatic-complexity
-    pub fn fold_events_to_note(
-        events: &[MemoryEventEnvelope],
-    ) -> Result<Option<MemoryFact>, AlephError> {
-        if events.is_empty() {
-            return Ok(None);
-        }
+    let mut fact: Option<MemoryFact> = None;
+    let mut access_count: u32 = 0;
 
-        let mut fact: Option<MemoryFact> = None;
-        let mut access_count: u32 = 0;
+    for envelope in events {
+        match &envelope.event {
+            // --------------------------------------------------------
+            // Initialization events
+            // --------------------------------------------------------
+            MemoryEvent::NoteCreated {
+                note_path,
+                content,
+                note_type,
+                path,
+                namespace,
+                agent: workspace,
+                source,
+                source_memory_ids,
+            } => {
+                let parent_path = compute_parent_path(path);
+                let category = note_type.default_category();
 
-        for envelope in events {
-            match &envelope.event {
-                // --------------------------------------------------------
-                // Initialization events
-                // --------------------------------------------------------
-                MemoryEvent::NoteCreated {
-                    note_path,
-                    content,
-                    note_type,
-                    path,
-                    namespace,
-                    agent: workspace,
-                    source,
-                    source_memory_ids,
-                } => {
-                    let parent_path = compute_parent_path(path);
-                    let category = note_type.default_category();
+                fact = Some(MemoryFact {
+                    id: note_path.clone(),
+                    content: content.clone(),
+                    note_type: note_type.clone(),
+                    embedding: None,
+                    source_memory_ids: source_memory_ids.clone(),
+                    created_at: envelope.timestamp,
+                    updated_at: envelope.timestamp,
+                    is_valid: true,
+                    invalidation_reason: None,
+                    decay_invalidated_at: None,
+                    specificity: FactSpecificity::default(),
+                    temporal_scope: TemporalScope::default(),
+                    namespace: namespace.clone(),
+                    agent: workspace.clone(),
+                    similarity_score: None,
+                    path: path.clone(),
+                    layer: MemoryLayer::default(),
+                    category,
+                    fact_source: *source,
+                    content_hash: String::new(),
+                    parent_path,
+                    embedding_model: String::new(),
+                    persona_id: None,
+                    access_count: 0,
+                    last_accessed_at: None,
+                    valid_from: None,
+                    valid_to: None,
+                });
+            }
 
-                    fact = Some(MemoryFact {
-                        // rust-doctor-disable-next-line excessive-clone
-                        id: note_path.clone(),
-                        // rust-doctor-disable-next-line excessive-clone
-                        content: content.clone(),
-                        // rust-doctor-disable-next-line excessive-clone
-                        note_type: note_type.clone(),
-                        embedding: None,
-                        // rust-doctor-disable-next-line excessive-clone
-                        source_memory_ids: source_memory_ids.clone(),
-                        created_at: envelope.timestamp,
-                        updated_at: envelope.timestamp,
-                        is_valid: true,
-                        invalidation_reason: None,
-                        decay_invalidated_at: None,
-                        specificity: FactSpecificity::default(),
-                        temporal_scope: TemporalScope::default(),
-                        // rust-doctor-disable-next-line excessive-clone
-                        namespace: namespace.clone(),
-                        // rust-doctor-disable-next-line excessive-clone
-                        agent: workspace.clone(),
-                        similarity_score: None,
-                        // rust-doctor-disable-next-line excessive-clone
-                        path: path.clone(),
-                        layer: MemoryLayer::default(),
-                        category,
-                        fact_source: *source,
-                        // rust-doctor-disable-next-line unnecessary-allocation
-                        content_hash: String::new(), // recomputed at projection time
-                        parent_path,
-                        // rust-doctor-disable-next-line unnecessary-allocation
-                        embedding_model: String::new(), // set at projection time
-                        persona_id: None,
-                        access_count: 0,
-                        last_accessed_at: None,
-                        valid_from: None,
-                        valid_to: None,
-                    });
+            MemoryEvent::NoteMigrated { snapshot, .. } => {
+                let migrated: MemoryFact = serde_json::from_value(snapshot.clone()).map_err(
+                    |e| AlephError::Other {
+                        message: format!("Failed to deserialize NoteMigrated snapshot: {e}"),
+                        suggestion: None,
+                    },
+                )?;
+                access_count = migrated.access_count;
+                fact = Some(migrated);
+            }
+
+            // --------------------------------------------------------
+            // Mutation events (require an initialized fact)
+            // --------------------------------------------------------
+            MemoryEvent::NoteContentUpdated { new_content, .. } => {
+                if let Some(ref mut f) = fact {
+                    f.content = new_content.clone();
+                    f.content_hash = String::new();
+                    f.updated_at = envelope.timestamp;
                 }
+            }
 
-                MemoryEvent::NoteMigrated { snapshot, .. } => {
-                    // rust-doctor-disable-next-line excessive-clone
-                    let migrated: MemoryFact =
-                        // rust-doctor-disable-next-line excessive-clone
-                        serde_json::from_value(snapshot.clone()).map_err(|e| {
-                            AlephError::Other {
-                                message: format!(
-                                    "Failed to deserialize NoteMigrated snapshot: {e}"
-                                ),
-                                suggestion: None,
-                            }
-                        })?;
-                    // Seed the access_count accumulator from the migrated
-                    // snapshot; otherwise the final `f.access_count = access_count`
-                    // assignment would reset it to 0.
-                    access_count = migrated.access_count;
-                    fact = Some(migrated);
-                }
-
-                // --------------------------------------------------------
-                // Mutation events (require an initialized fact)
-                // --------------------------------------------------------
-                MemoryEvent::NoteContentUpdated { new_content, .. } => {
-                    if let Some(ref mut f) = fact {
-                        // rust-doctor-disable-next-line excessive-clone
-                        f.content = new_content.clone();
-                        // rust-doctor-disable-next-line unnecessary-allocation
-                        f.content_hash = String::new(); // recomputed at projection time
-                        f.updated_at = envelope.timestamp;
-                    }
-                }
-
-                MemoryEvent::NoteMetadataUpdated {
-                    field, new_value, ..
-                } => {
-                    if let Some(ref mut f) = fact {
-                        match field.as_str() {
-                            "path" => {
-                                // rust-doctor-disable-next-line excessive-clone
-                                f.path = new_value.clone();
-                                f.parent_path = compute_parent_path(new_value);
-                            }
-                            "namespace" => {
-                                // rust-doctor-disable-next-line excessive-clone
-                                f.namespace = new_value.clone();
-                            }
-                            "agent" => {
-                                // rust-doctor-disable-next-line excessive-clone
-                                f.agent = new_value.clone();
-                            }
-                            _ => {
-                                // Unknown metadata field — silently ignore
-                            }
+            MemoryEvent::NoteMetadataUpdated {
+                field, new_value, ..
+            } => {
+                if let Some(ref mut f) = fact {
+                    match field.as_str() {
+                        "path" => {
+                            f.path = new_value.clone();
+                            f.parent_path = compute_parent_path(new_value);
                         }
-                        f.updated_at = envelope.timestamp;
-                    }
-                }
-
-                MemoryEvent::NoteAccessed { .. } => {
-                    if let Some(ref mut f) = fact {
-                        access_count += 1;
-                        f.last_accessed_at = Some(envelope.timestamp);
-                    }
-                }
-
-                MemoryEvent::NoteInvalidated { reason, actor, .. } => {
-                    if let Some(ref mut f) = fact {
-                        f.is_valid = false;
-                        // rust-doctor-disable-next-line excessive-clone
-                        f.invalidation_reason = Some(reason.clone());
-                        if *actor == EventActor::Decay {
-                            f.decay_invalidated_at = Some(envelope.timestamp);
+                        "namespace" => {
+                            f.namespace = new_value.clone();
+                        }
+                        "agent" => {
+                            f.agent = new_value.clone();
+                        }
+                        _ => {
+                            // Unknown metadata field — silently ignore
                         }
                     }
+                    f.updated_at = envelope.timestamp;
                 }
+            }
 
-                MemoryEvent::NoteRestored { .. } => {
-                    if let Some(ref mut f) = fact {
-                        f.is_valid = true;
-                        f.invalidation_reason = None;
-                        f.decay_invalidated_at = None;
-                    }
+            MemoryEvent::NoteAccessed { .. } => {
+                if let Some(ref mut f) = fact {
+                    access_count += 1;
+                    f.last_accessed_at = Some(envelope.timestamp);
                 }
+            }
 
-                MemoryEvent::NoteDeleted { .. } => {
-                    return Ok(None);
-                }
-
-                MemoryEvent::NoteConsolidated {
-                    consolidated_content,
-                    ..
-                } => {
-                    if let Some(ref mut f) = fact {
-                        // rust-doctor-disable-next-line excessive-clone
-                        f.content = consolidated_content.clone();
-                        f.updated_at = envelope.timestamp;
+            MemoryEvent::NoteInvalidated { reason, actor, .. } => {
+                if let Some(ref mut f) = fact {
+                    f.is_valid = false;
+                    f.invalidation_reason = Some(reason.clone());
+                    if *actor == EventActor::Decay {
+                        f.decay_invalidated_at = Some(envelope.timestamp);
                     }
                 }
             }
+
+            MemoryEvent::NoteRestored { .. } => {
+                if let Some(ref mut f) = fact {
+                    f.is_valid = true;
+                    f.invalidation_reason = None;
+                    f.decay_invalidated_at = None;
+                }
+            }
+
+            MemoryEvent::NoteDeleted { .. } => {
+                return Ok(None);
+            }
+
+            MemoryEvent::NoteConsolidated {
+                consolidated_content,
+                ..
+            } => {
+                if let Some(ref mut f) = fact {
+                    f.content = consolidated_content.clone();
+                    f.updated_at = envelope.timestamp;
+                }
+            }
         }
-
-        if let Some(ref mut f) = fact {
-            f.access_count = access_count;
-        }
-
-        Ok(fact)
     }
 
-    /// Rebuild a fact by loading all events from the store and folding them.
-    pub async fn rebuild_fact(&self, fact_id: &str) -> Result<Option<MemoryFact>, AlephError> {
-        let events = self.db.get_memory_events_for_fact(fact_id).await?;
-        Self::fold_events_to_note(&events)
+    if let Some(ref mut f) = fact {
+        f.access_count = access_count;
     }
 
-    /// Rebuild a fact at a specific point in time.
-    ///
-    /// Only events with `timestamp <= at` are included in the fold.
-    pub async fn rebuild_fact_at(
-        &self,
-        fact_id: &str,
-        at: i64,
-    ) -> Result<Option<MemoryFact>, AlephError> {
-        let events = self.db.get_memory_events_until(fact_id, at).await?;
-        Self::fold_events_to_note(&events)
-    }
+    Ok(fact)
 }
 
 // ============================================================================
@@ -256,7 +188,6 @@ mod tests {
     use crate::memory::context::MemoryCategory;
     use crate::memory::events::*;
 
-    /// Helper: create a `MemoryEventEnvelope` wrapping a `NoteCreated` event.
     fn make_created_envelope(fact_id: &str, seq: u64, ts: i64) -> MemoryEventEnvelope {
         MemoryEventEnvelope {
             id: 0,
@@ -278,7 +209,6 @@ mod tests {
         }
     }
 
-    /// Helper: wrap an event in an envelope.
     fn wrap(fact_id: &str, seq: u64, ts: i64, event: MemoryEvent) -> MemoryEventEnvelope {
         MemoryEventEnvelope {
             id: 0,
@@ -291,7 +221,6 @@ mod tests {
         }
     }
 
-    /// Helper: wrap with a specific actor.
     fn wrap_with_actor(
         fact_id: &str,
         seq: u64,
@@ -310,20 +239,16 @@ mod tests {
         }
     }
 
-    // --- fold: empty ---------------------------------------------------------
-
     #[test]
     fn test_fold_empty_events() {
-        let result = EventProjector::fold_events_to_note(&[]).unwrap();
+        let result = fold_events_to_note(&[]).unwrap();
         assert!(result.is_none());
     }
-
-    // --- fold: single NoteCreated --------------------------------------------
 
     #[test]
     fn test_fold_single_created() {
         let env = make_created_envelope("fact-001", 1, 1000);
-        let fact = EventProjector::fold_events_to_note(&[env])
+        let fact = fold_events_to_note(&[env])
             .unwrap()
             .expect("should produce a fact");
 
@@ -352,8 +277,6 @@ mod tests {
         assert_eq!(fact.temporal_scope, TemporalScope::default());
     }
 
-    // --- fold: NoteCreated + NoteContentUpdated ------------------------------
-
     #[test]
     fn test_fold_created_then_content_updated() {
         let events = vec![
@@ -371,16 +294,14 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
         assert_eq!(fact.content, "User prefers Rust and Go");
         assert_eq!(fact.updated_at, 2000);
-        assert_eq!(fact.created_at, 1000); // unchanged
+        assert_eq!(fact.created_at, 1000);
     }
-
-    // --- fold: NoteCreated + NoteInvalidated ---------------------------------
 
     #[test]
     fn test_fold_created_then_invalidated() {
@@ -399,7 +320,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce an invalidated fact");
 
@@ -408,7 +329,6 @@ mod tests {
             fact.invalidation_reason.as_deref(),
             Some("outdated information")
         );
-        // User actor should NOT set decay_invalidated_at
         assert!(fact.decay_invalidated_at.is_none());
     }
 
@@ -429,15 +349,13 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce an invalidated fact");
 
         assert!(!fact.is_valid);
         assert_eq!(fact.decay_invalidated_at, Some(3000));
     }
-
-    // --- fold: NoteCreated + NoteDeleted → None ------------------------------
 
     #[test]
     fn test_fold_created_then_deleted() {
@@ -454,11 +372,9 @@ mod tests {
             ),
         ];
 
-        let result = EventProjector::fold_events_to_note(&events).unwrap();
+        let result = fold_events_to_note(&events).unwrap();
         assert!(result.is_none());
     }
-
-    // --- fold: NoteCreated + NoteAccessed ------------------------------------
 
     #[test]
     fn test_fold_created_then_accessed() {
@@ -490,15 +406,13 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
         assert_eq!(fact.access_count, 2);
         assert_eq!(fact.last_accessed_at, Some(6000));
     }
-
-    // --- fold: NoteCreated + Invalidated + Restored --------------------------
 
     #[test]
     fn test_fold_created_invalidated_restored() {
@@ -525,7 +439,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a restored fact");
 
@@ -533,8 +447,6 @@ mod tests {
         assert!(fact.invalidation_reason.is_none());
         assert!(fact.decay_invalidated_at.is_none());
     }
-
-    // --- fold: NoteMigrated --------------------------------------------------
 
     #[test]
     fn test_fold_fact_migrated() {
@@ -575,7 +487,7 @@ mod tests {
             },
         )];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a migrated fact");
 
@@ -585,8 +497,6 @@ mod tests {
         assert_eq!(fact.access_count, 5);
         assert_eq!(fact.last_accessed_at, Some(800));
     }
-
-    // --- fold: NoteConsolidated ----------------------------------------------
 
     #[test]
     fn test_fold_consolidated() {
@@ -605,7 +515,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a consolidated fact");
 
@@ -615,8 +525,6 @@ mod tests {
         );
         assert_eq!(fact.updated_at, 9000);
     }
-
-    // --- fold: NoteMetadataUpdated -------------------------------------------
 
     #[test]
     fn test_fold_metadata_updated_path_only() {
@@ -635,7 +543,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
@@ -660,7 +568,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
@@ -685,20 +593,15 @@ mod tests {
             ),
         ];
 
-        // Should not fail — unknown fields are silently skipped
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 
-        // updated_at is still bumped
         assert_eq!(fact.updated_at, 2000);
     }
 
-    // --- fold: mutation before initialization is skipped ----------------------
-
     #[test]
     fn test_fold_mutation_before_created_is_skipped() {
-        // A content-update without a preceding NoteCreated should not panic
         let events = vec![wrap(
             "fact-orphan",
             1,
@@ -711,11 +614,9 @@ mod tests {
             },
         )];
 
-        let result = EventProjector::fold_events_to_note(&events).unwrap();
+        let result = fold_events_to_note(&events).unwrap();
         assert!(result.is_none());
     }
-
-    // --- fold: complex multi-event sequence -----------------------------------
 
     #[test]
     fn test_fold_complex_sequence() {
@@ -746,7 +647,7 @@ mod tests {
             ),
         ];
 
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
 

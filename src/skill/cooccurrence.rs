@@ -121,6 +121,39 @@ impl CoOccurrenceLog {
     pub fn snapshot(&self) -> Vec<RecentUse> {
         self.load()
     }
+
+    /// Remove every recorded use of `skill_id` from the ring.
+    ///
+    /// Paired with [`UsageStore::forget`](crate::skill::usage::UsageStore::forget)
+    /// on the `.usage.json` sidecar — both sidecars describe the same recent
+    /// activity, so a `remove_skill` that clears only the usage counter
+    /// leaves the co-occurrence ring reporting uses for skills the user has
+    /// just deleted. The dream pipeline's `cluster_chains` consumer would
+    /// then propose workflows that include a deleted skill for up to
+    /// `MAX_ENTRIES` records. Best-effort: failures warn and return without
+    /// panicking; the next `record` cycle will overwrite the sidecar.
+    pub fn forget(&self, skill_id: &str) {
+        if skill_id.is_empty() {
+            return;
+        }
+        let result = with_file_lock(&self.lock_path, |_| {
+            let mut entries = self.load();
+            let before = entries.len();
+            entries.retain(|e| e.skill != skill_id);
+            let removed = before.saturating_sub(entries.len());
+            if removed > 0 {
+                self.save(&entries);
+            }
+            Ok(removed)
+        });
+        match result {
+            Ok(removed) if removed > 0 => {
+                tracing::debug!(skill = skill_id, removed, "skill cooccur: forgot entries");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, skill = skill_id, "skill cooccur: forget failed"),
+        }
+    }
 }
 
 /// Cluster a time-ordered slice of uses into chains: a new chain starts
@@ -214,6 +247,51 @@ mod tests {
         let log = CoOccurrenceLog::new(tmp.path());
         log.record("");
         assert!(log.snapshot().is_empty());
+    }
+
+    /// Regression for `severed-wire-2026-09-05-modules2 skill C-1`: paired
+    /// with `remove_skill`, `forget` must remove every recorded use of the
+    /// given skill id while leaving the rest of the ring untouched. If this
+    /// shape ever drifts (e.g. forget clears the whole sidecar, or only
+    /// matches exact-string vs prefix), the dream pipeline's
+    /// `cluster_chains` will start proposing workflows that include a skill
+    /// the user has just deleted.
+    #[test]
+    fn forget_removes_only_the_named_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = CoOccurrenceLog::new(tmp.path());
+        log.record("alpha");
+        log.record("beta");
+        log.record("alpha");
+        log.record("gamma");
+        log.forget("alpha");
+        let snap = log.snapshot();
+        assert_eq!(snap.len(), 2);
+        assert!(snap.iter().all(|e| e.skill != "alpha"));
+        assert_eq!(snap[0].skill, "beta");
+        assert_eq!(snap[1].skill, "gamma");
+    }
+
+    #[test]
+    fn forget_is_noop_when_skill_not_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = CoOccurrenceLog::new(tmp.path());
+        log.record("alpha");
+        log.forget("nonexistent");
+        assert_eq!(log.snapshot().len(), 1);
+    }
+
+    #[test]
+    fn forget_empty_id_is_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = CoOccurrenceLog::new(tmp.path());
+        log.record("alpha");
+        log.forget("");
+        assert_eq!(
+            log.snapshot().len(),
+            1,
+            "forget(\"\") must not drop entries"
+        );
     }
 
     #[test]

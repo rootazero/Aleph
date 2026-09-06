@@ -182,6 +182,18 @@ impl SessionActor {
                         match append_result {
                             Ok(()) => {
                                 self.finish_emitted(seq, event, at, reply);
+                                // Reset the idle deadline after a successful
+                                // write: a session whose only traffic is
+                                // emits (e.g. a long-running harness writer
+                                // with no concurrent readers) must not be
+                                // reaped while events are still flowing.
+                                // Without this, the deadline set once at
+                                // the top of `run` would fire `idle_timeout`
+                                // after `run` started, regardless of how
+                                // many emits happened in between — see
+                                // severed-wire-2026-09-05-modules2
+                                // session I-1.
+                                idle_deadline = Instant::now() + self.idle_timeout;
                             }
                             Err(e) => {
                                 let _ = reply.send(Err(e));

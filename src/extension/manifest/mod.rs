@@ -348,7 +348,7 @@ fn has_any_component(root: &Path) -> bool {
 // =============================================================================
 
 /// Parse YAML frontmatter from markdown content
-pub fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
+pub fn parse_frontmatter<T: serde::de::DeserializeOwned + Default + 'static>(
     content: &str,
     path: &Path,
 ) -> ExtensionResult<(T, String)> {
@@ -371,7 +371,7 @@ pub fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
                 return Ok((T::default(), body));
             }
 
-            let frontmatter: T = serde_yaml::from_str(frontmatter_str)
+            let frontmatter: T = serde_yml::from_str(frontmatter_str)
                 .map_err(|e| ExtensionError::yaml_parse(path, format!("YAML error: {e}")))?;
 
             Ok((frontmatter, body))

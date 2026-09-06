@@ -131,50 +131,6 @@ pub fn build_summary_prompt(
 }
 
 // ---------------------------------------------------------------------------
-// chunk_messages
-// ---------------------------------------------------------------------------
-
-/// Group messages into chunks of approximately `chunk_tokens` tokens each.
-///
-/// `ratio` is the chars-per-token estimate (e.g. 3.5).
-/// Each returned chunk contains at least one message.
-#[must_use]
-pub fn chunk_messages(
-    messages: &[(String, String)],
-    chunk_tokens: usize,
-    ratio: f64,
-) -> Vec<Vec<(String, String)>> {
-    if messages.is_empty() {
-        return Vec::new();
-    }
-
-    let mut chunks: Vec<Vec<(String, String)>> = Vec::new();
-    let mut current_chunk: Vec<(String, String)> = Vec::new();
-    let mut current_tokens: usize = 0;
-
-    for msg in messages {
-        let msg_tokens = estimate_tokens(&msg.1, ratio);
-
-        // If adding this message would overflow the chunk and the current chunk
-        // is non-empty, flush it first.
-        if current_tokens + msg_tokens > chunk_tokens && !current_chunk.is_empty() {
-            chunks.push(std::mem::take(&mut current_chunk));
-            current_tokens = 0;
-        }
-
-        current_chunk.push(msg.clone());
-        current_tokens += msg_tokens;
-    }
-
-    // Flush the last partial chunk.
-    if !current_chunk.is_empty() {
-        chunks.push(current_chunk);
-    }
-
-    chunks
-}
-
-// ---------------------------------------------------------------------------
 // summary_to_fact
 // ---------------------------------------------------------------------------
 
@@ -309,58 +265,6 @@ mod tests {
             !prompt.contains("Previous context"),
             "prompt should not contain previous context section for empty string"
         );
-    }
-
-    // ------------------------------------------------------------------
-    // chunk_messages
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_chunk_messages_empty() {
-        let chunks = chunk_messages(&[], 100, 3.5);
-        assert!(chunks.is_empty());
-    }
-
-    #[test]
-    fn test_chunk_messages_all_fit_in_one() {
-        // Each message is "hi" (~0-1 tokens), chunk budget is very large.
-        let messages = msgs(&[("user", "hi"), ("assistant", "hello"), ("user", "bye")]);
-        let chunks = chunk_messages(&messages, 10_000, 3.5);
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].len(), 3);
-    }
-
-    #[test]
-    fn test_chunk_messages_splits_correctly() {
-        // Each message content is exactly 35 chars → ~10 tokens at ratio 3.5.
-        // chunk_tokens = 15, so two messages (20 tokens) should split into two chunks.
-        let content = "a".repeat(35); // 35 chars / 3.5 = 10 tokens
-        let messages: Vec<(String, String)> = (0..4)
-            .map(|_| ("user".to_string(), content.clone()))
-            .collect();
-        let chunks = chunk_messages(&messages, 15, 3.5);
-        // 4 messages × 10 tokens each, budget 15 → first chunk gets 1 msg,
-        // then the second fits 1, third fits 1, fourth fits 1 → 4 chunks.
-        // Actually: first msg (10 tokens) < 15, add it. Second msg would make
-        // 20 > 15, flush. So chunk [msg0], then [msg1], [msg2], [msg3].
-        assert_eq!(chunks.len(), 4);
-        for chunk in &chunks {
-            assert_eq!(chunk.len(), 1);
-        }
-    }
-
-    #[test]
-    fn test_chunk_messages_single_large_message_forms_own_chunk() {
-        // A single message larger than chunk_tokens still forms its own chunk.
-        let big = "x".repeat(1000);
-        let messages: Vec<(String, String)> = vec![
-            ("user".to_string(), big.clone()),
-            ("user".to_string(), "short".to_string()),
-        ];
-        let chunks = chunk_messages(&messages, 10, 3.5);
-        // Big message alone, then short message alone.
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0][0].1, big);
     }
 
     // ------------------------------------------------------------------

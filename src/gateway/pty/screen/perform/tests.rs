@@ -1774,6 +1774,44 @@ fn osc7_file_uri_with_empty_or_localhost_host_sets_cwd_and_percent_decodes() {
     );
 }
 
+/// RFC 8089 puts a Windows drive letter INSIDE the path component, so the
+/// host/path split hands back a leading `/` that belongs to the URI —
+/// `file:///C:/Users/x` parses to `/C:/Users/x`, a path no Windows API
+/// accepts. Every Windows terminal that emits OSC 7 sends that form, so before
+/// 2026-09-05 the live cwd of any Windows session that reported one was
+/// unusable; `qa/terminal/run.sh cwd` is what surfaced it, on its first run on
+/// that platform.
+///
+/// Both directions, because the strip has to be NARROW: a Unix path really can
+/// begin `/C:` and renaming it would be worse than the bug (判据 §17). Not
+/// `#[cfg(windows)]` — a URI is a platform-independent spelling, and a branch
+/// no developer's machine compiles is a branch nobody falsifies.
+#[test]
+fn osc7_keeps_a_windows_drive_letter_out_of_the_path() {
+    let mut s = Screen::new(3, 10);
+    s.feed(b"\x1b]7;file:///C:/Users/me/src\x07");
+    assert_eq!(s.cwd(), Some("C:/Users/me/src"));
+
+    let mut backslash = Screen::new(3, 10);
+    backslash.feed(b"\x1b]7;file://localhost/D:\\work\\aleph\x07");
+    assert_eq!(backslash.cwd(), Some("D:\\work\\aleph"));
+
+    // The narrow half. Without these two the strip could be "drop any leading
+    // slash before a colon" and nothing here would notice.
+    let mut unix = Screen::new(3, 10);
+    unix.feed(b"\x1b]7;file:///home/me\x07");
+    assert_eq!(unix.cwd(), Some("/home/me"), "an ordinary path is untouched");
+
+    let mut oddball = Screen::new(3, 10);
+    oddball.feed(b"\x1b]7;file:///C:no-separator\x07");
+    assert_eq!(
+        oddball.cwd(),
+        Some("/C:no-separator"),
+        "no separator after the colon is not the RFC 8089 shape, so it is a \
+         directory literally called `C:no-separator` and stays one"
+    );
+}
+
 /// A `file://` URI naming another machine describes another machine's
 /// filesystem. Dropping it leaves the previous answer standing, which is
 /// the only honest outcome: a rejected value has the standing to say "I

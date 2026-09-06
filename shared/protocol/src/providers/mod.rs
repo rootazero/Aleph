@@ -28,15 +28,19 @@ pub use catalog::{
     DiscoveredModel, ModelCapabilities, ModelLifecycle, ModelSource, ModelStatus, RateBasis,
     RateCard, RosterModel,
 };
-pub use generation::{GenerationPresetRow, GenerationSettings};
+pub use generation::{
+    default_generation_color, default_generation_enabled, GenerationDefaultsJson,
+    GenerationPresetRow, GenerationProviderConfigJson, GenerationProviderRow, GenerationSettings,
+    DEFAULT_GENERATION_COLOR,
+};
 pub use search::{
     filter_catalog, filter_rows, rank_entries, rank_models, rank_rows, EntryMatch, MatchRank,
     RowMatch, Searchable,
 };
 pub use wire::{
-    deserialize_models, AuthKind, CatalogEntry, CatalogParams, CatalogResult, CatalogView,
-    CreateParams, DeleteParams, DiscoveryFailureKind, GetParams, ModelsRefreshParams,
-    ModelsRefreshResult, ModelsRefreshRow, OAuthStatus, ProviderConfigJson, ProviderGetResult,
-    ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult, RefreshOutcome,
-    SetDefaultParams, TestParams, TestResult, UpdateParams,
+    deserialize_models, deserialize_optional_models, AuthKind, CatalogEntry, CatalogParams,
+    CatalogResult, CatalogView, CreateParams, DeleteParams, DiscoveryFailureKind, GetParams,
+    ModelsRefreshParams, ModelsRefreshResult, ModelsRefreshRow, OAuthStatus, ProviderConfigJson,
+    ProviderGetResult, ProviderHealthResult, ProviderHealthRow, ProviderInfo, ProviderListResult,
+    RefreshOutcome, SetDefaultParams, TestParams, TestResult, UpdateParams,
 };

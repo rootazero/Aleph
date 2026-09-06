@@ -242,7 +242,8 @@ pub async fn handle_ticket_create(
                             "gateway.ticket.create: UNBOUND (redeemer becomes owner)".to_string()
                         }
                     },
-                ));
+                ))
+                .await;
             }
             // Expiration is 5 minutes from now by default; compute client-facing value.
             let ttl_ms = ttl_ms.unwrap_or(5 * 60 * 1000);
@@ -369,7 +370,8 @@ pub async fn handle_ticket_revoke(
                     log.log(crate::security::audit::AuditEntry::authority_change(
                         crate::gateway::caller_identity::current_caller_user(),
                         format!("gateway.ticket.revoke: {ticket_id}"),
-                    ));
+                    ))
+                    .await;
                 }
             }
             JsonRpcResponse::success(

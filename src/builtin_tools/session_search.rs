@@ -30,7 +30,6 @@ use crate::gateway::context::GatewayContext;
 use crate::memory::assembler::envelope::ItemSource;
 use crate::memory::assembler::{AssemblyBudget, WorkingMemoryAssembler};
 use crate::memory::context::FactSource;
-use crate::memory::session_search_summary::dedup::{top_per_session, ScoredCandidate};
 use crate::memory::session_search_summary::synthesizer::SummarySynthesizer;
 use crate::memory::session_search_summary::FactSourceFilter;
 use crate::sync_primitives::Arc;
@@ -87,6 +86,42 @@ pub struct SessionSearchOutput {
     pub query: String,
     pub hits: Vec<SessionSearchHit>,
     pub total_hits: usize,
+}
+
+#[derive(Debug, Clone)]
+struct ScoredCandidate {
+    session_key: String,
+    agent_id: String,
+    fact_path: String,
+    summary_text: String,
+    topic: Option<String>,
+    timestamp: i64,
+    score: f32,
+}
+
+/// Group by `session_key`, keep the top score per group, return at most
+/// `max_sessions` groups ordered by best score (ties broken by `session_key`).
+fn top_per_session(candidates: Vec<ScoredCandidate>, max_sessions: usize) -> Vec<ScoredCandidate> {
+    use std::collections::HashMap;
+    let mut best_per_session: HashMap<String, ScoredCandidate> = HashMap::new();
+    for c in candidates {
+        let key = c.session_key.clone();
+        match best_per_session.get(&key) {
+            Some(prev) if prev.score >= c.score => {}
+            _ => {
+                best_per_session.insert(key, c);
+            }
+        }
+    }
+    let mut survivors: Vec<ScoredCandidate> = best_per_session.into_values().collect();
+    survivors.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.session_key.cmp(&b.session_key))
+    });
+    survivors.truncate(max_sessions);
+    survivors
 }
 
 #[derive(Clone)]

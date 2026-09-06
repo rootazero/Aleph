@@ -2416,13 +2416,50 @@ impl NoteStore for SqliteMemoryBackend {
         agent_id: &str,
         note_paths: &[String],
     ) -> Result<std::collections::HashMap<String, i64>, AlephError> {
-        // Reuse the existing recall-signal aggregator; `signal_count` is the
-        // per-note recall frequency (deduped by query/day/channel).
-        let aggregates = self.aggregate_for_facts(agent_id, note_paths)?;
-        Ok(aggregates
-            .into_iter()
-            .map(|a| (a.note_path, a.signal_count))
-            .collect())
+        // Per-note recall-signal count, deduped by (note_path, query, day, channel).
+        // SQLite's hard limit on bound parameters per statement is 999 — reserve one
+        // slot for the trailing `agent_id` bind appended to each chunk.
+        const SQLITE_MAX_VARS: usize = 999;
+        let mut out = std::collections::HashMap::new();
+        if note_paths.is_empty() {
+            return Ok(out);
+        }
+        let conn = lock_conn!(self)?;
+        for chunk in note_paths.chunks(SQLITE_MAX_VARS - 1) {
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let agent_ph = format!("?{}", chunk.len() + 1);
+            let sql = format!(
+                "SELECT note_path, COUNT(*) AS signal_count \
+                 FROM recall_signals \
+                 WHERE note_path IN ({}) AND agent_id = {agent_ph} \
+                 GROUP BY note_path",
+                placeholders.join(", ")
+            );
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| AlephError::config(format!("recall_hit_counts prepare: {e}")))?;
+            let mut rows = stmt
+                .query(rusqlite::params_from_iter(
+                    chunk
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once(agent_id.to_string())),
+                ))
+                .map_err(|e| AlephError::config(format!("recall_hit_counts query: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .map_err(|e| AlephError::config(format!("recall_hit_counts row: {e}")))?
+            {
+                let note_path: String = row
+                    .get(0)
+                    .map_err(|e| AlephError::config(format!("recall_hit_counts note_path: {e}")))?;
+                let signal_count: i64 = row
+                    .get(1)
+                    .map_err(|e| AlephError::config(format!("recall_hit_counts count: {e}")))?;
+                out.insert(note_path, signal_count);
+            }
+        }
+        Ok(out)
     }
 
     async fn record_recall_hits(

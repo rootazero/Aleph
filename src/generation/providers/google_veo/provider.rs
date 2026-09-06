@@ -73,6 +73,12 @@ impl std::fmt::Debug for GoogleVeoProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for GoogleVeoProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl GoogleVeoProvider {
     /// Create a new Google Veo Provider
     ///

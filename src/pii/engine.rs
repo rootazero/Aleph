@@ -4,15 +4,14 @@ use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
 use crate::config::PiiAction;
 use crate::config::PrivacyConfig;
 use crate::pii::allowlist::PiiAllowlist;
-use crate::pii::rules::PiiRule;
+use crate::pii::rules::{PiiRule, BUILTIN_COUNT};
 use crate::sync_primitives::{Arc, RwLock};
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
-/// Number of built-in rules prepended by [`crate::pii::rules::build_rules`].
-/// Custom rules come after them, so `rules.len() - BUILTIN_RULE_COUNT` is the
-/// number of custom rules that actually compiled.
-const BUILTIN_RULE_COUNT: usize = 7;
+/// Re-exported alias kept for source compatibility — the canonical constant
+/// lives in `crate::pii::rules` so it stays coupled with `build_rules`.
+const BUILTIN_RULE_COUNT: usize = BUILTIN_COUNT;
 
 /// Emit the single operator-facing "partial custom-rule load" summary when
 /// some configured custom patterns failed to compile. Shared by [`PiiEngine::new`]
@@ -21,7 +20,7 @@ const BUILTIN_RULE_COUNT: usize = 7;
 /// after a reload even though boot had warned.
 fn warn_if_partial_custom_load(config: &PrivacyConfig, rules: &[Box<dyn PiiRule>]) {
     let configured_custom = config.custom_rules.len();
-    let loaded_custom = rules.len().saturating_sub(BUILTIN_RULE_COUNT);
+    let loaded_custom = rules.len().saturating_sub(BUILTIN_COUNT);
     if loaded_custom < configured_custom {
         // `build_rules` already warns on each invalid pattern; this summary
         // surfaces a single operator-facing signal so a dashboard / health

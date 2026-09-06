@@ -499,6 +499,11 @@ pub struct SkillManifest {
     emoji: Option<String>,
     /// Trigger hint — describes when this skill should be proactively invoked.
     when_to_use: Option<String>,
+    /// Frontmatter-declared skill version (`version:` key), when the author
+    /// declares one. Free-form string, not semver-enforced — skills are
+    /// distributed as directories, not packages, so there is no resolver to
+    /// feed a parsed version into.
+    version: Option<String>,
     /// Declared scheduled automation (frontmatter `automation:` block).
     automation: Option<AutomationSpec>,
 }
@@ -527,6 +532,7 @@ impl SkillManifest {
             homepage: None,
             emoji: None,
             when_to_use: None,
+            version: None,
             automation: None,
         }
     }
@@ -611,6 +617,12 @@ impl SkillManifest {
         self.when_to_use.as_deref()
     }
 
+    /// The frontmatter-declared skill version, if any.
+    #[must_use]
+    pub fn version(&self) -> Option<&str> {
+        self.version.as_deref()
+    }
+
     /// The declared scheduled automation, if any.
     #[must_use]
     pub const fn automation(&self) -> Option<&AutomationSpec> {
@@ -685,6 +697,11 @@ impl SkillManifest {
     /// Set the `when_to_use` trigger hint.
     pub fn set_when_to_use(&mut self, hint: String) {
         self.when_to_use = Some(hint);
+    }
+
+    /// Set the frontmatter-declared skill version.
+    pub fn set_version(&mut self, version: String) {
+        self.version = Some(version);
     }
 
     /// Set the declared scheduled automation.

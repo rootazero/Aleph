@@ -35,12 +35,17 @@ pub async fn handle_update(
         }
     };
 
-    // Validate max_results
-    if dto.max_results == 0 || dto.max_results > 100 {
+    // Validate max_results against the same ceiling the request side clamps
+    // to (`SearchOptions::validated_max_results`), so a value the Panel can
+    // save is a value a search will actually honour.
+    if dto.max_results == 0 || dto.max_results > crate::search::MAX_SEARCH_RESULTS as u64 {
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            "max_results must be between 1 and 100".to_string(),
+            format!(
+                "max_results must be between 1 and {}",
+                crate::search::MAX_SEARCH_RESULTS
+            ),
         );
     }
 
@@ -199,6 +204,20 @@ pub async fn handle_update(
         crate::pii::PiiEngine::reload(cfg.privacy.clone());
     }
 
+    // `[search]` is a declared-live section, so persisting it is only half
+    // the write: the running `SearchRegistry` the `search` tool reads was
+    // captured at boot and would otherwise keep serving the old backends
+    // under a `{"success": true}`. Run the declaration table's executor and
+    // report the verdict VERIFIED — a process with no live handle (or a
+    // rebuild that could not resolve its secrets) downgrades to `restart`
+    // instead of claiming a swap that did not happen. See
+    // `execution_config::handle_update` for the precedent.
+    let impact = {
+        let cfg = config.read().await;
+        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"]);
+        crate::config::classify_verified("search", &landed)
+    };
+
     // Broadcast config change event
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("search".to_string()),
@@ -207,5 +226,8 @@ pub async fn handle_update(
     });
     let _ = event_bus.publish_gateway_event(&event);
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!({ "success": true, "reload_impact": impact }),
+    )
 }

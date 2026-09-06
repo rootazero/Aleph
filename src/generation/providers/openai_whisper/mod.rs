@@ -75,6 +75,12 @@ impl std::fmt::Debug for OpenAiWhisperProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for OpenAiWhisperProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl OpenAiWhisperProvider {
     /// Construct a new Whisper provider.
     pub fn new<S: Into<String>>(

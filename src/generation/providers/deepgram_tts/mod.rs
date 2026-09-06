@@ -76,6 +76,12 @@ impl std::fmt::Debug for DeepgramTtsProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for DeepgramTtsProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl DeepgramTtsProvider {
     pub fn new<S: Into<String>>(
         api_key: S,

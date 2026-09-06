@@ -1029,15 +1029,19 @@ pub fn create_tool_boxed(
 ) -> Option<Box<dyn AlephToolDyn>> {
     match name {
         "search" => {
-            // The "registry, else bare key, else empty" decision lives in
-            // `SearchRegistry::for_tool` — it used to be written out here and
-            // again in `builder/constructor/mod.rs`, under a comment saying
-            // the two must mirror each other.
-            let registry = crate::search::SearchRegistry::for_tool(
-                config.and_then(|cfg| cfg.search_registry.as_ref()),
-                config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
-            );
-            Some(Box::new(SearchTool::with_registry(registry)))
+            // A live handle wins: the tool then reads every `[search]`
+            // hot-apply off the swap cell. Without one the "bare key, else
+            // empty" decision lives in `SearchRegistry::for_tool` — it used
+            // to be written out here and again in `builder/constructor/mod.rs`,
+            // under a comment saying the two must mirror each other.
+            let tool = match config.and_then(|cfg| cfg.search_handle.as_ref()) {
+                Some(handle) => SearchTool::with_registry_cell(handle.registry_cell()),
+                None => SearchTool::with_registry(crate::search::SearchRegistry::for_tool(
+                    None,
+                    config.and_then(|cfg| cfg.tavily_api_key.as_deref()),
+                )),
+            };
+            Some(Box::new(tool))
         }
         "web_fetch" => Some(Box::new(WebFetchTool::new())),
         "google_meet" => Some(Box::new(
@@ -2612,16 +2616,40 @@ mod tests {
     /// them and puts its winner to the one active-principal predicate, and
     /// `the_model_facing_copy_names_the_same_faces` pins this sentence
     /// verbatim, so the copy and the argument cannot drift apart.
-    /// 2026-09-06 (browser live-view plan-1, task 8): 113_719 -> 114_106 B
-    /// (+387), all `runtime_manage`'s new DESCRIPTION (`runtime_manage` is not
-    /// in `default_core_tools()`, so this catalog line is the whole of what a
+    ///
+    /// ⚠️ **This total is now PLATFORM-CONDITIONAL, and one number guards two
+    /// of them.** Since the Windows-shell round, `bash`'s DESCRIPTION is
+    /// assembled from `#[cfg]`-selected slots (`builtin_tools::bash_exec`), so
+    /// the catalogue sums to a different figure on Windows than on Unix — and
+    /// the run you happen to do only ever exercises the one that compiles for
+    /// you. The other is unmeasured, and the ceiling is flush by design, so
+    /// "green on my machine" is not evidence about it: a Windows-only addition
+    /// that fits here goes red for whoever builds on Linux, and vice versa.
+    /// Measured at the time of writing: `bash` is 4_770 B on Windows and
+    /// 4_740 B on Unix, against the 4_796 B the single string used to cost.
+    ///
+    /// So a future editor touching any `#[cfg]`-conditional description must
+    /// check **both** assemblies, not just the one their `cargo test` builds.
+    /// Without a Windows and a Linux runner to hand, extract the macro bodies
+    /// and sum them for each platform — a text-level count, since the compiler
+    /// only ever hands you one arm. And when raising this ceiling, say which
+    /// platform the new number was measured on: it bounds the max over
+    /// platforms, not the total on yours.
+    ///
+    /// 2026-09-06 (browser live-view plan-1, task 8): +387 B on Unix for
+    /// `runtime_manage`'s new DESCRIPTION (`runtime_manage` is not in
+    /// `default_core_tools()`, so this catalog line is the whole of what a
     /// model reads before deciding whether to fetch its schema — the R8 tool
     /// face of the `runtimes.*` RPC family). First draft measured 569 B; the
     /// action semantics ("list shows what's installed", "install takes a
     /// capability") duplicated the `RuntimeAction` enum's own variant docs
     /// (the same fact twice, 判据 §1) and were cut, landing at 387 — under the
     /// 400 B pruning threshold this plan sets before a raise is accepted.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_106;
+    /// 2026-09-06 merge with origin/main (Windows-shell round): re-measured
+    /// on macOS after the merge at 114_393 B (94_797 catalog + 16_613
+    /// registry-only + 1_039 injected + 1_944 bridge), not derived by
+    /// arithmetic over the two sides' ledgers.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_393;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
@@ -3017,12 +3045,28 @@ mod tests {
     /// believing it had constrained one.
     ///
     /// Set flush against the measurement, as the rule above requires.
-    /// 2026-09-06 (browser live-view plan-1, task 8): 104_302 -> 104_830 B
-    /// (+528), all of it the new `runtime_manage` entry (`RuntimeManageArgs`'s
-    /// `action`/`capability` fields plus the `RuntimeAction` enum's variant
-    /// docs). The guard's own per-tool ledger names it as the only row that
-    /// moved.
-    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 104_830;
+    /// 2026-09-06 (browser live-view plan-1, task 8): +528 B, all of it the
+    /// new `runtime_manage` entry (`RuntimeManageArgs`'s `action`/`capability`
+    /// fields plus the `RuntimeAction` enum's variant docs). The guard's own
+    /// per-tool ledger names it as the only row that moved.
+    ///
+    /// 2026-09-05: +361 B, all of it `search` (2_050 -> 2_411): the
+    /// `queries: Vec<String>` optional parameter and its doc lines
+    /// (multi-query fan-out; mutually exclusive with `query`). Not read off a
+    /// diff — the guard's own per-tool ledger names `search` as the only row
+    /// that moved. Against the three questions: (1) the parameter's
+    /// existence, shape and exclusivity with `query` are runtime facts the
+    /// schema is the only carrier of; (2) unguessable — nothing else on the
+    /// tool face says several questions can ride one call; (3) `search` owns
+    /// the web-search surface, and its prose/schema pinning guard covers the
+    /// new field. The single-query path's schema bytes are unchanged;
+    /// trimming the new doc lines would ship an array parameter the model
+    /// cannot tell from `query`.
+    ///
+    /// 2026-09-06 merge: both deltas stack on the 104_302 base, so the
+    /// ceiling is 104_302 + 528 + 361 = 105_191; re-measured on macOS after
+    /// the merge (the guard prints the total if this drifts).
+    const REGISTRY_SCHEMA_CEILING_BYTES: usize = 105_191;
 
     /// That same measurement, decomposed per tool.
     ///
@@ -3094,7 +3138,7 @@ mod tests {
         ("remember", 1907),
         ("runtime_manage", 528),
         ("scratchpad", 4014),
-        ("search", 2050),
+        ("search", 2411),
         ("self_config", 3553),
         ("self_manage", 328),
         ("session_list", 931),

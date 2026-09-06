@@ -1,5 +1,5 @@
 //! Standalone `AlephHubCatalog` client: HTTP fetch → schema-version check →
-//! injection scan → `into_entry` normalization → cache sync. No SourceProvider
+//! injection scan → `to_entry` normalization → cache sync. No SourceProvider
 //! trait, no in-memory spec map — install resolution is a pure cache lookup of
 //! `ExtensionEntry.install_spec`.
 
@@ -193,7 +193,7 @@ impl AlephHubCatalog {
     }
 
     /// Parse + normalize an artifact body (no network) — schema check,
-    /// structural integrity gate, injection scan (warn-only), `into_entry`, then
+    /// structural integrity gate, injection scan (warn-only), `to_entry`, then
     /// the per-source trust clamp.
     fn ingest(&self, body: &str) -> Result<Ingested, CatalogError> {
         let art: HubCatalogArtifact =
@@ -234,7 +234,7 @@ impl AlephHubCatalog {
             if !findings.is_empty() {
                 tracing::warn!(hub = %self.id, id = %he.id, ?findings, "hub entry injection findings");
             }
-            let mut entry = he.into_entry(&art.manifest.hub_id);
+            let mut entry = he.to_entry(&art.manifest.hub_id);
             entry.trust_tier = entry.trust_tier.clamped_to(self.trust_tier);
             // No wire-declared upstream provenance → label the entry with this
             // source's human name (the Panel renders `via` as `source_label`).

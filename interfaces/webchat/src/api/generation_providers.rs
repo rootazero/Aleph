@@ -1,42 +1,10 @@
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
-use aleph_protocol::providers::GenerationPresetRow;
+pub use aleph_protocol::providers::{
+    GenerationPresetRow, GenerationProviderConfigJson, GenerationProviderRow,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// Default parameters for generation requests (mirrors server-side `GenerationDefaults`)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GenerationDefaults {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voice: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub format: Option<String>,
-    // Image/video fields are passed through but not edited by voice config UI
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub height: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aspect_ratio: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quality: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub n: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration_seconds: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub language: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub guidance_scale: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub steps: Option<u32>,
-}
 
 /// Information about a voice supported by a generation provider
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -47,77 +15,34 @@ pub struct VoiceInfo {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerationProviderConfig {
-    pub provider_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub secret_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-    #[serde(default)]
-    pub models: Vec<String>,
-    pub enabled: bool,
-    pub color: String,
-    pub capabilities: Vec<GenerationType>,
-    pub timeout_seconds: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub edit_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voices_url: Option<String>,
-    #[serde(default)]
-    pub verified: bool,
-    #[serde(default)]
-    pub defaults: GenerationDefaults,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerationProviderEntry {
-    pub name: String,
-    pub config: GenerationProviderConfig,
-    pub is_default_for: Vec<GenerationType>,
-    /// The generation category this provider belongs to (returned by server).
-    /// Falls back to capabilities[0] for backward compatibility.
-    #[serde(default)]
-    pub generation_type: Option<String>,
-    #[serde(default)]
-    pub has_api_key: bool,
-}
-
-/// Custom generation providers rank through the same matcher as the presets.
+/// Panel-side helpers on the shared row type.
 ///
-/// Two lists on one page filtered by one box have to agree about what a query
-/// means, or the box quietly does two different things depending on which half
-/// of the page you are looking at.
-impl aleph_protocol::providers::Searchable for GenerationProviderEntry {
-    fn search_id(&self) -> &str {
-        &self.name
-    }
-    /// A custom provider has no separate display name — the operator's chosen
-    /// name is both. Returning it twice is honest; inventing a second label
-    /// would make the display-name tier fire on rows that have none.
-    fn search_display_name(&self) -> &str {
-        &self.name
-    }
+/// A local trait rather than an inherent `impl`: `GenerationProviderRow` is a
+/// foreign type, so this is the only way to hang the Panel's own
+/// [`GenerationType`] off it. Which is also the point — the wire carries
+/// modality *strings*, and the mapping to this crate's enum happens here, at
+/// the boundary, once.
+pub trait GenerationRowExt {
+    /// The row's modality as this crate's enum, or `None` if the server named
+    /// one this build does not know.
+    fn effective_generation_type(&self) -> Option<GenerationType>;
 }
 
-impl GenerationProviderEntry {
-    /// Get the effective generation type, preferring the server-provided field
-    /// and falling back to capabilities[0] for backward compatibility.
-    #[must_use]
-    pub fn effective_generation_type(&self) -> Option<GenerationType> {
-        if let Some(ref gt) = self.generation_type {
-            match gt.as_str() {
-                "image" => Some(GenerationType::Image),
-                "video" => Some(GenerationType::Video),
-                "audio" => Some(GenerationType::Audio),
-                "speech" => Some(GenerationType::Speech),
-                "transcription" => Some(GenerationType::Transcription),
-                _ => self.config.capabilities.first().copied(),
-            }
-        } else {
-            self.config.capabilities.first().copied()
+impl GenerationRowExt for GenerationProviderRow {
+    fn effective_generation_type(&self) -> Option<GenerationType> {
+        // `effective_modality` is the shared derivation of "server filing
+        // first, capability fallback second" — not repeated here, because the
+        // rule is the same one the server writes to.
+        match self.effective_modality()? {
+            "image" => Some(GenerationType::Image),
+            "video" => Some(GenerationType::Video),
+            "audio" => Some(GenerationType::Audio),
+            "speech" => Some(GenerationType::Speech),
+            "transcription" => Some(GenerationType::Transcription),
+            // A modality only a newer server knows. `None` says "I cannot
+            // place this row", which is honest; guessing a category would file
+            // it under a tab it does not belong to.
+            _ => None,
         }
     }
 }
@@ -131,17 +56,14 @@ pub struct TestConnectionResult {
 pub struct GenerationProvidersApi;
 
 impl GenerationProvidersApi {
-    pub async fn list(state: &DashboardState) -> Result<Vec<GenerationProviderEntry>, String> {
+    pub async fn list(state: &DashboardState) -> Result<Vec<GenerationProviderRow>, String> {
         let result = state
             .rpc_call("generation_providers.list", Value::Null)
             .await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
-    pub async fn get(
-        state: &DashboardState,
-        name: &str,
-    ) -> Result<GenerationProviderEntry, String> {
+    pub async fn get(state: &DashboardState, name: &str) -> Result<GenerationProviderRow, String> {
         let params = serde_json::json!({ "name": name });
         let result = state.rpc_call("generation_providers.get", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
@@ -150,7 +72,7 @@ impl GenerationProvidersApi {
     pub async fn create(
         state: &DashboardState,
         name: &str,
-        config: GenerationProviderConfig,
+        config: GenerationProviderConfigJson,
         generation_type: &str,
     ) -> Result<(), String> {
         let params = serde_json::json!({
@@ -167,7 +89,7 @@ impl GenerationProvidersApi {
     pub async fn update(
         state: &DashboardState,
         name: &str,
-        config: GenerationProviderConfig,
+        config: GenerationProviderConfigJson,
     ) -> Result<(), String> {
         let params = serde_json::json!({
             "name": name,
@@ -202,21 +124,26 @@ impl GenerationProvidersApi {
         Ok(())
     }
 
+    /// Probe the provider's credentials.
+    ///
+    /// Deliberately takes no model: the server's probe
+    /// (`generation::probe_generation_provider`) is credential-and-endpoint
+    /// only and has no model parameter, so the `model` this used to send was
+    /// dropped by serde on arrival — a value collected from the form, put on
+    /// the wire, and read by nobody. A green result says "this key is accepted
+    /// at this endpoint", not "this model works".
     pub async fn test_connection(
         state: &DashboardState,
         provider_type: &str,
         api_key: Option<String>,
         base_url: Option<String>,
-        model: Option<String>,
         name: Option<&str>,
     ) -> Result<TestConnectionResult, String> {
         let params = serde_json::json!({
             "name": name,
             "provider_type": provider_type,
             "api_key": api_key,
-            "secret_name": Option::<String>::None,
             "base_url": base_url,
-            "model": model,
         });
         let result = state.rpc_call("generation_providers.test", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())

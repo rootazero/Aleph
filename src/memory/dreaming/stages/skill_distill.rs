@@ -102,12 +102,44 @@ impl DreamStage for SkillDistillStage {
             .await
             .unwrap_or_default();
 
-            let prompt = build_distill_prompt_with_candidates(
-                &content,
-                "skill",
-                self.max_per_cycle,
-                &candidates,
-                &rejected_feedback,
+            let candidates_block = if candidates.is_empty() {
+                "[]".to_string()
+            } else {
+                let entries: Vec<String> = candidates
+                    .iter()
+                    .map(|(path, sim)| format!("  {{\"id\": \"{path}\", \"similarity\": {sim:.2}}}"))
+                    .collect();
+                format!("[\n{}\n]", entries.join(",\n"))
+            };
+            let rejected_block = super::render_rejected_block(&rejected_feedback);
+            let prompt = format!(
+                "Analyze this synthesis note from the 'skill' category and \
+                 decide whether each insight is:\n\
+                 - a NEW skill (no existing candidate covers it)\n\
+                 - a STRENGTHEN of an existing candidate (same rule, more evidence)\n\
+                 - a SUPERSEDE of an existing candidate (better wording / corrects it)\n\
+                 - a SKIP (transient noise, not actionable)\n\n\
+                 Synthesis:\n{content}\n\n\
+                 Existing skill-note candidates (you MUST reference these IDs verbatim \
+                 if you choose strengthen or supersede):\n\
+                 existing_candidates: {candidates_block}\n\n\
+                 {rejected_block}\
+                 Quality bar: each NEW or SUPERSEDE rule must be a transferable procedure or \
+                 invariant (not a one-off fact); use a kebab-case title; prefer a \
+                 symptom→cause→fix shape; calibrate confidence to evidence strength and set \
+                 severity to real impact (low..critical); STRENGTHEN (don't reword) when the rule \
+                 already exists and you only have more evidence.\n\n\
+                 Emit at most {max_per_cycle} actions in this JSON shape:\n\
+                 ```json\n\
+                 {{\"actions\": [\n\
+                   {{\"type\": \"new\", \"title\": \"kebab-case-name\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
+                   {{\"type\": \"strengthen\", \"existing_note_path\": \"<id from candidates>\", \"source_facts\": [\"...\"]}},\n\
+                   {{\"type\": \"supersede\", \"old_note_path\": \"<id from candidates>\", \"title\": \"...\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
+                   {{\"type\": \"skip\", \"source_fact\": \"...\", \"reason\": \"...\"}}\n\
+                 ]}}\n\
+                 ```\n\
+                 Return `{{\"actions\": []}}` if nothing actionable.",
+                max_per_cycle = self.max_per_cycle,
             );
             let system = "You are a skill distillation engine. Choose the right \
                           DistillAction variant per the schema. Reference candidate \
@@ -256,60 +288,6 @@ impl DreamStage for SkillDistillStage {
     }
 }
 
-/// Build the LLM prompt for skill distillation with code-injected candidates.
-///
-/// `candidates` is the output of `find_similar_notes` (path + cosine similarity).
-/// The prompt instructs the LLM to choose one of four `DistillAction` variants
-/// (`new`/`strengthen`/`supersede`/`skip`) per insight and to reference
-/// candidate IDs verbatim when strengthening or superseding.
-#[must_use]
-pub fn build_distill_prompt_with_candidates(
-    synthesis_text: &str,
-    source_category: &str,
-    max_per_cycle: usize,
-    candidates: &[(String, f32)],
-    rejected: &[(String, String, String)],
-) -> String {
-    let candidates_block = if candidates.is_empty() {
-        "[]".to_string()
-    } else {
-        let entries: Vec<String> = candidates
-            .iter()
-            .map(|(path, sim)| format!("  {{\"id\": \"{path}\", \"similarity\": {sim:.2}}}"))
-            .collect();
-        format!("[\n{}\n]", entries.join(",\n"))
-    };
-    let rejected_block = super::render_rejected_block(rejected);
-    format!(
-        "Analyze this synthesis note from the '{source_category}' category and \
-         decide whether each insight is:\n\
-         - a NEW skill (no existing candidate covers it)\n\
-         - a STRENGTHEN of an existing candidate (same rule, more evidence)\n\
-         - a SUPERSEDE of an existing candidate (better wording / corrects it)\n\
-         - a SKIP (transient noise, not actionable)\n\n\
-         Synthesis:\n{synthesis_text}\n\n\
-         Existing skill-note candidates (you MUST reference these IDs verbatim \
-         if you choose strengthen or supersede):\n\
-         existing_candidates: {candidates_block}\n\n\
-         {rejected_block}\
-         Quality bar: each NEW or SUPERSEDE rule must be a transferable procedure or \
-         invariant (not a one-off fact); use a kebab-case title; prefer a \
-         symptom→cause→fix shape; calibrate confidence to evidence strength and set \
-         severity to real impact (low..critical); STRENGTHEN (don't reword) when the rule \
-         already exists and you only have more evidence.\n\n\
-         Emit at most {max_per_cycle} actions in this JSON shape:\n\
-         ```json\n\
-         {{\"actions\": [\n\
-           {{\"type\": \"new\", \"title\": \"kebab-case-name\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
-           {{\"type\": \"strengthen\", \"existing_note_path\": \"<id from candidates>\", \"source_facts\": [\"...\"]}},\n\
-           {{\"type\": \"supersede\", \"old_note_path\": \"<id from candidates>\", \"title\": \"...\", \"rule\": \"...\", \"confidence\": 0.0-1.0, \"severity\": \"low|med|high|critical\", \"source_facts\": [\"...\"]}},\n\
-           {{\"type\": \"skip\", \"source_fact\": \"...\", \"reason\": \"...\"}}\n\
-         ]}}\n\
-         ```\n\
-         Return `{{\"actions\": []}}` if nothing actionable."
-    )
-}
-
 #[derive(serde::Deserialize)]
 struct DistillResponse {
     actions: Vec<DistillAction>,
@@ -381,99 +359,6 @@ mod tests {
     #[test]
     fn stage_default_uses_config_default_cap() {
         assert_eq!(SkillDistillStage::default().max_per_cycle, 3);
-    }
-
-    #[test]
-    fn build_distill_prompt_includes_quality_bar() {
-        let prompt = build_distill_prompt_with_candidates(
-            "synthesis text",
-            "skill",
-            5,
-            &[("skill/async-error-handling".to_string(), 0.71)],
-            &[],
-        );
-        assert!(
-            prompt.contains("Quality bar:"),
-            "prompt must teach the skill-note quality bar:\n{prompt}"
-        );
-        // existing contract preserved
-        assert!(prompt.contains("existing_candidates"));
-        assert!(prompt.contains("strengthen") && prompt.contains("supersede"));
-        // No rejected feedback → no rejected block (byte-compatible baseline).
-        assert!(!prompt.contains("Previously REJECTED"));
-    }
-
-    #[test]
-    fn build_distill_prompt_includes_rejected_feedback() {
-        let prompt = build_distill_prompt_with_candidates(
-            "synthesis text",
-            "skill",
-            5,
-            &[("skill/async-error-handling".to_string(), 0.71)],
-            &[(
-                "skill/retry-policy".to_string(),
-                "retry-with-jitter".to_string(),
-                "recall-evidence gate: confidence 0.40 does not beat support 0.60".to_string(),
-            )],
-        );
-        assert!(
-            prompt.contains("Previously REJECTED"),
-            "prompt must replay rejected edits as negative feedback:\n{prompt}"
-        );
-        assert!(
-            prompt.contains("skill/retry-policy"),
-            "must name the rejected target"
-        );
-        assert!(
-            prompt.contains("retry-with-jitter"),
-            "must include the proposed title (summary)"
-        );
-    }
-
-    #[test]
-    fn build_distill_prompt_with_candidates_includes_existing_block() {
-        let candidates = vec![
-            ("skill/async-error-handling".to_string(), 0.92_f32),
-            ("skill/borrow-fights".to_string(), 0.88),
-        ];
-        let prompt = build_distill_prompt_with_candidates(
-            "Synthesis: borrow checker fights are common",
-            "skill",
-            3,
-            &candidates,
-            &[],
-        );
-        assert!(
-            prompt.contains("existing_candidates"),
-            "prompt must include candidates block:\n{prompt}"
-        );
-        assert!(
-            prompt.contains("skill/async-error-handling"),
-            "must list candidate IDs:\n{prompt}"
-        );
-        assert!(
-            prompt.contains("strengthen"),
-            "prompt must teach LLM about strengthen action"
-        );
-        assert!(
-            prompt.contains("supersede"),
-            "prompt must teach LLM about supersede action"
-        );
-        assert!(
-            prompt.contains("\"new\"") || prompt.contains("\"type\": \"new\""),
-            "prompt must teach about new"
-        );
-        assert!(
-            prompt.contains("\"skip\"") || prompt.contains("\"type\": \"skip\""),
-            "prompt must teach about skip"
-        );
-    }
-
-    #[test]
-    fn build_distill_prompt_with_no_candidates_still_works() {
-        let prompt = build_distill_prompt_with_candidates("text", "skill", 3, &[], &[]);
-        assert!(prompt.contains("existing_candidates"));
-        assert!(prompt.contains("[]") || prompt.contains("(none)"));
     }
 
     #[test]

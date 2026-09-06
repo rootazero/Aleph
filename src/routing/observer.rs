@@ -135,7 +135,7 @@ impl TraceSink for OutcomeObserver {
                 | crate::pricing::CostStatus::PartialMissingPrice => Some(est.usd),
                 crate::pricing::CostStatus::Unknown => None,
             };
-            if let Some(task_emb) = self.attribution.task_emb.get().cloned() {
+            if let Some(task_emb) = self.attribution.task_emb() {
                 match self.record_slots.clone().try_acquire_owned() {
                     Ok(permit) => {
                         tracing::debug!(
@@ -143,6 +143,8 @@ impl TraceSink for OutcomeObserver {
                             model = %self.model_id,
                             "recording routing experience"
                         );
+                        // task_emb() returns &[f32]; record_to_store owns the
+                        // vector so it can move it across spawn_blocking.
                         let record = Self::record_to_store(
                             // rust-doctor-disable-next-line excessive-clone
                             self.store.clone(),
@@ -152,7 +154,7 @@ impl TraceSink for OutcomeObserver {
                             self.model_id.clone(),
                             // rust-doctor-disable-next-line excessive-clone
                             self.provider_id.clone(),
-                            task_emb,
+                            task_emb.to_vec(),
                             outcome,
                         );
                         tokio::spawn(async move {

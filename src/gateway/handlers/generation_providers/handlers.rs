@@ -1,21 +1,25 @@
 use crate::config::types::generation::presets::{generation_metadata, PRESETS};
-use crate::config::types::generation::GenerationProviderConfig;
 use crate::config::Config;
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::handlers::generation_providers::helpers::{
-    find_provider_type, get_typed_provider_map, get_typed_provider_map_mut, parse_generation_type,
-    provider_exists,
+    default_modalities, find_provider_type, get_typed_provider_map, get_typed_provider_map_mut,
+    parse_generation_type, provider_exists,
+};
+use crate::gateway::handlers::generation_providers::wire::{
+    config_from_wire, modality_str, provider_row,
 };
 use crate::gateway::handlers::generation_providers::{
     build_generation_provider_for_persistence, resolve_api_key, save_config, vault_key,
-    GenerationProviderEntry, TestConnectionResult,
+    TestConnectionResult,
 };
 use crate::gateway::handlers::parse_params;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
 use crate::generation::GenerationType;
 use crate::sync_primitives::Arc;
-use aleph_protocol::providers::GenerationPresetRow;
+use aleph_protocol::providers::{
+    GenerationPresetRow, GenerationProviderConfigJson, GenerationProviderRow,
+};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
@@ -28,38 +32,17 @@ pub async fn handle_list(
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
-    let mut providers: Vec<(GenerationProviderEntry, GenerationType, bool)> = cfg
+    let mut rows: Vec<GenerationProviderRow> = cfg
         .generation
         .merged_providers()
         .into_iter()
         .map(|(name, provider_config, gen_type)| {
-            // Check which generation types this provider is default for
-            let mut is_default_for = Vec::new();
-            if cfg.generation.default_image_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Image);
-            }
-            if cfg.generation.default_video_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Video);
-            }
-            if cfg.generation.default_audio_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Audio);
-            }
-            if cfg.generation.default_speech_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Speech);
-            }
-            if cfg.generation.default_transcription_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Transcription);
-            }
-
+            let is_default_for = default_modalities(&cfg.generation, &name);
             let has_api_key = resolve_api_key(&name, &vault).is_some();
-            let mut cfg_clone = provider_config;
-            cfg_clone.api_key = None;
-            (
-                GenerationProviderEntry {
-                    name,
-                    config: cfg_clone,
-                    is_default_for,
-                },
+            provider_row(
+                name,
+                &provider_config,
+                &is_default_for,
                 gen_type,
                 has_api_key,
             )
@@ -67,25 +50,16 @@ pub async fn handle_list(
         .collect();
 
     // Sort by name for consistent ordering
-    providers.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Serialize and inject has_api_key and generation_type field
-    let json_arr: Vec<serde_json::Value> = providers
-        .iter()
-        .map(|(entry, gen_type, has_api_key)| {
-            let mut val = serde_json::to_value(entry).unwrap_or_default();
-            if let Some(obj) = val.as_object_mut() {
-                obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
-                obj.insert(
-                    "generation_type".into(),
-                    serde_json::Value::String(format!("{gen_type:?}").to_lowercase()),
-                );
-            }
-            val
-        })
-        .collect();
-
-    JsonRpcResponse::success(request.id, serde_json::json!(json_arr))
+    match serde_json::to_value(&rows) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize providers: {e}"),
+        ),
+    }
 }
 
 /// Get a specific generation provider
@@ -115,43 +89,23 @@ pub async fn handle_get(
 
     match found {
         Some((name, provider_config, gen_type)) => {
-            // Check which generation types this provider is default for
-            let mut is_default_for = Vec::new();
-            if cfg.generation.default_image_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Image);
-            }
-            if cfg.generation.default_video_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Video);
-            }
-            if cfg.generation.default_audio_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Audio);
-            }
-            if cfg.generation.default_speech_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Speech);
-            }
-            if cfg.generation.default_transcription_provider.as_deref() == Some(name.as_str()) {
-                is_default_for.push(GenerationType::Transcription);
-            }
-
+            let is_default_for = default_modalities(&cfg.generation, &name);
             let has_api_key = resolve_api_key(&name, &vault).is_some();
-            let mut cfg_clone = provider_config;
-            cfg_clone.api_key = None;
-            let entry = GenerationProviderEntry {
+            let row = provider_row(
                 name,
-                config: cfg_clone,
-                is_default_for,
-            };
-
-            // Serialize and inject has_api_key and generation_type field
-            let mut val = serde_json::to_value(entry).unwrap_or_default();
-            if let Some(obj) = val.as_object_mut() {
-                obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
-                obj.insert(
-                    "generation_type".into(),
-                    serde_json::Value::String(format!("{gen_type:?}").to_lowercase()),
-                );
+                &provider_config,
+                &is_default_for,
+                gen_type,
+                has_api_key,
+            );
+            match serde_json::to_value(&row) {
+                Ok(v) => JsonRpcResponse::success(request.id, v),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize provider: {e}"),
+                ),
             }
-            JsonRpcResponse::success(request.id, val)
         }
         None => JsonRpcResponse::error(
             request.id,
@@ -171,7 +125,7 @@ pub async fn handle_create(
     #[derive(Deserialize)]
     struct Params {
         name: String,
-        config: GenerationProviderConfig,
+        config: GenerationProviderConfigJson,
         #[serde(default)]
         generation_type: Option<String>,
     }
@@ -180,20 +134,13 @@ pub async fn handle_create(
         Ok(p) => p,
         Err(e) => return e,
     };
+    let incoming = config_from_wire(params.config);
 
     // Determine generation type from explicit param or capabilities
     let gen_type_str = params
         .generation_type
         .as_deref()
-        .or_else(|| {
-            params.config.capabilities.first().map(|g| match g {
-                GenerationType::Image => "image",
-                GenerationType::Video => "video",
-                GenerationType::Speech => "speech",
-                GenerationType::Audio => "audio",
-                GenerationType::Transcription => "transcription",
-            })
-        })
+        .or_else(|| incoming.capabilities.first().copied().map(modality_str))
         .unwrap_or("image");
     let gen_type = parse_generation_type(gen_type_str);
 
@@ -211,8 +158,10 @@ pub async fn handle_create(
 
         let mut provider_config = build_generation_provider_for_persistence(
             &params.name,
-            params.config,
+            incoming,
             &cfg.presets_override.generation,
+            // Create: nothing stored yet, so there is nothing to preserve.
+            None,
         );
 
         // Set capabilities from generation type
@@ -274,13 +223,14 @@ pub async fn handle_update(
     #[derive(Deserialize)]
     struct Params {
         name: String,
-        config: GenerationProviderConfig,
+        config: GenerationProviderConfigJson,
     }
 
     let params: Params = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
+    let incoming = config_from_wire(params.config);
 
     {
         let mut cfg = config.write().await;
@@ -297,10 +247,17 @@ pub async fn handle_update(
             }
         };
 
+        // The stored entry, read before the mutable borrow. Everything the
+        // wire type cannot express lives only here.
+        let prior = get_typed_provider_map(&cfg.generation, &gen_type_str)
+            .get(&params.name)
+            .cloned();
+
         let mut provider_config = build_generation_provider_for_persistence(
             &params.name,
-            params.config,
+            incoming,
             &cfg.presets_override.generation,
+            prior.as_ref(),
         );
 
         // Preserve capabilities from the typed map

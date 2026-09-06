@@ -24,6 +24,13 @@ pub(crate) struct HubCatalogArtifact {
 pub(crate) struct HubCatalogManifest {
     pub schema_version: u32,
     pub hub_id: String,
+    /// The publisher's own display name for its hub. Parsed to record the wire
+    /// shape and DELIBERATELY not read: the label a source is shown under comes
+    /// from local config (`catalog_client` uses `self.name` for `via`), the
+    /// same posture as `trust_tier` being clamped to the locally configured
+    /// tier and `requires_config` being recomputed. A hostile publisher does
+    /// not get to name itself in this operator's UI.
+    #[allow(dead_code)]
     pub name: String,
     /// Publish timestamp, surfaced as catalog freshness in the sync report.
     #[serde(default)]
@@ -60,6 +67,11 @@ pub(crate) struct HubCatalogEntry {
     /// `Option` only to tolerate a malformed artifact without a hard parse error.
     pub repo_url: Option<String>,
     pub trust_tier: TrustTier,
+    /// Wire-declared, DELIBERATELY not read. `HubCatalogEntry::to_entry`
+    /// recomputes it from `install_spec` so a hostile publisher cannot lie
+    /// about whether a key prompt is needed. Kept as a field so the wire shape
+    /// stays documented — and annotated so the next reader "fixes" nothing.
+    #[allow(dead_code)]
     #[serde(default)]
     pub requires_config: bool,
     #[serde(default)]
@@ -181,8 +193,11 @@ fn validate_config_schema(schema: &serde_json::Value) -> Result<(), String> {
 impl HubCatalogEntry {
     /// Project the objective wire record into the cache's `ExtensionEntry`,
     /// stamping the source id and zeroing per-user state.
+    ///
+    /// `to_`, not `into_`: it borrows and clones. The old name promised a
+    /// by-value conversion it never performed.
     #[must_use]
-    pub fn into_entry(&self, hub_id: &str) -> ExtensionEntry {
+    pub fn to_entry(&self, hub_id: &str) -> ExtensionEntry {
         ExtensionEntry {
             id: self.id.clone(),
             kind: self.kind,
@@ -286,7 +301,7 @@ mod tests {
         let art: HubCatalogArtifact = serde_json::from_str(FIXTURE).unwrap();
         assert_eq!(art.manifest.schema_version, 1);
         assert_eq!(art.manifest.hub_id, "aleph-hub");
-        let e = art.entries[0].into_entry(&art.manifest.hub_id);
+        let e = art.entries[0].to_entry(&art.manifest.hub_id);
         assert_eq!(e.source_id, "aleph-hub");
         assert_eq!(e.kind, ExtensionKind::Mcp);
         assert_eq!(e.trust_tier, TrustTier::Verified);

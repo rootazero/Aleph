@@ -70,7 +70,7 @@ impl FirecrawlProvider {
     pub fn new(
         api_key: impl Into<String>,
         base_url: Option<String>,
-        allow_private_upstream: bool,
+        allow_private_network: bool,
     ) -> Result<Self> {
         let api_key: String = api_key.into();
         if api_key.is_empty() {
@@ -88,18 +88,19 @@ impl FirecrawlProvider {
             ));
         }
 
-        // Refuse IP-literal / blocked-hostname upstreams unless the operator
-        // opted this backend in — see the matching guard in
-        // `SearxngProvider::new`. The default (`api.firecrawl.dev`) is a
-        // public hostname, so this rejects only operator overrides pointing
-        // at internal infrastructure, and the opt-in is how a self-hosted
-        // Firecrawl says so.
+        // Refuse IP-literal / blocked-hostname upstreams — same guard and
+        // same operator switch as `SearxngProvider::new`. The default
+        // (`api.firecrawl.dev`) is a public hostname so this rejects only
+        // operator overrides pointing at internal infrastructure; an
+        // operator running a self-hosted Firecrawl on the LAN opts in via
+        // `[ssrf] allow_private_network = true`, and cloud metadata endpoints
+        // stay refused regardless.
         if let Ok(parsed) = url::Url::parse(&trimmed) {
             if let Some(host) = parsed.host_str() {
                 crate::search::providers::base::reject_ssrf_target_host(
                     "Firecrawl",
                     host,
-                    allow_private_upstream,
+                    allow_private_network,
                 )?;
             }
         }
@@ -199,17 +200,14 @@ impl crate::search::ProviderFactory for FirecrawlFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
+        allow_private_network: bool,
     ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
     {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
             log::warn!("search backend '{name}' ({NAME}) skipped: no api_key in vault");
             return Ok(None);
         };
-        match FirecrawlProvider::new(
-            key.to_string(),
-            backend.base_url.clone(),
-            backend.allow_private_upstream,
-        ) {
+        match FirecrawlProvider::new(key.to_string(), backend.base_url.clone(), allow_private_network) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
                 log::warn!("search backend '{name}' ({NAME}) construct failed: {e}");
@@ -225,7 +223,8 @@ mod tests {
 
     #[test]
     fn firecrawl_provider_creation_defaults_to_cloud() {
-        let provider = FirecrawlProvider::new("fc-test-key".to_string(), None, false).unwrap();
+        let provider =
+            FirecrawlProvider::new("fc-test-key".to_string(), None, false).unwrap();
         assert_eq!(provider.name(), "firecrawl");
         assert!(provider.is_available());
         assert_eq!(provider.base_url, "https://api.firecrawl.dev");
@@ -243,20 +242,43 @@ mod tests {
         // so this is the opted-in shape.
         let provider = FirecrawlProvider::new(
             "fc-k".to_string(),
-            Some("http://localhost:3002/".to_string()),
-            true,
+            // `firecrawl.test`, not `localhost`: the constructor refuses
+            // loopback/blocked hosts as SSRF targets.
+            Some("http://firecrawl.test:3002/".to_string()),
+            false,
         )
         .unwrap();
-        assert_eq!(provider.base_url, "http://localhost:3002");
+        assert_eq!(provider.base_url, "http://firecrawl.test:3002");
+    }
+
+    /// The switch reaches the guard here too: a self-hosted Firecrawl on
+    /// loopback is refused by default and admitted under the operator's
+    /// `[ssrf] allow_private_network = true`, while cloud metadata stays
+    /// refused either way.
+    #[test]
+    fn firecrawl_constructor_honours_the_private_network_switch() {
+        let loopback = || {
+            FirecrawlProvider::new("fc-k".to_string(), Some("http://127.0.0.1:3002".to_string()), false)
+        };
+        assert!(loopback().is_err(), "loopback refused by default");
+        let allowed = FirecrawlProvider::new(
+            "fc-k".to_string(),
+            Some("http://127.0.0.1:3002".to_string()),
+            true,
+        );
+        assert!(allowed.is_ok(), "loopback allowed under the operator switch");
+        let metadata = FirecrawlProvider::new(
+            "fc-k".to_string(),
+            Some("http://169.254.169.254/".to_string()),
+            true,
+        );
+        assert!(metadata.is_err(), "cloud metadata refused under every policy");
     }
 
     #[test]
     fn firecrawl_provider_rejects_bad_scheme() {
-        let result = FirecrawlProvider::new(
-            "fc-k".to_string(),
-            Some("ftp://example.com".to_string()),
-            false,
-        );
+        let result =
+            FirecrawlProvider::new("fc-k".to_string(), Some("ftp://example.com".to_string()), false);
         assert!(result.is_err());
     }
 

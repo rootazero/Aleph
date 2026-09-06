@@ -19,7 +19,9 @@ use super::constants::DEFAULT_TIMEOUT_SECS;
 ///
 /// # Example
 ///
-/// ```rust
+/// Crate-internal: reached through `create_provider`, never from outside
+/// the crate, so this example is illustrative and not compiled.
+/// ```rust,ignore
 /// use alephcore::generation::providers::ReplicateProvider;
 /// use alephcore::generation::GenerationType;
 ///
@@ -36,6 +38,10 @@ pub(crate) struct ReplicateProviderBuilder {
     pub(crate) endpoint: String,
     pub(crate) model_mappings: HashMap<String, String>,
     pub(crate) supported_types: Vec<GenerationType>,
+    /// Per-request cap for the HTTP client. Defaults to this module's
+    /// `DEFAULT_TIMEOUT_SECS`; the factory overrides it with the provider's
+    /// `timeout_seconds` config knob.
+    pub(crate) timeout_secs: u64,
 }
 
 impl ReplicateProviderBuilder {
@@ -46,7 +52,19 @@ impl ReplicateProviderBuilder {
             endpoint: DEFAULT_ENDPOINT.to_string(),
             model_mappings: HashMap::new(),
             supported_types: vec![GenerationType::Image, GenerationType::Audio],
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
         }
+    }
+
+    /// Set the per-request HTTP timeout.
+    #[must_use]
+    pub const fn timeout_secs(mut self, secs: Option<u64>) -> Self {
+        // `None` = unconfigured. Keep the default this builder chose; the
+        // config field cannot express "unset" any other way.
+        if let Some(secs) = secs {
+            self.timeout_secs = secs;
+        }
+        self
     }
 
     /// Set a custom API endpoint
@@ -78,7 +96,7 @@ impl ReplicateProviderBuilder {
     #[must_use]
     pub fn build(self) -> ReplicateProvider {
         let client = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
             .build()
             .unwrap_or_default();
 

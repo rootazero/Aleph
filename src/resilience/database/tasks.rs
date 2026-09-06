@@ -178,60 +178,63 @@ impl StateDatabase {
                 .transaction()
                 .map_err(|e| AlephError::config(format!("Failed to begin transaction: {e}")))?;
 
-            let result = (|| -> rusqlite::Result<usize> {
-                let updated = tx.execute(
+            // Run the main status UPDATE first. Bail out with the not-found
+            // error BEFORE the side executes fire — otherwise a typo'd
+            // task_id would still write `started_at` / `completed_at`
+            // UPDATE records into the WAL (matching zero rows but still
+            // costing a savepoint + log entry per side execute), only to
+            // roll everything back via `tx` drop on the error path. The
+            // 0-check belongs next to the main UPDATE; everything else is
+            // gated on that.
+            let updated = tx
+                .execute(
                     r#"
                     UPDATE agent_tasks
                     SET status = ?1, updated_at = ?2
                     WHERE id = ?3
                     "#,
                     params![status.to_string(), now, task_id],
-                )?;
+                )
+                .map_err(|e| AlephError::config(format!("Failed to update task status: {e}")))?;
 
-                // Update started_at for Running status
-                if status == TaskStatus::Running {
-                    tx.execute(
-                        "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
-                        params![now, task_id],
-                    )?;
-                }
-
-                // Update completed_at for terminal states only when currently
-                // NULL — preserves the originally-recorded completion time on
-                // idempotent re-applies of the same terminal status.
-                if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
-                    tx.execute(
-                        "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
-                        params![now, task_id],
-                    )?;
-                }
-
-                Ok(updated)
-            })();
-
-            match result {
-                Ok(updated) => {
-                    if updated == 0 {
-                        // Surface a typed error so callers can distinguish
-                        // "task vanished" from "infrastructure broke". The
-                        // transaction is still committed (no writes happened)
-                        // so dropping it here is the correct rollback path.
-                        return Err(AlephError::config(format!(
-                            "update_task_status: task_id {task_id:?} not found (or already in status {status:?})"
-                        )));
-                    }
-                    tx.commit().map_err(|e| {
-                        AlephError::config(format!("Failed to commit transaction: {e}"))
-                    })?;
-                    Ok(())
-                }
-                Err(e) => {
-                    drop(tx); // implicit rollback on uncommitted transaction drop
-                    Err(AlephError::config(format!(
-                        "Failed to update task status: {e}"
-                    )))
-                }
+            if updated == 0 {
+                // Surface a typed error so callers can distinguish
+                // "task vanished" from "infrastructure broke". Dropping
+                // the uncommitted `tx` here is the correct rollback path —
+                // no rows were touched, and we never paid the cost of the
+                // side executes below.
+                return Err(AlephError::config(format!(
+                    "update_task_status: task_id {task_id:?} not found (or already in status {status:?})"
+                )));
             }
+
+            // Update started_at for Running status
+            if status == TaskStatus::Running {
+                tx.execute(
+                    "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
+                    params![now, task_id],
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to update started_at: {e}"))
+                })?;
+            }
+
+            // Update completed_at for terminal states only when currently
+            // NULL — preserves the originally-recorded completion time on
+            // idempotent re-applies of the same terminal status.
+            if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
+                tx.execute(
+                    "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
+                    params![now, task_id],
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to update completed_at: {e}"))
+                })?;
+            }
+
+            tx.commit()
+                .map_err(|e| AlephError::config(format!("Failed to commit transaction: {e}")))?;
+            Ok(())
         })
         .await
     }
@@ -306,7 +309,11 @@ impl StateDatabase {
     pub async fn mark_running_as_interrupted(&self) -> Result<u64, AlephError> {
         let now = chrono::Utc::now().timestamp();
         self.with_conn(move |conn| {
-            let count = conn
+            // `Connection::execute` returns `Result<usize>` (rows changed),
+            // not i64. Cast to i64 via try_from so an unexpected
+            // `usize > i64::MAX` (impossible per SQLite's row-count cap)
+            // is surfaced as a typed error rather than a silent truncation.
+            let count: usize = conn
                 .execute(
                     r#"
                     UPDATE agent_tasks
@@ -316,7 +323,12 @@ impl StateDatabase {
                     params![now],
                 )
                 .map_err(|e| AlephError::config(format!("Failed to mark tasks: {e}")))?;
-            Ok(count as u64)
+            let count_i64 = i64::try_from(count).map_err(|_| {
+                AlephError::config(format!(
+                    "mark_running_as_interrupted: row count {count} exceeds i64::MAX"
+                ))
+            })?;
+            super::i64_to_u64_count(count_i64, "marked_tasks")
         })
         .await
     }

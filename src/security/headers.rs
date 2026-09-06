@@ -44,6 +44,29 @@ fn is_static_asset(path: &str) -> bool {
     extensions.iter().any(|ext| path.ends_with(ext))
 }
 
+/// Returns true if the CSP string contains a standalone `*` source on any
+/// directive (the canonical `default-src *;` or `script-src *` form).
+///
+/// A CSP like `default-src *;frame-ancestors 'none'` was missed by the
+/// previous substring detector that only matched `"* "`, `" *;"`, or a
+/// trailing `" *"` — the asterisk directly followed by `;` is the most
+/// natural spelling a careless refactor produces. Tokenize on whitespace
+/// and treat the source list as the segment between a directive name and
+/// the next `;`.
+fn csp_contains_wildcard_source(csp: &str) -> bool {
+    let mut source_iter = csp.split(';');
+    source_iter.any(|directive| {
+        // Drop the directive name and inspect only the source list, so a
+        // legitimate `frame-ancestors *` (already a permissive policy) is
+        // flagged via this same helper. Quoted `'none'` is not a wildcard.
+        let mut tokens = directive.split_whitespace();
+        match tokens.next() {
+            Some(_) => tokens.any(|tok| tok == "*"),
+            None => false,
+        }
+    })
+}
+
 // --- Layer -----------------------------------------------------------------
 
 /// Tower layer that adds HTTP security headers to every response.
@@ -133,12 +156,18 @@ fn inject_security_headers(headers: &mut http::HeaderMap, is_static: bool) {
         // than silently. The two tells: a `default-src *` (or `*` anywhere)
         // and missing `frame-ancestors`.
         if let Ok(s) = existing.to_str() {
-            let suspicious = s.contains("* ") || s.contains(" *;") || s.ends_with(" *");
+            // `csp_contains_wildcard_source` covers the common careless
+            // spellings of a permissive policy: a bare `*` token (e.g.
+            // `default-src *;frame-ancestors 'none'`) was missed by the
+            // previous substring detector that only matched `"* "`, `" *;"`,
+            // or trailing `" *"`. Tokenize on whitespace and look for any
+            // directive whose source list contains the `*` source.
+            let suspicious_wildcard = csp_contains_wildcard_source(s);
             let missing_frame_ancestors = !s.contains("frame-ancestors");
-            if suspicious || missing_frame_ancestors {
+            if suspicious_wildcard || missing_frame_ancestors {
                 tracing::warn!(
                     csp = %s,
-                    suspicious_wildcard = suspicious,
+                    suspicious_wildcard = suspicious_wildcard,
                     missing_frame_ancestors = missing_frame_ancestors,
                     "handler-supplied CSP observed; verify it is at least as restrictive as the layer default"
                 );
@@ -315,5 +344,34 @@ mod tests {
             headers.contains_key("content-security-policy"),
             "CSP header should be present on static assets"
         );
+    }
+
+    /// Regression for `severed-wire-2026-09-05-modules2 security I-1`: the
+    /// wildcard detector used to miss the `default-src *;frame-ancestors
+    /// 'none'` shape (asterisk directly followed by `;`). Tokenizing on
+    /// whitespace + `;` covers every natural spelling.
+    #[test]
+    fn csp_contains_wildcard_source_catches_careless_permissive_spellings() {
+        // The exact case the previous detector missed.
+        assert!(csp_contains_wildcard_source(
+            "default-src *;frame-ancestors 'none'"
+        ));
+        // The spellings the previous detector caught still trip.
+        assert!(csp_contains_wildcard_source("default-src *"));
+        assert!(csp_contains_wildcard_source(
+            "default-src 'self' *;script-src 'self'"
+        ));
+        assert!(csp_contains_wildcard_source(
+            "default-src 'self' *"
+        ));
+        // Strict policies must NOT trip.
+        assert!(!csp_contains_wildcard_source(
+            "default-src 'self';script-src 'self';frame-ancestors 'none'"
+        ));
+        // `'unsafe-inline'` / `'none'` quoted sources must not trip the
+        // wildcard rule.
+        assert!(!csp_contains_wildcard_source(
+            "default-src 'none'; script-src 'unsafe-inline'"
+        ));
     }
 }

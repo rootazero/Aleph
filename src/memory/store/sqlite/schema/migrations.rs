@@ -27,7 +27,7 @@ pub fn migrate_recall_signals_note_path(conn: &Connection) -> Result<(), AlephEr
 /// Add the `agent_id` scope column to `recall_signals` for existing databases.
 ///
 /// The table pre-dates per-agent recall scoping; without it, the aggregate
-/// reads (`aggregate_for_facts` / `recall_signals_last_hit` / `co_recall_pairs`)
+/// reads (`recall_signals_last_hit` / `recall_hit_counts` / `co_recall_pairs`)
 /// mixed recall signals across every agent sharing the single `memory.db`, so
 /// two agents holding a note at the same relative path polluted each other's
 /// hot-surfacing counts. New rows carry the recording agent; existing rows are

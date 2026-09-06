@@ -558,6 +558,7 @@ fn build_guardrail_registry(
     // into the guard so they take effect alongside the built-in detectors.
     let guard_config = alephcore::security::SecurityGuardConfig {
         custom_leak_patterns: config.secrets_config.custom_leak_patterns.clone(),
+        audit_block_on_full: config.security.audit_block_on_full,
         ..Default::default()
     };
     let (guard, audit_rx) = alephcore::security::RuntimeSecurityGuard::new_with_audit(guard_config);
@@ -566,7 +567,11 @@ fn build_guardrail_registry(
     // Drain audit events to the security_audit_log table.
     // Holds an Arc<SecurityStore> for the task's lifetime. Task exits on
     // channel close (server shutdown drops the orchestrator → its sender).
-    let _drain_handle = alephcore::security::spawn_audit_drain(audit_rx, security_store);
+    let _drain_handle = alephcore::security::spawn_audit_drain(
+        audit_rx,
+        security_store,
+        guard.audit_dropped_counter(),
+    );
     // Handle deliberately not awaited; task lives for the server process lifetime.
 
     let pii = Arc::new(

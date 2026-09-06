@@ -246,11 +246,16 @@ pub fn select_best_install<'a>(
 /// commands behave as written. Fall back to `cmd /C`, which is always present.
 /// `sh` does not exist on Windows by default, so it must never be the Windows
 /// shell. On Unix, use `sh -c`.
+///
+/// Deliberately [`crate::utils::shell::pwsh`] and not
+/// [`powershell_host`](crate::utils::shell::powershell_host): the reason above
+/// is a reason against 5.1, so this site must skip it rather than inherit the
+/// general shell ladder.
 fn build_shell_command(cmd_str: &str) -> tokio::process::Command {
     #[cfg(windows)]
     {
-        if which::which("pwsh").is_ok() {
-            let mut c = tokio::process::Command::new("pwsh");
+        if let Some(pwsh) = crate::utils::shell::pwsh() {
+            let mut c = tokio::process::Command::new(&pwsh.program);
             c.arg("-NoProfile").arg("-Command").arg(cmd_str);
             return c;
         }

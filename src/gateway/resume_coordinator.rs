@@ -653,10 +653,7 @@ impl ResumeCoordinator {
     /// touch a log.
     fn is_running(&self, session_id: &SessionId) -> bool {
         let key = session_id.to_key_string();
-        self.execution_adapter
-            .running_sessions()
-            .iter()
-            .any(|k| *k == key)
+        self.execution_adapter.running_sessions().contains(&key)
     }
 
     fn try_claim_resume(&self, session_id: &SessionId) -> Option<ResumeSlot<'_>> {

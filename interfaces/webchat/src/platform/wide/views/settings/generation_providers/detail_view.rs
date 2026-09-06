@@ -5,7 +5,8 @@ use leptos::task::spawn_local;
 use std::rc::Rc;
 
 use crate::api::{
-    GenerationProviderConfig, GenerationProviderEntry, GenerationProvidersApi, VoiceInfo,
+    GenerationProviderConfigJson, GenerationProviderRow, GenerationProvidersApi, GenerationRowExt,
+    VoiceInfo,
 };
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_key_field::ProviderKeyField;
@@ -19,7 +20,7 @@ use super::extract_base_url;
 
 #[component]
 pub(super) fn ProviderDetailView(
-    provider: GenerationProviderEntry,
+    provider: GenerationProviderRow,
     catalog: ReadSignal<PresetCatalog>,
     on_reload: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
@@ -97,7 +98,7 @@ pub(super) fn ProviderDetailView(
 
     let build_config = {
         let existing_defaults = existing_defaults;
-        move || -> GenerationProviderConfig {
+        move || -> GenerationProviderConfigJson {
             let mut defaults = existing_defaults.clone();
             // Update voice-specific defaults from form
             let voice = form_voice.get();
@@ -105,7 +106,7 @@ pub(super) fn ProviderDetailView(
             defaults.speed = Some(form_speed.get());
             let fmt = form_audio_format.get();
             defaults.format = if fmt.is_empty() { None } else { Some(fmt) };
-            GenerationProviderConfig {
+            GenerationProviderConfigJson {
                 provider_type: config_provider_type.clone(),
                 api_key: {
                     let key = form_api_key.get();
@@ -115,7 +116,6 @@ pub(super) fn ProviderDetailView(
                         Some(key)
                     }
                 },
-                secret_name: None,
                 base_url: {
                     let url = extract_base_url(&form_base_url.get());
                     if url.is_empty() {
@@ -153,7 +153,7 @@ pub(super) fn ProviderDetailView(
                 },
                 enabled: form_enabled.get(),
                 color: config_color.clone(),
-                capabilities: vec![effective_gen_type],
+                capabilities: vec![effective_gen_type.as_str().to_string()],
                 timeout_seconds: form_timeout.get(),
                 verified: config_verified,
                 defaults,
@@ -212,7 +212,6 @@ pub(super) fn ProviderDetailView(
                 &config.provider_type,
                 config.api_key,
                 config.base_url,
-                config.models.first().cloned(),
                 Some(&name),
             )
             .await
@@ -376,18 +375,39 @@ pub(super) fn ProviderDetailView(
                     <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.edit_endpoint_hint)}</p>
                 </div>
 
-                // Timeout
+                // Timeout. "Auto" is a real state and not the slider's floor:
+                // checked omits the field from the payload entirely and the
+                // provider keeps its own default. A slider alone cannot say
+                // "unset" -- every position of it is a value (判据 §17).
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        {t!(i18n, settings.generation.timeout_label)} ": " {move || form_timeout.get()} "s"
+                        {t!(i18n, settings.generation.timeout_label)} ": "
+                        {move || form_timeout.get().map_or_else(
+                            || t_string!(i18n, settings.generation.timeout_auto).to_string(),
+                            |v| format!("{v}s"),
+                        )}
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer mb-2">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || form_timeout.get().is_none()
+                            on:change=move |ev| {
+                                form_timeout.set(if event_target_checked(&ev) { None } else { Some(60) });
+                            }
+                            class="w-4 h-4 rounded"
+                        />
+                        <span class="text-xs text-text-tertiary">
+                            {t!(i18n, settings.generation.timeout_auto_hint)}
+                        </span>
                     </label>
                     <input
                         type="range" min="10" max="600" step="10"
-                        prop:value=move || form_timeout.get()
+                        disabled=move || form_timeout.get().is_none()
+                        prop:value=move || form_timeout.get().unwrap_or(60)
                         on:input=move |ev| {
-                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { form_timeout.set(v); }
+                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { form_timeout.set(Some(v)); }
                         }
-                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary disabled:opacity-40"
                     />
                 </div>
             </div>
@@ -572,7 +592,7 @@ pub(super) fn ProviderDetailView(
 
             // Set as default button
             {
-                let is_default = is_default_for.contains(&effective_gen_type);
+                let is_default = is_default_for.iter().any(|m| m == effective_gen_type.as_str());
                 let set_default = handle_set_default;
 
                 view! {

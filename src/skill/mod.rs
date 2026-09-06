@@ -32,7 +32,7 @@ pub use installer::{
     InstallExecutor, InstallResult, InstallSuccess, SkillInstallError,
 };
 pub use manifest::{automation_notice, parse_skill_content, parse_skill_file, SkillParseError};
-pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
+pub use preprocess::{preprocess_skill_content, PreprocessError, SkillPreprocessContext};
 pub use prompt::{build_skills_prompt_xml, SkillPromptBudget};
 pub use registry::SkillRegistry;
 pub use shared::{ensure_shared_skill_system_initialized, shared_skill_system};
@@ -573,6 +573,13 @@ impl SkillSystem {
             let dirs = self.inner.skill_dirs.read().await.clone();
             for dir in &dirs {
                 UsageStore::new(dir).forget(id.as_str());
+                // Paired with the .usage.json cleanup above: `.cooccur.json`
+                // is the second sidecar that records the same recent
+                // activity. Without this, the dream pipeline's
+                // `cluster_chains` would keep proposing workflows that
+                // include the just-deleted skill for up to MAX_ENTRIES
+                // records (see cooccurrence.rs:75-85 for the invariant).
+                CoOccurrenceLog::new(dir).forget(id.as_str());
             }
             self.rebuild_snapshot().await;
         }

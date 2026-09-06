@@ -68,8 +68,9 @@
 //!
 //! 1. [`leader_from_terminal`] — the only one that touches the master, one
 //!    `tcgetpgrp` ioctl, under the lock;
-//! 2. [`deepest_newest_descendant`] — the fallback when the terminal will not
-//!    say, a FULL process-table refresh, outside every lock;
+//! 2. [`foreground_fact_for_shell`] — the fallback when the terminal will
+//!    not say, one FULL process-table refresh plus a single-pid read per
+//!    descendant, outside every lock;
 //! 3. [`fact_for_pid`] — one pid's facts, outside every lock.
 //!
 //! Splitting 1 from 2 is not cosmetic: they were briefly composed into one
@@ -123,24 +124,52 @@ pub const PROBE_RECHECK_MS: i64 = 3_000;
 /// answer as "nothing is running there" (判据 §8).
 pub const PROBE_MISSES_TO_FORGET: u32 = 6;
 
+/// How many probes ONE frame buys.
+///
+/// A frame says the SCREEN changed. The process it announced may not be in
+/// the table yet: a command is echoed at the prompt before `CreateProcess`
+/// returns and before the OS publishes the process, and a launcher chain adds
+/// more still. So the single look `PROBE_MIN_INTERVAL_MS` after the evidence
+/// can be too early -- and a single look was all a frame used to buy, because
+/// [`ForegroundState::observe`] cleared the sticky bit whatever it saw.
+///
+/// For a program that then goes SILENT (output redirected, or simply waiting
+/// for input) that made "not identified" absorbing: rule 2 had no frame left
+/// to fire on and rule 3 needs an agent already known. Measured on Windows
+/// 2026-09-05 -- `a_real_agent_started_after_spawn_is_identified` passes alone
+/// and fails inside the full suite, because load is what decides whether the
+/// one look lands before or after the process appears.
+///
+/// DERIVED, not chosen: `PROBE_FRAME_BUDGET * PROBE_MIN_INTERVAL_MS` is
+/// exactly `PROBE_RECHECK_MS`. A frame buys the same 3 s of watching that an
+/// already-identified agent gets for free -- one place decides that span
+/// (判据 §12), so moving either constant moves this with it.
+pub const PROBE_FRAME_BUDGET: u32 = (PROBE_RECHECK_MS / PROBE_MIN_INTERVAL_MS) as u32;
+
 /// One observation of a PTY's foreground process.
 ///
-/// `argv0` and `cmdline` are separate because they answer different
-/// questions and either can be absent: `argv0` is what the program was
-/// invoked as, `cmdline` is the whole command. Both are needed —
-/// `agent_detect::identify_agent_from_process` reads the command line
-/// precisely because `claude` runs as a Node script whose process NAME is
-/// `node`.
+/// `argv` is the whole vector and NOT a joined command line, because
+/// `agent_detect::identify_agent_from_process` has to tokenise it and a join
+/// is lossy exactly where Windows needs it not to be: `argv[0]` there is the
+/// full image path, so `["C:\Program Files\nodejs\node.exe", …]` joined and
+/// re-split starts with the token `C:\Program`. That token is not an agent,
+/// not a launcher and not a runtime, so the launcher walk went dead for every
+/// process installed under a path with a space, and the panel printed
+/// `Program` as the program name. Measured on Windows 11, 2026-09-05 — see
+/// `agent_detect::engine::normalized_program_name`. Carrying the vector means
+/// there is nothing to reconstruct (判据 §1).
+///
+/// It is also ONE field where there were two: `argv0` was `cmdline`'s first
+/// token, i.e. a second representation of the same fact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForegroundFact {
     /// The process id the terminal's foreground process group leads with.
     pub pid: u32,
     /// The kernel's name for the process (`sysinfo::Process::name`).
     pub name: String,
-    /// `argv[0]`, when the process table reports one.
-    pub argv0: Option<String>,
-    /// The whole command line, space-joined.
-    pub cmdline: Option<String>,
+    /// The process's argv, as the process table reports it. Empty when it
+    /// reports none — which is "the table would not say", not "no arguments".
+    pub argv: Vec<String>,
     /// The process's current working directory, when readable. This is the
     /// LIVE cwd — it is what makes a shell that has `cd`'d visible, which the
     /// spawn directory cannot do.
@@ -163,8 +192,7 @@ impl ForegroundFact {
     pub fn same_subject(&self, other: &Self) -> bool {
         self.pid == other.pid
             && self.name == other.name
-            && self.argv0 == other.argv0
-            && self.cmdline == other.cmdline
+            && self.argv == other.argv
             && self.cwd == other.cwd
     }
 }
@@ -186,6 +214,11 @@ impl ForegroundFact {
 ///    rule that can fire for a silent session, and without it an agent's
 ///    EXIT is never noticed.
 ///
+/// ⚠️ Rule 2 says "while the last frame still has budget", and BOTH
+/// halves of that were bought with a red test. "Not on this tick" came
+/// first; "budget, not a boolean" came second, from the same guard on
+/// Windows -- see [`PROBE_FRAME_BUDGET`] for why one look is not enough.
+///
 /// ⚠️ Rule 2 says "since the last probe", not "on this tick", and the
 /// difference is the whole rule. The first version asked whether THIS 16 ms
 /// tick produced a frame, and `a_real_agent_started_after_spawn_is_identified`
@@ -203,14 +236,14 @@ impl ForegroundFact {
 pub fn probe_due(
     last_probe_at: Option<i64>,
     now: i64,
-    frame_since_probe: bool,
+    frame_budget_left: bool,
     agent_known: bool,
 ) -> bool {
     let Some(last) = last_probe_at else {
         return true;
     };
     let age = now.saturating_sub(last);
-    (frame_since_probe && age >= PROBE_MIN_INTERVAL_MS) || (agent_known && age >= PROBE_RECHECK_MS)
+    (frame_budget_left && age >= PROBE_MIN_INTERVAL_MS) || (agent_known && age >= PROBE_RECHECK_MS)
 }
 
 /// The pid of the process group the kernel says owns this terminal, asked of
@@ -223,7 +256,7 @@ pub fn probe_due(
 /// is on its way out, or a shell that never enabled job control), or a platform
 /// where `portable-pty` has no such method at all. It is never "nothing is
 /// running there" (判据 §8) — the caller answers that with
-/// [`deepest_newest_descendant`].
+/// [`foreground_fact_for_shell`].
 ///
 /// # This is the ONLY thing that may run under the master lock
 ///
@@ -263,17 +296,14 @@ fn leader_from_terminal_impl(_master: &dyn portable_pty::MasterPty) -> Option<u3
 pub fn fact_for_pid(pid: u32) -> Option<ForegroundFact> {
     let observed_at = chrono::Utc::now().timestamp_millis();
     crate::utils::process_alive::with_process_specifics(pid, process_facts_refresh(), |p| {
-        let cmd = p.cmd();
         ForegroundFact {
             pid,
             name: p.name().to_string_lossy().into_owned(),
-            argv0: cmd.first().map(|a| a.to_string_lossy().into_owned()),
-            cmdline: (!cmd.is_empty()).then(|| {
-                cmd.iter()
-                    .map(|a| a.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            }),
+            argv: p
+                .cmd()
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect(),
             cwd: p.cwd().map(|c| c.to_string_lossy().into_owned()),
             observed_at,
         }
@@ -291,52 +321,180 @@ fn process_facts_refresh() -> sysinfo::ProcessRefreshKind {
         .with_cwd(UpdateKind::Always)
 }
 
-/// The shell's deepest, then newest, descendant — or the shell itself when it
-/// has none, because a shell sitting at its prompt IS the foreground program.
+/// One row of the process table, as the descendant walk needs it.
 ///
-/// This is the answer on platforms with no `tcgetpgrp`, and the fallback on
-/// the ones that have it (see [`leader_from_terminal`]). It is deliberately NOT
-/// `#[cfg(not(unix))]`: a branch that compiles on no machine any developer or
-/// CI job runs is a branch nobody can falsify, and its only proof would have
-/// been "it type-checks on Windows". Compiled and tested everywhere, it is
-/// instead exercised by
-/// `the_descendant_walk_finds_a_child_this_test_started`.
+/// The walk is split into this plain data plus the two pure functions below
+/// for one reason: BOTH of the rules they carry are things a live process
+/// table may simply not contain on the day you look. Measured on Windows 11
+/// on 2026-09-05, three consecutive reads: 10 of 174 processes pointed at a
+/// parent pid no longer in the table, and **0** of them had already turned
+/// into a start-time inversion. A rule whose input never occurs cannot be
+/// shown to go red against the live table (判据 §2), and a synthetic table
+/// is the only honest instrument for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcRow {
+    pub pid: u32,
+    pub parent: Option<u32>,
+    /// The table's own start-time reading. Only ever COMPARED with another
+    /// row's, never interpreted as a date, so the unit is the platform's.
+    pub start_time: u64,
+}
+
+/// `shell_pid`'s descendants as `(depth, start_time, pid)` — depth 1 is a
+/// direct child. Empty when it has none.
 ///
-/// The cost is a FULL process-table refresh — a descendant walk needs every
-/// process's parent — which is why it is second choice, why the rate gate
-/// exists, and why it takes a bare `u32` and no terminal handle: a function
-/// that cannot be handed the master cannot be called while the master lock is
-/// held by accident.
+/// ⚠️ A parent edge is DROPPED when the claimed parent started strictly AFTER
+/// the child. Windows recycles pids aggressively, and a process whose real
+/// parent exited keeps pointing at that pid; the 10 dangling pointers
+/// measured above are each a false edge waiting for their pid to be reused,
+/// and a false edge here grafts an unrelated process tree onto a terminal.
+/// The gate is one-directional and therefore safe: a real child cannot
+/// predate its own parent, so nothing legitimate is ever dropped.
+///
+/// Bounded at 64 levels so a parent-pointer CYCLE (a reparented pid, a table
+/// read mid-teardown) cannot spin here — the monotonicity gate makes a cycle
+/// far less likely but does not make it impossible, because two rows may
+/// report the same start time.
 #[must_use]
-pub fn deepest_newest_descendant(shell_pid: u32) -> Option<u32> {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
-
-    // (depth, start_time, pid), maximised in that order: deepest wins, then
-    // newest, then the pid — the last term only so the answer is a function
-    // of the table and not of its iteration order (判据 §12).
-    let mut best: Option<(usize, u64, u32)> = None;
-    let mut frontier = vec![Pid::from_u32(shell_pid)];
+pub fn descendants_of(rows: &[ProcRow], shell_pid: u32) -> Vec<(usize, u64, u32)> {
+    let start_of = |pid: u32| rows.iter().find(|r| r.pid == pid).map(|r| r.start_time);
+    let mut found: Vec<(usize, u64, u32)> = Vec::new();
+    let mut frontier = vec![shell_pid];
     let mut depth = 0usize;
-    // Bounded so a parent-pointer cycle (a reparented pid, a table read
-    // mid-teardown) cannot spin here. 64 is far past any real process tree.
     while !frontier.is_empty() && depth < 64 {
         depth += 1;
         let mut next = Vec::new();
-        for (pid, proc_) in sys.processes() {
-            if proc_.parent().is_some_and(|p| frontier.contains(&p)) {
-                next.push(*pid);
-                let candidate = (depth, proc_.start_time(), pid.as_u32());
-                if best.is_none_or(|b| candidate > b) {
-                    best = Some(candidate);
-                }
+        for row in rows {
+            let Some(parent) = row.parent else { continue };
+            if !frontier.contains(&parent) {
+                continue;
             }
+            if start_of(parent).is_some_and(|p| p > row.start_time) {
+                // A recycled pid: this row's real parent is gone.
+                continue;
+            }
+            // A pid is emitted at most once. Without this a self-parented row
+            // (or any cycle the monotonicity gate cannot see, because two rows
+            // may report the SAME start time) is re-emitted at every level and
+            // its 64 copies then win the ranking on depth alone.
+            if row.pid == shell_pid || found.iter().any(|&(_, _, pid)| pid == row.pid) {
+                continue;
+            }
+            next.push(row.pid);
+            found.push((depth, row.start_time, row.pid));
         }
         frontier = next;
     }
-    best.map(|(_, _, pid)| pid).or(Some(shell_pid))
+    found
+}
+
+/// The deepest, then newest candidate — the answer when nothing under the
+/// shell identifies as an agent.
+///
+/// Maximised on `(depth, start_time, pid)` in that order; the pid term is
+/// there only so the answer is a function of the table and not of its
+/// iteration order (判据 §12).
+#[must_use]
+fn deepest_newest(candidates: &[(usize, u64, u32)]) -> Option<u32> {
+    candidates.iter().max().map(|&(_, _, pid)| pid)
+}
+
+/// The foreground process of a shell that will not name one itself.
+///
+/// This is the whole answer on platforms with no `tcgetpgrp`, and the
+/// fallback on the ones that have it (see [`leader_from_terminal`]). It is
+/// deliberately NOT `#[cfg(not(unix))]`: a branch that compiles on no machine
+/// any developer or CI job runs is a branch nobody can falsify, and its only
+/// proof would have been "it type-checks on Windows".
+///
+/// ⚠️ That reasoning was right and the follow-through was not. An earlier doc
+/// here said "compiled and tested everywhere" while its one exerciser,
+/// `the_descendant_walk_finds_a_child_this_test_started`, carried
+/// `#[cfg(unix)]` — so the sentence describing the guarantee and the guard
+/// providing it disagreed, and the one that got read was the sentence
+/// (判据 §1). That guard and `a_real_child_is_reported_as_the_foreground_program`
+/// are now platform-independent and were run on Windows 11 on 2026-09-05.
+/// Do not re-gate either one.
+///
+/// # Why not simply the deepest descendant
+///
+/// "Deepest, then newest" was the whole rule until 2026-09-05, and it answers
+/// a DIFFERENT QUESTION from "which program owns this terminal". On Unix
+/// `tcgetpgrp` names the process GROUP LEADER, and an agent's tool
+/// subprocesses inherit its pgid — so `claude` running `rg` still answers
+/// `claude`. Windows has no process groups to ask about, so the deepest
+/// descendant of `claude` is `rg`, and `program` flipped to whatever tool the
+/// agent had most recently spawned — exactly while it was working, which is
+/// the only time anyone is looking.
+///
+/// So the rank is: the SHALLOWEST candidate that identifies as an agent
+/// (shallowest, because `npx claude` puts the launcher above the agent and
+/// the launcher's own command line already names its operand — see
+/// `agent_detect::identify_agent_from_process`), and only failing that, the
+/// deepest and newest. An agent's tools are always deeper than the agent.
+///
+/// # Cost
+///
+/// One FULL process-table refresh for the tree — a descendant walk needs
+/// every process's parent — plus one single-pid read per DESCENDANT, which is
+/// 0–2 in practice and never the table. That is why this is second choice,
+/// why the rate gate exists, and why it takes a bare `u32` and no terminal
+/// handle: a function that cannot be handed the master cannot be called while
+/// the master lock is held by accident.
+#[must_use]
+pub fn foreground_fact_for_shell(shell_pid: u32) -> Option<ForegroundFact> {
+    let candidates = descendants_of(&process_rows(), shell_pid);
+    // A shell sitting at its prompt IS the foreground program.
+    if candidates.is_empty() {
+        return fact_for_pid(shell_pid);
+    }
+    let facts: Vec<(usize, u64, ForegroundFact)> = candidates
+        .iter()
+        .filter_map(|&(depth, start, pid)| fact_for_pid(pid).map(|f| (depth, start, f)))
+        .collect();
+    pick_foreground(&facts)
+        .or_else(|| fact_for_pid(deepest_newest(&candidates).unwrap_or(shell_pid)))
+        // Every descendant died between the walk and the fact read. The shell
+        // is what is in the foreground now, and saying so is better than the
+        // miss that "I could not look" would spend (判据 §8 cuts the other
+        // way here: there IS an answer).
+        .or_else(|| fact_for_pid(shell_pid))
+}
+
+/// Rank already-collected candidate facts. Pure, and it runs the REAL
+/// identification rather than a predicate handed in by the caller, so the
+/// production answer and the test's answer cannot come from two different
+/// derivations of "is this an agent" (判据 §1 / §9).
+#[must_use]
+fn pick_foreground(facts: &[(usize, u64, ForegroundFact)]) -> Option<ForegroundFact> {
+    let is_agent = |f: &ForegroundFact| {
+        agent_detect::identify_agent_from_process(&f.name, &f.argv).is_some()
+    };
+    facts
+        .iter()
+        .filter(|(_, _, f)| is_agent(f))
+        .min_by_key(|(depth, start, f)| (*depth, *start, f.pid))
+        .or_else(|| facts.iter().max_by_key(|(depth, start, f)| (*depth, *start, f.pid)))
+        .map(|(_, _, f)| f.clone())
+}
+
+/// The parent-pointer table, as one refresh. `ProcessRefreshKind::nothing()`
+/// because the walk reads only pid / parent / start time; the per-candidate
+/// command lines are fetched afterwards, for the handful of pids that
+/// survived, by [`fact_for_pid`].
+fn process_rows() -> Vec<ProcRow> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    sys.processes()
+        .iter()
+        .map(|(pid, proc_)| ProcRow {
+            pid: pid.as_u32(),
+            parent: proc_.parent().map(sysinfo::Pid::as_u32),
+            start_time: proc_.start_time(),
+        })
+        .collect()
 }
 
 /// A session's probe bookkeeping: when it last looked, what it last saw, and
@@ -356,13 +514,15 @@ pub struct ForegroundState {
     fact: Option<ForegroundFact>,
     /// Consecutive misses since the last hit.
     misses: u32,
-    /// Whether any frame has arrived since the last probe.
+    /// Probes still owed to the most recent frame, capped at
+    /// [`PROBE_FRAME_BUDGET`].
     ///
-    /// Sticky, and that is the point: see the warning on [`probe_due`]. A
-    /// per-tick answer loses every frame that lands inside the rate limit's
-    /// shadow, which is where a program that paints once and goes quiet does
-    /// all of its painting.
-    frame_since_probe: bool,
+    /// A COUNTER and not a boolean, and that is the point twice over. Sticky,
+    /// so a frame landing inside the rate limit's shadow is not lost -- that
+    /// is where a program which paints once and goes quiet does all of its
+    /// painting. And bounded-but-plural, so the one look a frame used to buy
+    /// cannot land before the process it announced exists.
+    frame_probes_left: u32,
     /// How many probes this session has performed — the cost guard's
     /// instrument (herdr's counting-architecture-test shape).
     ///
@@ -387,13 +547,16 @@ impl ForegroundState {
     /// Record whether this tick produced a frame. Idempotent and sticky —
     /// once true it stays true until the next probe consumes it.
     pub fn note_frame(&mut self, produced: bool) {
-        self.frame_since_probe |= produced;
+        if produced {
+            self.frame_probes_left = PROBE_FRAME_BUDGET;
+        }
     }
 
-    /// Whether a frame has arrived since the last probe. Feeds [`probe_due`].
+    /// Whether the most recent frame still has probes owed to it. Feeds
+    /// [`probe_due`].
     #[must_use]
-    pub const fn frame_since_probe(&self) -> bool {
-        self.frame_since_probe
+    pub const fn frame_budget_left(&self) -> bool {
+        self.frame_probes_left > 0
     }
 
     /// Fold one probe outcome in. `now` is the tick that authorised it.
@@ -410,7 +573,9 @@ impl ForegroundState {
     /// the answer would carry no information (判据 §2).
     pub fn observe(&mut self, now: i64, observed: Option<ForegroundFact>) -> bool {
         self.last_probe_at = Some(now);
-        self.frame_since_probe = false;
+        // ONE unit, not the whole budget: the look may have been too early
+        // for the process the frame announced. See [`PROBE_FRAME_BUDGET`].
+        self.frame_probes_left = self.frame_probes_left.saturating_sub(1);
         self.probes = self.probes.saturating_add(1);
         let before = self.fact.take();
         match observed {
@@ -459,11 +624,123 @@ mod tests {
         ForegroundFact {
             pid: 1,
             name: name.to_owned(),
-            argv0: None,
-            cmdline: None,
+            argv: Vec::new(),
             cwd: None,
             observed_at,
         }
+    }
+
+    fn row(pid: u32, parent: u32, start_time: u64) -> ProcRow {
+        ProcRow {
+            pid,
+            parent: (parent != 0).then_some(parent),
+            start_time,
+        }
+    }
+
+    fn candidate(depth: usize, start: u64, pid: u32, name: &str, argv: &[&str]) -> (usize, u64, ForegroundFact) {
+        (
+            depth,
+            start,
+            ForegroundFact {
+                pid,
+                name: name.to_owned(),
+                argv: argv.iter().map(|a| (*a).to_owned()).collect(),
+                cwd: None,
+                observed_at: 0,
+            },
+        )
+    }
+
+    /// A recycled pid makes a live process point at a parent that is NEWER
+    /// than itself, and the walk must not graft that tree onto the terminal.
+    ///
+    /// ⚠️ This is a synthetic table on purpose, and that is the whole point of
+    /// [`ProcRow`] existing. Measured on this machine on 2026-09-05, three
+    /// consecutive reads of the live table: `dangling_ppid=10` of 174, and
+    /// `inverted_start_time=0`. So the hazard is real and loaded (10 pointers
+    /// into pids the OS is free to hand out again) while the FIRING CONDITION
+    /// was absent — a rule that cannot be shown red against the machine you
+    /// have is a rule you must be able to show red some other way (判据 §2).
+    ///
+    /// Falsify by deleting the `start_of(parent) > row.start_time` guard in
+    /// [`descendants_of`]: pid 900 is adopted and `deepest_newest` names it.
+    #[test]
+    fn a_parent_pointer_that_predates_its_child_is_not_an_edge() {
+        // 100 is the shell. 200 is its real child. 900 is an unrelated
+        // process that started LONG ago and whose real parent has exited;
+        // the OS then handed its pid, 200, to the shell's child.
+        let rows = [
+            row(100, 0, 1_000),
+            row(200, 100, 1_100),
+            row(900, 200, 5), // started at 5, "parent" started at 1_100
+        ];
+        let found = descendants_of(&rows, 100);
+
+        assert_eq!(
+            found,
+            vec![(1, 1_100, 200)],
+            "the shell's real child is the only descendant; 900 predates the \
+             pid it points at, so that edge is a recycled pid and not a parent"
+        );
+        assert_eq!(deepest_newest(&found), Some(200));
+
+        // The gate is one-directional: give 900 a start time AFTER 200 and it
+        // is an ordinary grandchild again. Without this row the test would
+        // pass just as well against a walk that dropped every depth-2 node.
+        let rows = [row(100, 0, 1_000), row(200, 100, 1_100), row(900, 200, 1_200)];
+        assert_eq!(
+            deepest_newest(&descendants_of(&rows, 100)),
+            Some(900),
+            "a child that postdates its parent is a real edge and must survive"
+        );
+    }
+
+    /// An agent outranks its own tool subprocess, which is the difference
+    /// between `program: "claude"` and `program: "rg"` on every Windows
+    /// terminal with an agent working in it.
+    ///
+    /// Runs the REAL `agent_detect` identification rather than a predicate
+    /// this test hands in, so the ranking and production cannot disagree
+    /// about what an agent is (判据 §9).
+    ///
+    /// Falsify by deleting the `filter(is_agent).min_by_key(...)` arm of
+    /// [`pick_foreground`]: the first case then answers `rg`.
+    #[test]
+    fn an_agent_outranks_the_tool_it_spawned_and_only_an_agent_does() {
+        // cmd.exe -> node (claude) -> rg. Deepest-and-newest says `rg`.
+        let tree = [
+            candidate(1, 10, 200, "node.exe", &["C:\\Program Files\\nodejs\\node.exe",
+                "C:\\p\\node_modules\\@anthropic-ai\\claude-code\\cli.js"]),
+            candidate(2, 20, 300, "rg.exe", &["rg", "--json", "TODO"]),
+        ];
+        assert_eq!(
+            pick_foreground(&tree).map(|f| f.pid),
+            Some(200),
+            "the agent owns the terminal; the tool it spawned is deeper and newer"
+        );
+
+        // Two agents (`claude` launched under `npx`): the SHALLOWEST wins,
+        // because the launcher's own command line already names its operand.
+        let chain = [
+            candidate(1, 10, 200, "node.exe", &["npm exec claude", "TERM_PROGRAM=x"]),
+            candidate(2, 20, 300, "node.exe", &["claude"]),
+        ];
+        assert_eq!(pick_foreground(&chain).map(|f| f.pid), Some(200));
+
+        // No agent anywhere: the fallback is unchanged, deepest then newest.
+        // Without this the preference could be "always the shallowest" and
+        // nothing here would notice.
+        let plain = [
+            candidate(1, 10, 200, "cmd.exe", &["cmd.exe", "/c", "ping"]),
+            candidate(2, 20, 300, "PING.EXE", &["ping", "-n", "30", "127.0.0.1"]),
+        ];
+        assert_eq!(
+            pick_foreground(&plain).map(|f| f.pid),
+            Some(300),
+            "with no agent in the tree the answer is still the deepest, newest"
+        );
+        assert_eq!(pick_foreground(&[]), None, "no candidates, no answer");
     }
 
     /// The gate's four interesting combinations, and the two ways it must
@@ -565,7 +842,7 @@ mod tests {
         // A frame at t=10ms: far too early to probe.
         state.note_frame(true);
         assert!(
-            !probe_due(state.last_probe_at(), 10, state.frame_since_probe(), false),
+            !probe_due(state.last_probe_at(), 10, state.frame_budget_left(), false),
             "the rate limit still applies"
         );
 
@@ -575,7 +852,7 @@ mod tests {
             assert!(!probe_due(
                 state.last_probe_at(),
                 tick,
-                state.frame_since_probe(),
+                state.frame_budget_left(),
                 false
             ));
         }
@@ -585,29 +862,72 @@ mod tests {
             probe_due(
                 state.last_probe_at(),
                 PROBE_MIN_INTERVAL_MS,
-                state.frame_since_probe(),
+                state.frame_budget_left(),
                 false
             ),
             "the frame from t=10 must still be remembered at t={PROBE_MIN_INTERVAL_MS} -- \
              otherwise a program that paints once and sleeps is never looked at again"
         );
 
-        // And the probe consumes it: no frame, no further probes.
+        // And the probe spends ONE unit of that frame's budget, not all of
+        // it. What stops the gate degenerating into "a probe every
+        // PROBE_MIN_INTERVAL_MS forever" is the budget running out, which is
+        // [`one_frame_buys_a_bounded_run_of_probes`]'s half of this.
         state.observe(
             PROBE_MIN_INTERVAL_MS,
             Some(fact("claude", PROBE_MIN_INTERVAL_MS)),
         );
         assert!(
-            !state.frame_since_probe(),
-            "a probe must consume the sticky bit, or the gate degenerates into \
-             one probe per PROBE_MIN_INTERVAL_MS forever"
+            state.frame_budget_left(),
+            "one probe must not spend the whole budget -- the look it just took \
+             may have been too early for the process the frame announced"
         );
-        assert!(!probe_due(
-            state.last_probe_at(),
-            PROBE_MIN_INTERVAL_MS * 3,
-            state.frame_since_probe(),
-            false
-        ));
+    }
+
+    /// One frame buys a bounded RUN of probes.
+    ///
+    /// The other half of [`a_frame_inside_the_rate_shadow_still_earns_the_next_probe`],
+    /// and the fix for a red this guard's real-PTY sibling only produced under
+    /// load: a command is echoed at the prompt before the OS has published the
+    /// process it starts, so the single look 500 ms later can be too early —
+    /// and if the program then stays silent, rule 2 has no frame left and rule
+    /// 3 needs an agent already known. "Not identified" was absorbing.
+    ///
+    /// Falsified both ways. Put `= 0` back in `observe` (the old
+    /// `frame_since_probe = false`) and the loop's first iteration goes red at
+    /// t=1000. Make the budget unbounded and the LAST assertion goes red —
+    /// which is the one that keeps this from becoming a full process-table
+    /// refresh per session every 500 ms forever.
+    #[test]
+    fn one_frame_buys_a_bounded_run_of_probes() {
+        let mut state = ForegroundState::default();
+
+        // One frame, and nothing else ever again.
+        state.note_frame(true);
+        assert!(
+            probe_due(state.last_probe_at(), 0, state.frame_budget_left(), false),
+            "the first look is free"
+        );
+        state.observe(0, None);
+
+        let mut now = 0;
+        for spent in 1..PROBE_FRAME_BUDGET {
+            now += PROBE_MIN_INTERVAL_MS;
+            assert!(
+                probe_due(state.last_probe_at(), now, state.frame_budget_left(), false),
+                "probe {spent} at t={now} must still be authorised by the single \
+                 frame at t=0 -- no later frame is coming, and the process it \
+                 announced may not have existed at t={PROBE_MIN_INTERVAL_MS}"
+            );
+            state.observe(now, None);
+        }
+
+        now += PROBE_MIN_INTERVAL_MS;
+        assert!(
+            !probe_due(state.last_probe_at(), now, state.frame_budget_left(), false),
+            "the budget must RUN OUT: one frame may not authorise a full \
+             process-table refresh every {PROBE_MIN_INTERVAL_MS} ms forever"
+        );
     }
 
     /// A hit is believed at once; a miss is not believed until
@@ -707,7 +1027,7 @@ mod tests {
     /// 2. `terminal_leader`'s whole body is that lock plus
     ///    `leader_from_terminal`. No walk, no single-pid read, no `sysinfo`.
     ///
-    /// Falsify by moving `deepest_newest_descendant` back into
+    /// Falsify by moving `foreground_fact_for_shell` back into
     /// `terminal_leader` (the shape this replaced) — assertion 2 goes red — or
     /// by inlining the lock into `maybe_probe_foreground` — assertion 1 does.
     #[test]
@@ -765,7 +1085,9 @@ mod tests {
             "terminal_leader must be the lock plus the ioctl. Body:\n{locked}"
         );
         for forbidden in [
-            "deepest_newest_descendant",
+            "foreground_fact_for_shell",
+            "descendants_of",
+            "process_rows",
             "fact_for_pid",
             "sysinfo",
             "refresh_processes",
@@ -780,78 +1102,177 @@ mod tests {
         }
     }
 
-    /// The Windows answer, exercised where it can actually run.
+    /// A live TWO-LEVEL process tree: a parent that stays alive while a child
+    /// of its own runs for ~30 s. Returns the parent handle; the caller kills
+    /// the tree with [`kill_tree`].
     ///
-    /// `deepest_newest_descendant` is the whole foreground answer on
-    /// platforms without `tcgetpgrp`, and on this machine there is no way to
-    /// compile that platform, let alone run it. Keeping the walk
-    /// platform-independent is what makes this guard possible at all: it
-    /// starts a real two-level process tree and asserts the walk descends
-    /// past the parent, which is the one thing the heuristic has to get
-    /// right.
+    /// Unix: `sh -c "sleep 30; true"` — the trailing `true` is what stops the
+    /// shell `exec`ing the sleep and vanishing, which would leave one level
+    /// and nothing to descend to.
+    ///
+    /// Windows: `cmd /c ping -n 31 127.0.0.1`. Windows has no `exec`, so
+    /// `cmd` is unconditionally a real parent of the external command it
+    /// runs — the same two levels, reached by a different mechanism.
+    /// `ping` and not `timeout` because `timeout` reads the console INPUT
+    /// handle and aborts with "input redirection is not supported" the moment
+    /// stdin is not one, which is exactly what a captured test child has.
+    fn spawn_two_level_tree() -> std::process::Child {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd.exe");
+            c.args(["/c", "ping", "-n", "31", "127.0.0.1"]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", "sleep 30; true"]);
+            c
+        };
+        cmd.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn a two-level process tree")
+    }
+
+    /// Kill a root process AND the child it started.
+    ///
+    /// `Child::kill` alone is not enough on either platform: it kills the
+    /// parent and leaves the grandchild running out its full 30 s. On Windows
+    /// that orphan also keeps a ppid pointing at a pid the OS is now free to
+    /// hand out again — a test that leaked one would be seeding the exact
+    /// stale-edge hazard `descendants_of` has to survive.
+    fn kill_tree(root: u32, inner: u32) {
+        let mut cmd = if cfg!(windows) {
+            // `/T` takes the tree, so `inner` is covered by naming the root.
+            let mut c = std::process::Command::new("taskkill");
+            c.args(["/PID", &root.to_string(), "/T", "/F"]);
+            c
+        } else {
+            let mut c = std::process::Command::new("kill");
+            c.args(["-TERM", &root.to_string(), &inner.to_string()]);
+            c
+        };
+        let _ = cmd
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    /// The Windows answer, exercised ON WINDOWS.
+    ///
+    /// `foreground_fact_for_shell` is the whole foreground answer on
+    /// platforms without `tcgetpgrp`, and until 2026-09-05 this guard carried
+    /// `#[cfg(unix)]` — so the one platform that depends on the walk for
+    /// EVERYTHING was the one platform that never ran it. The walk was
+    /// deliberately not `#[cfg(not(unix))]` precisely so that it could be
+    /// exercised everywhere, and then its only exerciser was gated to the
+    /// platform that does not need it (判据 §3: a guard's green covers only
+    /// the shapes it recognises, and this one did not recognise Windows at
+    /// all; 判据 §16: the porting round fixed the module for Windows and left
+    /// its twin, the test, on Unix).
     ///
     /// The tree is rooted at a process this test OWNS, not at the test binary
     /// itself: sibling tests in this crate spawn PTY children of the test
     /// process, so a walk rooted there answers with whichever of THEIR
     /// children happens to be newest. That is not flakiness in the walk, it
     /// is a guard whose corpus was bigger than its subject.
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_descendant_walk_finds_a_child_this_test_started() {
-        // `sleep 30; true` keeps the shell alive as a real parent instead of
-        // letting it `exec` the sleep and vanish, so there are two levels to
-        // descend.
-        let mut child = std::process::Command::new("sh")
-            .args(["-c", "sleep 30; true"])
-            .spawn()
-            .expect("spawn sh");
+        let mut child = spawn_two_level_tree();
         let shell_pid = child.id();
 
         // The process table needs a moment to see a just-forked grandchild.
         let mut answer = None;
         for _ in 0..40 {
-            answer = deepest_newest_descendant(shell_pid);
+            answer = foreground_fact_for_shell(shell_pid).map(|f| f.pid);
             if answer.is_some_and(|p| p != shell_pid) {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         let inner = answer.expect("the walk must never answer None for a live root");
-        let killed = std::process::Command::new("kill")
-            .args(["-TERM", &shell_pid.to_string(), &inner.to_string()])
-            .status();
+        // Printed so a passing run carries the measurement and not just the
+        // word "ok": on a platform where the walk is the ONLY answer, "which
+        // process did it actually name" is the whole result (判据 §18).
+        //
+        // The elapsed time is printed for the same reason. This walk is a
+        // FULL `ProcessesToUpdate::All` refresh and it runs on every probe of
+        // every session on a platform without `tcgetpgrp`, so "how expensive
+        // is second choice when it is the only choice" is a number the rate
+        // gate's constants are chosen against — and it was never once read on
+        // Windows before 2026-09-05. NOT asserted on: it is hardware, and a
+        // ceiling nobody can reproduce is worse than no ceiling (判据 §13).
+        let t0 = std::time::Instant::now();
+        let repeat = foreground_fact_for_shell(shell_pid).map(|f| f.pid);
+        let elapsed = t0.elapsed();
+        // Read BEFORE the kill below. This entry answers with a FACT, and a
+        // dead pid has none — `fact_for_pid` says "I could not look", which is
+        // the right answer and is not the one this line is asking about. The
+        // pid-only predecessor could not tell the two apart: it ended in
+        // `.or(Some(shell_pid))` and so named a process that had already
+        // exited (production then got `None` one call later anyway, from
+        // `fact_for_pid`, so only this guard's subject moved).
+        let leaf_answers_itself = foreground_fact_for_shell(inner).map(|f| f.pid);
+        eprintln!(
+            "walk: root={shell_pid} -> descendant={inner} (repeat={repeat:?}) \
+             one_walk={elapsed:?} fact={:?}",
+            fact_for_pid(inner)
+        );
+        kill_tree(shell_pid, inner);
         let _ = child.kill();
         let _ = child.wait();
-        let _ = killed;
 
         assert_ne!(
             inner, shell_pid,
             "the walk must descend past the shell ({shell_pid}) to the child it started"
         );
         assert_eq!(
-            deepest_newest_descendant(inner),
+            leaf_answers_itself,
             Some(inner),
             "a process with no descendants must answer with ITSELF, not None -- \
              a shell sitting at its prompt is the foreground program"
         );
     }
 
-    /// A real PTY, a real child, and the pgid the kernel reports: the child
-    /// `portable-pty` spawns becomes the terminal's foreground process group
-    /// (it `setsid`s and takes the pty as its controlling terminal), so the
-    /// probe must name it.
+    /// A real PTY, a real child, and the production call order — on both
+    /// platforms, because the two platforms reach the SAME answer down two
+    /// different halves of this module.
+    ///
+    /// Unix: the child `portable-pty` spawns becomes the terminal's
+    /// foreground process group (it `setsid`s and takes the pty as its
+    /// controlling terminal), so `leader_from_terminal` names it directly and
+    /// the walk is never reached.
+    ///
+    /// Windows: there is no `tcgetpgrp`, `leader_from_terminal` answers
+    /// `None` on every probe, and the identical assertion below can only be
+    /// satisfied by `foreground_fact_for_shell`. That makes this the ONLY
+    /// place the Windows fallback is exercised through production's own call
+    /// order — and it also pins the fall-through itself: an "optimisation"
+    /// that returned early on a `None` leader would take Windows from
+    /// working to blind, and until 2026-09-05 nothing would have gone red
+    /// (判据 §8 — `None` is "I could not look", never "nothing is there").
     ///
     /// It drives the PRODUCTION path —
     /// `PtySession::maybe_probe_foreground` then `foreground_fact()` — and
     /// not a test-only twin, so the two halves are exercised in the order and
     /// under the locking discipline production uses (判据 §7: a guard on a
     /// function production does not call proves the function, not the wire).
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_real_child_is_reported_as_the_foreground_program() {
+        // The same two-level shape as `spawn_two_level_tree`, spawned on a
+        // PTY instead of a pipe. On Windows the subject of the assertion is
+        // the GRANDCHILD (`ping`), because that is what the walk must reach;
+        // on Unix `sleep` is both the child and the pgid leader.
+        let (command, args, expect) = if cfg!(windows) {
+            (
+                "cmd.exe",
+                vec!["/c", "ping", "-n", "31", "127.0.0.1"],
+                "ping",
+            )
+        } else {
+            ("sleep", vec!["30"], "sleep")
+        };
         let opts = super::super::SpawnOptions {
-            command: Some("sleep".to_string()),
-            args: vec!["30".into()],
+            command: Some(command.to_string()),
+            args: args.into_iter().map(String::from).collect(),
             rows: 6,
             cols: 40,
             ..Default::default()
@@ -859,14 +1280,19 @@ mod tests {
         let session = super::super::PtySession::spawn("t-foreground-probe".into(), &opts, None)
             .expect("spawn");
 
+        // `sysinfo` reports `PING.EXE` on Windows and `sleep` on Unix; the
+        // case is the platform's, not the program's.
+        let names_the_child = |f: &ForegroundFact| f.name.to_ascii_lowercase().contains(expect);
+
         let mut seen: Option<ForegroundFact> = None;
         for i in 0..60 {
             // `frame_produced` is true and the min interval is respected by
             // spacing the calls, so rules 1 and 2 both authorise these.
             session.maybe_probe_foreground(i * PROBE_MIN_INTERVAL_MS, true, false);
             if let Some(f) = session.foreground_fact() {
+                let hit = names_the_child(&f);
                 seen = Some(f);
-                if seen.as_ref().is_some_and(|f| f.name.contains("sleep")) {
+                if hit {
                     break;
                 }
             }
@@ -875,9 +1301,13 @@ mod tests {
         session.kill();
 
         let seen = seen.expect("the probe returned nothing for a live child in 3s");
+        // On Windows this line is the evidence that the FALLBACK ran: the
+        // subject is a grandchild, and `leader_from_terminal` cannot name one.
+        eprintln!("probe: expect={expect} seen={seen:?}");
         assert!(
-            seen.name.contains("sleep"),
-            "the foreground program must be the child, not the server: {seen:?}"
+            names_the_child(&seen),
+            "the foreground program must be the child ({expect}), not the server \
+             and not the shell that launched it: {seen:?}"
         );
         assert!(seen.pid > 0, "a fact with no pid names no process");
     }

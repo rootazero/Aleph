@@ -14,6 +14,7 @@ use crate::secrets::types::{DecryptedSecret, EncryptedEntry, EntryMetadata, Secr
 use crate::secrets::vault::SecretVault;
 use crate::sync_primitives::{Arc, Mutex, RwLock};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// `ConsumerDecides`, and the sharpest instance the round has met so far: six
 /// production reads, five distinct dispositions, one of which reports success.
@@ -300,14 +301,25 @@ impl SharedTokenManager {
 
         // 1. Decrypt all entries with old token
         let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
-        let mut plaintext_entries: Vec<(String, String, EncryptedEntry)> = Vec::new();
+        // Plaintext name/value pairs are held in `Zeroizing<String>` so the
+        // decrypted secrets are wiped from the heap on drop — including every
+        // early-return error path below — instead of lingering as plain
+        // `String`s until the allocator reuses the pages (audit secrets I-1;
+        // same zeroize-on-drop invariant as `DecryptedSecret` and the
+        // `Zeroizing<[u8; 32]>` derived keys in `secrets::crypto`).
+        let mut plaintext_entries: Vec<(Zeroizing<String>, Zeroizing<String>, EncryptedEntry)> =
+            Vec::new();
         for (name, entry) in vault.entries() {
             let decrypted = old_crypto
                 .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
                 .map_err(|e| {
                     SharedTokenError::Storage(format!("Decrypt failed for '{name}': {e}"))
                 })?;
-            plaintext_entries.push((name.clone(), decrypted, entry.clone()));
+            plaintext_entries.push((
+                Zeroizing::new(name.clone()),
+                Zeroizing::new(decrypted),
+                entry.clone(),
+            ));
         }
         drop(vault);
 
@@ -317,10 +329,14 @@ impl SharedTokenManager {
 
         // 3. Re-encrypt all entries with new token
         let mut new_entries = HashMap::new();
-        for (name, plaintext, old_entry) in plaintext_entries {
-            let encrypted = new_crypto.encrypt(&plaintext).map_err(|e| {
-                SharedTokenError::Storage(format!("Re-encrypt failed for '{name}': {e}"))
+        for (mut name, plaintext, old_entry) in plaintext_entries {
+            let encrypted = new_crypto.encrypt(plaintext.as_str()).map_err(|e| {
+                SharedTokenError::Storage(format!("Re-encrypt failed for '{}': {e}", name.as_str()))
             })?;
+            // Move the name out of its `Zeroizing` wrapper (leaving an empty
+            // string behind to be wiped) so it can key the replacement map —
+            // the vault format is unchanged.
+            let name = std::mem::take(&mut *name);
             new_entries.insert(
                 name,
                 EncryptedEntry {

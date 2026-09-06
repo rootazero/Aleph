@@ -341,6 +341,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::mcp::sampling_bridge::sampling_llm_slot(),
     crate::spend::global_ledger_slot(),
     crate::spend::global_policy_slot(),
+    crate::search::handle::global_search_handle_slot(),
     crate::gateway::security::shared_token::global_shared_token_manager_slot(),
     crate::gateway::channel_policy::channel_config_snapshot_slot(),
     crate::gateway::shutdown_forensics::boot_instant_slot(),

@@ -100,7 +100,12 @@ pub(crate) const fn message_projector_slot() -> &'static dyn SlotStatus {
 /// rather than by convention.
 enum ProjectorMsg {
     /// An event was appended to the SSOT log; materialise it.
-    Event(SessionId, SessionEventRecord),
+    ///
+    /// Boxed because this variant is ~3x the next largest and the enum sizes
+    /// the whole bounded channel: unboxed, every queued `Repair`/`Flush`
+    /// also reserved a record's worth of buffer. The extra allocation is free
+    /// next to the `record.clone()` the sender already does.
+    Event(SessionId, Box<SessionEventRecord>),
     /// Fill this session's holes and re-apply its stamps, then answer.
     Repair(SessionId, oneshot::Sender<RepairReport>),
     /// Answer once every message queued before this one has been handled.
@@ -912,7 +917,7 @@ impl SessionEventObserver for MessageProjector {
             &id.to_key_string(),
             &record.event,
         );
-        let msg = ProjectorMsg::Event(id.clone(), record.clone());
+        let msg = ProjectorMsg::Event(id.clone(), Box::new(record.clone()));
         let sent = self
             .tx
             .lock()

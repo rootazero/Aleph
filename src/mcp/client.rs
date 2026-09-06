@@ -95,6 +95,21 @@ impl McpClient {
         self.sampling_handler.set_callback(callback).await;
     }
 
+    /// Install the McpClient on its own sampling handler so context injection
+    /// (`SamplingHandler::handle_request` →
+    /// `ContextInjector::gather_context`) can list tools/resources/prompts
+    /// from this client when a server requests `sampling/createMessage` with
+    /// `includeContext: "thisServer"|"allServers"`.
+    ///
+    /// Must be called once after the client is wrapped in `Arc` and before
+    /// any server starts. Without this wire, `self.client` inside
+    /// `SamplingHandler` stays `None` and the context-injection path is
+    /// inert (`ContextInjector` is otherwise only reachable from
+    /// `McpModernMrtr::fulfill` test paths).
+    pub async fn set_sampling_client(&self, client: Arc<McpClient>) {
+        self.sampling_handler.set_client(client).await;
+    }
+
     /// Start a single external server
     ///
     /// This method is public to support incremental refresh (scoped refresh)

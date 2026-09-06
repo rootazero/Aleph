@@ -75,7 +75,7 @@ impl MemoryCommandHandler {
         };
 
         let events = self.db.get_memory_events_for_fact(fact_id).await?;
-        let projected = super::projector::EventProjector::fold_events_to_note(&events)?;
+        let projected = super::projector::fold_events_to_note(&events)?;
 
         match projected {
             Some(fact) => {
@@ -266,7 +266,7 @@ impl MemoryCommandHandler {
             .db
             .get_memory_events_for_fact(&cmd.note_path)
             .await?;
-        let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?
+        let current_fact = super::projector::fold_events_to_note(&events)?
             .ok_or_else(|| {
                 AlephError::other(format!("Fact {} not found or deleted", cmd.note_path))
             })?;
@@ -381,7 +381,7 @@ impl MemoryCommandHandler {
             .db
             .get_memory_events_for_fact(&cmd.note_path)
             .await?;
-        let current_fact = super::projector::EventProjector::fold_events_to_note(&events)?;
+        let current_fact = super::projector::fold_events_to_note(&events)?;
         let current_access_count = current_fact.map_or(0, |f| f.access_count);
 
         let event = MemoryEvent::NoteAccessed {
@@ -608,7 +608,7 @@ impl MemoryCommandHandler {
             };
 
             let events = self.db.get_memory_events_for_fact(fact_id).await?;
-            let projected = super::projector::EventProjector::fold_events_to_note(&events)?;
+            let projected = super::projector::fold_events_to_note(&events)?;
 
             match projected {
                 Some(fact) if fact.is_valid => {
@@ -852,7 +852,7 @@ pub struct DivergentFact {
 mod tests {
     use super::*;
     use crate::memory::context::{FactSource, NoteType};
-    use crate::memory::events::projector::EventProjector;
+    use crate::memory::events::projector::fold_events_to_note;
 
     fn make_handler() -> MemoryCommandHandler {
         let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
@@ -911,7 +911,7 @@ mod tests {
         assert_eq!(events[0].actor, EventActor::Agent);
 
         // Verify fact can be projected
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert_eq!(fact.id, fact_id);
@@ -960,7 +960,7 @@ mod tests {
         }
 
         // Verify projection
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert_eq!(fact.content, "User prefers Rust and Go");
@@ -1002,7 +1002,7 @@ mod tests {
             .get_memory_events_for_fact(&fact_id)
             .await
             .unwrap();
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert!(!fact.is_valid);
@@ -1028,7 +1028,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + Invalidated + Restored
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert!(fact.is_valid);
@@ -1070,7 +1070,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events.len(), 3); // Created + 2 Accessed
-        let fact = EventProjector::fold_events_to_note(&events)
+        let fact = fold_events_to_note(&events)
             .unwrap()
             .expect("should produce a fact");
         assert_eq!(fact.access_count, 2);
@@ -1101,7 +1101,7 @@ mod tests {
         assert_eq!(events[1].event.event_type_tag(), "NoteDeleted");
 
         // Verify projection returns None (deleted fact)
-        let fact = EventProjector::fold_events_to_note(&events).unwrap();
+        let fact = fold_events_to_note(&events).unwrap();
         assert!(fact.is_none());
     }
 

@@ -110,6 +110,10 @@ pub struct PolicyEvaluation {
 }
 
 impl PolicyEvaluation {
+    /// True when the policy matched no rule — neither a blocking hit nor a
+    /// warning. Marked `#[must_use]` because `let _ = p.is_clean();` is a
+    /// silent semantic reversal (it discards whether the command was allowed).
+    #[must_use]
     const fn is_clean(&self) -> bool {
         self.blocked.is_empty() && self.warned.is_empty()
     }
@@ -440,7 +444,7 @@ impl SandboxBeforeHook for CommandPolicyHook {
                 warned = ?eval.warned,
                 "command_policy blocked command"
             );
-            record_policy_decision(true, ctx.command, &eval.blocked);
+            record_policy_decision(true, ctx.command, &eval.blocked).await;
             let reason = eval
                 .reason
                 .unwrap_or_else(|| "matched a blocked command pattern".to_string());
@@ -459,7 +463,7 @@ impl SandboxBeforeHook for CommandPolicyHook {
             warned = ?eval.warned,
             "command_policy flagged suspicious command (allowed)"
         );
-        record_policy_decision(false, ctx.command, &eval.warned);
+        record_policy_decision(false, ctx.command, &eval.warned).await;
         SandboxHookResult::Allow
     }
 }
@@ -485,7 +489,7 @@ impl SandboxBeforeHook for CommandPolicyHook {
 /// the same chain: an operator's own `[security].custom_blocked` refusal is the
 /// same kind of event and belongs in the same column, so it is the same
 /// producer rather than a second one that would drift.
-pub(crate) fn record_policy_decision(blocked: bool, cmd: &SandboxCommand, rules: &[String]) {
+pub(crate) async fn record_policy_decision(blocked: bool, cmd: &SandboxCommand, rules: &[String]) {
     let Some(log) = crate::security::audit::global() else {
         return;
     };
@@ -505,7 +509,8 @@ pub(crate) fn record_policy_decision(blocked: bool, cmd: &SandboxCommand, rules:
             program = cmd.program,
             rules = rules.join(", ")
         ),
-    ));
+    ))
+    .await;
 }
 
 #[cfg(test)]

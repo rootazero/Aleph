@@ -1,19 +1,11 @@
 //! Secret provider configuration types
 //!
 //! These types support the secrets subsystem configuration:
-//! - `SecretProviderConfig`: backend configuration (local vault, 1Password, Bitwarden, etc.)
-//! - `SecretsConfig`: top-level defaults for the secrets subsystem
+//! - `SecretsConfig`: top-level settings for the secrets subsystem
+//!   (virtual keys, custom leak patterns)
 //!
 //! Example TOML:
 //! ```toml
-//! [secret_providers.local]
-//! type = "local_vault"
-//!
-//! [secret_providers.op]
-//! type = "1password"
-//! account = "my.1password.com"
-//! service_account_token_env = "OP_SERVICE_ACCOUNT_TOKEN"
-//!
 //! [secrets_config.virtual_keys]
 //! "openai" = "OPENAI_API_KEY"
 //!
@@ -22,37 +14,15 @@
 //! pattern = "internal-[a-z0-9]{32}"
 //! ```
 //!
-//! Note: a `default_provider` selector is intentionally NOT exposed at the
-//! `[secrets_config]` level. Provider selection for a given `{{secret:...}}`
-//! reference is decided by the secret-name prefix (e.g. `op://...` routes to
-//! the 1Password provider). A top-level selector without a wired consumer
-//! would be a documented-but-dead key.
+//! The `[secret_providers]` table and its `SecretProviderConfig` type were
+//! removed in the 2026-09-05 audit pass (secrets I-3): the only backend
+//! behind it was a 1Password stub whose trait never grew a `get_secret`,
+//! so a configured provider could never resolve a secret. Unknown top-level
+//! tables are ignored (`Config` does not `deny_unknown_fields`), so an old
+//! config carrying `[secret_providers.*]` keeps loading unchanged.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-// =============================================================================
-// SecretProviderConfig
-// =============================================================================
-
-/// Configuration for a secret provider backend
-///
-/// Each provider entry describes how to connect to a particular secrets store.
-/// The `provider_type` field selects the backend implementation.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SecretProviderConfig {
-    /// Backend type: "`local_vault`", "1password", "bitwarden", etc.
-    #[serde(rename = "type")]
-    pub provider_type: String,
-
-    /// Account identifier (e.g., 1Password account URL)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<String>,
-
-    /// Environment variable that holds the service account token
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service_account_token_env: Option<String>,
-}
 
 // =============================================================================
 // VirtualKeyMapping
@@ -122,33 +92,6 @@ pub struct SecretsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_secret_provider_config_serde_toml() {
-        let toml_str = r#"
-            type = "1password"
-            account = "my.1password.com"
-            service_account_token_env = "OP_SERVICE_ACCOUNT_TOKEN"
-        "#;
-        let config: SecretProviderConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.provider_type, "1password");
-        assert_eq!(config.account, Some("my.1password.com".to_string()));
-        assert_eq!(
-            config.service_account_token_env,
-            Some("OP_SERVICE_ACCOUNT_TOKEN".to_string())
-        );
-    }
-
-    #[test]
-    fn test_secret_provider_config_minimal() {
-        let toml_str = r#"
-            type = "local_vault"
-        "#;
-        let config: SecretProviderConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.provider_type, "local_vault");
-        assert_eq!(config.account, None);
-        assert_eq!(config.service_account_token_env, None);
-    }
 
     #[test]
     fn test_secrets_config_default() {

@@ -78,6 +78,16 @@ pub async fn handle_delete_backend(
         }
     }
 
+    // `[search]` is a declared-live section: deleting a backend must reach
+    // the running registry too, or the deleted backend keeps answering (and
+    // billing) until restart. Absent handle → the verdict downgrades to
+    // `restart`, reported to the caller rather than claimed live.
+    let impact = {
+        let cfg = config.read().await;
+        let landed = crate::config::live_apply::apply_live_sections(&cfg, &["search"]);
+        crate::config::classify_verified("search", &landed)
+    };
+
     // Broadcast config change event
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("search".to_string()),
@@ -86,5 +96,8 @@ pub async fn handle_delete_backend(
     });
     let _ = event_bus.publish_gateway_event(&event);
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!({ "success": true, "reload_impact": impact }),
+    )
 }

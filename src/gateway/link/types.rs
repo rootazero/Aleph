@@ -202,7 +202,7 @@ routing:
   dm_policy: pairing
   group_policy: allowlist
 "#;
-        let cfg: LinkConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: LinkConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(cfg.spec_version, "1");
         assert_eq!(cfg.id.as_str(), "my-telegram-bot");
         assert_eq!(cfg.bridge.as_str(), "telegram");
@@ -221,7 +221,7 @@ id: bare
 bridge: signal
 name: Bare Link
 "#;
-        let cfg: LinkConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: LinkConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(cfg.id.as_str(), "bare");
         assert_eq!(cfg.bridge.as_str(), "signal");
         assert!(cfg.enabled); // default true
@@ -242,7 +242,7 @@ settings:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   api_key: "${MY_API_KEY}"
 "#;
-        let cfg: LinkConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: LinkConfig = serde_yml::from_str(yaml).unwrap();
         // Environment variable syntax is preserved as literal strings
         assert_eq!(
             cfg.settings["bot_token"].as_str().unwrap(),
@@ -269,7 +269,7 @@ routing:
   dm_policy: {yaml_val}
 "#
             );
-            let cfg: LinkConfig = serde_yaml::from_str(&yaml).unwrap();
+            let cfg: LinkConfig = serde_yml::from_str(&yaml).unwrap();
             assert_eq!(cfg.routing.dm_policy, expected, "dm_policy: {yaml_val}");
         }
     }
@@ -291,7 +291,7 @@ routing:
   group_policy: {yaml_val}
 "#
             );
-            let cfg: LinkConfig = serde_yaml::from_str(&yaml).unwrap();
+            let cfg: LinkConfig = serde_yml::from_str(&yaml).unwrap();
             assert_eq!(
                 cfg.routing.group_policy, expected,
                 "group_policy: {yaml_val}"

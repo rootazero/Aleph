@@ -7,7 +7,7 @@
 //!    performed over `(hash, length)` fingerprints so no plaintext secret is
 //!    ever retained by the detector (see [`LeakDetector::scan_inbound`]).
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -193,22 +193,18 @@ struct CompiledCustomPattern {
 
 /// Bidirectional leak detector for secret values.
 pub struct LeakDetector {
-    /// Fingerprints of registered secrets with bounded capacity. The previous
-    /// unbounded `HashSet<u64>` grew for the lifetime of the process on every
-    /// `register_injected` call (Aleph Server is a long-running daemon), so a
-    /// workload that injected many distinct secrets would inflate memory and
-    /// broaden false-positive matches over time. The LRU cap evicts the
-    /// oldest fingerprints first; once evicted, an old secret value that
-    /// re-appears in inbound content will no longer be flagged here (pattern
-    /// rules still cover the leak case — they just won't tag it as
-    /// "previously injected").
-    injected_hashes: lru::LruCache<u64, ()>,
-    /// Byte lengths of the registered secrets — the window sizes
-    /// [`Self::scan_inbound`] slides over inbound content. Kept as a sorted
-    /// set because a handful of distinct lengths is the norm and the scan
-    /// cost is linear in their sum. Lengths are also LRU-bounded for the same
-    /// reason as the hash set.
-    injected_lens: lru::LruCache<usize, ()>,
+    /// `(siphash, byte_length)` fingerprints of registered secrets with
+    /// bounded capacity (capped at [`INJECTED_LRU_CAP`]). Single keyed
+    /// cache so eviction policy is atomic across the pair — the previous
+    /// design used two independent `LruCache`s and a churned-out `(hash)`
+    /// could leave an orphan `len` behind (or vice versa), letting the
+    /// inbound scanner either miss a real echo or fire on every prose
+    /// window of that byte length. No plaintext is ever stored here:
+    /// fingerprint-only by design (a forensics dump must not extend the
+    /// leak surface). On eviction, an old secret value that re-appears in
+    /// inbound content will no longer be flagged as "previously injected"
+    /// (pattern rules still cover the leak case).
+    injected: lru::LruCache<(u64, usize), ()>,
     custom_patterns: Vec<CompiledCustomPattern>,
 }
 
@@ -222,10 +218,7 @@ impl LeakDetector {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            injected_hashes: lru::LruCache::new(
-                std::num::NonZeroUsize::new(INJECTED_LRU_CAP).expect("cap is non-zero"),
-            ),
-            injected_lens: lru::LruCache::new(
+            injected: lru::LruCache::new(
                 std::num::NonZeroUsize::new(INJECTED_LRU_CAP).expect("cap is non-zero"),
             ),
             custom_patterns: Vec::new(),
@@ -272,8 +265,9 @@ impl LeakDetector {
             }
             // `put` evicts the least-recently-used entry when the cache is at
             // capacity. `contains` below promotes on hit (LRU semantics).
-            self.injected_hashes.put(secret.value_hash, ());
-            self.injected_lens.put(secret.value_len, ());
+            // Single composite key ensures hash and length evict together —
+            // see `LeakDetector::injected` doc.
+            self.injected.put((secret.value_hash, secret.value_len), ());
         }
     }
 
@@ -365,40 +359,81 @@ impl LeakDetector {
     ///
     /// Two distinct injected secrets (or one echoed twice) must both surface
     /// to the caller; a single-match API would let the second pass through
-    /// silently. The matcher walks each `(start, len)` pair exactly once
-    /// across all registered lengths, then collapses overlapping windows by
-    /// *extending* the kept range rather than dropping the later match — a
-    /// later match that starts inside a kept range and ends past it is the
-    /// same secret value with a longer hash-window, and dropping it would
-    /// leave the tail of the longer secret visible in the redacted output.
+    /// silently.
+    ///
+    /// ## Algorithm (audit secrets I-4)
+    ///
+    /// Fingerprints are grouped by byte length first, so the content is
+    /// walked **once per distinct length** rather than once per `(hash,
+    /// len)` pair — with up to [`INJECTED_LRU_CAP`] registrations the old
+    /// per-pair `char_indices` re-walk degenerated to ~100M window hashes on
+    /// a 100 KB response on the `runtime_guard` hot path. Same-length
+    /// secrets share the walk; a window hit is resolved by binary search
+    /// over the group's sorted hashes, and lengths longer than the content
+    /// are skipped outright. SipHash is not a rolling hash, so each window
+    /// is hashed independently: per length the pass is O(content × len),
+    /// the same per-window cost as before, minus the per-pair re-walk and
+    /// per-window boundary checks.
+    ///
+    /// Windows are taken over **raw bytes**. That preserves the match set
+    /// exactly: the fingerprint at registration
+    /// ([`InjectedSecret::from_value`]) is `str::hash` over the raw secret
+    /// bytes, and a byte-equal match of a valid-UTF-8 needle inside a
+    /// valid-UTF-8 haystack is necessarily char-boundary aligned (a needle
+    /// can never begin or end with a continuation byte). A defensive
+    /// boundary check still runs on hash hits, so a theoretical SipHash
+    /// collision on an unaligned window degrades to a missed redaction
+    /// instead of panicking on an invalid slice.
+    ///
+    /// Overlapping windows are collapsed by *extending* the kept range
+    /// rather than dropping the later match — a later match that starts
+    /// inside a kept range and ends past it is the same secret value with a
+    /// longer hash-window, and dropping it would leave the tail of the
+    /// longer secret visible in the redacted output.
     fn find_all_injected_substrings<'c>(&self, content: &'c str) -> Vec<&'c str> {
-        if self.injected_lens.is_empty() {
+        if self.injected.is_empty() {
             return Vec::new();
         }
-        // Sort candidate lengths once so iteration is deterministic and the
-        // returned matches come out in left-to-right order regardless of
-        // LRU ordering. Length is ascending so longer windows shrink the
-        // available suffix rather than expanding it.
-        let mut lens: Vec<usize> = self.injected_lens.iter().map(|(&len, _)| len).collect();
-        lens.sort_unstable();
+        // Group fingerprint hashes by byte length. Sorting by `(len, hash)`
+        // makes each length group contiguous AND sorted-by-hash within the
+        // group, so a window hit is a binary search with no auxiliary map.
+        // LRU iteration order is deliberately discarded — output order must
+        // not depend on registration order.
+        let mut pairs: Vec<(usize, u64)> =
+            self.injected.iter().map(|(&(h, l), _)| (l, h)).collect();
+        pairs.sort_unstable();
+        pairs.dedup();
 
+        let bytes = content.as_bytes();
         let mut matches: Vec<(usize, usize)> = Vec::new();
-        for &len in &lens {
-            if len > content.len() {
+        let mut i = 0;
+        while i < pairs.len() {
+            let len = pairs[i].0;
+            let group_start = i;
+            while i < pairs.len() && pairs[i].0 == len {
+                i += 1;
+            }
+            let group = &pairs[group_start..i];
+            if len > bytes.len() {
                 continue;
             }
-            for (start, _) in content.char_indices() {
+            // One pass over the content per distinct length: every secret of
+            // this length shares the walk.
+            for start in 0..=(bytes.len() - len) {
                 let end = start + len;
-                if end > content.len() || !content.is_char_boundary(end) {
-                    continue;
-                }
-                let window = &content[start..end];
+                // Must reproduce the exact fingerprint `str::hash` yields at
+                // registration: raw bytes followed by a 0xff terminator.
                 let mut hasher = siphasher::sip::SipHasher::new_with_keys(
                     INJECTED_HASH_KEY0,
                     INJECTED_HASH_KEY1,
                 );
-                window.hash(&mut hasher);
-                if self.injected_hashes.contains(&hasher.finish()) {
+                hasher.write(&bytes[start..end]);
+                hasher.write_u8(0xff);
+                let h = hasher.finish();
+                if group.binary_search_by_key(&h, |&(_l, hash)| hash).is_ok()
+                    && content.is_char_boundary(start)
+                    && content.is_char_boundary(end)
+                {
                     matches.push((start, end));
                 }
             }
@@ -457,19 +492,53 @@ impl Default for LeakDetector {
 /// into a single `String`, so this is O(content.len() + matches.len()) and
 /// never allocates per-match.
 fn redact_all_matches<'c>(content: &'c str, matches: &[&'c str], replacement: &str) -> String {
-    debug_assert!(
-        matches
-            .windows(2)
-            .all(|w| w[0].as_ptr() as usize + w[0].len() <= w[1].as_ptr() as usize),
-        "matches must be non-overlapping and in start order"
-    );
+    // Defensive sort + boundary check — the invariant (sorted, non-
+    // overlapping, sub-slices of `content`) is upheld by
+    // `find_all_injected_substrings`, but redaction is security-critical:
+    // a wrong index produces a silently garbled output that leaks the tail
+    // of a secret instead of raising. Sort by pointer-derived offset (not
+    // `start` of the slice, which is `0` for every `&str`), drop any
+    // match that is not actually a sub-slice of `content`, and fall back to
+    // the unmodified content if any ordering anomaly is detected so the
+    // caller surfaces a real error path rather than a partial redaction.
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(matches.len());
+    let content_start = content.as_ptr() as usize;
+    let content_end = content_start + content.len();
+    for m in matches {
+        let s = m.as_ptr() as usize;
+        let e = s + m.len();
+        if s < content_start || e > content_end || s > e {
+            // Sub-slice invariant violated — bail to the unmodified
+            // content. The caller can decide how to escalate; this function
+            // must not produce a half-redacted output that looks correct.
+            tracing::warn!(
+                match_len = m.len(),
+                "redact_all_matches received a match that is not a sub-slice of content; \
+                 returning content unmodified"
+            );
+            return content.to_string();
+        }
+        spans.push((s - content_start, e - content_start));
+    }
+    spans.sort_unstable_by_key(|&(s, _)| s);
+
     let mut out = String::with_capacity(content.len());
     let mut cursor = 0usize;
-    for m in matches {
-        let start = m.as_ptr() as usize - content.as_ptr() as usize;
+    for (start, end) in spans {
+        if start < cursor {
+            // Overlap after the dedup loop in `find_all_injected_substrings`
+            // would mean the caller supplied unsorted or overlapping input.
+            // Same bail: do not produce garbled output.
+            tracing::warn!(
+                start = start,
+                cursor = cursor,
+                "redact_all_matches received an overlapping match span; returning content unmodified"
+            );
+            return content.to_string();
+        }
         out.push_str(&content[cursor..start]);
         out.push_str(replacement);
-        cursor = start + m.len();
+        cursor = end;
     }
     out.push_str(&content[cursor..]);
     out
@@ -589,6 +658,86 @@ mod tests {
             .is_blocked());
     }
 
+    /// 50 secrets with 50 distinct byte lengths must all be found with a
+    /// single content walk per length (audit secrets I-4 regression). The
+    /// assertion is on the match SET (sorted) plus the start-sorted,
+    /// non-overlapping contract `redact_all_matches` relies on — not on any
+    /// registration/iteration order.
+    #[test]
+    fn test_many_distinct_lengths_all_matched() {
+        let mut detector = LeakDetector::new();
+        let mut secrets: Vec<String> = Vec::new();
+        let mut records: Vec<InjectedSecret> = Vec::new();
+        for i in 0..50usize {
+            // Lengths 8..58, all distinct, all >= MIN_INJECTED_MATCH_LEN.
+            let secret = format!("s{i:02}-{}", "x".repeat(4 + i));
+            records.push(InjectedSecret::from_value(&format!("k{i}"), &secret));
+            secrets.push(secret);
+        }
+        detector.register_injected(&records);
+
+        let mut response = String::from("start ");
+        for s in &secrets {
+            response.push_str(s);
+            response.push_str(" | ");
+        }
+        response.push_str("end");
+
+        let matches = detector.find_all_injected_substrings(&response);
+        let mut got: Vec<&str> = matches.clone();
+        got.sort_unstable();
+        let mut want: Vec<&str> = secrets.iter().map(String::as_str).collect();
+        want.sort_unstable();
+        assert_eq!(got, want, "match set must be exactly the injected secrets");
+
+        // Start-sorted, non-overlapping — the redaction contract.
+        let base = response.as_ptr() as usize;
+        let spans: Vec<(usize, usize)> = matches
+            .iter()
+            .map(|m| {
+                (
+                    m.as_ptr() as usize - base,
+                    m.as_ptr() as usize - base + m.len(),
+                )
+            })
+            .collect();
+        for w in spans.windows(2) {
+            assert!(w[0].0 < w[1].0, "matches must be start-sorted");
+            assert!(w[0].1 <= w[1].0, "matches must be non-overlapping");
+        }
+    }
+
+    /// A secret containing multi-byte UTF-8, embedded in CJK prose: the
+    /// byte-window scan must find exactly the secret and must not
+    /// false-positive on byte-shifted windows of the surrounding multi-byte
+    /// text (audit secrets I-4 regression for the byte-slice switch).
+    #[test]
+    fn test_multibyte_secret_in_multibyte_content() {
+        let mut detector = LeakDetector::new();
+        let secret = "tok-密钥-9f3a"; // 4 + 6 + 5 = 15 bytes >= MIN_INJECTED_MATCH_LEN
+        detector.register_injected(&[InjectedSecret::from_value("k", secret)]);
+
+        let response = format!("结果：值={secret}，完毕。密钥🔑不应误报。");
+        let matches = detector.find_all_injected_substrings(&response);
+        assert_eq!(matches, vec![secret], "exactly the secret must match");
+
+        let decision = detector.scan_inbound(&response);
+        assert!(decision.is_blocked());
+        if let LeakDecision::Block {
+            redacted_content, ..
+        } = decision
+        {
+            assert!(!redacted_content.contains(secret));
+            assert!(redacted_content.contains(REDACTED_INJECTED));
+        }
+
+        // Same-shape multi-byte content without the secret must not
+        // false-positive on any mid-codepoint window.
+        assert!(!detector
+            .scan_inbound("结果：值=其他内容，完毕。")
+            .is_blocked());
+    }
+
     #[test]
     fn test_short_injected_values_not_tracked() {
         let mut detector = LeakDetector::new();
@@ -648,15 +797,54 @@ mod tests {
         let mut detector = LeakDetector::new();
         let secret = "abcdefghij-fingerprint-only";
         detector.register_injected(&[InjectedSecret::from_value("k", secret)]);
-        assert!(!detector.injected_hashes.is_empty());
+        assert!(!detector.injected.is_empty());
+        let lengths: Vec<usize> = detector.injected.iter().map(|(&(_h, l), _)| l).collect();
         assert_eq!(
-            detector
-                .injected_lens
-                .iter()
-                .map(|(k, _)| *k)
-                .collect::<Vec<_>>(),
+            lengths,
             vec![secret.len()],
-            "only the length is kept alongside the hash"
+            "length is kept alongside the hash"
+        );
+    }
+
+    /// Regression for `severed-wire-2026-09-05-modules2 secrets I-2`: two
+    /// independent LRU caches could half-evict (hash gone, len survives —
+    /// or vice versa). The combined `(hash, len)` keyed cache holds them
+    /// together, so a single combined-LRU-bound fingerprint must remain
+    /// atomically co-resident with its length.
+    #[test]
+    fn test_register_injected_evicts_hash_and_length_atomically() {
+        let mut detector = LeakDetector::new();
+        // Push two full caches of fingerprints with overlapping (h, l)
+        // coverage, then re-register a fresh secret and assert the oldest
+        // entry was evicted as a unit, not orphaned across two caches.
+        let older: Vec<InjectedSecret> = (0..INJECTED_LRU_CAP)
+            .map(|i| {
+                let val = format!("older-secret-{i:04}-padding-to-make-it-long-enough");
+                InjectedSecret::from_value(&format!("k{i}"), &val)
+            })
+            .collect();
+        detector.register_injected(&older);
+        assert_eq!(detector.injected.len(), INJECTED_LRU_CAP);
+
+        // The first secret to register must no longer be present after the
+        // (hash, len) tuple is evicted for a new registration; if half-
+        // eviction had returned, the (hash) entry would still match while
+        // (len) was gone, or vice versa.
+        let newest = InjectedSecret::from_value("newest", "newest-secret-padding");
+        detector.register_injected(&[newest]);
+        assert_eq!(detector.injected.len(), INJECTED_LRU_CAP);
+        let contains_newest = detector
+            .injected
+            .iter()
+            .any(|(&(_h, l), _)| l == "newest-secret-padding".len());
+        assert!(contains_newest, "newest fingerprint must be present");
+        let contains_oldest = detector
+            .injected
+            .iter()
+            .any(|(&(_h, l), _)| l == "older-secret-0000-padding-to-make-it-long-enough".len());
+        assert!(
+            !contains_oldest,
+            "oldest (hash, len) pair must have been evicted atomically"
         );
     }
 

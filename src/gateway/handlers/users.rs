@@ -351,7 +351,8 @@ pub async fn handle_create(request: JsonRpcRequest, store: Arc<SecurityStore>) -
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     crate::gateway::caller_identity::current_caller_user(),
                     format!("users.create: created {} role={}", user_id, role.as_str()),
-                ));
+                ))
+                .await;
             }
             let result = aleph_protocol::users::UserCreateResult {
                 user: UserView {
@@ -502,7 +503,8 @@ pub async fn handle_update(
                     old_role,
                     new_role.as_str()
                 ),
-            ));
+            ))
+            .await;
         }
     }
 
@@ -521,12 +523,13 @@ pub async fn handle_update(
                 log.log(crate::security::audit::AuditEntry::authority_change(
                     actor.clone(),
                     format!("users.update: status {} →deactivated", params.user_id),
-                ));
+                ))
+                .await;
             }
         }
         revoked_devices = deactivate_devices(&store, &kick, &params.user_id).await;
         revoked_tickets =
-            burn_outstanding_bootstrap_tickets(&store, &params.user_id, actor.clone());
+            burn_outstanding_bootstrap_tickets(&store, &params.user_id, actor.clone()).await;
         revoked_senders = revoke_channel_bindings(&kick, &params.user_id).await;
         freeze = freeze_owned_background_work(&params.user_id).await;
     }
@@ -540,7 +543,8 @@ pub async fn handle_update(
             log.log(crate::security::audit::AuditEntry::authority_change(
                 actor.clone(),
                 format!("users.update: status {} deactivated→active", params.user_id),
-            ));
+            ))
+            .await;
         }
     }
 
@@ -795,7 +799,7 @@ async fn deactivate_devices(
 /// record. The entry names the count and the principal and never the ticket
 /// codes: a bootstrap ticket is a bearer credential and this module exists to
 /// keep bearer credentials out of logs.
-fn burn_outstanding_bootstrap_tickets(
+async fn burn_outstanding_bootstrap_tickets(
     store: &Arc<SecurityStore>,
     user_id: &str,
     actor: Option<String>,
@@ -823,7 +827,8 @@ fn burn_outstanding_bootstrap_tickets(
             log.log(crate::security::audit::AuditEntry::authority_change(
                 actor,
                 format!("users.update: burned {burned} bootstrap ticket(s) for {user_id}"),
-            ));
+            ))
+            .await;
         }
     }
     burned
@@ -991,7 +996,9 @@ impl BackgroundWorkHandles {
 /// The two surfaces still report **different numbers**, on purpose: this one
 /// counts what the sweep CHANGED (`enabled && owned`), the preview counts what
 /// the principal OWNS. See [`aleph_protocol::users::FrozenBackgroundWork`].
-async fn freeze_owned_background_work(user_id: &str) -> aleph_protocol::users::FrozenBackgroundWork {
+async fn freeze_owned_background_work(
+    user_id: &str,
+) -> aleph_protocol::users::FrozenBackgroundWork {
     freeze_owned_background_work_with(&BackgroundWorkHandles::from_globals(), user_id).await
 }
 
@@ -2216,20 +2223,28 @@ mod tests {
     /// `gateway_devices.rs`'s per-credential rule.
     #[tokio::test]
     async fn a_second_deactivation_burns_zero_tickets_and_writes_no_authority_change() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // ⚠️ A UNIQUE principal, not the literal `u-alice`. The audit sink is
+        // process-global and the lock only serialises the tests that ASSERT on
+        // it, so sibling tests deactivating THEIR `u-alice` wrote rows this
+        // test could not tell from its own -- measured 2026-09-05, it read
+        // "burned 1 bootstrap ticket(s) for u-alice" from a test that had
+        // nothing to do with it. The other audit tests already key off a fresh
+        // uuid; this is that fix carried across (判据 §16).
+        let uid = format!("u-{}", uuid::Uuid::new_v4());
         let store = seeded_store();
-        store
-            .create_user("u-alice", "Alice", UserRole::Member)
-            .unwrap();
+        store.create_user(&uid, "Alice", UserRole::Member).unwrap();
         let mgr =
             crate::gateway::security::device_token_manager::DeviceTokenManager::new(store.clone());
-        mgr.create_bootstrap_ticket(Some(600_000), Some("u-alice"))
+        mgr.create_bootstrap_ticket(Some(600_000), Some(&uid))
             .unwrap();
 
         handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": "u-alice", "status": "deactivated"}),
+                json!({"user_id": uid, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
@@ -2238,12 +2253,13 @@ mod tests {
 
         // Install the audit handle only for the SECOND write, so anything it
         // receives came from the retry.
-        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        let (log, mut rx) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
         let resp = handle_update(
             rpc_request(
                 "users.update",
-                json!({"user_id": "u-alice", "status": "deactivated"}),
+                json!({"user_id": uid, "status": "deactivated"}),
             ),
             store.clone(),
             test_kick_sink(),
@@ -2251,7 +2267,11 @@ mod tests {
         .await;
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            details.push(entry.detail);
+            // Only this test's principal: everything else in the channel was
+            // written by whatever else the binary is running right now.
+            if entry.detail.contains(&uid) {
+                details.push(entry.detail);
+            }
         }
         crate::security::audit::clear_global_for_test();
 
@@ -2272,8 +2292,11 @@ mod tests {
     /// handle is process-global.
     #[tokio::test]
     async fn authority_changes_are_audited() {
-        let _serial = crate::security::audit::AUDIT_TEST_LOCK.lock().unwrap();
-        let (log, mut rx) = crate::security::audit::SecurityAuditLog::new(16);
+        let _serial = crate::security::audit::AUDIT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (log, mut rx) =
+            crate::security::audit::SecurityAuditLog::new(crate::security::audit::TEST_LOG_CAPACITY);
         crate::security::audit::replace_global_for_test(&log);
 
         let store = seeded_store();
@@ -2307,11 +2330,11 @@ mod tests {
 
         let mut details = Vec::new();
         while let Ok(entry) = rx.try_recv() {
-            assert_eq!(
-                entry.event_type,
-                crate::security::audit::AuditEventType::AuthorityChange
-            );
-            details.push((entry.actor_user, entry.detail));
+            // NOT asserting the event type here: the channel also carries rows
+            // written by whatever else the binary is running, and their type is
+            // none of this test's business. The assertion moved below the
+            // filter, where every row is this test's own.
+            details.push((entry.event_type, entry.actor_user, entry.detail));
         }
         crate::security::audit::clear_global_for_test();
 
@@ -2322,8 +2345,12 @@ mod tests {
         // entries carry this test's scoped caller.
         let mine: Vec<String> = details
             .into_iter()
-            .filter(|(_, d)| d.contains(&new_id))
-            .map(|(actor, d)| {
+            .filter(|(_, _, d)| d.contains(&new_id))
+            .map(|(event_type, actor, d)| {
+                assert_eq!(
+                    event_type,
+                    crate::security::audit::AuditEventType::AuthorityChange
+                );
                 assert_eq!(actor.as_deref(), Some("u-owner"));
                 d
             })
@@ -2374,13 +2401,10 @@ mod tests {
     }
 
     fn seed_goal(handles: &BackgroundWorkHandles, session: &str, owner: Option<&str>) {
-        let goal = crate::goal::Goal::new(session, "obj", 0, 0).with_pursuit(
-            crate::goal::PursuitMode::Active { max_iterations: 5 },
-        );
+        let goal = crate::goal::Goal::new(session, "obj", 0, 0)
+            .with_pursuit(crate::goal::PursuitMode::Active { max_iterations: 5 });
         let goal = match owner {
-            Some(u) => {
-                goal.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u)))
-            }
+            Some(u) => goal.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u))),
             None => goal,
         };
         handles.goals.as_ref().unwrap().put(&goal).unwrap();
@@ -2394,9 +2418,7 @@ mod tests {
             0,
         );
         let state = match owner {
-            Some(u) => {
-                state.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u)))
-            }
+            Some(u) => state.with_owner_scope(Some(&crate::scope::ScopeAttribution::personal(u))),
             None => state,
         };
         handles.loops.as_ref().unwrap().put(state);
@@ -2518,8 +2540,9 @@ mod tests {
     fn detail_ctx() -> UserDetailContext {
         UserDetailContext {
             projects: Arc::new({
-                let store =
-                    crate::projects::ProjectStore::new(rusqlite::Connection::open_in_memory().unwrap());
+                let store = crate::projects::ProjectStore::new(
+                    rusqlite::Connection::open_in_memory().unwrap(),
+                );
                 store.create_schema().unwrap();
                 store
             }),

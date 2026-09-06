@@ -4,7 +4,7 @@
 //! to reconstruct the state of a fact (or the entire memory) as it was
 //! at that moment. Useful for debugging, auditing, and undo operations.
 //!
-//! The traveler delegates to [`EventProjector::fold_events_to_note`] for
+//! The traveler delegates to [`super::projector::fold_events_to_note`] for
 //! the actual state reconstruction, and provides higher-level query
 //! methods for timeline and explanation use cases.
 
@@ -15,7 +15,7 @@ use crate::memory::events::{MemoryEvent, MemoryEventEnvelope};
 use crate::memory::explain::{ExplainedEvent, FactExplanation};
 use crate::resilience::database::StateDatabase;
 
-use super::projector::EventProjector;
+use super::projector::fold_events_to_note;
 
 /// Time-travel service for historical memory state reconstruction.
 ///
@@ -91,7 +91,7 @@ impl MemoryTimeTraveler {
         }
 
         // Reconstruct current state via projector
-        let current_fact = EventProjector::fold_events_to_note(&events)?;
+        let current_fact = fold_events_to_note(&events)?;
 
         let (content, is_valid) = match &current_fact {
             Some(f) => (Some(f.content.clone()), f.is_valid),

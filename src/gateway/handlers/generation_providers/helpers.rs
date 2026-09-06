@@ -70,6 +70,28 @@ pub(crate) fn provider_exists(config: &GenerationConfig, name: &str) -> bool {
         || config.providers.contains_key(name)
 }
 
+/// The modalities this provider is the configured default for.
+///
+/// `list` and `get` both need it and both used to spell out the same five
+/// `if` statements, which is two tables of one fact: a sixth modality would
+/// have had to be remembered twice (判据 §1).
+pub(crate) fn default_modalities(config: &GenerationConfig, name: &str) -> Vec<GenerationType> {
+    [
+        (&config.default_image_provider, GenerationType::Image),
+        (&config.default_video_provider, GenerationType::Video),
+        (&config.default_audio_provider, GenerationType::Audio),
+        (&config.default_speech_provider, GenerationType::Speech),
+        (
+            &config.default_transcription_provider,
+            GenerationType::Transcription,
+        ),
+    ]
+    .into_iter()
+    .filter(|(configured, _)| configured.as_deref() == Some(name))
+    .map(|(_, gen_type)| gen_type)
+    .collect()
+}
+
 /// Parse a generation type string into a `GenerationType` enum.
 pub(crate) fn parse_generation_type(s: &str) -> GenerationType {
     match s {

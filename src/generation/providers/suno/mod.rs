@@ -66,6 +66,12 @@ impl std::fmt::Debug for SunoProvider {
     }
 }
 
+impl crate::generation::providers::http::WithRequestTimeout for SunoProvider {
+    fn request_client_mut(&mut self) -> &mut reqwest::Client {
+        &mut self.client
+    }
+}
+
 impl SunoProvider {
     pub fn new<S: Into<String>>(
         api_key: S,

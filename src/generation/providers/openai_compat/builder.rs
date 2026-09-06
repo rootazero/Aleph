@@ -25,7 +25,7 @@ use super::types::{DEFAULT_COLOR, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS};
 ///     .model("dall-e-3")
 ///     .color("#ff0000")
 ///     .supported_types(vec![GenerationType::Image, GenerationType::Video])
-///     .timeout_secs(180)
+///     .timeout_secs(Some(180))
 ///     .build()?;
 /// ```
 #[derive(Debug)]
@@ -111,8 +111,12 @@ impl OpenAiCompatProviderBuilder {
     ///
     /// * `secs` - Timeout duration in seconds
     #[must_use]
-    pub const fn timeout_secs(mut self, secs: u64) -> Self {
-        self.timeout_secs = secs;
+    pub const fn timeout_secs(mut self, secs: Option<u64>) -> Self {
+        // `None` = unconfigured. Keep the default this builder chose; the
+        // config field cannot express "unset" any other way.
+        if let Some(secs) = secs {
+            self.timeout_secs = secs;
+        }
         self
     }
 
@@ -170,7 +174,7 @@ impl OpenAiCompatProviderBuilder {
 
         // Build HTTP client
         let client = Client::builder()
-            .timeout(Duration::from_secs(self.timeout_secs))
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {e}")))?;
 

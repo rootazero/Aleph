@@ -6,33 +6,26 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait FetchProvider: Send + Sync {
     /// Fetch `url` and return extracted markdown. Errors bubble up so the
-    /// registry can fall through to the next provider / built-in fetch.
+    /// caller can fall through to another backend / the built-in fetch.
     ///
     /// **SSRF contract**: callers MUST SSRF-validate `url` against the
     /// operator-configured [`crate::security::ssrf::SsrfPolicy`] BEFORE
     /// invoking `fetch`. Providers do not re-validate — they trust the
-    /// caller's gate. This keeps the operator's policy authoritative and
-    /// avoids redundant DNS resolutions (which would otherwise widen the
-    /// DNS-rebinding TOCTOU window).
+    /// caller's gate. Note that caller-side validation cannot pin the DNS
+    /// resolution a provider performs on its own network; that gap
+    /// (BT-D-R4-22) is exactly why the agent-facing `web_fetch` path no
+    /// longer routes through providers at all.
     ///
-    /// **Production callers today**: [`crate::builtin_tools::web_fetch`]
-    /// deliberately bypasses the configured fetch providers at the entry
-    /// point (BT-D-R4-22 in `web_fetch/mod.rs`) because the SSRF DNS pin
-    /// cannot yet be threaded into a provider's own `reqwest` client. The
-    /// only live caller of `FetchProvider::fetch` is the user-invoked
-    /// connection-test RPC in
+    /// **Production caller**: the user-invoked connection-test RPC
     /// `gateway/handlers/fetch_config.rs::handle_test`, which passes a
-    /// hardcoded `https://example.com` and cannot leak. When the agent-facing
-    /// path returns to providers (DNS pin plumbing lands), the
-    /// `SsrfPolicy::validate_url_async` gate belongs on the CALLER, not on
-    /// the provider — providers stay one-way HTTP wrappers.
+    /// hardcoded `https://example.com` and cannot leak. `WebFetchTool`
+    /// carries no provider wiring anymore; reviving it requires a provider
+    /// API that honors a caller-supplied DNS pin (or enforces an equivalent
+    /// SSRF policy server-side) before arbitrary-URL delegation is safe.
     async fn fetch(&self, url: &str) -> Result<String>;
 
     /// Stable provider name (matches the `[fetch].backends` key).
     fn name(&self) -> &str;
-
-    /// Whether this provider is configured enough to be used.
-    fn is_available(&self) -> bool;
 }
 
 #[cfg(test)]
@@ -49,16 +42,12 @@ mod tests {
         fn name(&self) -> &str {
             "dummy"
         }
-        fn is_available(&self) -> bool {
-            true
-        }
     }
 
     #[tokio::test]
     async fn trait_object_is_usable() {
         let p: std::sync::Arc<dyn FetchProvider> = std::sync::Arc::new(Dummy);
         assert_eq!(p.name(), "dummy");
-        assert!(p.is_available());
         assert_eq!(p.fetch("http://x").await.unwrap(), "# md");
     }
 }

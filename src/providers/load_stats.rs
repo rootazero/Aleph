@@ -58,7 +58,11 @@ fn now_min() -> u64 {
 /// still counts in full, at second 30 it counts half.
 ///
 /// Lock-free — a roll is a single CAS on the epoch; the previous counts are
-/// *moved*, not discarded.
+/// *moved*, not discarded. The `roll_lock` below is the minimal mutex needed
+/// to make the (load prev / store prev / store zero) sequence atomic with
+/// respect to a concurrent `bump_req` from another thread; without it, the
+/// `prev_req` store could be observed by a reader after the corresponding
+/// `req.store(0)` had already wiped the increment that produced it.
 #[derive(Debug, Default)]
 struct RateWindow {
     /// Monotonic-minute index this window's counters belong to.
@@ -71,6 +75,11 @@ struct RateWindow {
     prev_req: AtomicU32,
     /// Tokens consumed in the previous window, weight-decayed on read.
     prev_tokens: AtomicU64,
+    /// Serialises the multi-field roll so a `bump_req`/`add_tokens` racing
+    /// the reset cannot land its `fetch_add` in the window the winner is
+    /// about to wipe. Held only across the roll itself (a few atomic
+    /// loads/stores); `bump_req` then proceeds lock-free.
+    roll_lock: std::sync::Mutex<()>,
 }
 
 impl RateWindow {
@@ -81,6 +90,15 @@ impl RateWindow {
     /// proceed against the freshly-rolled window. A reader/writer racing the
     /// reset sees a value at most one request stale — the same advisory
     /// contract the rest of this module keeps.
+    ///
+    /// The `roll_lock` serialises the (load prev / store prev / store zero)
+    /// sequence against a concurrent `bump_req`. Without it, a thread that
+    /// lost the epoch CAS could `fetch_add` its increment into the window
+    /// between the winner's `prev_req.store(...)` and `req.store(0)`, and
+    /// the winner's reset would then silently wipe that increment — the
+    /// "freshly arrived request is wiped by the reset" bug the audit
+    /// flagged. The lock is the minimal fix that keeps the lock-free read
+    /// fast path (snapshot/weighted) intact.
     fn roll(&self, now: u64) {
         let cur = self.epoch_min.load(Ordering::Relaxed);
         if cur != now
@@ -89,6 +107,10 @@ impl RateWindow {
                 .compare_exchange(cur, now, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
         {
+            // Caller (bump_req / add_tokens / snapshot) already holds
+            // `roll_lock`, so this multi-field swap is atomic with respect
+            // to concurrent bumpers. The CAS itself still gates "only one
+            // thread rolls"; the lock makes the roll's effects consistent.
             if now == cur + 1 {
                 self.prev_req
                     .store(self.req.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -105,12 +127,31 @@ impl RateWindow {
 
     /// Count one request against the current window.
     fn bump_req(&self) {
+        // Take the same `roll_lock` as `roll` so a concurrent roll cannot
+        // observe our `fetch_add` and then wipe it. The lock is held only
+        // for the duration of `roll` + `fetch_add` (both nanoseconds) so
+        // contention is bounded by the per-window call rate, not the global
+        // request rate.
+        let _guard = self.roll_lock.lock().unwrap_or_else(|e| {
+            tracing::warn!(
+                "RateWindow::roll_lock poisoned in bump_req; recovering \
+                 (the request counter for this window may be off-by-one)"
+            );
+            e.into_inner()
+        });
         self.roll(now_min());
         self.req.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Add a successful call's tokens to the current window.
     fn add_tokens(&self, n: u64) {
+        let _guard = self.roll_lock.lock().unwrap_or_else(|e| {
+            tracing::warn!(
+                "RateWindow::roll_lock poisoned in add_tokens; recovering \
+                 (the token counter for this window may be off-by-one)"
+            );
+            e.into_inner()
+        });
         self.roll(now_min());
         self.tokens.fetch_add(n, Ordering::Relaxed);
     }
@@ -136,9 +177,18 @@ impl RateWindow {
     /// `route_status` snapshot — read this same weighted value, so the reported
     /// `rpm_used`/`tpm_used` decay smoothly across the minute boundary rather
     /// than jumping to zero.
+    ///
+    /// Uses `try_lock` so the hot read path never blocks on a concurrent
+    /// bumper. Losing the race means we skip the roll this tick; the next
+    /// snapshot in the next second will roll. Skipping a roll means the
+    /// counters stay one minute "stale" for that tick — the weight decay
+    /// is over the next 60s, so the worst-case error is 1/60th of a minute
+    /// of stale data, which is well within the advisory-only contract.
     fn snapshot(&self) -> (u32, u64) {
         let secs = now_secs();
-        self.roll(secs / 60);
+        if let Ok(_guard) = self.roll_lock.try_lock() {
+            self.roll(secs / 60);
+        }
         self.weighted(secs)
     }
 }

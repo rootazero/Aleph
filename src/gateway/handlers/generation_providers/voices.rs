@@ -321,11 +321,35 @@ mod tests {
     use crate::config::types::generation::GenerationProviderConfig;
     use crate::gateway::handlers::generation_providers::build_generation_provider_for_persistence;
 
+    /// A config with no base_url and no model takes the preset's.
+    ///
+    /// It used to bind `_persisted` and assert nothing at all, so it passed for
+    /// every possible behaviour of the function it names — including the
+    /// behaviour where the preset lookup returns `None` and nothing is applied
+    /// (判据 §2: in what case does this go red?). The preset's own existence is
+    /// asserted first, or "the preset was empty" and "the merge works" produce
+    /// the same green.
     #[test]
     fn test_build_generation_provider_applies_preset_defaults() {
-        let cfg = GenerationProviderConfig::new("openai");
         let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
-        let _persisted = build_generation_provider_for_persistence("dalle_main", cfg, &overrides);
+        let preset = crate::config::types::generation::presets::get_merged_generation_preset(
+            "dalle_main",
+            "openai",
+            &overrides,
+        )
+        .expect("the 'openai' provider type has a builtin preset to merge from");
+        assert!(
+            preset.base_url.is_some() && !preset.default_model.is_empty(),
+            "the preset carries nothing to apply, so this test could not fail"
+        );
+
+        let cfg = GenerationProviderConfig::new("openai");
+        assert!(cfg.base_url.is_none() && cfg.models.is_empty());
+
+        let persisted =
+            build_generation_provider_for_persistence("dalle_main", cfg, &overrides, None);
+        assert_eq!(persisted.base_url, preset.base_url);
+        assert_eq!(persisted.models, vec![preset.default_model]);
     }
 
     #[test]

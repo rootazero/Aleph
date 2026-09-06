@@ -158,7 +158,9 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.color, "#808080");
         assert!(config.capabilities.is_empty());
-        assert_eq!(config.timeout_seconds, 120);
+        // Unset, not 120: nothing here mentioned the knob, so the provider
+        // named by each entry is what decides.
+        assert_eq!(config.timeout_seconds, None);
     }
 
     #[test]
@@ -226,7 +228,7 @@ mod tests {
         // Invalid: zero timeout
         let zero_timeout = GenerationProviderConfig {
             provider_type: "openai".to_string(),
-            timeout_seconds: 0,
+            timeout_seconds: Some(0),
             ..Default::default()
         };
         assert!(zero_timeout.validate("test").is_err());
@@ -361,7 +363,7 @@ mod tests {
         assert_eq!(config.color, "#10a37f");
         assert!(config.capabilities.contains(&GenerationType::Image));
         assert!(config.capabilities.contains(&GenerationType::Speech));
-        assert_eq!(config.timeout_seconds, 180);
+        assert_eq!(config.timeout_seconds, Some(180));
         assert_eq!(config.defaults.width, Some(1024));
         assert_eq!(config.defaults.height, Some(1024));
         assert_eq!(config.defaults.quality, Some("hd".to_string()));

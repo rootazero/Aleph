@@ -89,48 +89,68 @@ impl Drop for WorktreeHandle {
         if self.cleaned_up.load(Ordering::Acquire) {
             return;
         }
-        // Safety net: spawn blocking task to run `git worktree remove --force`.
-        // Errors are logged via tracing; we never panic from Drop.
+        // Safety net: hand the `git worktree remove --force` to the tokio
+        // blocking pool so the calling executor thread is not stalled by a
+        // synchronous child process. The JoinHandle is intentionally dropped
+        // because `Drop` itself is sync — the blocking task is fire-and-forget
+        // and logs its own result. If no runtime is reachable (e.g. very
+        // late shutdown), fall back to a plain std::thread so we still try
+        // the cleanup once. We never panic from Drop.
         // rust-doctor-disable-next-line excessive-clone
         let repo_root = self.repo_root.clone();
         // rust-doctor-disable-next-line excessive-clone
         let path = self.path.clone();
+        // rust-doctor-disable-next-line excessive-clone
+        let trace_sink = self.trace_sink.clone();
         tracing::error!(
             path = %path.display(),
             "WorktreeHandle leaked — Drop safety-net removing"
         );
-        if let Some(sink) = self.trace_sink.as_ref() {
+        if let Some(sink) = trace_sink.as_ref() {
             sink.on_trace(&crate::harness::trace::LoopTraceEvent::WorktreeCleanedUp {
                 // rust-doctor-disable-next-line excessive-clone
-                path: self.path.clone(),
+                path: path.clone(),
                 leaked: true,
             });
         }
-        let result = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&repo_root)
-            .arg("worktree")
-            .arg("remove")
-            .arg("--force")
-            .arg(&path)
-            .status();
-        match result {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
-                tracing::error!(
-                    path = %path.display(),
-                    code = ?status.code(),
-                    "Drop safety-net cleanup returned non-zero exit code"
-                );
+        let outcome = move || {
+            let result = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo_root)
+                .arg("worktree")
+                .arg("remove")
+                .arg("--force")
+                .arg(&path)
+                .status();
+            match result {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    tracing::error!(
+                        path = %path.display(),
+                        code = ?status.code(),
+                        "Drop safety-net cleanup returned non-zero exit code"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        path = %path.display(),
+                        error = %e,
+                        "Drop safety-net cleanup failed"
+                    );
+                }
             }
-            Err(e) => {
-                tracing::error!(
-                    path = %path.display(),
-                    error = %e,
-                    "Drop safety-net cleanup failed"
-                );
-            }
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::spawn_blocking(outcome);
+        } else {
+            // Last-ditch fallback when the runtime has already been dropped.
+            // std::thread::spawn is fine here because Drop already runs
+            // off the executor; we just need the work off the current call.
+            let _ = std::thread::Builder::new()
+                .name("aleph-worktree-cleanup".into())
+                .spawn(outcome);
         }
+        let _ = trace_sink;
     }
 }
 
@@ -306,9 +326,11 @@ impl crate::sandbox::Sandbox for WorktreeSandbox {
             .envs(command.env.iter())
             // Injected unconditionally, and it has to stay that way. `program`
             // here is never `cargo`: every caller that reaches this sandbox
-            // spawns an *interpreter* — `code_exec` uses `language.runtime()`
-            // (`bash` / `sh` / `python` / `node`), `code_check` hardcodes
-            // `bash`, and the `bash` tool likewise — with the cargo invocation
+            // spawns an *interpreter* — `node` as a literal, and otherwise a
+            // probe result from `utils::shell` (`resolve()` for every shell
+            // caller, `python3()` for Python), which on Windows is an absolute
+            // path to pwsh / powershell / cmd. `code_exec`, `code_check` and
+            // the `bash` tool all go through those, with the cargo invocation
             // living inside `args` as shell text. So a `program == "cargo"`
             // predicate is false on every production path, and narrowing to it
             // (SAN-006, f4a994ee2) silently deleted the redirect that
