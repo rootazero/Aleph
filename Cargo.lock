@@ -12406,7 +12406,6 @@ dependencies = [
  "aleph-protocol",
  "async-trait",
  "futures",
- "leptos",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

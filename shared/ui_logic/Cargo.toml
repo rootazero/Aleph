@@ -17,9 +17,6 @@ unicode-width = "0.2"
 # Internal
 aleph-protocol = { path = "../protocol" }
 
-# Leptos (0.8 for the latest stable Reactivity)
-leptos = { version = "0.8", features = ["csr"], optional = true }
-
 # WASM (for browser)
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
@@ -29,12 +26,16 @@ web-sys = { version = "0.3", optional = true, features = [
     "ErrorEvent",
     "CloseEvent",
     "Window",
-    "console"
+    "console",
+    # Was reaching this crate's build only via feature unification with the
+    # (now-removed) `leptos` dependency, which pulled it in transitively —
+    # `wasm.rs`'s own direct use of `web_sys::BinaryType` needs it declared
+    # here so the `wasm` feature keeps building standalone.
+    "BinaryType"
 ] }
 
 [features]
-default = ["leptos", "wasm"]
-leptos = ["dep:leptos"]
+default = ["wasm"]
 wasm = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
