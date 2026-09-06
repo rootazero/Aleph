@@ -375,33 +375,66 @@ impl ToolResultStore {
         Some(marker)
     }
 
-    /// Read back a blob this store wrote.
+    /// Read back the blob this store wrote **for `tool_call_id`**.
     ///
     /// The path always arrives from a `[Full output persisted: …]` marker
     /// inside persisted tool text. That marker is server-written, but it is
-    /// still **data** read back out of a log, so this refuses anything that
-    /// does not resolve under this store's own root.
+    /// still **data** read back out of a log, so a path gets both available
+    /// bindings before a single byte is read.
     ///
-    /// Containment is checked against the store **base** directory, not
-    /// [`Self::blob_dir`]: blobs live in per-session subdirectories under the
-    /// base, so checking against one handle's `blob_dir()` would reject every
-    /// other session's legitimate blob.
+    /// # One canonicalization, both gates
     ///
-    /// Fail-closed in both directions, and neither is allowed to soften into
-    /// "here are some bytes" (判据 §8):
+    /// The two gates deliberately live in one function because they must bind
+    /// the **same** file (判据 §12: the check and the thing it authorises have
+    /// to be derived at one point). Splitting them — a name check on the raw
+    /// path, a containment check on the resolved one — is a hole, not a style
+    /// choice: a symlink at `<root>/<mine>/c-mine_grep.txt` pointing at
+    /// `<root>/<victim>/toolu_v_bash.txt` passes a raw-path name check and a
+    /// resolved-path containment check simultaneously. Everything below is
+    /// checked against `target`, the resolved path.
     ///
-    /// * a path that does not exist makes `canonicalize()` return `Err`;
-    /// * a path that exists outside the root returns `PermissionDenied`.
+    /// * **Containment** — against the store **base** directory, not
+    ///   [`Self::blob_dir`]: blobs live in per-session subdirectories under the
+    ///   base, so checking against one handle's `blob_dir()` would reject every
+    ///   other session's legitimate blob. Canonicalizing both sides is what
+    ///   stops `<root>/../../etc/hosts` from passing the prefix test.
+    /// * **Ownership** — [`blob_belongs_to_call`], because containment alone
+    ///   admits every session's blobs (they share one root). Read that
+    ///   function's doc for exactly how strong that binding is; it is a name
+    ///   prefix, not set membership.
     ///
-    /// Both `canonicalize()` calls matter: comparing the raw paths would let
-    /// `<root>/../../etc/hosts` pass the prefix test.
-    pub fn read_blob(&self, path: &Path) -> std::io::Result<String> {
+    /// Fail-closed in every direction, and none of them is allowed to soften
+    /// into "here are some bytes" (判据 §8): a path that does not exist makes
+    /// `canonicalize()` return `Err`; one outside the root, or one naming
+    /// another call's blob, returns `PermissionDenied`.
+    ///
+    /// # What canonicalization does NOT close: hardlinks
+    ///
+    /// Resolving the path defeats symlinks and `..`, and it is measured, not
+    /// assumed: `a_symlink_is_judged_by_what_it_resolves_to` (a real assertion
+    /// wherever the host can create one — Windows without Developer Mode
+    /// cannot). A **hardlink** has no target to resolve: both names are equal
+    /// directory entries for one inode, so `canonicalize()` returns the name it
+    /// was handed and the ownership gate reads the ATTACKER's chosen name while
+    /// the bytes are the victim's. Measured on this host and pinned by
+    /// `a_hardlink_is_not_closed_by_canonicalization`.
+    ///
+    /// This is a residue, not an escalation, and no name-based check can close
+    /// it: creating that link requires write access inside the store root,
+    /// which already implies being able to read the victim's file directly.
+    pub fn read_call_blob(&self, path: &Path, tool_call_id: &str) -> std::io::Result<String> {
         let root = self.inner.base_dir.canonicalize()?;
         let target = path.canonicalize()?;
         if !target.starts_with(&root) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "blob path outside the tool_results root",
+            ));
+        }
+        if !blob_belongs_to_call(&target, tool_call_id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "blob was written for a different tool call",
             ));
         }
         std::fs::read_to_string(target)
@@ -705,17 +738,27 @@ pub fn extract_persisted_ref(text: &str) -> Option<&str> {
 /// tokens, <tool>)]` marker in `text`, or `None` when there is no marker.
 ///
 /// The single derivation of "how do I get from marker text back to a file".
-/// It lived in three places before 2026-09-06 — `result_processing`'s private
-/// `parse_marker_path`, a `marker_path` helper in this file's own tests, and
-/// (nearly) a fourth in `gateway::handlers::tool_output` — each re-stating the
-/// literal prefix that [`PERSISTED_REF_PREFIX`] already owns. The marker is
-/// written by [`ToolResultStore::persist_if_large`] eleven lines up; the parse
-/// belongs beside it, not in each reader (判据 §1).
+/// It lived in **five** places before 2026-09-06 — `result_processing`'s
+/// private `parse_marker_path`, a `marker_path` helper in this file's own
+/// tests, two `#[cfg(test)]` splitters in `browser_tools` (`exec.rs`,
+/// `snapshot.rs`), and (nearly) a sixth in `gateway::handlers::tool_output` —
+/// each re-stating the literal prefix that [`PERSISTED_REF_PREFIX`] already
+/// owns. (The first count taken was "three": 判据 §6 — a miscount always runs
+/// short, and the two `#[cfg(test)]` copies are what a grep for the *function
+/// name* cannot see.) The marker is written by
+/// [`ToolResultStore::persist_if_large`]; the parse belongs beside it, not in
+/// each reader (判据 §1).
 ///
 /// Splits on the LAST `" ("`, not the first: the path is arbitrary and
 /// `C:\Program Files (x86)\…` is a real Windows path, while the trailing
-/// `" (<n> tokens, <tool>)]"` is generated and contains no further `" ("` —
-/// tool names carry no spaces.
+/// `" (<n> tokens, <tool>)]"` is generated. Neither rule is total — `tool_name`
+/// is **not** sanitized into the marker, so an MCP tool whose name contains
+/// `" ("` breaks `rfind` exactly as a `Program Files (x86)` path broke `find`.
+/// Recorded, not fixed here.
+///
+/// ⚠️ [`stabilize_persisted_ref`] inverts this same boundary — it keeps the
+/// tail this drops — so the two must stay in step. Change one and read the
+/// other.
 #[must_use]
 pub fn extract_persisted_path(text: &str) -> Option<&str> {
     let rest = extract_persisted_ref(text)?.strip_prefix(PERSISTED_REF_PREFIX)?;
@@ -723,32 +766,67 @@ pub fn extract_persisted_path(text: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
-/// Whether `path` names the blob [`ToolResultStore::persist_if_large`] would
-/// have written for `tool_call_id` — i.e. whether this blob belongs to THIS
-/// call.
+/// Whether `path`'s file **name begins with** `{sanitize(tool_call_id)}_` —
+/// the prefix [`ToolResultStore::persist_if_large`] gives a blob it writes for
+/// that call.
+///
+/// This is a name-prefix test, **not** set membership, and the difference is
+/// load-bearing. Read the gap section before relying on it.
 ///
 /// # Why a reader needs this on top of root containment
 ///
-/// [`ToolResultStore::read_blob`] answers "is this path inside my root", which
-/// is the right question for the store and the wrong one for a reader that
-/// found the path in a MARKER: the marker lives in tool text, and tool text is
-/// whatever the tool printed. A `file_read` of an attacker-authored file, a
-/// `bash` that echoed one, a fetched web page — any of them can contain a line
-/// starting with `[Full output persisted: `, and
+/// [`ToolResultStore::read_call_blob`]'s containment check answers "is this
+/// path inside my root", which is the right question for the store and the
+/// wrong one for a reader that found the path in a MARKER: the marker lives in
+/// tool text, and tool text is whatever the tool printed. A `file_read` of an
+/// attacker-authored file, a `bash` that echoed one, a fetched web page — any
+/// of them can contain a line starting with `[Full output persisted: `, and
 /// [`extract_persisted_path`] scans every line by design (Layer-2 may prepend
-/// an error digest above the real marker). Root containment alone would then
-/// let a crafted line inside session A's output steer a server-side read at
-/// session B's blob — a confused deputy, because the reader is trusted and the
-/// path is not.
+/// an error digest above the real marker). Every session's blobs share one
+/// root, so containment alone would let a crafted line inside session A's
+/// output steer a server-side read at session B's blob — a confused deputy,
+/// because the reader is trusted and the path is not.
 ///
 /// Every marker that legitimately reaches a `SessionEvent::ToolResult`'s value
 /// names that result's OWN call: `result_processing::apply_result_budget` and
 /// `browser_tools::offload_full_content` both pass the current call id, and
 /// `harness/agent/act.rs`'s turn spill rewrites `output.value` only on the arm
-/// where `spill.call_id == call.id`. So binding the file name to the call id
-/// costs nothing legitimate and removes the whole class.
+/// where `spill.call_id == call.id`. So the binding costs nothing legitimate.
 ///
-/// The file-name shape is `persist_if_large`'s, eleven lines up, and
+/// # What it does NOT exclude
+///
+/// A prefix does not have to end at a name boundary. The blob name is
+/// `{sanitize(call)}_{sanitize(tool)}.txt`, so a `tool_call_id` that is itself
+/// a **structural prefix of other ids** admits every blob under it: asking with
+/// the id `toolu` matches `toolu_01ABC…_bash.txt`, i.e. every Anthropic-shaped
+/// call in the store. The caller would need a `ToolResult` event of its own
+/// carrying that short id, plus a crafted marker naming the victim's path —
+/// but with both, this gate does not stop it.
+///
+/// **Not reachable through any in-repo id generator.** Every one synthesises a
+/// fixed shape ending in a uuid nonce — `json_{name}_{nonce}`
+/// (`providers/delta.rs:402`), `{tool}_{i}_{nonce}` (`providers/ollama.rs:363`),
+/// `gemini_fc_{i}_{nonce}` (`providers/protocols/gemini/sse.rs:114`) — so a
+/// caller cannot shorten its own id. **It IS reachable when an upstream
+/// supplies the id verbatim**, which OpenAI-compatible providers do
+/// (`providers/protocols/openai_chat/proto_impl.rs:186` carries `tc.id`
+/// through unchanged; Gemini does the same at `sse.rs:120` when the payload
+/// names one). A hostile or compromised "OpenAI-compatible" endpoint can
+/// therefore emit `id: "toolu"` and close the gap itself.
+///
+/// # The fix that is not taken here, and its blocker
+///
+/// The exact formulation is `stem == format!("{}_{}", sanitize(call),
+/// sanitize(tool))` with `tool` read off `SessionEvent::ToolCallRequested.name`
+/// for the same call — set membership rather than a prefix. It is blocked, not
+/// forgotten: `browser_tools::offload_full_content` deliberately files a blob
+/// under the **calling** tool rather than the snapshot tool, and
+/// `browser_tools/exec.rs:1055-1057` asserts exactly that ("the entry must be
+/// filed under the calling tool, not the snapshot tool"). An exact match would
+/// therefore trade this narrow leak for a class of false `Expired` on every
+/// browser result. Sizing that trade needs measurement (ruled 2026-09-07).
+///
+/// The file-name shape is `persist_if_large`'s, and
 /// `persisted_blob_name_matches_its_call` fails if that shape ever changes —
 /// otherwise every real blob would quietly start reading as expired.
 #[must_use]
@@ -776,6 +854,12 @@ pub fn blob_belongs_to_call(path: &Path, tool_call_id: &str) -> bool {
 /// The size + tool tail is deliberately kept: identical content offloads to an
 /// identical token count, so the placeholder loses no discriminating power that
 /// a fingerprint of the whole payload would have had.
+///
+/// ⚠️ This cuts the marker at the SAME `rfind(" (")` boundary
+/// [`extract_persisted_path`] does, from the other side: that one keeps the
+/// head (the path), this one keeps the tail. They must stay in step — one
+/// splitting differently from the other means the placeholder and the parse
+/// disagree about where the path ends. Change either and read the other.
 #[must_use]
 pub fn stabilize_persisted_ref(text: &str) -> std::borrow::Cow<'_, str> {
     if !text.contains(PERSISTED_REF_PREFIX) {
@@ -1165,12 +1249,18 @@ mod tests {
         );
     }
 
-    /// `read_blob` is the read-back half of `persist_if_large`, and the path it
-    /// is handed comes out of a log. All three answers, because the two refusals
-    /// are different branches and only one of them is exercised by a missing
-    /// file (判据 §8: "we could not read it" never becomes "here are bytes").
+    /// `read_call_blob` is the read-back half of `persist_if_large`, and the
+    /// path it is handed comes out of a log. Every answer, because the refusals
+    /// are DIFFERENT branches and a missing file exercises only one of them
+    /// (判据 §8: "we could not read it" never becomes "here are bytes").
+    ///
+    /// The out-of-root decoy is named `call_r_bash.txt` on purpose — the name
+    /// this call's own blob has — so it clears the ownership gate and the
+    /// CONTAINMENT gate is provably what refuses it. A differently-named decoy
+    /// would be refused a step later and this would pass without exercising the
+    /// check it is named for.
     #[test]
-    fn read_blob_reads_inside_the_root_and_refuses_everything_else() {
+    fn read_call_blob_reads_inside_the_root_and_refuses_everything_else() {
         let (_scratch, store, base) = test_store("read_blob_containment");
         let marker = store
             .persist_if_large("call_r", "bash", &"z".repeat(2000), 1)
@@ -1178,13 +1268,23 @@ mod tests {
         let blob = marker_path(&marker);
 
         assert_eq!(
-            store.read_blob(&blob).expect("blob reads back"),
+            store
+                .read_call_blob(&blob, "call_r")
+                .expect("blob reads back"),
             "z".repeat(2000)
         );
 
-        let missing = base.join("never-written.txt");
+        // Right file, wrong call — the gate root containment cannot supply,
+        // because every session's blobs share one root.
+        let err = store
+            .read_call_blob(&blob, "some-other-call")
+            .expect_err("another call's blob must be refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("different tool call"), "{err}");
+
+        let missing = base.join("call_r_bash.txt.gone");
         assert!(
-            store.read_blob(&missing).is_err(),
+            store.read_call_blob(&missing, "call_r").is_err(),
             "a path that does not exist must be an Err, not empty content"
         );
 
@@ -1193,12 +1293,13 @@ mod tests {
         // to turn a log line into an arbitrary file read.
         let (_outside_guard, outside_root) = crate::utils::scratch::scratch_root();
         std::fs::create_dir_all(&outside_root).unwrap();
-        let outside = outside_root.join("secret.txt");
+        let outside = outside_root.join("call_r_bash.txt");
         std::fs::write(&outside, "OUTSIDE-THE-ROOT").unwrap();
         let err = store
-            .read_blob(&outside)
+            .read_call_blob(&outside, "call_r")
             .expect_err("a path outside the root must be refused");
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("outside"), "{err}");
 
         // ...and so must a traversal that only *resolves* outside it, which is
         // why both sides are canonicalized before the prefix test. Both scratch
@@ -1213,9 +1314,79 @@ mod tests {
             .expect("both scratch trees share the temp root");
         let traversal = base.join("..").join("..").join(relative);
         let err = store
-            .read_blob(&traversal)
+            .read_call_blob(&traversal, "call_r")
             .expect_err("a traversal resolving outside the root must be refused");
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    /// The reason both gates live in one function: they must bind the same
+    /// file. A symlink whose NAME matches this call, pointing at another
+    /// call's blob, passes a name check on the raw path — so the name check has
+    /// to run on the path `canonicalize()` resolved to, which is what
+    /// `read_call_blob` does.
+    ///
+    /// Symlink creation needs elevation on Windows without Developer Mode
+    /// (measured on this host: "Administrator privilege required"), so this
+    /// probes and says so rather than asserting nothing quietly. It is a real
+    /// assertion on Linux, macOS and any host where the probe succeeds.
+    #[test]
+    fn a_symlink_is_judged_by_what_it_resolves_to() {
+        let (_scratch, store, base) = test_store("read_blob_symlink");
+        let victim = base.join("toolu_v_bash.txt");
+        std::fs::write(&victim, "VICTIM-BYTES").unwrap();
+        let link = base.join("c-mine_grep.txt");
+
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&victim, &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&victim, &link);
+
+        if let Err(e) = made {
+            eprintln!(
+                "SKIPPED a_symlink_is_judged_by_what_it_resolves_to: this host \
+                 cannot create a symlink ({e}). The branch is unproven here."
+            );
+            return;
+        }
+
+        let err = store
+            .read_call_blob(&link, "c-mine")
+            .expect_err("the resolved name is the victim's, so this must refuse");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("different tool call"), "{err}");
+    }
+
+    /// The residue canonicalization CANNOT close, pinned so nobody reads the
+    /// symlink test above as proof that a name check is a membership proof.
+    ///
+    /// A hardlink has no target to resolve — both names are equal directory
+    /// entries for one inode — so `canonicalize()` hands back the name it was
+    /// given. Measured, not reasoned: on Windows the canonical path of a
+    /// hardlink keeps the linking name and reads the linked content, and
+    /// POSIX `realpath` behaves the same way.
+    ///
+    /// It is not an escalation: creating the link needs write access inside the
+    /// store root, which already implies being able to read the victim file
+    /// directly. If a future change DOES close this, delete the test and the
+    /// paragraph in [`ToolResultStore::read_call_blob`] together.
+    #[test]
+    fn a_hardlink_is_not_closed_by_canonicalization() {
+        let (_scratch, store, base) = test_store("read_blob_hardlink");
+        let victim = base.join("toolu_v_bash.txt");
+        std::fs::write(&victim, "VICTIM-BYTES").unwrap();
+        let link = base.join("c-mine_grep.txt");
+        if let Err(e) = std::fs::hard_link(&victim, &link) {
+            eprintln!(
+                "SKIPPED a_hardlink_is_not_closed_by_canonicalization: this host \
+                 cannot create a hardlink ({e})."
+            );
+            return;
+        }
+        assert_eq!(
+            store.read_call_blob(&link, "c-mine").ok().as_deref(),
+            Some("VICTIM-BYTES"),
+            "if this now refuses, the gap is closed — update read_call_blob's doc"
+        );
     }
 
     #[test]

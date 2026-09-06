@@ -16,15 +16,20 @@ use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::GatewayConfig as FullGatewayConfig;
 use alephcore::gateway::GatewayServer;
 
-/// Register the `trace.` family. `trace.list` / `trace.get` / `trace.by_runs`
-/// replay durable traces when a state database is present; otherwise they
-/// return SERVICE_UNAVAILABLE with an environment-specific reason. Extracted
-/// verbatim from the real-execution branch of `agent_init/mod.rs`.
+/// Register the state-database half of the `trace.` family: `trace.list` /
+/// `trace.get` / `trace.by_runs` replay durable traces when a state database is
+/// present; otherwise they return SERVICE_UNAVAILABLE with an
+/// environment-specific reason. Extracted verbatim from the real-execution
+/// branch of `agent_init/mod.rs`, and still called only from there.
 ///
-/// `trace.tool_output` is registered OUTSIDE that branch: it reads the session
-/// event log through a process-wide handle and needs no state database, so
-/// putting it inside would make a perfectly serviceable method unavailable on
-/// every no-DB boot for a dependency it does not have.
+/// ⚠️ The family's fourth member, `trace.tool_output`, is deliberately NOT
+/// here: it needs no state database, only a `SessionStore`, and this function
+/// is reached from the real-execution branch alone
+/// (`agent_init/mod.rs:1492`, inside the `if let Some(provider_registry)` that
+/// opens at `:340` and yields to `} else {` at `:1857`). Registering it here
+/// would leave it permanently SERVICE_UNAVAILABLE on the Simulated boot path —
+/// a gate whose positive half has no door (判据 §14). It goes in
+/// [`register_common_handlers`], which runs after both branches.
 ///
 /// ⚠️ **Ordering**: `trace.list`/`trace.get` capture the server's
 /// `SecurityAuditLog` here so they can record cross-user content reads (human
@@ -41,21 +46,6 @@ pub(super) fn register_trace_handlers(
     session_store: Arc<dyn alephcore::gateway::session_store::SessionStore>,
 ) {
     let audit_log = server.audit_log();
-
-    // The one member-reachable sibling that is not a trace read at all: it
-    // serves the addressed session's OWN untruncated tool output out of the
-    // session event log, KeyChecked in the handler exactly as `trace.by_runs`
-    // is. Registered unconditionally — see this function's doc.
-    let tool_output_sessions = session_store.clone();
-    server
-        .handlers_mut()
-        .register("trace.tool_output", move |req| {
-            let sessions = tool_output_sessions.clone();
-            async move {
-                alephcore::gateway::handlers::tool_output::handle_tool_output(req, sessions).await
-            }
-        });
-
     // Phase-2 always overrides phase-1 to guarantee a deterministic response.
     // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
     // a tighter, environment-specific reason — never the phase-1 generic.
@@ -131,11 +121,15 @@ pub(super) fn register_trace_handlers(
     }
 }
 
-/// Register status/cancel/chat/agent.list/gateway.* handlers shared by both
-/// execution modes, then signal gateway readiness. `session_store` is cloned
-/// into each handler that needs it; the last consumer is
-/// `gateway.metrics.run_concurrency`, which narrows its session-key arrays to
+/// Register status/cancel/chat/agent.list/gateway.*/`trace.tool_output`
+/// handlers shared by both execution modes, then signal gateway readiness.
+/// `session_store` is cloned into each handler that needs it; the last consumer
+/// is `gateway.metrics.run_concurrency`, which narrows its session-key arrays to
 /// the caller (see that handler's doc).
+///
+/// "Shared by both execution modes" is the whole reason `trace.tool_output`
+/// lives here and not with the rest of its family — see
+/// [`register_trace_handlers`].
 pub(super) fn register_common_handlers(
     server: &mut GatewayServer,
     run_manager: &Option<Arc<AgentRunManager>>,
@@ -145,6 +139,26 @@ pub(super) fn register_common_handlers(
     full_config: &FullGatewayConfig,
     daemon: bool,
 ) {
+    // `trace.tool_output` — the `trace.` family's fourth member, and the only
+    // one that reads no trace table. It serves the addressed session's OWN
+    // untruncated tool output out of the session event log (reached through a
+    // process-wide handle), KeyChecked in the handler exactly as
+    // `trace.by_runs` is. Registered HERE, not with its siblings in
+    // `register_trace_handlers`: that function is reached from the
+    // real-execution branch only, so a Simulated boot would have left this
+    // method stuck on its phase-1 placeholder forever — SERVICE_UNAVAILABLE for
+    // a `SessionStore` the process is holding, over a log an earlier boot
+    // already wrote.
+    let tool_output_sessions = session_store.clone();
+    server
+        .handlers_mut()
+        .register("trace.tool_output", move |req| {
+            let sessions = tool_output_sessions.clone();
+            async move {
+                alephcore::gateway::handlers::tool_output::handle_tool_output(req, sessions).await
+            }
+        });
+
     // Register status/cancel (work for both real and simulated modes)
     if let Some(ref rm) = run_manager {
         // Both take `session_store`: a bare `run_id` is a caller-supplied

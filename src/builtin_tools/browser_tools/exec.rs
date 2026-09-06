@@ -1057,10 +1057,10 @@ mod tests {
             "the entry must be filed under the calling tool, not the snapshot tool: {footer}"
         );
 
-        let path = footer
-            .split("[Full output persisted: ")
-            .nth(1)
-            .and_then(|rest| rest.split(" (").next())
+        // Through the production parse, not a local re-split: this used to cut
+        // on the FIRST `" ("`, which production abandoned on 2026-09-06 because
+        // it truncates a `C:\Program Files (x86)\…` path.
+        let path = crate::tools::result_store::extract_persisted_path(&footer)
             .expect("marker names a path");
         let blob = std::fs::read_to_string(path).expect("blob exists on disk");
         assert!(

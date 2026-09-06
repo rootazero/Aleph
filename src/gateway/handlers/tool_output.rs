@@ -74,22 +74,46 @@ struct Params {
 
 /// Cut `[offset, offset + limit)` out of `text`, on char boundaries.
 ///
-/// Returns the slice and whether anything follows it. Both ends round **down**
-/// to a boundary, which keeps `start <= end` for any inputs (the greatest
-/// boundary at or below `start` cannot exceed the one at or below a larger
-/// `end`) — so an offset that lands inside a multi-byte char yields a short
-/// page rather than a panic.
-fn page(text: &str, offset: u64, limit: u64) -> (String, bool) {
+/// Returns the slice, the byte offset it actually **starts** at, and whether
+/// anything follows it.
+///
+/// # The two roundings go opposite ways, and both directions are load-bearing
+///
+/// `start` rounds **down** and `end` rounds **up**, so a page always covers at
+/// least the whole character the request landed in.
+///
+/// Rounding `end` down instead looks symmetric and is a livelock: `limit: 1`
+/// against a text whose first character is two bytes gives `end = 1 → 0`, an
+/// empty slice with `truncated: true`, and a client looping `while truncated`
+/// never advances — each iteration costing a whole blob read and a whole
+/// masking pass. Rounding up costs at most `len_utf8() - 1` extra bytes on the
+/// last character and guarantees progress whenever `limit >= 1`.
+///
+/// Returning `start` (rather than echoing the requested offset) is the other
+/// half: `ToolOutputPage`'s own contract is `offset + text.len() <
+/// total_bytes ⇒ truncated`, which only holds if `offset` names where the text
+/// really begins. A mid-character request would otherwise report an offset one
+/// or two bytes past its own first byte, and a client accumulating pages would
+/// re-request bytes it already has, forever.
+///
+/// `start <= end` holds for every input: `start_raw <= end_raw`, flooring is
+/// monotone, and `end` only moves up.
+fn page(text: &str, offset: u64, limit: u64) -> (String, u64, bool) {
     let total = text.len() as u64;
     let mut start = offset.min(total) as usize;
     while !text.is_char_boundary(start) {
         start -= 1;
     }
+    // `text.len()` is always a boundary, so this terminates at or before it.
     let mut end = offset.saturating_add(limit).min(total) as usize;
     while !text.is_char_boundary(end) {
-        end -= 1;
+        end += 1;
     }
-    (text[start..end].to_string(), (end as u64) < total)
+    (
+        text[start..end].to_string(),
+        start as u64,
+        (end as u64) < total,
+    )
 }
 
 /// Read-only: one tool result's untruncated text, paged.
@@ -229,14 +253,27 @@ pub async fn handle_tool_output(
         .limit
         .unwrap_or(MAX_TOOL_OUTPUT_PAGE_BYTES)
         .min(MAX_TOOL_OUTPUT_PAGE_BYTES);
-    let (slice, more) = page(&masked, params.offset, limit);
+    let (slice, start, more) = page(&masked, params.offset, limit);
     let out = ToolOutputPage {
         tool_call_id: call_id.to_string(),
         // `truncated` is one bit over two facts on purpose (its own doc in
         // `shared/protocol/src/context_breakdown.rs`): more pages follow, OR
         // the rest is gone for good. `source` is what tells them apart.
         truncated: more || matches!(source, ToolOutputSource::Expired),
-        offset: params.offset,
+        // Where the text REALLY starts, not what was asked for — a request
+        // landing inside a multi-byte character is served from that
+        // character's first byte. See [`page`].
+        offset: start,
+        // Bytes of the MASKED text, and therefore stable only within one
+        // masker configuration. `exec::masker::operator_patterns()` is
+        // runtime-configurable (`[[security.mask_patterns]]`), so an operator
+        // adding a pattern between a client's page 1 and page 2 renumbers this
+        // underneath it; a client accumulating pages should restart on a
+        // `total_bytes` that moves rather than splicing across the change.
+        //
+        // These coordinates are also NOT `ctx_search`'s: that indexes the
+        // UNMASKED blob (`ToolResultStore::index_output` is handed `full`), so
+        // its offsets and these are different systems over the same content.
         total_bytes: masked.len() as u64,
         source,
         text: slice,
@@ -247,19 +284,23 @@ pub async fn handle_tool_output(
 /// Turn the event log's stored text into the text to serve, plus the label that
 /// says what it actually is.
 ///
-/// # Two checks, because the marker is data
+/// # The marker is data, and both of its gates live in the store
 ///
 /// The marker line is written by the server, but it is read back out of a log
 /// whose neighbouring bytes are whatever a tool printed — a `file_read` of an
 /// attacker-authored file, a `bash` that echoed one, a fetched page. So the
-/// path gets both available bindings, and neither alone is enough:
+/// path is checked for containment (inside the store root) AND for ownership
+/// (written for THIS call), and neither alone is enough: containment does not
+/// exclude another session's blob, and ownership on its own does not exclude
+/// `/etc/hosts`.
 ///
-/// * [`read_blob`](crate::tools::result_store::ToolResultStore::read_blob)
-///   answers "inside my root" — it stops the marker from naming `/etc/hosts`;
-/// * [`blob_belongs_to_call`](crate::tools::result_store::blob_belongs_to_call)
-///   answers "written for THIS call" — it stops a crafted line inside one
-///   session's output from steering the read at another session's blob, which
-///   root containment by itself permits.
+/// Both gates are inside
+/// [`read_call_blob`](crate::tools::result_store::ToolResultStore::read_call_blob)
+/// rather than one here and one there, because they have to bind the **same
+/// file** and only the store can resolve the path once (判据 §12). Running the
+/// name check here on the raw path while the store checks containment on the
+/// resolved one is a hole: a symlink under the root whose name matches this
+/// call, pointing at another session's blob, satisfies both.
 ///
 /// Every failure — no store installed, path outside the root, wrong call, blob
 /// swept, unreadable file — lands on the same honest answer: the budgeted text,
@@ -269,11 +310,8 @@ fn resolve_source(text: String, call_id: &str) -> (String, ToolOutputSource) {
     let Some(path) = crate::tools::result_store::extract_persisted_path(&text) else {
         return (text, ToolOutputSource::Inline);
     };
-    let path = Path::new(path);
-    let blob = crate::tools::result_store::blob_belongs_to_call(path, call_id)
-        .then(crate::tools::result_store::global_tool_result_store)
-        .flatten()
-        .and_then(|store| store.read_blob(path).ok());
+    let blob = crate::tools::result_store::global_tool_result_store()
+        .and_then(|store| store.read_call_blob(Path::new(path), call_id).ok());
     match blob {
         Some(blob) => (blob, ToolOutputSource::Persisted),
         None => (text, ToolOutputSource::Expired),
@@ -539,8 +577,8 @@ mod tests {
             crate::tools::result_store::extract_persisted_path(&victim).expect("marker path"),
         );
         assert!(
-            store.read_blob(&victim_path).is_ok(),
-            "the victim blob must be readable, or this proves nothing"
+            store.read_call_blob(&victim_path, "c-victim").is_ok(),
+            "the victim blob must be readable BY ITS OWN CALL, or this proves nothing"
         );
 
         // The crafted line, as it would arrive inside some other tool's output.
@@ -621,15 +659,70 @@ mod tests {
 
     #[test]
     fn paging_never_splits_a_char_and_reports_what_follows() {
-        let text = "héllo"; // 'é' is two bytes, so byte 2 is not a boundary.
-        let (slice, more) = page(text, 0, 2);
-        assert_eq!(slice, "h", "an offset inside a char rounds down");
+        // 'h' is byte 0; 'é' spans bytes 1..3, so byte 2 is not a boundary.
+        let text = "héllo";
+        let (slice, start, more) = page(text, 0, 2);
+        assert_eq!(
+            slice, "hé",
+            "a limit ending mid-character extends to cover it, never truncates it away"
+        );
+        assert_eq!(start, 0);
         assert!(more);
-        let (slice, more) = page(text, 0, 100);
+
+        let (slice, start, more) = page(text, 0, 100);
         assert_eq!(slice, text);
+        assert_eq!(start, 0);
         assert!(!more);
-        let (slice, more) = page(text, 900, 10);
+
+        let (slice, start, more) = page(text, 900, 10);
         assert_eq!(slice, "", "an offset past the end is empty, not a panic");
+        assert_eq!(start, text.len() as u64);
         assert!(!more);
+    }
+
+    /// The livelock a symmetric "round both ends down" produces, and the
+    /// broken invariant it hides. Both halves are about a client that pages by
+    /// `offset += text.len()` while `truncated`.
+    #[test]
+    fn a_page_always_advances_and_reports_where_it_really_starts() {
+        // A one-byte limit against a two-byte first character. Rounding `end`
+        // DOWN gives ("", true) here — an infinite loop over a client that
+        // pays a full blob read and a full masking pass per iteration.
+        let two_byte_first = "élan";
+        let (slice, start, more) = page(two_byte_first, 0, 1);
+        assert_eq!(slice, "é", "a page must cover at least one whole character");
+        assert_eq!(start, 0);
+        assert!(more);
+
+        // A request landing INSIDE that character is served from its first
+        // byte, and says so: `ToolOutputPage`'s contract is
+        // `offset + text.len() < total_bytes ⇒ truncated`, which only holds if
+        // `offset` names where the text really begins.
+        let (slice, start, more) = page(two_byte_first, 1, 1);
+        assert_eq!(slice, "é");
+        assert_eq!(start, 0, "the REPORTED offset is the rounded one");
+        assert!(more);
+        assert_eq!(
+            start + slice.len() as u64,
+            2,
+            "so the client's next offset lands on the boundary after it"
+        );
+
+        // Whole-text progress: pages tile the string exactly once.
+        let mut at = 0u64;
+        let mut seen = String::new();
+        for _ in 0..16 {
+            let (slice, start, more) = page(two_byte_first, at, 1);
+            assert_eq!(start, at, "each step starts where the last one ended");
+            seen.push_str(&slice);
+            at = start + slice.len() as u64;
+            if !more {
+                break;
+            }
+        }
+        assert_eq!(
+            seen, two_byte_first,
+            "paging by 1 byte must terminate whole"
+        );
     }
 }
