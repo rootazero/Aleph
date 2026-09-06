@@ -230,6 +230,13 @@ struct Inner {
     next_id: AtomicU64,
     command_timeout: Duration,
     shutdown: watch::Sender<bool>,
+    /// `Some` only on a connection built by the testkit-only
+    /// `connect_widening_the_guard_insert_race`. Widens the otherwise sub-microsecond window in
+    /// `call_with_timeout` between its disconnected-reason guard and the pending-map insert, so a
+    /// race that needs real concurrency to land in production can be landed deterministically in
+    /// a test. Ordinary `connect` always leaves this `None`, so this costs one `Option` check —
+    /// never a sleep — on every real call.
+    race_widen: Option<Duration>,
 }
 
 impl Drop for Inner {
@@ -263,6 +270,38 @@ impl std::fmt::Debug for CdpConnection {
 
 impl CdpConnection {
     pub async fn connect(ws_url: &str, opts: ConnectOptions) -> Result<CdpConnection> {
+        Self::connect_inner(ws_url, opts, None).await
+    }
+
+    /// Test-only. Otherwise identical to [`connect`](Self::connect), except the connection it
+    /// returns widens the guard→insert race window in `call_with_timeout` by `widen` — see
+    /// [`Shared::recheck_after_insert`]'s doc for what that window is and why it matters. Exists
+    /// because the real window is a sub-microsecond, multi-thread-runtime-only interleaving that
+    /// cannot be relied on to land in an ordinary test; this makes it land every time, scoped to
+    /// only the one connection a test explicitly opts into, so it cannot affect any other test
+    /// running concurrently in the same binary.
+    #[cfg(feature = "testkit")]
+    pub async fn connect_widening_the_guard_insert_race(
+        ws_url: &str,
+        opts: ConnectOptions,
+        widen: Duration,
+    ) -> Result<CdpConnection> {
+        Self::connect_inner(ws_url, opts, Some(widen)).await
+    }
+
+    /// Test-only. The number of calls currently awaiting a reply. Exists to prove that a call
+    /// which times out (or is otherwise resolved) does not leave a dead entry in `pending`
+    /// behind it — see `call_with_timeout`'s `Err(_elapsed)` arm.
+    #[cfg(feature = "testkit")]
+    pub fn pending_len(&self) -> usize {
+        lock(&self.inner.shared.pending).len()
+    }
+
+    async fn connect_inner(
+        ws_url: &str,
+        opts: ConnectOptions,
+        race_widen: Option<Duration>,
+    ) -> Result<CdpConnection> {
         let (ws, _resp) = tokio_tungstenite::connect_async(ws_url)
             .await
             // The url is in the message on purpose: "connection refused" on its own does not say
@@ -319,6 +358,7 @@ impl CdpConnection {
                 next_id: AtomicU64::new(0),
                 command_timeout: opts.command_timeout,
                 shutdown: shutdown_tx,
+                race_widen,
             }),
         })
     }
@@ -343,6 +383,13 @@ impl CdpConnection {
         // Refuse immediately on a dead socket rather than spending the budget discovering it.
         if let Some(reason) = self.inner.shared.reason() {
             return Err(CdpError::Disconnected(reason));
+        }
+
+        // Test-only: `None` on every real connection (see `Inner::race_widen`'s doc), so this is
+        // a single `Option` check, never a sleep, outside of the one testkit constructor that
+        // opts a connection into it.
+        if let Some(widen) = self.inner.race_widen {
+            tokio::time::sleep(widen).await;
         }
 
         // CDP ids start at 1; a 0 id is indistinguishable from "no id" in a hand-written peer.

@@ -569,3 +569,99 @@ async fn a_call_made_after_the_peer_already_closed_fails_fast_as_disconnected() 
         started.elapsed()
     );
 }
+
+#[tokio::test]
+async fn a_race_between_the_guard_and_the_insert_still_reports_disconnected_not_timeout() {
+    // Reproduces, deterministically, the interleaving found in review: `fail_all` can complete —
+    // set the close reason AND drain `pending` — inside the otherwise sub-microsecond window
+    // between `call_with_timeout`'s initial disconnected-reason guard and its pending-map insert.
+    // In production that window is too narrow to hit on purpose; `connect_widening_the_guard_
+    // insert_race` (testkit-only, scoped to just this one connection — it cannot affect any other
+    // test running concurrently in this binary) widens it so this test lands inside it every run.
+    //
+    // Without `Shared::recheck_after_insert`, this call's own `outgoing.send()` still succeeds
+    // (the writer task is idle, blocked on its channel, and does not yet know the peer is gone),
+    // so the call proceeds to await a reply that will never come from `fail_all`'s drain (it
+    // already ran, before this call's entry existed) and burns its whole budget to report
+    // `Timeout` — while `closed()` already knows, correctly, `Disconnected`. That is a WRONG fact
+    // (`Timeout` claims "the peer did not answer in time"; the truth is "there is no peer"), not
+    // merely a slow one — see `a_call_made_after_the_peer_already_closed_fails_fast_as_disconnected`
+    // above for the same distinction in the non-race case this recheck also guards.
+    let server = FakeCdpServer::start(scripted(vec![(
+        "Slow.op",
+        Responder::Delay(
+            Duration::from_secs(10),
+            Box::new(Responder::Reply(json!({}))),
+        ),
+    )]))
+    .await;
+    let widen = Duration::from_millis(300);
+    let conn = CdpConnection::connect_widening_the_guard_insert_race(
+        server.ws_url().as_str(),
+        ConnectOptions {
+            command_timeout: Duration::from_secs(5),
+        },
+        widen,
+    )
+    .await
+    .expect("connect");
+
+    let call = {
+        let c = conn.clone();
+        tokio::spawn(async move { c.call(None, "Slow.op", json!({})).await })
+    };
+
+    // Land inside the widened window: the spawned call has already passed its initial guard (it
+    // read a live connection) and is now sleeping for `widen` before it inserts into `pending`.
+    // Drop the socket and wait for the reader task to have fully recorded the disconnect — both
+    // `closed` set AND `pending` drained — well before that sleep elapses.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    server.drop_socket();
+    wait_until(
+        || conn.closed().borrow().is_some(),
+        Duration::from_millis(200),
+    )
+    .await;
+
+    let outcome = tokio::time::timeout(Duration::from_secs(3), call)
+        .await
+        .expect(
+            "the race must resolve well inside the 5s command_timeout, not sit out the full budget",
+        )
+        .expect("join");
+    match outcome {
+        Err(CdpError::Disconnected(reason)) => assert_ne!(
+            reason,
+            CloseReason::LocalClose,
+            "a peer that went away must not read as us hanging up: {reason:?}"
+        ),
+        other => panic!(
+            "the race between the guard and the insert must still report Disconnected, not {other:?}"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn a_timed_out_call_does_not_leave_its_pending_entry_behind() {
+    let server = FakeCdpServer::start(scripted(vec![("Slow.op", Responder::Hang)])).await;
+    let conn = CdpConnection::connect(server.ws_url().as_str(), ConnectOptions::default())
+        .await
+        .expect("connect");
+    assert_eq!(
+        conn.pending_len(),
+        0,
+        "a fresh connection has nothing pending"
+    );
+
+    let err = conn
+        .call_with_timeout(None, "Slow.op", json!({}), Duration::from_millis(100))
+        .await
+        .expect_err("times out");
+    assert!(matches!(err, CdpError::Timeout { .. }), "{err:?}");
+
+    assert_eq!(
+        conn.pending_len(),
+        0,
+        "a timed-out call must not leave a dead entry in the pending table behind it forever"
+    );
+}
