@@ -80,12 +80,20 @@ def chrome_main_pid(udd):
     the SAME --user-data-dir flag as the main process but a DIFFERENT argv
     (no --use-mock-keychain). This machine has had as many as nine stray
     Chromes alive at once; pids[0] being the main process was a coin flip
-    the fixture happened to keep landing heads on, not a guarantee."""
+    the fixture happened to keep landing heads on, not a guarantee.
+
+    Queued fix: a pid that exits between `pgrep` (chrome_pids) and this `ps
+    -p` gives an EMPTY command line — which does not contain "--type=" either,
+    so the old check read that as "found the main process" instead of "this
+    pid is gone, learned nothing". An empty `ps` result means unknown; it
+    must never be spent as a match."""
     for pid in chrome_pids(udd):
         proc = subprocess.run(
             ["ps", "-p", pid, "-o", "command="],
             capture_output=True, text=True,
         )
+        if not proc.stdout.strip():
+            continue
         if "--type=" not in proc.stdout:
             return pid, proc.stdout
     return None, ""
@@ -295,4 +303,11 @@ async def main():
     return _led.verdict()
 
 
-sys.exit(asyncio.run(main()))
+if __name__ == "__main__":
+    # Not just style: without this guard, importing this module (as
+    # test_drive_attach.py does, to unit-test chrome_main_pid without a real
+    # machine) launches the whole QA driver — connecting to a real gateway —
+    # as a side effect of `import`. `run.sh` always invokes this file as
+    # `python3 drive_attach.py ...`, so `__name__` is `"__main__"` there and
+    # nothing about the real run changes.
+    sys.exit(asyncio.run(main()))
