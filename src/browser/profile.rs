@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::engine::Engine;
 use super::network_policy::SsrfConfig;
 
 /// Supported browser engines.
@@ -18,15 +19,53 @@ pub enum BrowserType {
     Edge,
 }
 
-/// Driver mode for browser profiles.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// How Aleph talks to the browser. **Orthogonal to `Engine`**, which is what
+/// the browser IS (spec §5.4).
+///
+/// The two legacy spellings are frozen: `"managed"` and `"existing_session"`
+/// are in every config file on every install, and a config value that quietly
+/// stops parsing is a silent driver change.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserDriver {
-    /// Aleph launches and manages a dedicated browser instance (Playwright CLI managed via fnm).
+    /// Aleph launches a dedicated Chromium and drives it through
+    /// `playwright-cli attach --cdp`.
     #[default]
     Managed,
-    /// Attach to user's running Chrome via Chrome `DevTools` MCP.
+    /// Attach to the user's running Chrome via the Chrome `DevTools` MCP
+    /// server.
     ExistingSession,
+    /// Aleph's own CDP client drives the engine directly — the only driver
+    /// obscura has, and the one Chromium gains as the escape hatch.
+    Cdp,
+}
+
+impl BrowserDriver {
+    /// Every driver, so an enumerator reaches a new one by adding a variant
+    /// here rather than by being remembered elsewhere (判据 §5).
+    pub const ALL: [Self; 3] = [Self::Managed, Self::ExistingSession, Self::Cdp];
+
+    /// The wire spelling — the same string serde reads and writes.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::ExistingSession => "existing_session",
+            Self::Cdp => "cdp",
+        }
+    }
+
+    /// The inverse of [`Self::as_wire`], exact match only.
+    ///
+    /// Exists because the Panel's config surface is a `String` in both
+    /// directions (`gateway::handlers::browser_config`), and a two-way `if`
+    /// there silently rewrote every driver it did not recognise into
+    /// `Managed` — a config change the operator never made, produced by
+    /// saving an unrelated field.
+    #[must_use]
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.as_wire() == s)
+    }
 }
 
 /// Per-profile browser configuration.
@@ -94,6 +133,13 @@ pub struct ProfileConfig {
     #[serde(default)]
     pub driver: BrowserDriver,
 
+    /// Which engine backs this profile. `None` follows
+    /// `[general.browser] default_engine` — resolve it through
+    /// [`Self::resolved_engine`], never by reading this field directly, so
+    /// "which engine is this profile on" has exactly one answer.
+    #[serde(default)]
+    pub engine: Option<Engine>,
+
     /// Max concurrently-open tabs for this profile before the least-recently-used
     /// are reclaimed on the next sweep. Only enforced for `Managed` profiles
     /// (Aleph-owned browsers); `ExistingSession` tabs belong to the user and are
@@ -129,8 +175,39 @@ impl Default for ProfileConfig {
             extra_args: Vec::new(),
             idle_timeout_secs: default_idle_timeout(),
             driver: BrowserDriver::default(),
+            engine: None,
             max_tabs_per_profile: default_max_tabs(),
             tab_idle_timeout_secs: default_tab_idle_timeout(),
+        }
+    }
+}
+
+impl ProfileConfig {
+    /// The engine this profile actually runs on.
+    ///
+    /// The ONE place the precedence lives, and the rule is **not** simply
+    /// "per-profile beats global": a **legacy driver pins the engine**
+    /// (skeleton Global Constraints; spec §5.4 「旧配置的
+    /// `driver=managed_cli|chrome_mcp` 隐含 `engine=chromium`」).
+    ///
+    /// `managed` launches a Chromium-family binary and `existing_session`
+    /// attaches to the user's Chrome. A profile that names either has already
+    /// named its engine, and dragging it onto a new global default it cannot
+    /// run would refuse the config at load — on every install that has ever
+    /// saved the Panel's browser settings, because
+    /// `gateway::handlers::browser_config::handle_update` writes `driver` into
+    /// both the `default` and `user` profiles on every save.
+    ///
+    /// So `default_engine` is consulted **only** under `Cdp`, the driver that
+    /// can actually run either engine. An explicit `engine` on a legacy driver
+    /// does not silently win here — it is a contradiction, and
+    /// [`validate_engine_driver`] refuses it by name at load rather than
+    /// letting this function pick a side.
+    #[must_use]
+    pub fn resolved_engine(&self, default_engine: Engine) -> Engine {
+        match self.driver {
+            BrowserDriver::Managed | BrowserDriver::ExistingSession => Engine::Chromium,
+            BrowserDriver::Cdp => self.engine.unwrap_or(default_engine),
         }
     }
 }
@@ -249,6 +326,88 @@ impl Default for BrowserRuntimeConfig {
     }
 }
 
+/// Which obscura archive a profile runs.
+///
+/// `default` carries the renderer; `stealth` is the anti-detection build and
+/// is opt-in per profile (spec §6.1). Never `no-render` — Aleph needs layout
+/// geometry for the page-state tree, which is exactly what that variant drops.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ObscuraVariant {
+    #[default]
+    Default,
+    Stealth,
+}
+
+/// External-runtime settings for obscura — the twin of
+/// [`BrowserRuntimeConfig`], for the other engine.
+///
+/// A separate table rather than three more keys on `[runtime]`: that section's
+/// keys are Chromium's (`prefer_system_browser` has no obscura meaning — there
+/// is no "system obscura"), and folding them would make each key's meaning
+/// depend on a value elsewhere.
+///
+/// `pinned_binary`/`download_host` mirror [`BrowserRuntimeConfig`]'s exactly
+/// (same field type, same trim/empty-filter semantics) — two runtime configs
+/// answering one question two ways is the shape this branch spends most of
+/// its review budget on (判据 §1).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ObscuraRuntimeConfig {
+    /// Absolute path to an obscura binary, pinned by the operator. Highest
+    /// precedence, and a pin that does not exist is a hard failure rather
+    /// than a fallback — same rule as [`BrowserRuntimeConfig::binary_path`],
+    /// for the same reason: launching a different binary than the one named
+    /// is worse than refusing.
+    #[serde(default)]
+    pub binary_path: Option<String>,
+
+    /// Which release archive to install and run.
+    #[serde(default)]
+    pub variant: ObscuraVariant,
+
+    /// Mirror host for the release-asset download.
+    ///
+    /// Same key name and same meaning as
+    /// [`BrowserRuntimeConfig::download_host`]: GitHub's release-assets host is
+    /// DNS-blocked on some networks exactly as Playwright's CDN is, and the
+    /// installer runs inside the daemon, so "go export a variable" is not a
+    /// remedy an operator can reach.
+    ///
+    /// It is also what keeps `[general.browser.obscura]` safe to name in an
+    /// operator-facing message: `config::dead_keys`'s census
+    /// (`src/config/dead_keys.rs:525`) takes every bracketed browser path it
+    /// finds in four files and deserialises `binary_path` **and**
+    /// `download_host` under it, asserting neither comes back dead. A section
+    /// with only `binary_path` fails that test the moment `error.rs` names it.
+    #[serde(default)]
+    pub download_host: Option<String>,
+}
+
+impl ObscuraRuntimeConfig {
+    /// The pinned binary, or `None` when unset **or blank**.
+    ///
+    /// A cleared Panel field posts `""`, and `Some("")` spent as a path
+    /// resolves to the current directory and then fails naming nothing — the
+    /// exact trap [`BrowserRuntimeConfig::pinned_binary`] documents.
+    #[must_use]
+    pub fn pinned_binary(&self) -> Option<&str> {
+        self.binary_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The download mirror, or `None` when unset or blank. See
+    /// [`Self::pinned_binary`] for why blank is not a value.
+    #[must_use]
+    pub fn download_host(&self) -> Option<&str> {
+        self.download_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+}
+
 /// Configuration for the Chrome `DevTools` MCP integration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ChromeMcpConfig {
@@ -308,8 +467,27 @@ impl Default for ChromeMcpConfig {
     }
 }
 
+/// Ceiling on `cdp_command_timeout_secs`, exclusive.
+///
+/// obscura cuts any CDP command off at its own
+/// `OBSCURA_CDP_COMMAND_TIMEOUT_MS` (60 s). An Aleph budget at or above that
+/// can never fire: obscura has already answered, so our timer measures nothing
+/// and the variant that would have named the stall
+/// (`BrowserError::EngineBusy`) becomes unreachable — a 恒假 arm (判据 §2).
+pub const CDP_COMMAND_TIMEOUT_CEILING_SECS: u64 = 60;
+
+const fn default_cdp_command_timeout_secs() -> u64 {
+    30
+}
+
 /// Top-level browser system configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+///
+/// **`Default` is deliberately NOT derived.** A derived `Default` would give
+/// `cdp_command_timeout_secs == 0` — every CDP call timing out before it was
+/// sent — for the 20+ tests that build a manager from
+/// `BrowserSystemConfig::default()`, while a real config file missing the key
+/// gets 30 from serde. See the hand-written impl below.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSystemConfig {
     /// Named browser profiles.
     #[serde(default)]
@@ -330,6 +508,172 @@ pub struct BrowserSystemConfig {
     /// External-runtime supply for the managed driver's Chromium.
     #[serde(default)]
     pub runtime: BrowserRuntimeConfig,
+
+    /// External-runtime supply for obscura.
+    #[serde(default)]
+    pub obscura: ObscuraRuntimeConfig,
+
+    /// The engine a profile runs when it names none.
+    #[serde(default)]
+    pub default_engine: Engine,
+
+    /// Per-command budget for Aleph's CDP client, both engines.
+    ///
+    /// Must be below [`CDP_COMMAND_TIMEOUT_CEILING_SECS`]; enforced by
+    /// [`Self::validate`], not by clamping — a value silently clamped is a
+    /// setting that "sometimes works".
+    ///
+    /// The field-level serde default is kept ALONGSIDE the hand-written
+    /// `Default` below: they are two different mechanisms serving two
+    /// different callers (a config file missing the key; `Self::default()`),
+    /// and dropping either one puts a 0 back on that path.
+    #[serde(default = "default_cdp_command_timeout_secs")]
+    pub cdp_command_timeout_secs: u64,
+}
+
+impl Default for BrowserSystemConfig {
+    /// Hand-written, matching every field's serde default exactly.
+    ///
+    /// `#[derive(Default)]` would give `cdp_command_timeout_secs == 0` while a
+    /// config file with no such key gives 30 — one fact with two answers,
+    /// where the wrong one is what every unit test sees and no operator ever
+    /// runs. `browser_system_config_default_timeout_is_30_not_0` pins both
+    /// paths; `the_struct_default_and_the_empty_config_agree_on_every_new_key`
+    /// pins the other two keys.
+    fn default() -> Self {
+        Self {
+            profiles: HashMap::new(),
+            policy: SsrfConfig::default(),
+            playwright_cli: PlaywrightCliConfig::default(),
+            chrome_mcp: ChromeMcpConfig::default(),
+            runtime: BrowserRuntimeConfig::default(),
+            obscura: ObscuraRuntimeConfig::default(),
+            default_engine: Engine::default(),
+            cdp_command_timeout_secs: default_cdp_command_timeout_secs(),
+        }
+    }
+}
+
+impl BrowserSystemConfig {
+    /// The per-command CDP budget as a `Duration`.
+    #[must_use]
+    pub fn cdp_command_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.cdp_command_timeout_secs)
+    }
+
+    /// Every profile setting its engine cannot honour, as
+    /// `(profile, key, explanation)` — for the doctor to REPORT, never to
+    /// refuse on.
+    ///
+    /// Spec §6.3: under obscura, `browser = <Chromium family>` 「被忽略并在
+    /// doctor 记一条」. `browser` steers
+    /// `discovery::find_chromium_preferred`, which obscura never reaches, so
+    /// the field is inert there. Inert is not harmless: the operator set it
+    /// and believes it did something, which is the silent-no-op shape
+    /// (判据 §11). Refusing instead would break a profile that merely carries
+    /// a leftover key, so this reports and [`Self::validate`] stays quiet
+    /// about it.
+    ///
+    /// A NON-default value is the evidence, not the value itself: `browser`
+    /// has a `Default`, so every profile has one whether or not anybody chose
+    /// it, and reporting the default would name a setting nobody made.
+    ///
+    /// Returned rather than logged so the doctor check that renders it
+    /// (Task 16) and this function are not two authors of one list.
+    #[must_use]
+    pub fn ignored_fields(&self) -> Vec<(String, &'static str, String)> {
+        let mut names: Vec<&String> = self.profiles.keys().collect();
+        names.sort();
+        let mut out = Vec::new();
+        for name in names {
+            let cfg = &self.profiles[name];
+            if cfg.resolved_engine(self.default_engine) == Engine::Obscura
+                && cfg.browser != BrowserType::default()
+            {
+                out.push((
+                    (*name).clone(),
+                    "browser",
+                    format!(
+                        "browser = {:?} selects a Chromium-family binary and is ignored while \
+                         this profile runs obscura; set engine = \"chromium\" if you meant to \
+                         pin that browser",
+                        cfg.browser
+                    ),
+                ));
+            }
+        }
+        out
+    }
+
+    /// Load-time validation for the browser section.
+    ///
+    /// Refuses only combinations that CANNOT start, and every message names
+    /// the edit that fixes it — a fail-closed answer that does not say how to
+    /// open the gate is fail-dead (判据 §14).
+    ///
+    /// Deliberately says nothing about a `browser` key that obscura ignores:
+    /// that is a report, not a refusal — see [`Self::ignored_fields`].
+    pub fn validate(&self) -> Result<(), String> {
+        if self.cdp_command_timeout_secs == 0
+            || self.cdp_command_timeout_secs >= CDP_COMMAND_TIMEOUT_CEILING_SECS
+        {
+            return Err(format!(
+                "[general.browser] cdp_command_timeout_secs = {} is out of range: it must be \
+                 between 1 and {} seconds. obscura cuts every CDP command off at its own \
+                 OBSCURA_CDP_COMMAND_TIMEOUT_MS ({} s), so a larger Aleph budget can never \
+                 fire — the engine has already answered, and the stall arrives as a protocol \
+                 error instead of a timeout. Set it to 30 (the default) unless you have \
+                 measured a reason not to.",
+                self.cdp_command_timeout_secs,
+                CDP_COMMAND_TIMEOUT_CEILING_SECS - 1,
+                CDP_COMMAND_TIMEOUT_CEILING_SECS
+            ));
+        }
+        let mut names: Vec<&String> = self.profiles.keys().collect();
+        // Sorted: a `HashMap` iteration order would make the same bad config
+        // report a different profile on each load.
+        names.sort();
+        for name in names {
+            validate_engine_driver(name, &self.profiles[name])?;
+        }
+        Ok(())
+    }
+}
+
+/// Refuse a profile whose engine and driver contradict each other.
+///
+/// obscura speaks CDP and nothing else: it is not a Chromium-family binary
+/// `playwright-cli` can launch, and it is not the user's own Chrome for the
+/// `DevTools` MCP server to attach to. Caught at load rather than at launch,
+/// because the launch-time failure is a missing-binary message that sends the
+/// operator looking for the wrong thing.
+///
+/// **Reads the EXPLICIT field, not the resolved engine, and that is the whole
+/// design.** [`ProfileConfig::resolved_engine`] never answers obscura for a
+/// legacy driver — it pins those to Chromium — so a check written against the
+/// resolved engine would be 恒假 for exactly the drivers it was written to
+/// police (判据 §2). The two functions divide the work: the resolver keeps
+/// every legacy config loading, and this one refuses the one input the
+/// resolver would otherwise have to silently discard — a profile that says
+/// `engine = "obscura"` *and* a driver that cannot run it. Telling the
+/// operator beats quietly running Chromium under a line that says obscura.
+///
+/// Inheriting obscura from `default_engine` is therefore **not** a
+/// contradiction and is not refused: such a profile resolves to Chromium and
+/// runs exactly as it did before the key existed.
+pub fn validate_engine_driver(profile_name: &str, cfg: &ProfileConfig) -> Result<(), String> {
+    if cfg.engine == Some(Engine::Obscura) && cfg.driver != BrowserDriver::Cdp {
+        return Err(format!(
+            "[general.browser.profiles.{profile_name}] sets engine = \"obscura\" with \
+             driver = \"{}\". obscura is driven only over CDP — it is not a Chromium-family \
+             binary playwright-cli can launch, and not a Chrome the DevTools MCP server can \
+             attach to. Fix it either way: set driver = \"cdp\" to run obscura, or drop the \
+             engine key to keep the current driver (a legacy driver already implies \
+             chromium).",
+            cfg.driver.as_wire()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -592,5 +936,376 @@ args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]
         assert_eq!(user.browser, BrowserType::Chrome);
         assert_eq!(user.driver, BrowserDriver::ExistingSession);
         assert_eq!(config.chrome_mcp.command, "npx");
+    }
+
+    use crate::browser::engine::Engine;
+
+    /// `driver` and `engine` are two axes, not one (spec §5.4). The legacy
+    /// values keep their exact wire spelling — a config file that says
+    /// `driver = "managed"` must land on the same variant it always has,
+    /// because those files exist on every install.
+    #[test]
+    fn the_driver_axis_gains_cdp_without_moving_the_two_legacy_spellings() {
+        for (wire, expected) in [
+            ("managed", BrowserDriver::Managed),
+            ("existing_session", BrowserDriver::ExistingSession),
+            ("cdp", BrowserDriver::Cdp),
+        ] {
+            let cfg: BrowserSystemConfig =
+                toml::from_str(&format!("[profiles.p]\ndriver = \"{wire}\"\n")).expect("parse");
+            assert_eq!(cfg.profiles["p"].driver, expected, "{wire}");
+            // Serialisation is the same string — the two directions of one
+            // fact, checked against each other rather than against a second
+            // literal list.
+            assert_eq!(
+                serde_json::to_string(&expected).expect("serialize"),
+                format!("\"{wire}\"")
+            );
+            assert_eq!(expected.as_wire(), wire);
+            assert_eq!(BrowserDriver::from_wire(wire), Some(expected));
+        }
+        assert_eq!(BrowserDriver::from_wire("managed_cli"), None);
+        assert_eq!(BrowserDriver::from_wire(""), None);
+    }
+
+    /// Under the `cdp` driver — the only one that can run either engine — a
+    /// profile with no `engine` follows the global default and one that names
+    /// an engine overrides it. The legacy drivers do not reach the default at
+    /// all; that half of the rule is
+    /// `legacy_managed_profile_resolves_to_chromium_under_obscura_default`.
+    /// Both halves are resolved in ONE function so no caller invents a third
+    /// answer.
+    #[test]
+    fn a_profile_without_an_engine_follows_the_global_default() {
+        let cfg: BrowserSystemConfig = toml::from_str(
+            r#"
+default_engine = "chromium"
+
+[profiles.follows]
+driver = "cdp"
+
+[profiles.overrides]
+driver = "cdp"
+engine = "obscura"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.default_engine, Engine::Chromium);
+        assert_eq!(cfg.profiles["follows"].engine, None);
+        assert_eq!(
+            cfg.profiles["follows"].resolved_engine(cfg.default_engine),
+            Engine::Chromium
+        );
+        assert_eq!(
+            cfg.profiles["overrides"].resolved_engine(cfg.default_engine),
+            Engine::Obscura
+        );
+    }
+
+    /// Missing keys are product defaults; a corrupt value is an error. Never
+    /// the other way round — a config that silently substituted a default for
+    /// an engine name the operator typed would run a browser they did not ask
+    /// for and report nothing.
+    #[test]
+    fn a_missing_engine_key_defaults_and_a_misspelled_one_refuses() {
+        let empty: BrowserSystemConfig = toml::from_str("").expect("parse");
+        assert_eq!(empty.default_engine, Engine::Obscura);
+        assert_eq!(empty.cdp_command_timeout_secs, 30);
+        assert_eq!(empty.obscura.variant, ObscuraVariant::Default);
+        assert_eq!(empty.obscura.pinned_binary(), None);
+
+        for bad in ["chrome", "Obscura", "webkit", ""] {
+            let parsed =
+                toml::from_str::<BrowserSystemConfig>(&format!("default_engine = \"{bad}\"\n"));
+            assert!(parsed.is_err(), "accepted default_engine = {bad:?}");
+        }
+        assert!(
+            toml::from_str::<BrowserSystemConfig>("[profiles.p]\nengine = \"chrome\"\n").is_err(),
+            "a misspelled per-profile engine must refuse, not fall back"
+        );
+    }
+
+    /// **Both** paths to a default timeout must land on 30, and neither may
+    /// land on 0.
+    ///
+    /// There are exactly two, and they are different mechanisms: `Default`
+    /// (which `BrowserSystemConfig::default()` uses, and which 20+ tests in
+    /// `manager.rs` build their manager from) and serde's field-level
+    /// `default = "default_cdp_command_timeout_secs"` (which a real config
+    /// file missing the key uses). `#[derive(Default)]` satisfies the second
+    /// and answers **0** for the first — a budget under which every CDP call
+    /// times out before it is sent, in exactly the builds a developer runs
+    /// and never in the one an operator does.
+    ///
+    /// The `assert_ne!` against 0 is not redundant with the `assert_eq!`: if
+    /// the constant is ever retuned, the equality assertions follow it and
+    /// this one still refuses the value that means "no budget at all".
+    #[test]
+    fn browser_system_config_default_timeout_is_30_not_0() {
+        // Path 1: the Rust default.
+        let built = BrowserSystemConfig::default();
+        assert_ne!(
+            built.cdp_command_timeout_secs, 0,
+            "a derived Default puts a 0s CDP budget under every test that \
+             builds a manager from BrowserSystemConfig::default()"
+        );
+        assert_eq!(built.cdp_command_timeout_secs, 30);
+        assert_eq!(
+            built.cdp_command_timeout(),
+            std::time::Duration::from_secs(30)
+        );
+
+        // Path 2: a config file with no such key. The `[policy]` table is
+        // present so this is a real parse of a real (if minimal) file, not an
+        // empty-string special case.
+        let parsed: BrowserSystemConfig =
+            toml::from_str("[policy]\nblock_private = true\n").expect("parse");
+        assert_ne!(parsed.cdp_command_timeout_secs, 0);
+        assert_eq!(parsed.cdp_command_timeout_secs, 30);
+
+        // And the two paths agree with each other, which is the property that
+        // breaks the moment one of the two mechanisms is dropped.
+        assert_eq!(
+            built.cdp_command_timeout_secs,
+            parsed.cdp_command_timeout_secs
+        );
+    }
+
+    /// The same "two derivations of the product defaults must agree" property
+    /// for the other two new keys. Kept apart from the timeout test above
+    /// because that one is about a specific value that must never be 0; this
+    /// one is about the mechanism, and it will need a line for every key added
+    /// later.
+    #[test]
+    fn the_struct_default_and_the_empty_config_agree_on_every_new_key() {
+        let parsed: BrowserSystemConfig = toml::from_str("").expect("parse");
+        let built = BrowserSystemConfig::default();
+        assert_eq!(built.default_engine, parsed.default_engine);
+        assert_eq!(built.default_engine, Engine::Obscura);
+        assert_eq!(built.obscura.variant, parsed.obscura.variant);
+        assert_eq!(built.obscura.variant, ObscuraVariant::Default);
+        assert_eq!(built.obscura.binary_path, parsed.obscura.binary_path);
+        assert_eq!(built.obscura.pinned_binary(), None);
+        assert_eq!(built.obscura.download_host, parsed.obscura.download_host);
+        assert_eq!(built.obscura.download_host(), None);
+    }
+
+    /// obscura only answers CDP. A profile that asks for it through the
+    /// playwright-cli or the Chrome-MCP driver is not a degraded setup, it is
+    /// one that cannot start — so it is refused at load with the edit that
+    /// fixes it, rather than failing later inside a launch with a message
+    /// about a missing binary.
+    #[test]
+    fn obscura_with_a_non_cdp_driver_is_refused_and_the_text_names_the_fix() {
+        for driver in [BrowserDriver::Managed, BrowserDriver::ExistingSession] {
+            let cfg = ProfileConfig {
+                engine: Some(Engine::Obscura),
+                driver,
+                ..Default::default()
+            };
+            let Err(err) = validate_engine_driver("work", &cfg) else {
+                panic!("obscura x {driver:?} must refuse");
+            };
+            assert!(err.contains("work"), "must name the profile: {err}");
+            assert!(err.contains("obscura"), "must name the engine: {err}");
+            assert!(
+                err.contains(driver.as_wire()),
+                "must quote the driver as the config file spells it: {err}"
+            );
+            assert!(
+                err.contains("driver = \"cdp\""),
+                "must name the edit that fixes it, not just the problem: {err}"
+            );
+        }
+
+        // Every other pairing is legal — including a legacy driver with no
+        // engine key, which is what every config file on every install looks
+        // like and which must keep loading.
+        for (engine, driver) in [
+            (Some(Engine::Obscura), BrowserDriver::Cdp),
+            (Some(Engine::Chromium), BrowserDriver::Cdp),
+            (Some(Engine::Chromium), BrowserDriver::Managed),
+            (Some(Engine::Chromium), BrowserDriver::ExistingSession),
+            (None, BrowserDriver::Cdp),
+            (None, BrowserDriver::Managed),
+            (None, BrowserDriver::ExistingSession),
+        ] {
+            let ok = ProfileConfig {
+                engine,
+                driver,
+                ..Default::default()
+            };
+            assert!(
+                validate_engine_driver("p", &ok).is_ok(),
+                "{engine:?} x {driver:?} was refused"
+            );
+        }
+    }
+
+    /// The rule that keeps every existing install loading: a legacy driver
+    /// pins the engine, and a new global default does not reach it.
+    ///
+    /// This is the assertion whose absence would have shipped a config layer
+    /// that refuses any file with `driver = "managed"` the moment
+    /// `default_engine` defaults to obscura — i.e. every install whose
+    /// operator has ever pressed save on the Panel's browser settings page,
+    /// because `handle_update` writes `driver` into both the `default` and
+    /// `user` profiles on every save. `Config::validate()` is called with `?`
+    /// on the load path, so those daemons would not start.
+    #[test]
+    fn legacy_managed_profile_resolves_to_chromium_under_obscura_default() {
+        let cfg: BrowserSystemConfig = toml::from_str(
+            r#"
+default_engine = "obscura"
+
+[profiles.default]
+driver = "managed"
+
+[profiles.user]
+driver = "existing_session"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.default_engine, Engine::Obscura);
+        for name in ["default", "user"] {
+            assert_eq!(
+                cfg.profiles[name].resolved_engine(cfg.default_engine),
+                Engine::Chromium,
+                "{name} was dragged onto the new global default"
+            );
+        }
+        assert!(
+            cfg.validate().is_ok(),
+            "a config that predates the engine key must still load"
+        );
+
+        // And the contrast that shows the default is not simply ignored: the
+        // same global default DOES reach a cdp profile with no engine key.
+        let cdp: BrowserSystemConfig =
+            toml::from_str("default_engine = \"obscura\"\n[profiles.p]\ndriver = \"cdp\"\n")
+                .expect("parse");
+        assert_eq!(
+            cdp.profiles["p"].resolved_engine(cdp.default_engine),
+            Engine::Obscura
+        );
+    }
+
+    /// The timeout must sit strictly below obscura's own guillotine, and the
+    /// error has to name it — otherwise an operator reads "must be under 60"
+    /// as an arbitrary Aleph rule and raises it in the next release.
+    #[test]
+    fn a_cdp_timeout_at_or_above_the_guillotine_is_refused_by_name() {
+        for bad in [60, 61, 600] {
+            let cfg = BrowserSystemConfig {
+                cdp_command_timeout_secs: bad,
+                ..Default::default()
+            };
+            let Err(err) = cfg.validate() else {
+                panic!("{bad} must refuse");
+            };
+            assert!(
+                err.contains("cdp_command_timeout_secs"),
+                "must name the key: {err}"
+            );
+            assert!(
+                err.contains("OBSCURA_CDP_COMMAND_TIMEOUT_MS"),
+                "must name the guillotine it is bounded by, or the number \
+                 reads as an arbitrary Aleph rule: {err}"
+            );
+            assert!(err.contains("60"), "must name the ceiling: {err}");
+        }
+        // Zero is the other end: every command would time out before it was
+        // sent, and the model would read that as the page being unreachable.
+        let zero = BrowserSystemConfig {
+            cdp_command_timeout_secs: 0,
+            ..Default::default()
+        };
+        assert!(zero.validate().is_err(), "0 must refuse");
+
+        for good in [1, 30, 59] {
+            let cfg = BrowserSystemConfig {
+                cdp_command_timeout_secs: good,
+                ..Default::default()
+            };
+            assert!(cfg.validate().is_ok(), "{good} must be accepted");
+        }
+    }
+
+    /// Spec §6.3: a `browser` key under obscura is ignored and REPORTED, not
+    /// refused. Both halves matter — refusing would break a profile carrying a
+    /// leftover key, and staying silent would leave the operator believing a
+    /// setting took effect (判据 §11).
+    #[test]
+    fn a_browser_key_under_obscura_is_reported_and_never_refused() {
+        let cfg: BrowserSystemConfig = toml::from_str(
+            r#"
+default_engine = "obscura"
+
+[profiles.pinned]
+driver = "cdp"
+browser = "brave"
+
+[profiles.silent]
+driver = "cdp"
+
+[profiles.legacy]
+driver = "managed"
+browser = "brave"
+"#,
+        )
+        .expect("parse");
+
+        // Reported, and the config still loads.
+        assert!(cfg.validate().is_ok(), "an ignored key must not refuse");
+        let ignored = cfg.ignored_fields();
+        assert_eq!(ignored.len(), 1, "{ignored:?}");
+        assert_eq!(ignored[0].0, "pinned");
+        assert_eq!(ignored[0].1, "browser");
+        assert!(
+            ignored[0].2.contains("engine = \"chromium\""),
+            "must name the edit that makes the key take effect: {}",
+            ignored[0].2
+        );
+
+        // `silent` carries the DEFAULT browser value, which nobody chose —
+        // reporting it would name a setting the operator never made.
+        // `legacy` runs Chromium (a legacy driver pins the engine), so its
+        // `browser` key is honoured and there is nothing to report.
+        assert!(!ignored.iter().any(|(p, _, _)| p == "silent"));
+        assert!(!ignored.iter().any(|(p, _, _)| p == "legacy"));
+    }
+
+    /// The obscura pin is the twin of `[general.browser.runtime] binary_path`
+    /// and has the same trap: a Panel form that clears the field posts `""`,
+    /// and `Some("")` spent as a path resolves to the current directory and
+    /// fails naming nothing.
+    #[test]
+    fn an_empty_obscura_pin_is_unset_not_the_current_directory() {
+        let cfg: BrowserSystemConfig = toml::from_str(
+            r#"
+[obscura]
+binary_path = "   "
+download_host = ""
+variant = "stealth"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.obscura.pinned_binary(), None, "blank pin is unset");
+        assert_eq!(cfg.obscura.download_host(), None, "blank host is unset");
+        assert_eq!(cfg.obscura.variant, ObscuraVariant::Stealth);
+
+        let pinned: BrowserSystemConfig =
+            toml::from_str("[obscura]\nbinary_path = \"/opt/obscura/obscura\"\n").expect("parse");
+        assert_eq!(
+            pinned.obscura.pinned_binary(),
+            // R49 supersedes the brief's `Option<&Path>` shape: `ObscuraRuntimeConfig`
+            // mirrors `BrowserRuntimeConfig` exactly, including the `Option<&str>`
+            // return type — a `&Path` cannot carry the trim/empty-filter semantics
+            // its sibling already has.
+            Some("/opt/obscura/obscura")
+        );
+        // The table is PRESENT and `variant` is absent, so this exercises the
+        // field-level serde default rather than `Default::default()`.
+        assert_eq!(pinned.obscura.variant, ObscuraVariant::Default);
     }
 }

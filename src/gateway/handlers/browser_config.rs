@@ -82,10 +82,8 @@ fn snapshot(browser: &BrowserSystemConfig) -> BrowserConfigResponse {
     let default_driver = browser
         .profiles
         .get("default")
-        .map_or("managed", |p| match p.driver {
-            BrowserDriver::Managed => "managed",
-            BrowserDriver::ExistingSession => "existing_session",
-        })
+        .map_or(BrowserDriver::default(), |p| p.driver)
+        .as_wire()
         .to_string();
 
     // DevTools profile: "user" (Your Chrome) unless explicitly set to Managed
@@ -114,6 +112,17 @@ fn snapshot(browser: &BrowserSystemConfig) -> BrowserConfigResponse {
         redact_secrets_in_content: Some(browser.policy.redact_secrets_in_content),
         headless_shadowed_by: headless_shadowed_by(browser),
     }
+}
+
+/// What `handle_update` makes of the driver string a client sent.
+///
+/// `current` is the driver already persisted, and an unrecognised string
+/// resolves to it — never to a hardcoded `Managed`. The Panel renders two
+/// radio buttons and round-trips whatever it was given for any third value;
+/// the old `== "existing_session" ? … : Managed` shape turned that round-trip
+/// into a silent driver change on every save of an unrelated field.
+fn driver_from_update(wire: &str, current: BrowserDriver) -> BrowserDriver {
+    BrowserDriver::from_wire(wire).unwrap_or(current)
 }
 
 /// `Managed` profiles whose own `headless` override shadows the global toggle.
@@ -205,11 +214,11 @@ pub async fn handle_update(
         let browser = &mut cfg.general.browser;
 
         // Update default profile driver
-        let driver = if update.default_driver == "existing_session" {
-            BrowserDriver::ExistingSession
-        } else {
-            BrowserDriver::Managed
-        };
+        let current_default = browser
+            .profiles
+            .get("default")
+            .map_or(BrowserDriver::default(), |p| p.driver);
+        let driver = driver_from_update(&update.default_driver, current_default);
 
         // Update or create the "default" profile with the chosen driver
         if let Some(profile) = browser.profiles.get_mut("default") {
@@ -507,6 +516,44 @@ mod tests {
             get(&make_config()).await["headless_shadowed_by"],
             json!([]),
             "the default config carries no override, so the toggle is authoritative"
+        );
+    }
+
+    /// A GET followed by a PUT must not rewrite the operator's driver.
+    ///
+    /// The update path used to read `default_driver` as a two-way switch
+    /// (`== "existing_session"` ? ExistingSession : Managed), so any third
+    /// value the Panel round-tripped came back as `managed` — a config the
+    /// operator never asked for, written by a save button they pressed for an
+    /// unrelated field.
+    #[test]
+    fn a_driver_the_panel_cannot_render_still_round_trips_through_a_save() {
+        let mut browser = BrowserSystemConfig::default();
+        browser.profiles.insert(
+            "default".to_string(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                ..Default::default()
+            },
+        );
+        let shown = snapshot(&browser);
+        assert_eq!(shown.default_driver, "cdp");
+
+        // What handle_update does with that string, isolated.
+        assert_eq!(
+            driver_from_update(&shown.default_driver, BrowserDriver::Managed),
+            BrowserDriver::Cdp
+        );
+        // A value no version of this server knows falls back to the driver
+        // already persisted, never to a hardcoded default: an unknown string
+        // is "I do not understand you", not "set it to managed".
+        assert_eq!(
+            driver_from_update("quantum", BrowserDriver::Cdp),
+            BrowserDriver::Cdp
+        );
+        assert_eq!(
+            driver_from_update("existing_session", BrowserDriver::Cdp),
+            BrowserDriver::ExistingSession
         );
     }
 }

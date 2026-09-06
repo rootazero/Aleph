@@ -380,6 +380,7 @@ impl ProfileManager {
     ///
     /// - `BrowserDriver::Managed`         → `PlaywrightCliBackend`
     /// - `BrowserDriver::ExistingSession` → `ChromeMcpBackend`
+    /// - `BrowserDriver::Cdp`             → nothing yet (Task 14); refused by name.
     pub fn get_backend(&self, profile_name: &str) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
         let cfg = self
             .get_config(profile_name)
@@ -398,6 +399,16 @@ impl ProfileManager {
                 self.chrome_mcp_driver.clone(),
                 profile_name.to_string(),
                 self.ssrf_guard.load_full(),
+            ))),
+            // The CDP backend is not built yet. Refusing BY NAME is the
+            // point: routing this to the managed backend would run a
+            // DIFFERENT engine than the profile asks for and report success
+            // (判据 §11), which is how "this setting never worked" starts.
+            // Task 14 replaces this arm with the real construction.
+            BrowserDriver::Cdp => Err(BrowserError::ActionFailed(format!(
+                "browser profile '{profile_name}' is configured with driver = \"cdp\", which \
+                 this build has no backend for yet. Set driver = \"managed\" to use the \
+                 Chromium-launching driver."
             ))),
         }
     }
@@ -519,6 +530,10 @@ impl ProfileManager {
         match self.get_driver(name) {
             Some(BrowserDriver::ExistingSession) => self.chrome_mcp_driver.has_session(name),
             Some(BrowserDriver::Managed) => self.playwright_cli_driver.chromium_alive(name),
+            // No CDP backend exists in this build, so nothing can have opened
+            // a session under it: a determinate `false`, not an unknown.
+            // Task 14 replaces it with the engine map's own answer.
+            Some(BrowserDriver::Cdp) => false,
             None => false,
         }
     }
@@ -616,7 +631,7 @@ impl ProfileManager {
     /// Get the driver mode for a named profile.
     pub fn get_driver(&self, name: &str) -> Option<BrowserDriver> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
-        let result = profiles.get(name).map(|p| p.config.driver.clone());
+        let result = profiles.get(name).map(|p| p.config.driver);
         tracing::debug!(
             profile = name,
             driver = ?result,
@@ -664,7 +679,7 @@ impl ProfileManager {
     pub(crate) fn live_endpoint(&self, profile: &str) -> Option<super::CdpEndpoint> {
         match self.get_driver(profile) {
             Some(BrowserDriver::Managed) => self.playwright_cli_driver.endpoint(profile),
-            Some(BrowserDriver::ExistingSession) | None => None,
+            Some(BrowserDriver::ExistingSession | BrowserDriver::Cdp) | None => None,
         }
     }
 

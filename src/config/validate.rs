@@ -79,6 +79,7 @@ impl Config {
         self.validate_search_config()?;
         self.validate_group_chat_and_personas()?;
         self.validate_policies()?;
+        self.validate_browser_config()?;
 
         info!(
             providers_count = self.providers.len(),
@@ -675,6 +676,20 @@ impl Config {
         Ok(())
     }
 
+    /// Validate the browser section: the CDP command budget and every
+    /// profile's engine/driver pairing.
+    ///
+    /// The decision lives in `browser::profile` — this is the wire, not a
+    /// second copy of the rule. A config layer that re-derived "can obscura
+    /// run under this driver" would answer differently from the launch path
+    /// exactly when it mattered (判据 §1, §9).
+    fn validate_browser_config(&self) -> Result<()> {
+        self.general.browser.validate().map_err(|detail| {
+            error!(%detail, "browser configuration is not startable");
+            AlephError::invalid_config(detail)
+        })
+    }
+
     /// Emit one-time advisory recommendations about the loaded config.
     ///
     /// These are *not* validation errors — they are startup hints. They live
@@ -823,5 +838,46 @@ mod tests {
 
         // Alphabetical minimum is chosen for deterministic behavior.
         assert_eq!(cfg.general.default_provider.as_deref(), Some("alpha"));
+    }
+
+    /// The browser check is actually reached from `Config::validate` — a
+    /// validator nothing calls is the shape a whole round was spent on
+    /// (判据 §7: both ends present, no wire).
+    #[test]
+    fn config_validate_refuses_an_engine_driver_pairing_that_cannot_start() {
+        use crate::browser::engine::Engine;
+        use crate::browser::profile::{BrowserDriver, ProfileConfig};
+
+        let mut config = Config::default();
+        config.general.browser.default_engine = Engine::Obscura;
+        config.general.browser.profiles.insert(
+            "work".to_string(),
+            ProfileConfig {
+                // The EXPLICIT contradiction. A profile with no engine key and
+                // a legacy driver is legal under any default and must not be
+                // used here — see
+                // `legacy_managed_profile_resolves_to_chromium_under_obscura_default`.
+                engine: Some(Engine::Obscura),
+                driver: BrowserDriver::Managed,
+                ..Default::default()
+            },
+        );
+        let err = config
+            .validate()
+            .expect_err("Config::validate must surface the browser refusal");
+        let text = err.to_string();
+        assert!(text.contains("work"), "{text}");
+        assert!(text.contains("driver = \"cdp\""), "{text}");
+
+        // The same config with the driver fixed passes, so the refusal is
+        // about the pairing and not about something else in the fixture.
+        config
+            .general
+            .browser
+            .profiles
+            .get_mut("work")
+            .expect("profile")
+            .driver = BrowserDriver::Cdp;
+        assert!(config.validate().is_ok());
     }
 }
