@@ -282,6 +282,38 @@ fn scan_sibling_installs(dry_run_location: &Path) -> (Vec<u64>, Option<PathBuf>)
     (seen_revisions, best)
 }
 
+/// Whether `path` is executable, as far as this platform can tell.
+///
+/// Unix: exists AND carries at least one exec bit. `is_file()` alone
+/// establishes existence, not launchability — a pin that lost its `+x`, a
+/// downloaded artifact, or a plain (non-executable) file inside a `.app`
+/// bundle all pass it and then die at `spawn()` with `Permission denied`,
+/// after both doctor and `runtime_manage{list}` have already reported the
+/// browser healthy (Final Review I2). Checked as `mode & 0o111 != 0` —
+/// ANY exec bit — rather than picking the one that applies to this
+/// process (owner/group/other): the OS already resolves that at `exec()`
+/// time, and guessing which one applies here would just be a different
+/// wrong answer dressed as precision.
+///
+/// Windows has no equivalent bit: executability there is decided by file
+/// association and extension, which this resolver already establishes a
+/// different way (the candidate is only ever a path this module itself
+/// found or an operator's own `.exe` pin). So there is nothing to check on
+/// that platform, and this always answers `true` — deliberately, not by
+/// omission.
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(_path: &Path) -> bool {
+    true
+}
+
 /// Resolve the binary the managed driver should launch for `browser`.
 ///
 /// # Errors
@@ -308,6 +340,21 @@ pub(crate) async fn resolve_binary(
     if let Some(pin) = runtime.pinned_binary() {
         let path = PathBuf::from(pin);
         if path.is_file() {
+            if !is_executable(&path) {
+                // Final Review I2: `is_file()` establishes existence, not
+                // launchability. A pin that lost its `+x`, a downloaded
+                // artifact, or a plain file inside a `.app` bundle all pass
+                // `is_file()` and then die at `spawn()` with `Permission
+                // denied` — well after doctor and `runtime_manage{list}`
+                // have both already reported the browser healthy. A third,
+                // distinguishable answer, not "does not exist" (a different
+                // fact) and not silently `Ok` (the bug this closes).
+                return Err(BrowserError::ChromiumUnavailable {
+                    tried: format!(
+                        "[general.browser.runtime] binary_path = {pin:?} exists but is not executable"
+                    ),
+                });
+            }
             let engine = super::discovery::engine_of(&path);
             return Ok(ResolvedChromium {
                 path,
@@ -671,6 +718,15 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         let dir = tempfile::tempdir().expect("tempdir");
         let pinned = dir.path().join("Google Chrome for Testing");
         std::fs::write(&pinned, b"not a real binary, just needs to exist").unwrap();
+        // A "valid" pin means launchable, not merely present (Final Review
+        // I2) — `std::fs::write` leaves the default, non-executable mode, so
+        // without this the fixture would no longer be testing what its own
+        // name claims.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&pinned, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
 
         let runtime = BrowserRuntimeConfig {
             binary_path: Some(pinned.to_string_lossy().into_owned()),
@@ -714,6 +770,54 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         match err {
             BrowserError::ChromiumUnavailable { tried } => {
                 assert!(tried.contains("/nonexistent/pinned-chrome"));
+            }
+            other => panic!("expected ChromiumUnavailable, got {other:?}"),
+        }
+    }
+
+    /// Final Review I2: `is_file()` establishes existence, not launchability.
+    /// A pin at a non-executable file (lost `+x`, a downloaded artifact, a
+    /// plain file inside a bundle) must be `ChromiumUnavailable` naming THAT
+    /// reason — not "does not exist" (a different fact) and not a silent
+    /// `Ok` (the bug: doctor and `runtime_manage{list}` both reported this
+    /// exact shape healthy, and only the next browser call discovered
+    /// `Permission denied`).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_pin_that_exists_but_is_not_executable_is_unavailable_and_says_so() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pinned = dir.path().join("chrome-no-exec-bit");
+        std::fs::write(&pinned, b"exists, but nobody chmod +x'd it").unwrap();
+        // `std::fs::write`'s default mode already has no exec bit on every
+        // platform this runs on, but state the precondition rather than
+        // relying on it: the whole test is dead if this ever stops holding.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&pinned).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o111,
+            0,
+            "fixture precondition: must start non-executable"
+        );
+
+        let runtime = BrowserRuntimeConfig {
+            binary_path: Some(pinned.to_string_lossy().into_owned()),
+            prefer_system_browser: true,
+            download_host: None,
+        };
+        let err = resolve_binary(
+            &runtime,
+            &BrowserType::Chromium,
+            Path::new("/nonexistent/playwright-cli-should-never-be-invoked"),
+        )
+        .await
+        .expect_err("a non-executable pin must not resolve as healthy");
+
+        match err {
+            BrowserError::ChromiumUnavailable { tried } => {
+                assert!(
+                    tried.contains("exists but is not executable"),
+                    "must distinguish this from \"does not exist\": {tried}"
+                );
             }
             other => panic!("expected ChromiumUnavailable, got {other:?}"),
         }
