@@ -26,3 +26,47 @@ pub struct CdpEvent {
     pub method: String,
     pub params: Value,
 }
+
+use std::sync::Arc;
+
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
+
+/// A subscriber's view of the connection's events.
+///
+/// Starts at the moment it is created: a caller that needs the event caused by a call must take
+/// the stream first. Falling behind is reported, not hidden — [`Self::lagged`] counts every event
+/// dropped for this subscriber, so a consumer can tell "nothing happened" from "I stopped
+/// looking" (spec §3.1).
+pub struct EventStream {
+    rx: broadcast::Receiver<Arc<CdpEvent>>,
+    lagged: u64,
+}
+
+impl EventStream {
+    pub(crate) fn new(rx: broadcast::Receiver<Arc<CdpEvent>>) -> Self {
+        Self { rx, lagged: 0 }
+    }
+
+    /// The next event, or `None` once the connection is gone.
+    ///
+    /// A lag is counted and then stepped over: the alternative — surfacing it as an error the
+    /// caller has to handle — would push a decision about how to recover into every consumer,
+    /// and there is nothing to recover, only something to know.
+    pub async fn next(&mut self) -> Option<Arc<CdpEvent>> {
+        loop {
+            match self.rx.recv().await {
+                Ok(event) => return Some(event),
+                Err(RecvError::Lagged(missed)) => {
+                    self.lagged = self.lagged.saturating_add(missed);
+                }
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
+
+    /// Cumulative count of events this subscriber never saw.
+    pub fn lagged(&self) -> u64 {
+        self.lagged
+    }
+}

@@ -24,7 +24,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::error::{CdpError, CloseReason, Result};
-use crate::events::{CdpEvent, EVENT_CHANNEL_CAPACITY};
+use crate::events::{CdpEvent, EventStream, EVENT_CHANNEL_CAPACITY};
 use crate::ids::SessionId;
 
 /// Per-command budget when the caller does not name one.
@@ -483,6 +483,15 @@ impl CdpConnection {
 
     pub fn command_timeout(&self) -> Duration {
         self.inner.command_timeout
+    }
+
+    /// Subscribe to this connection's events from now on.
+    ///
+    /// Defined here rather than in `events.rs` because `Inner` is private to this module and the
+    /// alternative — a `pub(crate)` accessor that hands out the shared state — would be a second
+    /// door into it whose only user is one line.
+    pub fn events(&self) -> EventStream {
+        EventStream::new(self.inner.shared.events_tx.subscribe())
     }
 }
 

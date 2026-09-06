@@ -34,6 +34,9 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::connection::{CdpConnection, ConnectOptions};
+use crate::ids::{SessionId, TargetId};
+
 /// The websocket path this server serves, and the one its `/json/version` advertises. Shaped like
 /// a real browser endpoint so nothing downstream can come to depend on a bare `/`.
 const WS_PATH: &str = "/devtools/browser/fake";
@@ -368,6 +371,40 @@ impl FakeCdpServer {
                 ),
             }
         }
+    }
+}
+
+impl FakeCdpServer {
+    /// Connect and attach in one line: the shape four other parts' tests start from.
+    ///
+    /// The command timeout is 5s, deliberately not the 30s product default — a test whose fake
+    /// forgot to script a method should fail in five seconds, not thirty.
+    ///
+    /// The `Target.attachToTarget` reply is filled in ONLY when the override table has no entry
+    /// for it, so a test that needs a particular session id calls `on("Target.attachToTarget", …)`
+    /// first and that wins. Note the asymmetry: an entry in the CONSTRUCTOR's script does not win,
+    /// because the override table is consulted before it — script the session id with `on`, not
+    /// with `scripted`.
+    pub async fn connect_and_attach(&self) -> (CdpConnection, SessionId) {
+        {
+            let mut overrides = lock(&self.overrides);
+            overrides
+                .entry("Target.attachToTarget".to_string())
+                .or_insert_with(|| Responder::Reply(json!({ "sessionId": FAKE_SESSION_ID })));
+        }
+        let conn = CdpConnection::connect(
+            self.ws_url().as_str(),
+            ConnectOptions {
+                command_timeout: Duration::from_secs(5),
+            },
+        )
+        .await
+        .expect("connect to the fake server");
+        let session = conn
+            .attach(&TargetId(FAKE_TARGET_ID.to_string()))
+            .await
+            .expect("attach to the fake target");
+        (conn, session)
     }
 }
 
