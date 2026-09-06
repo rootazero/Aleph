@@ -1,0 +1,34 @@
+{
+  "result": {
+    "type": "object",
+    "subtype": "error",
+    "className": "Error",
+    "description": "Error: t0 boom\n    at <anonymous>:1:7",
+    "objectId": "-6984270279995876249.9.2"
+  },
+  "exceptionDetails": {
+    "exceptionId": 1,
+    "text": "Uncaught",
+    "lineNumber": 0,
+    "columnNumber": 0,
+    "scriptId": "5",
+    "stackTrace": {
+      "callFrames": [
+        {
+          "functionName": "",
+          "scriptId": "5",
+          "url": "",
+          "lineNumber": 0,
+          "columnNumber": 6
+        }
+      ]
+    },
+    "exception": {
+      "type": "object",
+      "subtype": "error",
+      "className": "Error",
+      "description": "Error: t0 boom\n    at <anonymous>:1:7",
+      "objectId": "-6984270279995876249.9.3"
+    }
+  }
+}

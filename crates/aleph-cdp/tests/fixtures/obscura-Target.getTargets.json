@@ -1,0 +1,13 @@
+{
+  "targetInfos": [
+    {
+      "targetId": "page-1",
+      "type": "page",
+      "title": "Aleph T0 probe page",
+      "url": "http://127.0.0.1:18999/t0-page.html",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "default"
+    }
+  ]
+}

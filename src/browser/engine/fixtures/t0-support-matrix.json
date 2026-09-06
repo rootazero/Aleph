@@ -1,0 +1,470 @@
+{
+  "chrome": {
+    "Browser.getVersion": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.getTargets": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.createTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.attachToTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.detachFromTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.activateTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.closeTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.setDiscoverTargets": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.navigate": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.getFrameTree": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.getLayoutMetrics": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.getNavigationHistory": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.enable": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Runtime.enable": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.enable": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.bringToFront": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.reload": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.navigateToHistoryEntry": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.getDocument": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.querySelector": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.querySelector.miss": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.querySelectorAll": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.describeNode": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.getBoxModel": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.scrollIntoViewIfNeeded": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.focus": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.resolveNode": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.getBoxModel.hidden": {
+      "protocol": "Could not compute box model.",
+      "effect": null
+    },
+    "DOM.getBoxModel.badnode": {
+      "protocol": "No node found for given backend id",
+      "effect": null
+    },
+    "DOM.setFileInputFiles": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Runtime.evaluate": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Runtime.evaluate.throws": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Runtime.callFunctionOn": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Input.dispatchMouseEvent": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Input.dispatchKeyEvent": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Input.insertText": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.setCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.getAllCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.getCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.deleteCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setDeviceMetricsOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setUserAgentOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setGeolocationOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.clearDeviceMetricsOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setEmulatedMedia": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setCPUThrottlingRate": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.emulateNetworkConditions": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.setExtraHTTPHeaders": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.clearBrowserCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOMSnapshot.captureSnapshot": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.captureScreenshot": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.printToPDF": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.javascriptDialogOpening": {
+      "protocol": "ok",
+      "effect": true
+    },
+    "Page.handleJavaScriptDialog": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Input.dispatchTouchEvent": {
+      "protocol": "ok",
+      "effect": false
+    },
+    "Input.dispatchDragEvent": {
+      "protocol": "ok",
+      "effect": false
+    },
+    "DOM.setAttributeValue": {
+      "protocol": "ok",
+      "effect": true
+    },
+    "DOM.removeNode": {
+      "protocol": "ok",
+      "effect": true
+    }
+  },
+  "obscura": {
+    "Browser.getVersion": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.getTargets": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.createTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.attachToTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.detachFromTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.activateTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.closeTarget": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Target.setDiscoverTargets": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.navigate": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.getFrameTree": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.getLayoutMetrics": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.getNavigationHistory": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.enable": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Runtime.enable": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.enable": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.bringToFront": {
+      "protocol": "Unknown Page method: bringToFront",
+      "effect": null
+    },
+    "Page.reload": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.navigateToHistoryEntry": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.getDocument": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.querySelector": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.querySelector.miss": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.querySelectorAll": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.describeNode": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.getBoxModel": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.scrollIntoViewIfNeeded": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.focus": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.resolveNode": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.getBoxModel.hidden": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.getBoxModel.badnode": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOM.setFileInputFiles": {
+      "protocol": "DOM.setFileInputFiles is disabled. Restart with `obscura serve --allow-file-access` to enable local file uploads.",
+      "effect": null
+    },
+    "Runtime.evaluate": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Runtime.evaluate.throws": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Runtime.callFunctionOn": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Input.dispatchMouseEvent": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Input.dispatchKeyEvent": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Input.insertText": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.setCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.getAllCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.getCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.deleteCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setDeviceMetricsOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setUserAgentOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setGeolocationOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.clearDeviceMetricsOverride": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setEmulatedMedia": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Emulation.setCPUThrottlingRate": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.emulateNetworkConditions": {
+      "protocol": "Unknown Network method: emulateNetworkConditions",
+      "effect": null
+    },
+    "Network.setExtraHTTPHeaders": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Network.clearBrowserCookies": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "DOMSnapshot.captureSnapshot": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.captureScreenshot": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.printToPDF": {
+      "protocol": "ok",
+      "effect": null
+    },
+    "Page.javascriptDialogOpening": {
+      "protocol": "no event within 4s",
+      "effect": false
+    },
+    "Page.handleJavaScriptDialog": {
+      "protocol": "not reachable: no dialog event",
+      "effect": null
+    },
+    "Input.dispatchTouchEvent": {
+      "protocol": "ok",
+      "effect": false
+    },
+    "Input.dispatchDragEvent": {
+      "protocol": "Unknown Input method: dispatchDragEvent",
+      "effect": false
+    },
+    "DOM.setAttributeValue": {
+      "protocol": "ok",
+      "effect": false
+    },
+    "DOM.removeNode": {
+      "protocol": "ok",
+      "effect": false
+    }
+  }
+}

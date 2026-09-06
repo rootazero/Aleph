@@ -1,0 +1,58 @@
+{
+  "targetInfos": [
+    {
+      "targetId": "86DDF91C8FFFC3417FC3BE7B55F51155",
+      "type": "service_worker",
+      "title": "Service Worker chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js",
+      "url": "chrome-extension://fignfifoniblkonapihmkfakmlgkbkcf/service_worker.js",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "956A9697E54579BF1A49806D4929D716"
+    },
+    {
+      "targetId": "9596532CE0588FEAAAAC7852D0CB23A9",
+      "type": "page",
+      "title": "about:blank",
+      "url": "about:blank",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "956A9697E54579BF1A49806D4929D716"
+    },
+    {
+      "targetId": "547DA5AD3FDDBDE700C699CBF0DD735A",
+      "type": "browser_ui",
+      "title": "Omnibox Popup",
+      "url": "chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "956A9697E54579BF1A49806D4929D716"
+    },
+    {
+      "targetId": "E57ED7A7CE71FC28711A9D97060A92F9",
+      "type": "browser_ui",
+      "title": "Omnibox Popup",
+      "url": "chrome://omnibox-popup.top-chrome/",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "956A9697E54579BF1A49806D4929D716"
+    },
+    {
+      "targetId": "DCB319024296E82F16E6C7474EFB6522",
+      "type": "background_page",
+      "title": "Google Hangouts",
+      "url": "chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/background.html",
+      "attached": false,
+      "canAccessOpener": false,
+      "browserContextId": "956A9697E54579BF1A49806D4929D716"
+    },
+    {
+      "targetId": "038EEB9A6B799C3C8B2A352218CDF43D",
+      "type": "page",
+      "title": "Aleph T0 probe page",
+      "url": "http://127.0.0.1:18999/t0-page.html",
+      "attached": true,
+      "canAccessOpener": false,
+      "browserContextId": "956A9697E54579BF1A49806D4929D716"
+    }
+  ]
+}

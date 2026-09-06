@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aleph T0 probe page</title>
+<style>
+  html,body { margin:0; padding:0; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  #hidden-none  { display:none; }
+  #hidden-vis   { visibility:hidden; }
+  #zero-size    { width:0; height:0; overflow:hidden; }
+  #offscreen    { position:absolute; left:-9999px; top:0; }
+  #opacity-zero { opacity:0; }
+  #clip         { width:40px; height:12px; overflow:hidden; }
+  #spacer       { height:2000px; }
+  #deep-target  { width:120px; height:30px; }
+  #frame-host   { position:absolute; left:200px; top:120px; width:400px; height:200px; border:0; }
+  a, button     { cursor:pointer; }
+</style>
+</head>
+<body>
+  <header id="banner">
+    <a id="home" href="/t0-page.html">Aleph T0</a>
+    <a id="external" href="https://example.invalid/docs">Docs</a>
+  </header>
+  <main id="main">
+    <h1 id="title">T0 probe page</h1>
+    <p id="para">Deterministic page for the dual-engine T0 probes.</p>
+    <label for="q">Search</label>
+    <input id="q" name="q" type="text" placeholder="type here">
+    <button id="go" type="button">Go</button>
+    <input id="check" type="checkbox" checked>
+    <select id="sel"><option value="a">Alpha</option><option value="b" selected>Beta</option></select>
+    <textarea id="notes" rows="2" placeholder="notes"></textarea>
+    <input id="file" type="file">
+    <div id="hidden-none">display none text</div>
+    <div id="hidden-vis">visibility hidden text</div>
+    <div id="zero-size">zero</div>
+    <div id="offscreen">offscreen text</div>
+    <div id="opacity-zero">transparent text</div>
+    <div id="clip">a very long clipped string that overflows its box</div>
+    <ul id="list"><li>one</li><li>two</li></ul>
+    <div id="spacer"></div>
+    <button id="deep-target" type="button">Deep target</button>
+  </main>
+  <iframe id="frame-host" src="about:blank" title="child frame"></iframe>
+  <script>
+    window.__clicks = [];
+    document.getElementById('deep-target').addEventListener('click', function (e) {
+      window.__clicks.push({ id: 'deep-target', clientX: e.clientX, clientY: e.clientY,
+                             pageX: e.pageX, pageY: e.pageY, scrollY: window.scrollY });
+    });
+    document.getElementById('go').addEventListener('click', function () {
+      window.__clicks.push({ id: 'go' });
+    });
+    // Effect flags. A CDP method that answers `{}` while doing nothing is indistinguishable from
+    // one that worked, unless the page itself reports what reached it. These are the read-back.
+    window.__aleph_touch = false;
+    window.__aleph_drag = false;
+    document.addEventListener('touchstart', function () { window.__aleph_touch = true; }, true);
+    document.addEventListener('dragover', function () { window.__aleph_drag = true; }, true);
+    document.addEventListener('drop', function () { window.__aleph_drag = true; }, true);
+    var child = new URL(location.href).searchParams.get('child');
+    if (child) { document.getElementById('frame-host').src = child; }
+  </script>
+</body>
+</html>

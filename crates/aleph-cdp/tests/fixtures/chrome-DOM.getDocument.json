@@ -1,0 +1,1320 @@
+{
+  "root": {
+    "nodeId": 1,
+    "backendNodeId": 22,
+    "nodeType": 9,
+    "nodeName": "#document",
+    "localName": "",
+    "nodeValue": "",
+    "childNodeCount": 2,
+    "children": [
+      {
+        "nodeId": 2,
+        "parentId": 1,
+        "backendNodeId": 24,
+        "nodeType": 10,
+        "nodeName": "html",
+        "localName": "",
+        "nodeValue": "",
+        "publicId": "",
+        "systemId": ""
+      },
+      {
+        "nodeId": 3,
+        "parentId": 1,
+        "backendNodeId": 25,
+        "nodeType": 1,
+        "nodeName": "HTML",
+        "localName": "html",
+        "nodeValue": "",
+        "childNodeCount": 2,
+        "children": [
+          {
+            "nodeId": 4,
+            "parentId": 3,
+            "backendNodeId": 26,
+            "nodeType": 1,
+            "nodeName": "HEAD",
+            "localName": "head",
+            "nodeValue": "",
+            "childNodeCount": 3,
+            "children": [
+              {
+                "nodeId": 5,
+                "parentId": 4,
+                "backendNodeId": 27,
+                "nodeType": 1,
+                "nodeName": "META",
+                "localName": "meta",
+                "nodeValue": "",
+                "childNodeCount": 0,
+                "children": [],
+                "attributes": [
+                  "charset",
+                  "utf-8"
+                ]
+              },
+              {
+                "nodeId": 6,
+                "parentId": 4,
+                "backendNodeId": 28,
+                "nodeType": 1,
+                "nodeName": "TITLE",
+                "localName": "title",
+                "nodeValue": "",
+                "childNodeCount": 1,
+                "children": [
+                  {
+                    "nodeId": 7,
+                    "parentId": 6,
+                    "backendNodeId": 29,
+                    "nodeType": 3,
+                    "nodeName": "#text",
+                    "localName": "",
+                    "nodeValue": "Aleph T0 probe page"
+                  }
+                ],
+                "attributes": []
+              },
+              {
+                "nodeId": 8,
+                "parentId": 4,
+                "backendNodeId": 30,
+                "nodeType": 1,
+                "nodeName": "STYLE",
+                "localName": "style",
+                "nodeValue": "",
+                "childNodeCount": 1,
+                "children": [
+                  {
+                    "nodeId": 9,
+                    "parentId": 8,
+                    "backendNodeId": 31,
+                    "nodeType": 3,
+                    "nodeName": "#text",
+                    "localName": "",
+                    "nodeValue": "\n  html,body { margin:0; padding:0; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }\n  #hidden-none  { display:none; }\n  #hidden-vis   { visibility:hidden; }\n  #zero-size    { width:0; height:0; overflow:hidden; }\n  #offscreen    { position:absolute; left:-9999px; top:0; }\n  #opacity-zero { opacity:0; }\n  #clip         { width:40px; height:12px; overflow:hidden; }\n  #spacer       { height:2000px; }\n  #deep-target  { width:120px; height:30px; }\n  #frame-host   { position:absolute; left:200px; top:120px; width:400px; height:200px; border:0; }\n  a, button     { cursor:pointer; }\n"
+                  }
+                ],
+                "attributes": []
+              }
+            ],
+            "attributes": []
+          },
+          {
+            "nodeId": 10,
+            "parentId": 3,
+            "backendNodeId": 32,
+            "nodeType": 1,
+            "nodeName": "BODY",
+            "localName": "body",
+            "nodeValue": "",
+            "childNodeCount": 4,
+            "children": [
+              {
+                "nodeId": 11,
+                "parentId": 10,
+                "backendNodeId": 33,
+                "nodeType": 1,
+                "nodeName": "HEADER",
+                "localName": "header",
+                "nodeValue": "",
+                "childNodeCount": 2,
+                "children": [
+                  {
+                    "nodeId": 12,
+                    "parentId": 11,
+                    "backendNodeId": 34,
+                    "nodeType": 1,
+                    "nodeName": "A",
+                    "localName": "a",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 13,
+                        "parentId": 12,
+                        "backendNodeId": 35,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "Aleph T0"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "home",
+                      "href",
+                      "/t0-page.html"
+                    ]
+                  },
+                  {
+                    "nodeId": 14,
+                    "parentId": 11,
+                    "backendNodeId": 36,
+                    "nodeType": 1,
+                    "nodeName": "A",
+                    "localName": "a",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 15,
+                        "parentId": 14,
+                        "backendNodeId": 37,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "Docs"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "external",
+                      "href",
+                      "https://example.invalid/docs"
+                    ]
+                  }
+                ],
+                "attributes": [
+                  "id",
+                  "banner"
+                ]
+              },
+              {
+                "nodeId": 16,
+                "parentId": 10,
+                "backendNodeId": 38,
+                "nodeType": 1,
+                "nodeName": "MAIN",
+                "localName": "main",
+                "nodeValue": "",
+                "childNodeCount": 18,
+                "children": [
+                  {
+                    "nodeId": 17,
+                    "parentId": 16,
+                    "backendNodeId": 39,
+                    "nodeType": 1,
+                    "nodeName": "H1",
+                    "localName": "h1",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 18,
+                        "parentId": 17,
+                        "backendNodeId": 40,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "T0 probe page"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "title"
+                    ]
+                  },
+                  {
+                    "nodeId": 19,
+                    "parentId": 16,
+                    "backendNodeId": 41,
+                    "nodeType": 1,
+                    "nodeName": "P",
+                    "localName": "p",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 20,
+                        "parentId": 19,
+                        "backendNodeId": 42,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "Deterministic page for the dual-engine T0 probes."
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "para"
+                    ]
+                  },
+                  {
+                    "nodeId": 21,
+                    "parentId": 16,
+                    "backendNodeId": 43,
+                    "nodeType": 1,
+                    "nodeName": "LABEL",
+                    "localName": "label",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 22,
+                        "parentId": 21,
+                        "backendNodeId": 44,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "Search"
+                      }
+                    ],
+                    "attributes": [
+                      "for",
+                      "q"
+                    ]
+                  },
+                  {
+                    "nodeId": 23,
+                    "parentId": 16,
+                    "backendNodeId": 19,
+                    "nodeType": 1,
+                    "nodeName": "INPUT",
+                    "localName": "input",
+                    "nodeValue": "",
+                    "childNodeCount": 0,
+                    "children": [],
+                    "attributes": [
+                      "id",
+                      "q",
+                      "name",
+                      "q",
+                      "type",
+                      "text",
+                      "placeholder",
+                      "type here"
+                    ],
+                    "shadowRoots": [
+                      {
+                        "nodeId": 24,
+                        "backendNodeId": 45,
+                        "nodeType": 11,
+                        "nodeName": "#document-fragment",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 2,
+                        "children": [
+                          {
+                            "nodeId": 25,
+                            "parentId": 24,
+                            "backendNodeId": 46,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [
+                              {
+                                "nodeId": 26,
+                                "parentId": 25,
+                                "backendNodeId": 47,
+                                "nodeType": 3,
+                                "nodeName": "#text",
+                                "localName": "",
+                                "nodeValue": "type here"
+                              }
+                            ],
+                            "attributes": [
+                              "pseudo",
+                              "-webkit-input-placeholder",
+                              "id",
+                              "placeholder",
+                              "style",
+                              "display: block !important;"
+                            ]
+                          },
+                          {
+                            "nodeId": 27,
+                            "parentId": 24,
+                            "backendNodeId": 48,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "childNodeCount": 0,
+                            "children": [],
+                            "attributes": []
+                          }
+                        ],
+                        "shadowRootType": "user-agent"
+                      }
+                    ]
+                  },
+                  {
+                    "nodeId": 28,
+                    "parentId": 16,
+                    "backendNodeId": 49,
+                    "nodeType": 1,
+                    "nodeName": "BUTTON",
+                    "localName": "button",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 29,
+                        "parentId": 28,
+                        "backendNodeId": 50,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "Go"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "go",
+                      "type",
+                      "button"
+                    ]
+                  },
+                  {
+                    "nodeId": 30,
+                    "parentId": 16,
+                    "backendNodeId": 51,
+                    "nodeType": 1,
+                    "nodeName": "INPUT",
+                    "localName": "input",
+                    "nodeValue": "",
+                    "childNodeCount": 0,
+                    "children": [],
+                    "attributes": [
+                      "id",
+                      "check",
+                      "type",
+                      "checkbox",
+                      "checked",
+                      ""
+                    ]
+                  },
+                  {
+                    "nodeId": 31,
+                    "parentId": 16,
+                    "backendNodeId": 20,
+                    "nodeType": 1,
+                    "nodeName": "SELECT",
+                    "localName": "select",
+                    "nodeValue": "",
+                    "childNodeCount": 2,
+                    "children": [
+                      {
+                        "nodeId": 40,
+                        "parentId": 31,
+                        "backendNodeId": 58,
+                        "nodeType": 1,
+                        "nodeName": "OPTION",
+                        "localName": "option",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [
+                          {
+                            "nodeId": 45,
+                            "parentId": 40,
+                            "backendNodeId": 66,
+                            "nodeType": 3,
+                            "nodeName": "#text",
+                            "localName": "",
+                            "nodeValue": "Alpha"
+                          }
+                        ],
+                        "attributes": [
+                          "value",
+                          "a"
+                        ],
+                        "shadowRoots": [
+                          {
+                            "nodeId": 41,
+                            "backendNodeId": 62,
+                            "nodeType": 11,
+                            "nodeName": "#document-fragment",
+                            "localName": "",
+                            "nodeValue": "",
+                            "childNodeCount": 2,
+                            "children": [
+                              {
+                                "nodeId": 42,
+                                "parentId": 41,
+                                "backendNodeId": 63,
+                                "nodeType": 1,
+                                "nodeName": "SPAN",
+                                "localName": "span",
+                                "nodeValue": "",
+                                "childNodeCount": 1,
+                                "children": [
+                                  {
+                                    "nodeId": 43,
+                                    "parentId": 42,
+                                    "backendNodeId": 64,
+                                    "nodeType": 3,
+                                    "nodeName": "#text",
+                                    "localName": "",
+                                    "nodeValue": "Alpha"
+                                  }
+                                ],
+                                "attributes": [
+                                  "pseudo",
+                                  "-internal-option-label-container",
+                                  "aria-hidden",
+                                  "true"
+                                ]
+                              },
+                              {
+                                "nodeId": 44,
+                                "parentId": 41,
+                                "backendNodeId": 65,
+                                "nodeType": 1,
+                                "nodeName": "SLOT",
+                                "localName": "slot",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                                "attributes": [
+                                  "pseudo",
+                                  "-internal-option-slot"
+                                ],
+                                "distributedNodes": [
+                                  {
+                                    "nodeType": 3,
+                                    "nodeName": "#text",
+                                    "backendNodeId": 66
+                                  }
+                                ]
+                              }
+                            ],
+                            "shadowRootType": "user-agent"
+                          }
+                        ],
+                        "assignedSlot": {
+                          "nodeType": 1,
+                          "nodeName": "SLOT",
+                          "backendNodeId": 57
+                        }
+                      },
+                      {
+                        "nodeId": 46,
+                        "parentId": 31,
+                        "backendNodeId": 59,
+                        "nodeType": 1,
+                        "nodeName": "OPTION",
+                        "localName": "option",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [
+                          {
+                            "nodeId": 51,
+                            "parentId": 46,
+                            "backendNodeId": 71,
+                            "nodeType": 3,
+                            "nodeName": "#text",
+                            "localName": "",
+                            "nodeValue": "Beta"
+                          }
+                        ],
+                        "attributes": [
+                          "value",
+                          "b",
+                          "selected",
+                          ""
+                        ],
+                        "shadowRoots": [
+                          {
+                            "nodeId": 47,
+                            "backendNodeId": 67,
+                            "nodeType": 11,
+                            "nodeName": "#document-fragment",
+                            "localName": "",
+                            "nodeValue": "",
+                            "childNodeCount": 2,
+                            "children": [
+                              {
+                                "nodeId": 48,
+                                "parentId": 47,
+                                "backendNodeId": 68,
+                                "nodeType": 1,
+                                "nodeName": "SPAN",
+                                "localName": "span",
+                                "nodeValue": "",
+                                "childNodeCount": 1,
+                                "children": [
+                                  {
+                                    "nodeId": 49,
+                                    "parentId": 48,
+                                    "backendNodeId": 69,
+                                    "nodeType": 3,
+                                    "nodeName": "#text",
+                                    "localName": "",
+                                    "nodeValue": "Beta"
+                                  }
+                                ],
+                                "attributes": [
+                                  "pseudo",
+                                  "-internal-option-label-container",
+                                  "aria-hidden",
+                                  "true"
+                                ]
+                              },
+                              {
+                                "nodeId": 50,
+                                "parentId": 47,
+                                "backendNodeId": 70,
+                                "nodeType": 1,
+                                "nodeName": "SLOT",
+                                "localName": "slot",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                                "attributes": [
+                                  "pseudo",
+                                  "-internal-option-slot"
+                                ],
+                                "distributedNodes": [
+                                  {
+                                    "nodeType": 3,
+                                    "nodeName": "#text",
+                                    "backendNodeId": 71
+                                  }
+                                ]
+                              }
+                            ],
+                            "shadowRootType": "user-agent"
+                          }
+                        ],
+                        "assignedSlot": {
+                          "nodeType": 1,
+                          "nodeName": "SLOT",
+                          "backendNodeId": 57
+                        }
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "sel"
+                    ],
+                    "shadowRoots": [
+                      {
+                        "nodeId": 32,
+                        "backendNodeId": 52,
+                        "nodeType": 11,
+                        "nodeName": "#document-fragment",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 4,
+                        "children": [
+                          {
+                            "nodeId": 33,
+                            "parentId": 32,
+                            "backendNodeId": 53,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [
+                              {
+                                "nodeId": 34,
+                                "parentId": 33,
+                                "backendNodeId": 54,
+                                "nodeType": 3,
+                                "nodeName": "#text",
+                                "localName": "",
+                                "nodeValue": "Beta"
+                              }
+                            ],
+                            "attributes": [
+                              "aria-hidden",
+                              "true",
+                              "pseudo",
+                              "-internal-select-inner-element"
+                            ]
+                          },
+                          {
+                            "nodeId": 35,
+                            "parentId": 32,
+                            "backendNodeId": 55,
+                            "nodeType": 1,
+                            "nodeName": "SLOT",
+                            "localName": "slot",
+                            "nodeValue": "",
+                            "childNodeCount": 0,
+                            "children": [],
+                            "attributes": [
+                              "pseudo",
+                              "-internal-select-button-slot"
+                            ],
+                            "distributedNodes": []
+                          },
+                          {
+                            "nodeId": 36,
+                            "parentId": 32,
+                            "backendNodeId": 56,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [
+                              {
+                                "nodeId": 37,
+                                "parentId": 36,
+                                "backendNodeId": 57,
+                                "nodeType": 1,
+                                "nodeName": "SLOT",
+                                "localName": "slot",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                                "attributes": [
+                                  "id",
+                                  "select-options"
+                                ],
+                                "distributedNodes": [
+                                  {
+                                    "nodeType": 1,
+                                    "nodeName": "OPTION",
+                                    "backendNodeId": 58
+                                  },
+                                  {
+                                    "nodeType": 1,
+                                    "nodeName": "OPTION",
+                                    "backendNodeId": 59
+                                  }
+                                ]
+                              }
+                            ],
+                            "attributes": [
+                              "pseudo",
+                              "picker(select)",
+                              "popover",
+                              "auto"
+                            ]
+                          },
+                          {
+                            "nodeId": 38,
+                            "parentId": 32,
+                            "backendNodeId": 60,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [
+                              {
+                                "nodeId": 39,
+                                "parentId": 38,
+                                "backendNodeId": 61,
+                                "nodeType": 1,
+                                "nodeName": "DIV",
+                                "localName": "div",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                                "attributes": [
+                                  "pseudo",
+                                  "-internal-select-autofill-preview-text"
+                                ]
+                              }
+                            ],
+                            "attributes": [
+                              "pseudo",
+                              "-internal-select-autofill-preview",
+                              "popover",
+                              "manual"
+                            ]
+                          }
+                        ],
+                        "shadowRootType": "user-agent"
+                      }
+                    ]
+                  },
+                  {
+                    "nodeId": 52,
+                    "parentId": 16,
+                    "backendNodeId": 21,
+                    "nodeType": 1,
+                    "nodeName": "TEXTAREA",
+                    "localName": "textarea",
+                    "nodeValue": "",
+                    "childNodeCount": 0,
+                    "children": [],
+                    "attributes": [
+                      "id",
+                      "notes",
+                      "rows",
+                      "2",
+                      "placeholder",
+                      "notes"
+                    ],
+                    "shadowRoots": [
+                      {
+                        "nodeId": 53,
+                        "backendNodeId": 72,
+                        "nodeType": 11,
+                        "nodeName": "#document-fragment",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 2,
+                        "children": [
+                          {
+                            "nodeId": 54,
+                            "parentId": 53,
+                            "backendNodeId": 73,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [
+                              {
+                                "nodeId": 55,
+                                "parentId": 54,
+                                "backendNodeId": 74,
+                                "nodeType": 3,
+                                "nodeName": "#text",
+                                "localName": "",
+                                "nodeValue": "notes"
+                              }
+                            ],
+                            "attributes": [
+                              "pseudo",
+                              "-webkit-input-placeholder",
+                              "id",
+                              "placeholder",
+                              "style",
+                              "display: block !important;"
+                            ]
+                          },
+                          {
+                            "nodeId": 56,
+                            "parentId": 53,
+                            "backendNodeId": 75,
+                            "nodeType": 1,
+                            "nodeName": "DIV",
+                            "localName": "div",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [
+                              {
+                                "nodeId": 57,
+                                "parentId": 56,
+                                "backendNodeId": 76,
+                                "nodeType": 1,
+                                "nodeName": "BR",
+                                "localName": "br",
+                                "nodeValue": "",
+                                "childNodeCount": 0,
+                                "children": [],
+                                "attributes": [
+                                  "id",
+                                  "textarea-placeholder-break",
+                                  "aria-hidden",
+                                  "true"
+                                ]
+                              }
+                            ],
+                            "attributes": []
+                          }
+                        ],
+                        "shadowRootType": "user-agent"
+                      }
+                    ]
+                  },
+                  {
+                    "nodeId": 58,
+                    "parentId": 16,
+                    "backendNodeId": 77,
+                    "nodeType": 1,
+                    "nodeName": "INPUT",
+                    "localName": "input",
+                    "nodeValue": "",
+                    "childNodeCount": 0,
+                    "children": [],
+                    "attributes": [
+                      "id",
+                      "file",
+                      "type",
+                      "file"
+                    ],
+                    "shadowRoots": [
+                      {
+                        "nodeId": 59,
+                        "backendNodeId": 78,
+                        "nodeType": 11,
+                        "nodeName": "#document-fragment",
+                        "localName": "",
+                        "nodeValue": "",
+                        "childNodeCount": 2,
+                        "children": [
+                          {
+                            "nodeId": 60,
+                            "parentId": 59,
+                            "backendNodeId": 79,
+                            "nodeType": 1,
+                            "nodeName": "INPUT",
+                            "localName": "input",
+                            "nodeValue": "",
+                            "childNodeCount": 0,
+                            "children": [],
+                            "attributes": [
+                              "type",
+                              "button",
+                              "value",
+                              "选择文件",
+                              "pseudo",
+                              "-webkit-file-upload-button",
+                              "id",
+                              "file-upload-button",
+                              "aria-hidden",
+                              "true"
+                            ],
+                            "shadowRoots": [
+                              {
+                                "nodeId": 61,
+                                "backendNodeId": 80,
+                                "nodeType": 11,
+                                "nodeName": "#document-fragment",
+                                "localName": "",
+                                "nodeValue": "",
+                                "childNodeCount": 1,
+                                "children": [
+                                  {
+                                    "nodeId": 62,
+                                    "parentId": 61,
+                                    "backendNodeId": 81,
+                                    "nodeType": 3,
+                                    "nodeName": "#text",
+                                    "localName": "",
+                                    "nodeValue": "选择文件"
+                                  }
+                                ],
+                                "shadowRootType": "user-agent"
+                              }
+                            ]
+                          },
+                          {
+                            "nodeId": 63,
+                            "parentId": 59,
+                            "backendNodeId": 82,
+                            "nodeType": 1,
+                            "nodeName": "SPAN",
+                            "localName": "span",
+                            "nodeValue": "",
+                            "childNodeCount": 1,
+                            "children": [
+                              {
+                                "nodeId": 64,
+                                "parentId": 63,
+                                "backendNodeId": 83,
+                                "nodeType": 3,
+                                "nodeName": "#text",
+                                "localName": "",
+                                "nodeValue": "未选择任何文件"
+                              }
+                            ],
+                            "attributes": [
+                              "aria-hidden",
+                              "true"
+                            ]
+                          }
+                        ],
+                        "shadowRootType": "user-agent"
+                      }
+                    ]
+                  },
+                  {
+                    "nodeId": 65,
+                    "parentId": 16,
+                    "backendNodeId": 84,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 66,
+                        "parentId": 65,
+                        "backendNodeId": 85,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "display none text"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "hidden-none"
+                    ]
+                  },
+                  {
+                    "nodeId": 67,
+                    "parentId": 16,
+                    "backendNodeId": 86,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 68,
+                        "parentId": 67,
+                        "backendNodeId": 87,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "visibility hidden text"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "hidden-vis"
+                    ]
+                  },
+                  {
+                    "nodeId": 69,
+                    "parentId": 16,
+                    "backendNodeId": 88,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 70,
+                        "parentId": 69,
+                        "backendNodeId": 89,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "zero"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "zero-size"
+                    ]
+                  },
+                  {
+                    "nodeId": 71,
+                    "parentId": 16,
+                    "backendNodeId": 90,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 72,
+                        "parentId": 71,
+                        "backendNodeId": 91,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "offscreen text"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "offscreen"
+                    ]
+                  },
+                  {
+                    "nodeId": 73,
+                    "parentId": 16,
+                    "backendNodeId": 92,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 74,
+                        "parentId": 73,
+                        "backendNodeId": 93,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "transparent text"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "opacity-zero"
+                    ]
+                  },
+                  {
+                    "nodeId": 75,
+                    "parentId": 16,
+                    "backendNodeId": 94,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 76,
+                        "parentId": 75,
+                        "backendNodeId": 95,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "a very long clipped string that overflows its box"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "clip"
+                    ]
+                  },
+                  {
+                    "nodeId": 77,
+                    "parentId": 16,
+                    "backendNodeId": 96,
+                    "nodeType": 1,
+                    "nodeName": "UL",
+                    "localName": "ul",
+                    "nodeValue": "",
+                    "childNodeCount": 2,
+                    "children": [
+                      {
+                        "nodeId": 78,
+                        "parentId": 77,
+                        "backendNodeId": 97,
+                        "nodeType": 1,
+                        "nodeName": "LI",
+                        "localName": "li",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [
+                          {
+                            "nodeId": 80,
+                            "parentId": 78,
+                            "backendNodeId": 99,
+                            "nodeType": 3,
+                            "nodeName": "#text",
+                            "localName": "",
+                            "nodeValue": "one"
+                          }
+                        ],
+                        "attributes": [],
+                        "pseudoElements": [
+                          {
+                            "nodeId": 79,
+                            "backendNodeId": 98,
+                            "nodeType": 1,
+                            "nodeName": "::marker",
+                            "localName": "::marker",
+                            "nodeValue": "",
+                            "childNodeCount": 0,
+                            "attributes": [],
+                            "pseudoType": "marker"
+                          }
+                        ]
+                      },
+                      {
+                        "nodeId": 81,
+                        "parentId": 77,
+                        "backendNodeId": 100,
+                        "nodeType": 1,
+                        "nodeName": "LI",
+                        "localName": "li",
+                        "nodeValue": "",
+                        "childNodeCount": 1,
+                        "children": [
+                          {
+                            "nodeId": 83,
+                            "parentId": 81,
+                            "backendNodeId": 102,
+                            "nodeType": 3,
+                            "nodeName": "#text",
+                            "localName": "",
+                            "nodeValue": "two"
+                          }
+                        ],
+                        "attributes": [],
+                        "pseudoElements": [
+                          {
+                            "nodeId": 82,
+                            "backendNodeId": 101,
+                            "nodeType": 1,
+                            "nodeName": "::marker",
+                            "localName": "::marker",
+                            "nodeValue": "",
+                            "childNodeCount": 0,
+                            "attributes": [],
+                            "pseudoType": "marker"
+                          }
+                        ]
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "list"
+                    ]
+                  },
+                  {
+                    "nodeId": 84,
+                    "parentId": 16,
+                    "backendNodeId": 103,
+                    "nodeType": 1,
+                    "nodeName": "DIV",
+                    "localName": "div",
+                    "nodeValue": "",
+                    "childNodeCount": 0,
+                    "children": [],
+                    "attributes": [
+                      "id",
+                      "spacer"
+                    ]
+                  },
+                  {
+                    "nodeId": 85,
+                    "parentId": 16,
+                    "backendNodeId": 104,
+                    "nodeType": 1,
+                    "nodeName": "BUTTON",
+                    "localName": "button",
+                    "nodeValue": "",
+                    "childNodeCount": 1,
+                    "children": [
+                      {
+                        "nodeId": 86,
+                        "parentId": 85,
+                        "backendNodeId": 105,
+                        "nodeType": 3,
+                        "nodeName": "#text",
+                        "localName": "",
+                        "nodeValue": "Deep target"
+                      }
+                    ],
+                    "attributes": [
+                      "id",
+                      "deep-target",
+                      "type",
+                      "button"
+                    ]
+                  }
+                ],
+                "attributes": [
+                  "id",
+                  "main"
+                ]
+              },
+              {
+                "nodeId": 87,
+                "parentId": 10,
+                "backendNodeId": 106,
+                "nodeType": 1,
+                "nodeName": "IFRAME",
+                "localName": "iframe",
+                "nodeValue": "",
+                "childNodeCount": 0,
+                "children": [],
+                "attributes": [
+                  "id",
+                  "frame-host",
+                  "src",
+                  "about:blank",
+                  "title",
+                  "child frame"
+                ],
+                "frameId": "D59080DD898327850134AD872CD6E5F4",
+                "contentDocument": {
+                  "nodeId": 88,
+                  "backendNodeId": 23,
+                  "nodeType": 9,
+                  "nodeName": "#document",
+                  "localName": "",
+                  "nodeValue": "",
+                  "childNodeCount": 1,
+                  "children": [
+                    {
+                      "nodeId": 89,
+                      "parentId": 88,
+                      "backendNodeId": 107,
+                      "nodeType": 1,
+                      "nodeName": "HTML",
+                      "localName": "html",
+                      "nodeValue": "",
+                      "childNodeCount": 2,
+                      "children": [
+                        {
+                          "nodeId": 90,
+                          "parentId": 89,
+                          "backendNodeId": 108,
+                          "nodeType": 1,
+                          "nodeName": "HEAD",
+                          "localName": "head",
+                          "nodeValue": "",
+                          "childNodeCount": 0,
+                          "children": [],
+                          "attributes": []
+                        },
+                        {
+                          "nodeId": 91,
+                          "parentId": 89,
+                          "backendNodeId": 109,
+                          "nodeType": 1,
+                          "nodeName": "BODY",
+                          "localName": "body",
+                          "nodeValue": "",
+                          "childNodeCount": 0,
+                          "children": [],
+                          "attributes": []
+                        }
+                      ],
+                      "attributes": [],
+                      "frameId": "D59080DD898327850134AD872CD6E5F4"
+                    }
+                  ],
+                  "documentURL": "about:blank",
+                  "baseURL": "http://127.0.0.1:18999/t0-page.html",
+                  "xmlVersion": "",
+                  "compatibilityMode": "QuirksMode"
+                }
+              },
+              {
+                "nodeId": 92,
+                "parentId": 10,
+                "backendNodeId": 110,
+                "nodeType": 1,
+                "nodeName": "SCRIPT",
+                "localName": "script",
+                "nodeValue": "",
+                "childNodeCount": 1,
+                "children": [
+                  {
+                    "nodeId": 93,
+                    "parentId": 92,
+                    "backendNodeId": 111,
+                    "nodeType": 3,
+                    "nodeName": "#text",
+                    "localName": "",
+                    "nodeValue": "\n    window.__clicks = [];\n    document.getElementById('deep-target').addEventListener('click', function (e) {\n      window.__clicks.push({ id: 'deep-target', clientX: e.clientX, clientY: e.clientY,\n                             pageX: e.pageX, pageY: e.pageY, scrollY: window.scrollY });\n    });\n    document.getElementById('go').addEventListener('click', function () {\n      window.__clicks.push({ id: 'go' });\n    });\n    // Effect flags. A CDP method that answers `{}` while doing nothing is indistinguishable from\n    // one that worked, unless the page itself reports what reached it. These are the read-back.\n    window.__aleph_touch = false;\n    window.__aleph_drag = false;\n    document.addEventListener('touchstart', function () { window.__aleph_touch = true; }, true);\n    document.addEventListener('dragover', function () { window.__aleph_drag = true; }, true);\n    document.addEventListener('drop', function () { window.__aleph_drag = true; }, true);\n    var child = new URL(location.href).searchParams.get('child');\n    if (child) { document.getElementById('frame-host').src = child; }\n  "
+                  }
+                ],
+                "attributes": []
+              }
+            ],
+            "attributes": []
+          }
+        ],
+        "attributes": [
+          "lang",
+          "en"
+        ],
+        "frameId": "038EEB9A6B799C3C8B2A352218CDF43D"
+      }
+    ],
+    "documentURL": "http://127.0.0.1:18999/t0-page.html",
+    "baseURL": "http://127.0.0.1:18999/t0-page.html",
+    "xmlVersion": "",
+    "compatibilityMode": "NoQuirksMode",
+    "isScrollable": true
+  }
+}

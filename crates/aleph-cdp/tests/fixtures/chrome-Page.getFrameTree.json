@@ -1,0 +1,45 @@
+{
+  "frameTree": {
+    "frame": {
+      "id": "038EEB9A6B799C3C8B2A352218CDF43D",
+      "loaderId": "A241E84FA736E1C8A9B3A6DD81633BE2",
+      "url": "http://127.0.0.1:18999/t0-page.html",
+      "domainAndRegistry": "",
+      "securityOrigin": "http://127.0.0.1:18999",
+      "securityOriginDetails": {
+        "isLocalhost": true
+      },
+      "mimeType": "text/html",
+      "adFrameStatus": {
+        "adFrameType": "none"
+      },
+      "secureContextType": "SecureLocalhost",
+      "crossOriginIsolatedContextType": "NotIsolated",
+      "gatedAPIFeatures": []
+    },
+    "childFrames": [
+      {
+        "frame": {
+          "id": "8B57C637FDD0D5EBFB0D10F09F1518D3",
+          "parentId": "038EEB9A6B799C3C8B2A352218CDF43D",
+          "loaderId": "11EF4A59DD49C335B287C73781F7FC4B",
+          "name": "frame-host",
+          "url": "about:blank",
+          "domainAndRegistry": "",
+          "securityOrigin": "://",
+          "securityOriginDetails": {
+            "isLocalhost": false
+          },
+          "mimeType": "text/html",
+          "adFrameStatus": {
+            "adFrameType": "none",
+            "explanations": []
+          },
+          "secureContextType": "SecureLocalhost",
+          "crossOriginIsolatedContextType": "NotIsolated",
+          "gatedAPIFeatures": []
+        }
+      }
+    ]
+  }
+}

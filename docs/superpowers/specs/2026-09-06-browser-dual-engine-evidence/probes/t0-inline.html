@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>T0 inline box placements</title>
+<style>
+  html,body { margin:0; padding:0; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  #wrap-block { display:block; }
+</style></head>
+<body>
+  <a id="a-in-body" href="/a">link directly in body</a>
+  <p><a id="a-in-p" href="/b">link inside a paragraph</a></p>
+  <table><tbody><tr><td><a id="a-in-td" href="/c">link inside a table cell</a></td></tr></tbody></table>
+  <div id="wrap-block"><span id="span-in-block">span inside a display block div</span></div>
+</body>
+</html>

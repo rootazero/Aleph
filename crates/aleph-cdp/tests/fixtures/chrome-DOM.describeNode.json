@@ -1,0 +1,17 @@
+{
+  "node": {
+    "nodeId": 28,
+    "backendNodeId": 49,
+    "nodeType": 1,
+    "nodeName": "BUTTON",
+    "localName": "button",
+    "nodeValue": "",
+    "childNodeCount": 1,
+    "attributes": [
+      "id",
+      "go",
+      "type",
+      "button"
+    ]
+  }
+}

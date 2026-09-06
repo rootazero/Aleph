@@ -1,0 +1,19 @@
+{
+  "currentIndex": 1,
+  "entries": [
+    {
+      "id": 11,
+      "url": "about:blank",
+      "userTypedURL": "about:blank",
+      "title": "",
+      "transitionType": "auto_toplevel"
+    },
+    {
+      "id": 21,
+      "url": "http://127.0.0.1:18999/t0-page.html",
+      "userTypedURL": "http://127.0.0.1:18999/t0-page.html",
+      "title": "Aleph T0 probe page",
+      "transitionType": "typed"
+    }
+  ]
+}
