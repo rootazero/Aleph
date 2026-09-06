@@ -4,6 +4,7 @@ pub(crate) mod chrome_mcp_backend;
 pub(crate) mod chromium_launch;
 pub(crate) mod chromium_resolve;
 mod discovery;
+pub mod engine;
 pub mod error;
 pub mod manager;
 pub mod network_policy;

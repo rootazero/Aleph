@@ -259,7 +259,7 @@ impl ProfileManager {
         // Detached because boot must not wait for it — nothing downstream
         // reads the count.
         tokio::spawn(async {
-            match Self::sweep_orphaned_chromium().await {
+            match Self::sweep_orphaned_engines().await {
                 Ok(outcome) => {
                     if outcome.reaped > 0 {
                         tracing::info!(
@@ -334,7 +334,7 @@ impl ProfileManager {
     /// per record and possibly a kill, and `with_process_specifics` is
     /// documented as syscall-heavy.
     #[cfg(not(test))]
-    async fn sweep_orphaned_chromium(
+    async fn sweep_orphaned_engines(
     ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
         tokio::task::spawn_blocking(super::chromium_launch::reap_orphans_now).await
     }
@@ -342,7 +342,7 @@ impl ProfileManager {
     /// The sealed twin. See the production one above for why it is sealed.
     #[cfg(test)]
     #[allow(clippy::unused_async)]
-    async fn sweep_orphaned_chromium(
+    async fn sweep_orphaned_engines(
     ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
         Ok(super::chromium_launch::ReapOutcome::default())
     }
@@ -1019,7 +1019,7 @@ mod tests {
 
     /// The boot hook must actually call the orphan sweep.
     ///
-    /// A SOURCE pin, and deliberately so: `sweep_orphaned_chromium`'s
+    /// A SOURCE pin, and deliberately so: `sweep_orphaned_engines`'s
     /// production half is `cfg(not(test))` — it reads the real `$ALEPH_HOME`
     /// and kills pids, so no unit test may run it — which leaves the wire
     /// itself unobservable at runtime. Same shape and the same reason as
@@ -1036,7 +1036,7 @@ mod tests {
              reading its own source"
         );
         assert!(
-            production.contains("Self::sweep_orphaned_chromium()"),
+            production.contains("Self::sweep_orphaned_engines()"),
             "spawn_idle_reaper must still call the boot sweep"
         );
         assert!(
