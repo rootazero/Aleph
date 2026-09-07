@@ -900,9 +900,18 @@ mod integration_tests {
     use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
     use crate::browser::network_policy::BrowserSsrfGuard;
 
+    /// Needs its own `$ALEPH_HOME` (R72): `ensure_session` can fall through to
+    /// `ensure_chrome_running` -> `chrome_launch_args` -> resolving
+    /// `get_config_dir()`, whenever the ambient chrome-devtools-mcp connection
+    /// attempt fails. "Does not run by default" (`#[ignore]`) is a property of
+    /// how the harness is invoked, not of the test — `cargo test -- --ignored`
+    /// still runs it, and without the guard it would read whatever
+    /// `ALEPH_HOME` another test in the binary left behind.
     #[tokio::test]
     #[ignore] // Requires Chrome + npx chrome-devtools-mcp installed
     async fn test_chrome_mcp_list_tools() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         // Ensure session is created
@@ -920,9 +929,13 @@ mod integration_tests {
         assert!(!tools.is_empty(), "Should have tools available");
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72) — see
+    /// `test_chrome_mcp_list_tools`.
     #[tokio::test]
     #[ignore]
     async fn test_chrome_mcp_list_tabs_raw() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         driver.ensure_session("user").await.expect("session");
@@ -948,9 +961,13 @@ mod integration_tests {
         println!("=== page-related tools: {page_tools:?}");
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72) — see
+    /// `test_chrome_mcp_list_tools`.
     #[tokio::test]
     #[ignore]
     async fn test_chrome_mcp_list_tabs() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         let backend = ChromeMcpBackend::new(
@@ -971,9 +988,13 @@ mod integration_tests {
         }
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72) — see
+    /// `test_chrome_mcp_list_tools`.
     #[tokio::test]
     #[ignore]
     async fn test_chrome_mcp_snapshot() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config, HashMap::new()));
         let backend = ChromeMcpBackend::new(
