@@ -91,7 +91,14 @@ pub(crate) fn missing_finding_for_test() -> Finding {
 fn classify_resolution(probe: Result<ResolvedChromium, BrowserError>) -> Finding {
     match probe {
         Ok(r) => found_finding(&r.path, r.source),
-        Err(BrowserError::ChromiumUnavailable { tried }) => missing_finding(tried),
+        Err(BrowserError::EngineUnavailable { engine, tried, .. }) => {
+            debug_assert_eq!(engine, crate::browser::engine::Engine::Chromium);
+            // `tried`, NOT `install_hint`: `missing_finding` wraps its argument
+            // in its own sentence and appends its own fix hint, so passing the
+            // built hint would nest a whole remedy inside a parenthetical and
+            // state it twice from two authors.
+            missing_finding(tried)
+        }
         // Any other error is the resolver failing to look, not a verdict.
         Err(e) => unknown_finding(ID, SUBJECT, format!("the lookup failed: {e}")),
     }
@@ -230,7 +237,7 @@ mod tests {
     /// The arm mapping `run()` delegates to `classify_resolution` — the only
     /// production logic this check owns, and (before this test) the only
     /// piece of it nothing ever executed. Swapping the `Ok(r) =>` and
-    /// `Err(ChromiumUnavailable{..}) =>` arms in `classify_resolution` still
+    /// `Err(EngineUnavailable{..}) =>` arms in `classify_resolution` still
     /// compiles and every other test in this file still passes; this is the
     /// one that must go red for it (verified by hand while writing this test:
     /// swapping the two arms turned this test red with the found/missing
@@ -246,9 +253,10 @@ mod tests {
         assert_eq!(found.title, "Managed browser available");
         assert_eq!(found.severity, crate::diagnostics::finding::Severity::Info);
 
-        let missing = classify_resolution(Err(BrowserError::ChromiumUnavailable {
-            tried: "pin: none; system: none; playwright: not installed".into(),
-        }));
+        let missing = classify_resolution(Err(crate::browser::error::engine_unavailable(
+            crate::browser::engine::Engine::Chromium,
+            "pin: none; system: none; playwright: not installed",
+        )));
         assert_eq!(missing.check_id, ID);
         assert_eq!(missing.title, "No Chromium for the managed browser driver");
         assert_eq!(
@@ -257,7 +265,7 @@ mod tests {
         );
     }
 
-    /// Only `ChromiumUnavailable` is the resolver's considered "I looked
+    /// Only `EngineUnavailable` is the resolver's considered "I looked
     /// everywhere and there is nothing" answer. Any other `BrowserError` means
     /// the resolver failed to look (a launch-stage error, a timeout inside the
     /// dry-run, …) and must render as `unknown`, never as `missing` — the same

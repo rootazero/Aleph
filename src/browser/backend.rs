@@ -5,6 +5,7 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use super::error::BrowserError;
+use super::profile::BrowserDriver;
 use super::types::{
     ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
     ScrollDirection, SnapshotOutput, TabId, TabLine, WaitCondition,
@@ -116,7 +117,7 @@ pub trait BrowserBackend: Send + Sync {
     /// supported" leaves the model unable to tell whether the action, the
     /// profile, or the page is at fault, while the remedy is always the same.
     async fn pdf(&self, _tab_id: &str, _output_path: &Path) -> Result<(), BrowserError> {
-        Err(unsupported_in_existing_session("pdf"))
+        Err(unsupported_by_driver("pdf", BrowserDriver::Managed))
     }
 
     /// Bring the given tab to the foreground / make it the active page.
@@ -187,7 +188,7 @@ pub trait BrowserBackend: Send + Sync {
     /// storage-state primitive (see [`Self::pdf`] for why the default names the
     /// backend it speaks for).
     async fn save_state(&self, _path: &Path) -> Result<(), BrowserError> {
-        Err(unsupported_in_existing_session("save_state"))
+        Err(unsupported_by_driver("save_state", BrowserDriver::Managed))
     }
 
     /// Restore a previously-saved storage state from an absolute file path,
@@ -195,7 +196,7 @@ pub trait BrowserBackend: Send + Sync {
     ///
     /// One-sided capability — see [`Self::save_state`].
     async fn load_state(&self, _path: &Path) -> Result<(), BrowserError> {
-        Err(unsupported_in_existing_session("load_state"))
+        Err(unsupported_by_driver("load_state", BrowserDriver::Managed))
     }
 
     /// Run a cookie-management operation, returning the backend's textual output
@@ -203,7 +204,7 @@ pub trait BrowserBackend: Send + Sync {
     ///
     /// One-sided capability — see [`Self::save_state`].
     async fn cookies(&self, _op: &CookieOp) -> Result<String, BrowserError> {
-        Err(unsupported_in_existing_session("cookies"))
+        Err(unsupported_by_driver("cookies", BrowserDriver::Managed))
     }
 
     /// Fill several fields in one call.
@@ -228,13 +229,18 @@ pub trait BrowserBackend: Send + Sync {
 /// Error returned by the trait's one-sided defaults.
 ///
 /// Every default left in this trait that is not a shared implementation
-/// (`wait_for`, `fill_form`) is served by exactly one backend — the
-/// existing-session (Chrome `DevTools` MCP) one — because the managed
-/// Playwright backend overrides all of them. The message therefore names that
-/// backend and the remedy rather than claiming the operation does not exist.
-fn unsupported_in_existing_session(op: &str) -> BrowserError {
+/// (`wait_for`, `fill_form`) is served by some backends and not others. The
+/// message therefore names the DRIVER that serves it, spelled the way a config
+/// file spells it, rather than describing one particular backend's internals:
+/// the old text said "the Chrome DevTools MCP server exposes no {op}
+/// primitive", which was true when there were two drivers and became a lie
+/// about the third the day it existed — and it was a lie in the expensive
+/// direction, telling a `cdp` profile's reader to go configure Chrome MCP.
+pub(crate) fn unsupported_by_driver(op: &'static str, supported_by: BrowserDriver) -> BrowserError {
     BrowserError::ActionFailed(format!(
-        "{op} is not available in existing-session mode (the Chrome DevTools MCP server exposes \
-         no {op} primitive) — use a managed profile such as 'default'"
+        "{op} is not available on this profile's driver — a profile with \
+         driver = \"{}\" serves it. Change the profile's driver, or use one that already \
+         has it (the default profile is a good starting point).",
+        supported_by.as_wire()
     ))
 }

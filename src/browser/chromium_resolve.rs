@@ -42,7 +42,8 @@ use tokio::process::Command;
 
 use crate::utils::no_window::NoWindow;
 
-use super::error::BrowserError;
+use super::engine::Engine;
+use super::error::{engine_unavailable, BrowserError};
 use super::profile::{BrowserRuntimeConfig, BrowserType};
 
 /// How long the `--dry-run` probe may take.
@@ -65,8 +66,9 @@ pub(crate) const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// The subcommand that installs Playwright's own Chromium — the SAME argv
 /// `runtime_manage`'s ledger-driven install runs and `browser::error`'s
-/// `ChromiumUnavailable` fix hint names, written once so the three cannot
-/// drift into naming different commands (判据 §10).
+/// `EngineUnavailable` fix hint names (built by `error::engine_unavailable`,
+/// not a `#[error(...)]` attribute any more), written once so the three
+/// cannot drift into naming different commands (判据 §10).
 ///
 /// Lives HERE, not in `builtin_tools::runtime_manage`: this module is the
 /// lower layer both other call sites already depend on through the browser
@@ -339,7 +341,7 @@ fn is_executable(_path: &Path) -> bool {
 ///
 /// # Errors
 ///
-/// [`BrowserError::ChromiumUnavailable`] when no route produced a file — its
+/// [`BrowserError::EngineUnavailable`] when no route produced a file — its
 /// message names the install command and the pin, because a closed gate that
 /// does not say how to open it is fail-dead (判据 §14). A pin that does not
 /// exist is that error too, and deliberately not a fallback: launching a
@@ -370,11 +372,12 @@ pub(crate) async fn resolve_binary(
                 // have both already reported the browser healthy. A third,
                 // distinguishable answer, not "does not exist" (a different
                 // fact) and not silently `Ok` (the bug this closes).
-                return Err(BrowserError::ChromiumUnavailable {
-                    tried: format!(
+                return Err(engine_unavailable(
+                    Engine::Chromium,
+                    format!(
                         "[general.browser.runtime] binary_path = {pin:?} exists but is not executable"
                     ),
-                });
+                ));
             }
             let engine = super::discovery::engine_of(&path);
             return Ok(ResolvedChromium {
@@ -383,9 +386,10 @@ pub(crate) async fn resolve_binary(
                 engine,
             });
         }
-        return Err(BrowserError::ChromiumUnavailable {
-            tried: format!("[general.browser.runtime] binary_path = {pin:?} does not exist"),
-        });
+        return Err(engine_unavailable(
+            Engine::Chromium,
+            format!("[general.browser.runtime] binary_path = {pin:?} does not exist"),
+        ));
     }
 
     if runtime.prefer_system_browser {
@@ -428,9 +432,7 @@ pub(crate) async fn resolve_binary(
         }
         Err(why) => {
             tried.push(why);
-            Err(BrowserError::ChromiumUnavailable {
-                tried: tried.join("; "),
-            })
+            Err(engine_unavailable(Engine::Chromium, tried.join("; ")))
         }
     }
 }
@@ -440,7 +442,7 @@ pub(crate) async fn resolve_binary(
 /// sibling install that does (see [`scan_sibling_installs`] and the module
 /// doc).
 ///
-/// The `Err` is a sentence for [`BrowserError::ChromiumUnavailable`]'s `tried`
+/// The `Err` is a sentence for [`BrowserError::EngineUnavailable`]'s `tried`
 /// field, not an error to propagate: "the CLI would not answer", "the CLI
 /// exited non-zero", and "neither the named directory nor any sibling had a
 /// usable executable" are all just "this route did not produce a browser".
@@ -774,7 +776,7 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         assert_eq!(result.engine, Some(BrowserType::Chrome));
     }
 
-    /// A pin that does not exist is `ChromiumUnavailable`, not a fallback to
+    /// A pin that does not exist is `EngineUnavailable`, not a fallback to
     /// the other two routes — launching a different browser than the one
     /// named would be exactly the silent substitution the pin exists to
     /// prevent.
@@ -794,16 +796,17 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         .expect_err("a missing pin must not fall back to system/Playwright routes");
 
         match err {
-            BrowserError::ChromiumUnavailable { tried } => {
+            BrowserError::EngineUnavailable { engine, tried, .. } => {
+                assert_eq!(engine, Engine::Chromium);
                 assert!(tried.contains("/nonexistent/pinned-chrome"));
             }
-            other => panic!("expected ChromiumUnavailable, got {other:?}"),
+            other => panic!("expected EngineUnavailable, got {other:?}"),
         }
     }
 
     /// Final Review I2: `is_file()` establishes existence, not launchability.
     /// A pin at a non-executable file (lost `+x`, a downloaded artifact, a
-    /// plain file inside a bundle) must be `ChromiumUnavailable` naming THAT
+    /// plain file inside a bundle) must be `EngineUnavailable` naming THAT
     /// reason — not "does not exist" (a different fact) and not a silent
     /// `Ok` (the bug: doctor and `runtime_manage{list}` both reported this
     /// exact shape healthy, and only the next browser call discovered
@@ -839,13 +842,14 @@ Chrome Headless Shell 147.0.7727.49 (playwright chromium-headless-shell v1219)
         .expect_err("a non-executable pin must not resolve as healthy");
 
         match err {
-            BrowserError::ChromiumUnavailable { tried } => {
+            BrowserError::EngineUnavailable { engine, tried, .. } => {
+                assert_eq!(engine, Engine::Chromium);
                 assert!(
                     tried.contains("exists but is not executable"),
                     "must distinguish this from \"does not exist\": {tried}"
                 );
             }
-            other => panic!("expected ChromiumUnavailable, got {other:?}"),
+            other => panic!("expected EngineUnavailable, got {other:?}"),
         }
     }
 

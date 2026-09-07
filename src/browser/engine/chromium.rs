@@ -493,8 +493,11 @@ impl EngineProcess for ChromiumLauncher {
         let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
             .await
             .unwrap_or(None)
-            .ok_or_else(|| BrowserError::ChromiumUnavailable {
-                tried: "no playwright-cli found on PATH or in the runtime ledger".to_string(),
+            .ok_or_else(|| {
+                crate::browser::error::engine_unavailable(
+                    Engine::Chromium,
+                    "no playwright-cli found on PATH or in the runtime ledger",
+                )
             })?;
         // R68: the REQUEST's browser, never `BrowserType::default()` — see the
         // type's doc comment. This is the only place a profile's `browser`
