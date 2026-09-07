@@ -149,13 +149,17 @@ bench = false
 default = []
 # Loom concurrency testing (replaces std sync primitives)
 loom = ["dep:loom"]
-# Test helpers for integration tests. Pulls `aleph-cdp/testkit` through the
-# NORMAL dependency because `src/browser/testkit.rs` names
-# `aleph_cdp::testkit::FakeCdpServer`, and under
-# `cargo test --features test-helpers --test '*'` the lib is compiled WITHOUT
-# `cfg(test)` — a dev-dependency's features do not reach a lib built that way,
-# so without this the module compiles and its import does not.
-test-helpers = ["aleph-cdp/testkit"]
+# Test helpers for integration tests.
+#
+# Does NOT pull `aleph-cdp/testkit` (R84). It briefly did, as the second half of
+# widening `browser::testkit`'s cfg gate — but that module is `pub(crate)`, so
+# the integration-test consumer the widening was for cannot exist, and the whole
+# chain was circular: the gate was widened for that consumer, the widened gate
+# made the module compile outside `cfg(test)`, and that made this edit
+# necessary. `browser::testkit` is `cfg(test)` again, so a lib built under this
+# feature does not compile it and does not need the fake peer. The integration
+# tests get `aleph-cdp/testkit` through the dev-dependency, as before.
+test-helpers = []
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
 # Disabled test modules awaiting rewrite

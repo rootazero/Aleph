@@ -15,13 +15,16 @@ pub(crate) mod post_nav;
 pub mod profile;
 mod secret_guard;
 pub mod tab_registry;
-// Widened past `cfg(test)` because `--features test-helpers --test '*'`
-// compiles this lib WITHOUT `cfg(test)`, and the integration tests reach
-// `FakeEngineProcess` from there. The matching half is the root manifest's
-// `test-helpers = ["aleph-cdp/testkit"]`: this module names
-// `aleph_cdp::testkit`, and a dev-dependency's features do not reach a lib
-// built that way.
-#[cfg(any(test, feature = "test-helpers"))]
+// `cfg(test)` only, deliberately (R84). It was briefly widened to
+// `any(test, feature = "test-helpers")` for an integration-test consumer of
+// `FakeEngineProcess` that cannot exist: this module is `pub(crate)`, so
+// `alephcore::browser::testkit` does not resolve from another crate at all.
+// Measured before reverting: `FakeEngineProcess` = 35 hits across 4 files, all
+// under `src/`, zero under the 174 files in `tests/`. A later task that
+// genuinely wants an integration-level fake widens this in the commit that adds
+// the consumer — which is the right shape anyway, because that commit can prove
+// the consumer compiles.
+#[cfg(test)]
 pub(crate) mod testkit;
 pub mod types;
 pub(crate) mod wait_probe;
@@ -93,6 +96,20 @@ mod home_guard_census {
         "chromium_user_data_dir(",
         "sidecar_registry_dir(",
         "default_user_data_dir_for(",
+        // The engine path's three reachers, all of which get to
+        // `browser_state_dir` through `ProfileManager::launch_request_for`.
+        // They are here because the blind spot named above is not a note about
+        // some hypothetical future — it fired: these three landed with the
+        // engine registry and this list did not grow with them, so the census
+        // was green over three new ways to read the developer's real
+        // `$ALEPH_HOME` (判据 §5 — a list only covers the world as it was on
+        // the day it was written). Each is falsified separately below the
+        // census: one unguarded test fn per spelling, because a census that
+        // panics on the first offender it finds proves nothing about the
+        // second.
+        "launch_request_for(",
+        "engine_handle(",
+        "engine_handle_for(",
     ];
 
     /// Literal spellings that hold the one guard (or the combined `$HOME` +

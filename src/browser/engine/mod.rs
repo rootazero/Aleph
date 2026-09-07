@@ -302,6 +302,16 @@ impl EngineHandle {
     /// whose domains were never enabled looks identical to a quiet one: no
     /// error, no events, and a console log that is simply always empty
     /// (判据 §2).
+    /// **Bounded by ONE deadline across all four round trips**, the same shape
+    /// `registry::bring_up` uses and for the same reason. Each of `attach`,
+    /// `Page.enable`, `Runtime.enable` and `Network.enable` is separately
+    /// bounded by the connection's `command_timeout` (30 s by default), so end
+    /// to end the worst case was ~120 s — and every one of those seconds is
+    /// spent holding the table guard, blocking every `ensure_tab` and every
+    /// other `attach_tab` on this engine. Four limits that add up to a total
+    /// nobody chose is the same defect as no limit at all (判据 §13), so the
+    /// budget is the connection's own per-command patience spent ONCE for the
+    /// whole sequence.
     pub async fn attach_tab(
         &self,
         target: &aleph_cdp::TargetId,
@@ -310,35 +320,64 @@ impl EngineHandle {
         if let Some(existing) = tabs.entries.get(&target.0) {
             return Ok(existing.session.clone());
         }
-        let session = self.conn.attach(target).await.map_err(|e| {
+        let deadline = tokio::time::Instant::now() + self.conn.command_timeout();
+        let stalled = |step: &str| {
             BrowserError::AttachFailed(format!(
-                "could not attach to tab {} on {}: {e}",
+                "attaching to tab {} on {} stalled at {step} and did not finish within \
+                 {}s. The tab is refused rather than half-wired; nothing was added to \
+                 the tab table.",
                 target.0,
-                self.engine.as_str()
+                self.engine.as_str(),
+                self.conn.command_timeout().as_secs_f64()
             ))
-        })?;
+        };
+
+        let session = tokio::time::timeout_at(deadline, self.conn.attach(target))
+            .await
+            .map_err(|_| stalled("Target.attachToTarget"))?
+            .map_err(|e| {
+                BrowserError::AttachFailed(format!(
+                    "could not attach to tab {} on {}: {e}",
+                    target.0,
+                    self.engine.as_str()
+                ))
+            })?;
         for (domain, result) in [
             (
                 "Page",
-                aleph_cdp::methods::page::enable(&self.conn, Some(&session)).await,
+                tokio::time::timeout_at(
+                    deadline,
+                    aleph_cdp::methods::page::enable(&self.conn, Some(&session)),
+                )
+                .await,
             ),
             (
                 "Runtime",
-                aleph_cdp::methods::runtime::enable(&self.conn, Some(&session)).await,
+                tokio::time::timeout_at(
+                    deadline,
+                    aleph_cdp::methods::runtime::enable(&self.conn, Some(&session)),
+                )
+                .await,
             ),
             (
                 "Network",
-                aleph_cdp::methods::network::enable(&self.conn, Some(&session)).await,
+                tokio::time::timeout_at(
+                    deadline,
+                    aleph_cdp::methods::network::enable(&self.conn, Some(&session)),
+                )
+                .await,
             ),
         ] {
-            result.map_err(|e| {
-                BrowserError::AttachFailed(format!(
-                    "attached to tab {} but {domain} would not enable: {e}. Its \
-                     events would be silently absent, so the tab is refused \
-                     rather than half-wired.",
-                    target.0
-                ))
-            })?;
+            result
+                .map_err(|_| stalled(&format!("{domain}.enable")))?
+                .map_err(|e| {
+                    BrowserError::AttachFailed(format!(
+                        "attached to tab {} but {domain} would not enable: {e}. Its \
+                         events would be silently absent, so the tab is refused \
+                         rather than half-wired.",
+                        target.0
+                    ))
+                })?;
         }
         tabs.entries
             .insert(target.0.clone(), TabEntry::new(session.clone()));

@@ -207,6 +207,17 @@ impl ProfileManager {
         // answers a named error for it rather than a panic or a silent
         // fallback to Chromium — an engine the operator asked for and did not
         // get must say so.
+        //
+        // ⚠️ `cdp_command_timeout()` is captured HERE, at construction, and a
+        // `browser.update` that changes it needs a restart. The SSRF bit two
+        // screens down (`launch_request_for`'s `allow_private_network`) is
+        // deliberately the opposite — it reads the LIVE guard on every launch.
+        // Both are right for what they are: the timeout is handed to the
+        // connection when it is opened and cannot be re-read afterwards, while
+        // the SSRF answer is written into an argv this manager composes fresh
+        // each time. Said out loud because two adjacent values behaving
+        // differently with nothing explaining it is how the next reader
+        // "fixes" one of them.
         let engines = Arc::new(EngineRegistry::new(
             processes,
             config.cdp_command_timeout(),
@@ -958,39 +969,9 @@ fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::testkit::FakeEngineProcess;
+    use crate::browser::testkit::{engine_peer, FakeEngineProcess};
     use crate::utils::paths::AlephHomeEnvGuard;
-    use aleph_cdp::testkit::{FakeCdpServer, Responder};
-
-    fn engine_peer(msg: &serde_json::Value) -> Responder {
-        match msg.get("method").and_then(serde_json::Value::as_str) {
-            Some("Browser.getVersion") => Responder::Reply(serde_json::json!({
-                "protocolVersion": "1.3", "product": "Fake/1.0",
-                "revision": "@fake", "userAgent": "fake", "jsVersion": "13"
-            })),
-            Some("Target.createTarget") => Responder::Reply(serde_json::json!({"targetId": "T1"})),
-            Some("Target.attachToTarget") => {
-                Responder::Reply(serde_json::json!({"sessionId": "S1"}))
-            }
-            Some("Page.navigate") => {
-                Responder::Reply(serde_json::json!({"frameId": "F1", "loaderId": "L1"}))
-            }
-            Some("Runtime.evaluate") => Responder::Reply(serde_json::json!({
-                "result": {"type": "number", "value": 1}
-            })),
-            Some("Page.enable" | "Runtime.enable" | "Network.enable") => {
-                Responder::Reply(serde_json::json!({}))
-            }
-            Some(other) => Responder::Error {
-                code: -32601,
-                message: format!("fake peer does not implement {other}"),
-            },
-            None => Responder::Error {
-                code: -32600,
-                message: "not a request".into(),
-            },
-        }
-    }
+    use aleph_cdp::testkit::FakeCdpServer;
 
     /// A manager whose `default` profile is `driver = cdp, engine = chromium`
     /// and whose registry's only launcher is a fake.
@@ -1198,7 +1179,16 @@ mod tests {
     #[test]
     fn shutdown_browsers_reaches_both_browser_families() {
         let src = include_str!("manager.rs").replace('\r', "");
-        let production = crate::utils::source_scan::production_prefix(&src);
+        // `code_text` on top of the `#[cfg(test)]` bound, matching the two
+        // sibling pins (`engine_handle_is_built_in_exactly_one_production_place`
+        // and `both_daemon_exit_paths_reap_background_jobs_and_browsers`, whose
+        // own comment documents this hazard). Without it a COMMENT spelling the
+        // call satisfies the assertion, so deleting the statement and leaving a
+        // `// engines.shutdown_all()` behind would stay green — a guard a
+        // comment can satisfy is not a guard (判据 §2).
+        let production = crate::utils::source_scan::code_text(
+            &crate::utils::source_scan::production_prefix(&src),
+        );
         assert!(
             production.len() < src.len(),
             "the #[cfg(test)] bound matched nothing — this test would then be \

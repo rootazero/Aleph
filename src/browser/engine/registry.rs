@@ -209,6 +209,19 @@ impl EngineRegistry {
     /// A contended lock means some other call is mid-launch or mid-shutdown for
     /// SOME profile; `false` is then "I could not tell", spent in the direction
     /// that cannot strand anything (判据 §8).
+    ///
+    /// ⚠️ **That reasoning is about the LAUNCH consumer, and there is a second
+    /// one.** `session_active` also feeds `browser_profile`'s listing
+    /// (`builtin_tools/browser_tools/profile_tool.rs`), where the cost of a
+    /// spurious `false` is not a wasted launch but a **wrong label on a live
+    /// session** — and a wrong label costs more than a missing one (判据 §17).
+    /// The behaviour is deliberately unchanged, because the same `false` is
+    /// still the right answer for the launch consumer and a display cannot be
+    /// allowed to dictate a safety default. What makes it acceptable is that
+    /// the window is now BOUNDED: the launch that holds this lock is capped by
+    /// the bring-up budget (`registry::bring_up`'s single deadline), where it
+    /// used to be an unbounded `connect_async`. A profile can read as inactive
+    /// while another is starting, for at most that budget, once.
     #[must_use]
     pub fn is_live(&self, profile: &str) -> bool {
         self.handles
@@ -472,45 +485,11 @@ mod tests {
     use super::*;
     use crate::browser::engine::ENGINE_KILL_GRACE;
     use crate::browser::profile::BrowserType;
-    use crate::browser::testkit::{FakeEngineProcess, KillOutcome};
+    use crate::browser::testkit::{engine_peer, FakeEngineProcess, ScriptedKill};
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
-
-    /// The scripted peer a launched engine talks to: version, one target, one
-    /// session, a navigable page.
-    fn engine_peer(msg: &serde_json::Value) -> Responder {
-        match msg.get("method").and_then(serde_json::Value::as_str) {
-            Some("Browser.getVersion") => Responder::Reply(serde_json::json!({
-                "protocolVersion": "1.3", "product": "Fake/1.0",
-                "revision": "@fake", "userAgent": "fake", "jsVersion": "13"
-            })),
-            Some("Target.createTarget") => Responder::Reply(serde_json::json!({"targetId": "T1"})),
-            Some("Target.attachToTarget") => {
-                Responder::Reply(serde_json::json!({"sessionId": "S1"}))
-            }
-            Some("Page.navigate") => {
-                Responder::Reply(serde_json::json!({"frameId": "F1", "loaderId": "L1"}))
-            }
-            Some("Runtime.evaluate") => Responder::Reply(serde_json::json!({
-                "result": {"type": "number", "value": 1}
-            })),
-            // `attach_tab` enables these three and refuses the tab if any of
-            // them fails, so the peer has to answer them.
-            Some("Page.enable" | "Runtime.enable" | "Network.enable") => {
-                Responder::Reply(serde_json::json!({}))
-            }
-            Some(other) => Responder::Error {
-                code: -32601,
-                message: format!("fake peer does not implement {other}"),
-            },
-            None => Responder::Error {
-                code: -32600,
-                message: "not a request".into(),
-            },
-        }
-    }
 
     fn request(profile: &str, data_dir: &std::path::Path) -> LaunchRequest {
         LaunchRequest {
@@ -1112,7 +1091,7 @@ mod tests {
         let server = FakeCdpServer::start(engine_peer).await;
         let proc = Arc::new(
             FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
-                .with_kill_outcomes([KillOutcome::Survived]),
+                .with_kill_outcomes([ScriptedKill::Survived]),
         );
         let registry = registry_with(Engine::Chromium, &proc);
         let handle = registry
@@ -1156,7 +1135,7 @@ mod tests {
         let server = FakeCdpServer::start(engine_peer).await;
         let proc = Arc::new(
             FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
-                .with_kill_outcomes([KillOutcome::Failed("no such process".into())]),
+                .with_kill_outcomes([ScriptedKill::Failed("no such process".into())]),
         );
         let registry = registry_with(Engine::Chromium, &proc);
         let handle = registry
@@ -1510,9 +1489,9 @@ mod tests {
         let server = FakeCdpServer::start(engine_peer).await;
         let proc = Arc::new(
             FakeEngineProcess::new(Engine::Chromium, &server, dir.path()).with_kill_outcomes([
-                KillOutcome::Died,
-                KillOutcome::Died,
-                KillOutcome::Stalls(ENGINE_SHUTDOWN_BUDGET * 4),
+                ScriptedKill::Died,
+                ScriptedKill::Died,
+                ScriptedKill::Stalls(ENGINE_SHUTDOWN_BUDGET * 4),
             ]),
         );
         let registry = registry_with(Engine::Chromium, &proc);
@@ -1566,7 +1545,7 @@ mod tests {
         );
         let proc = Arc::new(
             FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
-                .with_kill_outcomes([KillOutcome::DiesAfter(slow)]),
+                .with_kill_outcomes([ScriptedKill::DiesAfter(slow)]),
         );
         let registry = registry_with(Engine::Chromium, &proc);
         for profile in ["a", "b", "c"] {

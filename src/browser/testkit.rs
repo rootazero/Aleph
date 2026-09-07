@@ -387,11 +387,14 @@ impl BrowserBackend for FakeBackend {
 /// `EngineHandle::shutdown` is asserted to undo — a fake that skipped it would
 /// let the deletion rot unobserved (判据 §4: assert the effect arrived).
 ///
-/// `pub`, unlike [`FakeBackend`] beside it, because an integration test under
-/// `--features test-helpers` may need to build one. `FakeBackend` stays
-/// `pub(crate)`: nothing outside the crate names it, and widening a visibility
-/// with no consumer is the abstraction this repo cuts.
-pub struct FakeEngineProcess {
+/// `pub(crate)`, like [`FakeBackend`] beside it. It was briefly `pub` for "an
+/// integration test under `--features test-helpers` may need to build one" —
+/// a consumer that is structurally impossible, because this module is
+/// `pub(crate)` and `alephcore::browser::testkit` therefore does not resolve
+/// from another crate at all. Measured: 35 hits across 4 files, all under
+/// `src/`, none under the 174 files in `tests/`. Widening a visibility for a
+/// consumer that cannot exist is the abstraction this repo cuts (R84, P5, R10).
+pub(crate) struct FakeEngineProcess {
     engine: super::engine::Engine,
     ws_url: String,
     http_url: String,
@@ -402,7 +405,7 @@ pub struct FakeEngineProcess {
     /// Scripted answers for [`Self::kill`], in order; the LAST entry sticks
     /// once the queue is down to one (the shape [`FakeBackend`] uses for
     /// `evaluate`), so a test can say "this engine never dies" without
-    /// counting calls. Empty means [`KillOutcome::Died`].
+    /// counting calls. Empty means [`ScriptedKill::Died`].
     ///
     /// Without this the fake answered `Ok(true)` unconditionally, which made
     /// `EngineHandle::shutdown`'s `Ok(false)`/`Err` arms and
@@ -410,17 +413,24 @@ pub struct FakeEngineProcess {
     /// contract **unfalsifiable**: no test that could exist would reach them
     /// (判据 §2 — an instrument that can only report success is not an
     /// instrument). Three real leaks sat green underneath it.
-    kill_outcomes: Mutex<VecDeque<KillOutcome>>,
+    kill_outcomes: Mutex<VecDeque<ScriptedKill>>,
 }
 
 /// What a scripted [`FakeEngineProcess::kill`] answers.
+///
+/// Named `ScriptedKill` rather than `KillOutcome`, which is what it was called
+/// when it landed: `crate::builtin_tools::process_registry::KillOutcome`
+/// already exists and is a PRODUCTION type about killing bash jobs. Two
+/// unrelated things answering to one name makes a grep for it stop identifying
+/// anything (判据 §6 — the census you run to answer "how many of these are
+/// there" quietly counts both).
 ///
 /// Its own enum rather than a queue of `Result<bool, BrowserError>` because
 /// `BrowserError` is not `Clone` and the last entry has to stick, and because
 /// "still running" and "could not even signal it" are different facts the
 /// caller is supposed to treat differently.
 #[derive(Clone, Debug)]
-pub enum KillOutcome {
+pub(crate) enum ScriptedKill {
     /// Signalled **and reaped** — `terminate`'s `Ok(true)`.
     Died,
     /// Still there when the grace window closed — `terminate`'s `Ok(false)`.
@@ -445,8 +455,54 @@ pub enum KillOutcome {
 /// A pid no test kills for real. Recorded and asserted on; never signalled.
 const FAKE_ENGINE_PID: u32 = 424_242;
 
+/// The scripted CDP peer a launched engine talks to: version, one target, one
+/// session, a navigable page, and the three domains `attach_tab` enables.
+///
+/// **One copy, here, because both test modules that need it can reach this
+/// one.** It lived twice — `engine::registry`'s tests and `manager`'s tests
+/// each had their own — and two fakes that must agree about what a healthy
+/// engine answers are two things free to disagree: the day one gains a method
+/// the other does not, the two modules are quietly testing different browsers
+/// (判据 §1). Measured before collapsing them: the two copies were
+/// behaviourally identical, differing only by a comment, so the duplication had
+/// not cost anything yet.
+///
+/// `readiness`'s own `healthy` is deliberately NOT folded in — it answers the
+/// three methods the gate asks and nothing else, and its `version_only` sibling
+/// is a mutilation of exactly that smaller thing. See its doc.
+pub(crate) fn engine_peer(msg: &serde_json::Value) -> aleph_cdp::testkit::Responder {
+    use aleph_cdp::testkit::Responder;
+    match msg.get("method").and_then(serde_json::Value::as_str) {
+        Some("Browser.getVersion") => Responder::Reply(serde_json::json!({
+            "protocolVersion": "1.3", "product": "Fake/1.0",
+            "revision": "@fake", "userAgent": "fake", "jsVersion": "13"
+        })),
+        Some("Target.createTarget") => Responder::Reply(serde_json::json!({"targetId": "T1"})),
+        Some("Target.attachToTarget") => Responder::Reply(serde_json::json!({"sessionId": "S1"})),
+        Some("Page.navigate") => {
+            Responder::Reply(serde_json::json!({"frameId": "F1", "loaderId": "L1"}))
+        }
+        Some("Runtime.evaluate") => Responder::Reply(serde_json::json!({
+            "result": {"type": "number", "value": 1}
+        })),
+        // `attach_tab` enables these three and refuses the tab if any of them
+        // fails, so the peer has to answer them.
+        Some("Page.enable" | "Runtime.enable" | "Network.enable") => {
+            Responder::Reply(serde_json::json!({}))
+        }
+        Some(other) => Responder::Error {
+            code: -32601,
+            message: format!("fake peer does not implement {other}"),
+        },
+        None => Responder::Error {
+            code: -32600,
+            message: "not a request".into(),
+        },
+    }
+}
+
 impl FakeEngineProcess {
-    pub fn new(
+    pub(crate) fn new(
         engine: super::engine::Engine,
         server: &aleph_cdp::testkit::FakeCdpServer,
         sidecar_dir: &Path,
@@ -470,7 +526,11 @@ impl FakeEngineProcess {
     /// accepts the TCP connection and never completes the websocket
     /// handshake. `FakeCdpServer` always completes it, so without this the
     /// bring-up's connect bound has no way to be shown red.
-    pub fn pointing_at(engine: super::engine::Engine, ws_url: &str, sidecar_dir: &Path) -> Self {
+    pub(crate) fn pointing_at(
+        engine: super::engine::Engine,
+        ws_url: &str,
+        sidecar_dir: &Path,
+    ) -> Self {
         Self {
             engine,
             ws_url: ws_url.to_string(),
@@ -488,7 +548,10 @@ impl FakeEngineProcess {
     /// Takes `self` by value so it is applied before the fake goes behind an
     /// `Arc` — nothing can rewrite a running engine's death mid-shutdown.
     #[must_use]
-    pub fn with_kill_outcomes(self, outcomes: impl IntoIterator<Item = KillOutcome>) -> Self {
+    pub(crate) fn with_kill_outcomes(
+        self,
+        outcomes: impl IntoIterator<Item = ScriptedKill>,
+    ) -> Self {
         {
             let mut q = self.kill_outcomes.lock().unwrap_or_else(|e| e.into_inner());
             q.clear();
@@ -498,12 +561,12 @@ impl FakeEngineProcess {
     }
 
     /// The next scripted outcome, leaving the last entry in place.
-    fn next_kill_outcome(&self) -> KillOutcome {
+    fn next_kill_outcome(&self) -> ScriptedKill {
         let mut q = self.kill_outcomes.lock().unwrap_or_else(|e| e.into_inner());
         match q.len() {
-            0 => KillOutcome::Died,
+            0 => ScriptedKill::Died,
             1 => q[0].clone(),
-            _ => q.pop_front().unwrap_or(KillOutcome::Died),
+            _ => q.pop_front().unwrap_or(ScriptedKill::Died),
         }
     }
 
@@ -515,7 +578,7 @@ impl FakeEngineProcess {
     /// endpoint that goes nowhere. A fake that answered `Ok` with an empty
     /// `ws_url` would fail later, at `CdpConnection::connect`, with a message
     /// about a URL nobody wrote.
-    pub fn detached(engine: super::engine::Engine) -> Self {
+    pub(crate) fn detached(engine: super::engine::Engine) -> Self {
         Self {
             engine,
             ws_url: String::new(),
@@ -529,7 +592,7 @@ impl FakeEngineProcess {
     }
 
     /// One `"<profile>/<session_key> headless=<bool>"` line per launch.
-    pub fn launches(&self) -> Vec<String> {
+    pub(crate) fn launches(&self) -> Vec<String> {
         self.launches
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -537,11 +600,11 @@ impl FakeEngineProcess {
     }
 
     /// The pids `kill` was called with, in order.
-    pub fn kills(&self) -> Vec<u32> {
+    pub(crate) fn kills(&self) -> Vec<u32> {
         self.kills.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    pub const fn pid(&self) -> u32 {
+    pub(crate) const fn pid(&self) -> u32 {
         self.pid
     }
 }
@@ -590,7 +653,7 @@ impl super::engine::process::EngineProcess for FakeEngineProcess {
     }
 
     /// Records the pid it was asked to stop and answers the next scripted
-    /// [`KillOutcome`] (default [`KillOutcome::Died`]).
+    /// [`ScriptedKill`] (default [`ScriptedKill::Died`]).
     ///
     /// Takes the whole `Launched` because the real launchers need the `Child`
     /// inside it to `wait()` after signalling; this fake has no OS process, so
@@ -612,17 +675,17 @@ impl super::engine::process::EngineProcess for FakeEngineProcess {
             .unwrap_or_else(|e| e.into_inner())
             .push(launched.pid);
         match self.next_kill_outcome() {
-            KillOutcome::Died => Ok(true),
-            KillOutcome::Survived => Ok(false),
-            KillOutcome::DiesAfter(d) => {
+            ScriptedKill::Died => Ok(true),
+            ScriptedKill::Survived => Ok(false),
+            ScriptedKill::DiesAfter(d) => {
                 tokio::time::sleep(d).await;
                 Ok(true)
             }
-            KillOutcome::Stalls(d) => {
+            ScriptedKill::Stalls(d) => {
                 tokio::time::sleep(d).await;
                 Ok(false)
             }
-            KillOutcome::Failed(reason) => Err(BrowserError::ActionFailed(reason)),
+            ScriptedKill::Failed(reason) => Err(BrowserError::ActionFailed(reason)),
         }
     }
 }
