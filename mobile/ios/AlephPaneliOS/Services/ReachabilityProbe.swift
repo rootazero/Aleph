@@ -109,7 +109,13 @@ struct GatewayReadyProbe: ReachabilityProbing {
     }
 }
 
-/// Accepts any server certificate **for the liveness probe only**.
+/// Accepts any server certificate **for the liveness probe only on hosts the
+/// operator is presumed to control** — loopback, RFC1918 private IPv4, link-
+/// local IPv6 (`fe80::/10`), and the mDNS `*.local` namespace. Anything else
+/// falls through to default handling so `URLSession` enforces real CA
+/// validation; this closes the public-network MITM window where a probe-time
+/// accept-any would let an attacker forge a 200 reply and hand the user a
+/// phishing-grade "first contact" sheet.
 ///
 /// This is not a trust decision and must never become one: the real decision
 /// lives in `PanelWebView`'s TOFU handler, which pins a fingerprint and shows
@@ -145,6 +151,53 @@ private final class AcceptAnyServerTrust: NSObject, URLSessionDelegate, @uncheck
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        completionHandler(.useCredential, URLCredential(trust: trust))
+        // Scope the trust bypass to hosts the operator is presumed to control.
+        // On a public network (coffee shop, hotel, cellular) the probe should
+        // fall through to default CA validation; a forged 200 here would
+        // otherwise route the user to an attacker-controlled webview whose
+        // TOFU sheet looks indistinguishable from a genuine first contact.
+        let host = challenge.protectionSpace.host
+        if Self.isLocalNetworkHost(host) {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+
+    /// Loopback (RFC1122 §3.2.1.3), RFC1918 private IPv4, link-local IPv6
+    /// (`fe80::/10`), and mDNS `*.local` are all treated as "the operator
+    /// controls this network". Everything else — public IPv4/IPv6, IPv6 ULA
+    /// beyond `fc00::/7` (kept on the safer side; not all ULA is operator-
+    /// controlled), DNS names resolving to a public IP — uses real CA
+    /// validation via `.performDefaultHandling`.
+    ///
+    /// IPv6 parsing is intentionally minimal: anything starting with `fe80:`
+    /// or `fe80::` is link-local and accepted. Operator-typed hostnames are
+    /// expected to be mDNS (`mygateway.local`) or RFC1918 literals; cloud
+    /// deployments over the public internet require a real CA chain, which
+    /// this gate forces.
+    private static func isLocalNetworkHost(_ host: String) -> Bool {
+        if host == "localhost" || host == "::1" { return true }
+        if host.hasSuffix(".local") { return true }
+        // Quick IPv4 shape check: four dot-separated 0–255 octets. Anything
+        // that doesn't parse as such is treated as non-local and validated.
+        let parts = host.split(separator: ".", maxSplits: 3, omittingEmptySubsequences: false)
+        if parts.count == 4, let first = Int(parts[0]) {
+            let octets = parts.compactMap { Int($0) }
+            guard octets.count == 4, octets.allSatisfy({ (0...255).contains($0) }) else {
+                return false
+            }
+            // 127.0.0.0/8 loopback, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+            if first == 127 { return true }
+            if first == 10 { return true }
+            if first == 172, (16...31).contains(octets[1]) { return true }
+            if first == 192, octets[1] == 168 { return true }
+            return false
+        }
+        // IPv6 link-local prefix `fe80::/10`. We accept the textual `fe80:`
+        // and `fe80::` shapes only; full CIDR matching is left to the OS via
+        // default handling, which is what we want for non-link-local IPv6.
+        if host.hasPrefix("fe80:") || host.hasPrefix("fe80::") { return true }
+        return false
     }
 }
