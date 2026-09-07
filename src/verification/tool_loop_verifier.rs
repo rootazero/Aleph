@@ -36,28 +36,74 @@
 //! reaches the Tier-2 branch — this is the key fix for the parallel news-fetch
 //! false positive.
 //!
+//! **Tier-2 internal cap.** Tier-2 has no `halt_threshold` analogue: the
+//! orchestrator's `profile.steer_max` is *supposed* to bound consecutive
+//! Tier-2 emissions, but the verifier itself never reads that field, so a
+//! future refactor that drops the external cap would let Tier-2 fire
+//! indefinitely on every verify call. To make the bound a property of the
+//! verifier rather than the orchestrator, we track consecutive Tier-2
+//! vetoes internally (per session) and escalate to `Halt` once
+//! `profile.steer_max` of them have landed without the model
+//! course-correcting. The cap clears on any Continue/Veto-from-Tier-1, so
+//! legitimate exploration never accumulates against it.
+//!
 //! All tiers are pure structural checks over `(name, args_hash)` and the
 //! presence/absence of text — no model reasoning, so this stays scaffolding
 //! (R10-safe), never a completion judge.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
+use crate::sync_primitives::Mutex;
 use crate::verification::turn_verifier::{
     ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
 
-pub struct ToolLoopVerifier;
+pub struct ToolLoopVerifier {
+    /// Per-session count of consecutive Tier-2 vetoes. Tier-2 fires on
+    /// every verify call while the model is wedged, so without an internal
+    /// cap the veto stream is bounded only by the orchestrator's
+    /// `steer_max` — a contract the verifier never enforced itself. The
+    /// internal counter is incremented on Tier-2 `Veto` and reset on any
+    /// other outcome (Continue, Tier-1 Veto/Halt). Cleared on session
+    /// close; the map stays bounded by concurrent wedged sessions.
+    tier2_consecutive: Mutex<HashMap<String, u32>>,
+}
 
 impl ToolLoopVerifier {
     /// Construct the verifier. Detection thresholds (`repeat_threshold`,
     /// `halt_threshold`, etc.) are read from `ctx.robustness_profile` at
     /// `verify` time — see `ModelRobustnessProfile` and `TurnVerifyContext`.
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new() -> Self {
+        Self {
+            tier2_consecutive: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn tier2_count(&self, session: &str) -> u32 {
+        self.tier2_consecutive
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn record_tier2(&self, session: &str) -> u32 {
+        let mut map = self.tier2_consecutive.lock().unwrap_or_else(|e| e.into_inner());
+        let count = map.entry(session.to_string()).or_insert(0);
+        *count += 1;
+        *count
+    }
+
+    fn clear_tier2(&self, session: &str) {
+        self.tier2_consecutive
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session);
     }
 }
 
@@ -102,7 +148,7 @@ fn trailing_same_name_run(calls: &[ToolCallSummary]) -> usize {
 
 impl Default for ToolLoopVerifier {
     fn default() -> Self {
-        Self
+        Self::new()
     }
 }
 
@@ -119,6 +165,13 @@ impl TurnVerifier for ToolLoopVerifier {
         }
         let profile = ctx.robustness_profile;
         if ctx.recent_tool_calls.len() < profile.repeat_threshold {
+            // Not enough history to judge a loop — and arriving here is
+            // also a strong signal the model is no longer thrashing on
+            // Tier-2 (either the window shrank or the run reset), so we
+            // clear any per-session Tier-2 counter we are tracking.
+            if let Some(sid) = ctx.session_id {
+                self.clear_tier2(sid);
+            }
             return VerifierVerdict::Continue;
         }
         let run = trailing_repeat_run(ctx.recent_tool_calls);
@@ -127,6 +180,12 @@ impl TurnVerifier for ToolLoopVerifier {
         // regardless of narration: an exact-repeat is never productive.
         if run >= profile.repeat_threshold {
             let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
+            // Tier-1 firing is also a course-correction event for Tier-2;
+            // reset the per-session counter so a later Tier-2 burst can be
+            // judged on its own merit.
+            if let Some(sid) = ctx.session_id {
+                self.clear_tier2(sid);
+            }
             if run >= profile.halt_threshold {
                 return VerifierVerdict::Halt {
                     reason: format!(
@@ -151,6 +210,12 @@ impl TurnVerifier for ToolLoopVerifier {
         // its veto-cap path fires a wrap-up grace turn. High-distinctness
         // fan-out (e.g. 8 distinct web_fetch URLs) has distinctness == 1.0,
         // which is >= novelty_min, so it never reaches here.
+        //
+        // Internal cap: track consecutive Tier-2 vetoes per session and
+        // escalate to `Halt` once `profile.steer_max` of them have landed
+        // without a course-correction event. This makes the cap a
+        // property of the verifier rather than relying on the orchestrator
+        // to enforce it externally.
         let same_name_run = trailing_same_name_run(ctx.recent_tool_calls);
         let has_text = ctx.final_text.is_some_and(|t| !t.trim().is_empty());
         let distinct = distinct_count(ctx.recent_tool_calls);
@@ -158,6 +223,19 @@ impl TurnVerifier for ToolLoopVerifier {
         let silent_ok = !profile.silence_required || !has_text;
         if same_name_run >= TOOL_HISTORY_WINDOW && distinctness < profile.novelty_min && silent_ok {
             let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
+            let session = ctx.session_id.unwrap_or("(no-session)");
+            let consecutive = self.record_tier2(session);
+            if (consecutive as usize) > profile.steer_max {
+                self.clear_tier2(session);
+                return VerifierVerdict::Halt {
+                    reason: format!(
+                        "tool '{tool}' stuck in a low-distinctness thrash for \
+                         {consecutive} consecutive Tier-2 vetoes (steer_max={}) — \
+                         terminating to break the loop",
+                        profile.steer_max,
+                    ),
+                };
+            }
             return VerifierVerdict::Veto {
                 reason: format!(
                     "tool '{tool}' invoked {same_name_run} times cycling a small set of arguments \
@@ -167,6 +245,12 @@ impl TurnVerifier for ToolLoopVerifier {
             };
         }
 
+        // No thrash detected this turn — clear the Tier-2 counter so a
+        // future wedge is judged on its own streak, not carried-over from
+        // an earlier, resolved one.
+        if let Some(sid) = ctx.session_id {
+            self.clear_tier2(sid);
+        }
         VerifierVerdict::Continue
     }
 }

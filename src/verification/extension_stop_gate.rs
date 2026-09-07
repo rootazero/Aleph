@@ -41,9 +41,15 @@ use crate::sync_primitives::Mutex;
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
 /// Ceiling on consecutive stop vetoes per session. Past it the gate logs and
-/// lets the stop through — a broken (or adversarial) hook must not wedge the
-/// loop into churning until `max_loops`.
+/// stops honoring further vetoes for the rest of the run — a broken (or
+/// adversarial) hook must not wedge the loop into churning until `max_loops`.
 const MAX_CONSECUTIVE_STOP_VETOES: u32 = 5;
+
+/// Cumulative cap on total vetoes per session. Consecutive-veto resets
+/// reset the consecutive counter but accumulate here, so an adversarial hook
+/// that wedges `MAX_CONSECUTIVE_STOP_VETOES` of every cycle can do so at
+/// most three times before the gate emits `Halt` instead of `Continue`.
+const MAX_TOTAL_STOP_VETOES: u32 = MAX_CONSECUTIVE_STOP_VETOES * 3;
 
 /// Byte budget for the `LAST_ASSISTANT_MESSAGE` env var handed to hooks.
 /// Char-boundary safe truncation; hooks needing the full text can read the
@@ -103,7 +109,17 @@ pub struct ExtensionStopHookVerifier {
     /// Consecutive-veto counts keyed by session. Entries exist only while a
     /// session is actively being vetoed (removed on Allow/Halt), so the map
     /// stays bounded by the number of concurrently-wedged sessions.
-    vetoes: Mutex<HashMap<String, u32>>,
+    vetoes: Mutex<HashMap<String, VetoCounters>>,
+}
+
+/// Per-session veto bookkeeping. `consecutive` resets on every Allow/Halt;
+/// `total` accumulates across the lifetime of the verifier so an adversarial
+/// hook that wedges 5-of-every-6 stop attempts cannot keep doing so
+/// indefinitely. See [`MAX_TOTAL_STOP_VETOES`].
+#[derive(Default, Clone, Copy)]
+struct VetoCounters {
+    consecutive: u32,
+    total: u32,
 }
 
 impl Default for ExtensionStopHookVerifier {
@@ -120,20 +136,21 @@ impl ExtensionStopHookVerifier {
         }
     }
 
-    fn veto_count(&self, session: &str) -> u32 {
+    fn veto_counters(&self, session: &str) -> VetoCounters {
         self.vetoes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(session)
             .copied()
-            .unwrap_or(0)
+            .unwrap_or_default()
     }
 
-    fn record_veto(&self, session: &str) -> u32 {
+    fn record_veto(&self, session: &str) -> VetoCounters {
         let mut map = self.vetoes.lock().unwrap_or_else(|e| e.into_inner());
-        let count = map.entry(session.to_string()).or_insert(0);
-        *count += 1;
-        *count
+        let counters = map.entry(session.to_string()).or_default();
+        counters.consecutive = counters.consecutive.saturating_add(1);
+        counters.total = counters.total.saturating_add(1);
+        *counters
     }
 
     fn clear(&self, session: &str) {
@@ -151,15 +168,30 @@ impl ExtensionStopHookVerifier {
         executor: &HookExecutor,
         ctx: &TurnVerifyContext<'_>,
     ) -> VerifierVerdict {
-        let session = ctx.session_id.unwrap_or("(no-session)");
-        let prior_vetoes = self.veto_count(session);
+        // The gate cannot isolate state without a per-call identity. A
+        // `None` `session_id` therefore refuses to make a decision rather
+        // than collapsing every session-less invocation onto a shared
+        // counter: a previous bug used the literal `"(no-session)"` as
+        // the map key, which let an adversarial hook wedge one such
+        // invocation and bleed veto budget into every other session-less
+        // run. Logging lets an operator trace the silent path without
+        // burning more tokens on it.
+        let Some(session) = ctx.session_id else {
+            tracing::debug!(
+                iterations = ctx.iterations,
+                tool_calls_made = ctx.tool_calls_made,
+                "ExtensionStopHookVerifier: skipping (no session_id; cannot isolate state)"
+            );
+            return VerifierVerdict::Continue;
+        };
+        let prior = self.veto_counters(session);
 
         let mut hctx = HookContext::new(session)
             .with_env("ITERATIONS", ctx.iterations.to_string())
             .with_env("TOOL_CALLS_MADE", ctx.tool_calls_made.to_string())
             .with_env(
                 "STOP_HOOK_ACTIVE",
-                if prior_vetoes > 0 { "true" } else { "false" },
+                if prior.consecutive > 0 { "true" } else { "false" },
             );
         if let Some(text) = ctx.final_text {
             hctx = hctx.with_env(
@@ -189,19 +221,40 @@ impl ExtensionStopHookVerifier {
                 VerifierVerdict::Halt { reason }
             }
             StopDecision::Veto(reason) => {
-                let count = self.record_veto(session);
-                if count > MAX_CONSECUTIVE_STOP_VETOES {
+                let post = self.record_veto(session);
+                if post.total > MAX_TOTAL_STOP_VETOES {
+                    // Cumulative cap: this hook/plugin has exhausted its
+                    // total budget for this session. Emit Halt with a
+                    // machine-readable cause rather than silently
+                    // Continue, so the run terminates with a clear signal
+                    // and a downstream operator can see why.
                     tracing::warn!(
                         session,
-                        count,
-                        "Stop hook exceeded consecutive-veto ceiling; allowing stop"
+                        total = post.total,
+                        consecutive = post.consecutive,
+                        "Stop hook exceeded cumulative-veto ceiling; halting run"
                     );
-                    // Reset the budget: the run ends here, and the NEXT run
-                    // in this session deserves a fresh veto allowance — a
-                    // lingering count would permanently disable the gate for
-                    // the session and misreport STOP_HOOK_ACTIVE=true on a
-                    // fresh run's first stop attempt.
                     self.clear(session);
+                    return VerifierVerdict::Halt {
+                        reason: format!(
+                            "stop hook wedged: exceeded {} total vetoes for session {}",
+                            MAX_TOTAL_STOP_VETOES, session
+                        ),
+                    };
+                }
+                if post.consecutive > MAX_CONSECUTIVE_STOP_VETOES {
+                    // Per-cycle anti-wedge bound: let this one stop
+                    // through, but keep `total` accumulating so the
+                    // cumulative cap above eventually fires. The NEXT
+                    // successful veto (after one Allow) restarts the
+                    // consecutive counter from 1, so a hook that wedges
+                    // every-other-stop will be re-detected promptly.
+                    tracing::warn!(
+                        session,
+                        consecutive = post.consecutive,
+                        total = post.total,
+                        "Stop hook exceeded consecutive-veto ceiling; allowing this stop"
+                    );
                     return VerifierVerdict::Continue;
                 }
                 VerifierVerdict::Veto { reason }

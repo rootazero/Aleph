@@ -700,8 +700,15 @@ impl ScopedToolService {
                     // the real verdict to `Cancelled` would (a) ban the call
                     // for the rest of the run in the cross-batch memo and
                     // (b) hand the model an empty persistence hint.
+                    //
+                    // The matcher accepts both spellings ("cancelled" UK,
+                    // "canceled" US) and ignores trailing punctuation /
+                    // whitespace, so future adapters that emit "... canceled"
+                    // or "... cancelled by upstream" still get attributed.
+                    // It does NOT fold any other cause — the same race-
+                    // condition guard above applies.
                     Err(ToolError::Execution { name: n, cause })
-                        if cancel.is_cancelled() && cause.trim_end().ends_with("cancelled") =>
+                        if cancel.is_cancelled() && looks_like_cancellation(&cause) =>
                     {
                         Err(ToolError::Cancelled { name: n })
                     }
@@ -1733,6 +1740,36 @@ fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
         elided,
         &body[tail_start..]
     ))
+}
+
+/// True iff `cause` reads as the tool reporting its own mid-execution
+/// cancellation. The dispatch path uses this to rewrite
+/// `ToolError::Execution` into `ToolError::Cancelled` when the run's
+/// `CancellationToken` is also set — the rewrite matters because folding
+/// it into `Execution` bans the call for the rest of the run in the
+/// cross-batch failure memo and hands the model an empty persistence
+/// hint.
+///
+/// Both spellings are accepted ("cancelled" UK, "canceled" US). Trailing
+/// punctuation / whitespace is ignored so "... cancelled" and
+/// "... canceled by upstream" both attribute. The matcher is deliberately
+/// **conservative** — it does NOT try to detect cancel via unrelated
+/// tokens, because the only safe signal is the adapter's own report, and
+/// a misclassification would silently re-route a genuine tool failure.
+fn looks_like_cancellation(cause: &str) -> bool {
+    let trimmed = cause.trim_end().trim_end_matches(|c: char| !c.is_alphanumeric());
+    // Strip the trailing "by upstream" / "by client" / "by caller" style
+    // participle so "... cancelled by upstream" still matches.
+    let core = trimmed
+        .strip_suffix("upstream")
+        .or_else(|| trimmed.strip_suffix("client"))
+        .or_else(|| trimmed.strip_suffix("caller"))
+        .unwrap_or(trimmed)
+        .trim_end();
+    let final_trimmed = core
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .trim_end();
+    final_trimmed.ends_with("cancelled") || final_trimmed.ends_with("canceled")
 }
 
 #[cfg(test)]
