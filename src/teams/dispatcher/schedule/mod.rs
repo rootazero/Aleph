@@ -16,8 +16,11 @@ pub use select::{
 };
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 
 use tokio::sync::OwnedSemaphorePermit;
+
+use futures::FutureExt;
 
 use super::handoff::build_handoff_context;
 use super::runner::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
@@ -179,11 +182,31 @@ impl TeamDispatcher {
                 .lock()
                 .await
                 .insert(task.id.clone(), owner.clone());
+            let task_id_for_log = task.id.clone();
             let dispatcher = Arc::clone(self);
+            // Catch panics inside run_task so a poisoned worker (e.g. an
+            // unwrap deep in execute_acp_member_task) cannot silently kill
+            // the spawned task without trace. The permit is moved into the
+            // closure so it drops on whichever exit path runs (panic or
+            // normal completion). Without this, a panicking adapter leaves
+            // a phantom running-map entry that only clears at the zombie
+            // sweep (TEAMS-003, high) — the user sees a task that "never
+            // completed" but the dispatcher loop keeps running.
             tokio::spawn(async move {
-                dispatcher
-                    .run_task(task, owner, dispatch_target, permit)
-                    .await;
+                if let Err(panic_payload) = AssertUnwindSafe(async {
+                    dispatcher
+                        .run_task(task, owner, dispatch_target, permit)
+                        .await
+                })
+                .catch_unwind()
+                .await
+                {
+                    tracing::error!(
+                        task_id = %task_id_for_log,
+                        panic = ?panic_payload,
+                        "dispatcher run_task panicked; adapter dropped the task silently"
+                    );
+                }
             });
         }
     }
