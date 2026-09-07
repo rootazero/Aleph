@@ -15,7 +15,13 @@ pub(crate) mod post_nav;
 pub mod profile;
 mod secret_guard;
 pub mod tab_registry;
-#[cfg(test)]
+// Widened past `cfg(test)` because `--features test-helpers --test '*'`
+// compiles this lib WITHOUT `cfg(test)`, and the integration tests reach
+// `FakeEngineProcess` from there. The matching half is the root manifest's
+// `test-helpers = ["aleph-cdp/testkit"]`: this module names
+// `aleph_cdp::testkit`, and a dev-dependency's features do not reach a lib
+// built that way.
+#[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod testkit;
 pub mod types;
 pub(crate) mod wait_probe;

@@ -404,6 +404,7 @@ dependencies = [
  "aes-gcm",
  "agent-detect",
  "aho-corasick",
+ "aleph-cdp",
  "aleph-client",
  "aleph-desktop",
  "aleph-desktop-linux",

@@ -42,8 +42,11 @@ pub enum BrowserError {
     /// file never appeared" are three different operator problems, and a
     /// single opaque string made the tool answer identical for all three.
     /// `stage` values in use: `"spawn"`, `"chromium-exit"`, `"devtools-port"`
-    /// (this module's Chromium launch) and `"chrome-mcp"` (the existing-session
-    /// driver's Chrome launch).
+    /// (this module's Chromium launch), `"chrome-mcp"` (the existing-session
+    /// driver's Chrome launch), `"engine-process"` (no launcher registered for
+    /// the profile's engine), `"cdp-endpoint"` (the engine process is up and
+    /// its websocket refused the connection) and `"cdp-ready"` (connected, but
+    /// it did not pass `engine::readiness::ready_gate`).
     #[error("Failed to launch browser at stage '{stage}': {detail}")]
     LaunchFailed { stage: &'static str, detail: String },
 
@@ -171,6 +174,31 @@ pub enum BrowserError {
          starts a fresh one."
     )]
     EngineFailure { engine: Engine, reason: String },
+
+    /// The profile already has a live engine, and it is not the one asked for.
+    ///
+    /// ⚠️ **Forward reference.** The message names `browser_session{action:
+    /// "switch_engine", engine:"…"}`, and at HEAD `BrowserSessionArgs.name` is
+    /// a required `String` — so between this task and Task 19, which makes it
+    /// `Option<String>`, the call it names is one the schema rejects. Task 19's
+    /// acceptance list must keep that field change, or this message has to name
+    /// the profile too.
+    ///
+    /// Not a silent swap: changing engines under an open profile discards its
+    /// cookies, its tabs and every ref the model is holding. That is
+    /// `switch_engine`'s job (spec §5.3) — it migrates the state and returns a
+    /// fresh page — so this refusal names it rather than performing half of it.
+    #[error(
+        "browser profile '{profile}' is already running {running}, but this call asked \
+         for {requested}. Use browser_session{{action:\"switch_engine\", \
+         engine:\"{requested}\"}} to move cookies and open tabs across, or close the \
+         profile first."
+    )]
+    EngineMismatch {
+        profile: String,
+        running: Engine,
+        requested: Engine,
+    },
 
     /// A snapshot ref that no longer addresses an element.
     ///
@@ -492,6 +520,11 @@ mod tests {
                 supported_by: None, ..
             } => RecoverySignal::Neither,
             BrowserError::EngineFailure { .. } => RecoverySignal::VerbAndEngine,
+            // Names BOTH engines (the one running and the one asked for) and
+            // the one verb that reconciles them, `browser_session
+            // {action:"switch_engine"}`. The reader's next move is a call, not
+            // a diagnosis, which is what separates this from `Cdp`.
+            BrowserError::EngineMismatch { .. } => RecoverySignal::VerbAndEngine,
             BrowserError::StaleRef { .. } => RecoverySignal::VerbOnly,
             BrowserError::Cdp { .. } => RecoverySignal::EngineOnly,
         }
@@ -518,6 +551,7 @@ mod tests {
     /// | `UnsupportedByEngine` (`Some`)   | yes | yes | — |
     /// | `UnsupportedByEngine` (`None`)   | **no** | **no** | nothing supports the verb — no engine to route on, and offering `switch_engine` would send the model on a round trip back to where it started |
     /// | `EngineFailure`                  | yes | yes | — |
+    /// | `EngineMismatch`                 | yes | yes | names both the running engine and the requested one, plus `switch_engine` — the call that reconciles them |
     /// | `StaleRef`                       | yes | **no** | no `engine` field — re-snapshotting the SAME tab fixes it regardless of which engine drives it |
     /// | `Cdp`                            | **no** | yes | no Aleph tool fixes a CDP protocol error; the actionable content IS the verbatim triple, and inventing a verb would name a door that does not exist |
     ///
@@ -569,6 +603,15 @@ mod tests {
                     reason: "websocket closed".into(),
                 },
                 BrowserOpenTool::NAME,
+                RecoverySignal::VerbAndEngine,
+            ),
+            (
+                BrowserError::EngineMismatch {
+                    profile: "default".into(),
+                    running: Engine::Chromium,
+                    requested: Engine::Obscura,
+                },
+                BrowserSessionTool::NAME,
                 RecoverySignal::VerbAndEngine,
             ),
             (

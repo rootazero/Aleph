@@ -14,9 +14,18 @@
 
 pub mod chromium;
 pub mod process;
+pub mod readiness;
+pub mod registry;
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use self::process::{EngineProcess, Launched};
+use super::error::BrowserError;
 
 /// Which browser process backs a profile.
 ///
@@ -111,6 +120,265 @@ impl Engine {
 impl std::fmt::Display for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// How long a kill waits for the child to actually die before saying it did
+/// not. Short on purpose: this runs on the daemon's wedged-shutdown path.
+pub const ENGINE_KILL_GRACE: Duration = Duration::from_millis(500);
+
+/// The whole engine half of a shutdown. The wedged-shutdown watchdog has
+/// already spent `SHUTDOWN_FAILSAFE` before it reaches us and the
+/// `std::process::exit(0)` after it waits for nobody, so this is a hard
+/// ceiling, not a hope (`src/bin/aleph-server/commands/start/helpers.rs`).
+pub const ENGINE_SHUTDOWN_BUDGET: Duration = Duration::from_secs(1);
+
+/// May this call start a browser?
+///
+/// A payload-free gate, deliberately NOT `super::playwright_launch::LaunchPolicy`.
+/// That one borrows a `SessionLaunch`, and the engine path has already spent
+/// those parameters in `super::manager::ProfileManager::launch_request_for` —
+/// so the registry would be handed a value it reads half of, and every holder
+/// of an `Arc<EngineRegistry>` (a CDP backend, which lives behind
+/// `Arc<dyn BrowserBackend>`) would have to carry its lifetime. Two gates for
+/// two drivers is not duplication: they gate different things, and the
+/// playwright one keeps its payload because its caller has not derived a
+/// request yet.
+///
+/// The reason either exists is the same, and it is `LaunchPolicy`'s own doc:
+/// a sensor must not create what it measures.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum EngineLaunch {
+    /// Observing. A missing engine is an answer, not something to fix.
+    Refuse,
+    /// Asking for a browser. Launch one if the profile has none.
+    Allow,
+}
+
+/// One live engine process plus the one CDP connection Aleph drives it with.
+///
+/// One per profile, held by [`registry::EngineRegistry`]. Backends stay
+/// per-call (hot-swapping the SSRF policy depends on it); the handle is what
+/// must not be rebuilt, because rebuilding it means launching a second
+/// browser.
+pub struct EngineHandle {
+    pub engine: Engine,
+    pub profile: String,
+    pub launched: Launched,
+    pub conn: aleph_cdp::CdpConnection,
+    pub tabs: tokio::sync::Mutex<TabTable>,
+    process: Arc<dyn EngineProcess>,
+}
+
+/// The tabs of one engine. The key is the CDP `targetId` string.
+#[derive(Default)]
+pub struct TabTable {
+    pub entries: HashMap<String, TabEntry>,
+    pub active: Option<String>,
+}
+
+/// Per-tab state that outlives a single call.
+pub struct TabEntry {
+    pub session: aleph_cdp::SessionId,
+    /// Bumped once per page-state capture; refs carry the generation they were
+    /// minted in (spec §4.3).
+    pub generation: u64,
+    /// The tab's current URL, as last observed. The post-navigation SSRF audit
+    /// reads it, and it starts at `"about:blank"` because that is where
+    /// [`EngineHandle::attach_tab`] finds a freshly created target — not
+    /// `String::new()`, which would be an empty string standing in for "I do
+    /// not know" and then getting vetted as a URL (判据 §8).
+    pub url: String,
+    pub console: VecDeque<String>,
+    pub network: VecDeque<String>,
+    pub pending_dialog: Option<String>,
+}
+
+impl TabEntry {
+    #[must_use]
+    pub fn new(session: aleph_cdp::SessionId) -> Self {
+        Self {
+            session,
+            generation: 0,
+            url: "about:blank".to_string(),
+            console: VecDeque::new(),
+            network: VecDeque::new(),
+            pending_dialog: None,
+        }
+    }
+}
+
+impl EngineHandle {
+    /// Build a handle around an already-launched process and an already-ready
+    /// connection.
+    ///
+    /// `pub`, not `pub(crate)`, and NOT split into two cfg'd bodies: a seam
+    /// that parks a handle ([`registry::EngineRegistry::insert_for_test`]) is
+    /// useless to a caller that cannot build one, and the
+    /// `--features test-helpers --test '*'` integration tests are a different
+    /// crate. Two bodies would be two answers to "how is a handle assembled",
+    /// so the "only the registry launches" rule is held by a census instead of
+    /// by visibility: `engine_handle_is_built_in_exactly_one_production_place`
+    /// in [`registry`].
+    #[must_use]
+    pub fn new(
+        engine: Engine,
+        profile: String,
+        launched: Launched,
+        conn: aleph_cdp::CdpConnection,
+        process: Arc<dyn EngineProcess>,
+        first_tab: (String, aleph_cdp::SessionId),
+    ) -> Self {
+        let (tab_id, session) = first_tab;
+        let mut entries = HashMap::new();
+        entries.insert(tab_id.clone(), TabEntry::new(session));
+        Self {
+            engine,
+            profile,
+            launched,
+            conn,
+            tabs: tokio::sync::Mutex::new(TabTable {
+                entries,
+                active: Some(tab_id),
+            }),
+            process,
+        }
+    }
+
+    /// Whether the engine is still reachable.
+    ///
+    /// Derived from the connection's disconnect watch — the owner of "the
+    /// engine died" per spec §5.2 — and not from a second `try_wait` on the
+    /// pid, which would be a second answer free to disagree with the first.
+    #[must_use]
+    pub fn alive(&self) -> bool {
+        self.conn.closed().borrow().is_none()
+    }
+
+    /// The session attached to `tab_id`. **A lookup, never an attach.**
+    ///
+    /// An unknown tab is `TabNotFound`: acting on a tab that does not exist is
+    /// the fail-closed direction, and inventing one here would make a typo look
+    /// like a working page. Every verb that operates on a tab which must
+    /// already exist calls this — `navigate`, `snapshot`, `evaluate`,
+    /// `screenshot`, the dialog and cookie paths — and only the verbs that
+    /// legitimately bring a tab into existence call [`Self::attach_tab`].
+    pub async fn ensure_tab(&self, tab_id: &str) -> Result<aleph_cdp::SessionId, BrowserError> {
+        let tabs = self.tabs.lock().await;
+        tabs.entries
+            .get(tab_id)
+            .map(|e| e.session.clone())
+            .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))
+    }
+
+    /// Attach to `target`, enable the three domains this driver listens on, and
+    /// put the tab in the table. Returns its session.
+    ///
+    /// The other half of [`Self::ensure_tab`], split because the two are
+    /// opposite fail directions and one name cannot be both: this one CREATES
+    /// the entry, so only the verbs that bring a tab into existence may use it
+    /// — `open_tab` (after `Target.createTarget`), `switch_tab` (adopting a
+    /// target the browser has but Aleph has not seen) and popup adoption.
+    ///
+    /// **Idempotent**, and that is not a convenience: attaching twice gives one
+    /// page two sessions and two `Page.enable` subscriptions, and the second
+    /// session's events arrive somewhere nothing reads. An already-known target
+    /// gets its existing session back, unchanged.
+    ///
+    /// The table guard is held across the attach so two concurrent adoptions of
+    /// one popup cannot both miss the check and both attach.
+    ///
+    /// The three `enable`s are here rather than at the call sites because a tab
+    /// whose domains were never enabled looks identical to a quiet one: no
+    /// error, no events, and a console log that is simply always empty
+    /// (判据 §2).
+    pub async fn attach_tab(
+        &self,
+        target: &aleph_cdp::TargetId,
+    ) -> Result<aleph_cdp::SessionId, BrowserError> {
+        let mut tabs = self.tabs.lock().await;
+        if let Some(existing) = tabs.entries.get(&target.0) {
+            return Ok(existing.session.clone());
+        }
+        let session = self.conn.attach(target).await.map_err(|e| {
+            BrowserError::AttachFailed(format!(
+                "could not attach to tab {} on {}: {e}",
+                target.0,
+                self.engine.as_str()
+            ))
+        })?;
+        for (domain, result) in [
+            (
+                "Page",
+                aleph_cdp::methods::page::enable(&self.conn, Some(&session)).await,
+            ),
+            (
+                "Runtime",
+                aleph_cdp::methods::runtime::enable(&self.conn, Some(&session)).await,
+            ),
+            (
+                "Network",
+                aleph_cdp::methods::network::enable(&self.conn, Some(&session)).await,
+            ),
+        ] {
+            result.map_err(|e| {
+                BrowserError::AttachFailed(format!(
+                    "attached to tab {} but {domain} would not enable: {e}. Its \
+                     events would be silently absent, so the tab is refused \
+                     rather than half-wired.",
+                    target.0
+                ))
+            })?;
+        }
+        tabs.entries
+            .insert(target.0.clone(), TabEntry::new(session.clone()));
+        if tabs.active.is_none() {
+            tabs.active = Some(target.0.clone());
+        }
+        Ok(session)
+    }
+
+    /// Stop the engine and clear its record. `true` when it actually died.
+    ///
+    /// SIGKILL plus a bounded reap, and **never a graceful handshake** — the
+    /// same rule `super::manager::ProfileManager::shutdown_browsers` states,
+    /// and for the same reason: one caller is the wedged-shutdown watchdog, and
+    /// a CDP `Browser.close` is a round trip to the process that may be why the
+    /// shutdown wedged. `conn.close()` is local; it closes our socket and fails
+    /// every pending call, it does not ask the peer for permission.
+    pub async fn shutdown(&self) -> bool {
+        self.conn.close().await;
+        let pid = self.launched.pid;
+        // The whole `Launched`, not the pid: it carries the `std::process::Child`
+        // the launcher has to `wait()` on after signalling. A signal without a
+        // reap leaves a zombie, and a pid on its own cannot be reaped by anyone.
+        let died = match self.process.kill(&self.launched, ENGINE_KILL_GRACE).await {
+            Ok(true) => true,
+            Ok(false) => {
+                tracing::warn!(
+                    pid,
+                    engine = self.engine.as_str(),
+                    "the engine did not exit within the kill grace window; leaving it \
+                     for the next boot sweep"
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(pid, engine = self.engine.as_str(), error = %e, "could not kill the engine");
+                false
+            }
+        };
+        match tokio::fs::remove_file(&self.launched.sidecar_path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                path = %self.launched.sidecar_path.display(),
+                error = %e,
+                "could not remove the engine sidecar; the boot sweep will see a \
+                 record for a process that is gone"
+            ),
+        }
+        died
     }
 }
 

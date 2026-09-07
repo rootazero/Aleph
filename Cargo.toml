@@ -149,8 +149,13 @@ bench = false
 default = []
 # Loom concurrency testing (replaces std sync primitives)
 loom = ["dep:loom"]
-# Test helpers for integration tests
-test-helpers = []
+# Test helpers for integration tests. Pulls `aleph-cdp/testkit` through the
+# NORMAL dependency because `src/browser/testkit.rs` names
+# `aleph_cdp::testkit::FakeCdpServer`, and under
+# `cargo test --features test-helpers --test '*'` the lib is compiled WITHOUT
+# `cfg(test)` — a dev-dependency's features do not reach a lib built that way,
+# so without this the module compiles and its import does not.
+test-helpers = ["aleph-cdp/testkit"]
 # Control plane UI (Leptos/WASM dashboard)
 control-plane = []
 # Disabled test modules awaiting rewrite
@@ -175,6 +180,10 @@ aleph-protocol = { path = "shared/protocol" }
 # Screen-text agent-state detection (ported from herdr, Apache-2.0). Consumed
 # by `gateway::runtime`, which samples PTY screens on the diff-frame cadence.
 agent-detect = { path = "crates/agent-detect" }
+# The CDP transport (spec §3.1). Its `testkit` feature is NOT enabled here — see
+# the `[features] testkit` comment in crates/aleph-cdp/Cargo.toml for why the
+# dev-dependency below can turn it on without it reaching a production build.
+aleph-cdp = { path = "crates/aleph-cdp" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 sqlite-vec = "0.1.9"
 uuid = { version = "1.7", features = ["v4", "serde"] }
@@ -356,6 +365,11 @@ path = "src/bin/aleph-server/main.rs"
 bench = false
 
 [dev-dependencies]
+# The same crate as the `[dependencies]` entry above, with the in-process fake
+# CDP peer switched on. `#[cfg(test)]` code in this crate drives the engine
+# registry against it; `--features test-helpers` reaches it through the normal
+# dependency instead (see the `test-helpers` feature above).
+aleph-cdp = { path = "crates/aleph-cdp", features = ["testkit"] }
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 tempfile = "3.8"
 filetime = "0.2"

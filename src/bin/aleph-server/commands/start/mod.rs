@@ -3669,7 +3669,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // every restart leaves a Chromium behind for the next boot's sweep to
     // find — and on a host where argv is unreadable that sweep declines to
     // act, by design, so the leak would be permanent.
-    let browsers = alephcore::browser::manager::shutdown_browsers_global();
+    let browsers = alephcore::browser::manager::shutdown_browsers_global().await;
     if browsers > 0 {
         tracing::info!(count = browsers, "stopped managed browsers on shutdown");
     }

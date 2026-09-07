@@ -150,6 +150,23 @@ impl BrowserSsrfGuard {
         Self { config }
     }
 
+    /// Whether this policy lets a browser reach private / loopback ranges.
+    ///
+    /// The engine launch needs the same bit [`Self::build_core_policy`] reads
+    /// (`allow_private_network: !self.config.block_private`), so it is derived
+    /// here rather than re-read at the launch site: two readers of one field
+    /// are how `--allow-private-network` ends up disagreeing with the guard
+    /// that vets the navigation (判据 §9 — one verb, several faces, one
+    /// derivation). `build_core_policy`'s other branch answers the same
+    /// question by turning the policy OFF entirely, which is reachable only
+    /// when `block_private` is already false — so the two faces agree there
+    /// too, and `the_launch_bit_and_the_navigation_guard_answer_alike` pins
+    /// that rather than leaving it to this sentence.
+    #[must_use]
+    pub const fn allows_private_network(&self) -> bool {
+        !self.config.block_private
+    }
+
     /// Build the core SSRF policy from browser config.
     /// When `block_private` is false and no allow/blocklists are configured,
     /// the policy is disabled entirely so that loopback, localhost, and
@@ -301,6 +318,46 @@ impl BrowserSsrfGuard {
 
 #[cfg(test)]
 mod tests {
+    /// The bit handed to an engine's argv and the bit the navigation guard
+    /// vets URLs with must be one answer, on EVERY branch of
+    /// `build_core_policy` — including the one that answers by disabling the
+    /// policy outright rather than by setting the field.
+    ///
+    /// A launch flag that says "private ranges are fine" while the guard still
+    /// refuses them is not a contradiction anything reports: the browser
+    /// simply gets a permission it can never use, and the operator reads the
+    /// refusal as an Aleph bug (判据 §9).
+    #[test]
+    fn the_launch_bit_and_the_navigation_guard_answer_alike() {
+        use super::{BrowserSsrfGuard, SsrfConfig};
+
+        // Both branches of `build_core_policy`, in both directions of the bit.
+        let cases = [
+            (true, vec![], vec![]),
+            (false, vec![], vec![]),
+            (true, vec!["evil.test".to_string()], vec![]),
+            (false, vec![], vec!["ok.test".to_string()]),
+        ];
+        for (block_private, blocked_domains, allowed_domains) in cases {
+            let guard = BrowserSsrfGuard::new(SsrfConfig {
+                block_private,
+                blocked_domains,
+                allowed_domains,
+                ..SsrfConfig::default()
+            });
+            let core = guard.build_core_policy();
+            // A disabled policy permits everything, so its answer to "may a
+            // browser reach a private range" is yes regardless of the field.
+            let core_allows = !core.enabled || core.allow_private_network;
+            assert_eq!(
+                guard.allows_private_network(),
+                core_allows,
+                "the launch flag and the navigation guard disagree for \
+                 block_private={block_private}"
+            );
+        }
+    }
+
     use super::*;
 
     #[tokio::test]

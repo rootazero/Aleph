@@ -528,12 +528,13 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // spent the whole 5 s failsafe, and that failsafe is matched to the
         // window `aleph-server stop` gives before its own SIGKILL — so every
         // line past this point may simply never execute. Ordering by cost is
-        // therefore the rule: the browser stop is synchronous (`kill()` plus a
-        // bounded `wait()`, no scheduler pass needed), so putting it first
-        // costs the bash reap nothing, while putting it last is what would
-        // spend the browser's only chance on a sleep it does not need.
+        // therefore the rule: the browser stop is hard-bounded — a synchronous
+        // playwright half (`kill()` plus a bounded `wait()`) and an engine half
+        // capped by `ENGINE_SHUTDOWN_BUDGET` (1 s) — so putting it first costs
+        // the bash reap at most that second, while putting it last is what
+        // would spend the browser's only chance on a sleep it does not need.
         // Idempotent with the `start_server` call site.
-        let browsers = alephcore::browser::manager::shutdown_browsers_global();
+        let browsers = alephcore::browser::manager::shutdown_browsers_global().await;
         if browsers > 0 {
             tracing::warn!(count = browsers, "stopped managed browsers before forced exit");
         }

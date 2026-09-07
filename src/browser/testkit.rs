@@ -378,6 +378,150 @@ impl BrowserBackend for FakeBackend {
     }
 }
 
+/// A test-only [`EngineProcess`](super::engine::process::EngineProcess) that
+/// "launches" nothing and points every
+/// [`Launched`](super::engine::process::Launched) at an in-process
+/// [`aleph_cdp::testkit::FakeCdpServer`].
+///
+/// It writes a real sidecar file, because the record on disk is half of what
+/// `EngineHandle::shutdown` is asserted to undo — a fake that skipped it would
+/// let the deletion rot unobserved (判据 §4: assert the effect arrived).
+///
+/// `pub`, unlike [`FakeBackend`] beside it, because an integration test under
+/// `--features test-helpers` may need to build one. `FakeBackend` stays
+/// `pub(crate)`: nothing outside the crate names it, and widening a visibility
+/// with no consumer is the abstraction this repo cuts.
+pub struct FakeEngineProcess {
+    engine: super::engine::Engine,
+    ws_url: String,
+    http_url: String,
+    sidecar_dir: std::path::PathBuf,
+    pid: u32,
+    launches: Mutex<Vec<String>>,
+    kills: Mutex<Vec<u32>>,
+}
+
+/// A pid no test kills for real. Recorded and asserted on; never signalled.
+const FAKE_ENGINE_PID: u32 = 424_242;
+
+impl FakeEngineProcess {
+    pub fn new(
+        engine: super::engine::Engine,
+        server: &aleph_cdp::testkit::FakeCdpServer,
+        sidecar_dir: &Path,
+    ) -> Self {
+        Self {
+            engine,
+            ws_url: server.ws_url(),
+            http_url: server.http_url(),
+            sidecar_dir: sidecar_dir.to_path_buf(),
+            pid: FAKE_ENGINE_PID,
+            launches: Mutex::new(Vec::new()),
+            kills: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// A fake with no server and no sidecar directory, for a handle that has
+    /// no process at all — a test that only needs an
+    /// `Arc<dyn EngineProcess>` to fill a field, never to launch anything.
+    ///
+    /// [`Self::launch`] REFUSES on one of these rather than handing back an
+    /// endpoint that goes nowhere. A fake that answered `Ok` with an empty
+    /// `ws_url` would fail later, at `CdpConnection::connect`, with a message
+    /// about a URL nobody wrote.
+    pub fn detached(engine: super::engine::Engine) -> Self {
+        Self {
+            engine,
+            ws_url: String::new(),
+            http_url: String::new(),
+            sidecar_dir: std::path::PathBuf::new(),
+            pid: FAKE_ENGINE_PID,
+            launches: Mutex::new(Vec::new()),
+            kills: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// One `"<profile>/<session_key> headless=<bool>"` line per launch.
+    pub fn launches(&self) -> Vec<String> {
+        self.launches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// The pids `kill` was called with, in order.
+    pub fn kills(&self) -> Vec<u32> {
+        self.kills.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
+}
+
+#[async_trait]
+impl super::engine::process::EngineProcess for FakeEngineProcess {
+    fn engine(&self) -> super::engine::Engine {
+        self.engine
+    }
+
+    async fn launch(
+        &self,
+        req: super::engine::process::LaunchRequest,
+    ) -> Result<super::engine::process::Launched, BrowserError> {
+        if self.ws_url.is_empty() {
+            return Err(BrowserError::LaunchFailed {
+                stage: "engine-process",
+                detail: "FakeEngineProcess::detached has no endpoint to launch \
+                         against; use FakeEngineProcess::new with a FakeCdpServer"
+                    .to_string(),
+            });
+        }
+        self.launches
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(format!(
+                "{}/{} headless={}",
+                req.profile, req.session_key, req.headless
+            ));
+        let sidecar_path = self.sidecar_dir.join(format!("{}.json", req.session_key));
+        tokio::fs::create_dir_all(&self.sidecar_dir).await?;
+        tokio::fs::write(&sidecar_path, b"{\"fake\":true}").await?;
+        Ok(super::engine::process::Launched {
+            pid: self.pid,
+            endpoint: super::engine::process::CdpEndpoint {
+                http_url: self.http_url.clone(),
+                ws_url: self.ws_url.clone(),
+                pid: self.pid,
+            },
+            sidecar_path,
+            // No OS process behind this fake, so there is nothing to reap.
+            // `None` from the start is the honest shape: `kill` below reports
+            // what it *recorded*, not what it found in here.
+            child: std::sync::Arc::new(crate::sync_primitives::Mutex::new(None)),
+        })
+    }
+
+    /// Records the pid it was asked to stop and reports it died.
+    ///
+    /// Takes the whole `Launched` because the real launchers need the `Child`
+    /// inside it to `wait()` after signalling; this fake has no OS process, so
+    /// it reads only the pid — and reads it from the ARGUMENT rather than from
+    /// `self.pid`, so a test that hands over the wrong `Launched` fails
+    /// instead of quietly passing.
+    async fn kill(
+        &self,
+        launched: &super::engine::process::Launched,
+        _grace: std::time::Duration,
+    ) -> Result<bool, BrowserError> {
+        self.kills
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(launched.pid);
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,5 +645,92 @@ mod tests {
         assert_eq!(fake.evaluate("1", "p").await.unwrap(), "first");
         assert_eq!(fake.evaluate("1", "p").await.unwrap(), "absent");
         assert_eq!(fake.evaluate("1", "p").await.unwrap(), "absent");
+    }
+    /// The fake engine must hand back an endpoint a real `CdpConnection` can
+    /// connect to, and must leave a sidecar file on disk — both are what
+    /// `EngineHandle::shutdown` is later asserted to undo.
+    #[tokio::test]
+    async fn fake_engine_process_launches_against_the_fake_peer_and_writes_a_sidecar() {
+        use crate::browser::engine::process::{EngineProcess, LaunchRequest};
+        use crate::browser::engine::Engine;
+        use crate::browser::profile::BrowserType;
+        use aleph_cdp::testkit::{FakeCdpServer, Responder};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server =
+            FakeCdpServer::start(|_: &serde_json::Value| Responder::Reply(serde_json::json!({})))
+                .await;
+        let proc = FakeEngineProcess::new(Engine::Chromium, &server, dir.path());
+        assert_eq!(proc.engine(), Engine::Chromium);
+
+        let launched = proc
+            .launch(LaunchRequest {
+                profile: "default".into(),
+                session_key: "default".into(),
+                data_dir: dir.path().join("udd"),
+                headless: true,
+                proxy: None,
+                browser: BrowserType::default(),
+                allow_private_network: false,
+                stealth: false,
+                extra_args: vec![],
+            })
+            .await
+            .expect("the fake launch cannot fail");
+
+        assert_eq!(launched.endpoint.ws_url, server.ws_url());
+        assert_eq!(launched.pid, proc.pid());
+        assert!(
+            launched.sidecar_path.exists(),
+            "a launch must leave a reapable record behind"
+        );
+        assert_eq!(
+            proc.launches(),
+            vec!["default/default headless=true".to_string()]
+        );
+
+        assert!(proc
+            .kill(&launched, std::time::Duration::from_millis(1))
+            .await
+            .unwrap());
+        assert_eq!(proc.kills(), vec![launched.pid]);
+        server.shutdown().await;
+    }
+
+    /// `detached` has no peer to point at, so it REFUSES rather than handing
+    /// back an endpoint that goes nowhere — the failure would otherwise land
+    /// at `CdpConnection::connect`, naming a URL nobody wrote.
+    #[tokio::test]
+    async fn a_detached_fake_engine_refuses_to_launch() {
+        use crate::browser::engine::process::{EngineProcess, LaunchRequest};
+        use crate::browser::engine::Engine;
+        use crate::browser::profile::BrowserType;
+
+        let proc = FakeEngineProcess::detached(Engine::Obscura);
+        assert_eq!(proc.engine(), Engine::Obscura);
+        // Not `expect_err`: that needs `Launched` to be `Debug`, and it
+        // deliberately is not — it owns the process handle, and a derived
+        // `Debug` would print it into whatever formatted the panic.
+        let Err(err) = proc
+            .launch(LaunchRequest {
+                profile: "p".into(),
+                session_key: "p".into(),
+                data_dir: std::path::PathBuf::from("/nonexistent"),
+                headless: true,
+                proxy: None,
+                browser: BrowserType::default(),
+                allow_private_network: false,
+                stealth: false,
+                extra_args: vec![],
+            })
+            .await
+        else {
+            panic!("a detached fake has nothing to launch against");
+        };
+        assert!(
+            matches!(err, BrowserError::LaunchFailed { stage, .. } if stage == "engine-process"),
+            "got {err:?}"
+        );
+        assert!(proc.launches().is_empty(), "a refusal must not be recorded");
     }
 }

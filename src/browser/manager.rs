@@ -12,6 +12,10 @@ use crate::sync_primitives::{AtomicBool, Mutex, Ordering, RwLock};
 use super::backend::BrowserBackend;
 use super::chrome_mcp::ChromeMcpDriver;
 use super::chrome_mcp_backend::ChromeMcpBackend;
+use super::engine;
+use super::engine::process::{EngineProcess, LaunchRequest};
+use super::engine::registry::EngineRegistry;
+use super::engine::{Engine, EngineHandle, EngineLaunch};
 use super::error::BrowserError;
 use super::network_policy::{BrowserSsrfGuard, PolicyViolation, SsrfConfig};
 use super::playwright_cli::PlaywrightCliDriver;
@@ -76,15 +80,18 @@ fn apply_policy_to(handle: Option<&Weak<ProfileManager>>, policy: SsrfConfig) ->
 /// automatic teardown is best-effort once the runtime itself is being torn
 /// down, so the daemon calls this explicitly. Returns 0 — honestly — when no
 /// manager is published (a CLI process, a test, or before boot wired one up).
-pub fn shutdown_browsers_global() -> usize {
+pub async fn shutdown_browsers_global() -> usize {
+    // The `.clone()` drops the `MutexGuard` before the await below: holding a
+    // `std::sync::MutexGuard` across a yield point is what this shape avoids,
+    // and it became load-bearing the moment `shutdown_browsers` went async.
     let handle = LIVE_MANAGER
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    handle
-        .as_ref()
-        .and_then(Weak::upgrade)
-        .map_or(0, |mgr| mgr.shutdown_browsers())
+    match handle.as_ref().and_then(Weak::upgrade) {
+        Some(mgr) => mgr.shutdown_browsers().await,
+        None => 0,
+    }
 }
 
 /// Manages the lifecycle of browser profiles.
@@ -100,6 +107,14 @@ pub struct ProfileManager {
     idle_reaper_started: AtomicBool,
     /// Per-tab lifecycle tracking for Managed profiles (idle reclamation + cap).
     tab_registry: TabRegistry,
+    /// The live CDP engines, for `driver = "cdp"` profiles.
+    ///
+    /// An `Arc` because [`Self::get_backend`] is SYNCHRONOUS (and the idle
+    /// reaper calls it), so a backend cannot be handed a resolved handle at
+    /// construction — resolving one means launching, and launching is async.
+    /// The registry is what a sync constructor can hand over; the backend
+    /// resolves on its own first async call.
+    engines: Arc<EngineRegistry>,
 }
 
 struct ManagedProfile {
@@ -180,6 +195,24 @@ impl ProfileManager {
                 .collect(),
         ));
 
+        // Read out of `config` before it moves into `Self` below.
+        let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
+        processes.insert(
+            Engine::Chromium,
+            Arc::new(engine::chromium::ChromiumLauncher::new(
+                config.runtime.clone(),
+            )),
+        );
+        // Obscura's launcher is registered by Task 16. Until then the registry
+        // answers a named error for it rather than a panic or a silent
+        // fallback to Chromium — an engine the operator asked for and did not
+        // get must say so.
+        let engines = Arc::new(EngineRegistry::new(
+            processes,
+            config.cdp_command_timeout(),
+            engine::readiness::READY_GATE_BUDGET,
+        ));
+
         Self {
             profiles: RwLock::new(profiles),
             ssrf_guard,
@@ -188,6 +221,7 @@ impl ProfileManager {
             playwright_cli_driver,
             idle_reaper_started: AtomicBool::new(false),
             tab_registry: TabRegistry::new(),
+            engines,
         }
     }
 
@@ -413,6 +447,116 @@ impl ProfileManager {
         }
     }
 
+    /// The registry every CDP backend resolves its engine handle through.
+    ///
+    /// Handed out as an `Arc` so [`Self::get_backend`] — which is synchronous —
+    /// can give a backend something that resolves later.
+    #[must_use]
+    pub const fn engines(&self) -> &Arc<EngineRegistry> {
+        &self.engines
+    }
+
+    /// The per-command CDP timeout both engines are driven with.
+    ///
+    /// Delegates to [`BrowserSystemConfig::cdp_command_timeout`] rather than
+    /// re-deriving `Duration::from_secs(cdp_command_timeout_secs)`: the
+    /// `< 60 s` rule (obscura's own guillotine) is enforced once, at config
+    /// load, and a second derivation here is a second place for the two to
+    /// disagree the day one of them moves (判据 §1).
+    #[must_use]
+    pub fn cdp_command_timeout(&self) -> Duration {
+        self.config.cdp_command_timeout()
+    }
+
+    /// Everything a launch of `profile` needs, and which engine it is for.
+    ///
+    /// **Synchronous and free of I/O on purpose.** It reads the profile config
+    /// and the live SSRF guard, nothing else — so the synchronous
+    /// [`Self::get_backend`] can call it, and so "what would we launch" is
+    /// answerable without launching anything. A sensor must not create what it
+    /// measures, which is the rule `playwright_launch::LaunchPolicy`'s own doc
+    /// states.
+    pub fn launch_request_for(
+        &self,
+        profile: &str,
+    ) -> Result<(Engine, LaunchRequest), BrowserError> {
+        let cfg = self
+            .get_config(profile)
+            .ok_or_else(|| BrowserError::ProfileNotFound(profile.into()))?;
+        let engine = cfg.resolved_engine(self.config.default_engine);
+        let headless = cfg.headless.unwrap_or(self.config.playwright_cli.headless);
+        let data_dir = match &cfg.user_data_dir {
+            Some(dir) => std::path::PathBuf::from(dir),
+            None => super::playwright_launch::browser_state_dir(engine.data_subdir())?
+                .join(super::playwright_launch::sanitize_session_key(profile)),
+        };
+        Ok((
+            engine,
+            LaunchRequest {
+                profile: profile.to_string(),
+                session_key: profile.to_string(),
+                data_dir,
+                headless,
+                proxy: cfg.proxy.clone(),
+                browser: cfg.browser,
+                // The LIVE guard, not the boot snapshot: `apply_policy` swaps
+                // it at runtime and this argv is written once, so reading the
+                // stale copy would hand obscura a permission the running policy
+                // has already withdrawn.
+                allow_private_network: self.ssrf_guard.load().allows_private_network(),
+                stealth: matches!(
+                    self.config.obscura.variant,
+                    super::profile::ObscuraVariant::Stealth
+                ),
+                extra_args: cfg.extra_args.clone(),
+            },
+        ))
+    }
+
+    /// The live engine for `profile`, on the engine its config resolves to.
+    ///
+    /// A thin delegate: the derivation is [`Self::launch_request_for`]'s and
+    /// the caching is the registry's. Kept as a method because the tool layer
+    /// and `switch_engine` (Task 19) address a profile, not a registry.
+    pub async fn engine_handle(
+        &self,
+        profile: &str,
+        gate: EngineLaunch,
+    ) -> Result<Arc<EngineHandle>, BrowserError> {
+        let (engine, req) = self.launch_request_for(profile)?;
+        self.engines.handle(engine, &req, gate).await
+    }
+
+    /// [`Self::engine_handle`] with the engine named explicitly — the face
+    /// `browser_open{engine}` and `switch_engine` use. A profile already
+    /// running a different engine is refused, not swapped (`EngineMismatch`).
+    pub async fn engine_handle_for(
+        &self,
+        profile: &str,
+        engine: Engine,
+        gate: EngineLaunch,
+    ) -> Result<Arc<EngineHandle>, BrowserError> {
+        let (_, req) = self.launch_request_for(profile)?;
+        self.engines.handle(engine, &req, gate).await
+    }
+
+    /// Test-only: build a manager around a registry the test owns.
+    ///
+    /// The ONE seam that lets a unit test put a browser into this manager
+    /// without a real binary — same discipline as [`Self::insert_test_child`]:
+    /// `#[cfg(test)]`, not `pub`, and there is exactly one. Construction-time
+    /// injection rather than a mutable process map, so nothing can swap a
+    /// launcher under a running engine.
+    #[cfg(test)]
+    pub(crate) fn with_engine_registry(
+        config: BrowserSystemConfig,
+        engines: Arc<EngineRegistry>,
+    ) -> Self {
+        let mut manager = Self::new(config);
+        manager.engines = engines;
+        manager
+    }
+
     /// Sweep idle profiles past their `idle_timeout_secs`, both drivers.
     /// Returns the number of profiles reaped (best-effort; safe to call any time).
     ///
@@ -530,10 +674,13 @@ impl ProfileManager {
         match self.get_driver(name) {
             Some(BrowserDriver::ExistingSession) => self.chrome_mcp_driver.has_session(name),
             Some(BrowserDriver::Managed) => self.playwright_cli_driver.chromium_alive(name),
-            // No CDP backend exists in this build, so nothing can have opened
-            // a session under it: a determinate `false`, not an unknown.
-            // Task 14 replaces it with the engine map's own answer.
-            Some(BrowserDriver::Cdp) => false,
+            // The engine registry's own answer, on the same terms as the
+            // `Managed` arm above: it asks the browser, not the bookkeeping.
+            // A hardcoded `false` was correct only while nothing could put an
+            // engine in the map; `engine_handle` can, so the constant would
+            // have become a lie the moment the first CDP profile launched
+            // (判据 §1 — this commit is what falsifies it).
+            Some(BrowserDriver::Cdp) => self.engines.is_live(name),
             None => false,
         }
     }
@@ -700,8 +847,32 @@ impl ProfileManager {
     /// reaps — microseconds, not a negotiation (see `ChromiumChild::shutdown`,
     /// which skips the wait entirely when the kill did not succeed, precisely
     /// so a child we could not signal cannot park this loop).
-    pub fn shutdown_browsers(&self) -> usize {
-        self.playwright_cli_driver.shutdown_all_chromium()
+    ///
+    /// Covers BOTH families of browser this manager owns: the playwright-owned
+    /// Chromiums and the CDP engines in [`Self::engines`]. One function, one
+    /// count — a second global for the engines would make each number a
+    /// half-truth about "did we stop the browsers".
+    pub async fn shutdown_browsers(&self) -> usize {
+        // The playwright-owned Chromiums first, unchanged and synchronous:
+        // this half has always had to fit inside SHUTDOWN_FAILSAFE and still
+        // does, and it costs the engine half nothing to run first.
+        let mut stopped = self.playwright_cli_driver.shutdown_all_chromium();
+        // Hard-bounded. One caller is the wedged-shutdown watchdog, whose
+        // `std::process::exit(0)` waits for nobody; a kill plus a local socket
+        // close is microseconds, so a second is generous and a timeout here
+        // means something is wrong rather than slow. Timing out LEAVES those
+        // engines to the next boot sweep — say so, do not swallow it.
+        match tokio::time::timeout(engine::ENGINE_SHUTDOWN_BUDGET, self.engines.shutdown_all())
+            .await
+        {
+            Ok(n) => stopped += n,
+            Err(_) => tracing::warn!(
+                budget_secs = engine::ENGINE_SHUTDOWN_BUDGET.as_secs(),
+                "the engine shutdown did not finish inside its budget; one or \
+                 more engines are left for the next boot sweep"
+            ),
+        }
+        stopped
     }
 
     /// Validate a URL against the SSRF policy.
@@ -794,7 +965,262 @@ fn is_idle(last_activity: std::time::Instant, now: std::time::Instant, timeout_s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::testkit::FakeEngineProcess;
     use crate::utils::paths::AlephHomeEnvGuard;
+    use aleph_cdp::testkit::{FakeCdpServer, Responder};
+
+    fn engine_peer(msg: &serde_json::Value) -> Responder {
+        match msg.get("method").and_then(serde_json::Value::as_str) {
+            Some("Browser.getVersion") => Responder::Reply(serde_json::json!({
+                "protocolVersion": "1.3", "product": "Fake/1.0",
+                "revision": "@fake", "userAgent": "fake", "jsVersion": "13"
+            })),
+            Some("Target.createTarget") => Responder::Reply(serde_json::json!({"targetId": "T1"})),
+            Some("Target.attachToTarget") => {
+                Responder::Reply(serde_json::json!({"sessionId": "S1"}))
+            }
+            Some("Page.navigate") => {
+                Responder::Reply(serde_json::json!({"frameId": "F1", "loaderId": "L1"}))
+            }
+            Some("Runtime.evaluate") => Responder::Reply(serde_json::json!({
+                "result": {"type": "number", "value": 1}
+            })),
+            Some("Page.enable" | "Runtime.enable" | "Network.enable") => {
+                Responder::Reply(serde_json::json!({}))
+            }
+            Some(other) => Responder::Error {
+                code: -32601,
+                message: format!("fake peer does not implement {other}"),
+            },
+            None => Responder::Error {
+                code: -32600,
+                message: "not a request".into(),
+            },
+        }
+    }
+
+    /// A manager whose `default` profile is `driver = cdp, engine = chromium`
+    /// and whose registry's only launcher is a fake.
+    fn manager_with_fake_engine(
+        server: &FakeCdpServer,
+        sidecar_dir: &std::path::Path,
+    ) -> (ProfileManager, Arc<FakeEngineProcess>) {
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                engine: Some(Engine::Chromium),
+                ..Default::default()
+            },
+        );
+        let proc = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            server,
+            sidecar_dir,
+        ));
+        let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
+        processes.insert(Engine::Chromium, proc.clone());
+        let registry = Arc::new(EngineRegistry::new(
+            processes,
+            Duration::from_millis(500),
+            Duration::from_secs(2),
+        ));
+        (ProfileManager::with_engine_registry(config, registry), proc)
+    }
+
+    /// The sync half: everything a launch needs, derived from the profile and
+    /// the LIVE policy, without touching the network or the disk.
+    ///
+    /// The private-network bit is read from the running guard, not the boot
+    /// snapshot: `apply_policy` swaps it at runtime and the argv is written
+    /// once, so the stale copy would hand obscura a permission the running
+    /// policy has already withdrawn.
+    #[test]
+    fn launch_request_for_derives_the_request_from_the_profile_and_the_live_policy() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "work".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                engine: Some(Engine::Chromium),
+                headless: Some(false),
+                proxy: Some("socks5://127.0.0.1:1080".into()),
+                extra_args: vec!["--disable-gpu".into()],
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+
+        let (engine, req) = manager
+            .launch_request_for("work")
+            .expect("a configured profile has a launch");
+        assert_eq!(engine, Engine::Chromium);
+        assert_eq!(req.profile, "work");
+        assert_eq!(req.session_key, "work");
+        assert!(!req.headless, "the profile's explicit headless=false");
+        assert_eq!(req.proxy.as_deref(), Some("socks5://127.0.0.1:1080"));
+        assert_eq!(req.extra_args, vec!["--disable-gpu".to_string()]);
+        assert!(
+            req.data_dir.ends_with("work"),
+            "the data dir is keyed by the sanitized profile name: {}",
+            req.data_dir.display()
+        );
+        assert!(
+            req.data_dir.starts_with(home.path()),
+            "the data dir must sit under THIS test's ALEPH_HOME, not the \
+             developer's: {}",
+            req.data_dir.display()
+        );
+        assert!(
+            !req.allow_private_network,
+            "the default policy blocks private ranges, so the engine must not \
+             be handed permission for them"
+        );
+
+        // Hot-apply an open policy: the NEXT request must carry the new answer.
+        manager.apply_policy(SsrfConfig {
+            block_private: false,
+            ..SsrfConfig::default()
+        });
+        let (_, req) = manager.launch_request_for("work").expect("still resolves");
+        assert!(
+            req.allow_private_network,
+            "the request must read the LIVE guard, not the boot snapshot"
+        );
+
+        assert!(matches!(
+            manager.launch_request_for("no-such-profile"),
+            Err(BrowserError::ProfileNotFound(_))
+        ));
+    }
+
+    /// `engine_handle` is a delegate: what it returns is what the registry
+    /// stored, under the profile's own key.
+    #[tokio::test]
+    async fn engine_handle_delegates_to_the_registry() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let server = FakeCdpServer::start(engine_peer).await;
+        let (manager, proc) = manager_with_fake_engine(&server, home.path());
+
+        let handle = manager
+            .engine_handle("default", EngineLaunch::Allow)
+            .await
+            .expect("launches through the registry");
+        let from_registry = manager
+            .engines()
+            .get("default")
+            .await
+            .expect("the registry holds it");
+        assert!(Arc::ptr_eq(&handle, &from_registry));
+        assert_eq!(proc.launches().len(), 1);
+
+        // The explicit-engine face resolves to the same handle rather than a
+        // second browser.
+        let same = manager
+            .engine_handle_for("default", Engine::Chromium, EngineLaunch::Allow)
+            .await
+            .expect("same engine, same handle");
+        assert!(Arc::ptr_eq(&handle, &same));
+        assert_eq!(proc.launches().len(), 1);
+
+        // The Cdp arm of `session_active` asks the registry, not a constant:
+        // a live engine reads as a live session, and an unknown profile does
+        // not.
+        assert!(
+            manager.session_active("default"),
+            "a launched CDP engine must read as an active session"
+        );
+        drop(handle);
+        drop(from_registry);
+        drop(same);
+
+        manager.shutdown_browsers().await;
+        assert!(
+            !manager.session_active("default"),
+            "a stopped engine must stop reading as an active session"
+        );
+        server.shutdown().await;
+    }
+
+    /// `BrowserSystemConfig` derives no `Default` by hand for nothing: a `u64`
+    /// timeout field defaults to **0** unless `Default` is hand-written, and a
+    /// zero command timeout makes every CDP call fail instantly, everywhere,
+    /// silently — every test that builds a manager from `::default()` would be
+    /// exercising that. Pin the product default at the face the engine path
+    /// actually reads.
+    #[test]
+    fn cdp_command_timeout_is_the_product_default_and_below_obscuras_guillotine() {
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let t = manager.cdp_command_timeout();
+        assert_eq!(t, Duration::from_secs(30), "spec §6.3 default");
+        assert!(
+            t < Duration::from_secs(super::super::profile::CDP_COMMAND_TIMEOUT_CEILING_SECS),
+            "must stay under obscura's own guillotine, or the page dies before \
+             our wait does"
+        );
+    }
+
+    /// `shutdown_browsers` must reclaim the CDP engines too, by effect.
+    #[tokio::test]
+    async fn shutdown_browsers_stops_engines_and_removes_their_sidecars() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+        let server = FakeCdpServer::start(engine_peer).await;
+        let (manager, proc) = manager_with_fake_engine(&server, home.path());
+
+        let handle = manager
+            .engine_handle("default", EngineLaunch::Allow)
+            .await
+            .expect("launch");
+        let sidecar = handle.launched.sidecar_path.clone();
+        let pid = handle.launched.pid;
+        assert!(sidecar.exists(), "precondition: the launch wrote a record");
+        drop(handle);
+
+        assert_eq!(
+            manager.shutdown_browsers().await,
+            1,
+            "one engine was stopped and the count must say so"
+        );
+        assert_eq!(proc.kills(), vec![pid], "the engine's pid was never killed");
+        assert!(!sidecar.exists(), "the sidecar outlived the engine");
+        assert_eq!(
+            manager.shutdown_browsers().await,
+            0,
+            "a second stop must find nothing, not re-report the first"
+        );
+        server.shutdown().await;
+    }
+
+    /// The single-derivation pin for the shutdown story: both daemon exit
+    /// paths already reach `shutdown_browsers_global` (pinned in
+    /// `start/helpers.rs`), so covering the engines is a property of THIS
+    /// function, not of the two call sites. A source pin because the
+    /// playwright half needs a real Chromium to observe and the two halves
+    /// must be asserted together.
+    #[test]
+    fn shutdown_browsers_reaches_both_browser_families() {
+        let src = include_str!("manager.rs").replace('\r', "");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] bound matched nothing — this test would then be \
+             reading its own source"
+        );
+        assert!(
+            production.contains("shutdown_all_chromium("),
+            "shutdown_browsers must still stop the playwright-owned browsers"
+        );
+        assert!(
+            production.contains("engines.shutdown_all("),
+            "shutdown_browsers must stop the CDP engines too — otherwise every \
+             restart leaves one running and the count it returns is a half-truth"
+        );
+    }
 
     #[test]
     fn test_manager_registers_profiles_from_config() {
@@ -1191,7 +1617,7 @@ mod tests {
              be handed an endpoint even when the driver has one under its key"
         );
         assert_eq!(
-            manager.shutdown_browsers(),
+            manager.shutdown_browsers().await,
             1,
             "precondition: the driver really was holding a child to answer with"
         );
@@ -1254,7 +1680,7 @@ mod tests {
         let manager = ProfileManager::new(BrowserSystemConfig::default());
 
         // Nothing launched → nothing to stop, and it must not pretend otherwise.
-        assert_eq!(manager.shutdown_browsers(), 0);
+        assert_eq!(manager.shutdown_browsers().await, 0);
 
         // A stand-in browser: long-lived, harmless, and observable by pid.
         let child = std::process::Command::new("sleep")
@@ -1268,13 +1694,13 @@ mod tests {
             "precondition: the stand-in is running"
         );
 
-        assert_eq!(manager.shutdown_browsers(), 1);
+        assert_eq!(manager.shutdown_browsers().await, 1);
         assert!(
             !crate::utils::process_alive::is_process_alive(pid as i32),
             "the stand-in browser is still running after shutdown_browsers"
         );
         // Idempotent: a second stop finds nothing and says so.
-        assert_eq!(manager.shutdown_browsers(), 0);
+        assert_eq!(manager.shutdown_browsers().await, 0);
     }
 
     /// The central behavioural claim of the launch-chain flip, asserted in the
