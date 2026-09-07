@@ -169,6 +169,9 @@ serde = { version = "1.0", features = ["derive"] }
 # so without this a misplaced section is indistinguishable from a working one.
 # Serde-only: its two deps (serde, serde_core) are already in the tree.
 serde_ignored = "0.1"
+# Line-level diffs for the FileChange presentation side-channel. Same 2.x the
+# Panel already pins — `cargo tree -p alephcore -i similar` must show one copy.
+similar = { version = "2", default-features = false, features = ["text"] }
 thiserror = "2.0"
 aleph-protocol = { path = "shared/protocol" }
 # Screen-text agent-state detection (ported from herdr, Apache-2.0). Consumed
@@ -360,6 +363,14 @@ tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
 aleph-protocol = { path = "shared/protocol" }
+# Test-only: `src/tools/presentation_census.rs` calls the REAL `display_name`
+# / `DISPLAY_NAMES` instead of scraping their source. `default-features =
+# false` is required — this crate's `default` is `["wasm"]` and would pull
+# wasm-bindgen / web-sys into alephcore's test build. With defaults off it
+# adds no new crates to the graph (same spelling `interfaces/tui` uses), and
+# there is no cycle: shared-ui-logic depends on aleph-protocol, never on
+# alephcore.
+shared-ui-logic = { path = "shared/ui_logic", default-features = false }
 proptest = "1.4"
 rand = "0.10"
 http-body-util = "0.1"

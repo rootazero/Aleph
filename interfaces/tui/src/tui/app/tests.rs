@@ -831,6 +831,7 @@ fn handle_agent_trace_tool_lifecycle_takes_precedence() {
                 tool_name: "bash".into(),
                 input: serde_json::json!({"command": "ls"}),
                 duration_ms: 120,
+                presentation: None,
             },
             result: aleph_protocol::AgentTraceToolResult::Success {
                 output: serde_json::json!({"ok": true}),

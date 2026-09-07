@@ -10,6 +10,10 @@ pub(in crate::commands::start) fn register_session_handlers(
     session_store: &Arc<dyn alephcore::gateway::session_store::SessionStore>,
     memory_db: &MemoryBackend,
     run_manager: Option<Arc<alephcore::gateway::handlers::agent::AgentRunManager>>,
+    // `context.breakdown` reads the operator's per-provider `context_window`
+    // override through it. Optional because the whole config handle is: the
+    // model catalogue answers without it.
+    app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     daemon: bool,
 ) {
     register_handler!(
@@ -56,6 +60,26 @@ pub(in crate::commands::start) fn register_session_handlers(
         session_handlers::handle_usage_db,
         session_store
     );
+    // Not `register_handler!`: the second dependency is an
+    // `Option<Arc<RwLock<Config>>>`, and the macro's 2-arg arm `Arc::clone`s
+    // both. Overriding the phase-1 placeholder registered in
+    // `HandlerRegistry::new`.
+    {
+        let store = Arc::clone(session_store);
+        let cfg = app_config.clone();
+        server
+            .handlers_mut()
+            .register("context.breakdown", move |req| {
+                let store = Arc::clone(&store);
+                let cfg = cfg.clone();
+                async move {
+                    alephcore::gateway::handlers::context_breakdown::handle_context_breakdown(
+                        req, store, cfg,
+                    )
+                    .await
+                }
+            });
+    }
     // Manual compaction still edits the session *event log* (what the prompt
     // is rebuilt from) through process-wide handles, not the `messages` read
     // projection — but the RPC now also needs the store for the P1
@@ -143,6 +167,7 @@ pub(in crate::commands::start) fn register_session_handlers(
         println!("  - sessions.preview   : Preview session with recent messages");
         println!("  - session.create     : Create a new session");
         println!("  - session.usage      : Get session token/message stats");
+        println!("  - context.breakdown  : Measured layout of the last prompt sent");
         println!("  - session.compact    : Compact session history");
         println!("  - session.truncate   : Truncate session history to first N messages");
         println!("  - sessions.compaction.list    : List compaction checkpoints");

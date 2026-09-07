@@ -218,10 +218,9 @@ mod tests {
             "the blob must be indexed, not merely written: {footer}"
         );
 
-        let path = footer
-            .split("[Full output persisted: ")
-            .nth(1)
-            .and_then(|rest| rest.split(" (").next())
+        // Through the production parse — see the twin in `exec.rs` for why a
+        // local re-split is the wrong thing here.
+        let path = crate::tools::result_store::extract_persisted_path(&footer)
             .expect("marker names a path");
         let blob = std::fs::read_to_string(path).expect("blob exists on disk");
         assert!(

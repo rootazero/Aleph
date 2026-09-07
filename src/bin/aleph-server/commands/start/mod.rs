@@ -484,6 +484,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
     }
 
+    // Install the per-session prompt-size registry so the harness bridge can
+    // publish each turn's measured prompt layout and `context.breakdown` can
+    // serve it. Unconditional and infallible — there is nothing to decline
+    // over, and a process that dies before this line leaves the slot's third
+    // state ("boot never got here") saying exactly that.
+    alephcore::thinker::prompt_size_registry::set_global_prompt_size_registry(Arc::new(
+        alephcore::thinker::prompt_size_registry::PromptSizeRegistry::default(),
+    ));
+
     // Security store + vault construction (early — vault needed for API key
     // resolution).
     let auth_bundle = initialize_vault(final_port, server.node_registry.clone());
@@ -1999,6 +2008,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &session_store,
         &memory_db,
         Some(agent_result.run_manager.clone()),
+        Some(app_config.clone()),
         args.daemon,
     );
     // Artifact metadata (`artifacts.list`, `session.export_html`). The byte

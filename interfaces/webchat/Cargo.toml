@@ -121,7 +121,7 @@ similar = { version = "2", default-features = false, features = ["text"] }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 # Internal logic
-shared-ui-logic = { path = "../../shared/ui_logic", features = ["leptos", "wasm"] }
+shared-ui-logic = { path = "../../shared/ui_logic", features = ["wasm"] }
 aleph-protocol = { path = "../../shared/protocol" }
 
 # Terminal grid rendering — must resolve to the same copy the server's PTY

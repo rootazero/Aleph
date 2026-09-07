@@ -138,6 +138,7 @@ pub(crate) async fn emit_flow_event(
             result,
             error,
             duration_ms,
+            presentation,
         } => {
             {
                 // Latch the terminal execution list. This drain is in-process
@@ -172,7 +173,19 @@ pub(crate) async fn emit_flow_event(
                         other => other.to_string(),
                     })
                     .unwrap_or_default();
+                // The presentation rides beside `output`, never inside it.
+                // Folding it back in would put the diff on the wire twice and
+                // destroy the plain `output` a client renders — a display and
+                // wire-shape cost. NOT an R9 one: this leg's only sinks are
+                // `emitter.emit` and the in-process `DrainState`, and the
+                // model's context is built from `session_events`
+                // (`context::compact::session_split` reads `output.value`),
+                // so nothing written here can reach the model's bytes. The R9
+                // property lives UPSTREAM, at the hoist that took the
+                // presentation out of the tool's JSON before the model-facing
+                // text was built.
                 crate::gateway::event_emitter::ToolResult::success(output)
+                    .with_presentation(presentation)
             };
             let seq = emitter.next_seq();
             emitter
@@ -450,10 +463,12 @@ const SCRATCHPAD_TOOL: &str = "scratchpad";
 
 /// Read the `snapshot` the `scratchpad` tool attaches to its output.
 ///
-/// One known shape — the raw `ScratchpadOutput` JSON that `act.rs` hands to
-/// `on_tool_call_done` — deliberately enumerated rather than searched for at
-/// any depth, so a future tool that happens to have a `snapshot` field cannot
-/// silently hijack the plan slot.
+/// One known shape — the raw `ScratchpadOutput` JSON, which `act.rs` hands to
+/// `on_tool_call_done` inside the whole `ToolOutput` and `BroadcastCallback`
+/// then puts on `FlowStreamEvent::ToolCallDone.result` as `.value` —
+/// deliberately enumerated rather than searched for at any depth, so a future
+/// tool that happens to have a `snapshot` field cannot silently hijack the
+/// plan slot.
 fn extract_plan_snapshot(result: &serde_json::Value) -> Option<aleph_protocol::plan::PlanSnapshot> {
     // The shared reader, because the harness hands this drain the tool's
     // output as a JSON-encoded STRING (`Value::String`), not an object: a
@@ -868,6 +883,7 @@ mod tests {
                 result: Some(result),
                 error: None,
                 duration_ms: 3,
+                presentation: None,
             },
             &emitter,
             "run-plan",
@@ -942,6 +958,7 @@ mod tests {
                 result: None,
                 error: Some("permission denied".to_string()),
                 duration_ms: 1,
+                presentation: None,
             },
             &emitter,
             "run-err",
@@ -979,6 +996,7 @@ mod tests {
                 })),
                 error: None,
                 duration_ms: 1,
+                presentation: None,
             },
             &emitter,
             "run-x",
@@ -1013,6 +1031,7 @@ mod tests {
                 result: Some(serde_json::json!("results")),
                 error: None,
                 duration_ms: 137,
+                presentation: None,
             },
             &emitter,
             "run-2",
@@ -1029,6 +1048,130 @@ mod tests {
         // (previously hardcoded to 0 here, only available at RunComplete).
         match &events[1] {
             StreamEvent::ToolEnd { duration_ms, .. } => assert_eq!(*duration_ms, 137),
+            other => panic!("expected ToolEnd, got {other:?}"),
+        }
+    }
+
+    /// The UI side-channel reaches the live frame BESIDE the text, not inside
+    /// it. Two halves, and the second is the one that would rot silently: a
+    /// drain that folded the presentation back into `output` would still make
+    /// `presentation.is_some()` assertions pass on the wire shape, while
+    /// putting the diff on the wire twice and corrupting the plain `output`
+    /// the USER's transcript view renders. (Not the model's — the model reads
+    /// `session_events`, never this leg.)
+    #[tokio::test]
+    async fn tool_end_carries_the_presentation_beside_the_plain_text_output() {
+        use aleph_protocol::{FileChange, FileChangeKind, Hunk, HunkLine, LineTag, Presentation};
+
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        emit_flow_event(
+            FlowStreamEvent::ToolCallDone {
+                id: "edit-1".to_string(),
+                result: Some(serde_json::Value::String("Edited src/a.rs".to_string())),
+                error: None,
+                duration_ms: 12,
+                presentation: Some(Presentation::FileChanges {
+                    changes: vec![FileChange {
+                        path: "src/a.rs".to_string(),
+                        kind: FileChangeKind::Modified,
+                        hunks: vec![Hunk {
+                            old_start: 10,
+                            new_start: 10,
+                            lines: vec![HunkLine {
+                                tag: LineTag::Add,
+                                text: "let x = 1;".to_string(),
+                            }],
+                        }],
+                        added: 1,
+                        removed: 0,
+                        unavailable: None,
+                    }],
+                }),
+            },
+            &emitter,
+            "run-pres",
+            &state,
+        )
+        .await
+        .expect("done ok");
+
+        let events = inner.events().await;
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StreamEvent::ToolEnd { result, .. } => {
+                assert_eq!(
+                    result.output.as_deref(),
+                    Some("Edited src/a.rs"),
+                    "the model-facing text passes through verbatim — the \
+                     presentation must not be re-encoded into it"
+                );
+                let Some(Presentation::FileChanges { changes }) = result.presentation.as_ref()
+                else {
+                    panic!("presentation did not reach the live frame: {result:?}");
+                };
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].path, "src/a.rs");
+                assert_eq!(changes[0].hunks.len(), 1, "hunks survive the drain");
+            }
+            other => panic!("expected ToolEnd, got {other:?}"),
+        }
+    }
+
+    /// The error arm DROPS a presentation rather than carrying it — and the
+    /// input below supplies one, deliberately, because otherwise this test
+    /// would be a restatement of its own fixture. Ask when it goes red: with
+    /// `presentation: None` in, the answer is "only if someone teaches the
+    /// error arm to invent a diff", and it stays green under both a "drop" and
+    /// a "carry" implementation. With one supplied, it goes red the moment the
+    /// arm starts forwarding it.
+    ///
+    /// This is a recorded decision, not a settled truth: the protocol already
+    /// defines `Unavailable::ToolFailed`, so a presentation on a FAILED
+    /// file-mutating call is an anticipated producer, and today's arm discards
+    /// it unconditionally. If that producer arrives, this test is the thing
+    /// that must change with it.
+    #[tokio::test]
+    async fn a_failed_tool_call_drops_the_presentation_it_was_given() {
+        use aleph_protocol::{FileChange, FileChangeKind, Presentation, Unavailable};
+
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        emit_flow_event(
+            FlowStreamEvent::ToolCallDone {
+                id: "edit-2".to_string(),
+                result: None,
+                error: Some("permission denied".to_string()),
+                duration_ms: 4,
+                presentation: Some(Presentation::FileChanges {
+                    changes: vec![FileChange::unavailable(
+                        "src/a.rs",
+                        FileChangeKind::Modified,
+                        Unavailable::ToolFailed,
+                    )],
+                }),
+            },
+            &emitter,
+            "run-pres-err",
+            &state,
+        )
+        .await
+        .expect("done ok");
+
+        let events = inner.events().await;
+        match &events[0] {
+            StreamEvent::ToolEnd { result, .. } => {
+                assert!(!result.success);
+                assert!(
+                    result.presentation.is_none(),
+                    "the error arm builds `ToolResult::error` and never calls \
+                     `with_presentation`; a presentation here would be a change \
+                     of behaviour, not a passing detail: {:?}",
+                    result.presentation
+                );
+            }
             other => panic!("expected ToolEnd, got {other:?}"),
         }
     }

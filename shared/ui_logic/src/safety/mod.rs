@@ -7,6 +7,5 @@
 pub mod prompt_injection;
 
 pub use prompt_injection::{
-    check_prompt_injection, prompt_guard_message, PromptInjectionCheck, PromptInjectionReason,
-    PromptInjectionVerdict,
+    check_prompt_injection, prompt_guard_message, PromptInjectionCheck, PromptInjectionVerdict,
 };

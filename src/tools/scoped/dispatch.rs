@@ -1467,6 +1467,13 @@ impl ScopedToolService {
             out.metadata.images = images;
         }
 
+        // Same discipline as the image hoist: structured UI data leaves the
+        // value before flattening/truncation so the model never pays for it
+        // and the UI never loses it.
+        if let Some(p) = crate::tools::result_processing::hoist_presentation(&mut out.value) {
+            out.metadata.presentation = Some(p);
+        }
+
         // Settle any `_media` the tool declared into the durable artifact store
         // and the run's channel-delivery buffer while the value is still
         // structured — the lines below flatten it to text and truncate it to
@@ -1859,5 +1866,54 @@ mod tests {
     fn empty_contexts_pass_value_through_untouched() {
         let v = Value::String("unchanged".into());
         assert_eq!(wrap_value_with_hook_contexts(v.clone(), &[]), v);
+    }
+
+    // `apply_layer_two` is private to this module, so the sentinel test that
+    // must observe it end-to-end lives here rather than in `super::tests`.
+    #[tokio::test]
+    async fn the_model_text_never_contains_the_presentation_the_metadata_carries() {
+        // Sentinel inside a hunk: if it is searchable in `out.value`, the
+        // side-channel leaked into the prompt (R9 / spec §4.3 guard #2).
+        let sentinel = "PRESENTATION_SENTINEL_9f3a";
+        let change = aleph_protocol::FileChange {
+            path: "a.rs".into(),
+            kind: aleph_protocol::FileChangeKind::Modified,
+            hunks: vec![aleph_protocol::Hunk {
+                old_start: 1,
+                new_start: 1,
+                lines: vec![aleph_protocol::HunkLine {
+                    tag: aleph_protocol::LineTag::Add,
+                    text: sentinel.into(),
+                }],
+            }],
+            added: 1,
+            removed: 0,
+            unavailable: None,
+        };
+        let value = serde_json::json!({"success": true, "message": "ok",
+            "_presentation": serde_json::to_value(aleph_protocol::Presentation::FileChanges { changes: vec![change] }).unwrap()});
+        let svc = ScopedToolService::new(
+            Arc::new(crate::tools::runtime::LoopToolRegistry::new()),
+            std::collections::BTreeSet::new(),
+        );
+        let out = svc
+            .apply_layer_two(
+                "file_edit",
+                ToolOutput {
+                    value,
+                    metadata: Default::default(),
+                },
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .await;
+        let text = out.value.as_str().expect("layer two flattens to text");
+        assert!(
+            !text.contains(sentinel),
+            "presentation leaked into model text: {text}"
+        );
+        assert!(!text.contains("_presentation"));
+        assert!(
+            matches!(out.metadata.presentation, Some(aleph_protocol::Presentation::FileChanges { ref changes }) if changes.len() == 1)
+        );
     }
 }
