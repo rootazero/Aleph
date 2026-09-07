@@ -746,6 +746,18 @@ mod tests {
                     ..Default::default()
                 },
             );
+            // A field the update would unconditionally overwrite on any
+            // completed run, set to a value `base_params()` disagrees with.
+            // This is what lets the second assertion below actually
+            // discriminate a true refusal from a fall-through (M3): the
+            // driver alone can't — the R70-regression fallback
+            // (`Err(_) => current_default`) reads the SAME value this
+            // fixture already persisted for "default", so the driver ends up
+            // `Cdp` either way. `block_private` has no such coincidence:
+            // `base_params()` sends `true`, so it only stays `false` if
+            // execution returned before reaching the unconditional
+            // `browser.policy.block_private = update.block_private;` line.
+            cfg.general.browser.policy.block_private = false;
         }
 
         let mut params = base_params();
@@ -758,12 +770,26 @@ mod tests {
              operator typed is the report-success no-op shape (判据 §11)"
         );
 
-        // And nothing landed: the profile's driver is still cdp, not silently
-        // kept-as-was by an Err arm that fell through to the old value.
+        let persisted = config.read().await;
+        // The driver ends up unchanged under EITHER a true refusal or a
+        // fall-through that happens to write back the same value — this line
+        // alone cannot tell them apart, only that no OTHER driver landed.
         assert_eq!(
-            config.read().await.general.browser.profiles["default"].driver,
+            persisted.general.browser.profiles["default"].driver,
             BrowserDriver::Cdp,
-            "a refused update must not persist any driver at all"
+            "a refused update must not silently coerce the driver to some \
+             other value"
+        );
+        // This is the assertion that actually discriminates: it only stays
+        // false if `handle_update` returned before the unconditional
+        // `block_private` write, i.e. before it reached save_incremental at
+        // all — not merely before the driver field happened to change.
+        assert!(
+            !persisted.general.browser.policy.block_private,
+            "a refusal must stop BEFORE any field is written and the config \
+             is saved, not just before the driver changes — block_private \
+             started false and base_params() asks for true; a fall-through \
+             that completed the save would have flipped it to true"
         );
     }
 }

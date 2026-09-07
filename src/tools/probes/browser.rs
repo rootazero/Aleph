@@ -224,10 +224,30 @@ mod tests {
             },
         );
         let manager = ProfileManager::new(config);
+        // `Arc<dyn BrowserBackend>` isn't `Debug`, so `.expect_err(..)` can't
+        // be used here — match instead.
+        let err = match manager.get_backend("cdp-profile") {
+            Err(e) => e,
+            Ok(_) => panic!(
+                "get_backend must still refuse Cdp — if this now succeeds, \
+                 Task 14 has landed a real backend and this module's doc \
+                 needs updating"
+            ),
+        };
+        // Keyed on the MESSAGE, not just `is_err()` (M2): `get_backend` is
+        // sync while R43 makes engine resolution/launch async, so Task 14
+        // cannot resolve inside it and must return a constructed backend
+        // like its two infallible siblings — but that is an inference about
+        // code nobody has written yet. If Task 14 instead ships something
+        // like `self.engines.get(profile).ok_or_else(...)?` (Err because no
+        // engine process is launched for this profile, not because Cdp has
+        // no backend), an `is_err()`-only check would stay green while this
+        // doc's premise had already gone false. Asserting the message reds
+        // under either shape.
         assert!(
-            manager.get_backend("cdp-profile").is_err(),
-            "get_backend must still refuse Cdp — if this now succeeds, Task 14 \
-             has landed a real backend and this module's doc needs updating"
+            err.to_string().contains("has no backend for yet"),
+            "must still be refused for the reason this module's doc names \
+             (no backend exists for Cdp), not merely some other Err: {err}"
         );
     }
 

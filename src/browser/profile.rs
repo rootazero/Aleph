@@ -374,11 +374,12 @@ pub struct ObscuraRuntimeConfig {
     /// remedy an operator can reach.
     ///
     /// It is also what keeps `[general.browser.obscura]` safe to name in an
-    /// operator-facing message: `config::dead_keys`'s census
-    /// (`src/config/dead_keys.rs:525`) takes every bracketed browser path it
-    /// finds in four files and deserialises `binary_path` **and**
-    /// `download_host` under it, asserting neither comes back dead. A section
-    /// with only `binary_path` fails that test the moment `error.rs` names it.
+    /// operator-facing message: `config::dead_keys`'s census (the
+    /// `every_operator_facing_browser_config_path_is_actually_read` test)
+    /// takes every bracketed browser path it finds in four files and
+    /// deserialises `binary_path` **and** `download_host` under it,
+    /// asserting neither comes back dead. A section with only `binary_path`
+    /// fails that test the moment `error.rs` names it.
     #[serde(default)]
     pub download_host: Option<String>,
 }
@@ -1054,13 +1055,12 @@ engine = "obscura"
     ///   from the field turns it from optional to mandatory for TOML
     ///   deserialization. It compiles cleanly — `cargo test --lib --no-run`
     ///   after that deletion produces zero errors — so it is **not** a
-    ///   compile failure. It IS a genuine runtime red for path 2 here, at the
-    ///   `assert_eq!(parsed.cdp_command_timeout_secs, 30)` line below
+    ///   compile failure. It IS a genuine runtime red for path 2 here
     ///   (`toml::from_str` panics with `missing field
-    ///   cdp_command_timeout_secs` before that line is even reached, so the
-    ///   panic is inside the `.expect("parse")` a few lines earlier — either
-    ///   way, path 2 never gets to compare against 30). Running the full `-p
-    ///   alephcore --lib` suite with the attribute deleted: **20 failures
+    ///   cdp_command_timeout_secs` inside the `.expect("parse")` a few lines
+    ///   below — path 2 never gets as far as comparing against 30). Running
+    ///   the full `-p alephcore --lib` suite with the attribute deleted: **20
+    ///   failures
     ///   observed**, of which one —
     ///   `utils::host::tests::no_other_module_hand_rolls_the_hostname_env_read`
     ///   — is a pre-existing, always-failing test with zero relation to this
