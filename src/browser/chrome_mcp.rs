@@ -795,8 +795,14 @@ mod tests {
         assert!(sessions.is_empty());
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72): `chrome_launch_args` unconditionally
+    /// calls `default_user_data_dir_for`, which resolves `get_config_dir()`
+    /// before it even looks at `cfg.user_data_dir` — so every call here races
+    /// every other test in the binary for the ambient env var.
     #[test]
     fn chrome_launch_args_never_pass_a_host_resolver_pin() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         // The DNS pin was removed (see network_policy's note): a control that
         // cannot fire on the reachable path is worse than none, because three
         // comments claimed it worked. This asserts it stays gone.
@@ -808,8 +814,14 @@ mod tests {
         assert!(args.contains(&"--remote-debugging-port=0".to_string()));
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72) — see the sibling test above: even
+    /// though this profile supplies an explicit `user_data_dir`,
+    /// `chrome_launch_args` still resolves `get_config_dir()` unconditionally
+    /// before consulting it.
     #[test]
     fn chrome_launch_args_wires_profile_proxy_and_user_data_dir() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let cfg = ProfileConfig {
             proxy: Some("socks5://127.0.0.1:1080".into()),
             user_data_dir: Some("/tmp/aleph-profile".into()),
@@ -822,8 +834,12 @@ mod tests {
         assert_eq!(args[0], "--remote-debugging-port=0");
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72) — see
+    /// `chrome_launch_args_never_pass_a_host_resolver_pin`.
     #[test]
     fn chrome_launch_args_appends_extra_args_last() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         // extra_args go last so a user flag wins over a config-derived one.
         let cfg = ProfileConfig {
             proxy: Some("http://proxy:8080".into()),
@@ -841,8 +857,12 @@ mod tests {
         assert!(args.contains(&"--proxy-server=http://proxy:8080".to_string()));
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72) — see
+    /// `chrome_launch_args_never_pass_a_host_resolver_pin`.
     #[test]
     fn chrome_launch_args_default_profile_matches_baseline() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         // A profile with no proxy/user-data/extra args must not change the argv.
         assert_eq!(
             chrome_launch_args(Some(&ProfileConfig::default()), "default").unwrap(),

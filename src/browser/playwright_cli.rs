@@ -1311,8 +1311,14 @@ Call log:
     /// configures none gets one derived under `~/.aleph/data/browser`. The
     /// containment property is the same one `config_path_for` has — one
     /// component under the state dir, whatever the session key looks like.
+    ///
+    /// Needs its own `$ALEPH_HOME` (R72): the `derived` branch below resolves
+    /// `aleph_home_dir()` through `browser_state_dir`, and without the guard
+    /// this races every other test in the binary for the ambient env var.
     #[test]
     fn every_profile_gets_a_user_data_dir_and_it_cannot_escape() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let configured = chromium_user_data_dir(
             &SessionLaunch {
                 user_data_dir: Some("/tmp/explicit".into()),
@@ -1411,10 +1417,22 @@ Call log:
     /// the child is ever torn down, `ensure_chromium` has to resolve a binary,
     /// and that pin makes the resulting failure instant and loud instead of a
     /// real Chrome launch inside a unit test.
+    ///
+    /// **R72:** `driver.run()` below writes a real `--config` file under
+    /// `aleph_home_dir()` (via `attach_once` -> `write_launch_config`), and the
+    /// cleanup at the end resolves the same path again. Neither this test nor
+    /// its C4 sibling used to hold `AlephHomeEnvGuard`, so each read whatever
+    /// home some other test in the binary had installed — and when that
+    /// test's `TempDir` dropped mid-run, the directory vanished underneath
+    /// (`cannot create the browser launch-config dir ... os error 22`, seen on
+    /// a clean tree with no relation to either test's own change).
     #[cfg(unix)]
     #[tokio::test]
     async fn a_lost_cli_session_does_not_cost_a_live_browser_its_tabs() {
         use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
 
         let session = "aleph-unit-c1-guard";
         let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -1539,10 +1557,21 @@ Call log:
     /// exactly the shortcut this fix must not take: `Refuse` means "do not
     /// launch a browser for this call", and re-attaching to one Aleph already
     /// owns is not that.
+    ///
+    /// **R72:** same reason as the C1 sibling above — `driver.run()` writes a
+    /// real `--config` under `aleph_home_dir()`, and the cleanup at the end
+    /// resolves it again. Without its own `AlephHomeEnvGuard` this reads
+    /// whatever home another test in the binary installed and races that
+    /// test's `TempDir` drop (`cannot write the browser launch config ...
+    /// os error 2`, seen on a clean tree with no relation to either test's
+    /// own change).
     #[cfg(unix)]
     #[tokio::test]
     async fn a_no_session_refusal_under_refuse_reattaches_to_the_browser_aleph_already_owns() {
         use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
 
         let session = "aleph-unit-c4-reattach";
         let tmp = tempfile::TempDir::new().expect("tempdir");

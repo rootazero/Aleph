@@ -341,8 +341,14 @@ mod tests {
     /// The OTHER caller of `launch_config_json`, which the arity change would
     /// otherwise leave uncompilable. Its containment assertions are about
     /// `output_dir_for` and are unaffected — only the call loses an argument.
+    ///
+    /// Needs its own `$ALEPH_HOME` (R72): `output_dir_for` resolves
+    /// `aleph_home_dir()`, and without the guard this races every other test
+    /// in the binary for the ambient env var.
     #[test]
     fn browsed_page_content_is_contained_under_aleph_home() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let out = output_dir_for("default").expect("home resolves");
         let json = launch_config_json(&out);
         assert_eq!(json["outputDir"], json!(out.to_string_lossy()));
@@ -380,8 +386,13 @@ mod tests {
         assert!(!argv.iter().any(|a| a == "--headed" || a == "--browser"));
     }
 
+    /// Needs its own `$ALEPH_HOME` (R72): `config_path_for` resolves
+    /// `aleph_home_dir()`, and without the guard this races every other test
+    /// in the binary for the ambient env var.
     #[test]
     fn config_path_cannot_escape_its_directory() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
         let dir = config_path_for("default")
             .expect("home resolves")
             .parent()
