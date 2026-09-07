@@ -62,11 +62,20 @@ impl ToolState {
     /// cannot race with a registration that re-inserts the same tool — the
     /// later mutation wins, which matches the read-then-mutate contract of
     /// every sibling method.
+    ///
+    /// Name matching is **case-insensitive** to match the rest of the
+    /// catalog's public API (`check_conflict`, `is_namespace`,
+    /// `resolve_command`, `register_with_conflict_resolution` all lowercase
+    /// before comparing). Without this, an operator calling
+    /// `set_active("Skill_Read", false)` would silently no-op while
+    /// `check_conflict("Skill_Read")` finds the tool — that asymmetry is the
+    /// bug TOOLMETA-001.
     pub async fn set_active(&self, name: &str, active: bool) -> bool {
         let mut tools = self.tools.write().await;
         let mut changed = false;
+        let name_lower = name.to_lowercase();
         for (_id, tool) in tools.iter_mut() {
-            if tool.name == name && tool.is_active != active {
+            if tool.name.to_lowercase() == name_lower && tool.is_active != active {
                 tool.is_active = active;
                 changed = true;
             }
