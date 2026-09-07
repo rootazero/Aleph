@@ -669,6 +669,23 @@ mod tests {
     /// production function did (the fixture-hand-rolls-the-subject shape).
     /// Same construction as `the_boot_hook_still_calls_the_orphan_sweep` in
     /// `browser/manager.rs`.
+    ///
+    /// **Blind spots, named rather than fixed (判据 §3 — a reviewer falsified
+    /// this guard: it goes red for the shape it names, so this is not a
+    /// rewrite):**
+    /// * A second fetch reached through a helper counts zero. `get_active_tab`
+    ///   (`:205`, a sibling in this same file) is itself exactly one
+    ///   `list_tabs()`, and `browser_tools::exec::read_guard` is another — if
+    ///   this function's body ever called either instead of the direct
+    ///   `.list_tabs()` below, the literal-string count would stay at 1 while
+    ///   the guarantee this test exists to protect (one snapshot for both the
+    ///   vetted tab and the returned tab) had already broken.
+    /// * The literal spelling is the predicate: `list_tabs ()` with a space,
+    ///   or any other reformatting of the call, also counts zero.
+    /// * The window is `body.find("\n}\n")` — a nested item or a raw string
+    ///   that happens to contain that exact byte sequence inside the function
+    ///   would truncate `body` at the wrong `}`, silently dropping whatever
+    ///   came after it from the count.
     #[test]
     fn the_guarded_path_lists_tabs_exactly_once() {
         let src = include_str!("mod.rs").replace('\r', "");
