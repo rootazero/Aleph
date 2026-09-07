@@ -1040,6 +1040,35 @@ engine = "obscura"
     /// The `assert_ne!` against 0 is not redundant with the `assert_eq!`: if
     /// the constant is ever retuned, the equality assertions follow it and
     /// this one still refuses the value that means "no budget at all".
+    ///
+    /// **What actually falsifies path 2, and what does not (K2, verified
+    /// against this exact tree rather than assumed):**
+    ///
+    /// - Deleting `#[serde(default = "default_cdp_command_timeout_secs")]`
+    ///   from the field turns it from optional to mandatory for TOML
+    ///   deserialization. It compiles cleanly — `cargo test --lib --no-run`
+    ///   after that deletion produces zero errors — so it is **not** a
+    ///   compile failure. It IS a genuine runtime red for path 2 here
+    ///   (`toml::from_str` panics with `missing field
+    ///   cdp_command_timeout_secs`), but the same deletion also breaks 20
+    ///   OTHER tests across this file, `config::dead_keys`,
+    ///   `config::load::dead_key_tests`, and
+    ///   `diagnostics::checks::config_parse` (21 total, measured by running
+    ///   the full `-p alephcore --lib` suite with the attribute deleted) —
+    ///   every one of them a config fragment that happens not to mention this
+    ///   key. That is a real falsifier, but a blunt, crate-wide one: it does
+    ///   not tell you THIS test caught it, only that something did.
+    /// - The mutation that falsifies path 2 **on its own**, leaving path 1
+    ///   untouched, is repointing the attribute at a second function
+    ///   returning a different value (verified: a `mutation_k2_wrong_cdp_timeout()
+    ///   -> u64 { 99 }` swapped into the `#[serde(default = "...")]` string).
+    ///   `impl Default` still calls the original, unedited
+    ///   `default_cdp_command_timeout_secs()`, so `built` stays 30 and only
+    ///   `parsed` becomes 99 — the final `assert_eq!(built..., parsed...)`
+    ///   below goes red precisely because the two mechanisms now disagree,
+    ///   which is the property this test exists to pin. This is the one to
+    ///   reach for when the question is "does path 2 specifically still
+    ///   work", not "does something in this file still work".
     #[test]
     fn browser_system_config_default_timeout_is_30_not_0() {
         // Path 1: the Rust default.

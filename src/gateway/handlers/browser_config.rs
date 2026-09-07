@@ -26,8 +26,20 @@ use tokio::sync::RwLock;
 /// heard of this switch".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BrowserConfigResponse {
-    /// Default profile driver: "managed" (headless) or "`existing_session`" (Chrome `DevTools`)
-    pub default_driver: String,
+    /// Default profile driver: "managed", "`existing_session`", or "cdp".
+    ///
+    /// `None` on the way *in* means "leave as persisted", the same
+    /// absent-means-unchanged rule the three secret-exfiltration switches
+    /// below use — a client that omits this field is not changing it. `Some(s)`
+    /// where `s` is not a recognised wire spelling is the caller saying
+    /// something this server does not understand, and [`driver_from_update`]
+    /// refuses it rather than silently keeping the old value: reporting
+    /// success while discarding what the operator typed is the report-success
+    /// no-op shape (判据 §11), whether the fallback lands on `Managed` (the old
+    /// shape) or on whatever was already persisted. Always `Some(..)` on the
+    /// way out.
+    #[serde(default)]
+    pub default_driver: Option<String>,
     /// Global Playwright CLI headless default.
     ///
     /// The *global* flag only. A `Managed` profile carrying its own `headless`
@@ -79,12 +91,14 @@ pub(crate) struct BrowserConfigResponse {
 /// read a hole where the config on disk has a value.
 fn snapshot(browser: &BrowserSystemConfig) -> BrowserConfigResponse {
     // Find the "default" profile's driver, or fallback to "managed"
-    let default_driver = browser
-        .profiles
-        .get("default")
-        .map_or(BrowserDriver::default(), |p| p.driver)
-        .as_wire()
-        .to_string();
+    let default_driver = Some(
+        browser
+            .profiles
+            .get("default")
+            .map_or(BrowserDriver::default(), |p| p.driver)
+            .as_wire()
+            .to_string(),
+    );
 
     // DevTools profile: "user" (Your Chrome) unless explicitly set to Managed
     let devtools_profile = if browser
@@ -116,13 +130,31 @@ fn snapshot(browser: &BrowserSystemConfig) -> BrowserConfigResponse {
 
 /// What `handle_update` makes of the driver string a client sent.
 ///
-/// `current` is the driver already persisted, and an unrecognised string
-/// resolves to it — never to a hardcoded `Managed`. The Panel renders two
-/// radio buttons and round-trips whatever it was given for any third value;
-/// the old `== "existing_session" ? … : Managed` shape turned that round-trip
-/// into a silent driver change on every save of an unrelated field.
-fn driver_from_update(wire: &str, current: BrowserDriver) -> BrowserDriver {
-    BrowserDriver::from_wire(wire).unwrap_or(current)
+/// Two different questions, two different answers (R70):
+/// - `wire = None` — the caller's request does not carry this field at all.
+///   That means "I am not changing this", the same absent-means-unchanged
+///   rule the three secret-exfiltration switches use, so the persisted driver
+///   is kept.
+/// - `wire = Some(s)` where `s` is not one of [`BrowserDriver::ALL`]'s wire
+///   spellings — the caller sent something and this server does not
+///   understand it. That is refused, naming the field and listing the values
+///   it accepts, rather than silently kept: the old `== "existing_session" ?
+///   … : Managed` shape coerced every unrecognised value to `Managed`, and
+///   silently falling back to whatever was already persisted is the same
+///   report-success no-op shape (判据 §11) wearing a friendlier value — either
+///   way the operator's save reports success while discarding what they
+///   typed.
+fn driver_from_update(wire: Option<&str>, current: BrowserDriver) -> Result<BrowserDriver, String> {
+    match wire {
+        None => Ok(current),
+        Some(s) => BrowserDriver::from_wire(s).ok_or_else(|| {
+            let accepted: Vec<&str> = BrowserDriver::ALL.iter().map(|d| d.as_wire()).collect();
+            format!(
+                "default_driver: unrecognised value {s:?}; accepted values are {}",
+                accepted.join(", ")
+            )
+        }),
+    }
 }
 
 /// `Managed` profiles whose own `headless` override shadows the global toggle.
@@ -211,14 +243,29 @@ pub async fn handle_update(
 
     let (effective, policy) = {
         let mut cfg = config.write().await;
-        let browser = &mut cfg.general.browser;
+
+        // Mutate a CLONE, not `cfg.general.browser` directly. `cfg` is the
+        // live, running config — a `return` from the K3 refusal below must
+        // leave it byte-for-byte as it was, or a rejected update would still
+        // rewrite the in-memory driver (just never persist it to disk),
+        // leaving the daemon serving a config no operator asked for and no
+        // file agrees with. Everything below reads and writes `browser`; the
+        // real `cfg.general.browser` is assigned from it only after
+        // `validate()` passes.
+        let mut browser = cfg.general.browser.clone();
+        let browser = &mut browser;
 
         // Update default profile driver
         let current_default = browser
             .profiles
             .get("default")
             .map_or(BrowserDriver::default(), |p| p.driver);
-        let driver = driver_from_update(&update.default_driver, current_default);
+        let driver = match driver_from_update(update.default_driver.as_deref(), current_default) {
+            Ok(d) => d,
+            Err(msg) => {
+                return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg);
+            }
+        };
 
         // Update or create the "default" profile with the chosen driver
         if let Some(profile) = browser.profiles.get_mut("default") {
@@ -274,8 +321,30 @@ pub async fn handle_update(
             browser.policy.redact_secrets_in_content = v;
         }
 
+        // K3 (§9): the same engine/driver contradiction load-time
+        // `Config::validate` refuses must be refused here too, not merely
+        // producible here. Without this, a profile that separately carries
+        // `engine = "obscura"` (hand-edited into config.toml, or once a later
+        // task exposes it in the Panel) survives a save that only changes its
+        // `driver` back to a legacy value — landing a config file that the
+        // very next boot's `Config::validate()` would refuse to load. One
+        // rule, checked through the one function
+        // `browser::profile::validate_engine_driver` lives in — not
+        // re-derived here as a second, drifting copy of the same question
+        // (判据 §1, §9).
+        //
+        // Checked against the CLONE, before `cfg.general.browser` is touched:
+        // a refusal here must leave the live config exactly as it was, not
+        // merely leave the file on disk as it was.
+        if let Err(msg) = browser.validate() {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg);
+        }
+
         let effective = snapshot(browser);
         let policy = browser.policy.clone();
+
+        // Validation passed — commit the clone as the real config, then save.
+        cfg.general.browser = browser.clone();
 
         // Save to disk — use precise path to avoid overwriting other general settings
         if let Err(e) = cfg.save_incremental(&["general.browser"]) {
@@ -519,13 +588,10 @@ mod tests {
         );
     }
 
-    /// A GET followed by a PUT must not rewrite the operator's driver.
-    ///
-    /// The update path used to read `default_driver` as a two-way switch
-    /// (`== "existing_session"` ? ExistingSession : Managed), so any third
-    /// value the Panel round-tripped came back as `managed` — a config the
-    /// operator never asked for, written by a save button they pressed for an
-    /// unrelated field.
+    /// A GET followed by a PUT must not rewrite the operator's driver: a
+    /// value this server itself produced (via `snapshot`) must always
+    /// round-trip back through `driver_from_update`, for every driver
+    /// including the one the Panel's two radio buttons cannot render.
     #[test]
     fn a_driver_the_panel_cannot_render_still_round_trips_through_a_save() {
         let mut browser = BrowserSystemConfig::default();
@@ -537,23 +603,98 @@ mod tests {
             },
         );
         let shown = snapshot(&browser);
-        assert_eq!(shown.default_driver, "cdp");
+        assert_eq!(shown.default_driver, Some("cdp".to_string()));
 
         // What handle_update does with that string, isolated.
         assert_eq!(
-            driver_from_update(&shown.default_driver, BrowserDriver::Managed),
-            BrowserDriver::Cdp
-        );
-        // A value no version of this server knows falls back to the driver
-        // already persisted, never to a hardcoded default: an unknown string
-        // is "I do not understand you", not "set it to managed".
-        assert_eq!(
-            driver_from_update("quantum", BrowserDriver::Cdp),
-            BrowserDriver::Cdp
+            driver_from_update(shown.default_driver.as_deref(), BrowserDriver::Managed),
+            Ok(BrowserDriver::Cdp)
         );
         assert_eq!(
-            driver_from_update("existing_session", BrowserDriver::Cdp),
-            BrowserDriver::ExistingSession
+            driver_from_update(Some("existing_session"), BrowserDriver::Cdp),
+            Ok(BrowserDriver::ExistingSession)
+        );
+    }
+
+    /// R70, absent half: a request that does not carry `default_driver` at
+    /// all is not changing it — the same absent-means-unchanged rule the
+    /// three secret-exfiltration switches already use — so the persisted
+    /// driver is kept. This is the half that silently rots if only the error
+    /// half below gets a test: it is easy to make "garbage errors" true while
+    /// accidentally also making "missing errors".
+    #[test]
+    fn an_absent_driver_field_preserves_the_persisted_value() {
+        assert_eq!(
+            driver_from_update(None, BrowserDriver::Cdp),
+            Ok(BrowserDriver::Cdp)
+        );
+        assert_eq!(
+            driver_from_update(None, BrowserDriver::ExistingSession),
+            Ok(BrowserDriver::ExistingSession)
+        );
+    }
+
+    /// R70, present-but-garbage half: a driver string this server does not
+    /// recognise is the caller saying something it does not understand, and
+    /// that must be a refusal naming the field and listing what it accepts —
+    /// not a silent fallback to whatever was already persisted. Falling back
+    /// to the persisted value here would be the very report-success no-op
+    /// shape (判据 §11) that motivated dropping the old `== "existing_session"
+    /// ? … : Managed` coercion in the first place; it would just wear a
+    /// friendlier value.
+    #[test]
+    fn an_unrecognised_driver_string_is_refused_not_silently_kept() {
+        let err = driver_from_update(Some("quantum"), BrowserDriver::Cdp)
+            .expect_err("an unrecognised driver string must be refused");
+        assert!(err.contains("quantum"), "must quote the bad value: {err}");
+        assert!(err.contains("default_driver"), "must name the field: {err}");
+        for wire in ["managed", "existing_session", "cdp"] {
+            assert!(
+                err.contains(wire),
+                "must list the accepted values, missing {wire}: {err}"
+            );
+        }
+    }
+
+    /// K3 (§9): the pairing `Config::validate` refuses at load must be
+    /// refused here too. Before this fix, a profile that already carried
+    /// `engine = "obscura"` with `driver = "cdp"` (a legal, previously-saved
+    /// state) could have its driver silently rewritten to a legacy value by a
+    /// save that only meant to flip the default driver — landing a config
+    /// file the very next boot's `Config::validate()` would refuse to load.
+    /// One rule must give the same answer from both doors.
+    #[tokio::test]
+    async fn saving_a_legacy_driver_over_an_obscura_profile_is_refused_not_persisted() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let config = make_config();
+        {
+            let mut cfg = config.write().await;
+            cfg.general.browser.profiles.insert(
+                "default".to_string(),
+                ProfileConfig {
+                    driver: BrowserDriver::Cdp,
+                    engine: Some(crate::browser::engine::Engine::Obscura),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let mut params = base_params();
+        params["default_driver"] = json!("managed");
+        let response = update(&config, params).await;
+        assert!(
+            !response.is_success(),
+            "engine=\"obscura\" + driver=\"managed\" must be refused — the same \
+             pairing Config::validate refuses at load"
+        );
+
+        // And nothing landed: the profile's driver is still cdp.
+        assert_eq!(
+            config.read().await.general.browser.profiles["default"].driver,
+            BrowserDriver::Cdp,
+            "a refused update must not partially persist"
         );
     }
 }
