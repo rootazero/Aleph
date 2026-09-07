@@ -42,7 +42,7 @@ fn sanitize_header(name: &str) -> String {
         // Markdown headers are one line; collapse CRLF/CR/LF to a single
         // space so a malicious configured name cannot forge a sibling
         // section.
-        out = out.replace("\r\n", " ").replace('\n', " ").replace('\r', " ");
+        out = out.replace(['\n', '\r'], " ");
     }
     out
 }
@@ -102,7 +102,6 @@ impl PromptLayer for ExtraFilesLayer {
             // and the label is a constant — routing the untrusted name through
             // the label would put it back into the one string this call emits
             // un-scanned.
-            const NAME_LABEL: &str = "an extra-context file name";
             // Sanitize the header (invisible Unicode + newline normalisation)
             // WITHOUT the injection-pattern scan — filenames containing
             // 'do not reveal' / 'system prompt:' / etc. are innocent. The
@@ -111,7 +110,7 @@ impl PromptLayer for ExtraFilesLayer {
             // previous code passed `file.name` as the CONTENT of
             // `sanitize_identity_content`, so a configured file called
             // `do_not_reveal_secrets.md` would render its section header as
-            // `[BLOCKED: 'an extra-context file name' …]` (THINK-001, high).
+            // `[BLOCKED: …]` (THINK-001, high).
             let safe_name = sanitize_header(&file.name);
             let safe = sanitize_identity_content(&file.name, &file.content);
             sections.push(format!("### {}\n{}", safe_name, safe));

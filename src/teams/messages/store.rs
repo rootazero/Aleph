@@ -251,7 +251,7 @@ impl SqliteMessageStore {
         input: NewMessage,
         ttl: Duration,
     ) -> crate::error::Result<TeamMessage> {
-        let conn = self.conn.lock().await;
+        let mut conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
