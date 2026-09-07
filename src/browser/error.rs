@@ -433,23 +433,98 @@ mod tests {
         );
     }
 
-    /// Spec §7.1, precisely (fix round 1, F3 — the original prose here
-    /// claimed more than this test enforces, and that lie is the expensive
-    /// kind: a future reader would have cited it as evidence the property
-    /// held for every variant). What actually holds, per variant, and why:
+    /// Exhaustive classification of spec §7.1's two signals — names a
+    /// recovery verb the model can call; names the engine involved — for
+    /// EVERY `BrowserError` variant. No `_` arm.
     ///
-    /// | Variant               | Names a verb | Names an engine | Exemption reason |
-    /// |-----------------------|:---:|:---:|---|
-    /// | `EngineBusy`          | yes | yes | — |
-    /// | `UnsupportedByEngine` | yes | yes | — |
-    /// | `EngineFailure`       | yes | yes | — |
-    /// | `StaleRef`            | yes | **no** | the variant has no `engine` field at all — a stale ref is fixed by re-snapshotting the SAME tab regardless of which engine drives it, so there is nothing to route on |
-    /// | `Cdp`                 | **no** | yes (F2) | no Aleph tool fixes a CDP protocol error; the actionable content IS the verbatim `{method, code, message}` triple, and inventing a verb would name a door that does not exist — worse than the gap (controller ruling, fix round 1) |
+    /// This is the enforcement now, not the doc table on the test below (fix
+    /// round 2): a hand-written prose table already carried an overclaim
+    /// TWICE inside the very artifact built to retire the first overclaim
+    /// (`UnsupportedByEngine`'s row said "yes | yes" unconditionally, when
+    /// its `None` arm names neither), and nothing in the suite caught it,
+    /// because prose cannot be falsified. A `match` can: add a variant in
+    /// Task 12 or Task 15 and this function fails to compile until it is
+    /// classified here, which a table on a doc comment could never guarantee
+    /// on its own (判据 §5 — a list written on legislation day).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum RecoverySignal {
+        /// Predates spec §7.1 — not one of the six variants Task 8 added, so
+        /// the property does not apply. A real classification, reviewed once
+        /// while writing this match, not a shrug.
+        NotApplicable,
+        /// Names both a recovery verb and the engine involved.
+        VerbAndEngine,
+        /// Names a recovery verb but not an engine — the recovery does not
+        /// depend on which engine is running.
+        VerbOnly,
+        /// Names the engine but no verb — no Aleph tool fixes this class of
+        /// failure.
+        EngineOnly,
+        /// Names neither.
+        Neither,
+    }
+
+    fn spec_7_1_signal(err: &BrowserError) -> RecoverySignal {
+        match err {
+            BrowserError::LaunchFailed { .. }
+            | BrowserError::TabNotFound(_)
+            | BrowserError::NavigationFailed(_)
+            | BrowserError::ActionFailed(_)
+            | BrowserError::Timeout(_)
+            | BrowserError::ChromiumNotFound
+            | BrowserError::ScreenshotFailed(_)
+            | BrowserError::AttachFailed(_)
+            | BrowserError::ChromeMcpError(_)
+            | BrowserError::ChromeMcpTransport(_)
+            | BrowserError::PlaywrightCliError(_)
+            | BrowserError::PlaywrightCliNotInstalled
+            | BrowserError::NoSession(_)
+            | BrowserError::Io(_)
+            | BrowserError::ProfileNotFound(_) => RecoverySignal::NotApplicable,
+
+            BrowserError::EngineUnavailable { .. } => RecoverySignal::VerbAndEngine,
+            BrowserError::EngineBusy { .. } => RecoverySignal::VerbAndEngine,
+            BrowserError::UnsupportedByEngine {
+                supported_by: Some(_),
+                ..
+            } => RecoverySignal::VerbAndEngine,
+            BrowserError::UnsupportedByEngine {
+                supported_by: None, ..
+            } => RecoverySignal::Neither,
+            BrowserError::EngineFailure { .. } => RecoverySignal::VerbAndEngine,
+            BrowserError::StaleRef { .. } => RecoverySignal::VerbOnly,
+            BrowserError::Cdp { .. } => RecoverySignal::EngineOnly,
+        }
+    }
+
+    /// Spec §7.1, precisely (fix round 2 — the fix-round-1 table itself
+    /// overclaimed, in exactly the shape it was written to retire:
+    /// `UnsupportedByEngine`'s row said "yes | yes" unconditionally, but its
+    /// `None` arm — [`unsupported_text`] two functions up — names NEITHER a
+    /// verb nor an engine, by design (判据 §8: naming a switch that would
+    /// send the model on a round trip back to where it started is worse than
+    /// naming nothing). Nothing caught it: a mutation dropping `{engine}`
+    /// from the `Some` arm stayed green, because nothing asserted that arm's
+    /// OWN `engine` field — every existing assertion covered only
+    /// `supported_by`/`other`. That gap is closed below, and
+    /// `spec_7_1_signal` (above this test) is now the enforced source of
+    /// truth; this table is a reading aid for it, not a second authority —
+    /// if the two disagree, the match is right and this table is stale):
     ///
-    /// `StaleRef`'s exemption needs no runtime assertion below: the type has
-    /// no `engine` field, so the compiler enforces it, not this test.
-    /// `Cdp`'s exemption IS enforced below (not just claimed): the test
-    /// asserts its text contains none of the three tool names.
+    /// | Variant                        | Verb | Engine | Reason |
+    /// |---------------------------------|:---:|:---:|---|
+    /// | `EngineUnavailable`              | yes | yes | covered by the `engine_unavailable*` tests above, not this one |
+    /// | `EngineBusy`                     | yes | yes | — |
+    /// | `UnsupportedByEngine` (`Some`)   | yes | yes | — |
+    /// | `UnsupportedByEngine` (`None`)   | **no** | **no** | nothing supports the verb — no engine to route on, and offering `switch_engine` would send the model on a round trip back to where it started |
+    /// | `EngineFailure`                  | yes | yes | — |
+    /// | `StaleRef`                       | yes | **no** | no `engine` field — re-snapshotting the SAME tab fixes it regardless of which engine drives it |
+    /// | `Cdp`                            | **no** | yes | no Aleph tool fixes a CDP protocol error; the actionable content IS the verbatim triple, and inventing a verb would name a door that does not exist |
+    ///
+    /// Every row below is checked against both a real `.to_string()` and
+    /// `spec_7_1_signal`'s classification, except `StaleRef`'s "no engine" —
+    /// the type has no `engine` field, so the compiler enforces that one, not
+    /// a runtime assertion.
     ///
     /// The expected substrings for the verb-bearing variants are the tools'
     /// own `NAME` constants, never typed literals:
@@ -469,7 +544,7 @@ mod tests {
         };
         use crate::tools::AlephTool;
 
-        let cases: Vec<(BrowserError, &str)> = vec![
+        let cases: Vec<(BrowserError, &str, RecoverySignal)> = vec![
             (
                 BrowserError::EngineBusy {
                     engine: Engine::Obscura,
@@ -477,6 +552,7 @@ mod tests {
                     waited_secs: 30,
                 },
                 BrowserSessionTool::NAME,
+                RecoverySignal::VerbAndEngine,
             ),
             (
                 BrowserError::UnsupportedByEngine {
@@ -485,6 +561,7 @@ mod tests {
                     supported_by: Some(Engine::Chromium),
                 },
                 BrowserSessionTool::NAME,
+                RecoverySignal::VerbAndEngine,
             ),
             (
                 BrowserError::EngineFailure {
@@ -492,6 +569,7 @@ mod tests {
                     reason: "websocket closed".into(),
                 },
                 BrowserOpenTool::NAME,
+                RecoverySignal::VerbAndEngine,
             ),
             (
                 BrowserError::StaleRef {
@@ -499,34 +577,53 @@ mod tests {
                     reason: StaleReason::Navigated,
                 },
                 BrowserSnapshotTool::NAME,
+                RecoverySignal::VerbOnly,
             ),
         ];
-        for (err, verb) in cases {
+        for (err, verb, expected_signal) in cases {
+            assert_eq!(
+                spec_7_1_signal(&err),
+                expected_signal,
+                "classification drifted from the code for {err:?}"
+            );
             let text = err.to_string();
             assert!(text.contains(verb), "no recovery verb in: {text}");
         }
 
         // The busy text carries the two numbers a reader needs to decide
         // whether to wait or to switch, and the method that stalled.
-        let busy = BrowserError::EngineBusy {
+        let busy_err = BrowserError::EngineBusy {
             engine: Engine::Obscura,
             method: "Page.navigate".into(),
             waited_secs: 30,
-        }
-        .to_string();
+        };
+        assert_eq!(spec_7_1_signal(&busy_err), RecoverySignal::VerbAndEngine);
+        let busy = busy_err.to_string();
         assert!(busy.contains("obscura"), "{busy}");
         assert!(busy.contains("Page.navigate"), "{busy}");
         assert!(busy.contains("30"), "{busy}");
 
         // The unsupported text names the engine that DOES support the verb —
-        // "not supported" alone leaves the model with nowhere to go.
-        let unsupported = BrowserError::UnsupportedByEngine {
+        // "not supported" alone leaves the model with nowhere to go. It ALSO
+        // names the engine that CANNOT (fix round 2): the assertion whose
+        // absence let the fix-round-1 table's overclaim survive a mutation
+        // dropping `{engine}` from this arm.
+        let unsupported_err = BrowserError::UnsupportedByEngine {
             engine: Engine::Obscura,
             verb: "browser_pdf",
             supported_by: Some(Engine::Chromium),
-        }
-        .to_string();
+        };
+        assert_eq!(
+            spec_7_1_signal(&unsupported_err),
+            RecoverySignal::VerbAndEngine
+        );
+        let unsupported = unsupported_err.to_string();
         assert!(unsupported.contains("browser_pdf"), "{unsupported}");
+        assert!(
+            unsupported.contains("obscura"),
+            "must name the engine that CANNOT do it, not only the one that \
+             can: {unsupported}"
+        );
         assert!(unsupported.contains("chromium"), "{unsupported}");
         assert!(
             unsupported.contains("switch_engine"),
@@ -534,16 +631,24 @@ mod tests {
         );
 
         // Nothing supports it: the text must say so plainly rather than
-        // implying a switch that would change nothing.
-        let nowhere = BrowserError::UnsupportedByEngine {
+        // implying a switch that would change nothing — and it names NEITHER
+        // engine, not even the one that asked, because naming one here would
+        // wrongly imply the engine matters (fix round 2's finding: this is
+        // the row the fix-round-1 table got wrong).
+        let nowhere_err = BrowserError::UnsupportedByEngine {
             engine: Engine::Obscura,
             verb: "browser_screencast",
             supported_by: None,
-        }
-        .to_string();
+        };
+        assert_eq!(spec_7_1_signal(&nowhere_err), RecoverySignal::Neither);
+        let nowhere = nowhere_err.to_string();
         assert!(
             !nowhere.contains("switch_engine"),
             "a verb no engine supports must not advertise a switch: {nowhere}"
+        );
+        assert!(
+            !nowhere.contains("obscura"),
+            "must not name an engine either — none of them can do it: {nowhere}"
         );
         assert!(nowhere.contains("no engine"), "{nowhere}");
 
@@ -554,11 +659,12 @@ mod tests {
             StaleReason::NodeGone,
             StaleReason::Unknown,
         ] {
-            let text = BrowserError::StaleRef {
+            let err = BrowserError::StaleRef {
                 ref_id: "e12".into(),
                 reason,
-            }
-            .to_string();
+            };
+            assert_eq!(spec_7_1_signal(&err), RecoverySignal::VerbOnly);
+            let text = err.to_string();
             assert!(text.contains("e12"), "{text}");
             assert!(text.contains(BrowserSnapshotTool::NAME), "{text}");
         }
@@ -569,13 +675,14 @@ mod tests {
         // routing signal, since it names no verb (see the table above this
         // test) — and it names no tool, enforcing the "no verb" exemption
         // rather than only claiming it in prose.
-        let cdp = BrowserError::Cdp {
+        let cdp_err = BrowserError::Cdp {
             engine: Engine::Obscura,
             method: "DOM.getBoxModel".into(),
             code: -32000,
             message: "Could not compute box model.".into(),
-        }
-        .to_string();
+        };
+        assert_eq!(spec_7_1_signal(&cdp_err), RecoverySignal::EngineOnly);
+        let cdp = cdp_err.to_string();
         assert!(cdp.contains("DOM.getBoxModel"), "{cdp}");
         assert!(cdp.contains("-32000"), "{cdp}");
         assert!(cdp.contains("Could not compute box model."), "{cdp}");
