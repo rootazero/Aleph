@@ -29,16 +29,17 @@ use super::backend::BrowserBackend;
 use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::tab_registry;
+use super::types::TabLine;
 
 /// Resolve the URL a navigation landed on from a `list_tabs` snapshot.
 ///
 /// `tab_id`'s line when given and found, else the listing's active tab
 /// ([`tab_registry::active_tab`] — the driver's `[selected]` marker first,
 /// last-listed only as fallback). `None` for an empty / unparseable listing.
-fn landed_url(tabs_text: &str, tab_id: Option<&str>) -> Option<String> {
+fn landed_url(tabs: &[TabLine], tab_id: Option<&str>) -> Option<String> {
     tab_id
-        .and_then(|id| tab_registry::tab_url_for(tabs_text, id))
-        .or_else(|| tab_registry::active_tab_url(tabs_text))
+        .and_then(|id| tab_registry::tab_url_for(tabs, id))
+        .or_else(|| tab_registry::active_tab_url(tabs))
 }
 
 /// Re-validate one landed URL against the SSRF policy (no browser I/O).
@@ -98,15 +99,15 @@ pub(crate) async fn audit_landed_url<B: BrowserBackend + ?Sized>(
 pub(crate) async fn audit_listing<B: BrowserBackend + ?Sized>(
     backend: &B,
     guard: &BrowserSsrfGuard,
-    tabs_text: &str,
+    tabs: &[TabLine],
     tab_id: Option<&str>,
 ) -> Result<(), BrowserError> {
-    let Some(url) = landed_url(tabs_text, tab_id) else {
+    let Some(url) = landed_url(tabs, tab_id) else {
         return Ok(());
     };
     let offender = tab_id
         .map(str::to_string)
-        .or_else(|| tab_registry::active_tab_id(tabs_text));
+        .or_else(|| tab_registry::active_tab_id(tabs));
     audit_landed_url(backend, guard, &url, offender.as_deref()).await
 }
 
@@ -119,14 +120,14 @@ pub(crate) async fn audit_landed_tab<B: BrowserBackend + ?Sized>(
     guard: &BrowserSsrfGuard,
     tab_id: Option<&str>,
 ) -> Result<(), BrowserError> {
-    let tabs_text = match backend.list_tabs().await {
-        Ok(text) => text,
+    let tabs = match backend.list_tabs().await {
+        Ok(rows) => rows,
         Err(e) => {
             tracing::warn!(error = %e, "post-navigation audit skipped: list_tabs failed");
             return Ok(());
         }
     };
-    audit_listing(backend, guard, &tabs_text, tab_id).await
+    audit_listing(backend, guard, &tabs, tab_id).await
 }
 
 #[cfg(test)]
@@ -143,7 +144,8 @@ mod tests {
         tab_id: Option<&str>,
     ) -> (Result<(), BrowserError>, Vec<String>) {
         let backend = FakeBackend::new(None);
-        let out = audit_listing(&backend, guard, tabs, tab_id).await;
+        let rows = tab_registry::parse_tab_lines(tabs);
+        let out = audit_listing(&backend, guard, &rows, tab_id).await;
         (out, backend.calls())
     }
 

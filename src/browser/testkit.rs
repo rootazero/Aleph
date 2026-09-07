@@ -58,7 +58,11 @@ pub(crate) struct FakeBackend {
     calls: Mutex<Vec<String>>,
     fail_at: Option<usize>,
     failure_message: String,
-    tabs_text: String,
+    /// What `list_tabs` answers, already parsed. Held as rows rather than
+    /// text so the fake returns exactly what the trait promises; the builder
+    /// still takes listing TEXT, because a test that is about a driver's
+    /// rendering should be able to write that rendering.
+    tabs: Vec<super::tab_registry::TabLine>,
     snapshot_text: String,
     screenshot_png: Vec<u8>,
     console_text: String,
@@ -75,7 +79,7 @@ impl FakeBackend {
             calls: Mutex::new(Vec::new()),
             fail_at,
             failure_message: DEFAULT_FAILURE_MESSAGE.to_string(),
-            tabs_text: DEFAULT_TABS_TEXT.to_string(),
+            tabs: super::tab_registry::parse_tab_lines(DEFAULT_TABS_TEXT),
             snapshot_text: String::new(),
             screenshot_png: Vec::new(),
             console_text: String::new(),
@@ -91,9 +95,12 @@ impl FakeBackend {
         self
     }
 
-    /// What `list_tabs` answers (default: [`DEFAULT_TABS_TEXT`]).
+    /// What `list_tabs` answers, given as one driver's listing text
+    /// (default: [`DEFAULT_TABS_TEXT`]). Parsed through the same function the
+    /// real text backends use — a second parser here would put a different
+    /// reading of a listing underneath every tool-layer test.
     pub(crate) fn with_tabs_text(mut self, text: impl Into<String>) -> Self {
-        self.tabs_text = text.into();
+        self.tabs = super::tab_registry::parse_tab_lines(&text.into());
         self
     }
 
@@ -186,9 +193,9 @@ impl BrowserBackend for FakeBackend {
         self.record(format!("close_tab:{tab_id}"))
     }
 
-    async fn list_tabs(&self) -> Result<String, BrowserError> {
+    async fn list_tabs(&self) -> Result<Vec<super::tab_registry::TabLine>, BrowserError> {
         self.record("list_tabs".into())?;
-        Ok(self.tabs_text.clone())
+        Ok(self.tabs.clone())
     }
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
@@ -422,7 +429,10 @@ mod tests {
     #[tokio::test]
     async fn builders_default_to_the_historical_answers() {
         let fake = FakeBackend::new(None);
-        assert_eq!(fake.list_tabs().await.unwrap(), DEFAULT_TABS_TEXT);
+        assert_eq!(
+            fake.list_tabs().await.unwrap(),
+            super::super::tab_registry::parse_tab_lines(DEFAULT_TABS_TEXT)
+        );
         assert_eq!(fake.snapshot("1").await.unwrap().snapshot_text, "");
         assert_eq!(
             fake.evaluate("1", "() => 1").await.unwrap(),
@@ -448,6 +458,26 @@ mod tests {
             },
         );
         assert!(err.await.unwrap_err().to_string().contains("boom"));
+    }
+
+    /// The fake answers ROWS, and `with_tabs_text` still takes the listing
+    /// text every existing test hands it — the text is parsed once, at the
+    /// seam, through the same function the real text backends use. A fake
+    /// with its own parser would be a second answer to "what does this
+    /// listing mean" (判据 §1) sitting under every tool-layer test.
+    #[tokio::test]
+    async fn the_fake_answers_rows_parsed_from_the_listing_it_was_given() {
+        let fake =
+            FakeBackend::new(None).with_tabs_text("1: https://a.com\n2: https://b.com [selected]");
+        let rows = fake.list_tabs().await.expect("list_tabs");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].id, "2");
+        assert!(rows[1].selected);
+        assert_eq!(
+            super::super::tab_registry::active_tab_id(&rows).as_deref(),
+            Some("2")
+        );
+        assert_eq!(fake.calls(), vec!["list_tabs"]);
     }
 
     #[tokio::test]

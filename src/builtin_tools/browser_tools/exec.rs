@@ -621,11 +621,11 @@ async fn read_guard(
     backend: &dyn BrowserBackend,
     tab_id: &str,
 ) -> std::result::Result<(), String> {
-    let tabs_text = backend
+    let tabs = backend
         .list_tabs()
         .await
         .map_err(|e| super::backend_error_text(manager, &e))?;
-    match super::current_page_block(manager, &tabs_text, tab_id).await {
+    match super::current_page_block(manager, &tabs, tab_id).await {
         Some(violation) => Err(format!(
             "current page blocked by SSRF policy ({violation}); \
              navigate to an allowed URL before reading page content"

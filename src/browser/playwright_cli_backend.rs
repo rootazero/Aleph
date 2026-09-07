@@ -13,7 +13,7 @@ use super::playwright_cli::{CliOutput, PlaywrightCliDriver};
 use super::playwright_launch::{LaunchPolicy, SessionLaunch};
 use super::types::{
     ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
-    ScrollDirection, SnapshotOutput, TabId,
+    ScrollDirection, SnapshotOutput, TabId, TabLine,
 };
 
 pub struct PlaywrightCliBackend {
@@ -179,26 +179,25 @@ impl BrowserBackend for PlaywrightCliBackend {
         // the id falls back to the "last" sentinel rather than failing a
         // successful open — but the skip is LOGGED: a silently skipped SSRF
         // audit is indistinguishable from one that passed.
-        let tabs_text = match self.list_tabs().await {
-            Ok(text) => text,
+        let tabs = match self.list_tabs().await {
+            Ok(rows) => rows,
             Err(e) => {
                 tracing::warn!(
                     error = %e,
                     "post-navigation audit skipped after tab-new: tab-list failed (the new tab \
                      keeps its unaudited landing, and its id is unknown)"
                 );
-                String::new()
+                Vec::new()
             }
         };
         // `tab-new` selects the tab it opened, so the CLI's own `[selected]`
         // marker names it; last-listed is the fallback for a listing without a
         // marker.
-        let tab_id = super::tab_registry::active_tab_id(&tabs_text);
+        let tab_id = super::tab_registry::active_tab_id(&tabs);
         // Post-navigation audit (quarantine included — it lives in `post_nav`):
         // a redirect may have landed the new tab on a blocked origin the
         // navigation-time guard never saw.
-        super::post_nav::audit_listing(self, &self.ssrf_guard, &tabs_text, tab_id.as_deref())
-            .await?;
+        super::post_nav::audit_listing(self, &self.ssrf_guard, &tabs, tab_id.as_deref()).await?;
         Ok(tab_id.unwrap_or_else(|| "last".into()))
     }
 
@@ -209,8 +208,9 @@ impl BrowserBackend for PlaywrightCliBackend {
         Ok(())
     }
 
-    async fn list_tabs(&self) -> Result<String, BrowserError> {
-        Ok(self.run(&["tab-list"], self.action_timeout()).await?.stdout)
+    async fn list_tabs(&self) -> Result<Vec<TabLine>, BrowserError> {
+        let out = self.run(&["tab-list"], self.action_timeout()).await?;
+        Ok(super::tab_registry::parse_tab_lines(&out.stdout))
     }
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {

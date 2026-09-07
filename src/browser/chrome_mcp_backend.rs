@@ -13,7 +13,7 @@ use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::types::{
     ActionTarget, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
-    SnapshotOutput, TabId, WaitCondition,
+    SnapshotOutput, TabId, TabLine, WaitCondition,
 };
 
 pub struct ChromeMcpBackend {
@@ -127,21 +127,22 @@ impl BrowserBackend for ChromeMcpBackend {
         // deadlock).
         let _guard = self.profile_guard().await;
         self.call("new_page", json!({ "url": url })).await?;
-        let tabs_text = Self::extract_text(&self.call("list_pages", json!({})).await?);
+        let tabs = super::tab_registry::parse_tab_lines(&Self::extract_text(
+            &self.call("list_pages", json!({})).await?,
+        ));
         // `new_page` also *selects* the page it opened, so the driver's own
         // `[selected]` marker names our tab; last-listed is the fallback for a
         // listing that carries no marker. Shared parser, so the
         // chrome-devtools-mcp "N: URL" and playwright-cli "Tab N: URL" formats
         // both yield the same id.
-        let new_id = super::tab_registry::active_tab_id(&tabs_text);
+        let new_id = super::tab_registry::active_tab_id(&tabs);
 
         // Post-navigation audit on the listing already fetched above (no extra
         // round trip): a redirect may have landed the new tab on a blocked
         // origin the navigation-time guard never saw. The quarantine (closing
         // the tab) lives in `post_nav`, not here — `close_tab` takes no profile
         // lock, so running it under `_guard` cannot deadlock.
-        super::post_nav::audit_listing(self, &self.ssrf_guard, &tabs_text, new_id.as_deref())
-            .await?;
+        super::post_nav::audit_listing(self, &self.ssrf_guard, &tabs, new_id.as_deref()).await?;
 
         new_id.ok_or_else(|| {
             BrowserError::TabNotFound(format!("Could not determine tab ID after opening {url}"))
@@ -159,9 +160,11 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(())
     }
 
-    async fn list_tabs(&self) -> Result<String, BrowserError> {
+    async fn list_tabs(&self) -> Result<Vec<TabLine>, BrowserError> {
         let result = self.call("list_pages", json!({})).await?;
-        Ok(Self::extract_text(&result))
+        Ok(super::tab_registry::parse_tab_lines(&Self::extract_text(
+            &result,
+        )))
     }
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {

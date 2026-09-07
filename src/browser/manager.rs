@@ -20,7 +20,7 @@ use super::playwright_launch::{LaunchPolicy, SessionLaunch};
 use super::profile::{
     BrowserDriver, BrowserSystemConfig, BrowserType, PlaywrightCliConfig, ProfileConfig,
 };
-use super::tab_registry::{parse_tab_ids, TabRegistry};
+use super::tab_registry::{tab_ids, TabRegistry};
 
 /// The manager the running daemon actually serves browser tools from, so a
 /// config write can reach it (see [`apply_policy_live`]).
@@ -600,7 +600,7 @@ impl ProfileManager {
                     continue;
                 }
             };
-            let tabs_text = match backend.list_tabs().await {
+            let tabs = match backend.list_tabs().await {
                 Ok(t) => t,
                 Err(e) => {
                     // Browser gone — stop re-probing this profile every sweep.
@@ -609,7 +609,7 @@ impl ProfileManager {
                     continue;
                 }
             };
-            let live_ids = parse_tab_ids(&tabs_text);
+            let live_ids = tab_ids(&tabs);
             let victims = self.tab_registry.select_victims(
                 &profile,
                 &live_ids,

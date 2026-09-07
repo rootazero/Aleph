@@ -33,6 +33,7 @@ use crate::browser::backend::BrowserBackend;
 use crate::browser::error::BrowserError;
 use crate::browser::manager::ProfileManager;
 use crate::browser::tab_registry;
+use crate::browser::types::TabLine;
 use crate::security::content_sanitizer::{
     sanitize_external_text, wrap_external_content, ContentSource,
 };
@@ -181,10 +182,10 @@ pub(crate) fn check_input_secret_block(manager: &ProfileManager, text: &str) -> 
 /// network target and are skipped.
 pub(crate) async fn current_page_block(
     manager: &ProfileManager,
-    tabs_text: &str,
+    tabs: &[TabLine],
     tab_id: &str,
 ) -> Option<String> {
-    let url = tab_registry::tab_url_for(tabs_text, tab_id)?;
+    let url = tab_registry::tab_url_for(tabs, tab_id)?;
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return None;
     }
@@ -202,8 +203,8 @@ pub(crate) async fn current_page_block(
 /// the last line, so the read-time SSRF re-check below could vet tab N while
 /// the content read landed on tab M.
 async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserError> {
-    let tabs_text = backend.list_tabs().await?;
-    tab_registry::active_tab_id(&tabs_text)
+    let tabs = backend.list_tabs().await?;
+    tab_registry::active_tab_id(&tabs)
         .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))
 }
 
@@ -251,11 +252,11 @@ pub(crate) async fn make_backend_and_tab_guarded(
     profile: &str,
 ) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
     let backend = make_backend(manager, profile)?;
-    let tabs_text = backend.list_tabs().await?;
-    let tab_id = tab_registry::active_tab_id(&tabs_text).ok_or_else(|| {
+    let tabs = backend.list_tabs().await?;
+    let tab_id = tab_registry::active_tab_id(&tabs).ok_or_else(|| {
         BrowserError::ActionFailed("No tabs open. Use browser_open first.".into())
     })?;
-    if let Some(violation) = current_page_block(manager, &tabs_text, &tab_id).await {
+    if let Some(violation) = current_page_block(manager, &tabs, &tab_id).await {
         return Err(BrowserError::NavigationFailed(format!(
             "current page blocked by SSRF policy ({violation}); \
              navigate to an allowed URL before reading page content"
@@ -611,16 +612,81 @@ mod tests {
     /// that was wrong here.)
     #[test]
     fn the_tool_layer_reads_the_selected_tab_not_the_last_line() {
-        let switched = "1: https://a.com [selected]\n2: https://b.com";
+        let switched =
+            tab_registry::parse_tab_lines("1: https://a.com [selected]\n2: https://b.com");
         assert_eq!(
-            tab_registry::active_tab_id(switched).as_deref(),
+            tab_registry::active_tab_id(&switched).as_deref(),
             Some("1"),
             "the marker wins over line order"
         );
         assert_eq!(
-            tab_registry::tab_url_for(switched, "1").as_deref(),
+            tab_registry::tab_url_for(&switched, "1").as_deref(),
             Some("https://a.com"),
             "and the URL the SSRF re-check reads belongs to that same tab"
+        );
+    }
+
+    /// `current_page_block` answers about the row the caller vetted, from the
+    /// caller's own listing.
+    ///
+    /// **An IP literal, not a hostname.** `current_page_block` reaches
+    /// `BrowserSsrfGuard::check_url` (`network_policy.rs`) →
+    /// `ssrf::validate_url_async`, which RESOLVES the host. `ok.example` is an
+    /// RFC 2606 reserved name that resolves nowhere, so a hostname here makes
+    /// the "must pass" assertion fail offline and on CI. `post_nav.rs`'s
+    /// `passes_public_landed_url` needs a hostname and therefore installs a
+    /// resolver hook; this test does not need one, so it uses the literal and
+    /// no hook.
+    #[tokio::test]
+    async fn current_page_block_answers_about_the_row_the_caller_vetted() {
+        let backend = crate::browser::testkit::FakeBackend::new(None)
+            .with_tabs_text("1: https://8.8.8.8/ [selected]\n2: http://127.0.0.1/x");
+        let rows = backend.list_tabs().await.expect("list_tabs");
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let id = tab_registry::active_tab_id(&rows).expect("an active row");
+        assert_eq!(id, "1");
+        assert!(
+            current_page_block(&manager, &rows, &id).await.is_none(),
+            "the allowed row must pass"
+        );
+        assert!(
+            current_page_block(&manager, &rows, "2").await.is_some(),
+            "the private-range row in the SAME listing must be blocked"
+        );
+    }
+
+    /// `make_backend_and_tab_guarded` must fetch the listing ONCE.
+    ///
+    /// The tab it vets and the tab it returns have to come from one snapshot,
+    /// and a CDP backend's target enumeration is live — two fetches can answer
+    /// two different listings, so the SSRF re-check would pass on tab N while
+    /// the read landed on tab M. That is the whole reason `list_tabs` returns
+    /// rows.
+    ///
+    /// A SOURCE pin, and deliberately so: the function resolves the active tab
+    /// itself, so a `FakeBackend` test can only re-assemble the same sequence
+    /// out of the same parts and would stay green no matter what the
+    /// production function did (the fixture-hand-rolls-the-subject shape).
+    /// Same construction as `the_boot_hook_still_calls_the_orphan_sweep` in
+    /// `browser/manager.rs`.
+    #[test]
+    fn the_guarded_path_lists_tabs_exactly_once() {
+        let src = include_str!("mod.rs").replace('\r', "");
+        let production = crate::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] bound matched nothing — this test would then be \
+             reading its own source"
+        );
+        let start = production
+            .find("pub(crate) async fn make_backend_and_tab_guarded")
+            .expect("the guarded path must still exist");
+        let body = &production[start..];
+        let end = body.find("\n}\n").expect("function end");
+        assert_eq!(
+            body[..end].matches("list_tabs()").count(),
+            1,
+            "two fetches means the vetted tab and the returned tab can differ"
         );
     }
 
@@ -782,34 +848,42 @@ mod tests {
             m
         });
 
+        let rows = |text: &str| tab_registry::parse_tab_lines(text);
+
         // Cloud metadata endpoint reached via redirect → blocked.
-        assert!(
-            current_page_block(&manager, "1: http://169.254.169.254/latest/meta-data", "1")
-                .await
-                .is_some()
-        );
+        assert!(current_page_block(
+            &manager,
+            &rows("1: http://169.254.169.254/latest/meta-data"),
+            "1"
+        )
+        .await
+        .is_some());
 
         // Loopback → blocked.
         assert!(
-            current_page_block(&manager, "1: http://127.0.0.1:9000/", "1")
+            current_page_block(&manager, &rows("1: http://127.0.0.1:9000/"), "1")
                 .await
                 .is_some()
         );
 
         // Public URL → allowed.
-        assert!(current_page_block(&manager, "1: https://example.com/", "1")
-            .await
-            .is_none());
+        assert!(
+            current_page_block(&manager, &rows("1: https://example.com/"), "1")
+                .await
+                .is_none()
+        );
 
         // Non-http schemes carry no network target → skipped.
-        assert!(current_page_block(&manager, "1: about:blank", "1")
+        assert!(current_page_block(&manager, &rows("1: about:blank"), "1")
             .await
             .is_none());
 
         // No matching tab → nothing to check.
-        assert!(current_page_block(&manager, "1: http://127.0.0.1/", "2")
-            .await
-            .is_none());
+        assert!(
+            current_page_block(&manager, &rows("1: http://127.0.0.1/"), "2")
+                .await
+                .is_none()
+        );
     }
 
     // ---------------------------------------------------------------

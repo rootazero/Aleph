@@ -7,14 +7,14 @@ use async_trait::async_trait;
 use super::error::BrowserError;
 use super::types::{
     ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
-    ScrollDirection, SnapshotOutput, TabId, WaitCondition,
+    ScrollDirection, SnapshotOutput, TabId, TabLine, WaitCondition,
 };
 
 #[async_trait]
 pub trait BrowserBackend: Send + Sync {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError>;
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError>;
-    async fn list_tabs(&self) -> Result<String, BrowserError>;
+    async fn list_tabs(&self) -> Result<Vec<TabLine>, BrowserError>;
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError>;
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError>;
     async fn type_text(
@@ -126,8 +126,8 @@ pub trait BrowserBackend: Send + Sync {
     ///
     /// Note for callers: the selection only survives if whoever asks "which tab
     /// is active" next honors the driver's own `[selected]` marker — see
-    /// [`super::tab_registry::active_tab_id`], the single source for that
-    /// question.
+    /// [`super::tab_registry::active_tab`], which takes the rows
+    /// [`Self::list_tabs`] returns and is the single source for that question.
     async fn switch_tab(&self, tab_id: &str) -> Result<(), BrowserError>;
 
     /// Respond to a pending native dialog (alert / confirm / prompt / beforeunload).

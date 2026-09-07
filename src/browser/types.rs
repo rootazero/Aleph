@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 /// Unique identifier for a browser tab.
 pub type TabId = String;
 
+/// One row of a backend tab listing. Re-exported here because `types` is the
+/// module every backend already imports its vocabulary from; the type itself
+/// lives with the parser that produces it (`super::tab_registry`).
+pub use super::tab_registry::TabLine;
+
 /// Target for a browser action (click, hover, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]

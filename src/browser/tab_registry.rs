@@ -195,10 +195,14 @@ fn markdown_link_url(s: &str) -> Option<&str> {
 /// Returns `None` for lines without a numeric id (headers such as
 /// `"### Result"` and `"## Pages"` fall out here).
 ///
-/// This is the lower-layer twin of the tab-line question; the browser-tools
-/// layer no longer keeps its own copy and calls [`active_tab_id`] instead.
+/// This is the ONE parser for both drivers' listings, and it is private: the
+/// only callers are [`parse_tab_lines`] below and, through it, the two text
+/// backends. Everything downstream of a backend now works on `&[TabLine]`,
+/// so no other layer can grow a second reading of a tab line — which is what
+/// the tool layer had, answering "active" with `.next_back()` while
+/// `browser_tabs {switch}` falsified it.
 #[must_use]
-pub fn parse_tab_line(line: &str) -> Option<TabLine> {
+fn parse_tab_line(line: &str) -> Option<TabLine> {
     let line = line.trim();
     // Normalize the two id prefixes ("- N: …" / "Tab N: …") to "N: …" so one
     // parser serves both drivers.
@@ -245,19 +249,28 @@ pub fn parse_tab_line(line: &str) -> Option<TabLine> {
     })
 }
 
-/// Extract numeric tab ids from a backend `list_tabs` listing.
+/// Every addressable row of a backend listing, in listing order.
 ///
-/// Handles both the Chrome `DevTools` MCP format `"N: URL"` and the Playwright
-/// CLI format `"Tab N: URL"`. Lower-layer twin of the `(id, url)` parser in the
-/// browser-tools layer — the reaper lives in the `browser` crate layer and may
-/// not reach up into `builtin_tools`, and it only needs the ids.
+/// The seam between "a driver printed some text" and "Aleph has tabs". Lines
+/// that carry no numeric id (`"### Result"`, `"## Pages"`, a `no pages open`
+/// notice) are not rows and fall out here — which makes an unreadable listing
+/// an EMPTY answer, never a fabricated one. Empty means "no tab I can
+/// address", and every caller must read it that way (判据 §8): the
+/// post-navigation audit then skips with a log line rather than vetting a URL
+/// it invented.
 #[must_use]
-pub fn parse_tab_ids(tabs_text: &str) -> Vec<String> {
-    tabs_text
-        .lines()
-        .filter_map(parse_tab_line)
-        .map(|t| t.id)
-        .collect()
+pub(crate) fn parse_tab_lines(text: &str) -> Vec<TabLine> {
+    text.lines().filter_map(parse_tab_line).collect()
+}
+
+/// The ids of a listing, in order.
+///
+/// Renamed from `parse_tab_ids`: after the trait change it parses nothing, and
+/// a name that says "parse" over a projection is a comment that lies about the
+/// code beneath it.
+#[must_use]
+pub(crate) fn tab_ids(tabs: &[TabLine]) -> Vec<String> {
+    tabs.iter().map(|t| t.id.clone()).collect()
 }
 
 /// The active tab of a listing — **the single source for that question**.
@@ -286,13 +299,15 @@ pub fn parse_tab_ids(tabs_text: &str) -> Vec<String> {
 /// `manager.rs`), not a smarter read of any single listing — see
 /// `docs/reference/FEATURE_LOCATOR.md` §3.12 (附录 D.9.19) and
 /// `qa/README.md`'s "Known gap: tab identity does not survive a re-attach".
+///
+/// The signature change to `&[TabLine]` does not touch that gap: the wrong
+/// marker is produced by the driver's enumeration, upstream of anything this
+/// function can see. Recovering the right tab across a re-attach still needs
+/// the persistent record one level up (`ProfileManager::tab_registry`).
 #[must_use]
-pub fn active_tab(tabs_text: &str) -> Option<TabLine> {
+pub fn active_tab(tabs: &[TabLine]) -> Option<&TabLine> {
     let mut last = None;
-    for line in tabs_text.lines() {
-        let Some(tab) = parse_tab_line(line) else {
-            continue;
-        };
+    for tab in tabs {
         if tab.selected {
             return Some(tab);
         }
@@ -303,22 +318,21 @@ pub fn active_tab(tabs_text: &str) -> Option<TabLine> {
 
 /// The active tab's id — see [`active_tab`].
 #[must_use]
-pub fn active_tab_id(tabs_text: &str) -> Option<String> {
-    active_tab(tabs_text).map(|t| t.id)
+pub fn active_tab_id(tabs: &[TabLine]) -> Option<String> {
+    active_tab(tabs).map(|t| t.id.clone())
 }
 
 /// The active tab's URL — see [`active_tab`].
-pub(crate) fn active_tab_url(tabs_text: &str) -> Option<String> {
-    active_tab(tabs_text).map(|t| t.url)
+pub(crate) fn active_tab_url(tabs: &[TabLine]) -> Option<String> {
+    active_tab(tabs).map(|t| t.url.clone())
 }
 
-/// The current URL of `tab_id` as reported by `list_tabs`, if present.
-pub(crate) fn tab_url_for(tabs_text: &str, tab_id: &str) -> Option<String> {
-    tabs_text
-        .lines()
-        .filter_map(parse_tab_line)
-        .rfind(|t| t.id == tab_id)
-        .map(|t| t.url)
+/// The current URL of `tab_id` in this listing, if present.
+///
+/// `rfind`, as before: a listing that names one id twice is answered by its
+/// last occurrence, which is the one a driver appends.
+pub(crate) fn tab_url_for(tabs: &[TabLine], tab_id: &str) -> Option<String> {
+    tabs.iter().rfind(|t| t.id == tab_id).map(|t| t.url.clone())
 }
 
 #[cfg(test)]
@@ -343,17 +357,18 @@ mod tests {
     #[test]
     fn parse_reads_the_real_playwright_cli_listing() {
         let text = "### Result\n                    - 0: [](about:blank)\n                    - 1: (current) [Example Domain](https://example.com/)";
-        assert_eq!(parse_tab_ids(text), ids(&["0", "1"]));
+        let rows = parse_tab_lines(text);
+        assert_eq!(tab_ids(&rows), ids(&["0", "1"]));
         // The `(current)` marker is the driver's own answer to "which tab is
         // active"; without it this listing would fall back to last-listed and
         // only accidentally agree.
-        assert_eq!(active_tab_id(text).as_deref(), Some("1"));
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("1"));
         assert_eq!(
-            active_tab_url(text).as_deref(),
+            active_tab_url(&rows).as_deref(),
             Some("https://example.com/")
         );
         assert_eq!(
-            tab_url_for(text, "0").as_deref(),
+            tab_url_for(&rows, "0").as_deref(),
             Some("about:blank"),
             "the non-selected line must resolve too"
         );
@@ -363,9 +378,57 @@ mod tests {
     /// that is NOT last, the parser must follow the marker.
     #[test]
     fn the_playwright_current_marker_beats_last_listed() {
-        let text = "- 0: (current) [A](https://a.com/)\n- 1: [B](https://b.com/)";
-        assert_eq!(active_tab_id(text).as_deref(), Some("0"));
-        assert_eq!(active_tab_url(text).as_deref(), Some("https://a.com/"));
+        let rows = parse_tab_lines("- 0: (current) [A](https://a.com/)\n- 1: [B](https://b.com/)");
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("0"));
+        assert_eq!(active_tab_url(&rows).as_deref(), Some("https://a.com/"));
+    }
+
+    /// The two drivers' real renderings, both through the ONE entry point the
+    /// backends now call. Verbatim output, not a description of it: the
+    /// previous description named a format no driver emits, and every real
+    /// playwright listing parsed to nothing while the tests stayed green.
+    #[test]
+    fn parse_tab_lines_reads_both_drivers_real_listings() {
+        let playwright = "### Result\n                    - 0: [](about:blank)\n                    - 1: (current) [Example Domain](https://example.com/)";
+        let rows = parse_tab_lines(playwright);
+        assert_eq!(tab_ids(&rows), ids(&["0", "1"]));
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("1"));
+        assert_eq!(
+            active_tab_url(&rows).as_deref(),
+            Some("https://example.com/")
+        );
+        assert_eq!(tab_url_for(&rows, "0").as_deref(), Some("about:blank"));
+
+        let mcp = "## Pages\n1: https://a.com [selected]\n2: https://b.com";
+        let rows = parse_tab_lines(mcp);
+        assert_eq!(tab_ids(&rows), ids(&["1", "2"]));
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("1"));
+        assert_eq!(tab_url_for(&rows, "2").as_deref(), Some("https://b.com"));
+
+        // A listing that parses to nothing is an EMPTY answer, never a
+        // sentinel row: an empty vec means "no tabs I can address", and the
+        // audit's `None` landing URL is what makes it skip rather than vet a
+        // URL it invented (判据 §8).
+        assert!(parse_tab_lines("### Result\nno pages open").is_empty());
+        assert!(parse_tab_lines("").is_empty());
+    }
+
+    /// `active_tab` now borrows out of the caller's rows, so the caller can
+    /// hold the whole listing and address the same tab it vetted. Identity,
+    /// not equality: the returned reference must point INTO the slice.
+    #[test]
+    fn active_tab_borrows_the_row_it_names_out_of_the_callers_listing() {
+        let rows = parse_tab_lines("1: https://a.com\n2: https://b.com [selected]");
+        let picked = active_tab(&rows).expect("a marked row");
+        assert_eq!(picked.id, "2");
+        assert!(
+            std::ptr::eq(picked, &rows[1]),
+            "active_tab must borrow the caller's row, not clone one"
+        );
+        // No marker anywhere: last-listed is the documented fallback.
+        let unmarked = parse_tab_lines("1: https://a.com\n2: https://b.com");
+        assert_eq!(active_tab(&unmarked).map(|t| t.id.as_str()), Some("2"));
+        assert!(active_tab(&[]).is_none());
     }
 
     /// The chrome-devtools-mcp `list_pages` listing, copied verbatim from a
@@ -374,40 +437,40 @@ mod tests {
     /// that was only ever written down here.
     #[test]
     fn parse_reads_the_real_chrome_devtools_mcp_listing() {
-        let text = "## Pages\n1: about:blank [selected]";
-        assert_eq!(parse_tab_ids(text), ids(&["1"]));
-        assert_eq!(active_tab_id(text).as_deref(), Some("1"));
-        assert_eq!(active_tab_url(text).as_deref(), Some("about:blank"));
+        let rows = parse_tab_lines("## Pages\n1: about:blank [selected]");
+        assert_eq!(tab_ids(&rows), ids(&["1"]));
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("1"));
+        assert_eq!(active_tab_url(&rows).as_deref(), Some("about:blank"));
     }
 
     #[test]
     fn parse_tab_ids_handles_both_formats() {
         let text = "1: https://a.com\nTab 2: https://b.com [selected]\nnoise\nTab x: bad";
-        assert_eq!(parse_tab_ids(text), ids(&["1", "2"]));
-        assert!(parse_tab_ids("").is_empty());
+        assert_eq!(tab_ids(&parse_tab_lines(text)), ids(&["1", "2"]));
+        assert!(tab_ids(&parse_tab_lines("")).is_empty());
     }
 
     #[test]
     fn active_tab_prefers_the_selected_marker_over_the_last_line() {
         // The marker is the driver's own answer; "last-listed" is only the
         // fallback for a listing that carries no marker.
-        let text = "1: https://a.com [selected]\nTab 2: http://10.0.0.1/x";
-        assert_eq!(active_tab_id(text).as_deref(), Some("1"));
-        assert_eq!(active_tab_url(text).as_deref(), Some("https://a.com"));
+        let rows = parse_tab_lines("1: https://a.com [selected]\nTab 2: http://10.0.0.1/x");
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("1"));
+        assert_eq!(active_tab_url(&rows).as_deref(), Some("https://a.com"));
         // …and the URL still has the annotation stripped when the marked tab
         // is the annotated one.
-        let text = "1: https://a.com\nTab 2: http://10.0.0.1/x [selected]";
-        assert_eq!(active_tab_id(text).as_deref(), Some("2"));
-        assert_eq!(active_tab_url(text).as_deref(), Some("http://10.0.0.1/x"));
+        let rows = parse_tab_lines("1: https://a.com\nTab 2: http://10.0.0.1/x [selected]");
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("2"));
+        assert_eq!(active_tab_url(&rows).as_deref(), Some("http://10.0.0.1/x"));
     }
 
     #[test]
     fn active_tab_falls_back_to_last_listed_without_a_marker() {
-        let text = "1: https://a.com\nTab 2: https://b.com";
-        assert_eq!(active_tab_id(text).as_deref(), Some("2"));
-        assert_eq!(active_tab_url(text).as_deref(), Some("https://b.com"));
-        assert_eq!(active_tab_id(""), None);
-        assert_eq!(active_tab_url("noise only"), None);
+        let rows = parse_tab_lines("1: https://a.com\nTab 2: https://b.com");
+        assert_eq!(active_tab_id(&rows).as_deref(), Some("2"));
+        assert_eq!(active_tab_url(&rows).as_deref(), Some("https://b.com"));
+        assert_eq!(active_tab_id(&parse_tab_lines("")), None);
+        assert_eq!(active_tab_url(&parse_tab_lines("noise only")), None);
     }
 
     #[test]
@@ -426,10 +489,13 @@ mod tests {
 
     #[test]
     fn tab_url_for_matches_id() {
-        let text = "1: https://a.com\n2: http://10.0.0.1/x [selected]";
-        assert_eq!(tab_url_for(text, "1").as_deref(), Some("https://a.com"));
-        assert_eq!(tab_url_for(text, "2").as_deref(), Some("http://10.0.0.1/x"));
-        assert_eq!(tab_url_for(text, "9"), None);
+        let rows = parse_tab_lines("1: https://a.com\n2: http://10.0.0.1/x [selected]");
+        assert_eq!(tab_url_for(&rows, "1").as_deref(), Some("https://a.com"));
+        assert_eq!(
+            tab_url_for(&rows, "2").as_deref(),
+            Some("http://10.0.0.1/x")
+        );
+        assert_eq!(tab_url_for(&rows, "9"), None);
     }
 
     #[test]
