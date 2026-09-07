@@ -2,9 +2,11 @@
 //! presence of a usable browser runtime.
 //!
 //! `BrowserDriver` (`browser::profile`) has THREE variants, and
-//! `browser::manager::get_backend` (doc at `manager.rs:381-383`, arms at
-//! `:389`/`:398`/`:408`) routes two of them to a real backend, each with its
-//! own prerequisite:
+//! `browser::manager::get_backend`'s three match arms — one per variant —
+//! route two of them to a real backend, each with its own prerequisite
+//! ([`self::tests::get_backend_still_refuses_cdp_by_name`] pins the third
+//! arm's current behaviour, so a future arm that gives `Cdp` a real backend
+//! reddens this doc instead of leaving it quietly wrong):
 //!   * `BrowserDriver::ExistingSession` → `ChromeMcpBackend`, which attaches to
 //!     a locally-installed Chromium by launching `npx chrome-devtools-mcp`. It
 //!     needs **both** a Chromium binary ([`find_chromium`]) **and** `npx`.
@@ -195,6 +197,37 @@ mod tests {
         assert!(
             !COVERED_DRIVERS.contains(&BrowserDriver::Cdp),
             "Cdp is the one driver this probe says nothing about"
+        );
+    }
+
+    /// L3: `covered_drivers_is_every_driver_except_cdp` only catches a FOURTH
+    /// variant appearing — it stays green through the change that is actually
+    /// scheduled, Task 14 giving `Cdp` a real backend, because
+    /// `BrowserDriver::ALL` and `COVERED_DRIVERS` would both be unchanged by
+    /// that. This is the premise pin for the other half of the module doc's
+    /// claim: that `get_backend` currently refuses a `Cdp` profile rather than
+    /// running it. It is not a `Cdp` health check (Task 14 owns that) — it
+    /// only pins today's refusal, so that the day `get_backend` starts
+    /// returning `Ok` for `Cdp`, this test reddens and forces the module doc
+    /// (which cites this test by name) to be updated in the same commit.
+    #[test]
+    fn get_backend_still_refuses_cdp_by_name() {
+        use crate::browser::manager::ProfileManager;
+        use crate::browser::profile::{BrowserSystemConfig, ProfileConfig};
+
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "cdp-profile".to_string(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        assert!(
+            manager.get_backend("cdp-profile").is_err(),
+            "get_backend must still refuse Cdp — if this now succeeds, Task 14 \
+             has landed a real backend and this module's doc needs updating"
         );
     }
 

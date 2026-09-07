@@ -1046,38 +1046,53 @@ engine = "obscura"
     /// mid-round conflated this mutation's effect with an unrelated,
     /// then-still-open bug in `gateway::handlers::browser_config::handle_update`,
     /// which inflated the count by one; the numbers below are the corrected
-    /// ones):**
+    /// ones, stated as absolutes rather than as deltas across three separate
+    /// commit messages that never agreed — those said 3, then 4, then 5
+    /// "other files"; 5 is correct, verified below by full path):**
     ///
     /// - Deleting `#[serde(default = "default_cdp_command_timeout_secs")]`
     ///   from the field turns it from optional to mandatory for TOML
     ///   deserialization. It compiles cleanly — `cargo test --lib --no-run`
     ///   after that deletion produces zero errors — so it is **not** a
-    ///   compile failure. It IS a genuine runtime red for path 2 here
+    ///   compile failure. It IS a genuine runtime red for path 2 here, at the
+    ///   `assert_eq!(parsed.cdp_command_timeout_secs, 30)` line below
     ///   (`toml::from_str` panics with `missing field
-    ///   cdp_command_timeout_secs`), but the same deletion also breaks 18
-    ///   OTHER tests, in `browser::profile` itself plus five other files —
-    ///   `config::dead_keys`, `config::load` (`dead_key_tests`),
-    ///   `config::tests::serialization`, `config::types::general`, and
-    ///   `diagnostics::checks::config_parse` — every one of them a config
-    ///   fragment that happens not to mention this key (19 failures total
-    ///   from this one mutation; measured by running the full `-p alephcore
-    ///   --lib` suite with the attribute deleted and subtracting the one
-    ///   pre-existing, unrelated failure `utils::host::tests::
-    ///   no_other_module_hand_rolls_the_hostname_env_read` that fails on this
-    ///   tree regardless of this mutation). That is a real falsifier, but a
-    ///   blunt, crate-wide one: it does not tell you THIS test caught it,
-    ///   only that something did.
+    ///   cdp_command_timeout_secs` before that line is even reached, so the
+    ///   panic is inside the `.expect("parse")` a few lines earlier — either
+    ///   way, path 2 never gets to compare against 30). Running the full `-p
+    ///   alephcore --lib` suite with the attribute deleted: **20 failures
+    ///   observed**, of which one —
+    ///   `utils::host::tests::no_other_module_hand_rolls_the_hostname_env_read`
+    ///   — is a pre-existing, always-failing test with zero relation to this
+    ///   change (confirmed separately). **19 failures are attributable to
+    ///   this mutation**: this test itself, plus 18 others split across
+    ///   `browser::profile::tests` (13 of the 18) and five other files, one
+    ///   failure each — `config::dead_keys`, `config::load`
+    ///   (`dead_key_tests`), `config::tests::serialization`,
+    ///   `config::types::general`, and `diagnostics::checks::config_parse`.
+    ///   That is a real falsifier, but a blunt, crate-wide one: it does not
+    ///   tell you THIS test caught it, only that something did.
     /// - The mutation that falsifies path 2 **on its own**, leaving path 1
     ///   untouched, is repointing the attribute at a second function
     ///   returning a different value (verified: a `mutation_k2_wrong_cdp_timeout()
     ///   -> u64 { 99 }` swapped into the `#[serde(default = "...")]` string).
     ///   `impl Default` still calls the original, unedited
     ///   `default_cdp_command_timeout_secs()`, so `built` stays 30 and only
-    ///   `parsed` becomes 99 — the final `assert_eq!(built..., parsed...)`
-    ///   below goes red precisely because the two mechanisms now disagree,
-    ///   which is the property this test exists to pin. This is the one to
-    ///   reach for when the question is "does path 2 specifically still
-    ///   work", not "does something in this file still work".
+    ///   `parsed` becomes 99. **The assertion that actually reds is
+    ///   `assert_eq!(parsed.cdp_command_timeout_secs, 30)`** (measured:
+    ///   `left: 99, right: 30`) — the SAME line path 1's own value never
+    ///   touches, four lines before the final cross-check. The final
+    ///   `assert_eq!(built.cdp_command_timeout_secs,
+    ///   parsed.cdp_command_timeout_secs)` is not reachable under this
+    ///   mutation (the panic above ends the test first), and it could not
+    ///   have caught it regardless: by the time execution would reach it,
+    ///   both `built == 30` and `parsed == 30` are already independently
+    ///   proven, so `built == parsed` is entailed and cannot fail — a 判据
+    ///   §2 arm. It stands as a statement of intent ("these two must agree"),
+    ///   not as a load-bearing assertion; the line above it is the one doing
+    ///   the falsifying. This is the mutation to reach for when the question
+    ///   is "does path 2 specifically still work", not "does something in
+    ///   this file still work".
     #[test]
     fn browser_system_config_default_timeout_is_30_not_0() {
         // Path 1: the Rust default.

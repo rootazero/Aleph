@@ -440,6 +440,30 @@ mod tests {
         assert_eq!(v["action_timeout_secs"], 10);
     }
 
+    /// L6: `default_driver` became `Option<String>` on a type that serves
+    /// BOTH the `get` response and the `update` params. `snapshot` always
+    /// wraps it in `Some(..)`, so nothing today sends a bare JSON `null` for
+    /// it — but a future outbound `None` would fail deserialization of the
+    /// WHOLE `BrowserConfigResponse` in the Panel, not just this field
+    /// (`String`, not `Option<String>`, on that side). Pinning "the GET
+    /// response's `default_driver` is never null" here means that failure
+    /// mode reddens this test instead of surfacing only as a Panel-side
+    /// deserialization error nobody connects back to this file.
+    #[tokio::test]
+    async fn get_response_default_driver_is_never_null() {
+        let v = get(&make_config()).await;
+        assert_ne!(
+            v["default_driver"],
+            serde_json::Value::Null,
+            "the GET response must always carry a driver string"
+        );
+        assert!(
+            v["default_driver"].is_string(),
+            "default_driver must be a JSON string, not null: {:?}",
+            v["default_driver"]
+        );
+    }
+
     /// The three secret-exfiltration switches must be readable: an operator who
     /// cannot see them cannot know whether page content is being redacted.
     #[tokio::test]
@@ -695,6 +719,51 @@ mod tests {
             config.read().await.general.browser.profiles["default"].driver,
             BrowserDriver::Cdp,
             "a refused update must not partially persist"
+        );
+    }
+
+    /// L1: R70's refusal, asserted at the WIRE FACE, not just at
+    /// `driver_from_update` in isolation. The two unit tests above prove the
+    /// function is falsifiable; neither one proves `handle_update` actually
+    /// reaches the `Err` arm and turns it into a refused RPC response —
+    /// `base_params()` and every other test-side write in this file only
+    /// ever send `"managed"`, so nothing before this test ever drove a
+    /// garbage `default_driver` through the real request path (判据 §4: a
+    /// test that only proves the function is called is not enough — the
+    /// effect at the boundary must be asserted).
+    #[tokio::test]
+    async fn an_unrecognised_driver_at_the_wire_face_is_refused_not_persisted() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let config = make_config();
+        {
+            let mut cfg = config.write().await;
+            cfg.general.browser.profiles.insert(
+                "default".to_string(),
+                ProfileConfig {
+                    driver: BrowserDriver::Cdp,
+                    ..Default::default()
+                },
+            );
+        }
+
+        let mut params = base_params();
+        params["default_driver"] = json!("quantum");
+        let response = update(&config, params).await;
+        assert!(
+            !response.is_success(),
+            "an unrecognised driver string must be refused at the wire face, \
+             not silently kept — reporting success while discarding what the \
+             operator typed is the report-success no-op shape (判据 §11)"
+        );
+
+        // And nothing landed: the profile's driver is still cdp, not silently
+        // kept-as-was by an Err arm that fell through to the old value.
+        assert_eq!(
+            config.read().await.general.browser.profiles["default"].driver,
+            BrowserDriver::Cdp,
+            "a refused update must not persist any driver at all"
         );
     }
 }
