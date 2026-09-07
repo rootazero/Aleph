@@ -1,8 +1,10 @@
 //! `BrowserRuntimeProbe` — gates the `browser_*` tool family on the
 //! presence of a usable browser runtime.
 //!
-//! Aleph routes browser work to one of two backends (see
-//! `browser::manager::get_backend`), and each has its own prerequisite:
+//! `BrowserDriver` (`browser::profile`) has THREE variants, and
+//! `browser::manager::get_backend` (doc at `manager.rs:381-383`, arms at
+//! `:389`/`:398`/`:408`) routes two of them to a real backend, each with its
+//! own prerequisite:
 //!   * `BrowserDriver::ExistingSession` → `ChromeMcpBackend`, which attaches to
 //!     a locally-installed Chromium by launching `npx chrome-devtools-mcp`. It
 //!     needs **both** a Chromium binary ([`find_chromium`]) **and** `npx`.
@@ -10,10 +12,23 @@
 //!     ledger-provisioned `playwright-cli` binary (`browser::playwright_cli`
 //!     resolves it through `runtimes::ensure_capability("playwright-cli", …)`)
 //!     and brings its own Chromium. It does **not** run `npx`.
+//!   * `BrowserDriver::Cdp` has no backend in this build — `get_backend`
+//!     refuses it by name — and no auto-injected profile uses it. This probe
+//!     asks nothing about it.
 //!
-//! Both profiles always exist — `ProfileManager::new` auto-injects a `default`
-//! (managed) and a `user` (existing-session) profile — so the probe answers for
-//! both drivers and reports `Healthy` when either one could actually run.
+//! Both auto-injected profiles always exist — `ProfileManager::new` injects a
+//! `default` (managed) and a `user` (existing-session) profile — so the probe
+//! covers the two drivers those profiles can use, and reports `Healthy` when
+//! either one could actually run. **That is coverage of two drivers out of
+//! three, not of "every driver"**: a profile an operator hand-configures with
+//! `driver = "cdp"` has a runtime prerequisite (an obscura or Chromium binary
+//! reachable over CDP) that is not one of the two questions this probe asks.
+//! `Healthy` here says nothing about whether such a profile could run — a
+//! guard's green only covers the shapes it was written to recognise (判据
+//! §3). [`self::tests::covered_drivers_is_every_driver_except_cdp`] ties the
+//! two-out-of-three claim to `BrowserDriver::ALL`, so a fourth driver reddens
+//! this file instead of leaving this paragraph quietly wrong again. Task 14
+//! owns whatever `Cdp` needs; this file is not it.
 //!
 //! # The question this used to ask, and why it was the wrong one
 //!
@@ -148,6 +163,40 @@ impl ToolHealthProbe for BrowserRuntimeProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::profile::BrowserDriver;
+
+    /// The drivers this probe's verdict actually covers — exactly the ones an
+    /// auto-injected profile can use. `BrowserDriver::Cdp` is deliberately
+    /// absent: it has no auto-injected profile and no backend yet, and
+    /// `Healthy` here says nothing about whether a hand-configured `Cdp`
+    /// profile could run.
+    const COVERED_DRIVERS: [BrowserDriver; 2] =
+        [BrowserDriver::Managed, BrowserDriver::ExistingSession];
+
+    /// Ties the module doc's "two drivers out of three" claim to
+    /// `BrowserDriver::ALL`, so a fourth driver reddens this file instead of
+    /// leaving the doc quietly wrong again (the exact shape K4 fixed: the doc
+    /// said "two backends... total" against a three-armed `get_backend`).
+    #[test]
+    fn covered_drivers_is_every_driver_except_cdp() {
+        assert_eq!(
+            BrowserDriver::ALL.len(),
+            COVERED_DRIVERS.len() + 1,
+            "BrowserDriver gained or lost a variant; re-check what this \
+             probe covers and update COVERED_DRIVERS and the module doc \
+             together"
+        );
+        for d in COVERED_DRIVERS {
+            assert!(
+                BrowserDriver::ALL.contains(&d),
+                "{d:?} is in COVERED_DRIVERS but not in BrowserDriver::ALL"
+            );
+        }
+        assert!(
+            !COVERED_DRIVERS.contains(&BrowserDriver::Cdp),
+            "Cdp is the one driver this probe says nothing about"
+        );
+    }
 
     #[tokio::test]
     async fn probe_agrees_with_the_per_driver_prerequisites() {
