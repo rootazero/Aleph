@@ -95,6 +95,33 @@ impl DoctorTool {
         self.mcp = Some(mcp);
         self
     }
+
+    /// Build the diagnostics engine this tool runs against.
+    ///
+    /// Pulled out of `call()` so a test can ask "how many checks are in the
+    /// battery `DoctorTool::default()` wires up" by calling this same
+    /// construction directly, instead of restating the count as a literal
+    /// that has to be hand-bumped every time a check is registered here or in
+    /// `default_registry()` — the shape `builtin_tools::doctor::tests::
+    /// registered_checks()` uses.
+    fn build_engine(&self) -> Result<DiagnosticEngine> {
+        let mut engine = DiagnosticEngine::default_registry()?;
+        if let (Some(config), Some(vault)) = (self.config.as_ref(), self.token_manager.as_ref()) {
+            engine = engine.with_runtime_checks(Arc::clone(config), Arc::clone(vault));
+        }
+        Ok(engine
+            .with_extension_usage_check(self.mcp.clone())
+            // Daemon-side: this process booted, so `core/capability-wiring` can
+            // actually answer here. It is deliberately absent from
+            // `default_registry()` — see that builder's doc.
+            .with_capability_wiring_check()
+            // Same reason: the projector and the event log only exist in the
+            // booted daemon.
+            .with_projection_holes_check()
+            // Same two handles, the other question: does the log contradict
+            // itself. `aleph resume` names this check to the operator by id.
+            .with_session_log_check())
+    }
 }
 
 #[async_trait]
@@ -118,22 +145,7 @@ impl AlephTool for DoctorTool {
         // (`registry_adapter::doctor_claim`); `only` / `skip` narrow the same
         // run and never widen what a repair may touch.
 
-        let mut engine = DiagnosticEngine::default_registry()?;
-        if let (Some(config), Some(vault)) = (self.config.as_ref(), self.token_manager.as_ref()) {
-            engine = engine.with_runtime_checks(Arc::clone(config), Arc::clone(vault));
-        }
-        engine = engine
-            .with_extension_usage_check(self.mcp.clone())
-            // Daemon-side: this process booted, so `core/capability-wiring` can
-            // actually answer here. It is deliberately absent from
-            // `default_registry()` — see that builder's doc.
-            .with_capability_wiring_check()
-            // Same reason: the projector and the event log only exist in the
-            // booted daemon.
-            .with_projection_holes_check()
-            // Same two handles, the other question: does the log contradict
-            // itself. `aleph resume` names this check to the operator by id.
-            .with_session_log_check();
+        let engine = self.build_engine()?;
         let posture = if args.fix {
             Posture::Fix
         } else {
@@ -171,37 +183,36 @@ mod tests {
     use super::*;
     use crate::utils::paths::IsolatedAlephHome;
 
-    /// Registered-check count. Asserted rather than derived so adding a check
-    /// is a deliberate edit here too — the alternative (`>= 1`) would let a
-    /// check silently drop out of `default_registry`.
-    /// Counts every check in `default_registry()` plus the four this tool
-    /// appends unconditionally, all of them daemon-only questions:
-    /// `ext/idle-extensions` (with `mcp: None` here, so it reports the MCP
-    /// category as unenumerable rather than being absent),
-    /// `core/capability-wiring`, `core/projection-holes` and
-    /// `core/session-log`. The last two answer UNKNOWN in this test — the
-    /// isolated home has no live projector and no open event log — which is
-    /// the point: they are registered, and an absent handle is a reported
-    /// "I could not look", never a silent absence.
+    /// Registered-check count, DERIVED from `DoctorTool::build_engine()` —
+    /// the exact construction `call()` runs against, called here with the
+    /// same `DoctorTool::default()` (`config`/`token_manager`/`mcp` all
+    /// `None`) `inspect_args()`'s tests use — rather than a literal restated
+    /// by hand. A literal needed a manual edit, in the SAME commit, every time
+    /// a check was added to either half of the sum it names (`default_
+    /// registry()`, or one of the four `with_*` calls `build_engine()` always
+    /// chains: `ext/idle-extensions`, `core/capability-wiring`, `core/
+    /// projection-holes`, `core/session-log`); it went red for a reason
+    /// unrelated to what these tests check the moment either side moved and
+    /// the literal did not move with it — twice, once per side, before this
+    /// derivation (a Task 7 fix-round regression: `browser/chromium-missing`
+    /// joining `default_registry()` reddened both call sites below without
+    /// touching anything either one actually asserts).
     ///
-    /// **A count cannot name what it counted.** It could not tell "the daemon
-    /// path still has `core/capability-wiring`" from "it vanished and
-    /// something else appeared" back when that check moved from one side of
-    /// the sum to the other, and it cannot do it for the two log-backed checks
-    /// now. Identity is asserted directly instead, by
+    /// **A count still cannot name what it counted** — it cannot tell "the
+    /// daemon path still has `core/capability-wiring`" from "it vanished and
+    /// something else, coincidentally the same size, appeared". Identity is
+    /// asserted directly instead, by
     /// [`the_daemon_path_still_reports_capability_wiring`] and
     /// [`the_daemon_path_still_reports_the_two_log_backed_checks`]; this
-    /// literal only holds the total, so that a check dropping out of
-    /// `default_registry` is still a red.
-    ///
-    /// 13 in `default_registry()` + those 4 = 17. Both halves of that sum moved
-    /// in this round and the literal was edited once per landing, not once at
-    /// the end: `core/projection-holes` and `core/session-log` arrived in
-    /// separate commits, and a module-filtered green (`--lib -- diagnostics`)
-    /// cannot see this test at all — it lives in `builtin_tools::doctor`. That
-    /// is why the count is asserted somewhere the check's own module filter
-    /// does not reach.
-    const REGISTERED_CHECKS: usize = 17;
+    /// function only holds the total, so that a check dropping out of the
+    /// battery is still a red — the derivation removes the "did I remember to
+    /// bump the literal" failure mode, not the identity gap those two cover.
+    fn registered_checks() -> usize {
+        DoctorTool::default()
+            .build_engine()
+            .expect("default_registry() must build against a real ~/.aleph path")
+            .check_count()
+    }
 
     fn inspect_args() -> DoctorArgs {
         DoctorArgs::default()
@@ -213,10 +224,11 @@ mod tests {
         let tool = DoctorTool::default();
         let out = tool.call(inspect_args()).await.unwrap();
 
-        // Structured payload: every registered check ran and reported.
+        // Structured payload: one entry per check in the battery, both ran
+        // and timed.
         assert_eq!(out.report.posture, "inspect");
-        assert_eq!(out.report.checks_run, REGISTERED_CHECKS);
-        assert_eq!(out.report.timings.len(), REGISTERED_CHECKS);
+        assert_eq!(out.report.checks_run, registered_checks());
+        assert_eq!(out.report.timings.len(), registered_checks());
         assert!(!out.report.findings.is_empty());
         // Summary is a compact one-line tally, not the full human render.
         assert!(!out.summary.contains('\n'));
@@ -309,7 +321,9 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(skipped.report.checks_run, REGISTERED_CHECKS - 1);
+        // Narrowing, not a re-stated total: full battery minus exactly the
+        // one named check.
+        assert_eq!(skipped.report.checks_run, registered_checks() - 1);
         assert!(skipped
             .report
             .findings

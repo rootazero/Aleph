@@ -83,8 +83,11 @@ impl StrategyStore {
 
     /// Fetch the strategy for `key`, if any. A missing row is `Ok(None)`;
     /// corrupt JSON is also `Ok(None)` (fail-safe: a bad row must never wedge
-    /// prompt assembly). Real DB errors propagate via `?` rather than being
-    /// silently swallowed as "not found".
+    /// prompt assembly) but is logged at warn so a sustained degradation
+    /// (disk corruption, schema migration mistake, manual tampering) is
+    /// observable instead of silently starving the prompt of its strategy.
+    /// Real DB errors propagate via `?` rather than being swallowed as
+    /// "not found".
     pub fn get(&self, key: &str) -> anyhow::Result<Option<Strategy>> {
         use rusqlite::OptionalExtension;
         let conn = self.lock();
@@ -96,7 +99,17 @@ impl StrategyStore {
             )
             .optional()
             .map_err(|e| AlephError::other(format!("strategy get: {e}")))?;
-        Ok(row.and_then(|j| serde_json::from_str::<Strategy>(&j).ok()))
+        Ok(row.and_then(|j| match serde_json::from_str::<Strategy>(&j) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(
+                    key = %key,
+                    error = %e,
+                    "strategy store: corrupt row, returning None (consider delete + repair)"
+                );
+                None
+            }
+        }))
     }
 
     /// Remove the strategy for `key` (no-op if absent).

@@ -75,6 +75,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) moa_manage_tool: crate::builtin_tools::moa_manage::MoaManageTool,
     /// List-models tool instance (LLM-facing model discovery: capability + cost)
     pub(crate) list_models_tool: crate::builtin_tools::list_models::ListModelsTool,
+    /// Runtime-manage tool instance (external runtime ledger: list + install)
+    pub(crate) runtime_manage_tool: crate::builtin_tools::runtime_manage::RuntimeManageTool,
     /// Doctor tool instance (self-diagnosis; carries live config + vault
     /// handles so the engine can probe provider connectivity at runtime)
     pub(crate) doctor_tool: crate::builtin_tools::DoctorTool,

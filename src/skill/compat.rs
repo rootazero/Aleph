@@ -27,6 +27,16 @@ pub struct SkillInfo {
     /// (which are registered through this same shape but carry no manifest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The skill's declared `allowed-tools:` list, projected verbatim from the
+    /// manifest. `None` = no declaration (allow-all); `Some(vec![])` = explicit
+    /// deny-all. `register_skills` validates the names against the tool
+    /// registry and carries the result onto `UnifiedTool.routing_capabilities`,
+    /// which is what the slash-command envelope and then the run loop read.
+    ///
+    /// Plugin *commands* are registered through this same shape and carry no
+    /// manifest, so they always project `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 impl From<SkillManifest> for SkillInfo {
@@ -37,6 +47,9 @@ impl From<SkillManifest> for SkillInfo {
             description: manifest.description().to_string(),
             scope: manifest.scope().clone(),
             version: manifest.version().map(str::to_string),
+            allowed_tools: manifest
+                .allowed_tools()
+                .map(|tools| tools.iter().map(String::clone).collect()),
         }
     }
 }
@@ -82,5 +95,39 @@ mod tests {
         let info: SkillInfo = manifest.into();
         assert_eq!(info.scope, PromptScope::System);
         assert!(info.version.is_none());
+        assert!(info.allowed_tools.is_none());
+    }
+
+    /// The projection must carry the empty-vs-absent distinction, not just the
+    /// names. This is the hop where a `Vec`-shaped field would have quietly
+    /// turned an author's deny-all into allow-all.
+    #[test]
+    fn skill_info_projects_the_allowed_tools_tri_state() {
+        let mut manifest = SkillManifest::new(
+            "test:scoped",
+            "Scoped",
+            "Narrows",
+            SkillContent::new("c"),
+            SkillSource::Global,
+        );
+
+        manifest.set_allowed_tools(Some(vec!["grep".to_string()]));
+        let info: SkillInfo = (&manifest).into();
+        assert_eq!(
+            info.allowed_tools.as_deref(),
+            Some(["grep".to_string()].as_slice())
+        );
+
+        manifest.set_allowed_tools(Some(Vec::new()));
+        let info: SkillInfo = (&manifest).into();
+        assert_eq!(
+            info.allowed_tools.as_deref(),
+            Some([].as_slice()),
+            "an explicit deny-all must not project as `None`"
+        );
+
+        manifest.set_allowed_tools(None);
+        let info: SkillInfo = (&manifest).into();
+        assert!(info.allowed_tools.is_none());
     }
 }

@@ -97,7 +97,7 @@ pub(crate) fn yaml_scalar(s: &str) -> String {
 }
 
 /// Emit a YAML flow-style array, quoting any element that contains a YAML
-/// reserved character so the round-trip survives `serde_yml::from_str`.
+/// reserved character so the round-trip survives `crate::yaml::from_str`.
 pub(crate) fn yaml_inline_array(items: &[String]) -> String {
     if items.is_empty() {
         return "[]".to_string();
@@ -110,7 +110,7 @@ pub(crate) fn yaml_inline_array(items: &[String]) -> String {
 /// [`super::parsing::ExtraFrontmatter`]) as YAML block lines, ready to be
 /// appended inside a note's `---` fence.
 ///
-/// Serialization goes through `serde_yml` rather than hand-built strings:
+/// Serialization goes through `crate::yaml` rather than hand-built strings:
 /// the values are arbitrary YAML read back from disk (nested maps, sequences,
 /// multi-line scalars), and only the emitter that produced them can be trusted
 /// to quote them back correctly.
@@ -121,20 +121,24 @@ pub(crate) fn yaml_extra_block(extra: &super::parsing::ExtraFrontmatter) -> Stri
     if extra.is_empty() {
         return String::new();
     }
-    let mut map = serde_yml::Mapping::new();
+    let mut map = crate::yaml::Mapping::new();
     for (k, v) in extra {
+        // `Mapping` is keyed by `Value`; `ExtraFrontmatter` by `String`.
         // rust-doctor-disable-next-line excessive-clone
-        map.insert(k.clone(), v.clone());
+        map.insert(crate::yaml::Value::String(k.clone()), v.clone());
     }
-    let Ok(rendered) = serde_yml::to_string(&serde_yml::Value::Mapping(map)) else {
+    let Ok(rendered) = crate::yaml::to_string(&crate::yaml::Value::Mapping(map)) else {
         // Unrepresentable value: drop the passthrough block rather than emit a
         // half-serialized header that would make the whole note unparseable.
         // The known fields — the ones the note layer actually reasons about —
         // still round-trip.
         return String::new();
     };
-    // Some serde_yml versions frame a document with `---` / `...`; those
-    // markers would close the note's own frontmatter fence early.
+    // A YAML emitter may frame a document with `---` / `...`; those markers
+    // would close the note's own frontmatter fence early. Normalised rather
+    // than trusted, because the framing is a property of whichever emitter
+    // `crate::yaml` resolves to today — see `skill_manage::compose_skill_md`,
+    // which answers this same question the same way.
     let body = rendered
         .strip_prefix("---\n")
         .unwrap_or(&rendered)

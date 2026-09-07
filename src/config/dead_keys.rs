@@ -163,6 +163,18 @@ const TOLERATED: &[Tolerated] = &[
         why: "retired 2026-08-23 — a failed ingest defers its raw rows for RETRY_GRACE_SECS               (src/memory/compression/service.rs); this knob never reached anything",
         retired: true,
     },
+    // Another whole-section retirement, so the same serde-root rule as
+    // `[agent]` / `[cowork]` applies: the path here must be `secret_providers`,
+    // not `secret_providers.*.account` — `Config` no longer has the field, so
+    // serde reports the root and never descends.
+    Tolerated {
+        path: "secret_providers",
+        why: "the whole [secret_providers] table was retired in the 2026-09-05 audit pass \
+               (secrets I-3): the SecretProvider trait never grew a `get_secret`, so a configured \
+               external provider could never resolve a single secret. Secrets resolve only through \
+               the built-in local vault (src/secrets/vault_resolver.rs)",
+        retired: true,
+    },
 ];
 
 /// Deserialize `contents`, returning the value alongside the dotted key paths
@@ -212,6 +224,19 @@ where
     dead.sort();
     dead.dedup();
     Ok((value, dead))
+}
+
+/// Every tolerated path with its `retired` flag, as `(path, retired)`.
+///
+/// Exposed to `config::tests::skill_doc_drift`, which derives "which top-level
+/// sections may the bundled `self` skill legitimately document" from this list
+/// unioned with `Config`'s schema. `Config` has no `gateway` field by design, so
+/// that guard cannot get the answer from serde alone — and a hand-copied list of
+/// foreign-owned sections over there would be a second spelling of this one,
+/// which is the failure mode the guard exists to catch.
+#[cfg(test)]
+pub(super) fn tolerated_roots() -> Vec<(&'static str, bool)> {
+    TOLERATED.iter().map(|t| (t.path, t.retired)).collect()
 }
 
 /// The matched tolerated entry for `path`, or `None` when nothing reads it.
@@ -376,6 +401,36 @@ mod tests {
         }
     }
 
+    /// A retired *section* has to be listed at its serde root, and only the
+    /// real `Config` can show that: what makes the entry correct is that
+    /// `Config` no longer declares the field, which the `Root` fixture above
+    /// cannot model. Scanning the fixture would only re-prove `covers`.
+    ///
+    /// `[secret_providers]` is the 2026-09-05 case. Two things are asserted
+    /// together because either alone is a false green: the table must still
+    /// **parse** (`Config` has no `deny_unknown_fields`, so an operator
+    /// upgrading past the retirement keeps booting), and it must be reported
+    /// as *retired* rather than *dead* — otherwise he gets a bare "config key
+    /// reaches no code" warning and a `core/config-parse` Warning finding with
+    /// no reason attached to it.
+    #[test]
+    fn the_retired_secret_providers_table_parses_and_is_not_reported_dead() {
+        let (_config, dead) = deserialize_reporting_dead_keys::<crate::config::Config>(
+            "[secret_providers.op]\ntype = \"1password\"\naccount = \"acme\"\n",
+        )
+        .expect("a retired table must still parse: Config has no deny_unknown_fields");
+
+        assert!(
+            dead.is_empty(),
+            "[secret_providers] must be reported as retired, not dead: {dead:?}"
+        );
+        let entry = tolerated_entry("secret_providers").expect("secret_providers is tolerated");
+        assert!(
+            entry.retired,
+            "the table is inert, so it must be flagged retired (info!), not foreign-owned (debug!)"
+        );
+    }
+
     /// The two foreign-owned entries are only correct while the reader they
     /// name still exists. Delete `apply_security_ssrf_overrides` and
     /// `security.ssrf` silently becomes a licence to ignore live config — the
@@ -403,5 +458,96 @@ mod tests {
                  either restore the reader or stop tolerating the path"
             );
         }
+    }
+
+    /// Final-review I1 (`31c963e3b..`): six operator-facing sentences named
+    /// `[browser.runtime]`, a section `Config` has never had — the real path
+    /// is `[general.browser.runtime]` (`GeneralConfig::browser` is not
+    /// `#[serde(flatten)]`, so there is no top-level `browser` table). Because
+    /// `Config` does not `deny_unknown_fields`, the wrong sentence parses,
+    /// saves, and reaches nothing: an operator who follows it exactly gets a
+    /// config that keeps failing the same check it was written to fix.
+    ///
+    /// Pinned here rather than as a fresh string comparison (判据 §10 — that
+    /// would only prove two literals agree with each other, not that either
+    /// names something real): every bracketed, `browser`-mentioning path
+    /// found in these four files is deserialized as a real `Config` fragment
+    /// through THIS module's own dead-key scanner, the same one
+    /// `core/config-parse` uses to answer "is this key actually read" for an
+    /// operator's real file. A path that reaches no field reports itself as
+    /// dead here exactly the way it would in a live config.
+    fn browser_paths_named_in_operator_facing_text() -> Vec<(&'static str, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = Vec::new();
+        for rel in [
+            "src/browser/error.rs",
+            "src/browser/chromium_resolve.rs",
+            "src/diagnostics/checks/chromium_missing.rs",
+            "src/builtin_tools/runtime_manage.rs",
+        ] {
+            let text = std::fs::read_to_string(root.join(rel))
+                .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            let bytes = text.as_bytes();
+            let mut i = 0usize;
+            // NOT "find the next `]` anywhere after this `[`" — these files'
+            // `#[error(...)]` attributes wrap multi-line strings that
+            // themselves contain the target `[general.browser.runtime]`, so
+            // the attribute's own opening `[` would greedily pair with the
+            // FIRST `]` it finds, which is the section path's closing
+            // bracket, not the attribute's — silently swallowing the real
+            // site into a giant, filtered-out candidate (measured: this is
+            // exactly why the first version of this scan found 6 sites, not
+            // 7, and missed `error.rs` entirely). Instead: a `[` only starts
+            // a candidate if it is IMMEDIATELY followed by a contiguous run
+            // of lowercase/`_`/`.` bytes that ends in `]`, checked without
+            // ever searching past unrelated brackets.
+            while let Some(off) = text[i..].find('[') {
+                let start = i + off;
+                let mut j = start + 1;
+                while j < bytes.len()
+                    && (bytes[j].is_ascii_lowercase() || bytes[j] == b'_' || bytes[j] == b'.')
+                {
+                    j += 1;
+                }
+                if j > start + 1 && bytes.get(j) == Some(&b']') {
+                    let candidate = &text[start + 1..j];
+                    if candidate.contains("browser") {
+                        found.push((rel, candidate.to_string()));
+                    }
+                }
+                i = start + 1;
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_operator_facing_browser_config_path_is_actually_read() {
+        let found = browser_paths_named_in_operator_facing_text();
+        assert!(
+            found.len() >= 7,
+            "derived only {} operator-facing browser config paths across the \
+             four known sites; 7 were measured on 2026-09-06 (one file states \
+             the section twice). A scan that stopped matching makes this \
+             guard pass by finding nothing: {found:?}",
+            found.len()
+        );
+        let mut wrong: Vec<String> = Vec::new();
+        for (rel, path) in &found {
+            let toml = format!("[{path}]\nbinary_path = \"/nonexistent\"\ndownload_host = \"https://example.invalid\"\n");
+            let (_config, dead): (crate::config::Config, Vec<String>) =
+                deserialize_reporting_dead_keys(&toml).unwrap_or_else(|e| {
+                    panic!("{rel} names {path:?}, which is not even valid TOML syntax: {e}")
+                });
+            if !dead.is_empty() {
+                wrong.push(format!("{rel} says [{path}] — reaches nothing: {dead:?}"));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "these operator-facing sentences name a config path Config does \
+             not read (parses, saves, fixes nothing):\n  {}",
+            wrong.join("\n  ")
+        );
     }
 }

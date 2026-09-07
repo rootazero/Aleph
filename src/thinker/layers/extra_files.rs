@@ -12,8 +12,40 @@
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
+use crate::security::unicode_guard::{is_invisible_char, strip_invisible_chars};
 
 use super::identity_files::sanitize_identity_content;
+
+/// Sanitize a string destined for a markdown header (e.g. an extra-file
+/// section title). Unlike `sanitize_identity_content`, this does NOT match
+/// the prompt-injection pattern list — those phrases are content-level
+/// concerns. A filename like `do_not_reveal_secrets.md` is not hostile; it
+/// is just a filename. The function only strips invisible Unicode, newlines
+/// (which would let a name forge a second `###` section), and CR (which
+/// would change the cacheable prefix cross-platform) — see THINK-001.
+///
+/// Returns the original slice when nothing needs stripping so the hot path
+/// stays allocation-free.
+fn sanitize_header(name: &str) -> String {
+    // Cheap pre-check: skip allocation when the name is already clean.
+    let needs_strip_invisible = name.chars().any(is_invisible_char);
+    let needs_normalize_newlines = name.contains('\n') || name.contains('\r');
+    if !needs_strip_invisible && !needs_normalize_newlines {
+        return name.to_string();
+    }
+    let mut out: String = if needs_strip_invisible {
+        strip_invisible_chars(name).0
+    } else {
+        name.to_string()
+    };
+    if needs_normalize_newlines {
+        // Markdown headers are one line; collapse CRLF/CR/LF to a single
+        // space so a malicious configured name cannot forge a sibling
+        // section.
+        out = out.replace(['\n', '\r'], " ");
+    }
+    out
+}
 
 pub struct ExtraFilesLayer;
 
@@ -70,12 +102,16 @@ impl PromptLayer for ExtraFilesLayer {
             // and the label is a constant — routing the untrusted name through
             // the label would put it back into the one string this call emits
             // un-scanned.
-            const NAME_LABEL: &str = "an extra-context file name";
-            let safe_name = sanitize_identity_content(NAME_LABEL, &file.name);
-            // A markdown header is one line by construction. `sanitize_identity_content`
-            // normalises CRLF but does not remove LF, and a newline here would
-            // let a configured name forge a second `###` section.
-            let safe_name = safe_name.replace('\n', " ");
+            // Sanitize the header (invisible Unicode + newline normalisation)
+            // WITHOUT the injection-pattern scan — filenames containing
+            // 'do not reveal' / 'system prompt:' / etc. are innocent. The
+            // content slot is still scanned (next call), so any actual
+            // injection attempt in the file body is still blocked. The
+            // previous code passed `file.name` as the CONTENT of
+            // `sanitize_identity_content`, so a configured file called
+            // `do_not_reveal_secrets.md` would render its section header as
+            // `[BLOCKED: …]` (THINK-001, high).
+            let safe_name = sanitize_header(&file.name);
             let safe = sanitize_identity_content(&file.name, &file.content);
             sections.push(format!("### {}\n{}", safe_name, safe));
         }

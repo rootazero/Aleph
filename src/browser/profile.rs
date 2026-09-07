@@ -34,12 +34,13 @@ pub enum BrowserDriver {
 pub struct ProfileConfig {
     /// Which browser engine to use.
     ///
-    /// Honored by both drivers, with one gap: the managed driver passes
-    /// `playwright-cli open --browser`, which accepts `chrome` / `msedge`
-    /// (and expresses Chromium by omission) but has no value for `Brave`. A
-    /// managed Brave profile is warned about at startup
-    /// (`ProfileManager::new` → `unhonored_managed_fields`) rather than
-    /// silently given Chromium.
+    /// Honored by both drivers. The managed driver no longer passes the engine
+    /// to `playwright-cli` (it launches the browser itself); the value steers
+    /// `discovery::find_chromium_preferred`. When the requested engine is not
+    /// installed the search degrades to whatever is, and
+    /// `PlaywrightCliDriver::ensure_chromium` warns with the engine it actually
+    /// resolved — the substitution is reported by the code that performs it,
+    /// which is why the old boot-time warning is gone.
     #[serde(default)]
     pub browser: BrowserType,
 
@@ -181,6 +182,73 @@ impl Default for PlaywrightCliConfig {
     }
 }
 
+/// External-runtime settings for the managed driver's browser.
+///
+/// Chromium is deliberately NOT in any Aleph installer (D4): all three
+/// artifacts stay Chromium-free and the browser is supplied at runtime, the
+/// same way `playwright-cli` already is.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BrowserRuntimeConfig {
+    /// Absolute path to a Chromium-family binary, pinned by the operator.
+    /// Highest precedence — a pin that does not exist is a hard failure, not a
+    /// fallback, because silently launching a different browser than the one
+    /// named is worse than refusing.
+    #[serde(default)]
+    pub binary_path: Option<String>,
+
+    /// Use a system-installed Chromium-family browser (via
+    /// `discovery::find_chromium_preferred`) before Playwright's own.
+    ///
+    /// Default `true`: Windows almost always has Edge and macOS usually has
+    /// Chrome, so the ~150 MB download is only for a clean Linux host. The
+    /// Chrome spike ran system Chrome 152 against playwright-core 1.60 with no
+    /// trouble, so the cross-version mixing this permits is measured, not hoped.
+    #[serde(default = "default_true")]
+    pub prefer_system_browser: bool,
+
+    /// `PLAYWRIGHT_DOWNLOAD_HOST` for the install. Playwright's CDN is blocked
+    /// on some networks exactly as GitHub release assets are; npmmirror carries
+    /// a mirror. A config key rather than "go export a variable", because the
+    /// installer runs inside the daemon.
+    #[serde(default)]
+    pub download_host: Option<String>,
+}
+
+impl BrowserRuntimeConfig {
+    /// The pinned binary, or `None` when unset **or blank**.
+    ///
+    /// A cleared form field posts `""`, and `Some("")` would be spent as a path
+    /// — resolving to the current directory and failing with a message that
+    /// names nothing.
+    #[must_use]
+    pub fn pinned_binary(&self) -> Option<&str> {
+        self.binary_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// The download mirror, or `None` when unset or blank. See
+    /// [`Self::pinned_binary`] for why blank is not a value.
+    #[must_use]
+    pub fn download_host(&self) -> Option<&str> {
+        self.download_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+}
+
+impl Default for BrowserRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            binary_path: None,
+            prefer_system_browser: true,
+            download_host: None,
+        }
+    }
+}
+
 /// Configuration for the Chrome `DevTools` MCP integration.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ChromeMcpConfig {
@@ -258,6 +326,10 @@ pub struct BrowserSystemConfig {
     /// Chrome `DevTools` MCP integration settings.
     #[serde(default)]
     pub chrome_mcp: ChromeMcpConfig,
+
+    /// External-runtime supply for the managed driver's Chromium.
+    #[serde(default)]
+    pub runtime: BrowserRuntimeConfig,
 }
 
 #[cfg(test)]
@@ -324,6 +396,66 @@ args = ["./mcp-server.js"]
         // surviving fields fall back to defaults).
         assert!(config.playwright_cli.headless);
         assert_eq!(config.playwright_cli.nav_timeout_secs, 30);
+    }
+
+    /// The three `[browser.runtime]` keys, and the one property that matters
+    /// about all of them: an EMPTY string is not a value.
+    ///
+    /// `download_host = ""` is what the spec's own config sample shows, and
+    /// what a Panel form posts when the operator clears the field. Handing that
+    /// to the installer as `PLAYWRIGHT_DOWNLOAD_HOST=` is not "no mirror", it is
+    /// "the mirror is the empty host" — every download then fails with a URL
+    /// error that names nothing. Same for a `binary_path` cleared to "".
+    #[test]
+    fn browser_runtime_reads_its_three_keys_and_treats_empty_as_unset() {
+        let cfg: BrowserSystemConfig = toml::from_str(
+            r#"
+[runtime]
+binary_path = "/opt/chromium/chrome"
+prefer_system_browser = false
+download_host = "https://npmmirror.com/mirrors/playwright"
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cfg.runtime.pinned_binary(), Some("/opt/chromium/chrome"));
+        assert!(!cfg.runtime.prefer_system_browser);
+        assert_eq!(
+            cfg.runtime.download_host(),
+            Some("https://npmmirror.com/mirrors/playwright")
+        );
+
+        let cleared: BrowserSystemConfig = toml::from_str(
+            r#"
+[runtime]
+binary_path = ""
+download_host = "   "
+"#,
+        )
+        .expect("parse");
+        assert_eq!(cleared.runtime.pinned_binary(), None, "empty pin is unset");
+        assert_eq!(cleared.runtime.download_host(), None, "blank host is unset");
+        // The `[runtime]` table is PRESENT here and the key is absent, so this
+        // exercises serde's field-level `default = "default_true"` — which is a
+        // different mechanism from `Default::default()` and the one that would
+        // silently flip to `false` if the attribute were dropped.
+        assert!(
+            cleared.runtime.prefer_system_browser,
+            "a system browser is preferred unless the operator says otherwise: \
+             Windows almost always has Edge and macOS usually has Chrome, so the \
+             download is for clean Linux servers"
+        );
+    }
+
+    /// A config with no `[runtime]` table at all must still produce the
+    /// defaults — this section is new, and every config file on every existing
+    /// install predates it.
+    #[test]
+    fn a_config_without_the_runtime_table_still_gets_the_defaults() {
+        let cfg: BrowserSystemConfig =
+            toml::from_str("[policy]\nblock_private = true\n").expect("parse");
+        assert!(cfg.runtime.prefer_system_browser);
+        assert_eq!(cfg.runtime.pinned_binary(), None);
+        assert_eq!(cfg.runtime.download_host(), None);
     }
 
     #[test]

@@ -10,8 +10,31 @@ import asyncio
 import json
 import os
 import subprocess
+import urllib.request
+
+import websockets
 
 RPC_TIMEOUT_SECS = 180
+
+
+def ws_connect(url):
+    """`websockets.connect`, with the low-level ping/pong keepalive disabled.
+
+    A real `browser_open` under the launch chain flip spawns Chromium and
+    polls for its port file — real wall-clock seconds, not a mocked call. On
+    a machine also running concurrent `cargo`/`clippy` builds (this plan's
+    reviewers run them alongside an implementer), CPU contention can starve
+    this process's asyncio loop long enough that the `websockets` library's
+    own keepalive (ping every 20s, 20s to get a pong — a fixed schedule,
+    unrelated to `RPC_TIMEOUT_SECS`) fires a false "keepalive ping timeout"
+    disconnect that has nothing to do with the code under test: observed
+    3-for-3 on this machine, always mid-`browser_open`, while `top`/`ps`
+    showed two other clippy-driver processes pinned near 100% CPU. The
+    gateway's own app-level keepalive (`idle_timeout_secs` in the `connect`
+    response) and this module's `RPC_TIMEOUT_SECS` are the timeouts that
+    should decide whether a call is actually stuck.
+    """
+    return websockets.connect(url, max_size=None, ping_interval=None)
 
 
 class Ledger:
@@ -131,3 +154,32 @@ def session_status(listing):
 def open_session_count(listing):
     """How many sessions the oracle reports as open."""
     return sum(1 for v in session_status(listing).values() if v == "open")
+
+
+def read_devtools_port_file(port_file):
+    """(port, browser_path) from Chrome's own `DevToolsActivePort`, or None.
+
+    This is the launch oracle that replaced `playwright-cli list` echoing
+    `user-data-dir:` — under `attach --cdp` the CLI does not own the profile
+    directory, so it has nothing to echo. The port file is written by Chrome
+    itself, into the user-data-dir ALEPH chose, which is what makes it prove
+    the browser rather than the CLI's copy of our config.
+    """
+    try:
+        with open(port_file) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    if len(lines) < 2 or not lines[1].startswith("/"):
+        return None
+    try:
+        return int(lines[0]), lines[1]
+    except ValueError:
+        return None
+
+
+def http_json(port, path):
+    """GET `path` off the CDP endpoint on `port`, parsed as JSON. Raises on
+    any failure — the caller's claim IS the absence of an exception."""
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as r:
+        return r.status, json.loads(r.read().decode())

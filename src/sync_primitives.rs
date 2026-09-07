@@ -18,7 +18,19 @@
 //! - Level 0: `StateDatabase` (resilience/database)
 //! - Level 1: `MemoryStore` (memory/)
 //! - Level 2: `ToolCatalog`, `ChannelRegistry` ((`tool_metadata`/, gateway/))
-//! - Level 3: UI state, progress monitors
+//! - Level 3 (leaf): UI state, progress monitors, `NodeRegistry` (cluster/)
+//!
+//! This list is a convention, not an enforced invariant: no `LockLevel` field
+//! or debug assertion stands behind it.
+//!
+//! `NodeRegistry` (`cluster/registry.rs`, one `RwLock<RegistryInner>`, all
+//! eight acquisition sites inside that file) is a leaf. Every critical section
+//! is a `HashMap` access plus clones, and every caller takes an owned snapshot
+//! before doing I/O, so no site holds it while taking a Level 0-2 lock and no
+//! site takes another lock under it. `register`/`forget` fire
+//! `close_connection()` after dropping the guard for critical-section hygiene,
+//! not to break a lock cycle. Its place at the bottom is therefore safe by
+//! leafness, not an ordering anyone has observed against Levels 0-2.
 
 // Arc is always std::sync::Arc — loom::sync::Arc is incompatible with
 // external crate APIs that expect std::sync::Arc (e.g. tokio::sync).

@@ -105,6 +105,7 @@ pub mod project_manage;
 pub mod recall_context;
 pub mod recall_events;
 pub mod remember;
+pub mod runtime_manage;
 pub mod scratchpad;
 pub mod scratchpad_registry;
 pub mod search;
@@ -266,6 +267,9 @@ pub use plugin_manage::{PluginAction, PluginManageArgs, PluginManageOutput, Plug
 pub use recall_context::{RecallContextArgs, RecallContextResult, RecallContextTool};
 pub use recall_events::{RecallEventsArgs, RecallEventsOutput, RecallEventsTool};
 pub use remember::{RememberArgs, RememberOutput, RememberTool};
+pub use runtime_manage::{
+    RuntimeAction, RuntimeManageArgs, RuntimeManageOutput, RuntimeManageTool, RuntimeRow,
+};
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use search::{SearchArgs, SearchTool};
 pub use select_model::{SelectModelArgs, SelectModelOutput, SelectModelTool};

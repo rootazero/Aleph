@@ -43,19 +43,28 @@ impl ManifestAdapter for CodexAdapter {
 
         // Codex supports: skills, hooks, mcpServers
         if let Some(skills_path) = json.get("skills").and_then(|v| v.as_str()) {
-            if let Ok(skills) = parsers::parse_skills_dir(dir, skills_path, &plugin_id) {
-                caps.extend(skills);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "skills",
+                dir,
+                parsers::parse_skills_dir(dir, skills_path, &plugin_id),
+            );
         }
         if let Some(hooks_path) = json.get("hooks").and_then(|v| v.as_str()) {
-            if let Ok(hooks) = parsers::parse_hooks_file(dir, hooks_path, &plugin_id) {
-                caps.extend(hooks);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "hooks",
+                dir,
+                parsers::parse_hooks_file(dir, hooks_path, &plugin_id),
+            );
         }
         if let Some(mcp_path) = json.get("mcpServers").and_then(|v| v.as_str()) {
-            if let Ok(mcp) = parsers::parse_mcp_config_file(dir, mcp_path, &plugin_id) {
-                caps.extend(mcp);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "mcp",
+                dir,
+                parsers::parse_mcp_config_file(dir, mcp_path, &plugin_id),
+            );
         }
 
         // Codex-specific: instructions field → skill
@@ -65,7 +74,6 @@ impl ManifestAdapter for CodexAdapter {
                 description: "Codex plugin instructions".to_string(),
                 content: instructions.to_string(),
                 triggers: vec![],
-                allowed_tools: vec![],
                 category: Some("instructions".to_string()),
                 plugin_id: plugin_id.clone(),
                 ..Default::default()
@@ -74,22 +82,31 @@ impl ManifestAdapter for CodexAdapter {
 
         // Scan default directories when manifest fields are absent
         if json.get("skills").is_none() && dir.join("skills").is_dir() {
-            if let Ok(skills) = parsers::parse_skills_dir(dir, "skills", &plugin_id) {
-                caps.extend(skills);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "skills",
+                dir,
+                parsers::parse_skills_dir(dir, "skills", &plugin_id),
+            );
         }
         if json.get("hooks").is_none() {
             let hooks_json = dir.join("hooks").join("hooks.json");
             if hooks_json.exists() {
-                if let Ok(hooks) = parsers::parse_hooks_file(dir, "hooks/hooks.json", &plugin_id) {
-                    caps.extend(hooks);
-                }
+                parsers::extend_scanned(
+                    &mut caps,
+                    "hooks",
+                    dir,
+                    parsers::parse_hooks_file(dir, "hooks/hooks.json", &plugin_id),
+                );
             }
         }
         if json.get("mcpServers").is_none() && dir.join(".mcp.json").exists() {
-            if let Ok(mcp) = parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id) {
-                caps.extend(mcp);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "mcp",
+                dir,
+                parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id),
+            );
         }
 
         // Handle Codex `apps` field: log and add metadata note

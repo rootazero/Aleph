@@ -59,12 +59,13 @@ pub enum CommandContext {
     Skill {
         /// Skill ID
         skill_id: String,
-        /// Skill instructions to inject
-        instructions: String,
         /// Skill name for display
         display_name: String,
-        /// Allowed tools for this skill
-        allowed_tools: Vec<String>,
+        /// The skill's declared tool scope, validated at registration.
+        /// `None` = the skill declared nothing (allow-all, the behaviour every
+        /// skill shipped with); `Some(vec![])` = explicit deny-all. Do not
+        /// flatten: an empty allow-set means allow-all downstream.
+        allowed_tools: Option<Vec<String>>,
     },
     /// Custom command context
     Custom {
@@ -136,18 +137,24 @@ fn tool_to_command_context(tool: UnifiedTool) -> CommandContext {
         ToolSource::Mcp { server } => CommandContext::Mcp {
             server_name: server,
         },
+        // No `instructions` field: skill registration deliberately leaves
+        // `routing_system_prompt` unset. The skill's description reaches the
+        // model through the `<available_skills>` block and its body only
+        // through `skill_read`; carrying a third copy here had no reader.
         ToolSource::Skill { id } => CommandContext::Skill {
             skill_id: id,
-            instructions: tool.routing_system_prompt.unwrap_or_default(),
             display_name: tool.display_name,
             allowed_tools: tool.routing_capabilities,
         },
         ToolSource::Custom { .. } => CommandContext::Custom {
             system_prompt: tool.routing_system_prompt,
-            // Provider override for custom `[[rules]]` lives on the rule itself
-            // (`RoutingRuleConfig::provider`); the slash-command fast path
-            // reads no `provider` JSON key, so this struct does not carry it.
-            // Resolution happens in the agent-loop routing pass.
+            // No `provider`: `RoutingRuleConfig::provider` is required by
+            // config validation and read by nothing. There is no agent-loop
+            // routing pass that resolves it — an earlier version of this
+            // comment claimed there was, sourced from a struct doc that
+            // contradicted its own module doc. `register_custom_commands`
+            // settles it: it copies `regex` and `system_prompt` onto the tool
+            // and never touches `provider`.
             pattern: tool.routing_regex.unwrap_or(tool.name),
         },
         ToolSource::Plugin { .. } => CommandContext::Builtin {

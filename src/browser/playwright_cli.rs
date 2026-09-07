@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -20,9 +20,12 @@ use crate::security::secret_env::is_secret_env;
 use crate::sync_primitives::RwLock;
 use crate::utils::no_window::NoWindow;
 
+use super::chromium_launch::{
+    CdpEndpoint, ChromiumChild, ChromiumLaunchSpec, DEVTOOLS_PORT_DEADLINE,
+};
 use super::error::BrowserError;
-use super::playwright_launch::{open_argv, write_launch_config, LaunchPolicy, SessionLaunch};
-use super::profile::PlaywrightCliConfig;
+use super::playwright_launch::{attach_argv, write_launch_config, LaunchPolicy, SessionLaunch};
+use super::profile::{BrowserRuntimeConfig, PlaywrightCliConfig};
 
 /// How long bringing up a browser session may take.
 ///
@@ -51,18 +54,32 @@ pub(crate) struct PageMeta {
 pub struct PlaywrightCliDriver {
     binary_path: RwLock<Option<PathBuf>>,
     config: PlaywrightCliConfig,
+    runtime: BrowserRuntimeConfig,
     per_session_locks: RwLock<HashMap<String, Arc<Mutex<()>>>>,
     binary_resolve_lock: tokio::sync::Mutex<()>,
+    /// The Chromium this driver launched, per session key.
+    ///
+    /// It lives HERE and not on `ProfileManager` because the lazy attach — the
+    /// only place a browser comes into existence — runs under
+    /// `per_session_locks`, three lines away. A map on the manager would have
+    /// to re-derive that serialization, and two callers racing into an unopened
+    /// session would each spawn a Chromium.
+    ///
+    /// A `std` mutex, never held across an `await`: the resolve-and-spawn
+    /// happens outside it, and the per-session lock is what keeps that safe.
+    chromium: crate::sync_primitives::Mutex<HashMap<String, ChromiumChild>>,
 }
 
 impl PlaywrightCliDriver {
     #[must_use]
-    pub fn new(config: PlaywrightCliConfig) -> Self {
+    pub fn new(config: PlaywrightCliConfig, runtime: BrowserRuntimeConfig) -> Self {
         Self {
             binary_path: RwLock::new(None),
             config,
+            runtime,
             per_session_locks: RwLock::new(HashMap::new()),
             binary_resolve_lock: tokio::sync::Mutex::new(()),
+            chromium: crate::sync_primitives::Mutex::new(HashMap::new()),
         }
     }
 
@@ -174,21 +191,29 @@ impl PlaywrightCliDriver {
             .clone()
     }
 
-    /// Run one `playwright-cli` subcommand for a session, launching the
-    /// session's browser first if the CLI says there is none.
+    /// Run one `playwright-cli` subcommand for a session, giving the session a
+    /// browser first if the CLI says it has none.
     ///
     /// Serializes concurrent calls within the same `session_key`, which is
-    /// also what makes the lazy launch safe: the open-and-retry happens under
+    /// also what makes the lazy launch safe: the attach-and-retry happens under
     /// the same per-session lock as every other call, so two callers racing
-    /// into an unopened session cannot both open it.
+    /// into an unattached session cannot both spawn a Chromium for it.
     ///
-    /// **Why lazily, off the CLI's own refusal, rather than eagerly at
-    /// construction:** a second `open` on a live session is destructive —
-    /// measured against `playwright-cli 0.1.8`, it relaunches the browser
-    /// under a new pid and drops every existing tab. Opening only when the CLI
-    /// itself reports the session is not open makes a redundant `open`
-    /// structurally impossible, whereas an eager open would have to be right
-    /// about every path that obtains a backend.
+    /// One mutation of the child map is **outside** this lock and it is worth
+    /// naming rather than leaving the claim above sounding total:
+    /// [`Self::shutdown_chromium`], whose caller is the idle reaper and is not
+    /// inside `run`. See its doc for what that does and does not cost.
+    ///
+    /// **Why lazily, off the CLI's own refusal, rather than eagerly:** the CLI
+    /// is not the thing that owns the browser any more, but it is still the
+    /// only thing that knows whether *this session* is attached. Attaching only
+    /// when it says it is not makes a redundant attach structurally impossible,
+    /// whereas an eager attach would have to be right about every path that
+    /// obtains a backend. (Under `open` the same shape was load-bearing for a
+    /// harder reason: a second `open` relaunched the browser and dropped every
+    /// tab. A second `attach` is merely wasteful — but the browser it would
+    /// attach to is now Aleph's, and re-deriving "is it alive" per call is how
+    /// two answers to that question get created.)
     ///
     /// `policy` comes from the caller for two reasons: the driver is shared
     /// across sessions and does not know which profile a session key belongs
@@ -205,47 +230,374 @@ impl PlaywrightCliDriver {
         let lock = self.session_lock(session_key);
         let _guard = lock.lock().await;
 
-        match self.spawn(&bin, session_key, args, timeout).await {
-            Err(BrowserError::NoSession(key)) => {
-                let Some(launch) = policy.launch() else {
-                    return Err(BrowserError::NoSession(key));
-                };
-                self.open_session(&bin, session_key, launch).await?;
-                // One retry only. If the session still reports "not open"
-                // after a successful launch, that is a real failure and must
-                // surface rather than loop.
-                self.spawn(&bin, session_key, args, timeout).await
+        // Before the verb: if this profile HAD a browser and it has since
+        // exited, no CLI subcommand can succeed and the error it returns is
+        // not guaranteed to be one of the phrasings below. `chromium_died` is
+        // a `try_wait` on a child we own — cheap enough to ask every time, and
+        // it is the only thing that closes spec §6.2's "Chrome 中途死" row for
+        // the verbs whose failure text says something else entirely.
+        if self.chromium_died(session_key) {
+            if let Some(launch) = policy.launch() {
+                tracing::info!(session = %session_key, "chromium exited; relaunching before the verb");
+                self.attach_session(&bin, session_key, launch).await?;
             }
-            other => other,
         }
+
+        let first = self.spawn(&bin, session_key, args, timeout).await;
+        let Err(err) = first else {
+            return first;
+        };
+        if !needs_relaunch(&err, self.chromium_alive(session_key)) {
+            return Err(err);
+        }
+        let Some(launch) = policy.launch() else {
+            // `Refuse` means "do not LAUNCH a browser for this call" — it does
+            // not mean "refuse a browser Aleph already owns and already knows
+            // how to reach". A `NoSession` here is the CLI's OWN session gone
+            // (a daemon restart is the common cause), not the browser: since
+            // `close` under `attach --cdp` only disconnects (Chrome survives,
+            // measured), Aleph can be sitting on a live, owned Chromium with
+            // nothing but a missing CLI session standing between a verb and
+            // the page that is still open. Refusing there answers "I don't
+            // know how to reach it" when the answer is sitting in
+            // `self.chromium`'s own map — so if `chromium_alive` says the
+            // browser is still running, re-attach to the endpoint already on
+            // record instead. This never launches (no `SessionLaunch`, no
+            // `resolve_binary`) and never kills (no `forget_chromium`) — the
+            // two things `Refuse` exists to prevent. Anything else — no live
+            // chromium for this profile, or any error other than `NoSession`
+            // — falls through to the refusal unchanged.
+            if matches!(err, BrowserError::NoSession(_)) && self.chromium_alive(session_key) {
+                if let Some(endpoint) = self.endpoint(session_key) {
+                    self.reattach_to_owned_chromium(&bin, session_key, &endpoint)
+                        .await?;
+                    // One retry only, same discipline as the `OpenIfNeeded`
+                    // arm below: if the verb still fails after a successful
+                    // re-attach, that is a real failure and must surface
+                    // rather than loop.
+                    return self.spawn(&bin, session_key, args, timeout).await;
+                }
+            }
+            return Err(err);
+        };
+        // NOT `forget_chromium` first. Tearing the browser down here would kill
+        // a browser that is very often perfectly alive: `needs_relaunch` says
+        // true for `NoSession` **regardless of liveness**, and `NoSession` is
+        // exactly what a `playwright-cli` daemon restart produces while Aleph's
+        // Chromium keeps running — so killing here would drop every tab to
+        // recover a CLI session, which is D.9.10's double-`open` wearing this
+        // round's costume. `ensure_chromium` already decides correctly and is
+        // the ONLY place that decides: it re-uses a live child's endpoint, and
+        // removes-and-kills a dead one before respawning.
+        self.attach_session(&bin, session_key, launch).await?;
+        // One retry only. If the verb still fails after a successful attach,
+        // that is a real failure and must surface rather than loop.
+        self.spawn(&bin, session_key, args, timeout).await
     }
 
-    /// Launch the session's browser via `open`, the only subcommand that
-    /// accepts `--config` / `--headed` / `--browser`.
+    /// Give this session a browser: make sure Aleph's Chromium for the profile
+    /// is alive, then `attach --cdp` to it.
     ///
     /// Calls [`Self::spawn`] directly rather than [`Self::run`]: the lock is
     /// already held by the caller, and going through `run` would make the
-    /// open-on-`NoSession` path re-entrant.
-    async fn open_session(
+    /// attach-on-`NoSession` path re-entrant.
+    ///
+    /// One retry, and only for [`BrowserError::AttachFailed`]. That is the
+    /// answer to the one race this design has: the liveness check said the
+    /// child was there (or could not tell — see `ChromiumChild::alive`) and the
+    /// endpoint refused the connection a moment later. Forgetting the child and
+    /// attaching once more relaunches it. Bounded at one so a genuinely
+    /// unreachable endpoint surfaces instead of looping.
+    async fn attach_session(
         &self,
         bin: &Path,
         session_key: &str,
         launch: &SessionLaunch,
     ) -> Result<(), BrowserError> {
-        let config_path = write_launch_config(session_key, launch).await?;
-        let argv = open_argv(launch, &config_path);
+        match self.attach_once(bin, session_key, launch).await {
+            Err(BrowserError::AttachFailed(detail)) => {
+                tracing::warn!(session = %session_key, %detail, "attach refused; relaunching chromium");
+                self.forget_chromium(session_key);
+                self.attach_once(bin, session_key, launch).await
+            }
+            other => other,
+        }
+    }
+
+    async fn attach_once(
+        &self,
+        bin: &Path,
+        session_key: &str,
+        launch: &SessionLaunch,
+    ) -> Result<(), BrowserError> {
+        let endpoint = self.ensure_chromium(bin, session_key, launch).await?;
+        let config_path = write_launch_config(session_key).await?;
+        let argv = attach_argv(&endpoint, &config_path);
         let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-        // Starting a browser is not a navigation and must not borrow the
-        // navigation budget, whose default (30 s) is shorter than a cold
-        // launch can take. The repo already answers "how long may bringing up
-        // a browser session take" in the twin subsystem — `chrome_mcp.rs`'s
-        // `create_session` allows 60 s — so take the larger of that and the
-        // configured navigation timeout rather than inventing a third number.
+        // Attaching is not a navigation and must not borrow the navigation
+        // budget. Same reasoning, and the same number, the `open` path used.
         let timeout =
             Duration::from_secs(self.config.nav_timeout_secs.max(SESSION_START_TIMEOUT_SECS));
         self.spawn(bin, session_key, &args, timeout).await?;
-        tracing::info!(session = %session_key, "playwright-cli session opened");
+        tracing::info!(
+            session = %session_key,
+            endpoint = %endpoint.http_url,
+            "playwright-cli attached to Aleph's chromium"
+        );
         Ok(())
+    }
+
+    /// Piece 4: re-attach the CLI to a Chromium Aleph **already owns and
+    /// already knows the endpoint of** — no `SessionLaunch`, no
+    /// `resolve_binary`, no `ensure_chromium`. This is deliberately NOT
+    /// `attach_once` with the launch step skipped: it exists only for the one
+    /// caller (`run`'s `LaunchPolicy::Refuse` arm) that has already confirmed
+    /// `chromium_alive` and already has the endpoint in hand, and it must stay
+    /// unable to launch or kill anything — the two things `Refuse` exists to
+    /// prevent. Reusing `attach_once` would mean threading an `Option<&SessionLaunch>`
+    /// through `ensure_chromium`'s launch branch just to make it unreachable here,
+    /// which is a wider change to a path 27 other subcommands rely on for a
+    /// single caller's narrower need.
+    async fn reattach_to_owned_chromium(
+        &self,
+        bin: &Path,
+        session_key: &str,
+        endpoint: &CdpEndpoint,
+    ) -> Result<(), BrowserError> {
+        let config_path = write_launch_config(session_key).await?;
+        let argv = attach_argv(endpoint, &config_path);
+        let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+        // Same budget `attach_once` uses: attaching is not a navigation and
+        // must not borrow the navigation timeout.
+        let timeout =
+            Duration::from_secs(self.config.nav_timeout_secs.max(SESSION_START_TIMEOUT_SECS));
+        self.spawn(bin, session_key, &args, timeout).await?;
+        tracing::info!(
+            session = %session_key,
+            endpoint = %endpoint.http_url,
+            "playwright-cli re-attached to Aleph's already-owned chromium (no-session recovery under Refuse)"
+        );
+        Ok(())
+    }
+
+    /// The endpoint of this session's Chromium, launching one if there is none
+    /// (or the one there is has exited).
+    ///
+    /// Safe without its own lock because every caller holds the per-session
+    /// lock from [`Self::run`]. The `chromium` mutex is taken twice, briefly,
+    /// and never across the `await`s in between.
+    ///
+    /// `bin` is passed in rather than re-resolved: `run` already resolved it
+    /// three lines up, and a second call site for the same fact is how two
+    /// answers get created even when both are cached.
+    async fn ensure_chromium(
+        &self,
+        bin: &Path,
+        session_key: &str,
+        launch: &SessionLaunch,
+    ) -> Result<CdpEndpoint, BrowserError> {
+        {
+            let mut map = self.chromium.lock().unwrap_or_else(|e| e.into_inner());
+            // Taken OUT and put back rather than inspected in place. The
+            // alternative — `get_mut`, then `remove` inside the dead branch —
+            // needs a second lookup whose `None` arm the surrounding branch has
+            // already proved impossible, i.e. a predicate that can never go red
+            // (判据 §2). The lock is held throughout, so the brief absence of a
+            // live child from the map is not observable.
+            if let Some(mut child) = map.remove(session_key) {
+                if child.alive() {
+                    let endpoint = child.endpoint().clone();
+                    map.insert(session_key.to_string(), child);
+                    return Ok(endpoint);
+                }
+                // Exited. It is already out of the map; `shutdown` reaps it and
+                // clears the sidecar so the next boot does not try to kill this
+                // pid.
+                child.shutdown();
+            }
+        }
+
+        let resolved =
+            super::chromium_resolve::resolve_binary(&self.runtime, &launch.browser, bin).await?;
+        // The replacement for the boot-time `unhonored_managed_fields` warning
+        // this round deletes. `find_chromium_preferred` degrades SILENTLY when
+        // the requested engine is not installed — it merely reorders candidates
+        // and logs the fallback at `debug!` — so without this line "asked for
+        // Brave, got Chrome" is reported nowhere. The predicate lives in
+        // `chromium_resolve::engine_mismatch` rather than being spelled out
+        // here: a bare `resolved != Some(requested)` fires on essentially every
+        // launch (`BrowserType::default()` is `Chromium` and the resolved
+        // engine is Chrome or Edge), and a warning that is always red is not a
+        // warning (判据 §2). `None` — an unidentifiable path — is not evidence
+        // that the request was honoured, so it warns too (判据 §8).
+        if super::chromium_resolve::engine_mismatch(&launch.browser, resolved.engine.as_ref()) {
+            tracing::warn!(
+                requested = ?launch.browser,
+                resolved = ?resolved.engine,
+                path = %resolved.path.display(),
+                "the managed profile asked for one engine and got another"
+            );
+        }
+        let user_data_dir = chromium_user_data_dir(launch, session_key)?;
+        let spec = ChromiumLaunchSpec {
+            binary: resolved.path,
+            user_data_dir,
+            headless: launch.headless,
+            proxy: launch.proxy.clone(),
+            extra_args: launch.extra_args.clone(),
+        };
+        tracing::info!(
+            session = %session_key,
+            binary = %spec.binary.display(),
+            source = resolved.source.label(),
+            "launching chromium for the managed profile"
+        );
+        let child = ChromiumChild::spawn(&spec, session_key, DEVTOOLS_PORT_DEADLINE).await?;
+        let endpoint = child.endpoint().clone();
+        let mut map = self.chromium.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = map.insert(session_key.to_string(), child) {
+            // Cannot happen while the per-session lock is held; if it ever
+            // does, the previous browser is leaked unless it is killed here.
+            // NOT `shutdown()`: its sidecar deletion is keyed by
+            // `session_key`, the SAME key the child inserted one line above
+            // just wrote its own record under — that would delete the NEW,
+            // live browser's only reclaim record (Final Review M1).
+            previous.kill_only();
+        }
+        Ok(endpoint)
+    }
+
+    /// Kill and forget this session's Chromium. Returns whether there was one.
+    fn forget_chromium(&self, session_key: &str) -> bool {
+        let taken = self
+            .chromium
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session_key);
+        match taken {
+            Some(child) => {
+                child.shutdown();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// This session's live CDP endpoint, if it has one — the accessor spec §3.2
+    /// asks for. **Task 6 (`manager.rs`) is its first caller**; what the
+    /// endpoint is ultimately *for* is Plan 2's live view, which reaches it
+    /// through the manager rather than through this driver.
+    ///
+    /// `None` is "**this driver** launched no browser for this key", which is
+    /// the same sentence as "there is no browser" only once Task 6's boot sweep
+    /// has run: a Chromium orphaned by a previous process is recorded in the
+    /// sidecar registry and not in this map, so before the sweep a caller that
+    /// reads `None` as "nothing is running" is reading an absent record as an
+    /// absent process (判据 §8). The same caveat applies to
+    /// [`Self::chromium_alive`].
+    pub(crate) fn endpoint(&self, session_key: &str) -> Option<CdpEndpoint> {
+        self.chromium
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_key)
+            .map(|c| c.endpoint().clone())
+    }
+
+    /// Whether this session's Chromium is running. The authoritative answer to
+    /// "does this managed profile have a browser" now that Aleph owns it.
+    pub(crate) fn chromium_alive(&self, session_key: &str) -> bool {
+        self.chromium
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(session_key)
+            .is_some_and(ChromiumChild::alive)
+    }
+
+    /// Whether this session HAD a browser and it has since exited.
+    ///
+    /// Deliberately not `!chromium_alive`: "there is no browser" and "the
+    /// browser died" are different facts and only the second one is a reason to
+    /// tear down and relaunch before a verb. Reading the first as the second
+    /// would make the pre-verb check fire on every cold profile.
+    pub(crate) fn chromium_died(&self, session_key: &str) -> bool {
+        let mut map = self.chromium.lock().unwrap_or_else(|e| e.into_inner());
+        map.get_mut(session_key).is_some_and(|c| !c.alive())
+    }
+
+    /// Public face of [`Self::forget_chromium`], for the idle reaper.
+    ///
+    /// ⚠️ Unlike every other mutation of the child map, this one does **not**
+    /// run under the per-session lock — the reaper is not inside [`Self::run`].
+    /// The map operation is atomic on its own mutex, so nothing corrupts; what
+    /// is not serialized is the reaper against a concurrent lazy attach. There
+    /// are two windows and they do **not** cost the same:
+    ///
+    /// * killed **before** the attach — the *system* recovers: the next verb
+    ///   sees `chromium_died` and relaunches, at the cost of one wasted launch;
+    /// * killed **during** the verb, after a successful attach — the *system*
+    ///   still recovers on the next call, but **this request does not**.
+    ///   `needs_relaunch` is false for whatever the CLI says about a connection
+    ///   that vanished mid-command, so the in-flight tool call returns that
+    ///   error as-is. Aleph has no measured transcript of that failure, and
+    ///   guessing an anchor for it is how an over-broad anchor gets written, so
+    ///   it is named here rather than classified (Task 9 scenario A is what
+    ///   would measure it).
+    ///
+    /// The fix for both, if it ever matters, is for this to take `session_lock`
+    /// and become `async`; it is stated here rather than done because the
+    /// reaper's sweep is off the request path, so a wasted relaunch — the
+    /// cheaper of the two windows — is what it usually costs.
+    pub(crate) fn shutdown_chromium(&self, session_key: &str) -> bool {
+        self.forget_chromium(session_key)
+    }
+
+    /// Kill and forget **every** Chromium this driver launched. Returns how
+    /// many there were.
+    ///
+    /// For a driver that does not live as long as the process. `ChromiumChild`
+    /// wraps a `std::process::Child` with **no `Drop`** — deliberately, because
+    /// a browser that outlives Aleph is the whole reason the sidecar registry
+    /// exists — so a driver that is constructed per call and dropped at the end
+    /// of it leaks one browser per launch unless it says so explicitly. That is
+    /// not merely untidy: the orphan keeps the profile lock on
+    /// `chromium-udd/<key>`, so the *next* launch on that key loses to it and
+    /// fails permanently rather than transiently.
+    /// `builtin_tools::pdf_generate::browser_engine` is exactly that caller.
+    ///
+    /// Task 6 consumes this too, for the process-wide shutdown path; it is here
+    /// rather than there because the map it drains is private to this file.
+    pub(crate) fn shutdown_all_chromium(&self) -> usize {
+        let taken: Vec<ChromiumChild> = self
+            .chromium
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .map(|(_, child)| child)
+            .collect();
+        let count = taken.len();
+        for child in taken {
+            child.shutdown();
+        }
+        count
+    }
+
+    /// Record a `ChromiumChild` for `session_key` as though this driver had
+    /// launched it.
+    ///
+    /// The seam that makes the lazy-attach wiring testable at all: a unit test
+    /// cannot launch a Chromium (and [`Self::provision_binary`]'s test twin
+    /// exists to stop it trying), so without this every line of [`Self::run`]
+    /// that touches a real child is unreachable — which is how a `run` that
+    /// killed live browsers passed a full mutation sweep of `needs_relaunch`.
+    ///
+    /// Pairs with [`ChromiumChild::from_parts`]. **Task 6 consumes this same
+    /// seam** for the reaper's tests; do not add a second one.
+    #[cfg(test)]
+    pub(crate) fn insert_test_child(&self, session_key: &str, child: ChromiumChild) {
+        self.chromium
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_key.to_string(), child);
     }
 
     /// Spawn one `playwright-cli -s=<session_key> <args>` process and capture
@@ -281,15 +633,24 @@ impl PlaywrightCliDriver {
             _ => BrowserError::Io(e),
         })?;
 
+        let started = Instant::now();
         let output_fut = child.wait_with_output();
         let output = match tokio::time::timeout(timeout, output_fut).await {
             Ok(res) => res.map_err(BrowserError::Io)?,
             Err(_) => {
                 // `output_fut` (owning `child`) is dropped here; `kill_on_drop`
-                // set above terminates the process on timeout.
+                // set above terminates the process on timeout. This IS the
+                // ceiling firing, so this is the one site entitled to name it.
                 return Err(BrowserError::Timeout(timeout.as_millis() as u64));
             }
         };
+        // The CLI exited on its own — Aleph's ceiling above never fired. What
+        // is reported below must be what actually elapsed, not the ceiling:
+        // the CLI can exit rc=0 with a timeout phrase in its output well
+        // before the ceiling (its own internal action/nav timeout), and a
+        // classifier that named the ceiling anyway reports a duration nothing
+        // in this process measured (see `classify_failure`'s doc).
+        let elapsed_ms = started.elapsed().as_millis() as u64;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -301,7 +662,7 @@ impl PlaywrightCliDriver {
                 &stderr,
                 exit_code,
                 session_key,
-                timeout.as_millis() as u64,
+                elapsed_ms,
             ));
         }
         // A clean exit status is not a success claim on this CLI — see
@@ -315,7 +676,7 @@ impl PlaywrightCliDriver {
                 &err,
                 exit_code,
                 session_key,
-                timeout.as_millis() as u64,
+                elapsed_ms,
             ));
         }
 
@@ -356,16 +717,56 @@ impl PlaywrightCliDriver {
 /// anchors are kept because a third phrasing is likelier to resemble one of them
 /// than to be predicted here.
 ///
+/// A **third** phrasing joined the two "not open" ones when the driver stopped
+/// launching browsers: a refused `attach --cdp`. Measured, not guessed —
+/// `playwright-cli -s=x attach --cdp http://127.0.0.1:1` exits 1 with an EMPTY
+/// stdout and a node exception on stderr (`Error: connect ECONNREFUSED …` plus
+/// a `Call log:` line `- <ws preparing> retrieving websocket url from …`). It
+/// shares no substring with either not-open phrase, so the anchors do not
+/// interact.
+///
+/// Unlike the not-open anchors, this one is a **conjunction**. The not-open
+/// pair could each stand alone because both are sentences only this CLI writes;
+/// `ECONNREFUSED` is a sentence any program writes, and this function is
+/// documented as running on output that can include page text. Requiring
+/// playwright's own call-log line beside it is what a page cannot supply by
+/// accident. A fourth wording is handled the same way it always was: add it,
+/// do not widen an existing anchor.
+///
 /// `detail` is the CLI's own account of the failure: stderr on a non-zero exit,
 /// the `### Error` body when the exit status was clean.
+///
+/// `elapsed_ms` is what the CALLER measured — wall-clock time from spawn to
+/// this exit — **not** the caller's configured timeout ceiling. Those are two
+/// different facts: a CLI that reports its own internal timeout can exit
+/// cleanly well inside Aleph's ceiling (measured: a `nav_timeout_secs = 120`
+/// ceiling, an action that failed at ~60 s, `tokio::time::timeout` never
+/// fired). The ceiling-firing branch is `spawn`'s own timeout arm, which
+/// already names the ceiling because it is the only site entitled to — this
+/// function only ever sees a process that already exited, so a duration is
+/// available and it is the one to report.
 fn classify_failure(
     stdout: &str,
     detail: &str,
     exit_code: i32,
     session_key: &str,
-    timeout_ms: u64,
+    elapsed_ms: u64,
 ) -> BrowserError {
     let s = format!("{stdout}\n{detail}").to_lowercase();
+    // A refused attach, before the not-open anchors: it is neither "no browser
+    // for this session" (which would attach again against the same dead
+    // endpoint) nor a page-level failure.
+    //
+    // BOTH phrases are required, and that is the point. This function runs on
+    // output that can contain page text — its own doc says so, and
+    // `snapshot`/`console` echo the page under `### Result` — so a single
+    // anchor on `econnrefused` would let a developer's own error page talk the
+    // driver into relaunching a browser. The node error and playwright's own
+    // call-log line appear together in the real transcript and not, by
+    // accident, in a page.
+    if s.contains("econnrefused") && s.contains("retrieving websocket url from") {
+        return BrowserError::AttachFailed(detail.trim().to_string());
+    }
     if s.contains("please run open first")
         || s.contains("is not open")
         || s.contains("no session")
@@ -373,7 +774,7 @@ fn classify_failure(
     {
         BrowserError::NoSession(session_key.to_string())
     } else if contains_timeout_phrase(&s) {
-        BrowserError::Timeout(timeout_ms)
+        BrowserError::Timeout(elapsed_ms)
     } else if s.contains("element not found")
         || s.contains("no element")
         || s.contains("does not match any elements")
@@ -385,6 +786,28 @@ fn classify_failure(
         BrowserError::ActionFailed(detail.trim().to_string())
     } else {
         BrowserError::PlaywrightCliError(format!("exit {exit_code}: {detail}"))
+    }
+}
+
+/// Whether this failure means "the browser needs relaunching", given whether
+/// the browser is currently alive.
+///
+/// * [`BrowserError::NoSession`] — the CLI has no session for this key. Attach,
+///   whatever the browser is doing; that is the lazy launch this driver has
+///   always had.
+/// * [`BrowserError::AttachFailed`] — the endpoint refused a connection. Only a
+///   reason to relaunch when the browser is **not** alive. Relaunching over a
+///   live browser is appendix D.9.10's hazard in a new costume: there it was a
+///   second `open` dropping every tab, here it is a second Chromium writing the
+///   same `DevToolsActivePort`.
+/// * everything else — the model's error to read. The harness does not pick a
+///   recovery strategy on its behalf (R10 第 5 不).
+#[must_use]
+fn needs_relaunch(err: &BrowserError, chromium_alive: bool) -> bool {
+    match err {
+        BrowserError::NoSession(_) => true,
+        BrowserError::AttachFailed(_) => !chromium_alive,
+        _ => false,
     }
 }
 
@@ -541,6 +964,28 @@ pub(crate) fn parse_result_value(stdout: &str) -> Option<String> {
     Some(value.trim().to_string())
 }
 
+/// Where this session's Chromium keeps its profile.
+///
+/// The profile's own `user_data_dir` when it has one; otherwise a directory
+/// derived under `~/.aleph/data/browser/chromium-udd/<key>`.
+///
+/// **A managed profile can no longer be "in memory".** `DevToolsActivePort` is
+/// written into the user-data-dir, so a browser with no profile directory has
+/// no discoverable endpoint — the file IS the contract. That is a behaviour
+/// change for a default profile and it is stated here rather than left to be
+/// discovered: browsing state (cookies, localStorage) now survives a restart
+/// for every managed profile, not only for the ones that asked.
+pub(crate) fn chromium_user_data_dir(
+    launch: &SessionLaunch,
+    session_key: &str,
+) -> Result<PathBuf, BrowserError> {
+    if let Some(dir) = &launch.user_data_dir {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(super::playwright_launch::browser_state_dir("chromium-udd")?
+        .join(super::playwright_launch::sanitize_session_key(session_key)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,7 +1091,10 @@ mod tests {
     /// silently becomes a live-browser test again.
     #[tokio::test]
     async fn an_unconfigured_driver_cannot_reach_the_machine_under_test() {
-        let driver = PlaywrightCliDriver::new(PlaywrightCliConfig::default());
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig::default(),
+            BrowserRuntimeConfig::default(),
+        );
         assert!(
             matches!(
                 driver.resolve_binary().await,
@@ -662,17 +1110,23 @@ mod tests {
     /// seal, not that any particular binary is present.)
     #[tokio::test]
     async fn an_explicit_binary_path_is_still_consulted_first() {
-        let driver = PlaywrightCliDriver::new(PlaywrightCliConfig {
-            binary_path: Some("/nonexistent/aleph-playwright-cli".into()),
-            ..PlaywrightCliConfig::default()
-        });
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig {
+                binary_path: Some("/nonexistent/aleph-playwright-cli".into()),
+                ..PlaywrightCliConfig::default()
+            },
+            BrowserRuntimeConfig::default(),
+        );
         // Missing file → NotInstalled, same variant, so assert on the branch
         // by using a path that DOES exist instead.
         let exists = std::env::current_exe().expect("test binary path");
-        let driver2 = PlaywrightCliDriver::new(PlaywrightCliConfig {
-            binary_path: Some(exists.to_string_lossy().into_owned()),
-            ..PlaywrightCliConfig::default()
-        });
+        let driver2 = PlaywrightCliDriver::new(
+            PlaywrightCliConfig {
+                binary_path: Some(exists.to_string_lossy().into_owned()),
+                ..PlaywrightCliConfig::default()
+            },
+            BrowserRuntimeConfig::default(),
+        );
         assert!(driver.resolve_binary().await.is_err());
         assert_eq!(
             driver2.resolve_binary().await.ok(),
@@ -706,6 +1160,22 @@ mod tests {
     fn test_classify_stderr_timeout() {
         let err = classify_failure("", "Error: action timeout 5000ms", 1, "foo", 5000);
         assert!(matches!(err, BrowserError::Timeout(5000)));
+    }
+
+    /// The hang-rootcause report's own guard: this function must report
+    /// whatever the caller measured, never a configured ceiling it was not
+    /// given. Passing a value that is deliberately NOT a round ceiling number
+    /// (a real ceiling here is 120_000, from `qa/browser_managed`'s own
+    /// `nav_timeout_secs`) proves the number in `BrowserError::Timeout` is the
+    /// argument, not something the function invents or a stale ceiling from
+    /// elsewhere in the call graph.
+    #[test]
+    fn the_reported_duration_is_whatever_the_caller_measured() {
+        let err = classify_failure("", "Error: Timeout 60000ms exceeded", 1, "default", 60_031);
+        assert!(
+            matches!(err, BrowserError::Timeout(60_031)),
+            "expected the caller's measured duration (60031), got {err:?}"
+        );
     }
 
     #[test]
@@ -744,5 +1214,515 @@ mod tests {
         assert!(!is_secret_env("HOME"));
         assert!(!is_secret_env("LANG"));
         assert!(!is_secret_env("ALEPH_CHROME_PATH"));
+    }
+}
+
+#[cfg(test)]
+mod attach_tests {
+    use super::*;
+
+    /// The verbatim stderr of a real `attach --cdp` against a dead port
+    /// (playwright-cli 0.1.8 / node 24.14.1), trimmed of the stack frames that
+    /// carry absolute paths.
+    const ATTACH_REFUSED: &str = "\
+Error: connect ECONNREFUSED 127.0.0.1:1
+Call log:
+  - <ws preparing> retrieving websocket url from http://127.0.0.1:1
+";
+
+    /// A refused attach is its own outcome. It is NOT `NoSession` (that would
+    /// loop straight back into another attach against the same dead endpoint)
+    /// and it is NOT a generic CLI error (that would surface to the model as
+    /// "exit 1: <node stack trace>" for a browser that merely needs
+    /// relaunching).
+    #[test]
+    fn a_refused_attach_classifies_as_attach_failed() {
+        let err = classify_failure("", ATTACH_REFUSED, 1, "default", 10_000);
+        assert!(
+            matches!(err, BrowserError::AttachFailed(_)),
+            "expected AttachFailed, got {err:?}"
+        );
+    }
+
+    /// The anchor is the **pair**, not either phrase alone, and that is not
+    /// fussiness: `classify_failure` runs on output that can contain page text
+    /// (its own doc says so, and `snapshot`/`console` echo the page under
+    /// `### Result`). A developer's own error page carrying the word
+    /// `ECONNREFUSED` must not be able to talk the driver into relaunching a
+    /// browser. Requiring both the node error AND playwright's call-log line is
+    /// what a page cannot supply by accident.
+    #[test]
+    fn one_half_of_the_attach_signature_is_not_enough() {
+        for half in [
+            "Error: connect ECONNREFUSED 127.0.0.1:8080",
+            "  - <ws preparing> retrieving websocket url from http://127.0.0.1:1",
+        ] {
+            let err = classify_failure(half, "", 1, "default", 10_000);
+            assert!(
+                !matches!(err, BrowserError::AttachFailed(_)),
+                "half the signature was enough: {half:?} -> {err:?}"
+            );
+        }
+    }
+
+    /// The two "not open" phrasings (appendix D.9.13) must keep producing
+    /// `NoSession` — that is what makes the lazy attach fire at all. Adding the
+    /// attach anchors must not shadow either of them.
+    #[test]
+    fn both_not_open_phrasings_still_produce_no_session() {
+        for (stdout, stderr) in [
+            (
+                "The browser 'default' is not open, please run open first",
+                "",
+            ),
+            (
+                "",
+                "Error: Browser 'default' is not open. Run open to start the browser session",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    classify_failure(stdout, stderr, 1, "default", 10_000),
+                    BrowserError::NoSession(_)
+                ),
+                "lost the lazy-attach trigger for {stdout:?}/{stderr:?}"
+            );
+        }
+    }
+
+    /// An ordinary Playwright failure keeps its own class.
+    #[test]
+    fn an_unrelated_failure_is_not_read_as_a_refused_attach() {
+        let err = classify_failure(
+            "",
+            "Error: strict mode violation: locator resolved to 3 elements",
+            1,
+            "default",
+            10_000,
+        );
+        assert!(
+            !matches!(err, BrowserError::AttachFailed(_)),
+            "over-broad attach anchor: {err:?}"
+        );
+    }
+
+    /// The user-data-dir is where `DevToolsActivePort` lands, so the managed
+    /// driver can no longer keep a browser "in memory": a profile that
+    /// configures none gets one derived under `~/.aleph/data/browser`. The
+    /// containment property is the same one `config_path_for` has — one
+    /// component under the state dir, whatever the session key looks like.
+    #[test]
+    fn every_profile_gets_a_user_data_dir_and_it_cannot_escape() {
+        let configured = chromium_user_data_dir(
+            &SessionLaunch {
+                user_data_dir: Some("/tmp/explicit".into()),
+                ..SessionLaunch::headless_default()
+            },
+            "default",
+        )
+        .expect("home resolves");
+        assert_eq!(configured, std::path::PathBuf::from("/tmp/explicit"));
+
+        let derived = chromium_user_data_dir(&SessionLaunch::headless_default(), "default")
+            .expect("home resolves");
+        let dir = derived.parent().expect("has a parent").to_path_buf();
+        for hostile in ["../../etc", "/etc", "..", "", "a/b"] {
+            let p = chromium_user_data_dir(&SessionLaunch::headless_default(), hostile)
+                .expect("home resolves");
+            assert_eq!(p.parent(), Some(dir.as_path()), "escaped with {hostile:?}");
+            assert_eq!(
+                p.components().count(),
+                dir.components().count() + 1,
+                "not a single component for {hostile:?}"
+            );
+        }
+    }
+
+    /// spec §6.2 row "Chrome 中途死 → 下次工具调用惰性重启" — and the two ways it
+    /// can present, which the first draft covered only one of.
+    ///
+    /// `NoSession` is the CLI saying it has no session: attach, whatever the
+    /// browser is doing. `AttachFailed` is the endpoint refusing a connection,
+    /// and it must trigger a relaunch **only when the browser is not alive**.
+    /// Relaunching over a live browser is the D.9.10 hazard in a new costume:
+    /// the old one was a second `open` dropping every tab, the new one is a
+    /// second Chromium writing the same `DevToolsActivePort`. Everything else
+    /// is the model's error to read, not the driver's to route (R10 第 5 不).
+    #[test]
+    fn only_a_dead_browser_earns_a_relaunch() {
+        // The CLI has no session: attach regardless of the browser's state.
+        assert!(needs_relaunch(&BrowserError::NoSession("d".into()), true));
+        assert!(needs_relaunch(&BrowserError::NoSession("d".into()), false));
+        // A refused endpoint with the browser gone: relaunch.
+        assert!(needs_relaunch(
+            &BrowserError::AttachFailed("econnrefused".into()),
+            false
+        ));
+        // A refused endpoint while the browser is ALIVE: do not. Something else
+        // is wrong and a second Chromium would make it worse.
+        assert!(!needs_relaunch(
+            &BrowserError::AttachFailed("econnrefused".into()),
+            true
+        ));
+        // Ordinary failures are the model's to read.
+        for other in [
+            BrowserError::ActionFailed("element not found".into()),
+            BrowserError::Timeout(1000),
+            BrowserError::PlaywrightCliError("exit 1: boom".into()),
+        ] {
+            assert!(
+                !needs_relaunch(&other, false),
+                "{other:?} must not relaunch"
+            );
+            assert!(!needs_relaunch(&other, true), "{other:?} must not relaunch");
+        }
+    }
+
+    /// The cheap pre-verb check. `chromium_alive` is a `try_wait` on a child we
+    /// own — no syscall storm, no process-table scan — so asking before every
+    /// verb costs nothing and closes the gap where the CLI's error text does
+    /// not happen to be one of the phrasings above.
+    ///
+    /// With no child recorded it must answer `false`: "there is no browser" is
+    /// not "the browser is dead", and the lazy attach already handles the
+    /// first case.
+    #[tokio::test]
+    async fn a_profile_with_no_child_is_not_reported_as_a_dead_one() {
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig::default(),
+            crate::browser::profile::BrowserRuntimeConfig::default(),
+        );
+        assert!(!driver.chromium_alive("default"));
+        assert!(!driver.chromium_died("default"));
+    }
+
+    /// **The C1 guard.** A `playwright-cli` daemon restart loses the CLI session
+    /// while Aleph's Chromium keeps running, so `NoSession` arrives over a
+    /// perfectly live browser. The relaunch arm used to `forget_chromium` first,
+    /// which kills that browser and every tab in it to recover a CLI session —
+    /// D.9.10's double-`open` in this round's costume, in the one path no test
+    /// could reach. `needs_relaunch`'s own mutation sweep could not catch it:
+    /// that predicate's contract is "a relaunch is needed", and the bug was in
+    /// what the wiring did on the way to the relaunch.
+    ///
+    /// The browser here is a `sleep`, and the CLI is a shell script that refuses
+    /// once and then succeeds — nothing reaches the network or a real browser.
+    /// The runtime config pins a Chromium that does not exist **on purpose**: if
+    /// the child is ever torn down, `ensure_chromium` has to resolve a binary,
+    /// and that pin makes the resulting failure instant and loud instead of a
+    /// real Chrome launch inside a unit test.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_lost_cli_session_does_not_cost_a_live_browser_its_tabs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let session = "aleph-unit-c1-guard";
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let marker = tmp.path().join("verb-was-refused-once");
+        let cli = tmp.path().join("fake-playwright-cli");
+
+        // Refuses the first verb the way playwright-cli 0.1.8 does (stdout,
+        // exit 1), answers `attach` with a clean exit, then serves the verb.
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\n\
+                 case \" $* \" in\n\
+                 *\" attach \"*) exit 0 ;;\n\
+                 esac\n\
+                 if [ -e {marker:?} ]; then\n\
+                 echo '### Page'\n\
+                 echo '- Page URL: about:blank'\n\
+                 exit 0\n\
+                 fi\n\
+                 : > {marker:?}\n\
+                 echo \"The browser '{session}' is not open, please run open first\"\n\
+                 exit 1\n",
+                marker = marker.to_string_lossy(),
+            ),
+        )
+        .expect("write fake cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake cli");
+
+        // The "browser": a process we can observe, that outlives the call.
+        let sleeper = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        let pid = sleeper.id();
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig {
+                binary_path: Some(cli.to_string_lossy().into_owned()),
+                ..PlaywrightCliConfig::default()
+            },
+            BrowserRuntimeConfig {
+                binary_path: Some("/nonexistent/aleph-test-chromium".into()),
+                ..BrowserRuntimeConfig::default()
+            },
+        );
+        driver.insert_test_child(
+            session,
+            ChromiumChild::from_parts(
+                sleeper,
+                CdpEndpoint {
+                    http_url: "http://127.0.0.1:1".into(),
+                    ws_url: "ws://127.0.0.1:1/devtools/browser/x".into(),
+                    pid,
+                },
+                tmp.path().join("udd"),
+                session,
+            ),
+        );
+
+        let launch = SessionLaunch::headless_default();
+        let out = driver
+            .run(
+                session,
+                LaunchPolicy::OpenIfNeeded(&launch),
+                &["tab-list"],
+                Duration::from_secs(10),
+            )
+            .await;
+        assert!(
+            out.is_ok(),
+            "the verb must succeed by re-attaching to the live browser, got {:?}",
+            out.err()
+        );
+
+        // The three facts, in increasing order of how hard they are to fake:
+        // the record survived, the driver still calls it alive, and the OS
+        // still has that pid (`shutdown` kills AND reaps, so a torn-down child
+        // is gone rather than a zombie `kill -0` would still accept).
+        assert_eq!(
+            driver.endpoint(session).map(|e| e.pid),
+            Some(pid),
+            "the live browser was torn down and replaced"
+        );
+        assert!(driver.chromium_alive(session));
+        let still_there = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .expect("kill -0");
+        assert!(still_there.success(), "pid {pid} is gone: it was killed");
+
+        assert_eq!(
+            driver.shutdown_all_chromium(),
+            1,
+            "cleanup killed the child"
+        );
+        // `attach_once` writes a real `--config` under the aleph home; this
+        // session key exists only for this test, so take its state with it.
+        let _ = tokio::fs::remove_file(
+            super::super::playwright_launch::config_path_for(session).expect("home resolves"),
+        )
+        .await;
+        let _ = tokio::fs::remove_dir_all(
+            super::super::playwright_launch::output_dir_for(session).expect("home resolves"),
+        )
+        .await;
+    }
+
+    /// Piece 4: under `LaunchPolicy::Refuse` (27 of 28 subcommands, per the
+    /// root-cause report), a `NoSession` refusal must RE-ATTACH to a Chromium
+    /// Aleph already owns rather than dead-end. Before this fix, every one of
+    /// those 27 subcommands treated "the CLI's own session is gone" as "I
+    /// cannot reach this browser" even when the browser was sitting right
+    /// there in `self.chromium`'s map with its endpoint on record — exactly
+    /// the state a `close` (a DISCONNECT, not a shutdown — measured
+    /// elsewhere in this file) leaves behind.
+    ///
+    /// The browser here is a `sleep`, standing in for a real Chromium the
+    /// same way the sibling test above does, and the assertion that matters
+    /// most is that its pid is UNCHANGED afterward — proving the fix
+    /// re-attached rather than relaunched. Relaunching (or killing) here is
+    /// exactly the shortcut this fix must not take: `Refuse` means "do not
+    /// launch a browser for this call", and re-attaching to one Aleph already
+    /// owns is not that.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_no_session_refusal_under_refuse_reattaches_to_the_browser_aleph_already_owns() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let session = "aleph-unit-c4-reattach";
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let marker = tmp.path().join("verb-was-refused-once");
+        let cli = tmp.path().join("fake-playwright-cli");
+
+        // Same shape as the sibling test's fake CLI: refuses the first verb
+        // the way playwright-cli 0.1.8 does (stdout, exit 1), answers
+        // `attach` with a clean exit, then serves the verb.
+        std::fs::write(
+            &cli,
+            format!(
+                "#!/bin/sh\n\
+                 case \" $* \" in\n\
+                 *\" attach \"*) exit 0 ;;\n\
+                 esac\n\
+                 if [ -e {marker:?} ]; then\n\
+                 echo '### Page'\n\
+                 echo '- Page URL: about:blank'\n\
+                 exit 0\n\
+                 fi\n\
+                 : > {marker:?}\n\
+                 echo \"The browser '{session}' is not open, please run open first\"\n\
+                 exit 1\n",
+                marker = marker.to_string_lossy(),
+            ),
+        )
+        .expect("write fake cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake cli");
+
+        let sleeper = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn the stand-in browser");
+        let pid = sleeper.id();
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig {
+                binary_path: Some(cli.to_string_lossy().into_owned()),
+                ..PlaywrightCliConfig::default()
+            },
+            BrowserRuntimeConfig {
+                binary_path: Some("/nonexistent/aleph-test-chromium".into()),
+                ..BrowserRuntimeConfig::default()
+            },
+        );
+        driver.insert_test_child(
+            session,
+            ChromiumChild::from_parts(
+                sleeper,
+                CdpEndpoint {
+                    http_url: "http://127.0.0.1:1".into(),
+                    ws_url: "ws://127.0.0.1:1/devtools/browser/x".into(),
+                    pid,
+                },
+                tmp.path().join("udd"),
+                session,
+            ),
+        );
+
+        // `Refuse`: the caller here is one of the 27 subcommands that must
+        // never launch a browser — the whole point is that this still
+        // succeeds by re-attaching, not by relaunching.
+        let out = driver
+            .run(
+                session,
+                LaunchPolicy::Refuse,
+                &["tab-list"],
+                Duration::from_secs(10),
+            )
+            .await;
+        assert!(
+            out.is_ok(),
+            "Refuse must re-attach to the owned browser rather than dead-end on NoSession, got {:?}",
+            out.err()
+        );
+
+        // The three facts that distinguish a re-attach from a relaunch: the
+        // pid is unchanged, the driver still calls it alive, and the OS still
+        // has that exact process (a torn-down-and-replaced child would be a
+        // different pid; a killed one would fail `kill -0`).
+        assert_eq!(
+            driver.endpoint(session).map(|e| e.pid),
+            Some(pid),
+            "the owned browser was replaced instead of re-attached to"
+        );
+        assert!(driver.chromium_alive(session));
+        let still_there = std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .expect("kill -0");
+        assert!(still_there.success(), "pid {pid} is gone: it was killed");
+
+        assert_eq!(
+            driver.shutdown_all_chromium(),
+            1,
+            "cleanup killed the child"
+        );
+        let _ = tokio::fs::remove_file(
+            super::super::playwright_launch::config_path_for(session).expect("home resolves"),
+        )
+        .await;
+        let _ = tokio::fs::remove_dir_all(
+            super::super::playwright_launch::output_dir_for(session).expect("home resolves"),
+        )
+        .await;
+    }
+
+    /// The hang-rootcause report's integration-level guard: the number in
+    /// `BrowserError::Timeout` must be what `spawn` actually measured, never
+    /// the caller's configured ceiling. Before the fix, `spawn` reported
+    /// `timeout.as_millis()` (the CEILING) on every classified failure —
+    /// including this one, where the CLI exits on ITS OWN, rc=1, carrying a
+    /// timeout phrase, well before Aleph's `tokio::time::timeout` ever fires.
+    /// That is exactly the shape the hang-rootcause investigation hit: a
+    /// `nav_timeout_secs = 120` ceiling and an error reading "timed out after
+    /// 120000ms" when nothing had waited anywhere near that long.
+    ///
+    /// The fake CLI here exits immediately with a timeout phrase, and `run` is
+    /// given a MUCH LARGER ceiling (120 s, `qa/browser_managed`'s own
+    /// `nav_timeout_secs`). If the reported number were the ceiling it would
+    /// read 120_000; the correct number is however long the (near-instant)
+    /// fake CLI actually took.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cli_that_reports_its_own_timeout_gets_its_elapsed_time_not_the_ceiling() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cli = tmp.path().join("fake-playwright-cli");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\necho 'Error: Timeout 60000ms exceeded' >&2\nexit 1\n",
+        )
+        .expect("write fake cli");
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake cli");
+
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig {
+                binary_path: Some(cli.to_string_lossy().into_owned()),
+                ..PlaywrightCliConfig::default()
+            },
+            BrowserRuntimeConfig::default(),
+        );
+
+        let err = driver
+            .run(
+                "aleph-unit-elapsed-guard",
+                LaunchPolicy::Refuse,
+                &["tab-list"],
+                Duration::from_secs(120), // the ceiling this call must NOT report
+            )
+            .await
+            .expect_err("the fake CLI always fails");
+
+        match err {
+            BrowserError::Timeout(ms) => assert!(
+                ms < 5_000,
+                "reported {ms}ms — looks like the 120_000ms ceiling was echoed \
+                 instead of the (near-instant) elapsed time"
+            ),
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+    }
+
+    /// The sealed test twin must stay sealed: a unit test may not install a
+    /// runtime, and now it may not launch a Chromium either.
+    #[tokio::test]
+    async fn an_unconfigured_driver_still_refuses_to_reach_outside_the_process() {
+        let driver = PlaywrightCliDriver::new(
+            PlaywrightCliConfig::default(),
+            crate::browser::profile::BrowserRuntimeConfig::default(),
+        );
+        assert!(matches!(
+            driver.resolve_binary().await,
+            Err(BrowserError::PlaywrightCliNotInstalled)
+        ));
+        assert!(driver.endpoint("default").is_none());
+        assert!(!driver.chromium_alive("default"));
+        assert!(!driver.shutdown_chromium("default"));
     }
 }

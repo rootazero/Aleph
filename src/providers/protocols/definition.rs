@@ -137,7 +137,7 @@ name: test-protocol
 extends: openai
 base_url: https://api.example.com
 "#;
-        let def: ProtocolDefinition = serde_yml::from_str(yaml).unwrap();
+        let def: ProtocolDefinition = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(def.name, "test-protocol");
         assert_eq!(def.extends, Some("openai".to_string()));
         assert_eq!(def.base_url, Some("https://api.example.com".to_string()));
@@ -153,7 +153,7 @@ differences:
     header: X-API-Key
     prefix: ""
 "#;
-        let def: ProtocolDefinition = serde_yml::from_str(yaml).unwrap();
+        let def: ProtocolDefinition = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(def.name, "custom-auth");
         assert!(def.differences.is_some());
     }
@@ -168,7 +168,7 @@ differences:
         .expect("Failed to read groq-custom.yaml");
 
         let def: ProtocolDefinition =
-            serde_yml::from_str(&yaml).expect("Failed to parse groq-custom.yaml");
+            crate::yaml::from_str(&yaml).expect("Failed to parse groq-custom.yaml");
         assert_eq!(def.name, "groq-custom");
         assert_eq!(def.extends, Some("openai".to_string()));
         assert_eq!(
@@ -196,7 +196,7 @@ differences:
         .expect("Failed to read exotic-ai.yaml");
 
         let def: ProtocolDefinition =
-            serde_yml::from_str(&yaml).expect("Failed to parse exotic-ai.yaml");
+            crate::yaml::from_str(&yaml).expect("Failed to parse exotic-ai.yaml");
         assert_eq!(def.name, "exotic-ai");
         assert_eq!(def.base_url, Some("https://api.exotic.ai".to_string()));
         assert!(def.custom.is_some());

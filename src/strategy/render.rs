@@ -175,11 +175,78 @@ mod tests {
         let a = render_strategy_summary(&s);
         let b = render_strategy_summary(&s);
         assert_eq!(a, b, "render must be byte-identical for identical input");
-        // No timestamp / clock leak: there must be no digits-bearing "ms" stamp.
+        // No timestamp / clock leak: pin concrete timestamp shapes, not the
+        // bare substring "ms" — legitimate content like "100ms" or guardrail
+        // text "do not let latency exceed 200ms" would otherwise trip a
+        // false positive (issue STRAT-005).
         assert!(
-            !a.contains("ms"),
+            !contains_iso_date(&a) && !contains_clock_time(&a) && !contains_epoch_ms(&a),
             "no timestamp may appear in the stable body"
         );
+    }
+
+    fn contains_iso_date(s: &str) -> bool {
+        // YYYY-MM-DD
+        let bytes = s.as_bytes();
+        if bytes.len() < 10 {
+            return false;
+        }
+        for i in 0..=bytes.len() - 10 {
+            if bytes[i..i + 4].iter().all(|b| b.is_ascii_digit())
+                && bytes[i + 4] == b'-'
+                && bytes[i + 5..i + 7].iter().all(|b| b.is_ascii_digit())
+                && bytes[i + 7] == b'-'
+                && bytes[i + 8..i + 10].iter().all(|b| b.is_ascii_digit())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn contains_clock_time(s: &str) -> bool {
+        // HH:MM:SS or HH:MM — must be preceded by start/whitespace to avoid
+        // matching identifiers like "12:34:56" inside URLs.
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i + 5 <= bytes.len() {
+            if i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\n' || bytes[i - 1] == b'\t' {
+                if bytes[i..i + 2].iter().all(|b| b.is_ascii_digit())
+                    && bytes[i + 2] == b':'
+                    && bytes[i + 3..i + 5].iter().all(|b| b.is_ascii_digit())
+                {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    fn contains_epoch_ms(s: &str) -> bool {
+        // 10-13 digit run standing alone (epoch seconds / epoch millis).
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i].is_ascii_digit() {
+                let start = i;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if (10..=13).contains(&(i - start)) {
+                    let left_ok = start == 0
+                        || !bytes[start - 1].is_ascii_alphanumeric();
+                    let right_ok =
+                        i == bytes.len() || !bytes[i].is_ascii_alphanumeric();
+                    if left_ok && right_ok {
+                        return true;
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+        false
     }
 
     #[test]

@@ -36,13 +36,12 @@ import base64
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
 
-import websockets
-
-from qa_rpc import Ledger, Rpc, cli_sessions, open_session_count, session_status
+from qa_rpc import Ledger, Rpc, cli_sessions, open_session_count, session_status, ws_connect
 
 # The two drivers print element handles differently, and the handle is what the
 # model passes back as `ref_id`:
@@ -601,6 +600,28 @@ async def scenario_reap(rpc, led, args):
         f"status={status}",
     )
 
+    # Since the launch chain flip, `close` under `attach --cdp` is a
+    # DISCONNECT: the CLI's session can read "closed" while the Chromium
+    # process Aleph spawned is still alive. The half that actually reclaims
+    # anything is `shutdown_chromium`, and the only real-machine witness to it
+    # is the process table — the CLI oracle above cannot see it.
+    if args.user_data_dir:
+        # `--` before the pattern: BSD pgrep (macOS) treats a pattern starting
+        # with `-` as an option and refuses it (`illegal option -- -`) unless
+        # told to stop parsing options first — without this the check always
+        # sees an empty pgrep result and passes vacuously regardless of
+        # whether the browser is actually gone (measured: it hid a real
+        # leaked Chrome process on this exact code path).
+        pids = subprocess.run(
+            ["pgrep", "-f", "--", f"--user-data-dir={args.user_data_dir}"],
+            capture_output=True, text=True,
+        ).stdout.split()
+        led.check(
+            "the reaped profile's Chrome process is gone too, not just its CLI session",
+            len(pids) == 0,
+            f"pgrep --user-data-dir={args.user_data_dir} -> {pids}",
+        )
+
     ok, res = await ctl.call("browser_tabs", action="list")
     ctl_tabs_after = len((res or {}).get("tabs") or [])
     led.check(
@@ -1068,6 +1089,14 @@ def parse_args():
     ap.add_argument("--cli", required=True)
     ap.add_argument("--out-dir", default="/tmp")
     ap.add_argument("--upload-file", default="")
+    ap.add_argument(
+        "--user-data-dir",
+        default="",
+        help="the default profile's user-data-dir — since the launch chain "
+        "flip, `reap` must prove the CHROMIUM PROCESS is gone (a pgrep on this "
+        "flag), not just that the CLI's session closed: under attach --cdp, "
+        "close is a disconnect, and the browser survives it.",
+    )
     ap.add_argument("--control-profile", default="control")
     ap.add_argument("--control-user-data-dir", default="")
     ap.add_argument("--control-max-tabs", type=int, default=2)
@@ -1081,7 +1110,7 @@ def parse_args():
 async def main():
     args = parse_args()
     led = Ledger()
-    async with websockets.connect(args.url, max_size=None) as ws:
+    async with ws_connect(args.url) as ws:
         rpc = Rpc(ws)
         await rpc.connect("qa-browser-tools")
         await SCENARIOS[args.scenario](rpc, led, args)

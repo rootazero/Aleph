@@ -1389,7 +1389,19 @@ fn fake_claude_on_path(dir: &std::path::Path) -> FakeClaude {
         let fake = dir.join("claude");
         std::fs::write(
             &fake,
-            format!("#!/bin/sh\nprintf '%s\\n' '{CLAUDE_WORKING_LINE}'\nsleep 30\n"),
+            // The leading newline is load-bearing, not cosmetic. The PTY line
+            // discipline echoes the typed command instantly while `sh` writes
+            // its prompt whenever it gets scheduled, so under a full-suite run
+            // the echo lands first and the prompt ends up on the NEXT line —
+            // the fake's chrome is then appended to it as
+            // `$ ⏵ pretending to work esc to interrupt`. `live_turn_working`
+            // is anchored `^\s*[⏸⏵]`, so a `$ ` prefix means it cannot match;
+            // the fake prints once and sleeps, so no later frame ever corrects
+            // the row and the entry stays `Idle` forever (observed 2026-09-06
+            // in a full `--lib` run: identified agent + program, chrome on
+            // screen, `state: Idle`). Starting on a fresh line makes the
+            // chrome begin at column 0 whatever the shell left behind.
+            format!("#!/bin/sh\nprintf '\\n%s\\n' '{CLAUDE_WORKING_LINE}'\nsleep 30\n"),
         )
         .expect("write fake claude");
         use std::os::unix::fs::PermissionsExt;

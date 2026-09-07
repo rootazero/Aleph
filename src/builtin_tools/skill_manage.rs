@@ -117,7 +117,7 @@ impl SkillManageOutput {
     }
 }
 
-/// Frontmatter composed for `create` — serialized through `serde_yml` so
+/// Frontmatter composed for `create` — serialized through `crate::yaml` so
 /// arbitrary names/descriptions can never break out of the YAML block.
 #[derive(Serialize)]
 struct ComposedFrontmatter<'a> {
@@ -125,6 +125,41 @@ struct ComposedFrontmatter<'a> {
     description: &'a str,
     #[serde(rename = "when-to-use", skip_serializing_if = "Option::is_none")]
     when_to_use: Option<&'a str>,
+}
+
+/// Compose a `SKILL.md` from typed frontmatter plus a markdown body.
+///
+/// The closing `---` has to land alone on its own line or
+/// [`crate::skill::frontmatter::split`] finds no fence at all — which makes
+/// the emitter's *line terminator* part of this function's contract. That
+/// terminator is not a stable fact:
+///
+/// * `serde_yaml` 0.9 documented `to_string(&point) == "x: 1.0\ny: 2.0\n"`.
+/// * `serde_yml` 0.0.13 (forwarding to `noyalib`) wrote `\n` *between* entries
+///   only: measured `"name: n\ndescription: d"` — no trailing newline.
+/// * `yaml_serde` 0.10.7, the backend today, measured
+///   `"name: n\ndescription: d\n"` — trailing newline, no document markers.
+///
+/// Three backends, three answers, one of which already broke this function
+/// once. So the emitter's output is normalised rather than interpolated as-is:
+/// any document markers it may frame the block with are stripped, every
+/// trailing newline is trimmed, then exactly one `\n` is appended — so the
+/// fence starts its own line whatever the emitter did. Do not "simplify" this
+/// to trust the current backend's trailing newline.
+///
+/// `memory::notes::note::helpers::yaml_extra_block` is the other site that
+/// splices this emitter's output into a `---` fence; it already normalises the
+/// same way. Keep the two answering this question the same way.
+fn compose_skill_md(fm: &ComposedFrontmatter<'_>, body: &str) -> Result<String> {
+    let yaml = crate::yaml::to_string(fm)
+        .map_err(|e| AlephError::tool(format!("Failed to compose frontmatter: {e}")))?;
+    let block = yaml
+        .strip_prefix("---\n")
+        .unwrap_or(&yaml)
+        .trim_end_matches('\n')
+        .trim_end_matches("\n...")
+        .trim_end_matches('\n');
+    Ok(format!("---\n{block}\n---\n\n{body}\n"))
 }
 
 #[derive(Clone)]
@@ -374,12 +409,7 @@ impl SkillManageTool {
             description,
             when_to_use: args.when_to_use.as_deref().map(str::trim),
         };
-        let mut yaml = serde_yml::to_string(&fm)
-            .map_err(|e| AlephError::tool(format!("Failed to compose frontmatter: {e}")))?;
-        if let Some(stripped) = yaml.strip_prefix("---\n") {
-            yaml = stripped.to_string();
-        }
-        let full = format!("---\n{yaml}---\n\n{body}\n");
+        let full = compose_skill_md(&fm, body)?;
 
         // Round-trip through the canonical parser so anything we write is
         // guaranteed loadable, and to derive the id the registry will use.
@@ -957,5 +987,51 @@ mod tests {
             .eligible_manifests
             .iter()
             .any(|m| m.name() == "seasonal"));
+    }
+
+    /// The composer must leave the closing `---` alone on its own line —
+    /// whatever the YAML emitter does with its last line's terminator.
+    ///
+    /// `serde_yaml` 0.9 documented `to_string(&point) == "x: 1.0\ny: 2.0\n"`.
+    /// `serde_yml` 0.0.13 (forwarding to `noyalib`) emitted `\n` *between*
+    /// entries only; measured, it returned `"name: n\ndescription: d"` — no
+    /// trailing newline, no document markers. `yaml_serde` 0.10.7, the backend
+    /// today, measures `"name: n\ndescription: d\n"` — the newline is back,
+    /// which is precisely why this test asserts the *composed document*
+    /// instead of the emitter's bytes. `create` used to interpolate the
+    /// emitter output straight into
+    /// `format!("---\n{yaml}---\n\n{body}\n")`, which produced
+    /// `description: d---`: a line that does not `trim()` to `---`, so the
+    /// fence never closed and *every* `skill_manage(action='create')` died on
+    /// the round-trip check with "no YAML frontmatter found".
+    ///
+    /// The eight `create`-driven tests only observe this as a side effect and
+    /// none of them names the emitter. This one goes red the moment the
+    /// emitter's output shape moves again.
+    #[test]
+    fn composed_skill_md_closes_its_fence_whatever_the_emitter_emits() {
+        for when_to_use in [None, Some("when testing")] {
+            let fm = ComposedFrontmatter {
+                name: "My Tricks",
+                description: "A test skill",
+                when_to_use,
+            };
+            let full = compose_skill_md(&fm, "# Do the thing\nStep one.").expect("compose");
+
+            assert!(
+                full.contains("\n---\n\n# Do the thing"),
+                "closing fence is not alone on its own line: {full:?}"
+            );
+
+            let (yaml, _) = crate::skill::frontmatter::split(&full)
+                .unwrap_or_else(|e| panic!("composed SKILL.md must split: {e} — {full:?}"));
+            assert!(yaml.contains("name: My Tricks"), "yaml: {yaml:?}");
+
+            let manifest = parse_skill_content(&full, SkillSource::Global)
+                .unwrap_or_else(|e| panic!("composed SKILL.md must parse: {e} — {full:?}"));
+            assert_eq!(manifest.id().as_str(), "my-tricks");
+            assert_eq!(manifest.description(), "A test skill");
+            assert_eq!(manifest.when_to_use(), when_to_use);
+        }
     }
 }

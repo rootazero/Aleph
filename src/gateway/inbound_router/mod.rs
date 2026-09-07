@@ -936,7 +936,7 @@ impl InboundMessageRouter {
                         return self.handle_new_session(&msg, &ctx).await;
                     }
                     // Use the rich serializer so Skill / Custom / MCP fields
-                    // (instructions, allowed_tools, system_prompt, server_name)
+                    // (allowed_tools, system_prompt, server_name)
                     // are preserved in the mode JSON instead of being lossily
                     // collapsed to `direct_tool`.
                     if let Some(mode_json) =

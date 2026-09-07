@@ -286,7 +286,7 @@ metadata:
     bins: ["echo"]
 "#;
 
-        let spec: AlephSkillSpec = serde_yml::from_str(yaml).unwrap();
+        let spec: AlephSkillSpec = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(spec.name, "test-tool");
         assert_eq!(spec.description, "A test tool");
         assert_eq!(spec.metadata.requires.bins, vec!["echo"]);
@@ -316,7 +316,7 @@ metadata:
         optional: false
 "#;
 
-        let spec: AlephSkillSpec = serde_yml::from_str(yaml).unwrap();
+        let spec: AlephSkillSpec = crate::yaml::from_str(yaml).unwrap();
         let aleph_meta = spec.metadata.aleph.unwrap();
 
         assert!(matches!(aleph_meta.security.sandbox, SandboxMode::Docker));

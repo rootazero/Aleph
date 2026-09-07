@@ -175,6 +175,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "list_models" => {
                 Box::pin(async move { self.list_models_tool.call_json(arguments).await })
             }
+            "runtime_manage" => {
+                Box::pin(async move { self.runtime_manage_tool.call_json(arguments).await })
+            }
             "vault_store" => Box::pin(async move {
                 let tool = self.vault_store_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("vault_store not available: no SharedTokenManager configured")
@@ -1462,9 +1465,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                             serde_json::from_value(arguments).map_err(|e| {
                                 AlephError::tool(format!("memory_reflect: bad args: {e}"))
                             })?;
-                        let out = tool
-                            .call_with_filed_partition(filed_agent_id, args)
-                            .await?;
+                        let out = tool.call_with_filed_partition(filed_agent_id, args).await?;
                         serde_json::to_value(out).map_err(|e| {
                             AlephError::tool(format!("memory_reflect: serialize: {e}"))
                         })

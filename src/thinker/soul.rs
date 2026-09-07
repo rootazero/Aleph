@@ -204,7 +204,7 @@ impl SoulManifest {
             }
             "toml" => toml::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string())),
             "yaml" | "yml" => {
-                serde_yml::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
+                crate::yaml::from_str(&content).map_err(|e| SoulLoadError::Parse(e.to_string()))
             }
             "md" | "markdown" => Self::from_markdown(&content),
             _ => Err(SoulLoadError::UnsupportedFormat(ext.to_string())),
@@ -217,7 +217,7 @@ impl SoulManifest {
 
         // Start with frontmatter values
         let mut manifest: Self = if !frontmatter.is_empty() {
-            serde_yml::from_str(&frontmatter)
+            crate::yaml::from_str(&frontmatter)
                 .map_err(|e| SoulLoadError::Parse(format!("YAML frontmatter error: {e}")))?
         } else {
             Self::default()

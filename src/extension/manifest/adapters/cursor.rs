@@ -63,37 +63,55 @@ impl ManifestAdapter for CursorAdapter {
 
                     // Parse standard components
                     if let Some(skills) = json.get("skills").and_then(|v| v.as_str()) {
-                        if let Ok(s) = parsers::parse_skills_dir(dir, skills, &plugin_id) {
-                            caps.extend(s);
-                        }
+                        parsers::extend_scanned(
+                            &mut caps,
+                            "skills",
+                            dir,
+                            parsers::parse_skills_dir(dir, skills, &plugin_id),
+                        );
                     }
                     // Commands are merged into skills following OpenClaw convention
                     if let Some(commands) = json.get("commands").and_then(|v| v.as_str()) {
-                        if let Ok(c) = parsers::parse_commands_dir(dir, commands, &plugin_id) {
-                            caps.extend(c);
-                        }
+                        parsers::extend_scanned(
+                            &mut caps,
+                            "commands",
+                            dir,
+                            parsers::parse_commands_dir(dir, commands, &plugin_id),
+                        );
                     }
                     if let Some(agents) = json.get("agents").and_then(|v| v.as_str()) {
-                        if let Ok(a) = parsers::parse_agents_dir(dir, agents, &plugin_id) {
-                            caps.extend(a);
-                        }
+                        parsers::extend_scanned(
+                            &mut caps,
+                            "agents",
+                            dir,
+                            parsers::parse_agents_dir(dir, agents, &plugin_id),
+                        );
                     }
                     if let Some(hooks) = json.get("hooks").and_then(|v| v.as_str()) {
-                        if let Ok(h) = parsers::parse_hooks_file(dir, hooks, &plugin_id) {
-                            caps.extend(h);
-                        }
+                        parsers::extend_scanned(
+                            &mut caps,
+                            "hooks",
+                            dir,
+                            parsers::parse_hooks_file(dir, hooks, &plugin_id),
+                        );
                     }
                     if let Some(mcp) = json.get("mcpServers").and_then(|v| v.as_str()) {
-                        if let Ok(m) = parsers::parse_mcp_config_file(dir, mcp, &plugin_id) {
-                            caps.extend(m);
-                        }
+                        parsers::extend_scanned(
+                            &mut caps,
+                            "mcp",
+                            dir,
+                            parsers::parse_mcp_config_file(dir, mcp, &plugin_id),
+                        );
                     }
 
                     // Cursor-specific: rules → skills
                     if let Some(rules_path) = json.get("rules").and_then(|v| v.as_str()) {
-                        if let Ok(r) = parsers::parse_skills_dir(dir, rules_path, &plugin_id) {
-                            caps.extend(r);
-                        }
+                        parsers::extend_scanned(
+                            &mut caps,
+                            "skills",
+                            dir,
+                            parsers::parse_skills_dir(dir, rules_path, &plugin_id),
+                        );
                     }
                 }
             }
@@ -112,33 +130,48 @@ impl ManifestAdapter for CursorAdapter {
             |field: &str| -> bool { json_ref.as_ref().and_then(|j| j.get(field)).is_some() };
 
         if !json_has("skills") && dir.join("skills").is_dir() {
-            if let Ok(s) = parsers::parse_skills_dir(dir, "skills", &plugin_id) {
-                caps.extend(s);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "skills",
+                dir,
+                parsers::parse_skills_dir(dir, "skills", &plugin_id),
+            );
         }
         // .cursor/commands/ → skills (commands as skills)
         if !json_has("commands") && dir.join(".cursor/commands").is_dir() {
-            if let Ok(s) = parsers::parse_commands_dir(dir, ".cursor/commands", &plugin_id) {
-                caps.extend(s);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "commands",
+                dir,
+                parsers::parse_commands_dir(dir, ".cursor/commands", &plugin_id),
+            );
         }
         // .cursor/agents/ → agents
         if !json_has("agents") && !json_has("subagents") && dir.join(".cursor/agents").is_dir() {
-            if let Ok(a) = parsers::parse_agents_dir(dir, ".cursor/agents", &plugin_id) {
-                caps.extend(a);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "agents",
+                dir,
+                parsers::parse_agents_dir(dir, ".cursor/agents", &plugin_id),
+            );
         }
         // .cursor/hooks.json → hooks
         if !json_has("hooks") && dir.join(".cursor/hooks.json").exists() {
-            if let Ok(h) = parsers::parse_hooks_file(dir, ".cursor/hooks.json", &plugin_id) {
-                caps.extend(h);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "hooks",
+                dir,
+                parsers::parse_hooks_file(dir, ".cursor/hooks.json", &plugin_id),
+            );
         }
         // .mcp.json → MCP servers
         if !json_has("mcpServers") && dir.join(".mcp.json").exists() {
-            if let Ok(m) = parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id) {
-                caps.extend(m);
-            }
+            parsers::extend_scanned(
+                &mut caps,
+                "mcp",
+                dir,
+                parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id),
+            );
         }
 
         // .cursorrules file → single skill
@@ -150,7 +183,6 @@ impl ManifestAdapter for CursorAdapter {
                     description: "Cursor rules imported as skill".to_string(),
                     content,
                     triggers: vec![],
-                    allowed_tools: vec![],
                     category: Some("rules".to_string()),
                     plugin_id: plugin_id.clone(),
                     ..Default::default()
@@ -177,7 +209,6 @@ impl ManifestAdapter for CursorAdapter {
                                 description: "Cursor rule imported as skill".to_string(),
                                 content,
                                 triggers: vec![],
-                                allowed_tools: vec![],
                                 category: Some("rules".to_string()),
                                 plugin_id: plugin_id.clone(),
                                 ..Default::default()

@@ -1995,27 +1995,16 @@ async fn handle_connection(
     // deregister (which removes it); the `if deregister` guard skips emission for
     // a stale old connection whose node_id was already reclaimed by a reconnect.
     //
-    // ⚠️ KNOWN GAP (2026-08-29) — that guard is false in a SECOND case nobody
-    // wrote down, and this publish is `node.disconnected`'s only producer
-    // repo-wide. `NodeRegistry::forget` (the operator-deregister path, reached
-    // from `cluster.deregister` and the `node_manage` tool) empties BOTH
-    // `nodes_by_id` and `nodes_by_conn` before it calls `close_connection()`,
-    // so by the time this cleanup runs `node_identity_by_conn` is already
-    // `None` and `deregister` already returns false — i.e. an explicit
-    // deregister emits nothing and skips the `touch_device` last-seen stamp.
-    // A second operator's Panel keeps rendering the node "online" until a full
-    // page reload, after which it vanishes entirely, so the transition is
-    // never observable as an event. `registry.rs`'s own test comments that
-    // "a stale conn cleanup after forget is a harmless no-op" — harmless only
-    // if you do not know the event lives inside the guard.
-    //
-    // This arm is NOT the place to fix it: after `forget` there is nothing
-    // here left to read. The publish belongs in `cluster::deregister_node`
-    // (already the single shared source for the RPC and tool faces), fired
-    // when it evicts a live session, with `forget` returning the evicted
-    // session's `device_name` so no second lookup is needed. Leave this arm
-    // as-is for the wedge/ordinary-drop path — its guard then correctly
-    // suppresses the duplicate.
+    // This arm is not the only producer of `node.disconnected`. The
+    // operator-deregister path (`cluster.deregister` RPC / the `node_manage`
+    // tool → `NodeRegistry::forget`) empties BOTH tables before it fires
+    // `close_connection()`, so by the time this cleanup runs
+    // `node_identity_by_conn` is `None` and `deregister` returns false — the
+    // guard below correctly suppresses a duplicate, and
+    // `cluster::deregister_node` publishes the event itself from the evicted
+    // session `forget` hands back (regression test:
+    // `cluster::enrollment::tests::deregister_publishes_node_disconnected_on_live_eviction`).
+    // This arm therefore owns exactly the wedge / ordinary-socket-drop path.
     let node_ident = ctx.node_registry.node_identity_by_conn(&conn_id);
     if ctx.node_registry.deregister(&conn_id) {
         if let Some((node_id, name)) = node_ident {

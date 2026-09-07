@@ -67,9 +67,11 @@ async fn run_cmd_with_timeout(cmd: &mut Command) -> Result<std::process::Output,
 /// capability binary (used for `RunSubcommand` and `AssetProbe`).
 pub async fn run(action: &PostInstallAction, bin_path: &PathBuf) -> Result<(), PostInstallError> {
     match action {
-        PostInstallAction::RunSubcommand { args, target_dir } => {
-            run_subcommand(bin_path, args, *target_dir).await
-        }
+        PostInstallAction::RunSubcommand {
+            args,
+            target_dir,
+            env,
+        } => run_subcommand(bin_path, args, *target_dir, env).await,
         PostInstallAction::FnmAlias { alias_name } => create_fnm_alias(alias_name).await,
         PostInstallAction::AssetProbe { path, repair } => {
             verify_or_repair(bin_path, path, repair).await
@@ -81,9 +83,13 @@ async fn run_subcommand(
     bin_path: &PathBuf,
     args: &[&str],
     target_dir: Option<&str>,
+    env: &[super::specs::EnvFromConfig],
 ) -> Result<(), PostInstallError> {
     let mut cmd = Command::new(bin_path);
     cmd.args(args);
+    for (key, value) in config_env(env) {
+        cmd.env(key, value);
+    }
     if let Some(td) = target_dir {
         let expanded = expand_home(td)?;
         if let Some(parent) = PathBuf::from(&expanded).parent() {
@@ -104,6 +110,42 @@ async fn run_subcommand(
         });
     }
     Ok(())
+}
+
+/// The environment `vars` ask for, read out of the running config.
+///
+/// Split from [`config_env_from`] so the mapping is testable without a config
+/// file: this half performs the global read, that half is a total function of
+/// its inputs.
+pub fn config_env(vars: &[super::specs::EnvFromConfig]) -> Vec<(&'static str, String)> {
+    if vars.is_empty() {
+        return Vec::new();
+    }
+    match crate::config::Config::load() {
+        Ok(cfg) => config_env_from(vars, &cfg.general.browser.runtime),
+        Err(e) => {
+            // "I could not read the config" is not "the operator set no
+            // mirror": say so, then proceed with the default host, which is the
+            // only thing left to do.
+            warn!("cannot read config for post-install environment: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// [`config_env`]'s pure half.
+#[must_use]
+pub fn config_env_from(
+    vars: &[super::specs::EnvFromConfig],
+    runtime: &crate::browser::profile::BrowserRuntimeConfig,
+) -> Vec<(&'static str, String)> {
+    vars.iter()
+        .filter_map(|v| match v {
+            super::specs::EnvFromConfig::PlaywrightDownloadHost => runtime
+                .download_host()
+                .map(|h| ("PLAYWRIGHT_DOWNLOAD_HOST", h.to_string())),
+        })
+        .collect()
 }
 
 async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
@@ -198,6 +240,13 @@ impl HomeEnvGuard {
         std::env::set_var("HOME", value);
         guard
     }
+
+    /// Lock, snapshot, then REMOVE `$HOME` for the guard's lifetime.
+    pub(crate) fn acquire_and_clear() -> Self {
+        let guard = Self::acquire();
+        std::env::remove_var("HOME");
+        guard
+    }
 }
 
 #[cfg(test)]
@@ -249,11 +298,34 @@ impl HomeEnvGuards {
             _aleph_home: aleph_home,
         }
     }
+
+    /// Lock both, then REMOVE `$ALEPH_HOME` and `$HOME` for the guard's
+    /// lifetime — for a test that needs `get_config_dir()` to fail outright
+    /// (no fallback of any kind), which only happens when neither resolves.
+    ///
+    /// Taking `HomeEnvGuard` alone for this — as this codebase's own
+    /// `runtime_manage` ledger-failure test once did — races: `HOME_LOCK` and
+    /// `ALEPH_HOME_TEST_GUARD` are separate mutexes, so a test elsewhere in
+    /// the same binary that legitimately sets `$ALEPH_HOME` under its OWN
+    /// guard can supply the very fallback the `$HOME`-only test is trying to
+    /// rule out, whenever `cargo test`'s default parallel execution overlaps
+    /// them. Measured: green in isolation, red running the whole module.
+    pub(crate) fn acquire_and_clear() -> Self {
+        // Same fixed order as `acquire_and_set` — ALEPH_HOME first.
+        let aleph_home = crate::utils::paths::AlephHomeEnvGuard::acquire_and_clear();
+        let home = HomeEnvGuard::acquire_and_clear();
+        Self {
+            _home: home,
+            _aleph_home: aleph_home,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::profile::BrowserRuntimeConfig;
+    use crate::runtimes::specs::EnvFromConfig;
 
     /// Collect every `.rs` file under `dir`, recursively.
     fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -415,5 +487,54 @@ mod tests {
         let sh = PathBuf::from("/bin/sh");
         let result = run(&action, &sh).await;
         assert!(result.is_ok());
+    }
+
+    /// The mirror is a config key rather than "go export a variable" because
+    /// the installer runs inside the daemon — there is no shell for an operator
+    /// to export into. Playwright's CDN is blocked on the same networks that
+    /// block GitHub release assets, so without this the install just hangs and
+    /// then fails with a network error naming a host nobody chose.
+    #[test]
+    fn the_download_host_reaches_the_installer_as_playwright_download_host() {
+        let runtime = BrowserRuntimeConfig {
+            download_host: Some("https://npmmirror.com/mirrors/playwright".into()),
+            ..BrowserRuntimeConfig::default()
+        };
+        assert_eq!(
+            config_env_from(&[EnvFromConfig::PlaywrightDownloadHost], &runtime),
+            vec![(
+                "PLAYWRIGHT_DOWNLOAD_HOST",
+                "https://npmmirror.com/mirrors/playwright".to_string()
+            )]
+        );
+    }
+
+    /// An unset or blank mirror must produce NO variable, not an empty one.
+    /// `PLAYWRIGHT_DOWNLOAD_HOST=` is not "use the default host"; it is "the
+    /// host is the empty string", and every download then fails on a malformed
+    /// URL. This is the fail-closed reading of a blank field (判据 §8).
+    #[test]
+    fn a_blank_download_host_sets_no_variable_at_all() {
+        for host in [None, Some(String::new()), Some("   ".to_string())] {
+            let runtime = BrowserRuntimeConfig {
+                download_host: host.clone(),
+                ..BrowserRuntimeConfig::default()
+            };
+            assert!(
+                config_env_from(&[EnvFromConfig::PlaywrightDownloadHost], &runtime).is_empty(),
+                "blank host {host:?} produced a variable"
+            );
+        }
+    }
+
+    /// An action that declares no env gets none — the passthrough must not
+    /// leak onto every other post-install subcommand just because it is cheap.
+    #[test]
+    fn an_action_that_declares_no_env_gets_none() {
+        let runtime = BrowserRuntimeConfig {
+            download_host: Some("https://mirror.example".into()),
+            ..BrowserRuntimeConfig::default()
+        };
+        assert!(config_env_from(&[], &runtime).is_empty());
     }
 }

@@ -97,18 +97,18 @@ pub async fn verify(server_url: &str, config: &CliConfig, name: &str, json: bool
     Ok(())
 }
 
+/// One row of `secrets.providers`. The external-provider plugin point was
+/// removed server-side in the 2026-09-05 audit pass, so `account` and
+/// `service_account_token_env` — which only an external provider ever carried
+/// — were dropped here too: no producer can emit them, and their display arms
+/// were branches the operator could never reach.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ProviderEntry {
     key: String,
     #[serde(rename = "type")]
     provider_type: String,
     #[serde(default)]
     builtin: bool,
-    #[serde(default)]
-    account: Option<String>,
-    #[serde(default)]
-    service_account_token_env: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,25 +124,32 @@ pub async fn providers(server_url: &str, config: &CliConfig, json: bool) -> CliR
     } else {
         let response: ProvidersResponse =
             serde_json::from_value(result.clone()).map_err(|e| CliError::Other(e.to_string()))?;
-        let headers = &["KEY", "TYPE", "ACCOUNT/ENV"];
-        let rows: Vec<Vec<String>> = response
-            .providers
-            .iter()
-            .map(|p| {
-                let extra = match (&p.account, &p.service_account_token_env) {
-                    (Some(a), Some(e)) => format!("{a} (env: {e})"),
-                    (Some(a), None) => a.clone(),
-                    (None, Some(e)) => format!("env: {e}"),
-                    (None, None) if p.builtin => "(built-in)".into(),
-                    (None, None) => "-".into(),
-                };
-                vec![p.key.clone(), p.provider_type.clone(), extra]
-            })
-            .collect();
-        output::print_table(headers, &rows, false, &result);
+        let rows = provider_rows(&response);
+        output::print_table(PROVIDER_HEADERS, &rows, false, &result);
     }
     client.close().await?;
     Ok(())
+}
+
+const PROVIDER_HEADERS: &[&str; 3] = &["KEY", "TYPE", "STATUS"];
+
+/// Render the provider listing as table rows.
+///
+/// Split out of [`providers`] so the tests exercise the rows the operator
+/// actually sees; asserting only that the response deserialises would test
+/// serde, not this rendering.
+fn provider_rows(response: &ProvidersResponse) -> Vec<Vec<String>> {
+    response
+        .providers
+        .iter()
+        .map(|p| {
+            // `builtin` is the only qualifier the server sends. A row without
+            // it renders "-" rather than guessing: absent means unknown, not
+            // "external".
+            let status = if p.builtin { "(built-in)" } else { "-" };
+            vec![p.key.clone(), p.provider_type.clone(), status.to_string()]
+        })
+        .collect()
 }
 
 /// Read a secret value from stdin (hidden TTY when interactive, raw read
@@ -179,17 +186,45 @@ mod tests {
         assert_eq!(parsed.secrets, vec!["a", "b"]);
     }
 
+    /// The literal below is the **whole** `secrets.providers` response the
+    /// server can produce today — `handle_secrets_providers` (alephcore) and
+    /// `aleph-server secret providers` both emit exactly this one built-in row.
+    /// The previous version of this test fabricated a second `1password` row
+    /// that no producer has emitted since the 2026-09-05 audit pass, so it
+    /// asserted a literal it had written itself.
+    ///
+    /// Caveat this test cannot lift: `ProvidersResponse` is a hand-written
+    /// mirror of a shape owned by a crate `aleph-cli` deliberately does not
+    /// depend on, so parsing proves only that the CLI accepts a superset. A
+    /// real equality check needs a key set both sides construct from — there is
+    /// no such shared constant today.
     #[test]
-    fn providers_response_deserialises() {
+    fn the_builtin_local_row_renders_the_way_the_server_sends_it() {
         let raw = serde_json::json!({
             "providers": [
-                { "key": "local", "type": "local_vault", "builtin": true },
-                { "key": "op", "type": "1password", "builtin": false, "account": "acme" }
+                { "key": "local", "type": "local_vault", "builtin": true }
             ]
         });
         let parsed: ProvidersResponse = serde_json::from_value(raw).unwrap();
-        assert_eq!(parsed.providers.len(), 2);
-        assert!(parsed.providers[0].builtin);
-        assert_eq!(parsed.providers[1].account.as_deref(), Some("acme"));
+
+        assert_eq!(
+            provider_rows(&parsed),
+            vec![vec![
+                "local".to_string(),
+                "local_vault".to_string(),
+                "(built-in)".to_string()
+            ]]
+        );
+    }
+
+    /// A row that omits `builtin` must read as unknown, not as a claim. The
+    /// status column is the only place this listing says anything beyond the
+    /// two strings the server sent, so it must not invent a third.
+    #[test]
+    fn a_row_without_builtin_renders_a_dash_rather_than_guessing() {
+        let raw = serde_json::json!({ "providers": [{ "key": "x", "type": "y" }] });
+        let parsed: ProvidersResponse = serde_json::from_value(raw).unwrap();
+
+        assert_eq!(provider_rows(&parsed)[0][2], "-");
     }
 }

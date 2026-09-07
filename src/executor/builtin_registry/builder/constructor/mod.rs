@@ -216,6 +216,11 @@ impl BuiltinToolRegistry {
             tool
         };
 
+        // Runtime-manage tool (external runtime ledger: list + install). No
+        // injected handle needed — it reads the ledger + config from
+        // process-global paths, like the doctor tool below.
+        let runtime_manage_tool = crate::builtin_tools::runtime_manage::RuntimeManageTool::new();
+
         // Doctor tool (self-diagnosis). Reuses the already-injected config +
         // vault handles — when both are present the diagnostics engine gains
         // the providers/connectivity runtime check, so the LLM repair loop
@@ -583,11 +588,16 @@ impl BuiltinToolRegistry {
                 crate::browser::profile::BrowserSystemConfig::default(),
             ))
         });
-        // The PDF browser engine drives a `playwright-cli` session of its own,
-        // so it needs the same driver settings the browser tools got — see
-        // `PdfGenerateTool::with_playwright_config`.
+        // The PDF browser engine drives a `playwright-cli` session of its own —
+        // and, since the managed driver started launching browsers itself, a
+        // Chromium of its own too. So it needs BOTH halves of the settings the
+        // browser tools got; inheriting one and defaulting the other is how an
+        // operator's pinned binary ends up honoured in one place and ignored in
+        // the other. See `PdfGenerateTool::with_playwright_config` /
+        // `with_browser_runtime`.
         let pdf_generate_tool = pdf_generate_tool
-            .with_playwright_config(browser_profile_manager.playwright_cli_config().clone());
+            .with_playwright_config(browser_profile_manager.playwright_cli_config().clone())
+            .with_browser_runtime(browser_profile_manager.runtime_config().clone());
         let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager))
             .with_approval_policy(Arc::clone(&approval_policy));
         let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager))
@@ -1163,6 +1173,7 @@ impl BuiltinToolRegistry {
             self_config_tool,
             moa_manage_tool,
             list_models_tool,
+            runtime_manage_tool,
             doctor_tool,
             vault_store_tool,
             hub_catalog_search_tool,

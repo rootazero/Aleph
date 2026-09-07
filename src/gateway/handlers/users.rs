@@ -2221,6 +2221,26 @@ mod tests {
     /// A retry of an already-deactivated principal burns nothing and records
     /// nothing — the audit line rides on the transition, exactly like
     /// `gateway_devices.rs`'s per-credential rule.
+    ///
+    /// # Why this test owns a principal id nobody else uses
+    ///
+    /// The audit handle is process-global. For as long as this test has one
+    /// installed, EVERY concurrently running test that drives an audited
+    /// production path writes into *this* channel. `AUDIT_TEST_LOCK` does not
+    /// close that window: it serialises the tests that **assert** on audit
+    /// (two of them), not the tests that **emit** — and the emitting set is
+    /// every test that calls a production path, which is not enumerable.
+    /// `a_ticket_minted_before_deactivation_cannot_pair_a_device_after_it` and
+    /// `reactivation_guidance_holds_because_the_old_ticket_is_dead` both used
+    /// to land their own `u-alice` deactivation rows in here.
+    ///
+    /// So the assertion is made immune to foreign entries rather than trying
+    /// to prevent them: this test deactivates a principal whose id appears
+    /// nowhere else in the process, and only entries naming that id are its
+    /// own. A future test that reuses this test's principal id — a fresh
+    /// uuid per run — or picks an id that collides with it puts its own
+    /// writes back inside this assertion and makes it flaky again in exactly
+    /// the old way.
     #[tokio::test]
     async fn a_second_deactivation_burns_zero_tickets_and_writes_no_authority_change() {
         let _serial = crate::security::audit::AUDIT_TEST_LOCK

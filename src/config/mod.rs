@@ -14,7 +14,7 @@
 pub mod agent_manager;
 pub mod agent_resolver;
 pub mod backup;
-mod dead_keys;
+pub(crate) mod dead_keys;
 pub mod defaults_override;
 pub mod guides;
 pub mod live_apply;

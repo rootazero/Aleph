@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn test_extract_placeholders_rejects_malformed() {
         let err = extract_secret_refs("Bearer {{secret:oops").unwrap_err();
-        assert!(format!("{}", err).contains("Invalid secret placeholder"));
+        assert!(format!("{}", err).contains("invalid secret placeholder"));
     }
 
     #[test]

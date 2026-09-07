@@ -112,9 +112,15 @@ impl UnifiedTool {
         self
     }
 
-    /// Builder method: set routing capabilities
+    /// Builder method: set the command's declared tool-surface narrowing.
+    ///
+    /// Takes the whole `Option` so a caller can express "the author declared
+    /// an empty list" (`Some(vec![])`, deny-all) as distinct from "the author
+    /// declared nothing" (`None`, allow-all). A `Vec`-taking signature forces
+    /// the caller to skip the call for the empty case, which is exactly how
+    /// the distinction gets lost.
     #[must_use]
-    pub fn with_routing_capabilities(mut self, caps: Vec<String>) -> Self {
+    pub fn with_routing_capabilities(mut self, caps: Option<Vec<String>>) -> Self {
         self.routing_capabilities = caps;
         self
     }

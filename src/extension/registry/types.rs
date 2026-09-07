@@ -210,10 +210,6 @@ pub struct SkillRegistration {
     #[serde(default)]
     pub triggers: Vec<String>,
 
-    /// Tools this skill is allowed to use
-    #[serde(default)]
-    pub allowed_tools: Vec<String>,
-
     /// Optional category for grouping
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
@@ -565,7 +561,6 @@ mod tests {
             description: "Search the web".to_string(),
             content: "You are a web search assistant.".to_string(),
             triggers: vec!["search".to_string(), "find".to_string()],
-            allowed_tools: vec!["web_search".to_string()],
             category: Some("research".to_string()),
             plugin_id: "search-plugin".to_string(),
             ..Default::default()

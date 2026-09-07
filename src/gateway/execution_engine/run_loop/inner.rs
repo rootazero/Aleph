@@ -230,36 +230,34 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
 
         // When a Skill slash command kicks off this run, restrict the tool
-        // surface to the skill's declared `allowed_tools` (set by execute.rs
-        // from the parsed CommandContext::Skill). Without this the LLM sees
-        // the agent's full toolset and the skill's intent to scope tool use
-        // is silently ignored. Empty / missing key preserves legacy behavior.
+        // surface to the skill's declared `allowed-tools` (written by
+        // `execute.rs` from the parsed `CommandContext::Skill`). Without this
+        // the LLM sees the agent's full toolset and the skill's intent to
+        // scope tool use is silently ignored.
         //
-        // FOLLOW-UP: `slash_skill_instructions` is also written into
-        // request.metadata by execute.rs but only consumed via PromptBuilder
-        // when the orchestrator path is used (see harness_bridge.rs).
-        // The legacy gateway path here does not yet thread that string into
-        // the system prompt overlay — the skill's `<instructions>` are
-        // still relying on the `<available_skills>` block in the system
-        // prompt to nudge the LLM to follow the skill's spec. A dedicated
-        // overlay slot in PromptBuilder is the right place to plumb it.
-        if let Some(raw) = request.metadata.get("slash_skill_allowed_tools") {
-            let skill_whitelist: std::collections::HashSet<&str> = raw
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !skill_whitelist.is_empty() {
-                let before = allowed_tools.len();
-                allowed_tools.retain(|t| skill_whitelist.contains(t.name.as_str()));
-                info!(
-                    run_id = run_id,
-                    before,
-                    after = allowed_tools.len(),
-                    skill_whitelist = ?skill_whitelist,
-                    "Applied slash-skill allowed_tools restriction"
-                );
-            }
+        // Derived ONCE, here, and shared by every tool source joined below —
+        // the builtin/plugin retain immediately after this, the MCP join, and
+        // the markdown-CLI-skill join. Each source re-deriving the predicate
+        // for itself is how the next source that gets joined ends up
+        // unfiltered. Spelling, encoding and decoding all live in
+        // `slash_skill_scope`; see that module for the tri-state
+        // (absent = allow-all / `[]` = deny-all / names = narrow).
+        let slash_skill_scope = super::super::slash_skill_scope::from_metadata(&request.metadata);
+
+        if slash_skill_scope.is_some() {
+            let before = allowed_tools.len();
+            let dropped = super::super::slash_skill_scope::narrow(
+                &mut allowed_tools,
+                slash_skill_scope.as_ref(),
+            );
+            info!(
+                run_id = run_id,
+                before,
+                after = allowed_tools.len(),
+                dropped,
+                skill_scope = ?slash_skill_scope,
+                "Applied slash-skill allowed_tools restriction"
+            );
         }
 
         // This turn's execution tier + explicit tool permission policy. Resolved
@@ -771,30 +769,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // consumer side of `mcp::spawn_tool_bridge` — the bridge keeps
             // the ToolHandlerRegistry in sync with every connected server's
             // tools/list; here those handlers become LLM-visible LoopTools.
-            // Gating mirrors the builtin path above: per-agent allowlist,
-            // plus the slash-skill whitelist when one restricted this run
-            // (re-parsed from metadata — see the restriction block above).
+            // Gating mirrors the builtin path above: per-agent allowlist, plus
+            // `slash_skill_scope` — the SAME set the builtin retain used, not a
+            // second parse of the same metadata key.
             // Existing names are never overwritten (builtins win collisions).
             if let Some(mcp_registry) = super::super::tool_service_builder::mcp_tool_registry() {
-                let skill_whitelist: Option<std::collections::HashSet<&str>> = request
-                    .metadata
-                    .get("slash_skill_allowed_tools")
-                    .map(|raw| {
-                        raw.split(',')
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .collect::<std::collections::HashSet<&str>>()
-                    })
-                    .filter(|set| !set.is_empty());
                 let mut joined = 0usize;
                 for (name, handler) in mcp_registry.snapshot().iter() {
                     if !agent.is_tool_allowed(name) {
                         continue;
                     }
-                    if let Some(ref wl) = skill_whitelist {
-                        if !wl.contains(name.as_str()) {
-                            continue;
-                        }
+                    if !super::super::slash_skill_scope::admits(slash_skill_scope.as_ref(), name) {
+                        continue;
                     }
                     if loop_registry_inner.get(name).is_some() {
                         continue;
@@ -829,10 +815,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // arrive through a `ToolRefreshSource` whose result
             // `ScopedToolService::list()` discarded, which meant a skill
             // installed at runtime was never callable at all.
+            //
+            // The predicate is the agent allowlist AND `slash_skill_scope` —
+            // the same set the builtin retain and the MCP join used. This
+            // source is the one the slash-skill narrowing originally forgot:
+            // it joined after the retain and re-widened the surface a skill
+            // had just narrowed.
             {
                 let joined = super::super::markdown_skill_tools::join_markdown_skills(
                     &mut loop_registry_inner,
-                    |name| agent.is_tool_allowed(name),
+                    |name| {
+                        agent.is_tool_allowed(name)
+                            && super::super::slash_skill_scope::admits(
+                                slash_skill_scope.as_ref(),
+                                name,
+                            )
+                    },
                     &mut allowed_names,
                 )
                 .await;

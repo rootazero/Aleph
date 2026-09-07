@@ -28,7 +28,15 @@ pub struct PlannerContext {
 pub fn env_summary() -> String {
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            // CWD failures (deleted dir, permission, Windows long-path) would
+            // otherwise render as a literal empty string in the prompt — an
+            // LLM may then read "cwd=" as "cwd really is empty". Surface the
+            // failure with a sentinel so downstream guardrail reasoning stays
+            // honest, and log so operators can diagnose.
+            tracing::warn!(error = %e, "planner env_summary: current_dir failed");
+            "<unknown>".to_string()
+        });
     format!("os={} cwd={}", std::env::consts::OS, cwd)
 }
 
@@ -147,6 +155,15 @@ fn parse_strategy(text: &str) -> Option<Strategy> {
         // not producing a plan.
         candidates += 1;
         if candidates > MAX_JSON_START_CANDIDATES {
+            // Distinct log from the JSON-parse-failed line below: this cap is
+            // a model-shape problem, not a parse problem — verbose models
+            // (heavy `{placeholder}` or brace-balanced lists in the preamble)
+            // trip it without any actual JSON error.
+            tracing::warn!(
+                scanned_candidates = MAX_JSON_START_CANDIDATES,
+                response_bytes = bytes.len(),
+                "strategy planner: brace-candidate scan hit cap; giving up"
+            );
             break;
         }
         let Some(end) = balanced_object_end(bytes, start) else {

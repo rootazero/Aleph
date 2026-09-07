@@ -506,6 +506,25 @@ pub struct SkillManifest {
     version: Option<String>,
     /// Declared scheduled automation (frontmatter `automation:` block).
     automation: Option<AutomationSpec>,
+    /// Tool names this skill declares it needs (frontmatter `allowed-tools:`).
+    ///
+    /// The `Option` is load-bearing and must survive every hop down to the
+    /// run loop:
+    /// * `None` — the key is absent. No declaration, so the run keeps the
+    ///   agent's full tool surface. This is what every skill shipped with.
+    /// * `Some(vec![])` — the author wrote `allowed-tools: []`, i.e. deny
+    ///   everything.
+    ///
+    /// Flattening the two into a bare `Vec` is a fail-open: `ScopedToolService`
+    /// reads an empty allow-set as allow-all, so "deny everything" and "said
+    /// nothing" would arrive at the enforcement point as the same value. Same
+    /// distinction, same reason, as `AgentDef.allowed_tools` +
+    /// `allowed_tools_explicit` (`src/agents/loader.rs`).
+    ///
+    /// Names are Aleph-native tool names (`file_read`, `bash`, `grep`), not
+    /// upstream Claude Code names (`Read`, `Bash`, `Grep`); unknown names are
+    /// rejected at registration rather than silently dropped.
+    allowed_tools: Option<Vec<String>>,
 }
 
 impl SkillManifest {
@@ -534,6 +553,7 @@ impl SkillManifest {
             when_to_use: None,
             version: None,
             automation: None,
+            allowed_tools: None,
         }
     }
 
@@ -629,6 +649,14 @@ impl SkillManifest {
         self.automation.as_ref()
     }
 
+    /// The declared `allowed-tools:` list, if the author wrote the key.
+    ///
+    /// `None` = no declaration (allow-all); `Some(&[])` = explicit deny-all.
+    #[must_use]
+    pub fn allowed_tools(&self) -> Option<&[String]> {
+        self.allowed_tools.as_deref()
+    }
+
     /// Override priority (delegates to `SkillSource::priority()`).
     #[must_use]
     pub const fn priority(&self) -> u8 {
@@ -707,6 +735,16 @@ impl SkillManifest {
     /// Set the declared scheduled automation.
     pub fn set_automation(&mut self, automation: AutomationSpec) {
         self.automation = Some(automation);
+    }
+
+    /// Set the declared `allowed-tools:` list.
+    ///
+    /// Takes the whole `Option` rather than a `Vec` on purpose: the caller
+    /// must be able to say "the author wrote an empty list", which a
+    /// `set_allowed_tools(Vec<String>)` signature cannot express without the
+    /// caller silently skipping the call.
+    pub fn set_allowed_tools(&mut self, tools: Option<Vec<String>>) {
+        self.allowed_tools = tools;
     }
 }
 

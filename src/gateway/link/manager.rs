@@ -55,7 +55,7 @@ pub async fn scan_link_configs(dir: &Path) -> Result<Vec<LinkConfig>, LinkManage
         }
 
         match tokio::fs::read_to_string(&path).await {
-            Ok(content) => match serde_yml::from_str::<LinkConfig>(&content) {
+            Ok(content) => match crate::yaml::from_str::<LinkConfig>(&content) {
                 Ok(config) => {
                     info!(path = %path.display(), id = %config.id, "Loaded link config");
                     configs.push(config);

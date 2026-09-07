@@ -81,6 +81,19 @@ p.add_argument(
     "reaper behaviour that does NOT need an idle wait, so the control profile "
     "carries it instead of costing a second sweep",
 )
+p.add_argument(
+    "--runtime-binary-path",
+    default="",
+    help="[browser.runtime] binary_path — pins the browser Aleph launches. The "
+    "attach scenario pins it so the run never depends on which browsers this "
+    "machine happens to have, and the RED control renames it.",
+)
+p.add_argument(
+    "--prefer-system-browser",
+    default="",
+    choices=["", "true", "false"],
+    help="[browser.runtime] prefer_system_browser",
+)
 args = p.parse_args()
 
 src = open(args.path).read()
@@ -134,6 +147,11 @@ for section, key, value in [
     ("general.browser.policy", "redact_secrets_in_content", "false"),
 ]:
     src = set_key(src, section, key, value)
+
+if args.runtime_binary_path:
+    src = set_key(src, "general.browser.runtime", "binary_path", f'"{args.runtime_binary_path}"')
+if args.prefer_system_browser:
+    src = set_key(src, "general.browser.runtime", "prefer_system_browser", args.prefer_system_browser)
 
 # A sub-table of the already-declared (empty) `[general.browser.profiles]`.
 # Declaring a child of a defined table is valid TOML; re-declaring the parent

@@ -133,6 +133,34 @@ pub mod tasks;
 pub mod teams;
 
 // =============================================================================
+// YAML seam
+// =============================================================================
+
+/// The single name under which the whole crate reaches its YAML parser.
+///
+/// Every `from_str` / `to_string` / `Value` call site in `src/` goes through
+/// `crate::yaml::…`, never through the backing crate's own name. The reason is
+/// concrete, not hypothetical: this crate changed YAML backend twice inside
+/// 24 hours (`serde_yaml` -> `serde_yml` -> `yaml_serde`), and each swap was a
+/// sweep across ~16 files. With this alias the next one is this line.
+///
+/// Backend today: `yaml_serde` 0.10 (the YAML Organization's fork of
+/// `serde_yaml` 0.9, on `libyaml-rs`). Its **scalar resolution** — which bare
+/// words become booleans — is the property this crate is most exposed to, and
+/// it cannot be read off the backend's lineage: libyaml is a YAML 1.1
+/// tokenizer, but resolution happens in the serde layer above it and follows
+/// the YAML 1.2 core schema. Measured on 0.10.7: `yes` / `no` / `on` / `off`
+/// deserialize as **strings**; only `true` / `false` are booleans. Why that
+/// matters, and the test that pins it, are in `crate::skill::manifest`.
+///
+/// `tests/` is a separate compilation unit and cannot see a `pub(crate)`
+/// item; no integration test calls the YAML crate today (only a comment in
+/// `tests/memory_relation_frontmatter.rs` names it), so nothing is re-exported
+/// for them. An integration test that needs YAML should take the dependency
+/// itself rather than widening this seam to `pub`.
+pub(crate) use yaml_serde as yaml;
+
+// =============================================================================
 // Core API Exports
 // =============================================================================
 

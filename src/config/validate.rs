@@ -235,8 +235,46 @@ impl Config {
         Ok(())
     }
 
-    /// Validate routing rules: provider references, keyword prompts, and regex patterns.
+    /// Every `[[rules]]` entry that reaches no code, as `(1-based index, regex)`.
+    ///
+    /// A keyword rule — one whose `regex` does not start with `^/` — was never
+    /// registered anywhere, and the concept is retired (see
+    /// `config::types::routing`'s module doc). This is the derivation that
+    /// `validate_rules` warns from, and the observable a test can assert on;
+    /// it deliberately reuses `is_registered_command` rather than re-spelling
+    /// the prefix test, so the set warned about is exactly the set skipped by
+    /// `register_custom_commands`.
+    ///
+    /// Note what is *not* the predicate here: the previous warning fired only
+    /// when a keyword rule was *missing* its `system_prompt`, which read as
+    /// "a keyword rule with a prompt is fine" — exactly backwards, since the
+    /// prompt is the part that reaches nothing. Every keyword rule is inert,
+    /// prompt or not, so every keyword rule is what the operator needs told.
+    pub(crate) fn retired_keyword_rules(&self) -> Vec<(usize, &str)> {
+        self.rules
+            .iter()
+            .enumerate()
+            .filter(|(_, rule)| !rule.is_registered_command())
+            .map(|(idx, rule)| (idx + 1, rule.regex.as_str()))
+            .collect()
+    }
+
+    /// Validate routing rules: provider references, retired keyword rules, and
+    /// regex patterns.
     fn validate_rules(&self) -> Result<()> {
+        // Retired keyword rules are reported, never rejected: `Config` has no
+        // `deny_unknown_fields` and these keys still parse, so an operator
+        // upgrading past the retirement must keep booting. He does need to be
+        // told, or the rule just stops working with no way to find out why.
+        for (position, regex) in self.retired_keyword_rules() {
+            warn!(
+                rule_index = position,
+                regex = %regex,
+                "Keyword routing rules are retired and reach no code; this rule does nothing. \
+                 Give it a `^/`-prefixed regex to make it a slash command, or delete it."
+            );
+        }
+
         // Validate routing rules
         for (idx, rule) in self.rules.iter().enumerate() {
             let rule_type = rule.get_rule_type();
@@ -271,15 +309,6 @@ impl Config {
                         )));
                     }
                 }
-            }
-
-            // Keyword rules require a system_prompt
-            if rule.is_keyword_rule() && rule.system_prompt.is_none() {
-                warn!(
-                    rule_index = idx + 1,
-                    regex = %rule.regex,
-                    "Keyword rule missing system_prompt - rule will have no effect"
-                );
             }
 
             debug!(

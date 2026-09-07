@@ -44,10 +44,28 @@ pub enum InstallStrategy {
     },
 }
 
+/// A process-environment variable a post-install action needs, named by the
+/// config key that supplies it.
+///
+/// An enum rather than a `(&str, &str)` pair because the value is not static:
+/// it comes out of the running config, and the resolver
+/// (`post_install::config_env_from`) is the single place that maps a variant to
+/// a key. Both consumers — the post-install runner and the R8 install tool —
+/// go through it, so the mirror cannot be honoured on one path and dropped on
+/// the other (判据 §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvFromConfig {
+    /// `PLAYWRIGHT_DOWNLOAD_HOST` ← `[browser.runtime] download_host`.
+    PlaywrightDownloadHost,
+}
+
 pub enum PostInstallAction {
     RunSubcommand {
         args: &'static [&'static str],
         target_dir: Option<&'static str>,
+        /// Environment this subcommand needs from the running config. Empty for
+        /// every action but the Chromium download.
+        env: &'static [EnvFromConfig],
     },
     FnmAlias {
         alias_name: &'static str,
@@ -173,6 +191,7 @@ pub const SPECS: &[RuntimeSpec] = &[
         post_install: &[PostInstallAction::RunSubcommand {
             args: &["install-browser", "chromium"],
             target_dir: None,
+            env: &[EnvFromConfig::PlaywrightDownloadHost],
         }],
         llm_hint: Some(
             "Browser automation CLI. Use `playwright-cli -s=<session> <command>`.",
@@ -474,7 +493,11 @@ mod tests {
             "playwright-cli should have exactly one post-install action (browser install)"
         );
         match spec.post_install[0] {
-            PostInstallAction::RunSubcommand { args, target_dir } => {
+            PostInstallAction::RunSubcommand {
+                args,
+                target_dir,
+                env,
+            } => {
                 assert_eq!(
                     args,
                     &["install-browser", "chromium"],
@@ -483,6 +506,11 @@ mod tests {
                 assert!(
                     target_dir.is_none(),
                     "`install-browser chromium` takes no appended target dir"
+                );
+                assert_eq!(
+                    env,
+                    &[EnvFromConfig::PlaywrightDownloadHost],
+                    "the chromium download is the one post-install action a mirror applies to"
                 );
             }
             _ => panic!("expected a RunSubcommand post-install for playwright-cli"),

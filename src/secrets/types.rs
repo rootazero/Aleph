@@ -59,6 +59,17 @@ pub struct EncryptedEntry {
 }
 
 /// Non-sensitive metadata for a vault entry.
+///
+/// Both fields look unread from the vault side and neither may be removed on
+/// that basis. [`VaultData`] is persisted with **bincode**, a positional format
+/// with no field names on the wire: dropping a field changes the byte layout of
+/// every [`EncryptedEntry`] already on disk, so an operator's existing vault
+/// would fail to deserialize — a data loss, not a cleanup. Removing one is a
+/// `VAULT_VERSION` bump plus a migration, never a delete.
+///
+/// `provider` also has a live writer regardless:
+/// `SharedTokenManager::store_secret` (src/gateway/security/shared_token.rs)
+/// stamps it on every secret it stores.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct EntryMetadata {
     /// Human-readable description
@@ -113,12 +124,6 @@ pub enum SecretError {
 
     #[error("Vault serialization error: {0}")]
     Serialization(String),
-
-    #[error("Provider '{provider}' requires authentication: {message}")]
-    ProviderAuthRequired { provider: String, message: String },
-
-    #[error("Provider '{provider}' error: {message}")]
-    ProviderError { provider: String, message: String },
 
     #[error("invalid secret placeholder")]
     InvalidPlaceholder(String),
@@ -194,25 +199,6 @@ mod tests {
         let decoded: EncryptedEntry = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.ciphertext, vec![1, 2, 3]);
         assert_eq!(decoded.created_at, 1000);
-    }
-
-    #[test]
-    fn test_provider_auth_required_error() {
-        let err = SecretError::ProviderAuthRequired {
-            provider: "1password".into(),
-            message: "Session expired".into(),
-        };
-        assert!(format!("{}", err).contains("1password"));
-        assert!(format!("{}", err).contains("authentication"));
-    }
-
-    #[test]
-    fn test_provider_error() {
-        let err = SecretError::ProviderError {
-            provider: "1password".into(),
-            message: "item not found".into(),
-        };
-        assert!(format!("{}", err).contains("1password"));
     }
 
     /// Regression for `severed-wire-2026-09-05-modules2 secrets C-1`: the

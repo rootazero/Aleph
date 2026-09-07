@@ -135,8 +135,5 @@ system_prompt = "You are a professional translator."
 capabilities = ["memory"]
 intent_type = "translation"
 
-# Catch-all with memory
-[[rules]]
-regex = ".*"
-provider = "openai"
-capabilities = ["memory"]
+# NOTE: every regex here starts with "^/". A rule whose regex does not is a
+# retired "keyword rule": it is registered nowhere and does nothing.

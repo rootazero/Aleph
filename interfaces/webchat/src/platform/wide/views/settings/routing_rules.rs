@@ -1,7 +1,7 @@
 //! Routing Rules Configuration View
 //!
 //! Provides UI for managing routing rules:
-//! - List all rules (command + keyword)
+//! - List all rules (custom slash commands; keyword rules are retired)
 //! - Add/Edit/Delete rules
 //! - Reorder rules (drag & drop or move up/down)
 //! - Real-time updates via config events
@@ -249,8 +249,10 @@ fn RuleEditor(
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
 
-    // Form state
-    let form_rule_type = RwSignal::new(String::from("command"));
+    // Form state. There is no rule-type control: keyword rules are retired
+    // (see src/config/types/routing.rs) and "command" is the only kind left,
+    // so the server derives the type from the regex. A one-option selector
+    // would be a control that cannot change anything.
     let form_regex = RwSignal::new(String::new());
     let form_provider = RwSignal::new(String::new());
     let form_system_prompt = RwSignal::new(String::new());
@@ -263,14 +265,12 @@ fn RuleEditor(
         if let Some(idx) = selected.get() {
             if idx == usize::MAX {
                 // Reset form for new rule
-                form_rule_type.set(String::from("command"));
                 form_regex.set(String::new());
                 form_provider.set(String::new());
                 form_system_prompt.set(String::new());
             } else {
                 // Load existing rule by its server index.
                 if let Some(rule) = rules.get().iter().find(|r| r.index == idx) {
-                    form_rule_type.set(rule.rule_type.clone());
                     form_regex.set(rule.regex.clone());
                     form_provider.set(rule.provider.clone().unwrap_or_default());
                     form_system_prompt.set(rule.system_prompt.clone().unwrap_or_default());
@@ -308,7 +308,9 @@ fn RuleEditor(
         };
 
         let rule_config = RoutingRuleConfig {
-            rule_type: Some(form_rule_type.get()),
+            // Omitted on purpose: the server derives the type from the regex,
+            // and the only value this form could ever send is the derived one.
+            rule_type: None,
             regex,
             provider: {
                 let p = form_provider.get();
@@ -434,21 +436,6 @@ fn RuleEditor(
 
                             // Form
                             <div class="space-y-6">
-                                // Rule Type
-                                <div>
-                                    <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        {t!(i18n, settings.routing_rules.rule_type)}
-                                    </label>
-                                    <select
-                                        prop:value=move || form_rule_type.get()
-                                        on:change=move |ev| form_rule_type.set(event_target_value(&ev))
-                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                    >
-                                        <option value="command">{t!(i18n, settings.routing_rules.command_type)}</option>
-                                        <option value="keyword">{t!(i18n, settings.routing_rules.keyword_type)}</option>
-                                    </select>
-                                </div>
-
                                 // Regex Pattern
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">

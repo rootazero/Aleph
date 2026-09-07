@@ -18,9 +18,18 @@ The oracle
 ----------
 `playwright-cli list` is read out of band, with the scenario's scratch HOME
 (the CLI's session store is HOME-scoped). It reports whether a session is open
-and which `user-data-dir` it launched with — the second is what proves the
-`--config` file Aleph generated actually reached the browser, rather than the
-browser merely being up.
+at all.
+
+That is as far as it goes now. Since the launch chain flipped — Aleph spawns
+Chromium itself and the CLI joins over `attach --cdp` — the CLI no longer owns
+the profile directory, so `playwright-cli list` has no `user-data-dir:` line
+to echo (it used to, back when the CLI launched the browser itself; the second
+oracle below replaced that reading). "The `--config` file Aleph generated
+actually reached the browser" is now proven by `DevToolsActivePort` appearing
+INSIDE `--expect-user-data-dir` plus a live `/json/version` on the port it
+names — the port file is written by Chrome itself, into the directory Aleph
+chose, which is a claim about the browser rather than about the CLI's copy of
+our config.
 
 The control group
 -----------------
@@ -36,9 +45,7 @@ import json
 import os
 import sys
 
-import websockets
-
-from qa_rpc import Ledger, Rpc, cli_sessions
+from qa_rpc import Ledger, Rpc, cli_sessions, http_json, read_devtools_port_file, ws_connect
 
 ap = argparse.ArgumentParser()
 ap.add_argument("url")
@@ -125,11 +132,30 @@ async def scenario(ws):
     check("the CLI now reports an open session", "status: open" in after, after.strip()[:200])
 
     log(f"\n--- the generated --config must have reached the browser ---")
+    # Not `playwright-cli list` echoing `user-data-dir:` — under `attach --cdp`
+    # the CLI does not own the profile dir, so it has nothing to echo (see the
+    # docstring's "The oracle"). The stronger claim: Chrome itself wrote
+    # `DevToolsActivePort` inside the directory Aleph's config named, and the
+    # port it names is a live CDP endpoint — proof the browser was launched
+    # with our user-data-dir, not merely that the CLI was told about one.
+    port_file = os.path.join(args.expect_user_data_dir, "DevToolsActivePort")
+    endpoint = read_devtools_port_file(port_file)
     check(
-        "the launch honored user_data_dir from the profile",
-        args.expect_user_data_dir in after,
-        f"expected {args.expect_user_data_dir!r} in list output",
+        "the launch honored user_data_dir from the profile (DevToolsActivePort appeared there)",
+        endpoint is not None,
+        port_file,
     )
+    if endpoint:
+        port, _browser_path = endpoint
+        try:
+            status, version = http_json(port, "/json/version")
+        except Exception as e:  # noqa: BLE001 - the failure IS the claim
+            status, version = 0, {"error": str(e)}
+        check(
+            "…and that user-data-dir's Chrome is a live, answering CDP endpoint",
+            status == 200 and "Chrome/" in version.get("Browser", ""),
+            json.dumps(version)[:200],
+        )
     if args.scenario == "headed":
         # `--headed` is an option of `open`; it used to be prepended to the
         # `tab-new` argv, where the CLI rejects it outright (`Unknown option:
@@ -207,7 +233,7 @@ async def scenario(ws):
 
 
 async def main():
-    async with websockets.connect(args.url, max_size=None) as ws:
+    async with ws_connect(args.url) as ws:
         _rpc[0] = Rpc(ws)
         await _rpc[0].connect("qa-browser-managed")
         await scenario(ws)

@@ -21,19 +21,37 @@ const HANDLED_ELSEWHERE: &[&str] = &["SOUL.md", "AGENTS.md"];
 /// Lowercase substring matches that flag a prompt-injection attempt.
 /// Kept conservative: false positives only block one file, never the whole
 /// prompt, and the LLM still sees a transparent `[BLOCKED: ...]` marker.
+///
+/// Previous list included overly-broad fragments that matched perfectly
+/// innocent identity content: 'system prompt:' flagged any document that
+/// *discussed* the system prompt (defensive documentation, agent
+/// definitions), 'you are now' flagged normal soul-framing ('you are
+/// Aleph, ...'), 'do not reveal' flagged policies about not revealing
+/// secrets. A blocked identity file is invisible to the user and
+/// silently degrades every prompt until the file is edited
+/// (THINK-002, high). Tightened to phrases that are unambiguously
+/// impersonation / override attempts.
 const INJECTION_PATTERNS: &[&str] = &[
-    "ignore previous instructions",
-    "ignore prior instructions",
-    "ignore all previous",
-    "disregard previous instructions",
-    "disregard all earlier",
-    "disregard your rules",
+    // Direct instruction-override attempts (the canonical "ignore your
+    // prior context and obey me instead" pattern).
+    "ignore all previous instructions",
+    "ignore your previous instructions",
+    "disregard all previous instructions",
+    "disregard your previous instructions",
+    // System-prompt override (the whole point of an injection attempt —
+    // distinct from merely *discussing* the system prompt).
     "override your system prompt",
     "override the system prompt",
-    "you are now",
-    "system prompt:",
-    "do not tell the user",
-    "do not reveal",
+    // Impersonation of a different role ('you are now a' / 'pretend to
+    // be' / 'act as' — leave out 'you are' alone since legitimate soul
+    // files routinely say 'you are Aleph').
+    "you are now a",
+    "pretend to be",
+    "act as a different",
+    // Suppress transparency to the user (the only 'do not' phrase that
+    // survives — the previous 'do not reveal' matched security policies).
+    "do not tell the user about",
+    // Data exfiltration requests.
     "exfiltrate",
 ];
 

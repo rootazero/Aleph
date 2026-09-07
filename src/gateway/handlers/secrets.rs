@@ -10,7 +10,9 @@
 //! - `secrets.set` (params: `{ key, value }`) → `{ key }`
 //! - `secrets.delete` (params: `{ key }`) → `{ deleted: true }` or `-32004`
 //! - `secrets.verify` (params: `{ key }`) → `{ key, bytes, present }`
-//! - `secrets.providers` → `{ providers: [{ key, type, account? }] }`
+//! - `secrets.providers` → `{ providers: [{ key, type, builtin }] }`
+//!   (exactly one entry since the 2026-09-05 audit pass — see
+//!   [`handle_secrets_providers`])
 //!
 //! Values are intentionally never returned over the wire — `verify`
 //! reports presence + byte length only. Use the local `aleph-server

@@ -123,13 +123,18 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// Serialize a `ParsedCommand` directly into the slash-command mode JSON used
 /// by `ExecutionEngine` fast path. Preserves source-specific fields per
 /// command kind:
-/// * `Skill` — `skill_id`, `instructions`, `allowed_tools`, `display_name`
+/// * `Skill` — `skill_id`, `allowed_tools`, `display_name`
 /// * `Custom` — `system_prompt`, `pattern`, `tool_id`
 /// * `Mcp`   — `server_name`, `tool_name`
 ///
 /// Without this, the fast-path's `match mode_type { "skill" => ... }` branch
-/// was dead code: every slash command was misclassified as `direct_tool` and
-/// skill instructions were silently dropped.
+/// was dead code: every slash command was misclassified as `direct_tool`.
+///
+/// `Skill.allowed_tools` is an `Option` and serialises as `null` (the skill
+/// declared nothing → the run keeps the full tool surface) or as an array,
+/// possibly empty (`allowed-tools: []` → deny-all). The two are read back
+/// apart in `execution_engine::slash_skill_scope`, so this must stay a JSON
+/// value rather than being flattened to a list on the way out.
 #[must_use]
 pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Option<String> {
     use crate::command::CommandContext;
@@ -152,14 +157,12 @@ pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Optio
     let value = match &parsed.context {
         CommandContext::Skill {
             skill_id,
-            instructions,
             display_name,
             allowed_tools,
         } => serde_json::json!({
             "type": "skill",
             "skill_id": skill_id,
             "display_name": display_name,
-            "instructions": instructions,
             "allowed_tools": allowed_tools,
             "args": args,
             "source": "skill",

@@ -554,10 +554,9 @@ pub(super) async fn build_steering_rescue_request(
         next_depth.to_string(),
     );
     // Strip slash-command residue: the rescue is a plain loop continuation and
-    // must never re-enter the fast path or re-apply a skill overlay.
+    // must never re-enter the fast path or re-apply a skill's tool scope.
     metadata.remove(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY);
-    metadata.remove("slash_skill_instructions");
-    metadata.remove("slash_skill_allowed_tools");
+    super::slash_skill_scope::strip(&mut metadata);
     // Strip the busy-input policy: if another run grabbed the freed slot
     // first (it reads the same log, so it covers the orphaned burst), an
     // inherited `Interrupt` would cancel that legitimate sibling. Absent key

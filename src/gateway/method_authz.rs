@@ -65,6 +65,15 @@ const OPERATOR_TOOLS: &[&str] = &[
     "agent_unbind",
     "channel_pairing",
     "hub_install_run",
+    // `runtime_manage{install}` runs `ensure_capability`, i.e. the ledger's
+    // bootstrap installers — an npm global install, a `curl … | sh` script, a
+    // winget invocation — plus their post-install subcommands. One call
+    // installs software on the host. Its three nearest siblings
+    // (`skill_install`, `skill_manage`, `hub_install_run`) are already here for
+    // the same reason. Deliberately NOT split so `list` stays open: this table
+    // matches on the tool NAME, and a chat-tier run that wants to know what is
+    // installed has `doctor`, which is open.
+    "runtime_manage",
     "moa",
     // Cluster: driving remote execution arms. Local `bash` is deliberately open
     // to chat tier, but the fleet is a different blast radius — one call reaches
@@ -232,6 +241,7 @@ mod tests {
             ("skill_manage", "skills.remove"),
             ("skill_install", "skills.install"),
             ("node_manage", "cluster.enroll"),
+            ("runtime_manage", "runtimes.install"),
         ];
         for (tool, rpc) in TOOL_FACES {
             assert!(
