@@ -246,7 +246,13 @@ impl HistoryReap for CronSessionReaper {
     }
 
     async fn reap(&self) -> Result<u64, String> {
-        let cutoff_secs = chrono::Utc::now().timestamp() - i64::from(self.retention_days) * 86_400;
+        // saturating_mul so retention_days = u32::MAX (or any pathological
+        // config drift) cannot wrap to a negative `cutoff_secs` and DELETE
+        // every row (TASKS-012). Cap the multiplier at a few thousand years
+        // — anything beyond that is certainly config error and a negative
+        // cutoff would be catastrophic, so saturate to "delete nothing yet".
+        let days_secs = i64::from(self.retention_days).saturating_mul(86_400);
+        let cutoff_secs = chrono::Utc::now().timestamp().saturating_sub(days_secs);
         self.store
             .reap_task_sessions("cron", cutoff_secs)
             .await
