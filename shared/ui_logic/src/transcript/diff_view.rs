@@ -34,6 +34,30 @@ pub struct DiffRows {
     pub hidden_hunks: usize,
 }
 
+/// What [`diff_rows`] answers with — a **sum**, not a struct with an ignorable
+/// field, on purpose.
+///
+/// A withheld diff (`Redacted`, `TooLarge`, …) and a genuinely no-op edit both
+/// arrive here with zero hunks. If this returned rows either way they would be
+/// byte-identical values, and the reason would live only in [`stats_label`] —
+/// a *convention between two functions*, which is exactly the arrangement that
+/// let "an empty hunk list reads as 'this change touched nothing'" happen on
+/// the server side (the emitter's `Redacted` ruling exists because of it).
+/// Here the caller cannot reach `rows` without matching the other arm, so a
+/// renderer that forgets does not compile rather than showing nothing and
+/// saying nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffView {
+    /// Hunks were computed. Empty `rows` here means what it says: the change
+    /// touched no lines.
+    Rows(DiffRows),
+    /// The server withheld the hunks and said why. Render the reason —
+    /// [`stats_label`] turns it into the sentence, and its counts are still
+    /// exact for `Redacted` and for the `MAX_HUNK_LINES` flavour of
+    /// `TooLarge`.
+    Unavailable(Unavailable),
+}
+
 /// `+12 -3`, or the unavailable reason when there are no hunks to show.
 ///
 /// A `TooLarge` change with `added == 0 && removed == 0` is one whose stats
@@ -52,7 +76,6 @@ pub fn stats_label(change: &FileChange) -> String {
         Some(Unavailable::TooLarge) | None => format!("+{} -{}", change.added, change.removed),
         Some(Unavailable::Binary) => "diff unavailable: binary".into(),
         Some(Unavailable::PreImageUnavailable) => "diff unavailable: previous content unreadable".into(),
-        Some(Unavailable::Encoding) => "diff unavailable: encoding".into(),
         Some(Unavailable::ToolFailed) => "diff unavailable: tool failed".into(),
         // Says WHY, not just that it is gone: the stats beside it are exact,
         // and a reader who is told only "unavailable" would reasonably wonder
@@ -200,8 +223,18 @@ fn hunk_rows(h: &Hunk, budget: usize, out: &mut Vec<DiffRow>) {
 
 /// All rows (expanded) or the first `COLLAPSED_DIFF_ROWS` (collapsed), with
 /// exact hidden counts so the hint can say `… +N rows · M hunks`.
+///
+/// A change that carries an `unavailable` reason returns
+/// [`DiffView::Unavailable`] and its hunks are **not** painted, even in the
+/// (today unreachable) state where a reason arrives alongside hunks: a reason
+/// means the server chose to withhold, and `Redacted` — the one reason that
+/// exists precisely because showing the lines was unsafe — makes that the
+/// fail-closed direction. See [`DiffView`] for why this is a sum type.
 #[must_use]
-pub fn diff_rows(change: &FileChange, expanded: bool) -> DiffRows {
+pub fn diff_rows(change: &FileChange, expanded: bool) -> DiffView {
+    if let Some(why) = change.unavailable {
+        return DiffView::Unavailable(why);
+    }
     let budget = if expanded { LCS_CELL_BUDGET_EXPANDED } else { LCS_CELL_BUDGET_COLLAPSED };
     let limit = if expanded { EXPANDED_DIFF_ROWS } else { COLLAPSED_DIFF_ROWS };
     let mut all: Vec<DiffRow> = Vec::new();
@@ -212,18 +245,18 @@ pub fn diff_rows(change: &FileChange, expanded: bool) -> DiffRows {
     }
     let total = all.len();
     if total <= limit {
-        return DiffRows { rows: all, hidden_rows: 0, hidden_hunks: 0 };
+        return DiffView::Rows(DiffRows { rows: all, hidden_rows: 0, hidden_hunks: 0 });
     }
     // A hunk is hidden only when its FIRST row falls at or past the cut —
     // one whose start is still before `limit` has at least one visible row,
     // even if the cut lands exactly on the next hunk's boundary.
     let hidden_hunks = hunk_starts.iter().filter(|&&start| start >= limit).count();
     all.truncate(limit);
-    DiffRows {
+    DiffView::Rows(DiffRows {
         rows: all,
         hidden_rows: total - limit,
         hidden_hunks,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -235,6 +268,14 @@ mod tests {
 
     fn change(hunks: Vec<Hunk>) -> FileChange {
         FileChange { path: "a.rs".into(), kind: FileChangeKind::Modified, hunks, added: 0, removed: 0, unavailable: None }
+    }
+
+    /// Unwrap the paintable arm; every caller below asserts on rows.
+    fn rows(view: DiffView) -> DiffRows {
+        match view {
+            DiffView::Rows(r) => r,
+            DiffView::Unavailable(why) => panic!("expected rows, got unavailable: {why:?}"),
+        }
     }
 
     #[test]
@@ -252,7 +293,7 @@ mod tests {
             line(LineTag::Ctx, "a"), line(LineTag::Del, "b"), line(LineTag::Del, "c"),
             line(LineTag::Add, "B"), line(LineTag::Ctx, "d"),
         ]}]);
-        let r = diff_rows(&c, true);
+        let r = rows(diff_rows(&c, true));
         let nums: Vec<(Option<u32>, Option<u32>, LineTag)> = r.rows.iter().map(|x| (x.old_no, x.new_no, x.tag)).collect();
         assert_eq!(nums, vec![
             (Some(10), Some(10), LineTag::Ctx),
@@ -267,7 +308,7 @@ mod tests {
     fn collapsed_shows_two_rows_and_counts_hidden_rows_and_hunks() {
         let h = |start: u32| Hunk { old_start: start, new_start: start, lines: vec![line(LineTag::Ctx, "x"), line(LineTag::Add, "y"), line(LineTag::Ctx, "z")] };
         let c = change(vec![h(1), h(50), h(90)]);
-        let r = diff_rows(&c, false);
+        let r = rows(diff_rows(&c, false));
         assert_eq!(r.rows.len(), 2);
         assert_eq!(r.hidden_rows, 7);
         assert_eq!(r.hidden_hunks, 2);
@@ -289,7 +330,7 @@ mod tests {
         let a = Hunk { old_start: 1, new_start: 1, lines: vec![line(LineTag::Ctx, "a"), line(LineTag::Ctx, "b")] };
         let b = Hunk { old_start: 50, new_start: 50, lines: vec![line(LineTag::Ctx, "c"), line(LineTag::Ctx, "d"), line(LineTag::Ctx, "e")] };
         let c = change(vec![a, b]);
-        let r = diff_rows(&c, false);
+        let r = rows(diff_rows(&c, false));
         assert_eq!(r.rows.len(), 2);
         assert_eq!(r.hidden_rows, 3);
         assert_eq!(r.hidden_hunks, 1, "hunk B has zero visible rows and must count as hidden");
@@ -315,5 +356,50 @@ mod tests {
         let label = stats_label(&c);
         assert!(!label.contains("+0"), "zero stats under TooLarge must not read as +0 -0: {label}");
         assert!(label.starts_with("diff unavailable"));
+    }
+
+    #[test]
+    fn a_withheld_diff_and_an_empty_one_are_not_the_same_answer() {
+        // The defect this guards: both used to return
+        // `DiffRows { rows: [], hidden_rows: 0, hidden_hunks: 0 }` — byte for
+        // byte the same value — so a renderer that painted rows and never
+        // called `stats_label` showed nothing and said nothing about a diff
+        // the server had deliberately withheld.
+        let mut withheld = change(vec![]);
+        withheld.unavailable = Some(Unavailable::Redacted);
+        withheld.added = 4;
+        withheld.removed = 1;
+        let no_op = change(vec![]);
+
+        assert_eq!(
+            diff_rows(&withheld, true),
+            DiffView::Unavailable(Unavailable::Redacted)
+        );
+        assert_eq!(diff_rows(&no_op, true), DiffView::Rows(DiffRows::default()));
+        assert_ne!(diff_rows(&withheld, true), diff_rows(&no_op, true));
+        // …and the reason still renders its sentence beside exact stats.
+        assert_eq!(
+            stats_label(&withheld),
+            "diff unavailable: contained a secret"
+        );
+    }
+
+    #[test]
+    fn a_reason_wins_over_hunks_that_arrived_with_it() {
+        // No producer emits this pair today (every server-side site clears
+        // hunks in the same breath as it sets a reason), so this pins the
+        // fail-closed direction rather than a live case: `Redacted` means
+        // "these lines could not be shown safely", and painting them because
+        // they happened to be present would be the one unrecoverable answer.
+        let mut c = change(vec![Hunk {
+            old_start: 1,
+            new_start: 1,
+            lines: vec![line(LineTag::Add, "AKIAIOSFODNN7EXAMPLE")],
+        }]);
+        c.unavailable = Some(Unavailable::Redacted);
+        assert_eq!(
+            diff_rows(&c, true),
+            DiffView::Unavailable(Unavailable::Redacted)
+        );
     }
 }

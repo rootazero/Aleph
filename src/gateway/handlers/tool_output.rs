@@ -171,6 +171,13 @@ fn page(text: &str, offset: u64, limit: u64) -> (String, u64, bool) {
 /// (`gateway::event_emitter::RedactingEmitter`). Serving it here unmasked would
 /// re-open through a different door a hole the same plan already closed once.
 ///
+/// The presentation side-channel has **three** doors that reach a human, not
+/// the two this seam account used to name: the live frame, the replay leg
+/// (`trace_replay::presentations_for_session`), and the raw value
+/// `tools.invoke` returns (`tools_invoke::mask_presentation_in_place`). All
+/// three call `exec::masker::mask_presentation`; that call-site list is the
+/// census, not this sentence.
+///
 /// # The asymmetry this leaves on attended runs
 ///
 /// Both write-time redaction legs are installed under `if unattended`

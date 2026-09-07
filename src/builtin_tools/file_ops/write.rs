@@ -189,11 +189,17 @@ impl AlephTool for FileWriteTool {
                 } else {
                     format!("Wrote {} bytes to {}", outcome.bytes, path)
                 };
-                let change = if outcome.pre_image_unreadable {
+                // The pre-image read already decided WHICH reason applies
+                // (binary / over the diff byte cap / a real I/O error); this
+                // arm only carries it through. Collapsing them here is what
+                // made every unreadable pre-image say "previous content
+                // unreadable", including the ones the enum has a precise
+                // word for.
+                let change = if let Some(why) = outcome.pre_image_unavailable {
                     aleph_protocol::FileChange::unavailable(
                         outcome.canonical.to_string_lossy(),
                         aleph_protocol::FileChangeKind::Modified,
-                        aleph_protocol::Unavailable::PreImageUnavailable,
+                        why,
                     )
                 } else {
                     super::diff::compute_file_change(
@@ -379,9 +385,11 @@ mod tests {
         assert!(!change["hunks"].as_array().unwrap().is_empty());
     }
 
-    /// A binary pre-image cannot be diffed — the write still succeeds, but
-    /// the presentation reports `pre_image_unavailable` rather than lying
-    /// about the old content.
+    /// A binary pre-image cannot be diffed — the write still succeeds, and
+    /// the presentation says `binary`, which is the word the closed set has
+    /// for exactly this. It used to say `pre_image_unavailable` (the vaguest
+    /// of the three causes one bool was covering) while the test's own NAME
+    /// claimed otherwise.
     #[tokio::test]
     async fn binary_pre_image_reports_unavailable() {
         let dir = tempdir().unwrap();
@@ -402,6 +410,36 @@ mod tests {
 
         let v = serde_json::to_value(&out).unwrap();
         let change = &v["_presentation"]["changes"][0];
-        assert_eq!(change["unavailable"], "pre_image_unavailable");
+        assert_eq!(change["unavailable"], "binary");
+    }
+
+    /// The other cause the same bool used to swallow: a pre-image over the
+    /// diff byte cap is `too_large`, not "unreadable". Distinguishing them is
+    /// the whole point — one says "we chose not to", the other "we could not".
+    #[tokio::test]
+    async fn an_oversized_pre_image_reports_too_large_not_unreadable() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("big.txt");
+        fs::write(
+            &file,
+            "x\n".repeat(super::super::diff::MAX_DIFF_INPUT_BYTES / 2 + 1),
+        )
+        .unwrap();
+
+        let tool = FileWriteTool::new();
+        let out = AlephTool::call(
+            &tool,
+            FileWriteArgs {
+                file_path: file.to_string_lossy().to_string(),
+                content: "small now\n".to_string(),
+                create_parents: true,
+            },
+        )
+        .await
+        .unwrap();
+
+        let v = serde_json::to_value(&out).unwrap();
+        let change = &v["_presentation"]["changes"][0];
+        assert_eq!(change["unavailable"], "too_large");
     }
 }

@@ -283,9 +283,16 @@ pub struct ModelInfo {
     /// Original model requested, if different from `model`.
     #[serde(default)]
     pub original_model: Option<String>,
-    /// Per-model context window, when the server resolved one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_window: Option<u32>,
+    // NO `context_window` here, deliberately. The gauge denominator has two
+    // homes that a producer actually fills — `ContextBreakdown.context_window`
+    // (`context.breakdown`) and `RunSummary.context_window` (`run_complete`,
+    // pinned by `run_summary_carries_the_gauge_fields_the_gateway_twin_sends`).
+    // A third copy on this frame was added and cut in the same branch: the
+    // gateway twin above never grew the field, so `stream.model_resolved`
+    // never carried the key, and `skip_serializing_if` meant it was not even
+    // a `null` a client could notice — a `/context` gauge wired to it would
+    // read `None` forever with no error anywhere (判据 §1 + §7). Wire it on
+    // BOTH sides in one change, or read one of the two homes that work.
 }
 
 /// Suggested action for handling AI uncertainty

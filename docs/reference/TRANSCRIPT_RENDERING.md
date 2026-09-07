@@ -27,7 +27,7 @@ Phase A 交付三样东西，各自独立可验证：
 |---|---|---|
 | **呈现侧信道 Presentation side-channel** | 文件变更工具把一份结构化 `FileChange` 挂在结果上，**模型看不到**，两条腿把它送到人面前 | `shared/protocol/src/file_change.rs` · `src/builtin_tools/file_ops/diff.rs` · `src/exec/masker.rs` |
 | **两个读面 RPC** | `trace.tool_output`（一次工具调用的**未截断**输出，分页）· `context.breakdown`（这个会话**上一次真正发出去的** prompt 由什么占着） | `src/gateway/handlers/{tool_output,context_breakdown}.rs` · `src/thinker/prompt_size_registry.rs` |
-| **共享渲染核 shared core** | 折叠 / 摘要 / 分组 / diff 行 / markdown 前处理 / 上下文行——**data → data**，两端各自绘制 | `shared/ui_logic/src/transcript/`（11 个模块，58 条 `#[test]`） |
+| **共享渲染核 shared core** | 折叠 / 摘要 / 分组 / diff 行 / markdown 前处理 / 上下文行——**data → data**，两端各自绘制 | `shared/ui_logic/src/transcript/`（11 个模块，60 条 `#[test]`） |
 
 **熵减的一半也在这一轮里**：`ToolResult` 的网关孪生（`src/gateway/event_emitter/types.rs`）曾是一个手写副本，
 带一个 `metadata: Option<Value>` 字段——**零写者**，`skip_serializing_if` 让它一次都没上过线。
@@ -77,16 +77,23 @@ Phase A 交付三样东西，各自独立可验证：
 
 ### 1.3 `Unavailable` 是一个闭集：渲染器**说出理由，从不猜**
 
-枚举自己的 doc 就是这条契约的所有者。今天六个成员：
+枚举自己的 doc 就是这条契约的所有者。今天五个成员，**每一个都有生产者**：
 
-| 成员 | 什么时候 | `added` / `removed` |
-|---|---|---|
-| `Binary` | 任一侧不是合法 UTF-8 | 0 |
-| `TooLarge` | hunk 行数超 `MAX_HUNK_LINES`，或输入超 `MAX_DIFF_INPUT_BYTES` | ⚠️ 见下 |
-| `PreImageUnavailable` | 工具在写之前读不到原文 | 0 |
-| `Encoding` | 文本解出来了但按行切分失败 | 0 |
-| `ToolFailed` | 工具自己失败，什么都没写 | 0 |
-| `Redacted` | 一个密钥模式**跨了不止一行 hunk**，整份 diff 被扣下 | **仍然精确** |
+| 成员 | 什么时候 | 生产者 | `added` / `removed` |
+|---|---|---|---|
+| `Binary` | 任一侧不是合法 UTF-8，或嗅探窗口里有 NUL | `diff::read_pre_image` | 0 |
+| `TooLarge` | hunk 行数超 `MAX_HUNK_LINES` / 输入超 `MAX_DIFF_INPUT_BYTES` / diff 跑超 `DIFF_TIME_BUDGET` | `diff.rs` 三处 + `read_pre_image` | ⚠️ 见下 |
+| `PreImageUnavailable` | 真正的 I/O 错误（含 `metadata` 失败但不是 NotFound——**不知道它存不存在，就不许说它是新建的**） | `diff::read_pre_image` | 0 |
+| `ToolFailed` | 工具自己失败，什么都没写 | `apply_patch` / `compute_file_change` 的 `(None, None)` | 0 |
+| `Redacted` | 一个密钥模式**跨了不止一行 hunk**，整份 diff 被扣下 | `exec::masker::mask_file_change` | **仍然精确** |
+
+⚠️ **`Encoding` 已被删（2026-09-07）**。它的语义是「文本解出来了但按行切分失败（例如孤立代理项）」——
+那是 UTF-16 的问题：Rust 的 `String` 天生合法 UTF-8，`str::lines()` 不会失败，所以这个工作区里
+**任何生产者都产不出它**。一个闭集里不可达的成员会教渲染器去处理一个到不了的情形（判据 §2）。
+真要回来，必须和它的生产者在同一笔改动里回来。
+同批修的是另一半：`file_write` 与 `apply_patch(delete)` 此前各用一个 bool / 一个 `Option` 把
+**三种原因**（超字节上限 / 二进制 / I/O 错误）压成一个 `PreImageUnavailable`，所以 `Binary`
+的生产者数目实际上是 0——现在两条路共用 `diff::read_pre_image`，原因即线上词。
 
 **为什么不复用一个现成成员**（`Redacted` 的存在理由，也是这个枚举扩展机制的示范）：
 `Redacted` 那一刻**没有失败、没有过大、内容解码正常**——拿其中任何一个当标签都是**一个错的标签**，
@@ -96,7 +103,18 @@ Phase A 交付三样东西，各自独立可验证：
 **⚠️ `TooLarge` 下的 `0 / 0` 永远读作「没算」，绝不读作「没变化」**（`diff.rs` 的 `MAX_DIFF_INPUT_BYTES` doc 是这条不变量的所有者）：
 `Modified` 那一侧的行数各自都不是真实统计量，所以被硬置 0；而 hunk 行数的那道上限**只会在一个真有变化的 diff 上跳闸**，
 所以真实统计量下 `TooLarge + 0/0` 不可达。`transcript::diff_view::stats_label` 就是靠这条不变量在那种情况下渲染
-「diff 不可用」而不是 `+0 -0`。
+「diff 不可用」而不是 `+0 -0`。第三个生产者（`DIFF_TIME_BUDGET`）遵守同一条：**一个零变化的 diff 花不掉 250 ms**。
+
+**⚠️ 有界的 Myers（2026-09-07）**：`compute_file_change` 现在走
+`TextDiff::configure().deadline(..)`，`DIFF_TIME_BUDGET = 250ms`。字节上限只挡「比 2 MiB 大」的输入，
+2 MiB 以内两份差异极大的 ~40k 行文本仍是 O(N·D)，而它**同步跑在 tokio worker 上**、
+`MAX_HUNK_LINES` 又是**算完之后**才裁——一份注定被丢弃的 diff 会被先足额付一遍。
+选 250 ms 的理由：能活过 `MAX_HUNK_LINES = 400` 的 diff 本身就是个小编辑脚本，
+即便在 2 MiB 输入上也只要个位数毫秒；而 `apply_patch` 是**每个文件调一次**，上限得给这个乘数留余量。
+⚠️ **超时之后 `similar` 不报错**：它停止寻找 middle snake，改吐一份**合法但非最小**的脚本
+（整段删 + 整段插），`TextDiff` 上**没有任何「我被截断了」的标志位**。所以代码在**构造之后立刻问时钟**：
+过了 deadline 就一律降级为 `TooLarge` + `0/0`，**不报一个自己没算出来的数**。
+误判窗口是「刚好在 deadline 前几微秒算完」，落在 fail-closed 一侧。
 
 ### 1.4 它怎么到达客户端，以及为什么模型看不到
 
@@ -355,14 +373,22 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 `aleph-tui` 与 `aleph-panel` 都依赖这个 crate，但用的是它的**别的**模块（`state::agent_panel`、`markdown_stream`、
 `connection`、`state::SessionKnobs`、`state::chat_scroll`），从来不是这一个。
 `src/` 那侧唯一的引用是 `src/tools/presentation_census.rs` 里的一条 `#[cfg(test)]` 依赖
-（它调真的 `display_name`，见 §5.4）。整棵树 11 个模块 / 2 189 行 / **58 条 `#[test]`**，**零调用者**。
+（它调真的 `display_name`，见 §5.4）。整棵树 11 个模块 / 2 272 行 / **60 条 `#[test]`**，**零调用者**。
 ⚠️ 那个 58 是 `grep -c "#\[test\]" shared/ui_logic/src/transcript/*.rs` 数出来的，谓词是「这棵树里的测试函数」；
 台账里那个 **144 是 `shared-ui-logic` 整个 crate `--lib` 的通过数**，谓词不同——两个数都对，别互相替代（附录 C.1）。
 
 ⚠️ **台账（`progress.md` 判据 §17 那条）只点名了 `diff_view.rs`；实测的范围更宽——是整个 `transcript/` 树。**
 `diff_view` 之所以被单独点出来，是因为它是 `Unavailable` 闭集契约**唯一的**渲染器：
-`stats_label` 里那六个 `Some(Unavailable::…)` 臂就是「说出理由，从不猜」这句话在代码里的全部落实，
-而它今天没有人调用。
+`stats_label` 里那几个 `Some(Unavailable::…)` 臂就是「说出理由，从不猜」这句话在代码里的全部落实，
+而它今天没有人调用。（**别在这里维护成员个数**——上一版写着「六个」，`Encoding` 一删就静默变假了；
+数目的所有者是枚举自己。）
+⚠️ **同一句话在共享核里被复现过一次，本轮修掉了**：`diff_rows` 只遍历 `change.hunks`，
+于是一个 `Redacted` / `TooLarge` 的 change 与一次真正的空编辑返回**逐字节相同**的值，
+理由只活在 `stats_label` 这个**另一个函数**里——正是 `Redacted` 那条裁定要防的形状
+（「一个空 hunk 列表读起来像『这次改动什么都没碰』」）被搬到了上一层。
+现在 `diff_rows` 返回 `DiffView::{Rows, Unavailable}` 这个**和类型**：拿不到 rows 就必须先匹配另一条臂，
+忘记问理由的渲染器**编译不过**，而不是「显示空白且什么都不说」。修法刻意不是加一条注释——
+**两个函数之间的约定**正是这次失效的东西。
 
 **这是被批准的，不是违规**：A→B→C 的顺序是用户自己裁定的（Phase A = 服务端 + 共享核，B = TUI，C = Panel），
 共享核比它的渲染器早落一期就是计划在正常运行。但判据 §17 要求一份「展示用」的东西必须指得出渲染它的那一行，
@@ -476,9 +502,13 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
   （`apply_layer_two`）· 哪条腿（实时帧 vs `trace.by_runs` 重放）· 还是**根本没有渲染器**（§5.1，今天最可能的答案）。
 - **要给 `Presentation` / `FileChange` / `Hunk` / `HunkLine` 加字段**：`mask_presentation` 会编译不过。
   那是设计好的机制——把新字段**加进那个走查**，不要加 `..`。
-- **要给 `Unavailable` 加成员**：先答一句「现有六个里为什么没有一个是真的」。答不出就不是新成员。
+- **要给 `Unavailable` 加成员**：先答两句——「现有的哪一个都不是真的，为什么」，以及「**谁产它**」。
+  第二句答不出就是下一个 `Encoding`（写下来、没有生产者、一年后被删）。
   加了之后 `shared/ui_logic` 的穷尽 match 编译不过，那是第二道机制。
 - **别在 handler 里「统一」脱敏**：两侧不对称是自洽的（§2.2），两个方向都明令禁止。
+  ⚠️ 但这句**不豁免一条把工具 JSON 原样返回的新面**：`tools.invoke` 就是那样一条
+  （不过 `apply_layer_two`，所以 `_presentation` 还挂在对象上），它在自己的 handler 里调
+  **同一个** `mask_presentation`。脱敏的面现在是**三个**，普查是 `mask_presentation` 的调用点，不是这句散文。
 - **别把 `context.breakdown` 改成读时重新派生**——那正是它存在的理由的反面（§3.2）。
 - **别调 `capability::census` 的那个数字**（§5.5）。
 - **数字带谓词**：本文里每一个计数都写了它数的是什么、以及测于哪个 commit。复述之前重数一遍，包括重数我的

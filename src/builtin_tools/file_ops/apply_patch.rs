@@ -78,8 +78,16 @@ pub struct FileOutcome {
     /// Internal only — never serialized as part of the model-facing output
     /// (the top-level `_presentation` key is what gets hoisted; this field
     /// would otherwise leak a second, per-file copy into the same JSON).
+    ///
+    /// **Boxed on purpose.** `FileOutcome` is the `Err` variant of
+    /// `Planned::plan_*`, and an inline `FileChange` (`String` + `Vec` + two
+    /// `u32`s + two small enums) put the struct at 136 bytes — over clippy's
+    /// `result_large_err` threshold, so every planning `?` moved that much on
+    /// the error path. `Option<Box<_>>` is one pointer and changes no
+    /// signature; the alternative (`Box<FileOutcome>` at the `Result`) would
+    /// have spread through every call site to hide the same growth.
     #[serde(skip)]
-    pub change: Option<aleph_protocol::FileChange>,
+    pub change: Option<Box<aleph_protocol::FileChange>>,
 }
 
 /// Aggregate output for one `apply_patch` invocation.
@@ -217,8 +225,10 @@ make several coordinated edits at once."#;
             format!("applied {applied}/{total} operations; a write failed partway")
         };
 
-        let changes: Vec<aleph_protocol::FileChange> =
-            outcomes.iter().filter_map(|o| o.change.clone()).collect();
+        let changes: Vec<aleph_protocol::FileChange> = outcomes
+            .iter()
+            .filter_map(|o| o.change.as_deref().cloned())
+            .collect();
         let presentation = (!changes.is_empty()).then(|| super::diff::presentation_for(changes));
 
         let out = ApplyPatchOutput {
@@ -435,10 +445,19 @@ make several coordinated edits at once."#;
         }
         // Best-effort pre-image for the diff side-channel, read under the
         // envelope-wide path lock `execute()` already holds. Unlike the
-        // delete itself, a failure to read it (oversized, binary, non-UTF-8,
-        // or an I/O error) must NOT fail the operation — `commit()` reports
-        // `Unavailable::PreImageUnavailable` when `old` comes back `None`.
-        let old = read_pre_image_best_effort(&resolved).await;
+        // delete itself, a failure to read it must NOT fail the operation —
+        // `commit()` reports the carried reason instead. Shares
+        // `diff::read_pre_image` with `execute_write`, so "why couldn't we
+        // read it" has one derivation rather than a copy per tool.
+        //
+        // `Ok(None)` (confirmed absent) is a race against the existence check
+        // three lines up; the delete will report its own failure, and there
+        // is no pre-image either way, so it maps to the I/O reason.
+        let old = match super::diff::read_pre_image(&resolved).await {
+            Ok(Some(text)) => Ok(text),
+            Ok(None) => Err(aleph_protocol::Unavailable::PreImageUnavailable),
+            Err(why) => Err(why),
+        };
         pending.insert(resolved.clone(), None);
         Ok(Planned {
             src: path.to_string(),
@@ -742,11 +761,11 @@ enum Effect {
     Delete {
         path: PathBuf,
         /// Pre-image for the diff side-channel, best-effort (see
-        /// `read_pre_image_best_effort`). `None` means it could not be read
-        /// as text (oversized, binary, non-UTF-8, or an I/O error) — the
-        /// delete still proceeds; the presentation reports
-        /// `Unavailable::PreImageUnavailable`, never an empty/zero change.
-        old: Option<String>,
+        /// `diff::read_pre_image`). `Err` carries WHICH cause stopped it
+        /// (over the diff byte cap, binary/non-UTF-8, or an I/O error) — the
+        /// delete still proceeds; the presentation reports that reason, never
+        /// an empty/zero change.
+        old: std::result::Result<String, aleph_protocol::Unavailable>,
     },
     Update {
         write_to: PathBuf,
@@ -769,11 +788,11 @@ impl Planned {
                 if let Some(parent) = path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
                         return FileOutcome {
-                            change: Some(aleph_protocol::FileChange::unavailable(
+                            change: Some(Box::new(aleph_protocol::FileChange::unavailable(
                                 path.to_string_lossy(),
                                 aleph_protocol::FileChangeKind::Created,
                                 aleph_protocol::Unavailable::ToolFailed,
-                            )),
+                            ))),
                             ..fail(
                                 "add",
                                 &src,
@@ -798,15 +817,15 @@ impl Planned {
                             op: "add",
                             success: true,
                             message: format!("created ({byte_count} bytes)"),
-                            change: Some(change),
+                            change: Some(Box::new(change)),
                         }
                     }
                     Err(e) => FileOutcome {
-                        change: Some(aleph_protocol::FileChange::unavailable(
+                        change: Some(Box::new(aleph_protocol::FileChange::unavailable(
                             path.to_string_lossy(),
                             aleph_protocol::FileChangeKind::Created,
                             aleph_protocol::Unavailable::ToolFailed,
-                        )),
+                        ))),
                         ..fail("add", &src, format!("write failed: {e}"))
                     },
                 }
@@ -814,19 +833,19 @@ impl Planned {
             Effect::Delete { path, old } => match tokio::fs::remove_file(&path).await {
                 Ok(()) => {
                     let change = match &old {
-                        Some(text) => super::diff::compute_file_change(
+                        Ok(text) => super::diff::compute_file_change(
                             &path.to_string_lossy(),
                             Some(text),
                             None,
                         ),
-                        // The pre-image could not be read as text (oversized,
-                        // binary, non-UTF-8, or an I/O error) — report the gap
-                        // explicitly rather than rendering an empty change
-                        // (which would misread as "0 lines removed").
-                        None => aleph_protocol::FileChange::unavailable(
+                        // The pre-image could not be read — report the gap
+                        // with the reason the read itself established, rather
+                        // than an empty change (which would misread as "0
+                        // lines removed") or one label for every cause.
+                        Err(why) => aleph_protocol::FileChange::unavailable(
                             path.to_string_lossy(),
                             aleph_protocol::FileChangeKind::Deleted,
-                            aleph_protocol::Unavailable::PreImageUnavailable,
+                            *why,
                         ),
                     };
                     FileOutcome {
@@ -834,15 +853,15 @@ impl Planned {
                         op: "delete",
                         success: true,
                         message: "deleted".into(),
-                        change: Some(change),
+                        change: Some(Box::new(change)),
                     }
                 }
                 Err(e) => FileOutcome {
-                    change: Some(aleph_protocol::FileChange::unavailable(
+                    change: Some(Box::new(aleph_protocol::FileChange::unavailable(
                         path.to_string_lossy(),
                         aleph_protocol::FileChangeKind::Deleted,
                         aleph_protocol::Unavailable::ToolFailed,
-                    )),
+                    ))),
                     ..fail("delete", &src, format!("delete failed: {e}"))
                 },
             },
@@ -857,11 +876,11 @@ impl Planned {
                     crate::utils::atomic_write::atomic_write_file(&write_to, &content).await
                 {
                     return FileOutcome {
-                        change: Some(aleph_protocol::FileChange::unavailable(
+                        change: Some(Box::new(aleph_protocol::FileChange::unavailable(
                             write_to.to_string_lossy(),
                             aleph_protocol::FileChangeKind::Modified,
                             aleph_protocol::Unavailable::ToolFailed,
-                        )),
+                        ))),
                         ..fail("update", &src, format!("write-back failed: {e}"))
                     };
                 }
@@ -870,10 +889,12 @@ impl Planned {
                         if let Some(parent) = to.parent() {
                             if let Err(e) = tokio::fs::create_dir_all(parent).await {
                                 return FileOutcome {
-                                    change: Some(aleph_protocol::FileChange::unavailable(
-                                        to.to_string_lossy(),
-                                        aleph_protocol::FileChangeKind::Modified,
-                                        aleph_protocol::Unavailable::ToolFailed,
+                                    change: Some(Box::new(
+                                        aleph_protocol::FileChange::unavailable(
+                                            to.to_string_lossy(),
+                                            aleph_protocol::FileChangeKind::Modified,
+                                            aleph_protocol::Unavailable::ToolFailed,
+                                        ),
                                     )),
                                     ..fail(
                                         "update",
@@ -889,11 +910,11 @@ impl Planned {
                         }
                         if let Err(e) = tokio::fs::rename(&from, &to).await {
                             return FileOutcome {
-                                change: Some(aleph_protocol::FileChange::unavailable(
+                                change: Some(Box::new(aleph_protocol::FileChange::unavailable(
                                     to.to_string_lossy(),
                                     aleph_protocol::FileChangeKind::Modified,
                                     aleph_protocol::Unavailable::ToolFailed,
-                                )),
+                                ))),
                                 ..fail(
                                     "update",
                                     &src,
@@ -920,7 +941,7 @@ impl Planned {
                     op: "update",
                     success: true,
                     message: format!("applied {hunks_applied} hunk(s)"),
-                    change: Some(change),
+                    change: Some(Box::new(change)),
                 }
             }
         }
@@ -957,26 +978,6 @@ async fn read_text(resolved: &Path, src: &str) -> std::result::Result<String, Fi
             format!("{} is not valid UTF-8 text", resolved.display()),
         )
     })
-}
-
-/// Best-effort pre-image read for the `_presentation` diff side-channel.
-/// Returns `None` on ANY failure (missing, oversized, binary, or non-UTF-8)
-/// rather than propagating an error — a delete must still succeed even when
-/// its diff cannot be computed; `Unavailable::PreImageUnavailable` reports
-/// the gap (never an empty/zero change, which would misread as "nothing was
-/// removed"). Mirrors the size gate `execute_write`'s pre-image read applies
-/// (see `ops.rs`), so a multi-GB file about to be deleted is not read fully
-/// into memory just to describe the deletion.
-async fn read_pre_image_best_effort(path: &Path) -> Option<String> {
-    let meta = tokio::fs::metadata(path).await.ok()?;
-    if meta.len() > super::diff::MAX_DIFF_INPUT_BYTES as u64 {
-        return None;
-    }
-    let bytes = tokio::fs::read(path).await.ok()?;
-    if is_binary(&bytes) {
-        return None;
-    }
-    String::from_utf8(bytes).ok()
 }
 
 // =============================================================================

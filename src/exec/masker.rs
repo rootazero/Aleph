@@ -215,13 +215,20 @@ pub fn mask_json_strings(masker: &SecretMasker, value: &mut serde_json::Value) -
 /// `StreamEvent` variant, so binding the variant's own five fields would not
 /// have caught it.
 ///
-/// Single source for the two surfaces that carry a presentation to a human:
-/// the live `tool_end` frame (`gateway::event_emitter::RedactingEmitter`) and
-/// the replayed `tool_call_completed`
+/// Single source for the **three** surfaces that carry a presentation to a
+/// human: the live `tool_end` frame (`gateway::event_emitter::
+/// RedactingEmitter`), the replayed `tool_call_completed`
 /// (`gateway::handlers::trace_replay::handle_by_runs`, which reads it out of
-/// the deliberately-unmasked `session_events` log). They must agree byte for
-/// byte — the same diff reaches the same person down both, and one masked copy
-/// plus one clear copy is not redaction.
+/// the deliberately-unmasked `session_events` log), and the raw tool value
+/// `tools.invoke` returns (`gateway::handlers::tools_invoke::
+/// mask_presentation_in_place` — that handler dispatches off the registry
+/// directly, so `apply_layer_two` never hoists the key away from it). They
+/// must agree byte for byte — the same diff reaches the same person down all
+/// of them, and one masked copy plus one clear copy is not redaction.
+///
+/// The count above is the kind of prose that rots (判据 §1); what keeps it
+/// honest is that a face is a **call site of this function**, so
+/// `grep -rn "mask_presentation(" src/` is the census, not this sentence.
 pub fn mask_presentation(masker: &SecretMasker, presentation: &mut aleph_protocol::Presentation) {
     match presentation {
         aleph_protocol::Presentation::FileChanges { changes } => {

@@ -171,10 +171,13 @@ pub(super) struct WriteOutcome {
     /// rename was therefore skipped. The file's `mtime` is preserved on
     /// `unchanged == true`; on `false` the rename overwrote it.
     pub unchanged: bool,
-    /// Old content when the file existed and was UTF-8 text; `None` = did not exist.
+    /// Old content when the file existed and was UTF-8 text. `None` with
+    /// `pre_image_unavailable == None` means the file did not exist (Created).
     pub previous: Option<String>,
-    /// The file existed but could not be read as text (binary / too large / IO).
-    pub pre_image_unreadable: bool,
+    /// Why the pre-image could not be read, when it could not — the wire
+    /// reason itself, so the caller does not have to guess which of three
+    /// causes a bool meant. `None` = nothing went wrong.
+    pub pre_image_unavailable: Option<aleph_protocol::Unavailable>,
 }
 
 /// Execute a write operation.
@@ -207,16 +210,12 @@ pub(super) async fn execute_write(
 
     // Pre-image for the diff side-channel. Read under the same lock the
     // write holds, so the diff describes exactly the bytes we replace.
-    let (previous, pre_image_unreadable) = match tokio::fs::metadata(&canonical).await {
-        Err(_) => (None, false), // does not exist → Created
-        Ok(meta) if meta.len() > super::diff::MAX_DIFF_INPUT_BYTES as u64 => (None, true),
-        Ok(_) => match tokio::fs::read(&canonical).await {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(text) => (Some(text), false),
-                Err(_) => (None, true),
-            },
-            Err(_) => (None, true),
-        },
+    // `read_pre_image` is shared with `apply_patch` and returns the WIRE
+    // reason: this used to be one bool covering three causes, which made
+    // every one of them render as "previous content unreadable".
+    let (previous, pre_image_unavailable) = match super::diff::read_pre_image(&canonical).await {
+        Ok(text) => (text, None), // `Ok(None)` = confirmed absent → Created
+        Err(why) => (None, Some(why)),
     };
 
     // Create parent directories if needed
@@ -245,7 +244,7 @@ pub(super) async fn execute_write(
             bytes,
             unchanged: true,
             previous,
-            pre_image_unreadable,
+            pre_image_unavailable,
         });
     }
 
@@ -262,7 +261,7 @@ pub(super) async fn execute_write(
         bytes,
         unchanged: false,
         previous,
-        pre_image_unreadable,
+        pre_image_unavailable,
     })
 }
 

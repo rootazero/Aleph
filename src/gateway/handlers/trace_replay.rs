@@ -280,6 +280,14 @@ pub async fn handle_by_runs(
 /// [`RedactingEmitter`] strips off the `tool_end` frame. Same masker, same
 /// walk, one source: [`mask_presentation`](crate::exec::masker::mask_presentation).
 ///
+/// **There is a third face, and it is not on this seam.** `tools.invoke`
+/// returns the registry's raw tool value, so it carries the un-hoisted
+/// `_presentation` and masks it in its own handler
+/// (`handlers::tools_invoke::mask_presentation_in_place`) — same function,
+/// same walk. It is listed here because "the two legs" was the sentence that
+/// made the door easy to miss; the census is the call sites of
+/// `mask_presentation`, not this paragraph.
+///
 /// # The asymmetry this leaves on ATTENDED runs, and why it stays
 ///
 /// Both write-time legs are installed under `if unattended` —

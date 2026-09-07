@@ -51,14 +51,26 @@ pub struct Hunk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Unavailable {
-    /// Either side is not valid UTF-8 text.
+    /// Either side is not valid UTF-8 text, or carries a NUL inside the
+    /// binary-sniff window. Produced by the shared pre-image read
+    /// (`file_ops::diff::read_pre_image`).
     Binary,
-    /// The hunks exceeded [`MAX_HUNK_LINES`]; `added` / `removed` are still exact.
+    /// The hunks exceeded [`MAX_HUNK_LINES`], an input exceeded the server's
+    /// diff byte cap, or the diff ran out of its time budget; `added` /
+    /// `removed` are exact for the first and `0`/`0` — "not computed" — for
+    /// the other two.
     TooLarge,
-    /// The tool could not read the file before writing it.
+    /// The tool could not read the file before writing it (a real I/O error,
+    /// or a `metadata` call that failed for anything but "not found" — we do
+    /// not know whether it existed, so we do not claim it was created).
     PreImageUnavailable,
-    /// Text decoded but line splitting failed (e.g. lone surrogates).
-    Encoding,
+    // NO `Encoding` member. It meant "text decoded but line splitting
+    // failed (e.g. lone surrogates)" — a UTF-16 problem. A Rust `String` is
+    // valid UTF-8 by construction and `str::lines()` cannot fail, so no
+    // producer in this workspace could ever emit it: it was a closed-set
+    // member that teaches a renderer to handle a case that cannot arrive
+    // (判据 §2). If a non-Rust producer ever needs it, add it back WITH that
+    // producer in the same change.
     /// The tool itself failed; nothing was written.
     ToolFailed,
     /// A secret pattern spanned more than one hunk line, so the hunks were
@@ -126,6 +138,13 @@ pub enum Presentation {
 
 /// The key a tool puts this under inside its own JSON output. The dispatch
 /// layer hoists and removes it BEFORE the value is flattened for the model.
+///
+/// **That is true of the model's path only.** `tools.invoke`
+/// (`gateway::handlers::tools_invoke`) returns the registry's raw value
+/// straight to its caller without going through `apply_layer_two`, so the key
+/// is still on the object there — the handler masks it in place instead. Any
+/// future surface that returns a tool's JSON verbatim inherits the same
+/// obligation: hoist it, mask it, or say why neither is needed.
 pub const PRESENTATION_KEY: &str = "_presentation";
 
 #[cfg(test)]
