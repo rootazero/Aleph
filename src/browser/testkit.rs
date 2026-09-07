@@ -399,6 +399,47 @@ pub struct FakeEngineProcess {
     pid: u32,
     launches: Mutex<Vec<String>>,
     kills: Mutex<Vec<u32>>,
+    /// Scripted answers for [`Self::kill`], in order; the LAST entry sticks
+    /// once the queue is down to one (the shape [`FakeBackend`] uses for
+    /// `evaluate`), so a test can say "this engine never dies" without
+    /// counting calls. Empty means [`KillOutcome::Died`].
+    ///
+    /// Without this the fake answered `Ok(true)` unconditionally, which made
+    /// `EngineHandle::shutdown`'s `Ok(false)`/`Err` arms and
+    /// `EngineRegistry::shutdown_all`'s "the count is *died*, not *attempted*"
+    /// contract **unfalsifiable**: no test that could exist would reach them
+    /// (判据 §2 — an instrument that can only report success is not an
+    /// instrument). Three real leaks sat green underneath it.
+    kill_outcomes: Mutex<VecDeque<KillOutcome>>,
+}
+
+/// What a scripted [`FakeEngineProcess::kill`] answers.
+///
+/// Its own enum rather than a queue of `Result<bool, BrowserError>` because
+/// `BrowserError` is not `Clone` and the last entry has to stick, and because
+/// "still running" and "could not even signal it" are different facts the
+/// caller is supposed to treat differently.
+#[derive(Clone, Debug)]
+pub enum KillOutcome {
+    /// Signalled **and reaped** — `terminate`'s `Ok(true)`.
+    Died,
+    /// Still there when the grace window closed — `terminate`'s `Ok(false)`.
+    /// Answers immediately: a launcher that reports this has already spent its
+    /// own grace, and making every test pay 500 ms to observe that would buy
+    /// nothing.
+    Survived,
+    /// Reaped, but only after `Duration` — a browser that takes a while to go
+    /// down, within its grace window. The only way to tell a concurrent
+    /// `shutdown_all` from a sequential one: N of these fit in one grace window
+    /// together and do not fit end to end.
+    DiesAfter(std::time::Duration),
+    /// Still there, and the launcher **overran its own grace window** by
+    /// `Duration` before saying so. The only way to reach
+    /// `shutdown_all`'s budget, which is derived on the assumption that a
+    /// launcher honours `grace`.
+    Stalls(std::time::Duration),
+    /// The kill could not be attempted at all — `EngineProcess::kill`'s `Err`.
+    Failed(String),
 }
 
 /// A pid no test kills for real. Recorded and asserted on; never signalled.
@@ -418,6 +459,51 @@ impl FakeEngineProcess {
             pid: FAKE_ENGINE_PID,
             launches: Mutex::new(Vec::new()),
             kills: Mutex::new(Vec::new()),
+            kill_outcomes: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// A fake pointing at a raw websocket URL rather than at a
+    /// [`aleph_cdp::testkit::FakeCdpServer`].
+    ///
+    /// For the one thing a working fake peer cannot model: an endpoint that
+    /// accepts the TCP connection and never completes the websocket
+    /// handshake. `FakeCdpServer` always completes it, so without this the
+    /// bring-up's connect bound has no way to be shown red.
+    pub fn pointing_at(engine: super::engine::Engine, ws_url: &str, sidecar_dir: &Path) -> Self {
+        Self {
+            engine,
+            ws_url: ws_url.to_string(),
+            http_url: String::new(),
+            sidecar_dir: sidecar_dir.to_path_buf(),
+            pid: FAKE_ENGINE_PID,
+            launches: Mutex::new(Vec::new()),
+            kills: Mutex::new(Vec::new()),
+            kill_outcomes: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// Script what [`Self::kill`] answers, in order; the last entry sticks.
+    ///
+    /// Takes `self` by value so it is applied before the fake goes behind an
+    /// `Arc` — nothing can rewrite a running engine's death mid-shutdown.
+    #[must_use]
+    pub fn with_kill_outcomes(self, outcomes: impl IntoIterator<Item = KillOutcome>) -> Self {
+        {
+            let mut q = self.kill_outcomes.lock().unwrap_or_else(|e| e.into_inner());
+            q.clear();
+            q.extend(outcomes);
+        }
+        self
+    }
+
+    /// The next scripted outcome, leaving the last entry in place.
+    fn next_kill_outcome(&self) -> KillOutcome {
+        let mut q = self.kill_outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        match q.len() {
+            0 => KillOutcome::Died,
+            1 => q[0].clone(),
+            _ => q.pop_front().unwrap_or(KillOutcome::Died),
         }
     }
 
@@ -438,6 +524,7 @@ impl FakeEngineProcess {
             pid: FAKE_ENGINE_PID,
             launches: Mutex::new(Vec::new()),
             kills: Mutex::new(Vec::new()),
+            kill_outcomes: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -502,13 +589,19 @@ impl super::engine::process::EngineProcess for FakeEngineProcess {
         })
     }
 
-    /// Records the pid it was asked to stop and reports it died.
+    /// Records the pid it was asked to stop and answers the next scripted
+    /// [`KillOutcome`] (default [`KillOutcome::Died`]).
     ///
     /// Takes the whole `Launched` because the real launchers need the `Child`
     /// inside it to `wait()` after signalling; this fake has no OS process, so
     /// it reads only the pid — and reads it from the ARGUMENT rather than from
     /// `self.pid`, so a test that hands over the wrong `Launched` fails
     /// instead of quietly passing.
+    ///
+    /// The pid is recorded **before** the outcome is consulted: "we asked this
+    /// pid to die" and "it died" are different facts, and a `kills()` that only
+    /// listed the successful ones could not tell a refusal from a kill that
+    /// never happened (判据 §4).
     async fn kill(
         &self,
         launched: &super::engine::process::Launched,
@@ -518,7 +611,19 @@ impl super::engine::process::EngineProcess for FakeEngineProcess {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(launched.pid);
-        Ok(true)
+        match self.next_kill_outcome() {
+            KillOutcome::Died => Ok(true),
+            KillOutcome::Survived => Ok(false),
+            KillOutcome::DiesAfter(d) => {
+                tokio::time::sleep(d).await;
+                Ok(true)
+            }
+            KillOutcome::Stalls(d) => {
+                tokio::time::sleep(d).await;
+                Ok(false)
+            }
+            KillOutcome::Failed(reason) => Err(BrowserError::ActionFailed(reason)),
+        }
     }
 }
 

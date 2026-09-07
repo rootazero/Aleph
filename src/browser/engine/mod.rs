@@ -131,7 +131,17 @@ pub const ENGINE_KILL_GRACE: Duration = Duration::from_millis(500);
 /// already spent `SHUTDOWN_FAILSAFE` before it reaches us and the
 /// `std::process::exit(0)` after it waits for nobody, so this is a hard
 /// ceiling, not a hope (`src/bin/aleph-server/commands/start/helpers.rs`).
-pub const ENGINE_SHUTDOWN_BUDGET: Duration = Duration::from_secs(1);
+///
+/// **Derived from [`ENGINE_KILL_GRACE`], not chosen.** It was a flat 1 s over a
+/// loop that waited up to `ENGINE_KILL_GRACE` per engine *in sequence*, so
+/// three stuck engines could not fit — an arithmetic impossibility nothing
+/// stated (判据 §13: a limit's position and its arithmetic decide what it
+/// actually limits). The loop is concurrent now, so the wall cost is ONE grace
+/// window whatever N is, and this is that window plus the same again for the
+/// socket closes and the sidecar unlinks. The two numbers cannot drift apart
+/// because there is only one.
+/// `the_shutdown_budget_is_derived_from_one_kill_grace` pins it.
+pub const ENGINE_SHUTDOWN_BUDGET: Duration = ENGINE_KILL_GRACE.saturating_mul(2);
 
 /// May this call start a browser?
 ///
@@ -348,38 +358,72 @@ impl EngineHandle {
     /// every pending call, it does not ask the peer for permission.
     pub async fn shutdown(&self) -> bool {
         self.conn.close().await;
-        let pid = self.launched.pid;
-        // The whole `Launched`, not the pid: it carries the `std::process::Child`
-        // the launcher has to `wait()` on after signalling. A signal without a
-        // reap leaves a zombie, and a pid on its own cannot be reaped by anyone.
-        let died = match self.process.kill(&self.launched, ENGINE_KILL_GRACE).await {
-            Ok(true) => true,
-            Ok(false) => {
-                tracing::warn!(
-                    pid,
-                    engine = self.engine.as_str(),
-                    "the engine did not exit within the kill grace window; leaving it \
-                     for the next boot sweep"
-                );
-                false
-            }
-            Err(e) => {
-                tracing::warn!(pid, engine = self.engine.as_str(), error = %e, "could not kill the engine");
-                false
-            }
-        };
-        match tokio::fs::remove_file(&self.launched.sidecar_path).await {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(
-                path = %self.launched.sidecar_path.display(),
-                error = %e,
-                "could not remove the engine sidecar; the boot sweep will see a \
-                 record for a process that is gone"
-            ),
-        }
-        died
+        stop_launched(&*self.process, &self.launched, self.engine).await
     }
+}
+
+/// Kill a launched engine and clear its record **only if it is known dead**.
+///
+/// One derivation of "how an engine is stopped", shared by
+/// [`EngineHandle::shutdown`] and by the launch path's own cleanup in
+/// [`registry`]. Two copies is how one of them would go on deleting the record
+/// of a process that refused to die (判据 §1) — which is the defect this
+/// function was extracted to fix.
+///
+/// **The sidecar is removed only on `true`.** That record is the only thing
+/// [`process::reap_orphans_now`] reads, and it is keyed on the session key — so
+/// deleting it for a process that is still running does not tidy anything, it
+/// makes that process unreapable for good and frees the slot for the next
+/// launch of the same profile to overwrite. The `Ok(false)` arm's own message
+/// says "leaving it for the next boot sweep"; the sweep has nothing to find
+/// unless this holds. "I could not kill it" is not "it is gone" (判据 §8).
+pub(crate) async fn stop_launched(
+    process: &dyn EngineProcess,
+    launched: &Launched,
+    engine: Engine,
+) -> bool {
+    let pid = launched.pid;
+    // The whole `Launched`, not the pid: it carries the `std::process::Child`
+    // the launcher has to `wait()` on after signalling. A signal without a
+    // reap leaves a zombie, and a pid on its own cannot be reaped by anyone.
+    let died = match process.kill(launched, ENGINE_KILL_GRACE).await {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::warn!(
+                pid,
+                engine = engine.as_str(),
+                sidecar = %launched.sidecar_path.display(),
+                "the engine did not exit within the kill grace window; leaving it \
+                 AND its sidecar for the next boot sweep"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::warn!(
+                pid,
+                engine = engine.as_str(),
+                error = %e,
+                sidecar = %launched.sidecar_path.display(),
+                "could not kill the engine; leaving it AND its sidecar for the next \
+                 boot sweep"
+            );
+            false
+        }
+    };
+    if !died {
+        return false;
+    }
+    match tokio::fs::remove_file(&launched.sidecar_path).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(
+            path = %launched.sidecar_path.display(),
+            error = %e,
+            "could not remove the engine sidecar; the boot sweep will see a \
+             record for a process that is gone"
+        ),
+    }
+    true
 }
 
 #[cfg(test)]

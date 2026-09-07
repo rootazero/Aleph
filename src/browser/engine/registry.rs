@@ -6,12 +6,13 @@
 //! registry and resolves on its own first async call.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::process::{EngineProcess, LaunchRequest};
+use super::process::{EngineProcess, LaunchRequest, Launched};
 use super::readiness::ready_gate;
-use super::{Engine, EngineHandle, EngineLaunch};
+use super::{stop_launched, Engine, EngineHandle, EngineLaunch, ENGINE_SHUTDOWN_BUDGET};
 use crate::browser::error::BrowserError;
 
 pub struct EngineRegistry {
@@ -49,11 +50,13 @@ impl EngineRegistry {
     /// Get-or-launch under one lock: a second caller either finds the handle or
     /// waits for the first launch, never starts a second browser.
     ///
-    /// A handle whose connection has closed is DROPPED here rather than
-    /// returned: the engine died, and spec §5.2 says the next call restarts the
-    /// same engine rather than switching. Under [`EngineLaunch::Refuse`] that
-    /// next call is not this one, so it answers `NoSession` — the observer's
-    /// answer, not a launch.
+    /// A handle whose connection has closed is **stopped and then** replaced,
+    /// and only by an `Allow` caller: spec §5.2 says the next call restarts the
+    /// same engine rather than switching, and a closed socket says Aleph lost
+    /// its grip, not that the browser exited. Under [`EngineLaunch::Refuse`]
+    /// that next call is not this one, so it answers `NoSession` and leaves the
+    /// dead handle exactly where it found it — an observer must not be the
+    /// thing that reclaims a browser.
     pub async fn handle(
         &self,
         engine: Engine,
@@ -61,27 +64,61 @@ impl EngineRegistry {
         gate: EngineLaunch,
     ) -> Result<Arc<EngineHandle>, BrowserError> {
         let mut map = self.handles.lock().await;
-        if let Some(existing) = map.get(&req.profile) {
-            if !existing.alive() {
-                tracing::warn!(
-                    profile = %req.profile,
-                    engine = existing.engine.as_str(),
-                    "the engine's CDP connection is closed; discarding the handle"
-                );
-                map.remove(&req.profile);
-            } else if existing.engine != engine {
-                return Err(BrowserError::EngineMismatch {
-                    profile: req.profile.clone(),
-                    running: existing.engine,
-                    requested: engine,
-                });
-            } else {
-                return Ok(existing.clone());
+        let existing = map.get(&req.profile).cloned();
+
+        // A LIVE engine is a determinate answer for both gates, and reaching it
+        // changes nothing.
+        if let Some(handle) = &existing {
+            if handle.alive() {
+                if handle.engine != engine {
+                    // Answered under `Refuse` too, on purpose. It is a fact
+                    // about the world — this profile is running that engine —
+                    // and `NoSession` would be a lie an observer then spends as
+                    // a licence to launch a second browser (判据 §8). The
+                    // recovery verb the message names is addressed to whoever
+                    // eventually acts; naming it does not oblige an observer to.
+                    return Err(BrowserError::EngineMismatch {
+                        profile: req.profile.clone(),
+                        running: handle.engine,
+                        requested: engine,
+                    });
+                }
+                return Ok(handle.clone());
             }
         }
 
+        // Everything past here either MUTATES the map or starts a browser, so
+        // the gate decides before any of it. To an observer a closed socket and
+        // an empty slot are the same answer — "no live engine for this profile"
+        // — and it must leave both exactly as it found them. `EngineLaunch::Refuse`
+        // says so in its own doc ("Observing. A missing engine is an answer, not
+        // something to fix"), and this used to evict the dead handle before ever
+        // reading the gate: a sensor that changed what it measured (判据 §4).
         if gate == EngineLaunch::Refuse {
             return Err(BrowserError::NoSession(req.profile.clone()));
+        }
+
+        // An `Allow` caller is the only one that may replace a dead handle, so
+        // it owns reclaiming what it displaces.
+        //
+        // **A closed socket is not a dead process.** It means Aleph lost its
+        // grip: the browser may well still be running, and `EngineHandle` has
+        // no `Drop`, so simply forgetting the handle orphans it — and the
+        // relaunch below writes a sidecar under the same session key, which
+        // `write_sidecar_record` documents as an *overwrite*, destroying the
+        // orphan's only record. Kill first, and only then let the launch have
+        // the slot.
+        if let Some(dead) = existing {
+            map.remove(&req.profile);
+            tracing::warn!(
+                profile = %req.profile,
+                engine = dead.engine.as_str(),
+                pid = dead.launched.pid,
+                "the engine's CDP connection is closed; stopping the process before \
+                 relaunching, because a closed socket says we lost our grip, not that \
+                 the browser exited"
+            );
+            dead.shutdown().await;
         }
 
         // The launch itself is `launch_engine`, which takes no `&self` and so
@@ -223,13 +260,50 @@ impl EngineRegistry {
             let mut map = self.handles.lock().await;
             map.drain().map(|(_, handle)| handle).collect()
         };
-        let mut stopped = 0;
-        for handle in handles {
-            if handle.shutdown().await {
-                stopped += 1;
-            }
+        if handles.is_empty() {
+            return 0;
         }
-        stopped
+        // Named before they are moved into the futures below, so a budget
+        // expiry can say WHICH processes it walked away from instead of
+        // leaving a silent leak (判据 §17).
+        let pids: Vec<u32> = handles.iter().map(|h| h.launched.pid).collect();
+
+        // The count has to survive the budget. `tokio::time::timeout` DROPS the
+        // future it was given, so a counter living inside that future is lost
+        // exactly when it has the most to say: the run that stopped two
+        // browsers and then hit the wall reported 0, and the caller believed
+        // the number rather than the world (判据 §11).
+        let died = Arc::new(AtomicUsize::new(0));
+        let stops = handles.into_iter().map(|handle| {
+            let died = Arc::clone(&died);
+            async move {
+                if handle.shutdown().await {
+                    died.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+
+        // CONCURRENT, not sequential. Each engine's kill waits up to
+        // `ENGINE_KILL_GRACE` on its own child and those windows overlap, so
+        // the wall cost is one grace window whatever N is — which is the only
+        // reason `ENGINE_SHUTDOWN_BUDGET` can be derived from a single grace.
+        // Run in sequence the cost was N x grace, and three stuck engines could
+        // not fit in any fixed budget. The stops touch nothing in common: one
+        // process and one sidecar path each.
+        if tokio::time::timeout(ENGINE_SHUTDOWN_BUDGET, futures::future::join_all(stops))
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                ?pids,
+                budget_ms = ENGINE_SHUTDOWN_BUDGET.as_millis(),
+                stopped = died.load(Ordering::Relaxed),
+                "the engine shutdown did not finish inside its budget; the engines \
+                 among these pids that had not been stopped yet are left for the next \
+                 boot sweep, and their sidecars with them"
+            );
+        }
+        died.load(Ordering::Relaxed)
     }
 }
 
@@ -266,11 +340,99 @@ async fn launch_engine(
 
     let launched = process.launch(req.clone()).await?;
 
-    let conn = aleph_cdp::CdpConnection::connect(
-        &launched.endpoint.ws_url,
-        aleph_cdp::ConnectOptions { command_timeout },
+    // ⚠️ A browser is running from here on, and only this function knows its
+    // pid. Every failure below therefore goes through the reclaim arm rather
+    // than through `?`: each of these errors tells the caller to RETRY, and a
+    // retry that leaves the previous process behind turns one refusal into N
+    // orphans — a message that is false about the world it describes
+    // (判据 §15: the hand-off across an irreversible boundary is this
+    // function's to complete, because after it returns nobody can).
+    match bring_up(&launched, engine, command_timeout, ready_budget).await {
+        Ok((conn, target, session)) => {
+            let handle = Arc::new(EngineHandle::new(
+                engine,
+                req.profile.clone(),
+                launched,
+                conn,
+                process,
+                (target.0.clone(), session),
+            ));
+            tracing::info!(
+                profile = %req.profile,
+                engine = engine.as_str(),
+                pid = handle.launched.pid,
+                "engine launched and ready"
+            );
+            Ok(handle)
+        }
+        Err(e) => {
+            let pid = launched.pid;
+            let died = stop_launched(&*process, &launched, engine).await;
+            tracing::warn!(
+                profile = %req.profile,
+                engine = engine.as_str(),
+                pid,
+                died,
+                error = %e,
+                "the engine came up but could not be driven; stopped it so the retry \
+                 this error asks for does not add a second browser"
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Connect to a launched engine, open its first page and prove it is ready.
+///
+/// **One deadline for the whole bring-up.** `tokio_tungstenite::connect_async`
+/// has no timeout of its own, and this runs while [`EngineRegistry::handle`]
+/// holds the `handles` guard — so an endpoint that accepts the TCP connection
+/// and never completes the websocket handshake used to wedge EVERY profile for
+/// the life of the process, with `is_live` answering `false` for all of them
+/// throughout. Being stuck must not be indistinguishable from being absent, and
+/// there has to be a way out (判据 §14 — that was fail-dead, not fail-closed).
+///
+/// Every step is bounded by what is LEFT of `budget` rather than by a budget of
+/// its own, so there is exactly one number for "how long may bringing an engine
+/// up take" and no two of them can add up to a total nobody chose. That is also
+/// why `ready_gate` is handed the remainder instead of `budget`: given the whole
+/// thing again, its own timeout could only fire after this one already had, and
+/// an inner limit that can never be reached is not a limit (判据 §2).
+async fn bring_up(
+    launched: &Launched,
+    engine: Engine,
+    command_timeout: Duration,
+    budget: Duration,
+) -> Result<
+    (
+        aleph_cdp::CdpConnection,
+        aleph_cdp::TargetId,
+        aleph_cdp::SessionId,
+    ),
+    BrowserError,
+> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let stalled = |step: &str| BrowserError::LaunchFailed {
+        stage: "cdp-endpoint",
+        detail: format!(
+            "the {engine} process is running (pid {}) but {step} against its CDP \
+             endpoint {} did not finish within {}s. The process has been stopped; \
+             retry, or switch engines with browser_session{{action:\"switch_engine\"}}.",
+            launched.pid,
+            launched.endpoint.ws_url,
+            budget.as_secs_f64()
+        ),
+    };
+
+    let conn = tokio::time::timeout_at(
+        deadline,
+        aleph_cdp::CdpConnection::connect(
+            &launched.endpoint.ws_url,
+            aleph_cdp::ConnectOptions { command_timeout },
+        ),
     )
     .await
+    .map_err(|_| stalled("opening the websocket"))?
     .map_err(|e| BrowserError::LaunchFailed {
         stage: "cdp-endpoint",
         detail: format!(
@@ -282,43 +444,35 @@ async fn launch_engine(
 
     // One tab, created and attached before the gate: the gate navigates, and a
     // navigation needs a page.
-    let target = aleph_cdp::methods::target::create_target(&conn, "about:blank")
+    let target = tokio::time::timeout_at(
+        deadline,
+        aleph_cdp::methods::target::create_target(&conn, "about:blank"),
+    )
+    .await
+    .map_err(|_| stalled("opening the first page"))?
+    .map_err(|e| BrowserError::LaunchFailed {
+        stage: "cdp-ready",
+        detail: format!("the engine would not open its first page: {e}"),
+    })?;
+    let session = tokio::time::timeout_at(deadline, conn.attach(&target))
         .await
-        .map_err(|e| BrowserError::LaunchFailed {
-            stage: "cdp-ready",
-            detail: format!("the engine would not open its first page: {e}"),
-        })?;
-    let session = conn
-        .attach(&target)
-        .await
+        .map_err(|_| stalled("attaching to the first page"))?
         .map_err(|e| BrowserError::LaunchFailed {
             stage: "cdp-ready",
             detail: format!("the engine would not attach to its first page: {e}"),
         })?;
-    ready_gate(&conn, &session, ready_budget).await?;
 
-    let handle = Arc::new(EngineHandle::new(
-        engine,
-        req.profile.clone(),
-        launched,
-        conn,
-        process,
-        (target.0.clone(), session),
-    ));
-    tracing::info!(
-        profile = %req.profile,
-        engine = engine.as_str(),
-        pid = handle.launched.pid,
-        "engine launched and ready"
-    );
-    Ok(handle)
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    ready_gate(&conn, &session, remaining).await?;
+    Ok((conn, target, session))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::engine::ENGINE_KILL_GRACE;
     use crate::browser::profile::BrowserType;
-    use crate::browser::testkit::FakeEngineProcess;
+    use crate::browser::testkit::{FakeEngineProcess, KillOutcome};
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -941,6 +1095,528 @@ mod tests {
 
         registry.shutdown_all().await;
         server.shutdown().await;
+    }
+
+    // ---- fix round 1: the leak set ------------------------------------------
+
+    /// F2. An engine that refused to die keeps its sidecar.
+    ///
+    /// The record is the only thing the boot sweep reads, so deleting it for a
+    /// live process does not tidy anything — it makes that process unreapable
+    /// for good. `shutdown`'s own `Ok(false)` message says "leaving it for the
+    /// next boot sweep"; before this the very next line deleted what the sweep
+    /// would have looked for.
+    #[tokio::test]
+    async fn a_refused_kill_keeps_the_sidecar_the_boot_sweep_needs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(
+            FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
+                .with_kill_outcomes([KillOutcome::Survived]),
+        );
+        let registry = registry_with(Engine::Chromium, &proc);
+        let handle = registry
+            .handle(
+                Engine::Chromium,
+                &request("default", dir.path()),
+                EngineLaunch::Allow,
+            )
+            .await
+            .expect("launch");
+        let sidecar = handle.launched.sidecar_path.clone();
+        let pid = handle.launched.pid;
+        assert!(sidecar.exists(), "precondition: the launch wrote a record");
+        drop(handle);
+
+        assert_eq!(
+            registry.shutdown_all().await,
+            0,
+            "a process that is still running must not be counted as stopped"
+        );
+        assert_eq!(proc.kills(), vec![pid], "it must still have been asked");
+        assert!(
+            sidecar.exists(),
+            "the sidecar of a process that refused to die was deleted — the boot \
+             sweep reads that record and nothing else, so the process is now \
+             unreapable and the next launch of this profile will overwrite its slot"
+        );
+        registry.shutdown_all().await;
+        server.shutdown().await;
+    }
+
+    /// F2, the other arm: a kill that could not even be attempted is also not
+    /// a death, and must not cost the record either.
+    ///
+    /// Separate from the `Survived` case because they are different facts and
+    /// `stop_launched` reaches the `remove_file` through two different branches
+    /// — one test could only ever falsify one of them.
+    #[tokio::test]
+    async fn a_kill_that_failed_outright_keeps_the_sidecar_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(
+            FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
+                .with_kill_outcomes([KillOutcome::Failed("no such process".into())]),
+        );
+        let registry = registry_with(Engine::Chromium, &proc);
+        let handle = registry
+            .handle(
+                Engine::Chromium,
+                &request("default", dir.path()),
+                EngineLaunch::Allow,
+            )
+            .await
+            .expect("launch");
+        let sidecar = handle.launched.sidecar_path.clone();
+        drop(handle);
+
+        assert_eq!(registry.shutdown_all().await, 0, "an Err is not a death");
+        assert!(
+            sidecar.exists(),
+            "a kill that errored deleted the record anyway — 'I could not kill it' \
+             is not 'it is gone'"
+        );
+        server.shutdown().await;
+    }
+
+    /// F3. A launch that comes up but cannot be driven must not leave the
+    /// browser running.
+    ///
+    /// The error it returns tells the caller to retry, so the retry is what
+    /// this asserts: two refusals must leave two dead browsers, not two live
+    /// ones nobody holds a handle to.
+    #[tokio::test]
+    async fn a_bring_up_failure_stops_the_browser_it_started() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Answers the version probe and nothing else, so `ready_gate` refuses
+        // after `launch` has already succeeded.
+        let server = FakeCdpServer::start(|msg: &serde_json::Value| {
+            match msg.get("method").and_then(serde_json::Value::as_str) {
+                Some("Target.createTarget") => {
+                    Responder::Reply(serde_json::json!({"targetId": "T1"}))
+                }
+                Some("Target.attachToTarget") => {
+                    Responder::Reply(serde_json::json!({"sessionId": "S1"}))
+                }
+                Some("Browser.getVersion") => Responder::Reply(serde_json::json!({
+                    "protocolVersion": "1.3", "product": "Fake/1.0",
+                    "revision": "@fake", "userAgent": "fake", "jsVersion": "13"
+                })),
+                _ => Responder::Drop,
+            }
+        })
+        .await;
+        let proc = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            &server,
+            dir.path(),
+        ));
+        let registry = registry_with(Engine::Chromium, &proc);
+        let req = request("default", dir.path());
+
+        let err = refusal(
+            registry
+                .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+                .await,
+            "the readiness gate must refuse this peer",
+        );
+        assert!(err.to_string().contains("cdp-ready"), "{err}");
+        assert_eq!(proc.launches().len(), 1);
+        assert_eq!(
+            proc.kills(),
+            vec![proc.pid()],
+            "the refusal abandoned a running browser: its error tells the caller to \
+             retry, and nothing else knows this pid"
+        );
+        assert!(
+            registry.all().await.is_empty(),
+            "a failed launch must not be parked"
+        );
+
+        // The retry the error asks for. It must cost one more browser started
+        // and one more stopped — never a second orphan.
+        let _ = registry
+            .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+            .await;
+        assert_eq!(proc.launches().len(), 2);
+        assert_eq!(
+            proc.kills(),
+            vec![proc.pid(), proc.pid()],
+            "the retry left the second browser running too"
+        );
+        server.shutdown().await;
+    }
+
+    /// F4. A closed socket means Aleph lost its grip, not that the browser
+    /// died — so the relaunch must stop the old process before taking its slot.
+    ///
+    /// `write_sidecar_record` is keyed on the session key and documents itself
+    /// as an overwrite, so a relaunch that skipped the kill would destroy the
+    /// orphan's only record on its way past.
+    #[tokio::test]
+    async fn a_closed_socket_is_killed_before_the_relaunch_takes_its_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            &server,
+            dir.path(),
+        ));
+        let registry = registry_with(Engine::Chromium, &proc);
+        let req = request("default", dir.path());
+
+        let first = registry
+            .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+            .await
+            .expect("launch");
+        let first_sidecar = first.launched.sidecar_path.clone();
+        let pid = first.launched.pid;
+
+        server.drop_socket();
+        let mut closed = first.conn.closed();
+        tokio::time::timeout(Duration::from_secs(5), closed.wait_for(Option::is_some))
+            .await
+            .expect("the client notices the peer went away within 5s")
+            .expect("the watch sender outlives the connection");
+        drop(first);
+
+        let second = registry
+            .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+            .await
+            .expect("the relaunch");
+        assert_eq!(proc.launches().len(), 2, "precondition: it relaunched");
+        assert_eq!(
+            proc.kills(),
+            vec![pid],
+            "the orphan was discarded without a kill — its socket closed, which says \
+             we lost our grip, not that the process exited, and EngineHandle has no Drop"
+        );
+        assert_eq!(
+            second.launched.sidecar_path, first_sidecar,
+            "precondition: the record is keyed on the session key, so the relaunch \
+             writes over exactly the slot the orphan would have been reaped from"
+        );
+
+        registry.shutdown_all().await;
+        server.shutdown().await;
+    }
+
+    /// F5. An observing call leaves a dead handle exactly where it found it.
+    ///
+    /// `EngineLaunch::Refuse` says so in its own doc — "Observing. A missing
+    /// engine is an answer, not something to fix" — and the eviction used to
+    /// run before the gate was ever read. A sensor must not change what it
+    /// measures (判据 §4).
+    #[tokio::test]
+    async fn an_observing_call_does_not_evict_or_kill_a_dead_handle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            &server,
+            dir.path(),
+        ));
+        let registry = registry_with(Engine::Chromium, &proc);
+        let req = request("default", dir.path());
+
+        let handle = registry
+            .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+            .await
+            .expect("launch");
+        server.drop_socket();
+        let mut closed = handle.conn.closed();
+        tokio::time::timeout(Duration::from_secs(5), closed.wait_for(Option::is_some))
+            .await
+            .expect("the client notices the peer went away within 5s")
+            .expect("the watch sender outlives the connection");
+        drop(handle);
+
+        let err = refusal(
+            registry
+                .handle(Engine::Chromium, &req, EngineLaunch::Refuse)
+                .await,
+            "a dead engine is not a live one, so Refuse must answer NoSession",
+        );
+        assert!(matches!(err, BrowserError::NoSession(ref p) if p == "default"));
+        assert!(
+            registry.get("default").await.is_some(),
+            "an observing call evicted the handle it was only asked about"
+        );
+        assert!(
+            proc.kills().is_empty(),
+            "an observing call killed a browser"
+        );
+        assert_eq!(
+            proc.launches().len(),
+            1,
+            "and it must not have launched one"
+        );
+
+        registry.shutdown_all().await;
+        server.shutdown().await;
+    }
+
+    /// F5, second half: a live engine of the WRONG kind is a fact, and both
+    /// gates get the same answer.
+    ///
+    /// Its own test because the mismatch arm sits before the gate on purpose —
+    /// answering `NoSession` to an observer would be a lie it would then spend
+    /// as a licence to launch a second browser (判据 §8).
+    #[tokio::test]
+    async fn an_observer_is_told_the_truth_about_a_profile_running_another_engine() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let chromium = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            &server,
+            dir.path(),
+        ));
+        let obscura = Arc::new(FakeEngineProcess::new(Engine::Obscura, &server, dir.path()));
+        let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
+        processes.insert(Engine::Chromium, chromium.clone());
+        processes.insert(Engine::Obscura, obscura.clone());
+        let registry = EngineRegistry::new(
+            processes,
+            Duration::from_millis(500),
+            Duration::from_secs(2),
+        );
+        let req = request("default", dir.path());
+
+        registry
+            .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+            .await
+            .expect("chromium launches");
+
+        let err = refusal(
+            registry
+                .handle(Engine::Obscura, &req, EngineLaunch::Refuse)
+                .await,
+            "an observer must be told which engine is running",
+        );
+        assert!(
+            matches!(err, BrowserError::EngineMismatch { running, .. } if running == Engine::Chromium),
+            "an observer was told NoSession about a profile with a live engine, which \
+             it would spend as a licence to start a second one: {err:?}"
+        );
+        assert!(obscura.launches().is_empty());
+        assert!(chromium.kills().is_empty(), "observing killed something");
+
+        registry.shutdown_all().await;
+        server.shutdown().await;
+    }
+
+    /// F6. An endpoint that accepts the connection and never finishes the
+    /// handshake is bounded, not fatal.
+    ///
+    /// `tokio_tungstenite::connect_async` has no timeout, and this runs while
+    /// `handle` holds the global map guard — so an unbounded wait here wedged
+    /// EVERY profile for the life of the process, with `is_live` answering
+    /// `false` for all of them throughout. Being stuck must be distinguishable
+    /// from being absent and there must be a way out (判据 §14).
+    ///
+    /// Asserts the elapsed time, not just the error: a refusal that arrived
+    /// after ten minutes would satisfy every other assertion here.
+    #[tokio::test]
+    async fn a_half_open_endpoint_is_bounded_and_the_browser_is_reclaimed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A listener that accepts TCP and never speaks HTTP. `FakeCdpServer`
+        // cannot model this: it always completes the upgrade.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let port = listener.local_addr().expect("local addr").port();
+        let accepted = tokio::spawn(async move {
+            // Hold every accepted socket open, answering nothing.
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+
+        let proc = Arc::new(FakeEngineProcess::pointing_at(
+            Engine::Chromium,
+            &format!("ws://127.0.0.1:{port}/devtools/browser/wedged"),
+            dir.path(),
+        ));
+        let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
+        processes.insert(Engine::Chromium, proc.clone());
+        // The bring-up budget is the one number this is measured against.
+        let budget = Duration::from_millis(300);
+        let registry = EngineRegistry::new(processes, Duration::from_secs(30), budget);
+
+        // The outer `timeout` is the assertion, not a convenience: without the
+        // bound under test this call never returns, and a hanging test is
+        // indistinguishable from a slow suite — the guard has to be able to go
+        // RED, not to stop (判据 §2).
+        let started = std::time::Instant::now();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            registry.handle(
+                Engine::Chromium,
+                &request("default", dir.path()),
+                EngineLaunch::Allow,
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the connect was never bounded: 5s against a {budget:?} bring-up \
+                 budget, and it holds the registry's global map lock the whole time, \
+                 so every other profile is wedged with it"
+            )
+        });
+        let err = refusal(
+            outcome,
+            "a peer that never completes the handshake must not be waited on forever",
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the refusal arrived, but far outside the {budget:?} bring-up budget it \
+             was supposed to be bounded by: {elapsed:?}"
+        );
+        assert!(
+            err.to_string().contains("cdp-endpoint"),
+            "the stage must name the step that stalled: {err}"
+        );
+        assert_eq!(
+            proc.kills(),
+            vec![proc.pid()],
+            "the wedged engine was left running"
+        );
+        assert!(registry.get("default").await.is_none());
+
+        accepted.abort();
+    }
+
+    /// F7. `shutdown_all` reports what actually died, even when the budget
+    /// expires part-way.
+    ///
+    /// Three engines: two die at once, one overruns its own grace window by
+    /// more than the whole budget. The count must be 2. Under the old shape —
+    /// a sequential loop with the timeout wrapped around it in
+    /// `shutdown_browsers` — the timeout dropped the future and took the count
+    /// with it, so a run that really did stop two browsers reported 0
+    /// (判据 §11: the number and the world disagree, and the number is what the
+    /// caller believes).
+    ///
+    /// Which handle draws which outcome is not deterministic, because the stops
+    /// run concurrently and share one scripted queue. The multiset is: two
+    /// `Died`, one `Stalls`. The COUNT is therefore 2 whichever way they land.
+    #[tokio::test]
+    async fn shutdown_all_counts_what_died_even_when_the_budget_expires() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(
+            FakeEngineProcess::new(Engine::Chromium, &server, dir.path()).with_kill_outcomes([
+                KillOutcome::Died,
+                KillOutcome::Died,
+                KillOutcome::Stalls(ENGINE_SHUTDOWN_BUDGET * 4),
+            ]),
+        );
+        let registry = registry_with(Engine::Chromium, &proc);
+        for profile in ["a", "b", "c"] {
+            registry
+                .handle(
+                    Engine::Chromium,
+                    &request(profile, dir.path()),
+                    EngineLaunch::Allow,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("launch {profile}: {e}"));
+        }
+        assert_eq!(registry.all().await.len(), 3);
+
+        let started = std::time::Instant::now();
+        let stopped = registry.shutdown_all().await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            stopped, 2,
+            "the budget expired and took the count with it: two browsers really were \
+             stopped and the caller was told zero"
+        );
+        assert_eq!(proc.kills().len(), 3, "every engine must have been asked");
+        assert!(
+            elapsed < ENGINE_SHUTDOWN_BUDGET * 3,
+            "the budget did not bound the run: {elapsed:?}"
+        );
+        server.shutdown().await;
+    }
+
+    /// F7. The stops run concurrently, so N engines cost ONE grace window, not
+    /// N of them.
+    ///
+    /// This is the assumption `ENGINE_SHUTDOWN_BUDGET`'s derivation rests on,
+    /// and it is the only thing that separates a concurrent `shutdown_all` from
+    /// a sequential one: three engines that each take 400 ms to go down fit in
+    /// the 1 s budget together and cannot fit end to end (3 x 400 ms = 1.2 s).
+    /// Run in sequence the third one is still being killed when the budget
+    /// expires, and the count comes back 2.
+    #[tokio::test]
+    async fn shutdown_all_stops_every_engine_inside_one_grace_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let slow = Duration::from_millis(400);
+        assert!(
+            slow < ENGINE_KILL_GRACE && slow * 3 > ENGINE_SHUTDOWN_BUDGET,
+            "the fixture must be inside one grace window and outside three of them, \
+             or this test is not about concurrency at all"
+        );
+        let proc = Arc::new(
+            FakeEngineProcess::new(Engine::Chromium, &server, dir.path())
+                .with_kill_outcomes([KillOutcome::DiesAfter(slow)]),
+        );
+        let registry = registry_with(Engine::Chromium, &proc);
+        for profile in ["a", "b", "c"] {
+            registry
+                .handle(
+                    Engine::Chromium,
+                    &request(profile, dir.path()),
+                    EngineLaunch::Allow,
+                )
+                .await
+                .unwrap_or_else(|e| panic!("launch {profile}: {e}"));
+        }
+
+        let started = std::time::Instant::now();
+        let stopped = registry.shutdown_all().await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            stopped, 3,
+            "three engines that each die well inside the grace window did not all \
+             get stopped — run end to end they cost 3 x {slow:?}, which no fixed \
+             budget derived from ONE grace window can cover"
+        );
+        assert!(
+            elapsed < ENGINE_SHUTDOWN_BUDGET,
+            "the stops did not overlap: {elapsed:?} for three {slow:?} kills"
+        );
+        server.shutdown().await;
+    }
+
+    /// F7's other half: the budget is a function of the per-item cost, not a
+    /// number someone picked.
+    ///
+    /// A flat 1 s over an N x 500 ms **sequential** loop could not be met for
+    /// N >= 2 in the worst case (2 x 500 ms = the whole budget, before the
+    /// socket closes and the unlinks) and was arithmetically impossible for
+    /// N >= 3. The loop is concurrent now, so the wall cost is one grace
+    /// window; this pins that the budget still covers exactly that, with slack,
+    /// and that neither number can be moved without the other.
+    #[test]
+    fn the_shutdown_budget_is_derived_from_one_kill_grace() {
+        assert_eq!(
+            ENGINE_SHUTDOWN_BUDGET,
+            ENGINE_KILL_GRACE * 2,
+            "the budget stopped being a function of the cost it has to cover"
+        );
+        assert!(
+            ENGINE_SHUTDOWN_BUDGET > ENGINE_KILL_GRACE,
+            "a budget that does not cover one grace window cannot stop one engine"
+        );
     }
 
     /// Only the registry assembles a handle.

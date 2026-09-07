@@ -857,21 +857,14 @@ impl ProfileManager {
         // this half has always had to fit inside SHUTDOWN_FAILSAFE and still
         // does, and it costs the engine half nothing to run first.
         let mut stopped = self.playwright_cli_driver.shutdown_all_chromium();
-        // Hard-bounded. One caller is the wedged-shutdown watchdog, whose
-        // `std::process::exit(0)` waits for nobody; a kill plus a local socket
-        // close is microseconds, so a second is generous and a timeout here
-        // means something is wrong rather than slow. Timing out LEAVES those
-        // engines to the next boot sweep — say so, do not swallow it.
-        match tokio::time::timeout(engine::ENGINE_SHUTDOWN_BUDGET, self.engines.shutdown_all())
-            .await
-        {
-            Ok(n) => stopped += n,
-            Err(_) => tracing::warn!(
-                budget_secs = engine::ENGINE_SHUTDOWN_BUDGET.as_secs(),
-                "the engine shutdown did not finish inside its budget; one or \
-                 more engines are left for the next boot sweep"
-            ),
-        }
+        // Still hard-bounded by `engine::ENGINE_SHUTDOWN_BUDGET`, but the bound
+        // lives INSIDE `shutdown_all` now. A `timeout` wrapped around the call
+        // here drops the future and takes the count with it, so a run that
+        // stopped two engines and then hit the wall added 0 to this total —
+        // a number that under-reports work done is the same family as a no-op
+        // that reports success (判据 §11). The registry owns both the budget
+        // and the count because only it can still see what died.
+        stopped += self.engines.shutdown_all().await;
         stopped
     }
 
