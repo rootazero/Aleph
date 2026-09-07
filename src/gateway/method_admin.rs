@@ -315,9 +315,10 @@ const ADMIN_PREFIXES: &[&str] = &[
     // `run_id`, with no owner recorded anywhere in the trace store, so this
     // family was an enumeration oracle (`trace.list` returns EVERY task_id in
     // the process) feeding arbitrary-id readers. Gated whole so a future
-    // sibling is gated by default; `trace.by_runs` — the Panel's
-    // session-hydration path, the only member-reachable one — is carved out
-    // below and owner-scoped in its own handler instead. `trace.list` /
+    // sibling is gated by default; the TWO member-reachable ones —
+    // `trace.by_runs` (the Panel's session-hydration path) and
+    // `trace.tool_output` (one call's untruncated output) — are carved out
+    // below and owner-scoped in their own handlers instead. `trace.list` /
     // `trace.get` have no member surface: their only callers are the operator
     // debugging commands `aleph trace list|get` (CLI) and the TUI's `/trace`.
     // See `handlers/trace_replay.rs`'s module doc for the full split. ---
@@ -360,6 +361,29 @@ const MEMBER_CARVE_OUTS: &[&str] = &[
     // session's own) — see `handlers/trace_replay.rs::handle_by_runs`. Its
     // siblings stay gated; this carve-out is as narrow as `tools.invoke`'s.
     "trace.by_runs",
+    // The family's second carve-out (2026-09-06). What makes it defensible is
+    // that it discloses no CLASS of data a member could not already read
+    // through `trace.by_runs`, and is checked by the same predicate:
+    //
+    //  * it is KeyChecked on the addressed session with
+    //    `visibility::session_visible` / `not_found_response`, exactly as
+    //    `trace.by_runs` is, so a foreign key is byte-identical to a missing
+    //    one and there is no existence oracle;
+    //  * there is no second identifier to intersect: it reads
+    //    `session_events` for THAT session key, so a `tool_call_id` from
+    //    someone else's session is not among the rows it looked at. Owning one
+    //    session does not become a licence to read another's calls;
+    //  * `method_visibility.rs` already records that a persisted trace is a
+    //    full transcript — "prompts, tool inputs and tool outputs" — so a tool
+    //    output is a class this family serves today. This method serves MORE
+    //    of one output (the pre-budget text, and the offloaded blob behind it),
+    //    which is a quantity change inside a class, not a new class.
+    //
+    // Its counterpart obligation lives in the handler, not here: everything it
+    // serves comes out of `session_events`, which is unmasked by design, so it
+    // masks with `SecretMasker` on the way out. If that ever goes, this
+    // carve-out has to be re-argued.
+    "trace.tool_output",
     // The approval gate's two faces, carved out 2026-08-08 so that the gate
     // works for the person it gates. Both are filtered in
     // `handlers/exec_approvals.rs` by the same visibility predicate the rest of
@@ -744,21 +768,34 @@ mod tests {
         }
     }
 
-    /// Final-review C2's exact shape: `trace.list` is the enumeration oracle
-    /// and must be gated; `trace.by_runs` must stay open because the Panel's
-    /// session hydration depends on it — its isolation is the handler's job,
-    /// not this gate's.
+    /// Final-review C2's exact shape, plus its 2026-09-06 second carve-out:
+    /// `trace.list` is the enumeration oracle and must be gated; the two
+    /// member-reachable methods must stay open, and each carries its OWN
+    /// reason — a carve-out is a ruling about one method, so a shared message
+    /// would let a wrong one pass for a right one.
+    ///
+    /// Deliberately still a named sibling list rather than "at most N are
+    /// carved out": a count goes green for the wrong reasons — swap which two
+    /// are open and it never notices.
     #[test]
-    fn trace_by_runs_is_carved_open_but_its_siblings_stay_gated() {
+    fn the_two_trace_carve_outs_are_open_and_their_siblings_stay_gated() {
         assert!(
             !method_requires_admin("trace.by_runs"),
             "trace.by_runs must stay open — the Panel replays tool calls with it \
              on every session open; it is owner-scoped in its own handler"
         );
+        assert!(
+            !method_requires_admin("trace.tool_output"),
+            "trace.tool_output must stay open — it serves the addressed \
+             session's OWN untruncated tool output, KeyChecked in its handler \
+             by the same predicate trace.by_runs uses, and it exposes no class \
+             of data that trace.by_runs does not already replay"
+        );
         for sibling in ["trace.list", "trace.get"] {
             assert!(
                 method_requires_admin(sibling),
-                "{sibling} must be admin-gated — only trace.by_runs is carved out"
+                "{sibling} must be admin-gated — trace.by_runs and \
+                 trace.tool_output are the only carve-outs in this family"
             );
         }
     }
@@ -897,6 +934,7 @@ mod tests {
             // them was asking it.
             "agent.resume",
             "trace.by_runs",
+            "trace.tool_output",
             "gateway.metrics.run_concurrency",
             "session.compact",
             "command.execute",

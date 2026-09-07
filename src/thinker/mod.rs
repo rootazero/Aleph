@@ -25,6 +25,7 @@ pub mod prompt_layer;
 pub mod prompt_mode;
 pub mod prompt_pipeline;
 pub mod prompt_sanitizer;
+pub mod prompt_size_registry;
 pub mod protocol_tokens;
 pub mod runtime_context;
 pub mod security_context;

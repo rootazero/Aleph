@@ -15,6 +15,13 @@ pub enum ConnectionFailure {
     /// WS never opened / TCP unreachable / DNS failure → "check network/address".
     Unreachable { detail: String },
     /// WS opened but the server went silent / an RPC timed out.
+    ///
+    /// No path in this crate currently constructs this variant (the
+    /// `FailureStage::RpcTimeout` classification arm that used to produce it
+    /// was cut as dead) — kept because the Panel branches on it explicitly
+    /// for dedicated timeout copy and its exhaustive matches would break
+    /// without it (`interfaces/webchat/src/components/boot_check_gate.rs`,
+    /// `connection_status.rs`, `service_blocking_gate.rs`, `context.rs`).
     Timeout { detail: String },
     /// Something answered the upgrade and refused it (gateway origin gate,
     /// TLS gate, connection cap, or a proxy). The server is *up and
@@ -42,8 +49,6 @@ pub enum FailureStage {
     AfterOpen,
     /// During the `connect` handshake RPC (transport-level error).
     Handshake,
-    /// An RPC exceeded its timeout without the socket closing.
-    RpcTimeout,
 }
 
 /// Close reasons the gateway sends when it kicks a socket for an *auth* reason
@@ -79,7 +84,6 @@ pub fn classify(
             ConnectionFailure::Unreachable { detail }
         }
         FailureStage::Rejected => ConnectionFailure::Rejected { detail },
-        FailureStage::RpcTimeout => ConnectionFailure::Timeout { detail },
         FailureStage::AfterOpen => ConnectionFailure::Dropped { detail },
     }
 }
@@ -194,16 +198,6 @@ mod tests {
         assert_eq!(
             classify(FailureStage::BeforeOpen, None, false),
             ConnectionFailure::Unreachable {
-                detail: String::new()
-            }
-        );
-    }
-
-    #[test]
-    fn rpc_timeout_stage_is_timeout() {
-        assert_eq!(
-            classify(FailureStage::RpcTimeout, None, false),
-            ConnectionFailure::Timeout {
                 detail: String::new()
             }
         );

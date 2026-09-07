@@ -6,9 +6,10 @@
 
 use crate::tools::info::ToolInfo;
 
-use super::{PromptBuilder, SystemPromptPart};
+use super::{PromptBuilder, PromptLayout, SystemPromptPart};
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput};
 use crate::thinker::prompt_mode::PromptMode;
+use crate::thinker::prompt_pipeline::LayerSize;
 
 impl PromptBuilder {
     /// Build two-part system prompt for Anthropic cache optimization.
@@ -34,17 +35,53 @@ impl PromptBuilder {
         tools: &[ToolInfo],
         mode: PromptMode,
     ) -> Vec<SystemPromptPart> {
+        self.build_system_prompt_cached_with_mode_measured(tools, mode)
+            .0
+    }
+
+    /// [`Self::build_system_prompt_cached_with_mode`] that also returns the
+    /// [`PromptLayout`] of the prompt it just built.
+    ///
+    /// The production main-loop entry point for `context.breakdown`: the sizes
+    /// are captured while the bytes are produced, so what the RPC reports is
+    /// the prompt that was actually sent — never a later re-render of a
+    /// pipeline whose inputs have moved on.
+    ///
+    /// # The two measurements, and why neither replaces the other
+    ///
+    /// `PromptLayout::layers` is taken **before** the two post-pipeline steps
+    /// below (the strategy weld and the token-budget trim), because that is
+    /// the only point at which bytes can still be attributed to the layer that
+    /// emitted them — after a head/tail trim there is no way to say which layer
+    /// lost which bytes.
+    ///
+    /// `PromptLayout::dynamic_bytes_sent` is taken **after** both, and is
+    /// therefore the authoritative size of the dynamic half as the model
+    /// received it. It can be SMALLER than the sum of the Dynamic-zone layer
+    /// bytes (the trim bit) or LARGER (a post-pipeline weld added bytes no
+    /// layer owns). Reporting only the first would overstate an over-budget
+    /// prompt — the one case `context.breakdown` exists for; reporting only the
+    /// second would throw away the attribution. Both cross the wire.
+    pub fn build_system_prompt_cached_with_mode_measured(
+        &self,
+        tools: &[ToolInfo],
+        mode: PromptMode,
+    ) -> (Vec<SystemPromptPart>, PromptLayout) {
         let input = self.build_cached_input(tools, mode);
+        let (stable, stable_sizes) =
+            self.pipeline
+                .execute_stable_with_mode_measured(AssemblyPath::Cached, &input, mode);
+        let (mut dynamic, dynamic_sizes) =
+            self.pipeline
+                .execute_dynamic_with_mode_measured(AssemblyPath::Cached, &input, mode);
         // Prompt-size tracing lived only on the `Basic` (sub-agent) path, so
         // `ALEPH_PROMPT_SIZE_TRACE` was silent for the main loop — the one
         // prompt worth measuring. Same env gate, same helper, both paths.
-        super::maybe_trace_prompt_size(&self.pipeline, AssemblyPath::Cached, &input, mode);
-        let stable = self
-            .pipeline
-            .execute_stable_with_mode(AssemblyPath::Cached, &input, mode);
-        let mut dynamic =
-            self.pipeline
-                .execute_dynamic_with_mode(AssemblyPath::Cached, &input, mode);
+        // Stable layers all sort before dynamic ones
+        // (`stable_layers_come_before_dynamic`), so the concatenation is
+        // already assembly order.
+        let sizes: Vec<LayerSize> = stable_sizes.into_iter().chain(dynamic_sizes).collect();
+        super::maybe_trace_prompt_size(AssemblyPath::Cached, &sizes);
         let resolved_strategy = self
             .resolved_context
             .as_ref()
@@ -67,16 +104,24 @@ impl PromptBuilder {
             &self.config.token_budget,
         );
 
-        vec![
-            SystemPromptPart {
-                content: stable,
-                cache: true,
+        // Read AFTER the weld and the trim: this is the half as sent.
+        let dynamic_bytes_sent = dynamic.len() as u64;
+        (
+            vec![
+                SystemPromptPart {
+                    content: stable,
+                    cache: true,
+                },
+                SystemPromptPart {
+                    content: dynamic,
+                    cache: false,
+                },
+            ],
+            PromptLayout {
+                layers: sizes,
+                dynamic_bytes_sent,
             },
-            SystemPromptPart {
-                content: dynamic,
-                cache: false,
-            },
-        ]
+        )
     }
 
     /// Build the `Basic`-path system prompt **split at the stable/dynamic
@@ -110,13 +155,14 @@ impl PromptBuilder {
     pub fn build_system_prompt_parts(&self, tools: &[ToolInfo]) -> Vec<SystemPromptPart> {
         let path = AssemblyPath::Basic;
         let input = self.build_basic_input(tools);
-        super::maybe_trace_prompt_size(&self.pipeline, path, &input, PromptMode::Full);
-        let stable = self
-            .pipeline
-            .execute_stable_with_mode(path, &input, PromptMode::Full);
-        let mut dynamic = self
-            .pipeline
-            .execute_dynamic_with_mode(path, &input, PromptMode::Full);
+        let (stable, stable_sizes) =
+            self.pipeline
+                .execute_stable_with_mode_measured(path, &input, PromptMode::Full);
+        let (mut dynamic, dynamic_sizes) =
+            self.pipeline
+                .execute_dynamic_with_mode_measured(path, &input, PromptMode::Full);
+        let sizes: Vec<LayerSize> = stable_sizes.into_iter().chain(dynamic_sizes).collect();
+        super::maybe_trace_prompt_size(path, &sizes);
         // The welds land in the dynamic half for the same reason the Cached
         // path puts its strategy weld there: they are per-run inputs the
         // caller hands in, not part of the shared scaffold.

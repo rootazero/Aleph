@@ -64,6 +64,10 @@ pub enum FlowStreamEvent {
         result: Option<serde_json::Value>,
         error: Option<String>,
         duration_ms: u64,
+        /// UI side-channel hoisted out of the tool's JSON
+        /// (`ToolOutputMetadata::presentation`) before the value was flattened
+        /// to model text. Never part of `result`, and never seen by the model.
+        presentation: Option<aleph_protocol::Presentation>,
     },
     /// Live context-window occupancy after one LLM call. Emitted once per
     /// call (`HarnessCallback::on_context_usage`) so the panel gauge tracks a

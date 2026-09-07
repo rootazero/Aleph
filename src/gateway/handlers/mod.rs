@@ -57,6 +57,7 @@ pub mod cluster;
 pub mod commands;
 pub mod config;
 pub mod connect;
+pub mod context_breakdown;
 pub mod cron;
 pub mod daemon_control;
 pub mod debug;
@@ -128,6 +129,7 @@ pub mod subagent;
 pub mod system_info;
 pub mod task_error;
 pub mod teams;
+pub mod tool_output;
 pub mod tools_cancel;
 pub mod tools_invoke;
 pub mod tools_visibility;
@@ -473,6 +475,17 @@ impl HandlerRegistry {
                 req.id,
                 INTERNAL_ERROR,
                 "chat.clear requires Gateway runtime - use Gateway::new()".to_string(),
+            )
+        });
+
+        // Prompt breakdown (requires SessionStore -- placeholder). Phase-2
+        // registration lives beside `session.usage` in the start builder; this
+        // line is what keeps the method EXISTING, with a reason, on any boot
+        // path that never reaches it. Fail-closed with a reason, never absent.
+        registry.register("context.breakdown", |req| async move {
+            service_unavailable(
+                req,
+                "context.breakdown requires SessionStore (boot phase 2)",
             )
         });
 
@@ -844,6 +857,16 @@ impl HandlerRegistry {
         });
         registry.register("trace.get", |req| async move {
             service_unavailable(req, "trace.get requires state database (boot phase 2)")
+        });
+        // Its sibling needs no state database — only a SessionStore, which
+        // this stateless phase-1 registry does not hold either. The Simulated
+        // execution branch never reaches `register_trace_handlers`, so without
+        // this line the method would not exist at all there.
+        registry.register("trace.tool_output", |req| async move {
+            service_unavailable(
+                req,
+                "trace.tool_output requires SessionStore (boot phase 2)",
+            )
         });
         registry.register("gateway.identity.get", |req| async move {
             service_unavailable(

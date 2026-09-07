@@ -199,7 +199,23 @@ pub fn production_text(path: &std::path::Path, src: &str) -> String {
 /// genuinely holds a mid-file `#[cfg(test)] pub(crate) mod census;`"), so the
 /// spelling was known here and the matcher still did not accept it —
 /// 判据 §3: what a guard recognises, not what its author had in mind.
-fn declared_as_a_test_module(path: &std::path::Path) -> bool {
+/// `pub(crate)` for the censuses, not just for [`production_text`]: a walk
+/// that wants to COUNT what it skipped needs the predicate itself, and the
+/// alternative is each census hand-rolling a proxy from the marker text —
+/// which is the second reading of `#[cfg(test)]` that
+/// [`no_module_hand_rolls_the_cfg_test_prefix_cut`] exists to reject.
+/// `tools::presentation_census` reaches for it that way. Do not re-privatise
+/// without giving those callers somewhere else to ask.
+///
+/// What this visibility does NOT protect against, stated so a caller reads it
+/// here rather than discovering it: hand-rolling the OTHER half — writing
+/// `if declared_as_a_test_module(p) { skip } else { production_prefix(src) }`
+/// instead of calling [`production_text`]. That spells no `#[cfg(test)]`
+/// literal, so [`no_module_hand_rolls_the_cfg_test_prefix_cut`] cannot see it,
+/// and it is a second answer to "what is this file's production half" free to
+/// drift from the first. Call [`production_text`]; use this predicate only to
+/// COUNT what that skipped.
+pub(crate) fn declared_as_a_test_module(path: &std::path::Path) -> bool {
     let absolute;
     let path = if path.is_absolute() {
         path

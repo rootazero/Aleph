@@ -355,6 +355,7 @@ pub static ALL_SLOTS: &[&'static dyn SlotStatus] = &[
     crate::gateway::handlers::channel::telegram_tool_registry_slot(),
     crate::gateway::runtime_footer::global_footer_config_slot(),
     crate::goal::global_slot(),
+    crate::thinker::prompt_size_registry::global_prompt_size_registry_slot(),
     crate::thinker::memory_context_provider::session_end_mcp_slot(),
     crate::thinker::memory_context_provider::session_end_summarizer_slot(),
     crate::thinker::memory_context_provider::session_reflector_slot(),
