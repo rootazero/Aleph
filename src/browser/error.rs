@@ -189,8 +189,20 @@ pub enum BrowserError {
     /// CDP docs, and the message is the engine's own words. Neither is
     /// paraphrased — a paraphrase of an engine's error is a second author for
     /// a fact we did not observe.
-    #[error("cdp {method} failed: {code} {message}")]
+    ///
+    /// `engine` (fix round 1, F2/M3): this is the one variant with no
+    /// recovery verb (see the exemption table on
+    /// `every_engine_error_names_the_engine_and_a_verb_the_model_can_call`),
+    /// so the engine name is the only routing signal it can carry — a
+    /// protocol error that cannot say which engine produced it is one the
+    /// reader cannot route. Deviates from the brief's `Produces` (three flat
+    /// fields); this is a controller ruling, not drift: at the time this was
+    /// written `Cdp` had exactly one construction site in the whole tree (a
+    /// test), and `map_cdp_err` (Task 12) does not exist yet, so adding the
+    /// field now is a struct-field change, not a live-call-site change.
+    #[error("{engine} cdp {method} failed: {code} {message}")]
     Cdp {
+        engine: Engine,
         method: String,
         code: i64,
         message: String,
@@ -250,6 +262,36 @@ pub fn engine_unavailable(engine: Engine, tried: impl fmt::Display) -> BrowserEr
     };
     BrowserError::EngineUnavailable {
         engine,
+        tried: tried.to_string(),
+        install_hint,
+    }
+}
+
+/// [`BrowserError::EngineUnavailable`] for the ONE cause [`engine_unavailable`]
+/// cannot name correctly (fix round 1, F1): `playwright-cli` itself is not on
+/// PATH or in the runtime ledger. `engine_unavailable`'s ordinary Chromium
+/// hint says "Run `playwright-cli install-browser chromium` yourself" —
+/// correct when the CLI exists and only the browser is missing, a dead end
+/// when the CLI is the thing that is missing. `engine_unavailable` cannot
+/// tell the two causes apart from a `Display`; only the caller that tried to
+/// locate the CLI knows which one happened (`chromium.rs`'s
+/// `managed_cli_path()` call, currently the only call site).
+///
+/// Chromium only: there is no obscura equivalent — obscura's hint never
+/// mentions `playwright-cli`, so this cause cannot occur for it.
+///
+/// The install hint keeps exactly one author per cause: this function is the
+/// only place that builds THIS hint, same as [`engine_unavailable`] is the
+/// only place that builds the ordinary one, and both defer the actual remedy
+/// sentence to [`super::chromium_resolve::PLAYWRIGHT_CLI_MISSING_REMEDY`]
+/// rather than typing it out here a second time.
+pub fn engine_unavailable_no_launcher(tried: impl fmt::Display) -> BrowserError {
+    let install_hint = format!(
+        "No chromium for the browser ({tried}). {}",
+        crate::browser::chromium_resolve::PLAYWRIGHT_CLI_MISSING_REMEDY
+    );
+    BrowserError::EngineUnavailable {
+        engine: Engine::Chromium,
         tried: tried.to_string(),
         install_hint,
     }
@@ -350,12 +392,68 @@ mod tests {
         );
     }
 
-    /// Spec §7.1: every new variant's text names a recovery verb, and each
-    /// says which engine it is about. A message that stops at the diagnosis
-    /// leaves the model with a dead end and no next call to make.
+    /// F1 (fix round 1): the ordinary chromium-missing case (cli present,
+    /// browser absent) must still point at the CLI install command —
+    /// `engine_unavailable_no_launcher` is a new SIBLING for the other cause,
+    /// not a replacement, and must not have regressed this one.
+    #[test]
+    fn the_ordinary_chromium_missing_hint_still_names_playwright_cli() {
+        let text = engine_unavailable(Engine::Chromium, "no system browser").to_string();
+        assert!(
+            text.contains("Run `playwright-cli install-browser chromium`"),
+            "cli present, browser missing: must still point at the CLI \
+             install command: {text}"
+        );
+    }
+
+    /// F1 (fix round 1): the falsifying test for the defect itself.
+    /// `engine_unavailable`'s ordinary hint tells the reader to run
+    /// `playwright-cli` — correct when the CLI exists, a dead end when the
+    /// CLI itself is what is missing. This asserts the NEW no-launcher hint
+    /// does not make that mistake, and instead names the one route that
+    /// actually installs playwright-cli.
+    #[test]
+    fn the_no_launcher_hint_never_tells_the_reader_to_run_playwright_cli() {
+        let text = engine_unavailable_no_launcher(
+            "no playwright-cli found on PATH or in the runtime ledger",
+        )
+        .to_string();
+        assert!(
+            !text.contains("Run `playwright-cli"),
+            "playwright-cli is the thing reported missing; telling the \
+             reader to run it is the dead end this fixes: {text}"
+        );
+        assert!(
+            text.contains("capability:\"playwright-cli\""),
+            "must name the ledger capability that actually installs it: {text}"
+        );
+        assert!(
+            text.contains("chromium"),
+            "must still say which engine: {text}"
+        );
+    }
+
+    /// Spec §7.1, precisely (fix round 1, F3 — the original prose here
+    /// claimed more than this test enforces, and that lie is the expensive
+    /// kind: a future reader would have cited it as evidence the property
+    /// held for every variant). What actually holds, per variant, and why:
     ///
-    /// The expected substrings are the tools' own `NAME` constants, never
-    /// typed literals: `BrowserSessionTool::NAME` (`browser_tools/session.rs:131`),
+    /// | Variant               | Names a verb | Names an engine | Exemption reason |
+    /// |-----------------------|:---:|:---:|---|
+    /// | `EngineBusy`          | yes | yes | — |
+    /// | `UnsupportedByEngine` | yes | yes | — |
+    /// | `EngineFailure`       | yes | yes | — |
+    /// | `StaleRef`            | yes | **no** | the variant has no `engine` field at all — a stale ref is fixed by re-snapshotting the SAME tab regardless of which engine drives it, so there is nothing to route on |
+    /// | `Cdp`                 | **no** | yes (F2) | no Aleph tool fixes a CDP protocol error; the actionable content IS the verbatim `{method, code, message}` triple, and inventing a verb would name a door that does not exist — worse than the gap (controller ruling, fix round 1) |
+    ///
+    /// `StaleRef`'s exemption needs no runtime assertion below: the type has
+    /// no `engine` field, so the compiler enforces it, not this test.
+    /// `Cdp`'s exemption IS enforced below (not just claimed): the test
+    /// asserts its text contains none of the three tool names.
+    ///
+    /// The expected substrings for the verb-bearing variants are the tools'
+    /// own `NAME` constants, never typed literals:
+    /// `BrowserSessionTool::NAME` (`browser_tools/session.rs:131`),
     /// `BrowserOpenTool::NAME` (`open.rs:58`), `BrowserSnapshotTool::NAME`
     /// (`snapshot.rs:79`) — all reachable, since every one of those modules is
     /// `pub mod` in `browser_tools/mod.rs`. A literal here would only prove
@@ -467,8 +565,12 @@ mod tests {
 
         // A protocol error is reported verbatim, both halves: a code with no
         // message is unactionable and a message with no code cannot be looked
-        // up against the CDP docs.
+        // up against the CDP docs. It names the engine (F2) — its only
+        // routing signal, since it names no verb (see the table above this
+        // test) — and it names no tool, enforcing the "no verb" exemption
+        // rather than only claiming it in prose.
         let cdp = BrowserError::Cdp {
+            engine: Engine::Obscura,
             method: "DOM.getBoxModel".into(),
             code: -32000,
             message: "Could not compute box model.".into(),
@@ -477,6 +579,19 @@ mod tests {
         assert!(cdp.contains("DOM.getBoxModel"), "{cdp}");
         assert!(cdp.contains("-32000"), "{cdp}");
         assert!(cdp.contains("Could not compute box model."), "{cdp}");
+        assert!(cdp.contains("obscura"), "must name which engine: {cdp}");
+        for tool in [
+            BrowserSessionTool::NAME,
+            BrowserOpenTool::NAME,
+            BrowserSnapshotTool::NAME,
+        ] {
+            assert!(
+                !cdp.contains(tool),
+                "Cdp names no recovery verb — no Aleph tool fixes a protocol \
+                 error, and inventing one would name a door that does not \
+                 exist: {cdp}"
+            );
+        }
     }
 
     /// The one-sided trait defaults used to name Chrome DevTools MCP by hand,

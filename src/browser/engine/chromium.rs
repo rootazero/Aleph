@@ -490,12 +490,16 @@ impl EngineProcess for ChromiumLauncher {
         // `which` PATH walk plus a ledger read, off the async worker) —
         // never provisioned here, since `resolve_binary` promises never to
         // install anything.
+        // F1 (fix round 1): NOT `error::engine_unavailable` — that hint's
+        // first remedy is "run `playwright-cli install-browser chromium`
+        // yourself", which is a dead end here specifically: playwright-cli is
+        // the thing this branch just failed to find. This is the one call
+        // site that knows the cause is "no launcher", not "no browser".
         let cli = tokio::task::spawn_blocking(crate::tools::probes::browser::managed_cli_path)
             .await
             .unwrap_or(None)
             .ok_or_else(|| {
-                crate::browser::error::engine_unavailable(
-                    Engine::Chromium,
+                crate::browser::error::engine_unavailable_no_launcher(
                     "no playwright-cli found on PATH or in the runtime ledger",
                 )
             })?;

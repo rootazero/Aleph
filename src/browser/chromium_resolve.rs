@@ -86,6 +86,22 @@ pub(crate) const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(6);
 /// changes it.
 pub(crate) const CHROMIUM_INSTALL_ARGS: &[&str] = &["install-browser", "chromium"];
 
+/// The remedy for "playwright-cli itself is not installed" — the SAME
+/// sentence `runtime_manage`'s install-chromium fix hint speaks and
+/// `browser::error`'s no-launcher hint speaks, so the two cannot drift into
+/// naming different next steps for the same cause (判据 §1, fix round 1 F1).
+///
+/// Telling a caller with no `playwright-cli` to "run `playwright-cli
+/// install-browser chromium`" — [`CHROMIUM_INSTALL_ARGS`]'s ordinary remedy —
+/// is a dead end: the reader is pointed at the very binary the message just
+/// reported missing. This is the one true remedy for that specific cause,
+/// authored once here (the lower layer both other call sites already depend
+/// on, same reasoning as [`CHROMIUM_INSTALL_ARGS`]'s placement) rather than
+/// typed out a second time at each caller.
+pub(crate) const PLAYWRIGHT_CLI_MISSING_REMEDY: &str = "playwright-cli is not provisioned yet. \
+     Install that first (`runtime_manage{action:\"install\", capability:\"playwright-cli\"}`), \
+     whose own post-install step installs chromium too.";
+
 /// The header anchor of the browser block in `--dry-run` output.
 ///
 /// The trailing `v` matters: `chromium-headless-shell` starts with `chromium`,

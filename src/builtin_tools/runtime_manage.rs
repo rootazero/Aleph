@@ -596,10 +596,10 @@ async fn install_chromium(
     let Some(cli) = cli else {
         return install_output(
             false,
-            "Cannot install chromium: playwright-cli is not provisioned yet. Install that \
-             first (`runtime_manage{action:\"install\", capability:\"playwright-cli\"}`), \
-             whose own post-install step installs chromium too."
-                .to_string(),
+            format!(
+                "Cannot install chromium: {}",
+                crate::browser::chromium_resolve::PLAYWRIGHT_CLI_MISSING_REMEDY
+            ),
         );
     };
     let mut cmd = tokio::process::Command::new(&cli);
