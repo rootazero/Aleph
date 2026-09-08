@@ -24,6 +24,7 @@ pub type AgentId = String;
 // Priority
 // ---------------------------------------------------------------------------
 
+#[non_exhaustive]
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
@@ -77,6 +78,7 @@ impl Priority {
 /// tasks with `status = 'pending'`, so a paused task is naturally skipped
 /// without any conditional in the scheduler. Downstream dependents stay
 /// blocked because Paused does NOT satisfy dependencies.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoordTaskStatus {
@@ -366,6 +368,7 @@ pub struct CoordTaskFilter {
 /// Terminal status of a single task execution attempt. A task can have many
 /// runs (one per dispatcher claim); this captures what each individually
 /// produced so the drawer can show retry history.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskRunStatus {
@@ -426,6 +429,7 @@ pub const RUN_ABANDONED_BY_JANITOR_ERROR: &str =
     "interrupted: run never finished (process restart or lost worker)";
 
 /// Reviewer category for a step-level approval decision (Phase C).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewerKind {
@@ -438,6 +442,7 @@ pub enum ReviewerKind {
 }
 
 /// Verdict of a step review (Phase C).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewVerdict {

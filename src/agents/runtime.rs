@@ -76,6 +76,7 @@ pub struct AgentRuntimeConfig {
 // =============================================================================
 
 /// Outcome classification for a sub-agent execution.
+#[non_exhaustive]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptOutcome {
     /// The sub-agent completed successfully.

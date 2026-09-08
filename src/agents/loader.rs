@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::types::{AgentDef, AgentMode, AgentSource};
 
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum LoaderError {
     #[error("malformed frontmatter in {path}: {source}")]
