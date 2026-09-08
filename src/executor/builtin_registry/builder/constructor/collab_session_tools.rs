@@ -246,11 +246,11 @@ impl BuiltinToolRegistry {
             if let Some(ref artifact_store) = config.artifact_store {
                 use crate::builtin_tools::team::{TaskReadArtifactTool, TaskSubmitTool};
 
-                let current_agent_id = current_agent_id.clone();
+                let current_agent_id_for_submit = current_agent_id.clone();
                 let submit = TaskSubmitTool::new(
                     Arc::clone(artifact_store),
                     config.coord_task_store.clone(),
-                    current_agent_id,
+                    current_agent_id_for_submit,
                 )
                 .with_team_store(config.team_store.clone());
                 let read = TaskReadArtifactTool::new(Arc::clone(artifact_store))
