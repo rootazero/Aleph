@@ -46,7 +46,7 @@ impl SubagentTool {
     /// when the parent is). Falls back to a standalone token for tests / direct
     /// callers with no parent token wired.
     pub(super) fn cancel_for_child(&self) -> CancellationToken {
-        self.parent_cancel
+        self.background.parent_cancel
             .as_ref()
             .map(|t| t.child_token())
             .unwrap_or_default()
@@ -107,8 +107,8 @@ impl SubagentTool {
         // because the production tool is shared per top-level run, so every
         // background subagent attaches under the session root (see design doc).
         let depth = child_chain.depth;
-        let root_session = self.parent_session_id.clone().unwrap_or_default();
-        let tree_agent_id = self.parent_agent_id.clone();
+        let root_session = self.memory.parent_session_id.clone().unwrap_or_default();
+        let tree_agent_id = self.agent_resolution.parent_agent_id.clone();
         // The child's persisted transcript address — same derivation the
         // spawner itself performs (`ephemeral_for(&req.agent_def.id,
         // req.request_id)`), exposed once so tree consumers can open the
@@ -119,7 +119,7 @@ impl SubagentTool {
         )
         .to_string();
 
-        self.background_tracker.register_with_meta(
+        self.background.background_tracker.register_with_meta(
             request_id.clone(),
             cancel_token.clone(),
             task.clone(),
@@ -178,11 +178,11 @@ impl SubagentTool {
         // watcher (otherwise it parks until process exit).
         let bridge_cancel = cancel_token.clone();
         let mut runtime = self.build_runtime(child_chain, cancel_token);
-        if let Some(parent_sink) = self.trace_sink.clone() {
+        if let Some(parent_sink) = self.trace.trace_sink.clone() {
             let wrapper: std::sync::Arc<dyn crate::harness::TraceSink> = std::sync::Arc::new(
                 crate::agents::forwarding_trace_sink::ForwardingTraceSink::new(
                     parent_sink,
-                    self.background_tracker.clone(),
+                    self.background.background_tracker.clone(),
                     request_id.clone(),
                     tree_agent_id.clone(),
                     root_session.clone(),
@@ -193,17 +193,17 @@ impl SubagentTool {
 
         // X1 C2: capture on_delegation inputs before the task/registry are
         // moved into the spawned future.
-        let deleg_registry = self.capture_registry.clone();
-        let deleg_parent_agent_id = self.parent_agent_id.clone();
-        let deleg_parent_session_id = self.parent_session_id.clone();
+        let deleg_registry = self.memory.capture_registry.clone();
+        let deleg_parent_agent_id = self.agent_resolution.parent_agent_id.clone();
+        let deleg_parent_session_id = self.memory.parent_session_id.clone();
         let deleg_task = task.clone();
 
         // R5 announce inputs — the gateway subscriber needs the parent's
         // agent id and session key to proactively deliver the result.
-        let announce_agent_id = self.parent_agent_id.clone();
-        let announce_session_id = self.parent_session_id.clone();
+        let announce_agent_id = self.agent_resolution.parent_agent_id.clone();
+        let announce_session_id = self.memory.parent_session_id.clone();
 
-        let tracker = self.background_tracker.clone();
+        let tracker = self.background.background_tracker.clone();
         let rid = request_id.clone();
         // Separate clone: `rid` is consumed by the delegation-ctx capture below,
         // and this one has to survive into the `AgentRuntimeConfig` literal.
@@ -443,56 +443,56 @@ impl SubagentTool {
         cancel: CancellationToken,
     ) -> AgentRuntime {
         let mut runtime = AgentRuntime::new(
-            self.provider.clone(),
+            self.providers.provider.clone(),
             child_chain,
             cancel,
-            self.session.clone(),
-            self.parent_tools.clone(),
+            self.tools.session.clone(),
+            self.tools.parent_tools.clone(),
         )
-        .with_parent_agent_id(self.parent_agent_id.clone());
-        if let Some(w) = self.raw_memory_writer.clone() {
+        .with_parent_agent_id(self.agent_resolution.parent_agent_id.clone());
+        if let Some(w) = self.memory.raw_memory_writer.clone() {
             runtime = runtime.with_raw_memory_writer(w);
         }
-        if let Some(reg) = self.capture_registry.clone() {
+        if let Some(reg) = self.memory.capture_registry.clone() {
             runtime = runtime.with_capture_registry(reg);
         }
-        if let Some(sid) = self.parent_session_id.clone() {
+        if let Some(sid) = self.memory.parent_session_id.clone() {
             runtime = runtime.with_parent_session_id(sid);
         }
-        runtime = runtime.with_subagent_semaphore(self.subagent_semaphore.clone());
-        if let Some(reg) = self.plugin_registry.clone() {
+        runtime = runtime.with_subagent_semaphore(self.background.subagent_semaphore.clone());
+        if let Some(reg) = self.agent_resolution.plugin_registry.clone() {
             runtime = runtime.with_plugin_registry(reg);
         }
-        if let Some(sink) = self.trace_sink.clone() {
+        if let Some(sink) = self.trace.trace_sink.clone() {
             runtime = runtime.with_trace_sink(sink);
         }
-        if let Some(rs) = self.routing_store.clone() {
+        if let Some(rs) = self.routing.routing_store.clone() {
             runtime = runtime.with_routing_store(rs);
         }
-        if let Some(sc) = self.stall_config.clone() {
+        if let Some(sc) = self.policy_inheritance.stall_config.clone() {
             runtime = runtime.with_stall_config(sc);
         }
-        if let Some(cap) = self.consecutive_failure_cap {
+        if let Some(cap) = self.policy_inheritance.consecutive_failure_cap {
             runtime = runtime.with_consecutive_failure_cap(cap);
         }
-        if let Some(tt) = self.turn_timeout {
+        if let Some(tt) = self.policy_inheritance.turn_timeout {
             runtime = runtime.with_turn_timeout(tt);
         }
-        if let Some(mi) = self.default_max_iterations {
+        if let Some(mi) = self.budget_inheritance.default_max_iterations {
             runtime = runtime.with_default_max_iterations(mi);
         }
-        if let Some(cap) = self.parallel_tool_concurrency {
+        if let Some(cap) = self.budget_inheritance.parallel_tool_concurrency {
             runtime = runtime.with_parallel_tool_concurrency(cap);
         }
-        if let Some(cfg) = self.context_budget_config.as_ref() {
+        if let Some(cfg) = self.budget_inheritance.context_budget_config.as_ref() {
             // rust-doctor-disable-next-line excessive-clone
             runtime = runtime.with_context_budget_config(cfg.clone());
         }
-        if let Some(refiner) = self.context_budget_refiner.as_ref() {
+        if let Some(refiner) = self.budget_inheritance.context_budget_refiner.as_ref() {
             runtime = runtime
-                .with_context_budget_refinement(refiner.clone(), self.primary_context_window);
+                .with_context_budget_refinement(refiner.clone(), self.budget_inheritance.primary_context_window);
         }
-        if let Some(cheap) = self.cheap_summary_provider.clone() {
+        if let Some(cheap) = self.budget_inheritance.cheap_summary_provider.clone() {
             runtime = runtime.with_cheap_summary_provider(cheap);
         }
         // AGENTS-R4-01 — thread the parent runner's verifier chain so spawned
@@ -500,22 +500,22 @@ impl SubagentTool {
         // as the main run. Without this, every spawned child silently ran with
         // `verifier_chain: None` and the parent's `halt_threshold` (8 identical
         // calls) only protected the main run.
-        if let Some(vc) = self.verifier_chain.clone() {
+        if let Some(vc) = self.budget_inheritance.verifier_chain.clone() {
             runtime = runtime.with_verifier_chain(vc);
         }
-        if !self.provider_overrides.is_empty() {
-            runtime = runtime.with_provider_overrides(self.provider_overrides.clone());
+        if !self.providers.provider_overrides.is_empty() {
+            runtime = runtime.with_provider_overrides(self.providers.provider_overrides.clone());
         }
         // Stage 5a (#9) — thread the parent harness's guardrail registry so
         // the child's SpawnerBase → HarnessDeps inheritance chain (already
         // wired downstream) actually receives a registry to inherit.
-        if let Some(g) = self.guardrails.clone() {
+        if let Some(g) = self.policy_inheritance.guardrails.clone() {
             runtime = runtime.with_guardrails(g);
         }
-        if let Some(s) = self.strategy.clone() {
+        if let Some(s) = self.policy_inheritance.strategy.clone() {
             runtime = runtime.with_strategy(s);
         }
-        if let Some(m) = self.session_mode {
+        if let Some(m) = self.policy_inheritance.session_mode {
             runtime = runtime.with_session_mode(m);
         }
         runtime

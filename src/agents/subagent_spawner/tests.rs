@@ -9,7 +9,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::agents::{AgentDef, AgentMode};
+    use crate::agents::{AgentDef, AgentIdentity, AgentMode, Lifecycle, SpawnOverride};
     use crate::error::Result as AlephResult;
     use crate::harness::chain_context::ChainContext;
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};

@@ -702,12 +702,12 @@ impl super::SubagentTool {
         if ids.is_empty() {
             return out;
         }
-        let Some(parent_id) = parent_session(self.parent_session_id.as_deref()) else {
+        let Some(parent_id) = parent_session(self.memory.parent_session_id.as_deref()) else {
             // No owning session (CLI / direct construction) — there is no log
             // to consult, and that is not an error.
             return out;
         };
-        let events = match self.session.get_events(&parent_id, None, None).await {
+        let events = match self.tools.session.get_events(&parent_id, None, None).await {
             Ok(events) => events,
             Err(error) => {
                 tracing::debug!(
@@ -776,7 +776,7 @@ impl super::SubagentTool {
             else {
                 continue;
             };
-            match self.session.get_events(&child, None, None).await {
+            match self.tools.session.get_events(&child, None, None).await {
                 Ok(events) => {
                     // A forked child's log opens with a copy of the parent's
                     // transcript; charging those dispatches to the child would
@@ -827,8 +827,8 @@ impl super::SubagentTool {
         known: &[String],
         scope: Option<&str>,
     ) -> Vec<(String, Recovered)> {
-        let mut out = match parent_session(self.parent_session_id.as_deref()) {
-            Some(parent_id) => match self.session.get_events(&parent_id, None, None).await {
+        let mut out = match parent_session(self.memory.parent_session_id.as_deref()) {
+            Some(parent_id) => match self.tools.session.get_events(&parent_id, None, None).await {
                 Ok(events) => enumerate(&events, known),
                 Err(error) => {
                     tracing::debug!(%error, "subagent list: parent event log unreadable");

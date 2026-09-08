@@ -220,7 +220,7 @@ impl LoopTool for SubagentTool {
                 text,
                 team_name,
             } => {
-                let router = match &self.message_router {
+                let router = match &self.agent_resolution.message_router {
                     Some(r) => r.clone(),
                     None => {
                         return ToolResult::Error {
@@ -232,8 +232,8 @@ impl LoopTool for SubagentTool {
                 };
 
                 // Resolve team_name to team_id via teammate_manager
-                let resolved_team_id = if let Some(ref mgr) = self.teammate_manager {
-                    match mgr.ensure_team(&team_name, &self.parent_agent_id).await {
+                let resolved_team_id = if let Some(ref mgr) = self.agent_resolution.teammate_manager {
+                    match mgr.ensure_team(&team_name, &self.agent_resolution.parent_agent_id).await {
                         Ok(id) => id,
                         Err(e) => {
                             return ToolResult::Error {
@@ -249,7 +249,7 @@ impl LoopTool for SubagentTool {
                 match router
                     .send(SendRequest {
                         team_id: resolved_team_id,
-                        from_agent: self.parent_agent_id.clone(),
+                        from_agent: self.agent_resolution.parent_agent_id.clone(),
                         to: vec![to.clone()],
                         cc: vec![],
                         msg_type: MessageType::Message,
@@ -278,7 +278,7 @@ impl LoopTool for SubagentTool {
                 }
             }
             SubagentAction::ReadInbox { team_name } => {
-                let inbox = match &self.inbox {
+                let inbox = match &self.agent_resolution.inbox {
                     Some(i) => i.clone(),
                     None => {
                         return ToolResult::Error {
@@ -289,8 +289,8 @@ impl LoopTool for SubagentTool {
                 };
 
                 // Resolve team_name to team_id via teammate_manager
-                let resolved_team_id = if let Some(ref mgr) = self.teammate_manager {
-                    match mgr.ensure_team(&team_name, &self.parent_agent_id).await {
+                let resolved_team_id = if let Some(ref mgr) = self.agent_resolution.teammate_manager {
+                    match mgr.ensure_team(&team_name, &self.agent_resolution.parent_agent_id).await {
                         Ok(id) => id,
                         Err(e) => {
                             return ToolResult::Error {
@@ -304,7 +304,7 @@ impl LoopTool for SubagentTool {
                 };
 
                 match inbox
-                    .read(&self.parent_agent_id, &resolved_team_id, None, true)
+                    .read(&self.agent_resolution.parent_agent_id, &resolved_team_id, None, true)
                     .await
                 {
                     Ok(messages) => {
@@ -337,11 +337,11 @@ impl LoopTool for SubagentTool {
                 // enumeration face is: the tracker is process-global, so
                 // without this a request_id learned any other way (announce
                 // echo, log line, paste) read another session's output.
-                let scope = self.parent_session_id.as_deref();
+                let scope = self.memory.parent_session_id.as_deref();
                 // Running? — surface elapsed time + a derived activity
                 // summary alongside the recent progress events.
-                if let Some(meta) = self.background_tracker.running_meta(&request_id, scope) {
-                    let progress = self.background_tracker.progress_snapshot(&request_id, 10);
+                if let Some(meta) = self.background.background_tracker.running_meta(&request_id, scope) {
+                    let progress = self.background.background_tracker.progress_snapshot(&request_id, 10);
                     return ToolResult::Success {
                         output: json!({
                             "status": "running",
@@ -355,12 +355,12 @@ impl LoopTool for SubagentTool {
                 }
                 // Completed? — non-destructive read, so the parent may poll
                 // the same request_id again later without it vanishing.
-                match self.background_tracker.result_snapshot(&request_id, scope) {
+                match self.background.background_tracker.result_snapshot(&request_id, scope) {
                     Some(snap) => {
                         // The parent has now seen the terminal result on-demand;
                         // mark it consumed so the proactive announce does not
                         // spend a fresh turn re-delivering it (dedup with wait).
-                        self.background_tracker.mark_consumed(&request_id);
+                        self.background.background_tracker.mark_consumed(&request_id);
                         if let CompletedOutcome::Err(err) = &snap.outcome {
                             return ToolResult::Error {
                                 error: error_with_trail(err, &snap.progress_tail),
@@ -391,7 +391,7 @@ impl LoopTool for SubagentTool {
                 // inside the tracker so the announce won't re-deliver it.
                 let dur = std::time::Duration::from_secs(timeout_secs);
                 // W11 — scoped addressing (see CheckStatus).
-                let scope = self.parent_session_id.as_deref();
+                let scope = self.memory.parent_session_id.as_deref();
 
                 // A park owes an arm to EVERY signal whose worst-case latency
                 // it would otherwise become. `cancel` covers "stop"; this
@@ -415,7 +415,7 @@ impl LoopTool for SubagentTool {
                         biased;
                         () = cancel.cancelled() => return self.wait_cancelled(&request_ids).await,
                         () = steer.steered() => return self.wait_steered(&request_ids).await,
-                        outcome = self.background_tracker.wait(request_id, scope, dur) => outcome,
+                        outcome = self.background.background_tracker.wait(request_id, scope, dur) => outcome,
                     };
                     return match outcome {
                         // Identical shape to check_status so the model reads a
@@ -438,7 +438,7 @@ impl LoopTool for SubagentTool {
                             // waiting or cancel?" was to spend another whole turn
                             // on check_status for data the tracker already had.
                             let progress =
-                                self.background_tracker.progress_snapshot(request_id, 10);
+                                self.background.background_tracker.progress_snapshot(request_id, 10);
                             ToolResult::Success {
                                 output: json!({
                                     "status": "still_running",
@@ -472,9 +472,9 @@ impl LoopTool for SubagentTool {
                     biased;
                     () = cancel.cancelled() => return self.wait_cancelled(&request_ids).await,
                     () = steer.steered() => return self.wait_steered(&request_ids).await,
-                    outcome = self.background_tracker.wait_any(&request_ids, scope, dur) => outcome,
+                    outcome = self.background.background_tracker.wait_any(&request_ids, scope, dur) => outcome,
                 };
-                let unknown = self.background_tracker.unknown_ids(&request_ids, scope);
+                let unknown = self.background.background_tracker.unknown_ids(&request_ids, scope);
                 // One log read serves every unknown id in this call. Ids the
                 // durable log can account for are NOT unknown — they are
                 // finished-and-forgotten or interrupted-by-restart, and telling
@@ -493,7 +493,7 @@ impl LoopTool for SubagentTool {
                     WaitAnyOutcome::TimedOut { still_running } => {
                         let waiting: Vec<Value> = still_running
                             .iter()
-                            .map(|id| match self.background_tracker.running_meta(id, scope) {
+                            .map(|id| match self.background.background_tracker.running_meta(id, scope) {
                                 Some(meta) => json!({
                                     "request_id": id,
                                     "task": meta.task,
@@ -569,8 +569,8 @@ impl LoopTool for SubagentTool {
                 // W11 — scoped addressing (see CheckStatus). Cancelling
                 // another session's run is the most damaging of the three
                 // by-id verbs, so it goes through the same chokepoint.
-                let scope = self.parent_session_id.as_deref();
-                let hit = self.background_tracker.cancel_in_scope(&request_id, scope);
+                let scope = self.memory.parent_session_id.as_deref();
+                let hit = self.background.background_tracker.cancel_in_scope(&request_id, scope);
                 if hit {
                     // The parent has decided this run's outcome: whatever the
                     // child unwinds into is already accounted for. Stamping the
@@ -579,7 +579,7 @@ impl LoopTool for SubagentTool {
                     // later does not reach `subagent_announce` un-consumed and
                     // spend a whole fresh parent turn reporting the failure of a
                     // sub-agent the parent itself just killed.
-                    self.background_tracker.mark_consumed(&request_id);
+                    self.background.background_tracker.mark_consumed(&request_id);
                     return ToolResult::Success {
                         output: json!({
                             "status": "cancelling",
@@ -605,13 +605,13 @@ impl LoopTool for SubagentTool {
                 // so the LLM gets a deterministic answer rather than a
                 // misleading "not found". Non-destructive: a later
                 // check_status still sees the same result.
-                return match self.background_tracker.result_snapshot(&request_id, scope) {
+                return match self.background.background_tracker.result_snapshot(&request_id, scope) {
                     Some(snap) => {
                         // The parent has now seen the terminal result via this
                         // cancel; mark it consumed so the proactive announce
                         // does not spend a fresh turn re-delivering it
                         // (mirrors check_status / wait).
-                        self.background_tracker.mark_consumed(&request_id);
+                        self.background.background_tracker.mark_consumed(&request_id);
                         if let CompletedOutcome::Err(err) = &snap.outcome {
                             return ToolResult::Error {
                                 error: format!(
@@ -653,8 +653,9 @@ impl LoopTool for SubagentTool {
                 // sub-agents — ids it could then `check_status` (reading another
                 // session's output) or `cancel`. `None` only when this tool has
                 // no owning session at all (CLI / direct construction).
-                let scope = self.parent_session_id.as_deref();
+                let scope = self.memory.parent_session_id.as_deref();
                 let running: Vec<Value> = self
+                    .background
                     .background_tracker
                     .list_running(scope)
                     .into_iter()
@@ -668,7 +669,7 @@ impl LoopTool for SubagentTool {
                     .collect();
                 // Newest-first from the tracker, so the cap keeps the results the
                 // parent is most likely to still care about.
-                let all_completed = self.background_tracker.all_completed(scope);
+                let all_completed = self.background.background_tracker.all_completed(scope);
                 let completed_total = all_completed.len();
                 let completed: Vec<Value> = all_completed
                     .iter()
@@ -769,13 +770,13 @@ impl LoopTool for SubagentTool {
         // for. See `subagent_spawner::fork::ForkSource`.
         let fork_source = if args.spawn_context.is_some_and(|c| c.is_fork()) {
             let parent = self
-                .parent_session_id
+                .memory.parent_session_id
                 .as_deref()
                 .and_then(crate::agents::subagent_spawner::parent_session_id_of);
             match parent {
                 Some(id) => {
                     match crate::agents::subagent_spawner::fork::snapshot(
-                        self.session.as_ref(),
+                        self.tools.session.as_ref(),
                         &id,
                     )
                     .await
@@ -828,13 +829,13 @@ impl LoopTool for SubagentTool {
 
         if let Some(ref batch) = effective_batch {
             if !batch.is_empty() {
-                let child_chain = match self.chain.child() {
+                let child_chain = match self.tools.chain.child() {
                     Some(c) => c,
                     None => {
                         return ToolResult::Error {
                             error: format!(
                                 "Maximum subagent nesting depth ({}) exceeded",
-                                self.chain.max_depth
+                                self.tools.chain.max_depth
                             ),
                             retryable: false,
                         };
@@ -854,13 +855,13 @@ impl LoopTool for SubagentTool {
                 for (idx, batch_task) in batch.iter().enumerate() {
                     let agent_def = if let Some(ref agent_type) = batch_task.agent_type {
                         match self
-                            .agent_registry
+                            .agent_resolution.agent_registry
                             .resolve_spawnable(agent_type, project_root_ref)
                         {
                             Some(def) => def,
                             None => {
                                 let available =
-                                    self.agent_registry.spawnable_agent_ids().join(", ");
+                                    self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -871,13 +872,13 @@ impl LoopTool for SubagentTool {
                         }
                     } else if let Some(ref agent_type) = args.agent_type {
                         match self
-                            .agent_registry
+                            .agent_resolution.agent_registry
                             .resolve_spawnable(agent_type, project_root_ref)
                         {
                             Some(def) => def,
                             None => {
                                 let available =
-                                    self.agent_registry.spawnable_agent_ids().join(", ");
+                                    self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "batch task {idx}: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -888,7 +889,7 @@ impl LoopTool for SubagentTool {
                         }
                     } else {
                         match self
-                            .agent_registry
+                            .agent_resolution.agent_registry
                             .lookup_with_overlay("default", project_root_ref)
                         {
                             Some(def) => def,
@@ -955,7 +956,7 @@ impl LoopTool for SubagentTool {
                 // budget. Without it a five-row batch of full-length children is
                 // arithmetically guaranteed to overrun and be thrown away whole.
                 let agg_rounds = usize::from(args.synthesize);
-                let permits = self.subagent_semaphore.available_permits();
+                let permits = self.background.subagent_semaphore.available_permits();
                 let child_cap_secs =
                     wave_aware_child_timeout_cap(prepared.len(), permits, agg_rounds);
                 let waves = u64::try_from(wave_count(prepared.len(), permits)).unwrap_or(u64::MAX);
@@ -1018,14 +1019,14 @@ impl LoopTool for SubagentTool {
                     // nothing feeds the proactive announce (results are returned
                     // inline below).
                     let running_reg = RunningRegistration::register(
-                        self.background_tracker.clone(),
+                        self.background.background_tracker.clone(),
                         uuid::Uuid::new_v4().to_string(),
                         batch_cancel.clone(),
                         task.clone(),
                         SpawnMeta {
                             parent_id: None,
                             depth: child_chain.depth,
-                            root_session: self.parent_session_id.clone().unwrap_or_default(),
+                            root_session: self.memory.parent_session_id.clone().unwrap_or_default(),
                             model: model.clone(),
                             // Sync fan-out children mint anonymous `sub-<nonce>`
                             // keys that address nothing after the call returns.
@@ -1180,13 +1181,13 @@ impl LoopTool for SubagentTool {
                 if args.synthesize && !proposals.is_empty() {
                     let aggregator_def = if let Some(ref agent_type) = args.agent_type {
                         match self
-                            .agent_registry
+                            .agent_resolution.agent_registry
                             .resolve_spawnable(agent_type, project_root_ref)
                         {
                             Some(def) => def,
                             None => {
                                 let available =
-                                    self.agent_registry.spawnable_agent_ids().join(", ");
+                                    self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
                                 return ToolResult::Error {
                                     error: format!(
                                         "aggregator: Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -1197,7 +1198,7 @@ impl LoopTool for SubagentTool {
                         }
                     } else {
                         match self
-                            .agent_registry
+                            .agent_resolution.agent_registry
                             .lookup_with_overlay("default", project_root_ref)
                         {
                             Some(def) => def,
@@ -1262,14 +1263,14 @@ impl LoopTool for SubagentTool {
                     // (Interrupt demote guard) while it synthesizes. Same
                     // running-only RAII shape as the batch children above.
                     let _agg_running_reg = RunningRegistration::register(
-                        self.background_tracker.clone(),
+                        self.background.background_tracker.clone(),
                         uuid::Uuid::new_v4().to_string(),
                         agg_cancel.clone(),
                         "MoA aggregator (synthesis reduce)".to_string(),
                         SpawnMeta {
                             parent_id: None,
                             depth: child_chain.depth,
-                            root_session: self.parent_session_id.clone().unwrap_or_default(),
+                            root_session: self.memory.parent_session_id.clone().unwrap_or_default(),
                             model: args.aggregator_model.clone().or_else(|| args.model.clone()),
                             child_session: None,
                         },
@@ -1358,12 +1359,12 @@ impl LoopTool for SubagentTool {
         let project_root_ref = project_root.as_deref();
         let agent_def = if let Some(ref agent_type) = args.agent_type {
             match self
-                .agent_registry
+                .agent_resolution.agent_registry
                 .resolve_spawnable(agent_type, project_root_ref)
             {
                 Some(def) => def,
                 None => {
-                    let available = self.agent_registry.spawnable_agent_ids().join(", ");
+                    let available = self.agent_resolution.agent_registry.spawnable_agent_ids().join(", ");
                     return ToolResult::Error {
                         error: format!(
                             "Unknown agent_type '{agent_type}'. Available agents: {available}"
@@ -1374,7 +1375,7 @@ impl LoopTool for SubagentTool {
             }
         } else {
             match self
-                .agent_registry
+                .agent_resolution.agent_registry
                 .lookup_with_overlay("default", project_root_ref)
             {
                 Some(def) => def,
@@ -1388,13 +1389,13 @@ impl LoopTool for SubagentTool {
         };
 
         // 3. Check nesting depth
-        let child_chain = match self.chain.child() {
+        let child_chain = match self.tools.chain.child() {
             Some(c) => c,
             None => {
                 return ToolResult::Error {
                     error: format!(
                         "Maximum subagent nesting depth ({}) exceeded",
-                        self.chain.max_depth
+                        self.tools.chain.max_depth
                     ),
                     retryable: false,
                 };
@@ -1579,11 +1580,11 @@ impl SubagentTool {
         note: &'static str,
     ) -> ToolResult {
         // W11 — scoped addressing, same as the wait it reports on.
-        let scope = self.parent_session_id.as_deref();
+        let scope = self.memory.parent_session_id.as_deref();
         let still_running: Vec<Value> = request_ids
             .iter()
             .filter_map(|id| {
-                self.background_tracker.running_meta(id, scope).map(|meta| {
+                self.background.background_tracker.running_meta(id, scope).map(|meta| {
                     json!({
                         "request_id": id,
                         "task": meta.task,
@@ -1592,7 +1593,7 @@ impl SubagentTool {
                 })
             })
             .collect();
-        let unknown = self.background_tracker.unknown_ids(request_ids, scope);
+        let unknown = self.background.background_tracker.unknown_ids(request_ids, scope);
         let recovered = self.resolve_forgotten(&unknown, scope).await;
         let mut output = json!({
             "status": status,
