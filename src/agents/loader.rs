@@ -136,9 +136,10 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     }
 
     // Reserved-id guard (security: B1-02). Disk-loaded definitions are
-    // forced to `AgentMode::SubAgent` (see `with_mode` below). Without this
-    // guard a user/project `<id>.md` whose id collides with a builtin Primary
-    // agent (`main` today) would shadow the builtin at registration time,
+    // forced to `AgentMode::SubAgent` via `AgentDef::new(&fm.id, AgentMode::SubAgent)`
+    // on the `def` initializer just below. Without this guard a user/project
+    // `<id>.md` whose id collides with a builtin Primary agent (`main` today)
+    // would shadow the builtin at registration time,
     // flipping it to SubAgent, surviving `resolve_spawnable` (which filters on
     // mode), and carrying the wildcard tool grant into a sub-agent the
     // system had explicitly marked Primary. The list itself is a literal

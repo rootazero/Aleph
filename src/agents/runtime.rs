@@ -41,6 +41,7 @@ pub struct LoopRunResult {
 // =============================================================================
 
 /// Configuration for launching a sub-agent.
+#[derive(Debug)]
 pub struct AgentRuntimeConfig {
     /// The agent definition describing role, tools, and limits.
     pub agent_def: AgentDef,
