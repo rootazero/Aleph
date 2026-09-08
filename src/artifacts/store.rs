@@ -302,10 +302,18 @@ async fn evict_overflow(dir: &Path) {
     });
     let overflow = records.len() - MAX_ARTIFACTS_PER_SESSION;
     for record in records.into_iter().take(overflow) {
+        let json = dir.join(format!("{}.json", record.id));
+        let bin = dir.join(format!("{}.bin", record.id));
         // Sidecar first: a partial delete leaves an invisible orphan blob, not
-        // a listed record whose bytes are gone.
-        let _ = fs::remove_file(dir.join(format!("{}.json", record.id))).await;
-        let _ = fs::remove_file(dir.join(format!("{}.bin", record.id))).await;
+        // a listed record whose bytes are gone. Failures are logged but not
+        // propagated — the blob is already durably written, and surfacing
+        // them as a failed `put` would undo work that succeeded.
+        if let Err(e) = fs::remove_file(&json).await {
+            warn!(path = %json.display(), error = %e, "artifact eviction: could not remove sidecar");
+        }
+        if let Err(e) = fs::remove_file(&bin).await {
+            warn!(path = %bin.display(), error = %e, "artifact eviction: could not remove blob");
+        }
     }
 }
 
