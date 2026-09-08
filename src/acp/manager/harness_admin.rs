@@ -228,22 +228,7 @@ impl AcpAdapterManager {
         drop(configs);
         drop(adapters);
         drop(sessions);
-        for (_, entry) in &removed {
-            let mut session = entry.session.lock().await;
-            session.kill().await;
-        }
-        for (key, _) in removed {
-            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id: key.harness_id,
-                cwd: key.cwd.to_string_lossy().into_owned(),
-                session_name: if key.name.is_empty() {
-                    None
-                } else {
-                    Some(key.name)
-                },
-            })
-            .await;
-        }
+        self.kill_and_emit_removed(removed).await;
 
         info!(harness_id = %id, "Unregistered ACP harness");
         Ok(())
@@ -303,22 +288,7 @@ impl AcpAdapterManager {
             drop(configs);
             drop(adapters);
             drop(sessions);
-            for (_, entry) in &removed {
-                let mut session = entry.session.lock().await;
-                session.kill().await;
-            }
-            for (key, _) in removed {
-                self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                    harness_id: key.harness_id,
-                    cwd: key.cwd.to_string_lossy().into_owned(),
-                    session_name: if key.name.is_empty() {
-                        None
-                    } else {
-                        Some(key.name)
-                    },
-                })
-                .await;
-            }
+            self.kill_and_emit_removed(removed).await;
 
             info!(harness_id = %id, "Disabled ACP harness");
             return Ok(());
@@ -334,22 +304,7 @@ impl AcpAdapterManager {
         drop(configs);
         drop(adapters);
         drop(sessions);
-        for (_, entry) in &removed {
-            let mut session = entry.session.lock().await;
-            session.kill().await;
-        }
-        for (key, _) in removed {
-            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id: key.harness_id,
-                cwd: key.cwd.to_string_lossy().into_owned(),
-                session_name: if key.name.is_empty() {
-                    None
-                } else {
-                    Some(key.name)
-                },
-            })
-            .await;
-        }
+        self.kill_and_emit_removed(removed).await;
 
         info!(harness_id = %id, "Updated ACP harness");
         Ok(())
@@ -400,6 +355,34 @@ impl AcpAdapterManager {
         let hook = self.persistence_hook.read().await;
         if let Some(ref h) = *hook {
             h(event);
+        }
+    }
+
+    /// Kill every entry in `removed` and emit an `AcpSessionEvent::Removed`
+    /// for each so persistence + gateway broadcast stay in sync. The caller
+    /// must have already dropped any outer write locks before calling — this
+    /// method acquires the per-session mutex (which may block on a long prompt)
+    /// and must NOT run under the sessions/adapters/configs map locks. See
+    /// `unregister_harness` / `update_harness` for the lock-release pattern.
+    async fn kill_and_emit_removed(
+        &self,
+        removed: Vec<(SessionKey, SessionEntry)>,
+    ) {
+        for (_, entry) in &removed {
+            let mut session = entry.session.lock().await;
+            session.kill().await;
+        }
+        for (key, _) in removed {
+            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
+                harness_id: key.harness_id,
+                cwd: key.cwd.to_string_lossy().into_owned(),
+                session_name: if key.name.is_empty() {
+                    None
+                } else {
+                    Some(key.name)
+                },
+            })
+            .await;
         }
     }
 

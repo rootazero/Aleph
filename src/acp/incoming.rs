@@ -499,11 +499,13 @@ fn apply_line_window(content: &str, line: Option<u64>, limit: Option<u64>) -> St
             .min(lines.len()),
         None => lines.len(),
     };
-    lines
-        .get(start..end)
-        // Safe: `start` is guarded by the check above, and `end` is clamped to `lines.len()`.
-        .expect("invariant: start/end are within line bounds")
-        .join("\n")
+    // `get` returns `None` only if the bounds are inverted — impossible by
+    // construction (`start < lines.len()` from the early return above, and
+    // `end` is clamped to `lines.len()`). Use `unwrap_or_default` so an
+    // unexpected out-of-bounds path never panics this agent-facing handler
+    // (the function is documented as "never panics"); the empty-string result
+    // is the same observable behaviour the caller would get on a 0-line file.
+    lines.get(start..end).unwrap_or_default().join("\n")
 }
 
 /// Pick the first option whose `kind` (or `name`) matches one of `wanted`,
