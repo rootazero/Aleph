@@ -253,7 +253,12 @@ impl BuiltinToolRegistry {
                     current_agent_id,
                 )
                 .with_team_store(config.team_store.clone());
-                let read = TaskReadArtifactTool::new(Arc::clone(artifact_store));
+                let read = TaskReadArtifactTool::new(Arc::clone(artifact_store))
+                    .with_team_store(
+                        config.coord_task_store.clone(),
+                        config.team_store.clone(),
+                        current_agent_id.clone(),
+                    );
 
                 // Register parameter schemas
                 {
