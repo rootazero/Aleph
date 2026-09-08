@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::SubagentTool;
 use crate::agents::background_tracker::{CompletedOutcome, SpawnMeta};
-use crate::agents::runtime::{AgentRuntime, AgentRuntimeConfig};
+use crate::agents::runtime::{AgentIdentity, AgentRuntime, AgentRuntimeConfig, Lifecycle, SpawnOverride};
 use crate::agents::subagent_tree_events::{emit_tree_event, now_ms};
 use crate::agents::AgentDef;
 use aleph_protocol::subagent_tree::{NodeLifecycle, SubagentNode, SubagentTreeEvent};
@@ -242,20 +242,25 @@ impl SubagentTool {
         tokio::spawn(AssertUnwindSafe(async move {
             let _cancel_guard = CancelGuard::new(bridge_cancel.clone());
             let runtime_config = AgentRuntimeConfig {
-                agent_def,
-                task,
-                context_summary: starting.summary,
-                spawn_context: starting.mode,
-                fork_source: starting.source,
-                model,
-                timeout_secs,
-                // The one path where the id outlives the call: `request_id` is
-                // the only handle the model gets back, and the tracker holding
-                // it is process-memory. Threading it here makes it the child's
-                // ephemeral session id, so the durable `SubagentSpawned` /
-                // `SubagentReturned` pair in the parent log stays addressable
-                // by that same id after a restart (see `subagent_tool::recovery`).
-                request_id: Some(rid_for_child),
+                identity: AgentIdentity {
+                    agent_def,
+                    task,
+                    context_summary: starting.summary,
+                },
+                spawn_override: SpawnOverride {
+                    spawn_context: starting.mode,
+                    fork_source: starting.source,
+                    model,
+                    // The one path where the id outlives the call: `request_id`
+                    // is the only handle the model gets back, and the tracker
+                    // holding it is process-memory. Threading it here makes it
+                    // the child's ephemeral session id, so the durable
+                    // `SubagentSpawned` / `SubagentReturned` pair in the parent
+                    // log stays addressable by that same id after a restart
+                    // (see `subagent_tool::recovery`).
+                    request_id: Some(rid_for_child),
+                },
+                lifecycle: Lifecycle { timeout_secs },
             };
             let result = carried
                 .reestablish(async move {

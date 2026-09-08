@@ -10,7 +10,7 @@ use crate::agents::background_tracker::{
     WaitOutcome,
 };
 use crate::agents::progress::SubagentProgress;
-use crate::agents::runtime::AgentRuntimeConfig;
+use crate::agents::runtime::{AgentIdentity, AgentRuntimeConfig, Lifecycle, SpawnOverride};
 use crate::agents::AgentDef;
 use crate::teams::messages::router::SendRequest;
 use crate::teams::messages::types::MessageType;
@@ -1033,15 +1033,21 @@ impl LoopTool for SubagentTool {
                         },
                     );
                     let runtime_config = AgentRuntimeConfig {
-                        agent_def,
-                        task,
-                        context_summary: args.context_summary.clone(),
-                        spawn_context: args.spawn_context,
-                        fork_source: fork_source.clone(),
-                        model,
-                        timeout_secs: timeout,
-                        // Batch legs deliver inline; no id outlives the call.
-                        request_id: None,
+                        identity: AgentIdentity {
+                            agent_def,
+                            task,
+                            context_summary: args.context_summary.clone(),
+                        },
+                        spawn_override: SpawnOverride {
+                            spawn_context: args.spawn_context,
+                            fork_source: fork_source.clone(),
+                            model,
+                            // Batch legs deliver inline; no id outlives the call.
+                            request_id: None,
+                        },
+                        lifecycle: Lifecycle {
+                            timeout_secs: timeout,
+                        },
                     };
 
                     let runtime = self.build_runtime(child_chain.clone(), batch_cancel.clone());
@@ -1224,23 +1230,30 @@ impl LoopTool for SubagentTool {
                     );
 
                     let runtime_config = AgentRuntimeConfig {
-                        agent_def: aggregator_def,
-                        task: synthesis_prompt,
-                        context_summary: args.context_summary.clone(),
-                        // The reduce inherits the call's context choice like
-                        // every other leg. Honouring `isolated` here matters
-                        // most: an aggregator that quietly reads the parent's
-                        // summary while the proposers were kept clean would
-                        // re-introduce, at the one step whose output the caller
-                        // actually keeps, exactly the framing the caller asked
-                        // to exclude.
-                        spawn_context: args.spawn_context,
-                        fork_source: fork_source.clone(),
-                        model: args.aggregator_model.clone().or_else(|| args.model.clone()),
-                        // W19 ① — the reduce is the `+1` serial round the share
-                        // was divided by; it gets one round, same as a proposer.
-                        timeout_secs: args.timeout_secs.min(child_cap_secs),
-                        request_id: None,
+                        identity: AgentIdentity {
+                            agent_def: aggregator_def,
+                            task: synthesis_prompt,
+                            context_summary: args.context_summary.clone(),
+                        },
+                        spawn_override: SpawnOverride {
+                            // The reduce inherits the call's context choice like
+                            // every other leg. Honouring `isolated` here matters
+                            // most: an aggregator that quietly reads the parent's
+                            // summary while the proposers were kept clean would
+                            // re-introduce, at the one step whose output the caller
+                            // actually keeps, exactly the framing the caller asked
+                            // to exclude.
+                            spawn_context: args.spawn_context,
+                            fork_source: fork_source.clone(),
+                            model: args.aggregator_model.clone().or_else(|| args.model.clone()),
+                            request_id: None,
+                        },
+                        lifecycle: Lifecycle {
+                            // W19 ① — the reduce is the `+1` serial round the
+                            // share was divided by; it gets one round, same as
+                            // a proposer.
+                            timeout_secs: args.timeout_secs.min(child_cap_secs),
+                        },
                     };
                     let agg_cancel = self.cancel_for_child_with(&cancel);
                     let _agg_cancel_guard = CancelGuard::new(agg_cancel.clone());
@@ -1421,16 +1434,23 @@ impl LoopTool for SubagentTool {
         } else {
             // Foreground execution
             let runtime_config = AgentRuntimeConfig {
-                agent_def,
-                task: args.task.clone(),
-                context_summary: args.context_summary,
-                spawn_context: args.spawn_context,
-                fork_source: fork_source.clone(),
-                model: args.model,
-                timeout_secs: args.timeout_secs,
-                // Foreground: the result is returned to the model in this very
-                // tool call, so there is no handle to recover it by later.
-                request_id: None,
+                identity: AgentIdentity {
+                    agent_def,
+                    task: args.task.clone(),
+                    context_summary: args.context_summary,
+                },
+                spawn_override: SpawnOverride {
+                    spawn_context: args.spawn_context,
+                    fork_source: fork_source.clone(),
+                    model: args.model,
+                    // Foreground: the result is returned to the model in this
+                    // very tool call, so there is no handle to recover it by
+                    // later.
+                    request_id: None,
+                },
+                lifecycle: Lifecycle {
+                    timeout_secs: args.timeout_secs,
+                },
             };
 
             let child_cancel = self.cancel_for_child_with(&cancel);
