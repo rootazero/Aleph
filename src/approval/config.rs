@@ -145,8 +145,37 @@ struct CompiledRule {
 
 /// Pre-compile a list of [`PolicyRule`]s into a map keyed by [`ActionType`].
 ///
-/// Rules whose patterns fail to compile are skipped with a warning.
-fn compile_rules_grouped(rules: &[PolicyRule]) -> HashMap<ActionType, Vec<CompiledRule>> {
+/// `fail_closed` distinguishes the security-critical blocklist from the
+/// convenience-only allowlist:
+///
+/// - **`fail_closed = true`** (blocklist): a compile failure inserts a
+///   synthetic match-anything rule for the affected `ActionType`, so EVERY
+///   target of that action is denied unconditionally. The operator's broken
+///   blocklist must NOT silently resolve to something weaker than what they
+///   wrote — that is exactly the shape of fail-open the curated-vs-broken
+///   file split (see [`Self::load_from`]) exists to prevent, and it bites
+///   hardest on default-Allow action families (BrowserNavigate, BrowserClick,
+///   …) where a typo'd blocklist rule used to let every target fall through
+///   to `Allow`.
+/// - **`fail_closed = false`** (allowlist): a compile failure is logged at
+///   `warn!` and the rule is silently skipped; the policy falls back to its
+///   defaults. A broken allowlist is a convenience loss, not a security
+///   regression: the defaults remain in force, and for a default-Deny action
+///   the fall-through is still Deny.
+///
+/// `label` names the rule source in log messages ("blocklist" / "allowlist").
+fn compile_rules_grouped(
+    rules: &[PolicyRule],
+    fail_closed: bool,
+    label: &str,
+) -> HashMap<ActionType, Vec<CompiledRule>> {
+    // The fail-closed fallback: `(?s).*` matches every string (DOTALL),
+    // including the empty one. Constructed lazily via `OnceLock` so the
+    // (literal, infallible) compile cost is paid once per process. `Regex`
+    // clones share the underlying automaton, so reusing one instance keeps
+    // the per-rule insert cheap.
+    static MATCH_ANYTHING: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
     let mut grouped: HashMap<ActionType, Vec<CompiledRule>> = HashMap::new();
     for rule in rules {
         let regex_str = glob_to_regex_str(&rule.pattern);
@@ -161,11 +190,34 @@ fn compile_rules_grouped(rules: &[PolicyRule]) -> HashMap<ActionType, Vec<Compil
                     });
             }
             Err(e) => {
-                warn!(
-                    pattern = %rule.pattern,
-                    error = %e,
-                    "Failed to compile glob pattern; skipping rule"
-                );
+                if fail_closed {
+                    let match_anything = MATCH_ANYTHING.get_or_init(|| {
+                        // `(?s).*` is a fundamental regex — its compile can
+                        // only fail if the underlying engine regresses, and
+                        // then the process is already in trouble. `expect`
+                        // rather than `unwrap` so the failure mode is named.
+                        regex::Regex::new("(?s).*")
+                            .expect("static regex pattern `(?s).*`")
+                    });
+                    error!(
+                        pattern = %rule.pattern,
+                        error = %e,
+                        "Failed to compile {label} glob pattern; denying all matching actions (fail-closed)"
+                    );
+                    grouped
+                        .entry(rule.action_type.clone())
+                        .or_default()
+                        .push(CompiledRule {
+                            pattern: rule.pattern.clone(),
+                            regex: match_anything.clone(),
+                        });
+                } else {
+                    warn!(
+                        pattern = %rule.pattern,
+                        error = %e,
+                        "Failed to compile {label} glob pattern; skipping rule"
+                    );
+                }
             }
         }
     }
@@ -193,8 +245,13 @@ impl ConfigApprovalPolicy {
     /// Create a new policy from an explicit [`PolicyConfig`].
     #[must_use]
     pub fn new(config: PolicyConfig) -> Self {
-        let blocklist_by_type = compile_rules_grouped(&config.blocklist);
-        let allowlist_by_type = compile_rules_grouped(&config.allowlist);
+        // Blocklist is security-critical: a compile failure must NOT silently
+        // resolve to "weaker than what the operator wrote" (see the doc on
+        // [`compile_rules_grouped`] for the default-Allow example). Allowlist
+        // stays fail-open: a broken allowlist rule is a convenience loss, and
+        // the defaults remain in force either way.
+        let blocklist_by_type = compile_rules_grouped(&config.blocklist, true, "blocklist");
+        let allowlist_by_type = compile_rules_grouped(&config.allowlist, false, "allowlist");
         Self {
             config,
             blocklist_by_type,
@@ -947,5 +1004,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Fail-closed blocklist compile failure (APPROVAL-R*-001)
+    // -----------------------------------------------------------------------
+
+    /// A blocklist rule that fails to compile (operator typo, size bomb,
+    /// ReDoS-shaped pattern) must NOT silently fall through to the
+    /// default-Allow posture of `BrowserNavigate`. Fail-closed semantics
+    /// deny every target of that action type.
+    ///
+    /// Uses a 2 MB literal pattern — exceeds
+    /// `crate::security::safe_regex::MAX_COMPILED_SIZE` (1 MiB) so
+    /// `bounded_builder` rejects the compile deterministically.
+    #[tokio::test]
+    async fn a_blocklist_rule_that_fails_to_compile_denies_all_matching_actions() {
+        let oversized_pattern = "a".repeat(2_000_000);
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![PolicyRule {
+                action_type: ActionType::BrowserNavigate,
+                pattern: oversized_pattern,
+            }],
+        });
+        let req = make_request_with_target(
+            ActionType::BrowserNavigate,
+            "https://docs.github.com/en/actions",
+        );
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Deny { .. }),
+            "a broken blocklist must deny all matching actions, not silently fall through to defaults"
+        );
+    }
+
+    /// The fail-closed half's mirror: an allowlist compile failure stays
+    /// fail-open (the rule is dropped, defaults remain). A broken allowlist
+    /// for a default-Allow action type means no tightening was lost — the
+    /// rule was a convenience, not a permission.
+    #[tokio::test]
+    async fn an_allowlist_rule_that_fails_to_compile_is_silently_skipped() {
+        let oversized_pattern = "a".repeat(2_000_000);
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
+        let policy = ConfigApprovalPolicy::new(PolicyConfig {
+            defaults,
+            allowlist: vec![PolicyRule {
+                action_type: ActionType::BrowserNavigate,
+                pattern: oversized_pattern,
+            }],
+            blocklist: vec![],
+        });
+        let req = make_request_with_target(
+            ActionType::BrowserNavigate,
+            "https://docs.github.com/en/actions",
+        );
+        assert!(
+            matches!(policy.check(&req).await, ApprovalDecision::Allow),
+            "a broken allowlist rule is dropped; the default posture is preserved"
+        );
     }
 }
