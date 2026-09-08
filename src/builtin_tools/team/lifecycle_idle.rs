@@ -80,6 +80,14 @@ impl AlephTool for LifecycleIdleTool {
     type Output = LifecycleIdleOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any team read or message send. The
+        // team-existence + leader-self checks below are not membership
+        // checks — a non-member could satisfy both and still send
+        // arbitrary `summary` / `last_task_id` text to the leader's
+        // inbox and the team event log. Mirrors the gate the sibling
+        // lifecycle_resolve_shutdown uses.
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
+
         let team = self
             .team_store
             .get_team(&args.team_id)

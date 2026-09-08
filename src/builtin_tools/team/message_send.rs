@@ -103,6 +103,14 @@ impl AlephTool for MessageSendTool {
     type Output = MessageSendOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any team read or message send. Without
+        // this check, an arbitrary agent can call
+        // `message_send({team_id, broadcast: true})` and reach every
+        // member of any team, with arbitrary `content` landing in the
+        // team's event ledger. Mirrors the gate lifecycle_resolve_shutdown
+        // / team_digest / team_status already use.
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
+
         // Extract @mentions from content. `@all` / `@everyone` upgrade the
         // request to a broadcast; plain `@<id>` mentions are union-merged
         // into `to` after validating against actual team membership.

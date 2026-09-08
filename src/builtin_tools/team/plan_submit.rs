@@ -80,6 +80,12 @@ impl AlephTool for PlanSubmitTool {
         let actor = self.actor();
         let from_agent = if actor.is_empty() { "agent" } else { &actor };
 
+        // BT-D-R4-23: gate before any plan_store / inbox write. A
+        // non-member must not be able to submit plans into another team's
+        // inbox (polluting the leader's approval queue and spamming
+        // cross-team message inboxes). Mirrors plan_resolve.rs:73.
+        super::require_team_auth(&*self.team_store, &args.team_id, &actor).await?;
+
         let team = self
             .team_store
             .get_team(&args.team_id)
