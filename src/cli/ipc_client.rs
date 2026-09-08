@@ -153,49 +153,23 @@ fn build_client(url: &str) -> anyhow::Result<reqwest::blocking::Client> {
 }
 
 /// Extract the host portion of a `scheme://host:port/path` URL, correctly
-/// handling bracketed IPv6 hosts (`[::1]:18790` → `::1`). Falls back to
-/// `None` for unparseable input so the caller can produce a clear error.
+/// handling bracketed IPv6 hosts (`[::1]:18790` → `::1`). Returns `None` for
+/// unparseable input so the caller can produce a clear error.
+///
+/// `url::Url::parse` is the single parser: it understands the bracketed
+/// IPv6 form natively, so `host_str()` already returns `::1` for
+/// `https://[::1]:18790/admin`. The earlier manual fallback (a hand-rolled
+/// char-by-char truncation with its own bracket-stripping) was removed: it
+/// was unreachable in practice (every real input passes `Url::parse`) and
+/// had a bracket-vs-`]`-suffix bug that would have produced
+/// `"::1]"`-with-trailing-bracket for any unparseable IPv6 URL, which
+/// `is_loopback_host` then could not parse (see
+/// review-results/cli-logic-2026-08-26/REPORT.md Warning 2 for the prior
+/// byte-split incident this replaced).
 fn host_of(url: &str) -> Option<String> {
-    // Strip the scheme.
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-    // Strip userinfo (none expected today, but stay defensive).
-    let after_userinfo = after_scheme
-        .split_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or(after_scheme);
-    // Truncate at the first `:`, `/`, or `?` that closes the host portion.
-    // For IPv6 these come in the form `[::1]:port` so use `url::Url::parse`
-    // to do the bracket-aware split rather than the prior byte-split which
-    // turned `[::1]:18790` into host `::1` only when an extra `:18790`
-    // boundary survived — fragile and silently rejected loopback HTTPS in
-    // production (see review-results/cli-logic-2026-08-26/REPORT.md Warning 2).
     url::Url::parse(url)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_string))
-        .or_else(|| {
-            // Manual fallback: strip everything from the host-closing delimiter.
-            let mut end = after_userinfo.len();
-            for (idx, ch) in after_userinfo.char_indices() {
-                if matches!(ch, '/' | '?') {
-                    end = idx;
-                    break;
-                }
-            }
-            let host = &after_userinfo[..end];
-            // Strip the bracketed IPv6 form to bare `::1` etc.
-            let host = host
-                .strip_prefix('[')
-                .and_then(|s| s.strip_suffix(']'))
-                .unwrap_or(host);
-            // Stop at the trailing `]:port` — none expected here since the
-            // loop above already removed `:`, but defensive.
-            let host = host.split(':').next().unwrap_or("");
-            if host.is_empty() {
-                None
-            } else {
-                Some(host.to_string())
-            }
-        })
 }
 
 fn is_loopback_host(host: &str) -> bool {
