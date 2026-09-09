@@ -418,6 +418,15 @@ fn match_prefix(entries: &BTreeMap<String, ConsentEntry>, prefix: &str) -> Optio
     if prefix.is_empty() {
         return None;
     }
+    // review(extension): require at least 4 hex chars — the full fingerprint
+    // is 16 hex chars (see `fingerprint`), so 4 hex chars still has ~65k
+    // possible prefixes per entry and stops a one-character prefix from
+    // resolving to whichever entry happens to sort first alphabetically.
+    // Without this, `aleph hooks approve a` would approve the first entry
+    // starting with `a` and silently skip the matching-by-prefix step.
+    if prefix.len() < 4 {
+        return None;
+    }
     if entries.contains_key(prefix) {
         return Some(prefix.to_string());
     }
