@@ -26,7 +26,7 @@ use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
 
 use super::agent_instance::AgentRegistry;
-use super::channel::{InboundMessage, OutboundMessage};
+use super::channel::{InboundMessage, OutboundMessage, CB_MESSAGE_ID_PREFIX};
 use super::channel_registry::ChannelRegistry;
 use super::execution_adapter::ExecutionAdapter;
 use super::handlers::group_chat::SharedOrchestrator;
@@ -544,9 +544,10 @@ impl InboundMessageRouter {
         );
 
         // Approval-callback short-circuit: intercept before normal routing.
-        // callback query inbound message ids start with "cb_" prefix (consistent
-        // across webhook / polling paths).
-        if msg.id.as_str().starts_with("cb_") {
+        // callback query inbound message ids start with CB_MESSAGE_ID_PREFIX
+        // (defined in `gateway::channel`) — use the constant, not the literal
+        // "cb_", so producers and the router stay in lockstep.
+        if msg.id.as_str().starts_with(CB_MESSAGE_ID_PREFIX) {
             if let Some(ref sink) = self.approval_callback_sink {
                 if let Some(result) = sink
                     .handle_callback(&msg.text, msg.sender_id.as_str())
