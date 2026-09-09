@@ -1030,6 +1030,59 @@ mod tests {
     }
 
     #[test]
+    fn test_from_rate_limit_with_retry_after_to_aleph_error() {
+        // The provider gave us a Retry-After: 30 hint. The From boundary
+        // must fold it into the AlephError suggestion so gateway/voice/outbound
+        // can wait 30s instead of the Aleph-side 60s default.
+        let gen_err = GenerationError::rate_limit(
+            "Too many requests",
+            Some(Duration::from_secs(30)),
+        );
+        let aleph_err: AlephError = gen_err.into();
+        match aleph_err {
+            AlephError::RateLimitError { message, suggestion } => {
+                assert_eq!(message, "Too many requests");
+                let s = suggestion.expect("suggestion must be preserved");
+                assert!(
+                    s.contains("30 seconds"),
+                    "suggestion must include the upstream Retry-After hint, got: {s}"
+                );
+            }
+            other => panic!("expected RateLimitError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_provider_error_to_aleph_error_preserves_status_and_provider() {
+        // Provider returned 503 from openai. The From boundary must include
+        // the status code AND the provider name in the AlephError message
+        // so downstream classifiers retain the diagnostic info.
+        let gen_err =
+            GenerationError::provider("upstream error", Some(503), "openai");
+        let aleph_err: AlephError = gen_err.into();
+        match aleph_err {
+            AlephError::ProviderError { message, .. } => {
+                assert!(message.contains("openai"), "message missing provider, got: {message}");
+                assert!(message.contains("503"), "message missing status, got: {message}");
+            }
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_serialization_error_is_not_classified_as_io() {
+        // SerializationError must NOT be wrapped as IoError, because IoError
+        // classifiers treat it as transport-retryable and would loop on a
+        // payload that will never parse differently on retry.
+        let gen_err = GenerationError::serialization("bad json");
+        let aleph_err: AlephError = gen_err.into();
+        assert!(
+            !matches!(aleph_err, AlephError::IoError(_)),
+            "SerializationError must not classify as IoError (got: {aleph_err:?})"
+        );
+    }
+
+    #[test]
     fn test_from_timeout_to_aleph_error() {
         let gen_err = GenerationError::timeout(Duration::from_secs(30));
         let aleph_err: AlephError = gen_err.into();
