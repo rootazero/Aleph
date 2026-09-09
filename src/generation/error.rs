@@ -699,10 +699,11 @@ impl From<GenerationError> for AlephError {
                 // Preserve provider name + status code in the message so the
                 // AlephError downstream retains the diagnostic info the typed
                 // GenerationError had. AlephError::provider() would discard both.
-                let provider_hint = provider
-                    .as_deref()
-                    .map(|p| format!(" (provider: {p})"))
-                    .unwrap_or_default();
+                let provider_hint = if provider.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (provider: {provider})")
+                };
                 let status_hint = status_code
                     .map(|c| format!(" (HTTP {c})"))
                     .unwrap_or_default();

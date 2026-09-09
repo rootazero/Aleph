@@ -242,6 +242,7 @@ pub async fn handle_update(
                 default_provider: String::new(),
                 fallback_providers: None,
                 backends: std::collections::HashMap::new(),
+                verified_shared: std::collections::HashMap::new(),
             });
         }
 
@@ -667,6 +668,7 @@ mod tests {
                 default_provider: String::new(),
                 fallback_providers: None,
                 backends: std::collections::HashMap::new(),
+                verified_shared: std::collections::HashMap::new(),
             }),
             ..Default::default()
         };

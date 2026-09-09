@@ -1548,6 +1548,7 @@ mod tests {
             default_provider: default_provider.into(),
             fallback_providers: None,
             backends,
+            verified_shared: HashMap::new(),
         }
     }
 
