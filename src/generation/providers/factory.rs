@@ -103,6 +103,23 @@ pub fn create_provider(
         GenerationError::authentication(format!("API key is required for provider '{name}'"), name)
     })?;
 
+    // Reject empty / whitespace-only api keys at the factory gate. Six
+    // individual builders (OpenAiImageProvider, StabilityImageProvider,
+    // GoogleImagenProvider, MidjourneyProviderBuilder, ReplicateProviderBuilder,
+    // FalProviderBuilder) used to accept `Some("")` silently and only fail
+    // at the first request with a 401 — a misconfigured provider would run
+    // for an arbitrary time before the operator noticed. Centralising the
+    // check here means future arms inherit the gate for free.
+    if api_key.trim().is_empty() {
+        return Err(GenerationError::authentication(
+            format!(
+                "API key for provider '{name}' is empty; set \
+                 [generation.{name}].api_key in config.toml"
+            ),
+            name,
+        ));
+    }
+
     let provider: Arc<dyn GenerationProvider> = match config.provider_type.as_str() {
         "openai" | "openai_image" | "dalle" => Arc::new(
             OpenAiImageProvider::new(
@@ -299,7 +316,12 @@ pub fn create_provider(
             // Honor the `timeout_seconds` config knob.
             builder = builder.timeout_secs(config.request_timeout_secs());
 
-            Arc::new(builder.build())
+            // Use `try_build` so a TLS / DNS resolver misconfiguration
+            // surfaces at startup instead of silently producing a provider
+            // whose reqwest::Client has no per-request timeout. The other
+            // arms in this factory already use `with_timeout` for the same
+            // reason.
+            Arc::new(builder.try_build()?)
         }
         "elevenlabs" => Arc::new(
             ElevenLabsProvider::new(
@@ -377,7 +399,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{other}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_tts, local, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal"
+                    "Unknown provider type: '{other}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_whisper, whisper, deepgram_stt, deepgram, deepgram_tts, azure_speech, azure_tts, suno, bfl, bfl_flux, flux, cartesia, minimax_tts, volcengine_tts, local, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, fal"
                 ),
                 Some("provider_type".to_string()),
             ));
