@@ -50,19 +50,6 @@ mod think;
 const GRACE_TIMEOUT_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A "failure turn" for the consecutive-failure watchdog: the turn made no net
-/// progress because failures outnumber successes. Pure structural count — no
-/// judgment about whether a *successful* call was actually useful (R10-safe).
-pub(crate) const fn is_failure_turn(executed: usize, errors: usize) -> bool {
-    errors > executed
-}
-
-/// A "clean turn" resets the streak: zero tool errors this turn. An interleaved
-/// single success no longer zeroes a churning failure streak — only a fully
-/// clean turn does.
-pub(crate) const fn is_clean_turn(_executed: usize, errors: usize) -> bool {
-    errors == 0
-}
-
 /// Stage 5b tool-call guardrail outcome. `Block` means the helper already
 /// fired `on_safety_block` + emitted `ToolError`; the caller `continue`s.
 pub(crate) enum ToolCallGuardOutcome {
@@ -396,7 +383,7 @@ impl AgentHarness {
     /// Bounds a pathological appender that keeps writing user messages so the
     /// loop can never spin forever on follow-up continuations alone; the
     /// normal stop/iteration caps still apply on top of this.
-    const MAX_FOLLOWUP_CONTINUATIONS: usize = 8;
+    /// (Constant inlined at the only call site — see `followup_continuations < 8` below.)
 
     /// Lazy-construct a `LoopTraceEvent` and forward to `trace_sink`.
     /// Returns immediately when no sink is wired — the closure is not invoked.
@@ -485,7 +472,7 @@ impl AgentHarness {
         let mut consecutive_failure_turns: usize = 0;
         // Pi `getFollowUpMessages` parity: how many times a `Done` turn has been
         // overridden because a steering message arrived after the model's final
-        // turn. Bounded by `MAX_FOLLOWUP_CONTINUATIONS`.
+        // turn. Bounded by 8 (constant inlined at the gate; see run()).
         let mut followup_continuations: usize = 0;
         let mut tool_history: std::collections::VecDeque<ToolCallSummary> =
             std::collections::VecDeque::with_capacity(TOOL_HISTORY_WINDOW);
@@ -649,9 +636,16 @@ impl AgentHarness {
                             .iter()
                             .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
                             .count();
-                        if is_clean_turn(executed, errors) {
+                        // Inlined from the deleted `is_clean_turn` /
+                        // `is_failure_turn` const fns (each used exactly
+                        // once). A "clean turn" resets the streak (zero
+                        // errors); a "failure turn" advances it (errors
+                        // outnumber executions). Structural counts only —
+                        // no judgment about whether a successful call was
+                        // actually useful (R10-safe).
+                        if errors == 0 {
                             consecutive_failure_turns = 0;
-                        } else if is_failure_turn(executed, errors) {
+                        } else if errors > executed {
                             consecutive_failure_turns = consecutive_failure_turns.saturating_add(1);
                             if let Some(cap) = self.deps.consecutive_failure_cap {
                                 // Soft landing: one turn before the hard cap,
@@ -787,7 +781,7 @@ impl AgentHarness {
                     // Cheap atomic first so the common path never pays the
                     // seq-ranged store read.
                     if !self.hit_limit()
-                        && followup_continuations < Self::MAX_FOLLOWUP_CONTINUATIONS
+                        && followup_continuations < 8
                         && self.has_unanswered_user_message(&current_session).await
                     {
                         followup_continuations = followup_continuations.saturating_add(1);
