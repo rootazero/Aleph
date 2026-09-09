@@ -234,6 +234,22 @@ impl GroupChatExecutor {
             }
         }
 
+        // Enforce the no-commit-attempt budget. `max_rounds` only bounds
+        // COMMITTED rounds — an empty coordinator plan (`respondents: []`)
+        // skips the commit phase, so `current_round` never advances and the
+        // gate above is never tripped. A coordinator that returns empty
+        // plans indefinitely could burn LLM budget unboundedly. The bound
+        // is `clamp(max_rounds.unwrap_or(8), 4, 16)` — see
+        // `GroupChatSession::max_no_commit_attempts`.
+        let no_commit_cap = session.max_no_commit_attempts();
+        if session.no_commit_attempts >= no_commit_cap {
+            return Err(GroupChatError::SessionInactive(format!(
+                "session {} produced {} consecutive empty coordinator plans; \
+                 refusing further attempts to bound LLM cost",
+                session.id, session.no_commit_attempts
+            )));
+        }
+
         // Step 1: Stage user message as a System turn (NOT yet added to history).
         let mut staged_turns: Vec<(u32, u32, Speaker, String)> = Vec::new();
         // persistence sequence: user=0, coordinator=1, persona_0=2, persona_1=3, ...
@@ -457,8 +473,16 @@ impl GroupChatExecutor {
                 round = round,
                 "coordinator returned an empty plan; round not committed"
             );
+            // Count this as a no-commit attempt so a coordinator that keeps
+            // returning empty plans cannot loop unboundedly past `max_rounds`.
+            // The gate at the top of `execute_round` rejects the next call
+            // once `no_commit_attempts >= max_no_commit_attempts()`.
+            session.no_commit_attempts = session.no_commit_attempts.saturating_add(1);
             return Ok(messages);
         }
+        // A real commit lands here — reset the no-commit counter so a single
+        // empty plan in a long session does not poison future rounds.
+        session.no_commit_attempts = 0;
         // Append the user/system turn to history (matches the original
         // semantic that `add_turn` records both user prompts and persona
         // responses).
@@ -1190,5 +1214,80 @@ mod tests {
             set_size_after, 1,
             "second miss with same (persona, provider) must NOT grow the set"
         );
+    }
+
+    /// Coordinator returns a valid plan with an EMPTY `respondents` array.
+    /// Without the no-commit-attempt budget, `execute_round` would loop
+    /// indefinitely past `max_rounds` because `current_round` never advances.
+    /// With the budget, after `max_no_commit_attempts()` empty-plan returns
+    /// the executor must refuse further attempts with `SessionInactive`.
+    #[tokio::test]
+    async fn test_empty_plan_loop_is_bounded() {
+        // Provider returns an empty-plan coordinator response on every call.
+        let empty_plan = r#"{"respondents":[],"need_summary":false}"#.to_string();
+        let provider = Arc::new(SequentialMockProvider::new(vec![empty_plan]));
+        let executor = GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
+        let mut session = make_session().with_max_rounds(Some(1));
+        let cap = session.max_no_commit_attempts();
+
+        // Drive `cap` empty-plan calls. All should return Ok (no commit, but
+        // the gate has not tripped yet) and bump `no_commit_attempts`.
+        for i in 0..cap {
+            let result = executor
+                .execute_round(&mut session, "ping", &[])
+                .await
+                .expect("empty plan within budget should not error");
+            assert!(result.is_empty(), "empty plan returns no messages");
+            assert_eq!(
+                session.no_commit_attempts,
+                i + 1,
+                "no_commit_attempts must increment on each empty-plan call"
+            );
+            assert_eq!(
+                session.current_round, 0,
+                "current_round must NOT advance on an empty plan"
+            );
+        }
+
+        // The next call must be rejected: the gate trips exactly once the
+        // counter reaches the budget. This is the regression we are locking in
+        // — without the budget the same loop would burn LLM cost forever.
+        let result = executor.execute_round(&mut session, "ping", &[]).await;
+        assert!(
+            matches!(result, Err(GroupChatError::SessionInactive(_))),
+            "executor must reject after {cap} consecutive empty plans, got {result:?}"
+        );
+    }
+
+    /// A successful commit must RESET the no-commit counter, so one empty
+    /// plan in a long session does not poison later rounds.
+    #[tokio::test]
+    async fn test_successful_commit_resets_no_commit_counter() {
+        // Three calls: empty plan → empty plan → real plan with a respondent.
+        let coordinator_response =
+            r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+        let provider = Arc::new(SequentialMockProvider::new(vec![
+            r#"{"respondents":[],"need_summary":false}"#.to_string(),
+            r#"{"respondents":[],"need_summary":false}"#.to_string(),
+            coordinator_response.to_string(),
+            // Persona response for the third call.
+            "ok".to_string(),
+        ]));
+        let executor = GroupChatExecutor::new(Arc::new(crate::providers::StaticDefault::new(
+            provider as Arc<dyn AiProvider>,
+        )));
+        let mut session = make_session();
+
+        // Two empty plans: counter goes to 2.
+        let _ = executor.execute_round(&mut session, "ping", &[]).await.unwrap();
+        let _ = executor.execute_round(&mut session, "ping", &[]).await.unwrap();
+        assert_eq!(session.no_commit_attempts, 2);
+
+        // Real plan: counter resets to 0.
+        let _ = executor.execute_round(&mut session, "ping", &[]).await.unwrap();
+        assert_eq!(session.no_commit_attempts, 0, "successful commit resets the counter");
+        assert_eq!(session.current_round, 1, "real plan advances current_round");
     }
 }
