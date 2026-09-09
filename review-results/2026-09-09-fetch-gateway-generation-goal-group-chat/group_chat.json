@@ -1,0 +1,24 @@
+{
+  "module": "src/group_chat",
+  "scan": {
+    "files_scanned": ["src/group_chat/mod.rs", "src/group_chat/channel.rs", "src/group_chat/coordinator.rs", "src/group_chat/executor.rs", "src/group_chat/orchestrator.rs", "src/group_chat/persona.rs", "src/group_chat/protocol.rs", "src/group_chat/session.rs"],
+    "lines_total": 3605,
+    "rust_doctor_diagnostics_in_module": 0
+  },
+  "findings": [
+    {
+      "severity": "P1",
+      "title": "Empty coordinator plans bypass max_rounds and permit unbounded billed calls",
+      "file": "src/group_chat/executor.rs",
+      "line": 228,
+      "category": "logic",
+      "description": "The per-session max_rounds gate only counts COMMITTED rounds. When the coordinator returns a valid plan with respondents:[], execute_round returns successfully without committing the user turn or advancing current_round. A caller can submit unlimited requests that each invoke the coordinator LLM while the session remains at the same round and never reaches max_rounds. Both gateway handlers perform the same current_round >= max_rounds check and so do not close this gap.",
+      "trigger": "A session is created with finite max_rounds, and the coordinator repeatedly returns valid JSON whose respondents array is empty; the client repeatedly calls group_chat.continue.",
+      "suggested_fix": "Track no_commit_attempts on GroupChatSession; bump on every empty-plan commit, reset on every successful commit, and reject a new attempt once it reaches max_no_commit_attempts() = clamp(max_rounds.unwrap_or(8), 4, 16).",
+      "confidence": "high",
+      "fixed_in_commit": "98a37917a"
+    }
+  ],
+  "severities_summary": {"P0": 0, "P1": 1, "P2": 0, "P3": 0},
+  "notes": "Read-only review of all eight production files. Prior findings from the 2026-08-31 pass (cancellation, ownership, validation, staging) all hold. The new finding is the empty-plan / max_rounds interaction, fixed by adding a separate no_commit_attempts counter on GroupChatSession and gating it alongside max_rounds. Two regression tests pin the behaviour."
+}

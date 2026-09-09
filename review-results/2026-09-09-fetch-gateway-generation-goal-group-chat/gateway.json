@@ -1,0 +1,102 @@
+{
+  "module": "src/gateway",
+  "scan": {
+    "files_scanned": ["src/gateway/mod.rs", "src/gateway/agent_binding.rs", "src/gateway/agent_instance.rs", "src/gateway/agent_lifecycle.rs", "src/gateway/channel.rs", "src/gateway/channel_registry.rs", "src/gateway/delivery_queue.rs", "src/gateway/event_bus.rs", "src/gateway/execution_engine/*", "src/gateway/inbound_router/*", "src/gateway/session_manager/*", "src/gateway/handlers/*", "src/gateway/interfaces/telegram/mod.rs", "src/gateway/interfaces/discord/mod.rs", "src/gateway/pair_loop_guard.rs", "src/gateway/inbound_router/command_handler.rs", "src/gateway/inbound_router/permission.rs"],
+    "lines_total": 278159,
+    "rust_doctor_diagnostics_in_module": 0
+  },
+  "findings": [
+    {
+      "severity": "P2",
+      "title": "Bot-loop protection config is a severed wire — operator can configure but cannot change behavior",
+      "file": "src/gateway/pair_loop_guard.rs",
+      "line": 363,
+      "category": "wiring",
+      "description": "resolve_pair_loop_settings is documented as severed (zero production callers). The only writer of the router's pair_loop_config (InboundMessageRouter::with_bot_loop_protection) is also called only from inbound_router's test module. Production runs on PairLoopGuardConfig::default() (enabled: true, hardcoded 20 events per 60s window). ChannelAccessConfig declares the field but nothing reads it; channel_policy.rs's doc text still claims it falls back 'via resolve_pair_loop_settings', a promise nothing keeps.",
+      "trigger": "Configure [channels.whatsapp].access.bot_loop_protection — the field is parsed, stored, and ignored at runtime. Any chatty bridged bot bursting >20 messages/60s gets silently suppressed.",
+      "suggested_fix": "Pick (a) add a global config block resolved once at boot, or (b) change the router's pair_loop_config to a HashMap<channel_id, PairLoopGuardConfig> and have pair_loop_check look up by msg.channel_id. The pre-existing comment in pair_loop_guard.rs:355-375 documents this as DECIDE.",
+      "confidence": "high",
+      "fixed_in_commit": null,
+      "deferred_reason": "Architectural decision (per-channel HashMap vs global block) explicitly documented as DECIDE in the source comments. Not a one-liner fix."
+    },
+    {
+      "severity": "P2",
+      "title": "Channel start opens a window where webhooks 404 but the channel is running",
+      "file": "src/gateway/channel_registry.rs",
+      "line": 446,
+      "category": "concurrency",
+      "description": "In ChannelRegistry::start_channel, between channel.start() returning Ok and webhook_mounts.mount(mount).await (4 statements and one tokio::spawn later), the channel is logically Connected and the inbound forwarder is running, but the HTTP route is not yet mounted. A webhook request arriving in this window returns 404. Same pattern in restart_channel.",
+      "trigger": "Channel restart with a webhook handler, or first channel start under load.",
+      "suggested_fix": "Either (a) build the mount under the channel write lock BEFORE releasing it, or (b) install a placeholder mount under Pending status that the channel swaps atomically when start() returns Ok.",
+      "confidence": "medium",
+      "fixed_in_commit": null,
+      "deferred_reason": "Sub-microsecond race window; requires lock-ordering decision at the channel_registry core. Not a single-line fix."
+    },
+    {
+      "severity": "P2",
+      "title": "Approval-callback cb_ prefix interception is convention-based and brittle",
+      "file": "src/gateway/inbound_router/mod.rs",
+      "line": 549,
+      "category": "wiring",
+      "description": "The router short-circuits to the approval callback sink for any message whose msg.id starts with 'cb_'. Only Telegram and Discord currently mint such IDs. Any future channel that emits a MessageId starting with cb_ will silently have its messages routed through the approval-callback sink.",
+      "trigger": "Future channel adapter uses MessageId = 'cb_...' for non-callback messages, OR upstream proxy rewrites IDs and drops the cb_ prefix.",
+      "suggested_fix": "Promote the prefix to pub const CB_MESSAGE_ID_PREFIX: &str = 'cb_' so producers AND the router consumer reference it.",
+      "confidence": "high",
+      "fixed_in_commit": "57e2ac445"
+    },
+    {
+      "severity": "P2",
+      "title": "AgentLifecycleEvent::Registered/Deleted published with no documented subscriber",
+      "file": "src/gateway/agent_lifecycle.rs",
+      "line": 26,
+      "category": "wiring",
+      "description": "Producers exist for agent.lifecycle.registered (3 sites) and agent.lifecycle.deleted (2 sites). A grep across the entire tree finds zero subscribers. Events fire and travel but cannot drive any UI state.",
+      "trigger": "Operator calls agents.create or agents.delete from Panel/CLI/builtin_tool.",
+      "suggested_fix": "Either (a) add a subscriber in the Panel agent list, or (b) demote to tracing::trace! and remove the bus round-trip.",
+      "confidence": "high",
+      "fixed_in_commit": null,
+      "deferred_reason": "Cross-module coordination needed (Panel + handlers); deferred to a UI/agent-binding pass."
+    },
+    {
+      "severity": "P3",
+      "title": "/stop reply says 'no active run' when cancel_session fails",
+      "file": "src/gateway/inbound_router/command_handler.rs",
+      "line": 411,
+      "category": "error",
+      "description": "handle_stop calls adapter.cancel_session(...).await.unwrap_or_else(|e| { warn!(...); None }) and chooses reply text from cancelled.is_some(). On error the user sees NoActiveRun even though their run is still consuming tokens.",
+      "trigger": "adapter.cancel_session returns Err.",
+      "suggested_fix": "Distinguish 'no active run' from 'tried to stop, failed' in the reply.",
+      "confidence": "high",
+      "fixed_in_commit": null,
+      "deferred_reason": "UX improvement; needs i18n-aware RunStopFailed receipt design."
+    },
+    {
+      "severity": "P3",
+      "title": "check_mention substring heuristic has no word-boundary, false-positives in group chats",
+      "file": "src/gateway/inbound_router/permission.rs",
+      "line": 156,
+      "category": "logic",
+      "description": "The fallback mention check matches ['@aleph', '@bot', 'aleph'] as plain substrings. 'I like aleph beers' is treated as addressing the bot under require_mention=true.",
+      "trigger": "Group chat with require_mention=true, any message containing the substring 'aleph'.",
+      "suggested_fix": "Either drop the substring fallback and require MessageMeta::AppMention, or require word boundaries.",
+      "confidence": "medium",
+      "fixed_in_commit": null,
+      "deferred_reason": "Heuristic-vs-adapter-signal design choice; documented as deliberate fallback in the source."
+    },
+    {
+      "severity": "P3",
+      "title": "ChannelRegistry::unregister documented to always return None for started channels",
+      "file": "src/gateway/channel_registry.rs",
+      "line": 233,
+      "category": "wiring",
+      "description": "Per the doc comment itself: 'start_message_forwarder clones the channel Arc into the forwarder task at start_channel, so after a start the registry is never the sole strong owner and Arc::try_unwrap below ALWAYS fails — this function then returns None'.",
+      "trigger": "Any code path calling unregister on a started channel gets None and reports failure.",
+      "suggested_fix": "Change the return type to bool (or Result<(), UnregisterError>) where the boolean distinguishes 'channel not present' from 'removed but adapter retained by forwarder'.",
+      "confidence": "medium",
+      "fixed_in_commit": null,
+      "deferred_reason": "API contract change; needs coordination across all unregister callers."
+    }
+  ],
+  "severities_summary": {"P0": 0, "P1": 0, "P2": 4, "P3": 3},
+  "notes": "Heavily audited module. The recent severed-wire audit (30edbd21f) deleted AgentInstance::list_runs, DebugHandler module, SubscriptionManager::{get,set}_filter, demoted TopicFilter::with_subscriptions and GatewayEventBus::with_capacity. The remaining findings above survived prior audits and the prior 2026-08-31 group_chat / gateway pass: they are documented in source comments as known issues (bot_loop_protection severed-wire DECIDE, unregister-None-for-started, channel_registry webhook mount ordering, cb_ prefix convention). 1 P2 fixed (cb_ prefix constant), 3 P2 + 3 P3 deferred."
+}
