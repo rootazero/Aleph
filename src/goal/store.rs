@@ -110,7 +110,11 @@ pub enum FieldUpdate {
 }
 
 pub struct GoalStore {
-    conn: std::sync::Mutex<rusqlite::Connection>,
+    // Routed through `crate::sync_primitives` so a loom concurrency test can
+    // exercise the same claim CAS the looping module already exercises under
+    // loom. Using `std::sync::Mutex` directly bypasses the crate convention
+    // (R8 / sync primitives import rule) and prevents the swap.
+    conn: crate::sync_primitives::Mutex<rusqlite::Connection>,
 }
 
 impl GoalStore {
@@ -142,11 +146,11 @@ impl GoalStore {
         )
         .map_err(|e| AlephError::other(format!("goal store init: {e}")))?;
         Ok(Self {
-            conn: std::sync::Mutex::new(conn),
+            conn: crate::sync_primitives::Mutex::new(conn),
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, rusqlite::Connection> {
+    fn lock(&self) -> crate::sync_primitives::MutexGuard<'_, rusqlite::Connection> {
         // P7 lock-safety: never propagate poison.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
