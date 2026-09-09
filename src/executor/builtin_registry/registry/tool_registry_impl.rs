@@ -1361,14 +1361,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move { self.gateway_route_tool.call_json(arguments).await })
             }
 
-            // Media send tool — no dependencies, always available
-            "media_send" => Box::pin(async move {
-                crate::builtin_tools::media_send::MediaSendTool::new(
-                    crate::security::ssrf::SsrfPolicy::default(),
-                )
-                .call_json(arguments)
-                .await
-            }),
+            // Media send tool — no dependencies, always available. Constructed
+            // once in the registry's builder with the operator's configured
+            // `[ssrf]` policy; the dispatch arm uses that instance rather than
+            // rebuilding per call (which used to silently fall back to the
+            // conservative default and ignore the operator's allow/deny rules).
+            // review(executor): previous shape shadowed `BuiltinToolConfig::ssrf_policy`.
+            "media_send" => {
+                let tool = self.media_send_tool.clone();
+                Box::pin(async move { tool.call_json(arguments).await })
+            }
 
             // Deliverable publisher — reads the session from the turn context,
             // so it needs nothing injected here either.

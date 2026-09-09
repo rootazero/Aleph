@@ -37,6 +37,7 @@ impl BuiltinToolRegistry {
         Option<crate::builtin_tools::team::SessionTurnTool>,
         Option<crate::builtin_tools::team::SessionReadTool>,
         crate::builtin_tools::google_meet::GoogleMeetTool,
+        crate::builtin_tools::media_send::MediaSendTool,
         crate::builtin_tools::skill_status::SkillStatusTool,
         crate::builtin_tools::skill_install::SkillInstallTool,
         crate::builtin_tools::skill_manage::SkillManageTool,
@@ -387,6 +388,14 @@ impl BuiltinToolRegistry {
             config.google_meet_bridge.clone(),
             config.ssrf_policy.clone().unwrap_or_default(),
         );
+        // Media-send tool — constructed once with the operator's `[ssrf]`
+        // policy (same source as `google_meet` above), so the dispatch arm
+        // does not rebuild it per call with the conservative default.
+        // review(executor): matches `create_tool_boxed`'s wiring; the previous
+        // per-call `MediaSendTool::new(SsrfPolicy::default())` shadowed it.
+        let media_send_tool = crate::builtin_tools::media_send::MediaSendTool::new(
+            config.ssrf_policy.clone().unwrap_or_default(),
+        );
 
         let skill_system = crate::skill::shared_skill_system().clone();
         let skill_status_tool =
@@ -603,6 +612,7 @@ impl BuiltinToolRegistry {
             session_turn_tool,
             session_read_tool,
             google_meet_tool,
+            media_send_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,
