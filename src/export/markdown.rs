@@ -127,7 +127,15 @@ fn percent_decode_scheme(s: &str) -> String {
         // Advance one full UTF-8 char. `s.is_char_boundary(i)` guards against
         // panicking if a prior percent decode landed mid-multibyte sequence.
         if s.is_char_boundary(i) {
-            let ch = s[i..].chars().next().unwrap();
+            // review(export): `is_char_boundary(i)` plus the only advances (1 byte
+            // for ASCII pass-through, 3 bytes for a consumed `%xx`) guarantee
+            // `s[i..]` is non-empty and starts on a char boundary, so `next()`
+            // cannot return None. `expect` documents that proof for both readers
+            // and `#![deny(clippy::unwrap_used)]` rather than re-asserting it.
+            let ch = s[i..]
+                .chars()
+                .next()
+                .expect("is_char_boundary(i) implies s[i..] is non-empty");
             out.push(ch);
             i += ch.len_utf8();
         } else {
