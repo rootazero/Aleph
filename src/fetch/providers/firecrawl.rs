@@ -120,18 +120,25 @@ impl FetchProvider for FirecrawlFetchProvider {
         .await?;
         // Bound body size before deserializing to avoid OOM on hostile /
         // misconfigured upstreams that return arbitrarily large responses.
-        let body_bytes = bytes_with_limit(resp, MAX_RESPONSE_BYTES)
-            .await
-            .map_err(|e| {
-                AlephError::provider(format!(
-                    "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes: {e}"
-                ))
-            })?
-            .ok_or_else(|| {
-                AlephError::provider(format!(
-                    "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes"
-                ))
-            })?;
+        //
+        // Distinguish `bytes_with_limit`'s two failure shapes:
+        //  - `Err(_)` is a transport-level failure (TCP reset, decode error).
+        //    Surface as `AlephError::network` so the caller sees the real
+        //    cause instead of a misleading "exceeded N bytes" attribution.
+        //  - `Ok(None)` is the explicit size-cap refusal; surface as
+        //    `AlephError::provider` with the size message.
+        // Folding `Err` into the size-cap message (the pre-fix behaviour)
+        // is exactly the fold `bytes_with_limit` was designed to prevent;
+        // its own test asserts that an `Err` from a body stream must not
+        // be reported as a size-cap answer.
+        let bytes = bytes_with_limit(resp, MAX_RESPONSE_BYTES).await.map_err(|e| {
+            AlephError::network(format!("firecrawl body read failed: {e}"))
+        })?;
+        let body_bytes = bytes.ok_or_else(|| {
+            AlephError::provider(format!(
+                "firecrawl response exceeded {MAX_RESPONSE_BYTES} bytes"
+            ))
+        })?;
         let parsed: FirecrawlScrapeResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
             AlephError::provider(format!("Failed to parse firecrawl response: {e}"))
         })?;

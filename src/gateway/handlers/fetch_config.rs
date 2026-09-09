@@ -85,9 +85,14 @@ fn resolve_firecrawl_api_key(vault: &SharedTokenManager) -> Option<String> {
 /// (Decision A — firecrawl needs no `[fetch]` backend entry). Returns `None`
 /// when search firecrawl is unconfigured (absent or empty base URL). `has_api_key`
 /// reflects the shared `search:firecrawl` vault presence; the secret is never echoed.
+///
+/// `verified` is read from `cfg.fetch.verified_shared["firecrawl"]` so a
+/// successful `fetch_config.test` against the shared firecrawl backend can
+/// surface as `verified: true` to the Panel.
 fn synth_firecrawl_dto(
     search: Option<&crate::config::types::SearchConfigInternal>,
     has_api_key: bool,
+    fetch: Option<&crate::config::types::FetchConfigInternal>,
 ) -> Option<FetchBackendDto> {
     let base_url = search?
         .backends
@@ -95,6 +100,9 @@ fn synth_firecrawl_dto(
         .base_url
         .clone()
         .filter(|s| !s.is_empty())?;
+    let verified = fetch
+        .and_then(|f| f.verified_shared.get("firecrawl").copied())
+        .unwrap_or(false);
     Some(FetchBackendDto {
         name: "firecrawl".to_string(),
         provider_type: "firecrawl".to_string(),
@@ -102,7 +110,7 @@ fn synth_firecrawl_dto(
         timeout_seconds: None,
         api_key: None,
         has_api_key,
-        verified: false,
+        verified,
         shares_search: true,
     })
 }
@@ -179,6 +187,7 @@ pub async fn handle_get(
         if let Some(fc) = synth_firecrawl_dto(
             cfg.search.as_ref(),
             resolve_firecrawl_api_key(&vault).is_some(),
+            cfg.fetch.as_ref(),
         ) {
             dto.backends.push(fc);
         }
@@ -467,15 +476,24 @@ pub async fn handle_test(
         },
     };
 
-    // Persist verified=true on success
+    // Persist verified=true on success. Two cases:
+    //  - backends[name] exists → mutate FetchBackendConfig::verified.
+    //  - backends[name] does NOT exist (firecrawl per Strategy V) → write
+    //    into the side-channel `verified_shared` map so synth_firecrawl_dto
+    //    can surface `verified: true` on the next read.
     if test_result.success {
         let mut cfg = config.write().await;
         if let Some(fetch) = &mut cfg.fetch {
-            if let Some(backend) = fetch.backends.get_mut(&params.name) {
-                backend.verified = true;
-                if let Err(e) = cfg.save_incremental(&["fetch"]) {
-                    tracing::error!(error = %e, "Failed to save config after fetch test");
+            let in_backends = fetch.backends.contains_key(&params.name);
+            if in_backends {
+                if let Some(backend) = fetch.backends.get_mut(&params.name) {
+                    backend.verified = true;
                 }
+            } else {
+                fetch.verified_shared.insert(params.name.clone(), true);
+            }
+            if let Err(e) = cfg.save_incremental(&["fetch"]) {
+                tracing::error!(error = %e, "Failed to save config after fetch test");
             }
         }
     }
@@ -529,24 +547,26 @@ mod tests {
     #[test]
     fn synth_firecrawl_dto_present_when_search_configured() {
         let search = search_with_firecrawl("https://api.firecrawl.dev");
-        let dto = synth_firecrawl_dto(Some(&search), true).expect("firecrawl available");
+        let dto = synth_firecrawl_dto(Some(&search), true, None)
+            .expect("firecrawl available");
         assert_eq!(dto.name, "firecrawl");
         assert_eq!(dto.provider_type, "firecrawl");
         assert!(dto.shares_search);
         assert!(dto.has_api_key);
         assert_eq!(dto.base_url.as_deref(), Some("https://api.firecrawl.dev"));
         assert!(dto.api_key.is_none(), "never echo a secret");
+        assert!(!dto.verified, "no fetch config → verified is false");
     }
 
     #[test]
     fn synth_firecrawl_dto_absent_without_search() {
-        assert!(synth_firecrawl_dto(None, false).is_none());
+        assert!(synth_firecrawl_dto(None, false, None).is_none());
         let empty: crate::config::types::SearchConfigInternal =
             serde_json::from_value(serde_json::json!({ "backends": {} })).unwrap();
-        assert!(synth_firecrawl_dto(Some(&empty), true).is_none());
+        assert!(synth_firecrawl_dto(Some(&empty), true, None).is_none());
         let blank = search_with_firecrawl("");
         assert!(
-            synth_firecrawl_dto(Some(&blank), true).is_none(),
+            synth_firecrawl_dto(Some(&blank), true, None).is_none(),
             "empty base_url → unavailable"
         );
     }
