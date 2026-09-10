@@ -40,7 +40,18 @@ fn conservative_redact(text: &str) -> String {
         while let Some(idx) = remaining.to_ascii_lowercase().find(&needle.to_ascii_lowercase()) {
             out.push_str(&remaining[..idx]);
             out.push_str(replacement);
+            // Consume the value following the needle (up to the next
+            // whitespace, delimiter, or quote) so the credential itself does
+            // not survive into the trailing slice — e.g. for input
+            // "Authorization: Bearer xyz" this drops "xyz" along with the
+            // needle. Without this, `out` would end with the replacement and
+            // `remaining` would still hold the secret, leaking it into the
+            // final `out.push_str(remaining)` below.
             remaining = &remaining[idx + needle.len()..];
+            let val_end = remaining
+                .find(|c: char| c.is_whitespace() || matches!(c, '&' | ',' | '"' | '\''))
+                .unwrap_or(remaining.len());
+            remaining = &remaining[val_end..];
         }
     }
     out.push_str(remaining);
