@@ -53,19 +53,19 @@ impl FenceSpan {
 
     /// The fence marker (e.g., "```" or "~~~~").
     #[must_use]
-    pub fn marker(&self) -> &str {
+    pub(crate) fn marker(&self) -> &str {
         &self.marker
     }
 
     /// Leading indentation (0-3 spaces).
     #[must_use]
-    pub fn indent(&self) -> &str {
+    pub(crate) fn indent(&self) -> &str {
         &self.indent
     }
 
     /// Language tag if present (e.g., "rust", "javascript").
     #[must_use]
-    pub fn language(&self) -> Option<&str> {
+    pub(crate) fn language(&self) -> Option<&str> {
         self.language.as_deref()
     }
 
