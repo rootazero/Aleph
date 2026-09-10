@@ -392,10 +392,20 @@ impl LoopState {
         // `pending_tick_wake_ms` when it enqueues the tick. Surface it so a fixed
         // watch-loop reports when it next runs, mirroring the model-paced next-wake
         // line above. Cleared during a firing tick (`confirm_fire`) → omitted then.
+        // When `wake == now_ms` (due now) or the wake is past, render "due now"
+        // instead of dropping the line — the model-paced arm above already does
+        // this and the symmetry matches the user-visible shape across cadences.
         if matches!(self.cadence, Cadence::Fixed { .. }) {
             if let Some(wake) = self.pending_tick_wake_ms {
-                if now_ms != 0 && wake > now_ms {
-                    parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
+                if now_ms != 0 {
+                    if wake > now_ms {
+                        parts.push(format!(
+                            "next tick: in {}",
+                            fmt_duration_ms(wake - now_ms)
+                        ));
+                    } else {
+                        parts.push("next tick: due now".to_string());
+                    }
                 }
             }
         }
@@ -470,11 +480,19 @@ impl LoopState {
         }
         // Fixed-cadence next fire rides the transient tail too — see
         // `human_summary` for why `pending_tick_wake_ms` (not `next_wake_ms`)
-        // holds the known wake for a fixed loop.
+        // holds the known wake for a fixed loop. Mirror the model-paced arm
+        // for due-now / past-wake so both renderers stay in lockstep.
         if matches!(self.cadence, Cadence::Fixed { .. }) {
             if let Some(wake) = self.pending_tick_wake_ms {
-                if now_ms != 0 && wake > now_ms {
-                    parts.push(format!("next tick: in {}", fmt_duration_ms(wake - now_ms)));
+                if now_ms != 0 {
+                    if wake > now_ms {
+                        parts.push(format!(
+                            "next tick: in {}",
+                            fmt_duration_ms(wake - now_ms)
+                        ));
+                    } else {
+                        parts.push("next tick: due now".to_string());
+                    }
                 }
             }
         }
