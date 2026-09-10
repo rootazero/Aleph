@@ -86,7 +86,7 @@ impl FenceSpan {
     /// safe: the `\n` preceding the closing fence sits at `end - 1`, which is
     /// still inside the span.
     #[must_use]
-    pub const fn contains(&self, index: usize) -> bool {
+    pub(crate) const fn contains(&self, index: usize) -> bool {
         index > self.start && index < self.end
     }
 
@@ -98,7 +98,7 @@ impl FenceSpan {
 
     /// Get the reopening fence line (preserves language tag).
     #[must_use]
-    pub fn reopen_line(&self) -> String {
+    pub(crate) fn reopen_line(&self) -> String {
         if !self.info.is_empty() {
             format!("{}{}{}", self.indent, self.marker, self.info)
         } else {
