@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::media::detect::detect_from_path;
@@ -92,7 +92,25 @@ Example:
     type Output = AudioTranscribeOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let path = PathBuf::from(&args.file_path);
+        // SECURITY (P0 MED-01): the model-supplied `file_path` was previously
+        // forwarded to `MediaPipeline::process` as-is, allowing an LLM to
+        // point the tool at `/etc/passwd`, `~/.ssh/id_rsa`, or any other
+        // readable file. Mirror the gate `media_understand` uses: run the
+        // same `check_and_resolve_path` `file_read` runs, surface the denial
+        // as a tool-output error, and use the canonical path everywhere
+        // downstream so the symlink-free promise holds.
+        let path = match crate::builtin_tools::file_ops::check_and_resolve_path(
+            Path::new(&args.file_path),
+            &crate::builtin_tools::file_ops::get_denied_paths(),
+            None,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                return Ok(AudioTranscribeOutput::err(format!(
+                    "path rejected: {e}"
+                )));
+            }
+        };
         let mt = match detect_from_path(&path).await {
             Ok(mt) => mt,
             Err(e) => {

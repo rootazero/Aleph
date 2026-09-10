@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 
+use crate::media::cache::MediaCache;
 use crate::media::error::MediaError;
 use crate::media::provider::MediaProvider;
 use crate::media::types::{DocFormat, MediaInput, MediaOutput, MediaType};
@@ -69,6 +70,21 @@ impl MediaProvider for TextDocumentProvider {
         const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
         match input {
             MediaInput::FilePath { path } => {
+                // SECURITY (P1 MED-04): defense-in-depth — mirror the audio
+                // provider. The tool layer (document_extract) gates the
+                // model-supplied path with `check_and_resolve_path`, but if a
+                // future caller invokes `MediaPipeline` directly we still
+                // refuse any path outside the media trust root. Same predicate
+                // `MediaCache::safe_local_media_path` enforces on the way out.
+                let path_str = path.to_str().ok_or_else(|| MediaError::Refused(
+                    "path is not valid UTF-8".into(),
+                ))?;
+                if MediaCache::safe_local_media_path(path_str).await.is_none() {
+                    return Err(MediaError::Refused(
+                        "path outside media trust root".into(),
+                    ));
+                }
+
                 let meta =
                     tokio::fs::metadata(path)
                         .await
@@ -91,12 +107,36 @@ impl MediaProvider for TextDocumentProvider {
                         ),
                     });
                 }
-                let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-                    MediaError::ProviderError {
-                        provider: "text-document".into(),
-                        message: format!("Failed to read {}: {}", path.display(), e),
+                let content = {
+                    // SECURITY (P1): close the TOCTOU window between the
+                    // trust-root check above and the read itself. Same
+                    // defense as `MediaCache::to_base64` and the Whisper
+                    // transcription path — `tokio::fs::read_to_string`
+                    // follows symlinks at the leaf, so a planted symlink
+                    // could redirect the read to an arbitrary file the
+                    // process can reach.
+                    use tokio::io::AsyncReadExt as _;
+                    let mut options = tokio::fs::OpenOptions::new();
+                    options.read(true);
+                    #[cfg(unix)]
+                    {
+                        options.custom_flags(libc::O_NOFOLLOW);
                     }
-                })?;
+                    let mut file = options.open(path).await.map_err(|e| {
+                        MediaError::ProviderError {
+                            provider: "text-document".into(),
+                            message: format!("Failed to read {}: {}", path.display(), e),
+                        }
+                    })?;
+                    let mut s = String::with_capacity(meta.len() as usize);
+                    file.read_to_string(&mut s).await.map_err(|e| {
+                        MediaError::ProviderError {
+                            provider: "text-document".into(),
+                            message: format!("Failed to read {}: {}", path.display(), e),
+                        }
+                    })?;
+                    s
+                };
                 Ok(MediaOutput::Text { text: content })
             }
             MediaInput::Base64 { data, .. } => {

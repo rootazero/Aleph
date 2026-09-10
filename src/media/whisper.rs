@@ -140,7 +140,40 @@ impl TranscriptionService for WhisperTranscription {
                 MAX_AUDIO_BYTES
             );
         }
-        let file_bytes = tokio::fs::read(&audio.local_path).await?;
+        let file_bytes = {
+            // SECURITY (P1 MED-05): close the TOCTOU window between the
+            // trust-root check (in MediaCache::safe_local_media_path /
+            // the caller's `check_and_resolve_path`) and the read itself.
+            // `tokio::fs::read` follows symlinks; a planted symlink at
+            // the resolved leaf between check and read would let a hostile
+            // actor read an arbitrary file the process can reach. Open
+            // with `O_NOFOLLOW` so the kernel refuses to traverse a leaf
+            // symlink. Same defense as `MediaCache::to_base64`.
+            use tokio::io::AsyncReadExt as _;
+            let mut options = tokio::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            let mut file = options
+                .open(&audio.local_path)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to open audio file {}: {e}",
+                        audio.local_path.display()
+                    )
+                })?;
+            let mut bytes = Vec::with_capacity(audio.size as usize);
+            file.read_to_end(&mut bytes).await.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to read audio file {}: {e}",
+                    audio.local_path.display()
+                )
+            })?;
+            bytes
+        };
         let file_name = audio
             .local_path
             .file_name()

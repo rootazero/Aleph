@@ -24,4 +24,16 @@ pub enum MediaError {
     /// Format detection failed.
     #[error("Cannot detect media format: {0}")]
     DetectionFailed(String),
+
+    /// Path refused by the media trust-root guard.
+    ///
+    /// Defense-in-depth: the tool layer (`audio_transcribe`,
+    /// `document_extract`) gates the model-supplied path with
+    /// `check_and_resolve_path` from `file_ops`, and the providers
+    /// (`AudioMediaProvider`, `TextDocumentProvider`) cross-check the path
+    /// they actually open with `MediaCache::safe_local_media_path`. Both
+    /// layers should agree; this variant is the loud failure when they
+    /// don't (or when a caller bypasses the tool layer).
+    #[error("Media path refused by trust-root guard: {0}")]
+    Refused(String),
 }
