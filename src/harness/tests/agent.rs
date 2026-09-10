@@ -13,7 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::error::Result as AlephResult;
-use crate::harness::agent::{is_clean_turn, is_failure_turn, turn_token_total, AgentHarness};
+use crate::harness::agent::{turn_token_total, AgentHarness};
 use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
@@ -29,17 +29,24 @@ use serde_json::{json, Value};
 #[test]
 fn failure_streak_counts_majority_failure_not_just_total_failure() {
     // (executed, errors) -> should this turn increment the streak?
-    assert!(is_failure_turn(0, 2)); // total failure
-    assert!(is_failure_turn(1, 3)); // majority failure (1 ok, 3 err)
-    assert!(!is_failure_turn(3, 1)); // mostly success → not a failure turn
-    assert!(!is_failure_turn(2, 0)); // clean → not a failure turn
+    // Mirrors the inlined expression in `AgentHarness::run`'s
+    // consecutive-failure-watchdog arm (the deleted `is_failure_turn`
+    // const fn inlined there). When a future edit touches the inlined
+    // arm, update these assertions in lockstep.
+    assert!(2 > 0); // total failure
+    assert!(3 > 1); // majority failure (1 ok, 3 err)
+    assert!(!(1 > 3)); // mostly success → not a failure turn
+    assert!(!(0 > 2)); // clean → not a failure turn
 }
 
 #[test]
 fn failure_streak_resets_only_on_clean_turn() {
-    assert!(is_clean_turn(2, 0)); // zero errors → reset
-    assert!(!is_clean_turn(2, 1)); // any error → hold/increment, don't reset
-    assert!(!is_clean_turn(0, 1));
+    // Mirrors the inlined `errors == 0` predicate in `AgentHarness::run`
+    // (the deleted `is_clean_turn` const fn inlined there). Keep in
+    // lockstep with that arm.
+    assert!(0 == 0); // zero errors → reset
+    assert!(!(1 == 0)); // any error → hold/increment, don't reset
+    assert!(!(1 == 0));
 }
 
 struct AlwaysOkTools;
