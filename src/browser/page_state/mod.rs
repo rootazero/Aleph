@@ -262,7 +262,10 @@ pub struct NodeStates {
     pub disabled: bool,
     pub checked: Option<bool>,
     pub expanded: Option<bool>,
-    pub selected: bool,
+    /// Is this option/tab/row selected? `None` is "nobody looked", exactly as
+    /// for [`Self::checked`] and [`Self::focused`] — a bare `bool` spells that
+    /// as a denial on the JSON face.
+    pub selected: Option<bool>,
     pub required: bool,
     pub readonly: bool,
     /// Does the caret live here? `None` is "no producer has looked", which is
@@ -446,7 +449,7 @@ mod wire_face {
                 disabled: true,
                 checked: Some(true),
                 expanded: Some(true),
-                selected: true,
+                selected: Some(true),
                 required: true,
                 readonly: true,
                 focused: Some(true),

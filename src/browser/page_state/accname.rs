@@ -402,6 +402,7 @@ mod tests {
         RawFrame {
             frame_id: "F".into(),
             loader_id: "L".into(),
+            live_properties_observed: false,
             offset: (0, 0),
             nodes,
         }

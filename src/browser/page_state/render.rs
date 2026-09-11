@@ -249,8 +249,15 @@ fn state_tokens(states: &NodeStates) -> String {
         Some(false) => s.push_str(" [collapsed]"),
         None => {}
     }
-    if states.selected {
-        s.push_str(" [selected]");
+    // `[unselected]`, not silence, and the asymmetry with `focused` below is
+    // deliberate: an unselected option is a thing the model acts ON — clicking
+    // it is how selection changes — where an unfocused node is not. It is the
+    // `[checked]`/`[unchecked]` pair one role over, and a bare `- option "Blue"`
+    // cannot be told apart from an option nobody looked at.
+    match states.selected {
+        Some(true) => s.push_str(" [selected]"),
+        Some(false) => s.push_str(" [unselected]"),
+        None => {}
     }
     if states.required {
         s.push_str(" [required]");
@@ -497,6 +504,7 @@ mod tests {
                 frames: vec![RawFrame {
                     frame_id: "F".into(),
                     loader_id: "L".into(),
+                    live_properties_observed: false,
                     offset: (0, 0),
                     nodes: raw,
                 }],
@@ -710,6 +718,16 @@ mod tests {
     /// a leaf whose text some nearby control carries as a name — is a
     /// non-ancestor rule, and this is the case that goes red when someone
     /// writes one.
+    ///
+    /// **The checkbox line carried `[unchecked]` when this test was written,
+    /// and that token was a defect this expectation pinned.** The control has no
+    /// `checked` attribute and no fetcher looked at it, and the fallback spent
+    /// that absence as "we looked and the answer is no" — on every checkbox in
+    /// every capture. Whole-line expectations are the right instrument and this
+    /// is their cost: a token nobody was thinking about rides along as ratified.
+    /// The state itself belongs to
+    /// `an_absent_attribute_is_silence_rather_than_a_denial` in `build.rs`; what
+    /// is asserted here is the pair of lines.
     #[test]
     fn a_wrapping_label_prints_its_text_and_the_control_it_names() {
         let state = built(&[
@@ -724,7 +742,7 @@ mod tests {
                  scroll=0,0 doc=800x600 no_box=0/3 fetch=1ms",
                 "- generic",
                 "  - text: \"Remember me\" [ref=e1]",
-                "  - checkbox \"Remember me\" [unchecked] [ref=e2] @1,2 3x4",
+                "  - checkbox \"Remember me\" [ref=e2] @1,2 3x4",
             ],
             "the label's visible text and the control's name are two facts"
         );
@@ -930,6 +948,7 @@ mod tests {
             frames: vec![RawFrame {
                 frame_id: "F".into(),
                 loader_id: "L".into(),
+                live_properties_observed: false,
                 offset: (0, 0),
                 nodes: vec![
                     RawNode {
@@ -1146,6 +1165,7 @@ mod tests {
                 frames: vec![RawFrame {
                     frame_id: "F".into(),
                     loader_id: "L".into(),
+                    live_properties_observed: false,
                     offset: (0, 0),
                     nodes,
                 }],

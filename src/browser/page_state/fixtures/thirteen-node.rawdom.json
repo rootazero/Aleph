@@ -9,6 +9,7 @@
       "frame_id": "F-main",
       "loader_id": "L-1",
       "offset": [0, 0],
+      "live_properties_observed": false,
       "nodes": [
         { "backend_node_id": 1, "parent": null, "kind": "document", "tag": null,
           "attrs": [], "text": null, "rect": null, "computed": null,
@@ -64,6 +65,7 @@
       "frame_id": "F-child",
       "loader_id": "L-2",
       "offset": [40, 200],
+      "live_properties_observed": false,
       "nodes": [
         { "backend_node_id": 20, "parent": null, "kind": "document", "tag": null,
           "attrs": [], "text": null, "rect": null, "computed": null,

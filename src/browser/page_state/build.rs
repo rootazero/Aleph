@@ -174,7 +174,7 @@ fn state_node(
         name_covers_all_text: name.covers_all_text,
         name: name.text,
         value: value_of(node),
-        states: states_of(node, role),
+        states: states_of(node, role, fx.frame.live_properties_observed),
         // The one place the frame offset is applied. Position moves; size does
         // not.
         rect: node.rect.as_ref().map(|r| Rect {
@@ -223,6 +223,22 @@ fn value_of(node: &RawNode) -> Option<String> {
     node.attr("value").map(normalize).filter(|v| !v.is_empty())
 }
 
+/// The roles a `checked` answer can be about at all — a bare attribute, an
+/// `inputChecked` reading, or the `false` a live capture derives from silence.
+///
+/// One derivation, because the gate is asked twice and two spellings of one
+/// rule part company (判据 §12). Wider than HTML on purpose: `menuitem` carries
+/// no bare `checked` attribute, but `role="menuitemcheckbox"` maps here and
+/// does carry the state.
+const fn is_checkable(role: Role) -> bool {
+    matches!(role, Role::Checkbox | Role::Radio | Role::MenuItem)
+}
+
+/// [`is_checkable`]'s twin for `selected`.
+const fn is_selectable(role: Role) -> bool {
+    matches!(role, Role::Option | Role::Tab | Role::Row | Role::Cell)
+}
+
 /// The state bits.
 ///
 /// # Which bits a page is allowed to assert about itself, and which it is not
@@ -254,7 +270,23 @@ fn value_of(node: &RawNode) -> Option<String> {
 ///   `attrs`. It is the one bit in this set with no attribute fallback at all,
 ///   and it lived in `attrs` as `":focus"` until a page could forge it — see
 ///   `RawNode`'s doc for the mechanism.
-fn states_of(node: &RawNode, role: Role) -> NodeStates {
+///
+/// # An absent attribute is silence, not a denial
+///
+/// The fallback used to answer `Some(has_attr("checked"))`, so a checkbox with
+/// **no** `checked` attribute rendered `[unchecked]` — a claim that someone
+/// looked and the answer was no, manufactured out of an absence (判据 §8), on
+/// every checkbox in every capture, and pinned by a passing test. It is the
+/// `focused` ruling inverted: *"answering 'the caret is elsewhere' would be its
+/// own invention"* is the same sentence with a different subject.
+///
+/// The attribute's PRESENCE is what this round's finding was about — it records
+/// the *initial* state and goes stale — so its ABSENCE records the initial
+/// state just as weakly. What a page writes is carried; what it does not write
+/// is `None`, and `state_tokens` prints nothing for `None` because only states
+/// that are KNOWN print. `aria-checked="false"` is different and still lands as
+/// `Some(false)`: that is the page saying "no", not the page saying nothing.
+fn states_of(node: &RawNode, role: Role, live: bool) -> NodeStates {
     let aria_true = |name: &str| {
         node.attr(name)
             .is_some_and(|v| v.eq_ignore_ascii_case("true"))
@@ -269,25 +301,38 @@ fn states_of(node: &RawNode, role: Role) -> NodeStates {
     };
     NodeStates {
         disabled: node.has_attr("disabled") || aria_true("aria-disabled"),
-        // The fetcher's reading of the live property wins outright; the page's
-        // attribute answers only where no fetcher looked. `None` for anything
-        // that is not checkable: "this is not a checkbox" and "this checkbox is
-        // off" are different facts, and the renderer prints them differently.
-        checked: node.checked.or_else(|| match role {
-            Role::Checkbox | Role::Radio | Role::MenuItem => {
-                Some(node.has_attr("checked") || aria_true("aria-checked"))
+        // The fetcher's reading of the live property wins outright. Where it
+        // said nothing, `live` decides who answers: a capture that read the
+        // properties answers `false` for a checkable node it did not list
+        // (`inputChecked` is a rare-boolean list — appearing in it IS the
+        // truth value), and the page's markup is not consulted at all. A
+        // capture that did not look leaves the markup as the only evidence.
+        // `None` throughout for anything not checkable: "this is not a
+        // checkbox" and "this checkbox is off" are different facts.
+        checked: node.checked.or_else(|| {
+            if live {
+                is_checkable(role).then_some(false)
+            } else {
+                match role {
+                    _ if is_checkable(role) && node.has_attr("checked") => Some(true),
+                    _ => aria_bool("aria-checked"),
+                }
             }
-            _ => aria_bool("aria-checked"),
         }),
         expanded: aria_bool("aria-expanded"),
-        // `checked`'s twin, and the same precedence. The gated fallback: the
-        // bare `selected` attribute says something only on an element that can
-        // be selected — `<div selected>` is not a selected anything.
-        selected: node.selected.unwrap_or_else(|| match role {
-            Role::Option | Role::Tab | Role::Row | Role::Cell => {
-                node.has_attr("selected") || aria_true("aria-selected")
+        // `checked`'s twin, the same precedence and the same silence (判据
+        // §16). `Option<bool>` for the reason `focused` is one: a bare `bool`
+        // spells "nobody looked" as `"selected": false` on the JSON face, which
+        // is a denial about every node on the page.
+        selected: node.selected.or_else(|| {
+            if live {
+                is_selectable(role).then_some(false)
+            } else {
+                match role {
+                    _ if is_selectable(role) && node.has_attr("selected") => Some(true),
+                    _ => aria_bool("aria-selected"),
+                }
             }
-            _ => aria_true("aria-selected"),
         }),
         required: node.has_attr("required") || aria_true("aria-required"),
         readonly: node.has_attr("readonly") || aria_true("aria-readonly"),
@@ -555,15 +600,17 @@ mod tests {
         let mut raw = fixture();
         raw.frames[1].nodes[3].tag = Some("option".to_string());
         raw.frames[1].nodes[3].attrs = vec![("selected".to_string(), String::new())];
-        assert!(
+        assert_eq!(
             states_of_node(&built(&raw), 23).selected,
+            Some(true),
             "fallback: the page's `selected` on an <option> is the only \
              evidence and must still reach the state"
         );
         raw.frames[1].nodes[3].selected = Some(false);
         let state = built(&raw);
-        assert!(
-            !states_of_node(&state, 23).selected,
+        assert_eq!(
+            states_of_node(&state, 23).selected,
+            Some(false),
             "the fetcher saw the option deselected and the markup won anyway"
         );
         assert!(
@@ -748,6 +795,187 @@ mod tests {
         assert_eq!(json, Some(serde_json::json!(true)));
     }
 
+    /// **An absent attribute is silence, and silence is not a denial.**
+    ///
+    /// The fallback used to answer `Some(has_attr("checked"))`, so a checkbox
+    /// the page never marked — which is nearly every checkbox — rendered
+    /// `[unchecked]`: "somebody looked and the answer is no", manufactured out
+    /// of an absence (判据 §8). Round 3 ruled the other way for the twin, in a
+    /// sentence that transfers verbatim: *"answering 'the caret is elsewhere'
+    /// would be its own invention"*. It was pinned by a passing whole-line
+    /// expectation in `render.rs`, which is why it survived three rounds.
+    ///
+    /// The three cases are asserted together because the rule is about which
+    /// of them are the same: **the page saying yes**, **the page saying no**,
+    /// and **the page saying nothing** — and only the third is silence.
+    #[test]
+    fn an_absent_attribute_is_silence_rather_than_a_denial() {
+        let built = |attrs: &[(&str, &str)]| {
+            let mut raw = fixture();
+            raw.frames[1].nodes[2].attrs = attrs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            PageState::build(
+                &raw,
+                &mut RefTable::new(),
+                1,
+                "https://example.test/hn",
+                "t",
+                Duration::from_secs(0),
+            )
+        };
+        let checkbox = |state: &PageState| {
+            state
+                .nodes
+                .iter()
+                .find(|n| n.backend_node_id == 22)
+                .expect("the fixture checkbox")
+                .states
+                .checked
+        };
+
+        let silent = built(&[("type", "checkbox")]);
+        assert_eq!(
+            checkbox(&silent),
+            None,
+            "a checkbox the page never marked is not a checkbox someone \
+             looked at and found off"
+        );
+        let rendered = render_text(&silent);
+        assert!(
+            !rendered.contains("[unchecked]") && !rendered.contains("[checked]"),
+            "an invented state token reached the text tree:\n{rendered}"
+        );
+
+        // The page saying yes. Weak evidence — it is the INITIAL state — but it
+        // is evidence, and it is all there is until a fetcher looks.
+        assert_eq!(
+            checkbox(&built(&[("type", "checkbox"), ("checked", "")])),
+            Some(true),
+            "the page's own markup stopped reaching the state"
+        );
+
+        // The page saying no, which is NOT silence: `aria-checked="false"` is
+        // an assertion, and the model gets it.
+        let denied = built(&[("type", "checkbox"), ("aria-checked", "false")]);
+        assert_eq!(checkbox(&denied), Some(false));
+        assert!(
+            render_text(&denied).contains("[unchecked]"),
+            "a page that says \"not checked\" is answering, and the answer \
+             must print — otherwise this rule is indistinguishable from one \
+             that stopped reading the attribute at all"
+        );
+    }
+
+    /// **A capture that read the live properties does not consult the markup —
+    /// and its silence about a node is an answer, not a gap.**
+    ///
+    /// This is the obligation that could otherwise undo the whole round.
+    /// `inputChecked` is a rare-boolean index list, so a fetcher doing the
+    /// obvious thing — walk the list, set what it finds — leaves `None` on
+    /// every node whose property is *false*. Per-node, that `None` is
+    /// indistinguishable from "no fetcher ran", the attribute fallback takes
+    /// over, and a box the agent just unchecked reads `[checked]` off stale
+    /// markup with every test green.
+    ///
+    /// `RawFrame::live_properties_observed` moves that obligation from every
+    /// node to one declaration per capture: when it is set, absence within a
+    /// checkable role IS `false`, and the page's attributes are not consulted
+    /// at all. Task 11 cannot get it wrong per-node because there is no
+    /// per-node rule left to get wrong.
+    #[test]
+    fn a_capture_that_read_the_properties_never_falls_back_to_the_markup() {
+        let built = |live: bool, fetcher_said: Option<bool>| {
+            let mut raw = fixture();
+            raw.frames[1].live_properties_observed = live;
+            // Markup says checked; the fetcher's reading is the argument.
+            raw.frames[1].nodes[2].checked = fetcher_said;
+            PageState::build(
+                &raw,
+                &mut RefTable::new(),
+                1,
+                "https://example.test/hn",
+                "t",
+                Duration::from_secs(0),
+            )
+        };
+        let checkbox = |state: &PageState| {
+            state
+                .nodes
+                .iter()
+                .find(|n| n.backend_node_id == 22)
+                .expect("the fixture checkbox")
+                .states
+                .checked
+        };
+
+        // The defect this prevents, stated as the case: the fetcher looked and
+        // did not list this node, so the property is false — while the markup
+        // still says `checked` because the attribute is the initial state.
+        assert_eq!(
+            checkbox(&built(true, None)),
+            Some(false),
+            "a capture that read the properties fell back to the page's stale \
+             markup for a node the fetcher did not list — which is the exact \
+             shape a fetcher produces for every control that is OFF"
+        );
+        // Same capture, same silence, but nobody looked: now the markup is the
+        // only evidence there is and it counts.
+        assert_eq!(
+            checkbox(&built(false, None)),
+            Some(true),
+            "with no fetcher the page's markup is the only evidence and must \
+             still reach the state"
+        );
+        // A node the fetcher DID list is unaffected by the flag.
+        assert_eq!(checkbox(&built(true, Some(true))), Some(true));
+
+        // Applicability still comes from the role: a live capture answers
+        // `false` for things that can be checked, not for everything.
+        let live = built(true, None);
+        let button = live
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 5)
+            .expect("the fixture button");
+        assert_eq!(
+            button.states.checked, None,
+            "\"nothing to check here\" is not \"checked: no\" — a live capture \
+             must not answer for a node the question does not apply to"
+        );
+
+        // `selected`, the twin, through the same flag.
+        let mut raw = fixture();
+        raw.frames[1].live_properties_observed = true;
+        raw.frames[1].nodes[3].tag = Some("option".to_string());
+        raw.frames[1].nodes[3].attrs = vec![("selected".to_string(), String::new())];
+        let state = PageState::build(
+            &raw,
+            &mut RefTable::new(),
+            1,
+            "https://example.test/hn",
+            "t",
+            Duration::from_secs(0),
+        );
+        let option = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 23)
+            .expect("the option");
+        assert_eq!(
+            option.states.selected,
+            Some(false),
+            "the `selected` twin still reads the page's markup under a capture \
+             that looked (判据 §16)"
+        );
+        assert!(
+            render_text(&state).contains("[unselected]"),
+            "and the model is told so: an option nobody can tell apart from an \
+             unobserved one is a line the model cannot act on"
+        );
+    }
+
     /// **A page cannot write a state token into the model's observation.**
     ///
     /// `render::quote` defends page-controlled *strings*; a state token is a
@@ -798,9 +1026,11 @@ mod tests {
              than `Some(false)` is the claim: nobody LOOKED, so answering \
              \"the caret is elsewhere\" would be its own invention"
         );
-        assert!(
-            !button.states.selected,
-            "a page wrote `selected` on a button and the model was told it is selected"
+        assert_eq!(
+            button.states.selected, None,
+            "a page wrote `selected` on a button and the model was told it is \
+             selected — and `None` rather than `Some(false)`, because a button \
+             is not selectable and \"not applicable\" is not \"not selected\""
         );
         let rendered = render_text(&state);
         assert!(

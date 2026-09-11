@@ -159,10 +159,14 @@ pub struct RawNode {
     /// exists to fix.
     ///
     /// `inputChecked` is a rare-boolean index list: a node appears in it iff
-    /// the property is true, so a fetcher must write `Some(false)` for the
-    /// checkable nodes NOT in that list, not `None`. `None` is a statement
-    /// about the fetcher ("I did not look"), and spending it as "not checked"
-    /// hands the page's stale attribute the last word (判据 §8).
+    /// the property is true. **You do not have to write `Some(false)` for the
+    /// rest** — set [`RawFrame::live_properties_observed`] on the frame and
+    /// `build` reads the silence correctly, because the declaration says the
+    /// silence means something. That is deliberate: this doc used to ask for
+    /// the per-node `Some(false)`, which is an obligation the obvious
+    /// implementation (walk the list, set what it finds) violates silently on
+    /// exactly the nodes that matter, and a doc comment is the copy nobody
+    /// re-reads (判据 §1).
     ///
     /// A field, so the page cannot reach it — and so an answer of "no" is
     /// expressible at all, which `attrs` could not do. It **outranks the
@@ -172,10 +176,10 @@ pub struct RawNode {
     #[serde(default)]
     pub checked: Option<bool>,
     /// Is this option selected **now**? [`Self::checked`]'s twin in every
-    /// respect (判据 §16), filled from `DOMSnapshot`'s `optionSelected` and
-    /// subject to the same obligation: the property, never the `selected`
-    /// content attribute, and `Some(false)` rather than `None` for the
-    /// selectable nodes the engine did not list.
+    /// respect (判据 §16), filled from `DOMSnapshot`'s `optionSelected`, the
+    /// property and never the `selected` content attribute, and governed by the
+    /// same frame declaration — so silence about a selectable node is read as
+    /// `false` when [`RawFrame::live_properties_observed`] is set.
     #[serde(default)]
     pub selected: Option<bool>,
 }
@@ -219,6 +223,58 @@ pub struct RawFrame {
     pub loader_id: String,
     /// Where this document's origin sits in page coordinates.
     pub offset: (i32, i32),
+    /// **Did this capture read the live DOM properties** for the three fields
+    /// that have a page-attribute fallback — [`RawNode::checked`],
+    /// [`RawNode::selected`] and [`RawNode::value`]?
+    ///
+    /// # What it licenses
+    ///
+    /// `true` says: for this frame, the fetcher asked the engine for the
+    /// properties. `build` then reads **only** the fields — the page's
+    /// `checked` / `selected` / `value` content attributes are not consulted at
+    /// all — and a checkable node the fetcher left `None` is one whose property
+    /// is **false**, because `DOMSnapshot` reports these as rare-boolean index
+    /// lists where a node appears iff the property is true.
+    ///
+    /// `false` says the opposite: nobody looked, so the page's markup is the
+    /// only evidence there is, and it is evidence of the **initial** state.
+    ///
+    /// # Why this is a property of the CAPTURE and not of the node
+    ///
+    /// A per-node rule is one a fetcher author has to honour on every node, and
+    /// it fails silently on the node nobody thought about: the obvious
+    /// implementation — walk `inputChecked`, set the ones it lists — leaves
+    /// `None` on every other node, and a `None` that falls back to a stale
+    /// content attribute is exactly the defect the fields were added to fix.
+    /// Declared once per frame, that obligation cannot be got wrong per-node.
+    ///
+    /// # Why the FRAME and not `RawDom`
+    ///
+    /// A capture is assembled per document — an out-of-process iframe is a
+    /// separate `DOMSnapshot` call, and this module's fixtures carry such a
+    /// pair — so one document's read can succeed while another's does not.
+    /// Per-frame is never worse than per-capture and matches the unit a fetcher
+    /// actually assembles. A fetcher that reads properties for the whole page
+    /// writes `true` on every frame, which costs it one line.
+    ///
+    /// # Why there is no `#[serde(default)]`, unlike every other new field
+    ///
+    /// Deliberate, and the distinction is the point: [`RawNode::focused`] and
+    /// friends are per-NODE data, where absent honestly means "this node was
+    /// not mentioned". This is a capture's **declaration about itself**, and a
+    /// capture that does not say what it looked at is one nobody can read
+    /// safely (判据 §8). Omitting it is a missing-field error from serde and a
+    /// compile error at every construction site, which is the whole reason to
+    /// spend a required field here.
+    ///
+    /// **A `false` here is conservative, not neutral**, and that is why it is
+    /// the shape of the type rather than a default: a fetcher that fills the
+    /// fields but forgets this flag still gets the attribute fallback, and a
+    /// node whose markup says `checked` but whose property is false will read
+    /// `[checked]`. Defaulting the other way would be worse — it would have an
+    /// unset flag manufacture `Some(false)` denials on every checkable node in
+    /// every hand-written capture, which is the invention this round removed.
+    pub live_properties_observed: bool,
     pub nodes: Vec<RawNode>,
 }
 
