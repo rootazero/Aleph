@@ -25,9 +25,20 @@ use tokio::task::JoinHandle;
 use super::icon::use_unicode;
 use super::theme::{paint, Style};
 
-const BRAILLE_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const ASCII_FRAMES: &[&str] = &["|", "/", "-", "\\"];
-const FRAME_INTERVAL: Duration = Duration::from_millis(80);
+/// The braille frames and their cadence come from `shared-ui-logic`, which
+/// owns them for every surface that paints this spinner. They used to be
+/// spelled out here as an identical `&[&str]` beside an identical `80` —
+/// the same fact in three places, and the two clients would have drifted
+/// silently because nothing compares one surface's spinner to another's
+/// (判据 §1).
+use shared_ui_logic::transcript::{SPINNER_FRAMES, SPINNER_PERIOD_MS};
+
+/// The ASCII stand-in for terminals that cannot render braille. It stays
+/// local because it has exactly one holder: `use_unicode()` is this crate's
+/// gate and no other surface offers the fallback. Moving it to the shared
+/// crate would create a second home for a fact with one reader.
+const ASCII_FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+const FRAME_INTERVAL: Duration = Duration::from_millis(SPINNER_PERIOD_MS);
 
 /// RAII handle for an active spinner. Drop or call [`Spinner::stop`] to
 /// clear the line.
@@ -54,10 +65,10 @@ impl Spinner {
         }
         let stop_signal = Arc::new(Notify::new());
         let signal = stop_signal.clone();
-        let frames: &'static [&'static str] = if use_unicode() {
-            BRAILLE_FRAMES
+        let frames: &'static [char] = if use_unicode() {
+            &SPINNER_FRAMES
         } else {
-            ASCII_FRAMES
+            &ASCII_FRAMES
         };
 
         let join = tokio::spawn(async move {
@@ -67,7 +78,7 @@ impl Spinner {
                     let mut err = std::io::stderr().lock();
                     // \r returns cursor; \x1b[K clears to end-of-line.
                     let frame = frames[idx % frames.len()];
-                    let painted = paint(Style::Info, frame);
+                    let painted = paint(Style::Info, &frame.to_string());
                     let _ = write!(err, "\r{painted} {message}\x1b[K");
                     let _ = err.flush();
                 }

@@ -692,26 +692,14 @@ pub enum AgentPanelData {
     Loading,
     /// A `runtime.agents.list` reply. An empty `Vec` here really does mean
     /// "no agents running" — nothing upstream needs to guess.
-    #[allow(
-        dead_code,
-        reason = "the entries are the whole point of this variant and are read by Task 8b's widget, not by anything in Task 8a's scope (mod.rs/app/mod.rs/app/events.rs) — see R8-3's scope fence"
-    )]
     Ready(Vec<RuntimeAgentEntry>),
     /// The operator gate said no (`runtime.agents.list` returned
     /// [`aleph_protocol::jsonrpc::AUTH_REQUIRED`]) — distinguished from
     /// [`Self::Unavailable`] by the JSON-RPC error CODE, never by matching
     /// words in the message (P8).
-    #[allow(
-        dead_code,
-        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
-    )]
     Refused(String),
     /// Every other failure: transport, timeout, decode. Not the operator
     /// gate specifically — see [`Self::Refused`].
-    #[allow(
-        dead_code,
-        reason = "the message is rendered by Task 8b's widget, not read anywhere in Task 8a's scope"
-    )]
     Unavailable(String),
 }
 
