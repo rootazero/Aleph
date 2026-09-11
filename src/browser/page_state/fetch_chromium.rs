@@ -1146,9 +1146,24 @@ mod tests {
     ///
     /// Two authorities, neither of them the flag itself: the flag is asserted
     /// on frames built from every fixture in this directory, and the module's
-    /// production source is censused for the four reads that make the
-    /// declaration honest. A flag set `true` by a fetcher that had stopped
-    /// reading `optionSelected` would pass the first and fail the second.
+    /// production source is censused for the four READS that make the
+    /// declaration honest.
+    ///
+    /// The census is written on `doc.nodes.<field>`, not on `<field>`, and that
+    /// took a measurement. The first version matched the bare field name, which
+    /// the wire struct's own DECLARATION also carries: deleting the `text_value`
+    /// read while leaving `text_value: RareStringData` in the struct left this
+    /// test green, with the fetcher no longer reading a list its frames were
+    /// still declaring they had read. Measured at `496cd85ca` — the mutation
+    /// reddened `the_real_same_origin_capture_fills_the_live_property_fields`
+    /// and nothing here.
+    ///
+    /// Its remaining scope, said out loud because a guard is worth exactly that
+    /// (判据 §3): it catches a deleted read, not a rebound receiver — someone
+    /// who writes `let n = &doc.nodes;` and reads `n.text_value` evades it. The
+    /// authority that does not is the EFFECT: `the_real_same_origin_capture_fills_the_live_property_fields`
+    /// asserts all four lists against a capture Chrome produced, and all four
+    /// have been shown red.
     #[test]
     fn every_frame_declares_that_this_capture_read_the_live_properties() {
         for (name, text) in [
@@ -1188,16 +1203,16 @@ mod tests {
             "the census can no longer see the field it is about — the \
              instrument is what is broken, not the tree"
         );
-        for field in [
-            "input_checked",
-            "option_selected",
-            "input_value",
-            "text_value",
+        for read in [
+            "doc.nodes.input_checked",
+            "doc.nodes.option_selected",
+            "doc.nodes.input_value",
+            "doc.nodes.text_value",
         ] {
             assert!(
-                code.contains(field),
+                code.contains(read),
                 "the frame declares that this capture read the live properties, \
-                 but production code no longer reads `{field}` — the \
+                 but production code no longer contains `{read}` — the \
                  declaration has become a claim about work nobody does"
             );
         }
