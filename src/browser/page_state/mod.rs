@@ -59,7 +59,11 @@ impl Role {
     /// compiler**: [`Self::walk`] is const-evaluated to build [`Self::ALL`],
     /// and it panics — a hard compile error in a `const` initializer — if the
     /// chain [`Self::next`] describes is any other length.
-    pub const COUNT: usize = 27;
+    ///
+    /// `pub(crate)`: it exists to size `ALL` and to make that check possible,
+    /// and nothing outside this crate reads it. A caller wanting the count has
+    /// `Role::ALL.len()`, which cannot drift from the array it describes (P5).
+    pub(crate) const COUNT: usize = 27;
 
     /// Where [`Self::ALL`] starts.
     const FIRST: Role = Role::Link;

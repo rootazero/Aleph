@@ -539,6 +539,42 @@ mod tests {
         );
     }
 
+    /// **The label and the visible text are two different facts, and the model
+    /// gets both.**
+    ///
+    /// `<button aria-label="Save document">Save</button>` is ordinary markup —
+    /// not an adversarial case and not a rare one — and the substring rule
+    /// absorbed the `"Save"` leaf into the label that contains it. What the
+    /// accessibility tree claims and what a human actually sees are separate
+    /// observations, and where they diverge that divergence is usually the
+    /// interesting part; collapsing them makes one of the two invisible with no
+    /// token saying so.
+    ///
+    /// This is a **visible behaviour change on real pages**, which is why it
+    /// has a fixture of its own rather than riding on the `$29` case: that one
+    /// is about a leaf colliding with an unrelated part of a name, this one is
+    /// about a leaf that IS the name's subject. Deleting the
+    /// `name_from_content` distinction reddens this by name.
+    #[test]
+    fn a_label_and_the_text_under_it_are_two_facts_and_both_are_shown() {
+        let state = built(&[
+            (Some("button"), &[("aria-label", "Save document")], None, 0),
+            (None, &[], Some("Save"), 1),
+        ]);
+        let rendered = render_text(&state);
+        assert_eq!(
+            rendered.lines().collect::<Vec<_>>(),
+            vec![
+                "# engine=chromium gen=1 url=\"https://x.test/\" viewport=800x600 \
+                 scroll=0,0 doc=800x600 no_box=0/2 fetch=1ms",
+                "- button \"Save document\" [ref=e1] @1,2 3x4",
+                "  - text: \"Save\" [ref=e2]",
+            ],
+            "the label and the text the user sees are different facts and the \
+             model is shown both"
+        );
+    }
+
     /// **…and nothing may print twice**, which is the other direction of the
     /// same rule and needs its own guard.
     ///
