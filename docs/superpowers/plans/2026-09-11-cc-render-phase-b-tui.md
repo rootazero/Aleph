@@ -33,15 +33,24 @@ Already built and tested in Phase A; this phase adds the first caller for each.
 
 ## 1b. Status (2026-09-11)
 
-**B1–B5 landed.** B1/B2/B3 — `6594bfca6` (shared `at_ms`) + `071fac0f0` (the
+**B1–B6 landed.** B1/B2/B3 — `6594bfca6` (shared `at_ms`) + `071fac0f0` (the
 TUI). B4 — `3db635bed` (one flag set across four renderers) + `9e0c8eb7f`
-(lazy syntect). B5 — mouse, region table, `chat_scroll`. 377 `aleph-tui`
-tests green, zero warnings in both test and non-test builds; `aleph-cli`,
-`shared-ui-logic` and `aleph-panel` re-verified because shared types moved.
+(lazy syntect). B5 — mouse, region table, `chat_scroll` (`4b5648464`,
+`1b91f285e`). B6 — header, boxless composer, hint line, width-aware status
+line, cost (`d94e67e95`) plus an entropy commit (`9712a87c3`). 414
+`aleph-tui` tests green, zero warnings in both test and non-test builds;
+`aleph-cli` (241) and `shared-ui-logic` (154) re-verified. B6 touched only
+`interfaces/tui/`, so `aleph-panel` was not re-run for it.
 
-**B5 found a severed wire it did not create:** `ctrl+o` has been printed under
-every folded tool row since B2 and was bound to nothing, and `ToolRow::expanded`
-had no writer in the crate. See B5's own section.
+**Each of B5 and B6 found a severed wire it did not create.** B5: `ctrl+o`
+had been printed under every folded tool row since B2, bound to nothing, and
+`ToolRow::expanded` had no writer in the crate. B6: `TranscriptEntry::TurnSummary`
+had a renderer in `chat_area` since B3 and no producer anywhere, and
+`last_run_duration` was written at every run end and rendered nowhere. Both
+sections below have the detail. The pattern is now three for three: **a round
+that adds a renderer, a label or a field should grep for the other end in the
+same sitting** — dead-code analysis is structurally blind to this shape,
+because both ends exist.
 
 Four things came out different from the plan below, and each is recorded where
 it happened rather than only here:
@@ -270,7 +279,7 @@ way is that a tool row arriving *after* the keystroke arrives folded — wearing
 of the transcript needs the emulator's override (Shift+drag in most). Whether a given Windows Terminal
 profile honours that is on the real-machine list, unmeasured.
 
-### B6 — Chrome
+### B6 — Chrome ✅
 
 - Header as the first transcript entry: `ℵ Aleph 26.x · <model> · ~/cwd (branch)`.
 - Input: drop the full box; flat rule + gold `❯` + dim `Try "…"` when empty; grows with content.
@@ -279,6 +288,77 @@ profile honours that is on the real-machine list, unmeasured.
 - Cost = `session.usage` + accumulated `RunSummary.estimated_cost_usd`. Verb per turn from `affordance::verb`, re-rolled every 7 s; `✻ Worked for 12s` on completion.
 
 **Guard:** a narrow-width test asserts the status line drops segments in the declared priority and never exceeds the width — the one thing a format string will get wrong silently.
+Landed as `status_bar::tests::a_narrow_line_sheds_segments_in_the_declared_order` (the pure
+function, at every width from 8 to 120) plus
+`what_survives_the_fit_is_what_reaches_the_screen` (the painted cells). Mutation-verified by
+disabling the drop loop and by inverting `max`→`min` on the priority.
+
+#### Six deviations from this section as written
+
+1. **The header's folder is `SessionSnapshot.project_root`, and it is absent when the server
+   reports none.** `~/cwd` cannot mean the terminal's own working directory here: the gateway
+   may be on another machine, and when it is not, the agent's cwd is still its own
+   `~/.aleph/workspaces/{agent_id}` rather than wherever the TUI was launched. The client is
+   told exactly one directory — the conversation's `project_root` — so that is the one shown,
+   and a conversation scoped to nothing shows nothing (判据 §1's fourth face: a line that
+   describes another subsystem's state).
+2. **The branch is read from this machine's filesystem, and that is the one piece that can be
+   wrong.** No RPC reports it. `git_branch_of` reads `<project_root>/.git/HEAD`, following the
+   `gitdir:` pointer a worktree leaves (this repository is one), and yields `None` for anything
+   it cannot read — which is what a remote gateway's path produces. The residual case is
+   documented at the function: a remote gateway whose `project_root` *also* exists here.
+3. **`aleph-tui` gained a `build.rs`.** The header names a version and this crate had no
+   `ALEPH_VERSION`: it must not depend on `alephcore`, and `CARGO_PKG_VERSION` is the
+   workspace number kept in sync with the `VERSION` file *by hand*. Same script, same reason,
+   as `interfaces/cli/build.rs` — a third reader of the one source of truth, not a third
+   source.
+4. **The status line kept its existing segments.** The spec's example line does not show
+   `cache N%`, the session key, the token count or `T:`, but each of those is a live signal
+   someone added for a reason (a cache drop is how a prefix bust announces itself). They are
+   segments with priorities rather than deletions; the width logic is what the section asked
+   for, and it is what decides which of them a narrow terminal keeps.
+5. **The hint line names keys only; `⏵⏵ auto` is not on it.** The exec tier already has exactly
+   one home, on the status line. Rendering it twice is the same fact in two places waiting to
+   disagree (判据 §1). The "compressed while typing" form is the send/newline keys instead —
+   which is a better answer to the same need, because those two key names had been living in
+   the input box's title and the box is what this task deletes.
+6. **`✻ Worked for 12s` and the turn summary are two rows, not one.** They are two clocks: the
+   summary sums the tools' own durations, the trailer is the run's wall clock, and the gap
+   between them is the time the model spent thinking. Collapsing them would have to pick one
+   and be wrong about the other.
+
+#### The welcome message is gone, and that is the point
+
+`AppState::new` opened every session with `Welcome to Aleph CLI. Session: … | Model: … Type
+/help for commands.` All three of its facts now have one live home each — the model on the
+derived header, the key on the status bar, `/help` on the hint line — and the entry was a
+frozen string: the model it named was correct only until the first session snapshot arrived,
+about a second later. The transcript now starts empty and the header is derived per frame
+rather than stored, so `/session` and a model switch move it.
+
+#### Two things B6 found rather than built
+
+- **`TranscriptEntry::TurnSummary` had a renderer and no producer.** `chat_area` has rendered
+  it since B3; nothing in the crate ever constructed one outside a test. Same shape as B5's
+  `ctrl+o` (判据 §7). A completed run now emits one via the shared `summarize_turn`, counted
+  over the rows `RunSummary.tool_summaries` names so it describes *that run* rather than
+  everything still on screen.
+- **`last_run_duration` was written at every run end and read by nothing** but the test
+  asserting it had been written (判据 §17). Deleted in the entropy commit; the duration
+  reaches a reader now as the trailer.
+
+#### One guard of my own that was green for the wrong reason
+
+`what_survives_the_fit_is_what_reaches_the_screen` first asserted that at 40 columns the
+session key is *absent*. It stayed green with `fit` disabled entirely — a 40-column buffer
+cannot hold the session key whether it was dropped or clipped, so the assertion was measuring
+the backend's width (判据 §10). What only dropping can produce is the segment to the *right*
+of the shed ones becoming visible, so it now asserts the working indicator is on screen at 40
+columns. That version reddens under the mutation.
+
+**Cost to note:** the composer is two rows shorter than the boxed version at its minimum, and
+the hint line takes one of them back — net one row returned to the transcript. The chat area
+still has its own box; only the input lost one.
 
 ### B7 — `/context` overlay, `/theme` command
 
@@ -330,6 +410,13 @@ carries syntect's syntax definitions too.
 - ~~Delete `widgets/tool_block.rs`~~ (done in B3) and ~~the old `markdown.rs` body~~ (done in B4).
 - Delete `btw_panel.rs`'s second spinner (`affordance::spinner_frame` is the one source).
 - Delete the three stale `#[allow(dead_code)]` in `AgentPanelData`.
+- Done early, in `9712a87c3`, because B6 walked into them: the **second
+  `SessionKnob` enum** (`app/mod.rs`'s, a four-arm identity relabelling of the
+  parser's, defended by a comment that described a wiring the code does not
+  have) and **`last_run_duration`** (written every run end, rendered nowhere).
+  Removing the enum also returned `AppState`'s doc comment to `AppState` —
+  the enum had been inserted under the banner and took the `///` lines with
+  it, leaving the struct undocumented.
 - Done along the way, because the compiler named them: `Theme::code_bg`,
   `Theme::link`, `Theme::quote`, `Theme::code_block_border` had no readers left
   once the renderer moved to `palette().color(role)`. Note that
@@ -370,3 +457,10 @@ Two instrument notes earned in this phase:
   function it was testing, one had a fixture that wrapped itself. A third
   guard survived its own deletion, which is how the redundant scroll clamp
   was found (判据 §18).
+- **A narrow `TestBackend` cannot tell "dropped" from "clipped".** B6's
+  status-line paint test first asserted that the session key is absent at 40
+  columns — which stays green with the drop logic deleted, because a
+  40-column buffer could not have held it either way. The assertion has to
+  name something only dropping can produce: the segment to the RIGHT of the
+  shed ones appearing. Same family as the width note above — the backend's
+  own size is not evidence about the code that filled it.
