@@ -224,12 +224,13 @@ impl EngineRegistry {
     /// can see instead of a way only a stopwatch can find. The lock is held by
     /// [`Self::handle`] across, in order:
     /// a dead handle's `shutdown()` (≤ [`super::ENGINE_KILL_GRACE`]),
-    /// `process.launch()` (≤ `chromium::DEVTOOLS_PORT_DEADLINE`, deliberately
-    /// not an intra-doc link: this fn is `pub` and that constant is
-    /// `pub(crate)`, so the link would not resolve for a reader outside the
-    /// crate — for
-    /// the spawn, **plus an unbounded binary-resolve step that no constant
-    /// covers**), and `bring_up` (≤ [`super::readiness::READY_GATE_BUDGET`]).
+    /// `process.launch()` (≤ `chromium::DEVTOOLS_PORT_DEADLINE` for the spawn,
+    /// **plus an unbounded binary-resolve step that no constant covers**), and
+    /// `bring_up` (≤ [`super::readiness::READY_GATE_BUDGET`]).
+    ///
+    /// `DEVTOOLS_PORT_DEADLINE` is deliberately not an intra-doc link: this fn
+    /// is `pub` and that constant is `pub(crate)`, so the link would not
+    /// resolve for a reader outside the crate.
     /// Sum the three constants for the floor; the resolve makes it a floor
     /// rather than a ceiling.
     ///
@@ -296,9 +297,11 @@ impl EngineRegistry {
         // `shutdown()`. Starting the clock after the acquisition made the
         // declared budget describe only the kills: measured at 1.856 s and
         // 2.856 s in two runs against a stated 1 s. A limit's POSITION decides
-        // what it limits (判据 §13), and the consumer here is the wedged-exit
-        // failsafe, where `SHUTDOWN_FAILSAFE` is already spent, `exit(0)`
-        // follows and nothing is behind it — so an overrun is not slow, it is
+        // what it limits (判据 §13). There are TWO consumers, not one: the
+        // wedged-exit failsafe, where `SHUTDOWN_FAILSAFE` is already spent and
+        // `exit(0)` follows with nothing behind it; and the orderly path, which
+        // RACES that same watchdog and loses everything downstream if it
+        // overruns. For either of them an overrun is not slow, it is
         // the browsers never being stopped at all.
         let deadline = tokio::time::Instant::now() + budget;
 
@@ -366,8 +369,10 @@ impl EngineRegistry {
                 budget_ms = budget.as_millis(),
                 stopped = died.load(Ordering::Relaxed),
                 "the engine shutdown did not finish inside its budget; the engines \
-                 among these pids that had not been stopped yet are left for the next \
-                 boot sweep, and their sidecars with them"
+                 among these pids that had not been stopped yet are still running, and \
+                 they may NOT be collected later: the boot sweep declines to act on a \
+                 pid whose argv it cannot read, so on such a host they are orphaned \
+                 permanently rather than deferred"
             );
         }
         died.load(Ordering::Relaxed)
@@ -931,15 +936,15 @@ mod tests {
         // The three domains really were enabled — a tab whose domains were
         // never enabled looks exactly like a quiet one.
         //
-        // ⚠️ This block is also the guard for a DUPLICATION (R89): `attach_tab`
-        // spells these three method names itself, because
-        // `aleph_cdp::methods::{page,runtime,network}::enable` hardcode the
-        // connection's full `command_timeout` and cannot be handed a
-        // remainder. Two copies of one fact are survivable exactly when a
-        // guard fails on drift and the next reader can find it — this is that
-        // guard, it asserts all THREE names (a guard covering two of three
-        // reports green on the drift it misses), and it must not be deleted as
-        // redundant with the loop it is checking.
+        // ⚠️ This asserts the three names against the WIRE, which is worth
+        // having — but it is **not** the guard for the R89 duplication, and it
+        // used to claim it was. Measured: mutating the OWNER
+        // (`runtime::enable` made to send `Page.enable`) reddens
+        // `a_stalled_enable_and_a_refused_enable_are_told_apart` and leaves
+        // THIS test green, because both copies still agree with each other.
+        // Two copies agreeing is not either of them agreeing with the owner.
+        // That other test is the duplication's guard; this one pins that the
+        // three domains are enabled at all.
         let asked: Vec<String> = server
             .received()
             .iter()
@@ -991,10 +996,18 @@ mod tests {
     /// the names `attach_tab` sends are the names the wrappers that own them
     /// send.
     ///
-    /// Both facts in one test because they are read off the same attach. The
-    /// two messages collapsed into one when the per-call budget replaced the
-    /// outer wrapper, and nothing pinned either — an unreachable branch naming
-    /// a specific cause is a wrong label waiting to happen (判据 §17).
+    /// Both facts in one test because they share one engine and one fake peer,
+    /// NOT because they are read off the same attach — there are three attaches
+    /// here (T2 for the name comparison, T3 refused, T4 stalled), and an
+    /// earlier version of this sentence said otherwise. The two messages
+    /// collapsed into one when the per-call budget replaced the outer wrapper,
+    /// and nothing pinned either — an unreachable branch naming a specific
+    /// cause is a wrong label waiting to happen (判据 §17).
+    ///
+    /// ⚠️ Those three attaches are sequential assertions in one test, so the
+    /// ordering corollary applies to them: the name comparison runs first and a
+    /// mutation that trips it never reaches the two message assertions. That is
+    /// why the owner-drift mutation had to be one the fake peer ANSWERS.
     #[tokio::test]
     async fn a_stalled_enable_and_a_refused_enable_are_told_apart() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2010,8 +2023,9 @@ mod tests {
             elapsed < threshold,
             "the shutdown budget did not bound the LOCK acquisition: {elapsed:?} \
              against a {ENGINE_SHUTDOWN_BUDGET:?} budget, with a launch holding \
-             the guard. The caller is the wedged-exit failsafe, where \
-             SHUTDOWN_FAILSAFE is already spent and exit(0) follows — an overrun \
+             the guard. Both callers lose by an overrun: the wedged-exit failsafe \
+             has already spent SHUTDOWN_FAILSAFE and exit(0) follows, and the \
+             orderly path races that same watchdog — an overrun \
              there is the external SIGKILL landing first and the browsers never \
              being stopped at all"
         );

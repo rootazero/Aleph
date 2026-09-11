@@ -847,9 +847,16 @@ impl ProfileManager {
     /// under `attach --cdp` the CLI was never the browser's parent — so without
     /// this every restart leaves a Chromium running until the next boot sweep.
     ///
-    /// **Must finish inside `SHUTDOWN_FAILSAFE` (5 s, `start/helpers.rs`),**
-    /// because one of its two call sites is the wedged-shutdown watchdog and
-    /// the `std::process::exit(0)` after it waits for nobody. What that buys
+    /// **Must finish inside `SHUTDOWN_FAILSAFE` (`start/helpers.rs`)** — both
+    /// call sites, not just one. The wedged-shutdown watchdog IS that failsafe
+    /// and the `std::process::exit(0)` after it waits for nobody; the orderly
+    /// path races the same watchdog, because its `JoinHandle` is dropped and
+    /// nothing cancels it. That is why `budget` is a parameter and why the
+    /// orderly caller derives its own from the failsafe rather than from a
+    /// constant in this crate: for a while it threaded 35.5 s through here,
+    /// against a doc that said 5 s and was never re-read because this task
+    /// never edited it (判据 §1's fourth form — a doc that stayed true until
+    /// someone changed its subject). What that buys
     /// this function is a rule, not a budget: SIGKILL plus a bounded reap per
     /// child, and **never a graceful handshake**. No SIGTERM-then-wait, no CDP
     /// `Browser.close`, no round trip to a browser that may be the reason the
@@ -866,7 +873,9 @@ impl ProfileManager {
     pub async fn shutdown_browsers(&self, budget: Duration) -> usize {
         // The playwright-owned Chromiums first, unchanged and synchronous:
         // this half has always had to fit inside SHUTDOWN_FAILSAFE and still
-        // does, and it costs the engine half nothing to run first.
+        // does, and it costs the engine half nothing to run first. Note it is
+        // NOT covered by `budget`: the caller's budget bounds the engine half
+        // below, and this synchronous call runs before the clock starts.
         let mut stopped = self.playwright_cli_driver.shutdown_all_chromium();
         // Still hard-bounded, but by the CALLER's budget and inside
         // `shutdown_all`. A `timeout` wrapped around the call
@@ -880,7 +889,9 @@ impl ProfileManager {
         // stops. It briefly did not — the deadline started after the lock, so a
         // launch in flight could hold this call for ~35 s against a stated 1 s.
         // Worth knowing here rather than only at the definition, because this
-        // is the call site whose own caller is the wedged-exit failsafe.
+        // is the call site both daemon exit paths reach: the wedged-exit
+        // failsafe AND the orderly teardown, which race the same watchdog and
+        // pass different budgets for exactly that reason.
         stopped += self.engines.shutdown_all(budget).await;
         stopped
     }
