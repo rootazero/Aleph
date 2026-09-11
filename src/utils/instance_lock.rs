@@ -7,7 +7,9 @@
 //! of the locked file itself fails with os error 33 on Windows, where `fs2`
 //! uses `LockFileEx` and an exclusive lock blocks reads from all other handles.
 //! The lock is automatically released by the OS when the holder process exits
-//! (graceful, panic, SIGKILL — all release).
+//! (graceful, panic, SIGKILL — all release). The sidecar is removed on a clean
+//! release (`Drop`); only a crash, SIGKILL, or a forced `process::exit` leaves
+//! it behind, which is what `aleph doctor`'s stale-lock finding is for.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -50,7 +52,35 @@ impl InstanceLock {
     }
 }
 
-// Drop releases the OS-level fs2 lock automatically when `file` is dropped.
+impl Drop for InstanceLock {
+    /// Take the holder record down with the lock on a clean release.
+    ///
+    /// This body runs while `file` — and therefore the OS lock — is still
+    /// held: Rust drops fields *after* `drop` returns. So no successor can
+    /// have acquired the lock and written its own sidecar yet, and the only
+    /// record this can remove is ours (a successor writes a fresh one once
+    /// it wins the lock). Do not move the removal after the release.
+    ///
+    /// Without this the sidecar outlived every clean exit naming a dead PID,
+    /// and `aleph doctor` reported "Stale lock file … a crashed daemon left
+    /// it behind" after every `aleph stop`. A crash, SIGKILL, or the forced
+    /// `std::process::exit` paths still skip this — which is exactly the case
+    /// that finding exists for. The fork parents in `daemonize` also exit via
+    /// `process::exit`, so only the daemonized grandchild ever runs this.
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.holder_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                holder = %self.holder_path.display(),
+                error = %e,
+                "instance lock released but its holder sidecar could not be removed; \
+                 `aleph doctor` will report it as stale until it is cleared"
+            ),
+        }
+        // `file` drops after this returns and releases the OS-level fs2 lock.
+    }
+}
 
 #[derive(Debug)]
 pub enum AcquireOutcome {
@@ -301,6 +331,35 @@ mod tests {
             }
             other => panic!("expected HeldByLive, got {:?}", other),
         }
+    }
+
+    /// The other half of the "stale sidecar" loop: a clean release must take
+    /// its holder record with it. Otherwise `diagnose_holder` — and so
+    /// `aleph doctor` — reports "Stale lock file … a crashed daemon left it
+    /// behind" after every clean `aleph stop`.
+    #[test]
+    fn releasing_the_lock_removes_the_holder_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = dir.path().join(HOLDER_FILENAME);
+        let lock = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        assert!(
+            holder.exists(),
+            "the holder is recorded while the lock is held"
+        );
+
+        drop(lock);
+
+        assert!(
+            !holder.exists(),
+            "a clean release must remove its holder record"
+        );
+        assert!(
+            matches!(diagnose_holder(dir.path()), Ok(None)),
+            "after a clean release the doctor must see a free singleton, not a stale holder"
+        );
     }
 
     #[test]

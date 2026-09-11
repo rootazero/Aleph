@@ -1,10 +1,13 @@
 //! `core/instance-lock` — detect and clear a stale singleton lock file.
 //!
-//! The OS releases the `flock` on process exit, but the `aleph.lock` file
-//! (carrying the holder PID) can linger. A lingering file whose PID is no
-//! longer alive is harmless to `flock`-based acquisition, yet it produces
-//! the scary `Stale lock file detected` diagnostic at startup. Clearing it
-//! is a deterministic, safe repair — but ONLY when the holder is dead.
+//! The OS releases the `flock` on process exit, and a clean release also
+//! removes the holder sidecar (`aleph.lock.pid`, see `InstanceLock::drop`).
+//! A crash, SIGKILL, or a forced `process::exit` skips that, leaving a
+//! sidecar that names a dead PID. It is harmless to `flock`-based
+//! acquisition — the next `try_acquire` simply wins the lock and overwrites
+//! it — so this check is the only place the leftover is ever reported.
+//! Clearing it is a deterministic, safe repair — but ONLY when the holder
+//! is dead.
 //!
 //! Reuses [`crate::utils::instance_lock::diagnose_holder`] so the PID-read
 //! and liveness logic is not duplicated.
