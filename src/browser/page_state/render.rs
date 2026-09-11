@@ -250,7 +250,13 @@ fn state_tokens(states: &NodeStates) -> String {
     if states.readonly {
         s.push_str(" [readonly]");
     }
-    if states.focused {
+    // Only `Some(true)` prints. `Some(false)` is a real observation and stays
+    // silent here on purpose — exactly one element in a document has the caret,
+    // so an `[unfocused]` token on every other node would be noise with no
+    // reader. That asymmetry with `[checked]`/`[unchecked]` is deliberate: both
+    // checkbox states are things a model acts on, only one focus state is. The
+    // observation is not lost — `to_json` carries all three.
+    if states.focused == Some(true) {
         s.push_str(" [focused]");
     }
     s

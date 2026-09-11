@@ -236,7 +236,19 @@ pub struct NodeStates {
     pub selected: bool,
     pub required: bool,
     pub readonly: bool,
-    pub focused: bool,
+    /// Does the caret live here? `None` is "no producer has looked", which is
+    /// every Chromium capture until Task 17 — see [`raw::RawNode::focused`].
+    ///
+    /// An `Option` like `checked` and `expanded`, and for the reason this
+    /// struct's own doc gives, because the two faces of this field disagree
+    /// about the collapse. The text render prints nothing for `None` and
+    /// nothing for `Some(false)`, so *there* they are the same observable. The
+    /// JSON render is not: this struct has no `skip_serializing_if`, so a
+    /// `bool` made `to_json` emit `"focused": false` on every node — a printed
+    /// claim that the caret is elsewhere, about something nobody has looked at.
+    /// One derivation has to serve both faces (判据 §9), so the distinction is
+    /// carried rather than collapsed here and spelled `null` in JSON.
+    pub focused: Option<bool>,
 }
 
 /// One node of the tree the model reads. `parent` indexes `PageState::nodes`.

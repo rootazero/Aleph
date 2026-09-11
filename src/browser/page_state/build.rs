@@ -283,19 +283,21 @@ fn states_of(node: &RawNode, role: Role) -> NodeStates {
         readonly: node.has_attr("readonly") || aria_true("aria-readonly"),
         // From the FIELD, never from `attrs` — the page cannot reach a field.
         //
-        // `None` (no fetcher has said) and `Some(false)` (a fetcher looked and
-        // the caret is elsewhere) both render nothing, so they collapse here
-        // deliberately: `NodeStates::focused` means "we are asserting the caret
-        // is here", and not asserting it is the same observable either way. The
-        // distinction that matters — did anyone look — stays one layer down on
-        // `RawNode::focused`, where a Task 17 fetcher fills it.
-        focused: node.focused.unwrap_or(false),
+        // Carried, not collapsed. An earlier version of this line spent `None`
+        // as `false`, arguing that "nobody looked" and "the caret is elsewhere"
+        // render identically so the difference is unobservable. That is true of
+        // the TEXT face and false of the JSON one: `NodeStates` has no
+        // `skip_serializing_if`, so the collapse made `to_json` print
+        // `"focused": false` on every node — a positive claim about something
+        // no producer has looked at until Task 17 (判据 §9: one verb, two
+        // faces, and they must share a derivation).
+        focused: node.focused,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{render_text, RefTable, StaleReason};
+    use super::super::{render_text, to_json, RefTable, StaleReason};
     use super::*;
     use std::time::Duration;
 
@@ -568,6 +570,75 @@ mod tests {
         assert_eq!(button.parent, None);
     }
 
+    /// **"Nobody looked" and "the caret is elsewhere" are different facts, and
+    /// the JSON face is where the difference is visible.**
+    ///
+    /// This field spent `None` as `false` for one round, on the argument that
+    /// both render nothing so the collapse is unobservable. That is true of the
+    /// text face only. `NodeStates` has no `skip_serializing_if`, so a `bool`
+    /// made `to_json` emit `"focused": false` on **every node of every
+    /// capture** — a printed claim about something no producer has looked at
+    /// until Task 17. One verb, two faces, and a derivation justified by one
+    /// face's observable was being applied to both (判据 §9).
+    ///
+    /// All three states are asserted on both faces, because the failure was
+    /// precisely that one face could not tell two of them apart.
+    #[test]
+    fn an_unobserved_focus_is_unknown_in_json_and_not_a_denial() {
+        let button_states = |raw: &RawDom| -> (NodeStates, String, serde_json::Value) {
+            let mut refs = RefTable::new();
+            let state = PageState::build(
+                raw,
+                &mut refs,
+                1,
+                "https://example.test/hn",
+                "t",
+                Duration::from_secs(0),
+            );
+            let at = state
+                .nodes
+                .iter()
+                .position(|n| n.backend_node_id == 5)
+                .expect("the button is in the tree");
+            (
+                state.nodes[at].states,
+                render_text(&state),
+                to_json(&state)["nodes"][at]["states"]["focused"].clone(),
+            )
+        };
+
+        // 1. No producer has looked — every Chromium capture, today.
+        let mut raw = fixture();
+        let (states, text, json) = button_states(&raw);
+        assert_eq!(states.focused, None);
+        assert!(!text.contains("[focused]"), "text asserts nothing:\n{text}");
+        assert_eq!(
+            json,
+            serde_json::Value::Null,
+            "JSON said something about a caret nobody has looked for"
+        );
+
+        // 2. A fetcher looked and the caret is elsewhere. Silent in text —
+        //    exactly one node per document has it, so an `[unfocused]` on all
+        //    the others would be noise — but a REAL observation in JSON.
+        raw.frames[0].nodes[4].focused = Some(false);
+        let (states, text, json) = button_states(&raw);
+        assert_eq!(states.focused, Some(false));
+        assert!(!text.contains("[focused]"), "{text}");
+        assert_eq!(
+            json,
+            serde_json::json!(false),
+            "an observation that the caret is elsewhere reads as 'nobody looked'"
+        );
+
+        // 3. The caret is here.
+        raw.frames[0].nodes[4].focused = Some(true);
+        let (states, text, json) = button_states(&raw);
+        assert_eq!(states.focused, Some(true));
+        assert!(text.contains("[focused]"), "{text}");
+        assert_eq!(json, serde_json::json!(true));
+    }
+
     /// **A page cannot write a state token into the model's observation.**
     ///
     /// `render::quote` defends page-controlled *strings*; a state token is a
@@ -612,9 +683,11 @@ mod tests {
             .iter()
             .find(|n| n.backend_node_id == 5)
             .expect("button");
-        assert!(
-            !button.states.focused,
-            "a page wrote `:focus` and the model was told the caret is there"
+        assert_eq!(
+            button.states.focused, None,
+            "a page wrote `:focus` and it reached the state — and `None` rather \
+             than `Some(false)` is the claim: nobody LOOKED, so answering \
+             \"the caret is elsewhere\" would be its own invention"
         );
         assert!(
             !button.states.selected,
