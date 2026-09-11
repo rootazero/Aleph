@@ -100,11 +100,18 @@ fn abbreviate_home(path: &str, home: Option<&str>) -> String {
     path.to_string()
 }
 
+/// This machine's home directory, as a string to compare a path prefix
+/// against.
+///
+/// Delegates to [`aleph_protocol::paths::home_dir`] rather than reading the
+/// variables here. B6 wrote its own `HOME`-then-`USERPROFILE` version, which
+/// was the shared one minus its `HOMEDRIVE` + `HOMEPATH` arm — a copy that is
+/// born weaker than its original and agrees with it on every machine except
+/// the ones the missing arm exists for (判据 §1).
 fn home_dir() -> Option<String> {
-    std::env::var("HOME")
-        .ok()
+    aleph_protocol::paths::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
         .filter(|h| !h.is_empty())
-        .or_else(|| std::env::var("USERPROFILE").ok().filter(|h| !h.is_empty()))
 }
 
 /// The git branch checked out at `root`, read from this machine's filesystem.
