@@ -9,43 +9,85 @@
 use super::raw::{attr_of, RawNode};
 use super::Role;
 
+/// Every ARIA `role` token this build models — the whole mapping, as data.
+///
+/// A table for the same reason [`SIMPLE_TAGS`] is one, and this is the **third**
+/// instance of that class rather than a new idea (判据 §16): the tag table was
+/// the first, `role_for`'s hand-routed arms the second, and a `match` over
+/// `&str` still cannot be made exhaustive, so the only way a test can notice a
+/// deleted key is for the key set to be a value it can read.
+///
+/// **Measured at `8d394e3ea`, before this table existed**: deleting `"switch"`,
+/// `"searchbox"`, `"gridcell"`, `"columnheader"` and `"rowheader"` from the
+/// match left the module suite at **49 passed / 0 failed**. Censused at the
+/// same commit: **41 tokens in 26 arms, of which 34 were never mentioned by any
+/// test** — and the seven that were mostly appeared as *tag* literals
+/// elsewhere, not as ARIA tokens. A page writing `role="switch"` silently
+/// stopped being a checkbox; `role="gridcell"` stopped being a cell, which
+/// flattens every ARIA grid on the web.
+///
+/// Grouped as ARIA groups them, so a reader can still see which tokens share a
+/// role. The pairs are the contract; the order is not.
+const ARIA_ROLES: &[(&str, Role)] = &[
+    ("link", Role::Link),
+    ("button", Role::Button),
+    ("textbox", Role::Textbox),
+    ("searchbox", Role::Textbox),
+    ("checkbox", Role::Checkbox),
+    ("switch", Role::Checkbox),
+    ("radio", Role::Radio),
+    ("combobox", Role::Combobox),
+    ("listbox", Role::Listbox),
+    ("option", Role::Option),
+    ("menu", Role::Menu),
+    ("menubar", Role::Menu),
+    ("menuitem", Role::MenuItem),
+    ("menuitemcheckbox", Role::MenuItem),
+    ("menuitemradio", Role::MenuItem),
+    ("tab", Role::Tab),
+    ("heading", Role::Heading),
+    ("img", Role::Image),
+    ("image", Role::Image),
+    ("figure", Role::Image),
+    ("banner", Role::Banner),
+    ("main", Role::Main),
+    ("navigation", Role::Navigation),
+    ("contentinfo", Role::Contentinfo),
+    ("list", Role::List),
+    ("listitem", Role::ListItem),
+    ("table", Role::Table),
+    ("grid", Role::Table),
+    ("row", Role::Row),
+    ("cell", Role::Cell),
+    ("gridcell", Role::Cell),
+    ("columnheader", Role::Cell),
+    ("rowheader", Role::Cell),
+    ("article", Role::Article),
+    ("form", Role::Form),
+    ("search", Role::Form),
+    ("dialog", Role::Dialog),
+    ("alertdialog", Role::Dialog),
+    // An author saying "this markup carries no semantics" is a DECISION,
+    // not an unknown, so these map rather than falling through.
+    ("presentation", Role::Generic),
+    ("none", Role::Generic),
+    ("generic", Role::Generic),
+];
+
 /// An ARIA `role` token, or `None` when the token is one this build does not
 /// model. `None` means "fall through to the tag", never "generic": an unknown
 /// token is not a reason to throw away what the tag already said.
+///
+/// The two normalisations — trim and ASCII-lowercase — are here rather than in
+/// [`ARIA_ROLES`], so the table holds one spelling of each token and the
+/// function owns the folding.
 #[must_use]
 pub fn role_from_aria(token: &str) -> Option<Role> {
     let t = token.trim().to_ascii_lowercase();
-    Some(match t.as_str() {
-        "link" => Role::Link,
-        "button" => Role::Button,
-        "textbox" | "searchbox" => Role::Textbox,
-        "checkbox" | "switch" => Role::Checkbox,
-        "radio" => Role::Radio,
-        "combobox" => Role::Combobox,
-        "listbox" => Role::Listbox,
-        "option" => Role::Option,
-        "menu" | "menubar" => Role::Menu,
-        "menuitem" | "menuitemcheckbox" | "menuitemradio" => Role::MenuItem,
-        "tab" => Role::Tab,
-        "heading" => Role::Heading,
-        "img" | "image" | "figure" => Role::Image,
-        "banner" => Role::Banner,
-        "main" => Role::Main,
-        "navigation" => Role::Navigation,
-        "contentinfo" => Role::Contentinfo,
-        "list" => Role::List,
-        "listitem" => Role::ListItem,
-        "table" | "grid" => Role::Table,
-        "row" => Role::Row,
-        "cell" | "gridcell" | "columnheader" | "rowheader" => Role::Cell,
-        "article" => Role::Article,
-        "form" | "search" => Role::Form,
-        "dialog" | "alertdialog" => Role::Dialog,
-        // An author saying "this markup carries no semantics" is a DECISION,
-        // not an unknown, so it maps rather than falling through.
-        "presentation" | "none" | "generic" => Role::Generic,
-        _ => return None,
-    })
+    ARIA_ROLES
+        .iter()
+        .find(|(k, _)| *k == t.as_str())
+        .map(|(_, role)| *role)
 }
 
 /// The role of an element with `tag` and `attrs`.
@@ -364,6 +406,108 @@ mod tests {
         assert_eq!(role_for("blink", &attrs(&[])), Role::Generic);
     }
 
+    /// **The same guard for the ARIA half of the mapping**, which had none at
+    /// all: `role_from_aria` was never called by name from any test.
+    ///
+    /// Censused at `8d394e3ea` by parsing its arms: **41 tokens in 26 arms**,
+    /// of which **34 were never mentioned anywhere in the test module** — and
+    /// several of the seven that were (`button`, `table`, `checkbox`) appear
+    /// only as *tag* literals in the guard above. **Measured, not read**:
+    /// deleting `"switch"`, `"searchbox"`, `"gridcell"`, `"columnheader"` and
+    /// `"rowheader"` left the module suite at 49 passed / 0 failed.
+    ///
+    /// Four assertions, and they answer four different questions:
+    ///
+    /// 1. the table is the mapping that was ratified — one hand-written
+    ///    expectation, so the test does not assert the table against itself
+    ///    (判据 §16, and the reason M3 kept its roles hand-written);
+    /// 2. the table is not dead data — every key routes through the function;
+    /// 3. the foldings and the fall-through are the function's own, and an
+    ///    unknown token is `None` rather than `Generic`;
+    /// 4. **every role this build models is reachable from ARIA**, which is the
+    ///    direction a written-down list cannot cover by itself (判据 §5: a list
+    ///    only covers the day it was written). `Role::Text` is the one
+    ///    exception and it is named: a text leaf is not something a page can
+    ///    claim with `role=`.
+    #[test]
+    fn the_aria_role_table_is_complete() {
+        let actual: Vec<String> = ARIA_ROLES
+            .iter()
+            .map(|(token, role)| format!("{token}={}", role.as_str()))
+            .collect();
+        let expected = [
+            "link=link",
+            "button=button",
+            "textbox=textbox",
+            "searchbox=textbox",
+            "checkbox=checkbox",
+            "switch=checkbox",
+            "radio=radio",
+            "combobox=combobox",
+            "listbox=listbox",
+            "option=option",
+            "menu=menu",
+            "menubar=menu",
+            "menuitem=menuitem",
+            "menuitemcheckbox=menuitem",
+            "menuitemradio=menuitem",
+            "tab=tab",
+            "heading=heading",
+            "img=image",
+            "image=image",
+            "figure=image",
+            "banner=banner",
+            "main=main",
+            "navigation=navigation",
+            "contentinfo=contentinfo",
+            "list=list",
+            "listitem=listitem",
+            "table=table",
+            "grid=table",
+            "row=row",
+            "cell=cell",
+            "gridcell=cell",
+            "columnheader=cell",
+            "rowheader=cell",
+            "article=article",
+            "form=form",
+            "search=form",
+            "dialog=dialog",
+            "alertdialog=dialog",
+            "presentation=generic",
+            "none=generic",
+            "generic=generic",
+        ];
+        assert_eq!(actual, expected, "the ARIA token table changed");
+
+        // Not dead data: every key routes through `role_from_aria`.
+        for (token, role) in ARIA_ROLES {
+            assert_eq!(role_from_aria(token), Some(*role), "role=\"{token}\"");
+        }
+
+        // The foldings the function owns, and the fall-through it promises.
+        assert_eq!(role_from_aria("  BUTTON "), Some(Role::Button));
+        assert_eq!(
+            role_from_aria("tree"),
+            None,
+            "an unmodelled token falls through to the TAG — answering \
+             `Generic` would throw away what the tag already said"
+        );
+
+        // The other direction, which no list of tokens can cover by itself: a
+        // role this build models but ARIA cannot name is a role a page has no
+        // way to ask for.
+        for role in Role::ALL {
+            assert!(
+                role == Role::Text || ARIA_ROLES.iter().any(|(_, r)| *r == role),
+                "`{}` is in Role::ALL and no ARIA token maps to it — either \
+                 give it its token, or say here why a page cannot ask for it \
+                 (only `text` has that answer today)",
+                role.as_str()
+            );
+        }
+    }
+
     /// **That guard is complete over the TABLE. This one is complete over
     /// `role_for`.**
     ///
@@ -389,7 +533,7 @@ mod tests {
     /// payloads, which is exactly what this census counts. Comment stripping
     /// comes from the lexer so a `//` inside a literal cannot cut a line short.
     #[test]
-    fn role_for_routes_no_tag_by_hand_except_the_attribute_dependent_ones() {
+    fn no_tag_or_aria_token_is_routed_by_hand_outside_the_tables() {
         use crate::utils::source_scan::{code_keeping_literals, production_text};
 
         let rel = "src/browser/page_state/roles.rs";
@@ -397,26 +541,34 @@ mod tests {
         let src = std::fs::read_to_string(&path).expect("roles.rs is readable");
         let code = code_keeping_literals(&production_text(std::path::Path::new(rel), &src));
 
-        let start = code
-            .find("pub fn role_for(")
-            .expect("the scan is broken, not the tree: role_for is in this file");
-        let end = start
-            + code[start..]
-                .find("\n}")
-                .expect("role_for's body closes at column 0");
-        let body = &code[start..end];
+        // The literals one function's body mentions, and the body itself so
+        // the caller can anchor its own non-vacuity on something that is not a
+        // literal — `role_from_aria` is allowed NONE, and an empty set matches
+        // an empty expectation however broken the slice is (判据 §2).
+        let literals_in = |signature: &str| -> (String, Vec<String>) {
+            let start = code.find(signature).unwrap_or_else(|| {
+                panic!("the scan is broken, not the tree: no `{signature}` in this file")
+            });
+            let end = start
+                + code[start..]
+                    .find("\n}")
+                    .expect("the function body closes at column 0");
+            let body = code[start..end].to_string();
 
-        let mut found: Vec<String> = Vec::new();
-        let mut rest = body;
-        while let Some(open) = rest.find('"') {
-            let after = &rest[open + 1..];
-            let Some(close) = after.find('"') else { break };
-            found.push(after[..close].to_string());
-            rest = &after[close + 1..];
-        }
-        found.sort();
-        found.dedup();
+            let mut found: Vec<String> = Vec::new();
+            let mut rest = body.as_str();
+            while let Some(open) = rest.find('"') {
+                let after = &rest[open + 1..];
+                let Some(close) = after.find('"') else { break };
+                found.push(after[..close].to_string());
+                rest = &after[close + 1..];
+            }
+            found.sort();
+            found.dedup();
+            (body, found)
+        };
 
+        let (tag_body, tag_literals) = literals_in("pub fn role_for(");
         let mut allowed: Vec<String> = [
             // Tags whose role is NOT a constant — each has its own test above.
             "a", "area", "input", "select",
@@ -435,19 +587,39 @@ mod tests {
         // Non-vacuity FIRST, so a slice that lost the function reports THAT
         // rather than a diff against an empty set (判据 §2).
         assert!(
-            found.len() > 8 && found.contains(&"select".to_string()),
-            "the scan, not the tree: the slice yielded {} literals ({found:?}), \
-             so it is reading something other than `role_for`'s body",
-            found.len()
+            tag_literals.len() > 8 && tag_literals.contains(&"select".to_string()),
+            "the scan, not the tree: the slice yielded {} literals \
+             ({tag_literals:?}), so it is reading something other than \
+             `role_for`'s body",
+            tag_literals.len()
         );
         assert_eq!(
-            found, allowed,
+            tag_literals, allowed,
             "the literals `role_for` routes by hand are no longer the ones \
              written down here. If a tag was ADDED to the match: its role is a \
              constant, so it belongs in SIMPLE_TAGS where the completeness \
              guard can see it — a match arm is invisible there however much \
              that guard's name promises. If one was REMOVED: re-rule this list \
              on purpose."
+        );
+
+        // `role_from_aria` routes NOTHING by hand: every token is a table row,
+        // so its body has no string literals at all. The anchor is the table's
+        // NAME rather than a count, because "no literals" is exactly what a
+        // slice that found the wrong function also reports.
+        let (aria_body, aria_literals) = literals_in("pub fn role_from_aria(");
+        assert!(
+            aria_body.contains("ARIA_ROLES"),
+            "the scan, not the tree: the slice does not contain the table \
+             `role_from_aria` reads, so it is reading some other function"
+        );
+        assert_eq!(
+            aria_literals,
+            Vec::<String>::new(),
+            "`role_from_aria` mentions a token literal. Every ARIA token is a \
+             row in ARIA_ROLES, where `the_aria_role_table_is_complete` can \
+             see it; a match arm beside the table is invisible to that guard \
+             — the third time this class has been found in this file."
         );
     }
 
