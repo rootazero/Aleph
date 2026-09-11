@@ -31,11 +31,56 @@ Already built and tested in Phase A; this phase adds the first caller for each.
 | `turn_summary` | `summarize_turn`, `turn_summary_text` |
 | `theme_tokens` | `SemanticColor` (26 roles), `ALL_SEMANTIC_COLORS`, `mix_rgb`, `DIFF_ROW_MIX`, `DIFF_EMPHASIS_MIX` |
 
+## 1b. Status (2026-09-11)
+
+**B1, B2, B3 landed** — `6594bfca6` (shared `at_ms`) + `071fac0f0` (the TUI).
+340 `aleph-tui` tests green, zero warnings; `aleph-cli` and `aleph-panel`
+re-verified because the shared type moved.
+
+Four things came out different from the plan below, and each is recorded where
+it happened rather than only here:
+
+1. **B1 and B2/B3 are one commit, not three.** `theme.rs`'s `/theme` arm lives
+   in `commands.rs`, which is also where the history loader and the turn-undo
+   moved; `app/mod.rs` holds both the palette invalidation and the model. A
+   split by file would have produced commits that do not compile alone, which
+   is worse than one commit that does.
+2. **Grouping is deferred.** `group_entries` takes `Vec<TranscriptEntry>` by
+   value, so calling it per frame reintroduces the O(transcript) deep copy
+   `build_visible_lines` was written to remove. Reconciling the two — an
+   index-range grouping, or a grouped list cached against a revision counter —
+   is its own task, and doing it badly would undo a measured optimisation.
+3. **The per-message `┃ Aleph` label is gone.** Spec §6 makes the identity a
+   one-time header entry; repeating a label above every fragment of an
+   interleaved turn is noise. The `┃ ` bar and the colour still mark it.
+4. **`/theme` persists through `ALEPH_TUI_THEME`, not a settings file.** R4:
+   an interface does not persist, and this crate has no config of its own. A
+   terminal's colour preference is the same kind of fact as `COLORTERM`.
+
+A correction to the spec, measured while writing B3's tests: §5's summary
+table writes `shell→Bash`. There is no `shell` tool — the real name is `bash`
+(`src/builtin_tools/bash_exec.rs`), and Phase A's `DISPLAY_NAMES` already keys
+on it correctly. The spec line is the wrong one.
+
+And a correction to my own work, made before this was committed: I had padded
+the status glyph into a two-column cell on the claim that `⏺` (U+23FA) carries
+`Emoji_Presentation` and therefore measures two columns. Measured, it does
+not — `unicode-width` reports **one** column for it, the same as a braille
+spinner frame, so the padding was solving nothing and shifted every header to
+`⏺  Read(…)`. Worse, padding could not have solved it even had the premise
+held: `ratatui` budgets cells with the same `unicode-width` the padding is
+computed from, so a glyph the *terminal* paints wider stays misaligned however
+many spaces follow. What survives is the invariant — every glyph that can open
+a row is one column — asserted in `tool_row.rs` against `status_glyph`'s own
+returns plus every spinner frame, and mutation-verified red with `🔴`. The
+residual risk (a terminal that disagrees with `unicode-width` about `⏺`) is
+invisible to every test in this repo and stays on the real-machine list below.
+
 ## 2. Tasks
 
 Ordered so the tree compiles after each and every commit is independently reviewable.
 
-### B1 — Theme: one role table, three presets, `/theme`
+### B1 — Theme: one role table, three presets, `/theme` ✅
 
 `interfaces/tui/src/tui/theme.rs` today is a 25-field `Theme` const with five roles sharing a colour, and `DEFAULT_THEME` is referenced from ~15 widgets.
 
@@ -46,7 +91,7 @@ Ordered so the tree compiles after each and every commit is independently review
 
 **Guard — when does it go red:** a test iterating `ALL_SEMANTIC_COLORS` resolves each role in each preset and asserts no role falls through to a placeholder. Adding a 27th `SemanticColor` in `shared-ui-logic` turns this red until the TUI paints it. A second test asserts the legacy `Theme` fields are byte-equal to `resolve` for their role — the thing that makes "derived" true rather than claimed.
 
-### B2 — Transcript model: chronological entries
+### B2 — Transcript model: chronological entries ✅
 
 `ChatMessage` (`app/mod.rs:190`) is `User | Assistant{content,tools:Vec<ToolExecution>,reasoning,is_streaming} | System`. Tools hang *under* an assistant message, so they can only ever render above its text.
 
@@ -57,7 +102,7 @@ Ordered so the tree compiles after each and every commit is independently review
 
 **Guard:** a test that feeds `text → tool_start → text → tool_end` and asserts the rendered order is the arrival order — red today, because today's model cannot express it.
 
-### B3 — Tool rows replace the bordered block
+### B3 — Tool rows replace the bordered block ✅ (grouping deferred)
 
 Delete `widgets/tool_block.rs` (221 lines, 3–5 lines of box per call).
 
