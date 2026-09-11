@@ -534,41 +534,16 @@ mod tests {
     /// comes from the lexer so a `//` inside a literal cannot cut a line short.
     #[test]
     fn no_tag_or_aria_token_is_routed_by_hand_outside_the_tables() {
-        use crate::utils::source_scan::{code_keeping_literals, production_text};
+        use crate::utils::source_scan::{
+            code_keeping_literals, production_text, string_literals_in_fn,
+        };
 
         let rel = "src/browser/page_state/roles.rs";
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
         let src = std::fs::read_to_string(&path).expect("roles.rs is readable");
         let code = code_keeping_literals(&production_text(std::path::Path::new(rel), &src));
 
-        // The literals one function's body mentions, and the body itself so
-        // the caller can anchor its own non-vacuity on something that is not a
-        // literal — `role_from_aria` is allowed NONE, and an empty set matches
-        // an empty expectation however broken the slice is (判据 §2).
-        let literals_in = |signature: &str| -> (String, Vec<String>) {
-            let start = code.find(signature).unwrap_or_else(|| {
-                panic!("the scan is broken, not the tree: no `{signature}` in this file")
-            });
-            let end = start
-                + code[start..]
-                    .find("\n}")
-                    .expect("the function body closes at column 0");
-            let body = code[start..end].to_string();
-
-            let mut found: Vec<String> = Vec::new();
-            let mut rest = body.as_str();
-            while let Some(open) = rest.find('"') {
-                let after = &rest[open + 1..];
-                let Some(close) = after.find('"') else { break };
-                found.push(after[..close].to_string());
-                rest = &after[close + 1..];
-            }
-            found.sort();
-            found.dedup();
-            (body, found)
-        };
-
-        let (tag_body, tag_literals) = literals_in("pub fn role_for(");
+        let (tag_body, tag_literals) = string_literals_in_fn(&code, "pub fn role_for(");
         let mut allowed: Vec<String> = [
             // Tags whose role is NOT a constant — each has its own test above.
             "a", "area", "input", "select",
@@ -615,7 +590,7 @@ mod tests {
         // so its body has no string literals at all. The anchor is the table's
         // NAME rather than a count, because "no literals" is exactly what a
         // slice that found the wrong function also reports.
-        let (aria_body, aria_literals) = literals_in("pub fn role_from_aria(");
+        let (aria_body, aria_literals) = string_literals_in_fn(&code, "pub fn role_from_aria(");
         assert!(
             aria_body.contains("ARIA_ROLES"),
             "the scan, not the tree: the slice does not contain the table \

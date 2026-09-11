@@ -1147,6 +1147,170 @@ mod tests {
         );
     }
 
+    /// **Every attribute `states_of` reads reaches the model, and the list of
+    /// them is written down.**
+    ///
+    /// The fourth instance of the class closed three times in `roles.rs`, and
+    /// the largest: a hand-written mapping from page-supplied attribute names to
+    /// something the model reads, with no key set a test could enumerate.
+    /// **Measured at `ce000f108`**, in two batches both predicted green and both
+    /// green: making `expanded`, `required`, `readonly`, the `aria-disabled`
+    /// half of `disabled` and both `aria-checked` reads inert left the module at
+    /// 50 passed / 0 failed. Four tokens in the model's vocabulary —
+    /// `[expanded]`, `[collapsed]`, `[required]`, `[readonly]` — could stop
+    /// rendering with nothing red. Censused here: 11 attribute literals, of
+    /// which **five ARIA spellings appear nowhere in this module but in
+    /// `states_of` itself**, and `required`/`readonly` appear only inside a test
+    /// that builds `NodeStates` by hand and never calls `states_of` — the render
+    /// side was pinned and the derivation was not, which is exactly why those
+    /// mutations were green.
+    ///
+    /// Both halves are needed and they catch opposite changes: the rows below
+    /// go red when an attribute stops being read, and
+    /// `states_of_reads_no_attribute_outside_this_list` goes red when a new one
+    /// starts being read.
+    #[test]
+    fn every_attribute_states_of_reads_reaches_the_model() {
+        // (attribute, its value, the tag that carries it, the token it earns).
+        // One row per attribute literal in `states_of`, plus the second
+        // direction of `aria-expanded` because `[collapsed]` is its own token.
+        let rows: &[(&str, &str, &str, &[(&str, &str)], &str)] = &[
+            ("disabled", "", "button", &[], "[disabled]"),
+            ("aria-disabled", "true", "button", &[], "[disabled]"),
+            ("checked", "", "input", &[("type", "checkbox")], "[checked]"),
+            (
+                "aria-checked",
+                "true",
+                "div",
+                &[("role", "checkbox")],
+                "[checked]",
+            ),
+            ("aria-expanded", "true", "button", &[], "[expanded]"),
+            ("aria-expanded", "false", "button", &[], "[collapsed]"),
+            ("selected", "", "option", &[], "[selected]"),
+            (
+                "aria-selected",
+                "true",
+                "div",
+                &[("role", "tab")],
+                "[selected]",
+            ),
+            ("required", "", "input", &[], "[required]"),
+            ("aria-required", "true", "input", &[], "[required]"),
+            ("readonly", "", "input", &[], "[readonly]"),
+            ("aria-readonly", "true", "input", &[], "[readonly]"),
+        ];
+
+        // The node under test is NAMED, and only its own line is read. The
+        // fixture carries a disabled button of its own, so a `contains` over
+        // the whole render answered `[disabled]` for every row — the control
+        // assertion caught that, which is what a control is for.
+        let line_with = |tag: &str, mut attrs: Vec<(String, String)>| {
+            attrs.push(("aria-label".to_string(), "PROBE".to_string()));
+            let mut raw = fixture();
+            raw.frames[1].nodes[3].tag = Some(tag.to_string());
+            raw.frames[1].nodes[3].attrs = attrs;
+            let rendered = render_text(&PageState::build(
+                &raw,
+                &mut RefTable::new(),
+                1,
+                "https://example.test/hn",
+                "t",
+                Duration::from_secs(0),
+            ));
+            rendered
+                .lines()
+                .find(|l| l.contains("\"PROBE\""))
+                .unwrap_or_else(|| panic!("the probe node did not render at all:\n{rendered}"))
+                .to_string()
+        };
+
+        for (attr, value, tag, extra, token) in rows {
+            let mut attrs: Vec<(String, String)> = extra
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            attrs.push(((*attr).to_string(), (*value).to_string()));
+            let line = line_with(tag, attrs);
+            assert!(
+                line.contains(token),
+                "`{attr}=\"{value}\"` on <{tag}> no longer reaches the model as \
+                 `{token}` — the derivation can be deleted and only this row \
+                 notices:\n{line}"
+            );
+        }
+
+        // The control: with none of them present, none of the tokens print.
+        // Without this the rows above would pass against a renderer that
+        // printed every token unconditionally (判据 §2).
+        let bare = line_with("input", vec![("type".to_string(), "text".to_string())]);
+        for (_, _, _, _, token) in rows {
+            assert!(
+                !bare.contains(token),
+                "`{token}` printed for a control that asserts nothing:\n{bare}"
+            );
+        }
+    }
+
+    /// **…and no attribute is read that the rows above do not know about.**
+    ///
+    /// The rows catch a deletion; this catches an addition, which is the half a
+    /// list of examples can never cover (判据 §5 — a list only covers the day it
+    /// was written). Same mechanism as `roles.rs`'s two censuses, sharing their
+    /// slicing helper rather than a third copy of it.
+    #[test]
+    fn states_of_reads_no_attribute_outside_this_list() {
+        use crate::utils::source_scan::{
+            code_keeping_literals, production_text, string_literals_in_fn,
+        };
+
+        let rel = "src/browser/page_state/build.rs";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let src = std::fs::read_to_string(&path).expect("build.rs is readable");
+        let code = code_keeping_literals(&production_text(std::path::Path::new(rel), &src));
+        let (body, found) = string_literals_in_fn(&code, "fn states_of(");
+
+        assert!(
+            body.contains("NodeStates {"),
+            "the scan, not the tree: the slice does not contain the struct \
+             `states_of` builds, so it is reading some other function"
+        );
+
+        let mut allowed: Vec<String> = [
+            // The eleven attribute names, each with a row above.
+            "disabled",
+            "aria-disabled",
+            "checked",
+            "aria-checked",
+            "aria-expanded",
+            "selected",
+            "aria-selected",
+            "required",
+            "aria-required",
+            "readonly",
+            "aria-readonly",
+            // The two values `aria_bool` parses. Not attribute names, and the
+            // reason they are listed rather than filtered out: a filter would
+            // be a rule about what counts, and this list is supposed to be the
+            // rule.
+            "true",
+            "false",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        allowed.sort();
+
+        assert_eq!(
+            found, allowed,
+            "`states_of` reads a literal this list does not name. Every page \
+             attribute it consults is one the model can be made to believe \
+             something by, so each needs a row in \
+             `every_attribute_states_of_reads_reaches_the_model` and a line \
+             here — or, if one was removed, a deliberate re-ruling."
+        );
+    }
+
     /// **A page cannot write a state token into the model's observation.**
     ///
     /// `render::quote` defends page-controlled *strings*; a state token is a

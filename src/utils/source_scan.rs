@@ -802,6 +802,52 @@ pub fn code_keeping_literals(src: &str) -> String {
 
 /// Walk `root` for `.rs` files, returning `(repo-relative path, contents)`.
 ///
+/// One function's body and **the string literals it mentions**, for guards that
+/// census hand-written keys a `match` cannot make exhaustive.
+///
+/// Test-only, and shared rather than copied: `page_state` has three of these
+/// guards — tag routing, ARIA tokens, state attributes — and three copies of
+/// the slicing would be three things to get subtly different (判据 §1).
+///
+/// `code` must already be [`code_keeping_literals`] of [`production_text`]:
+/// comments stripped by the lexer so a `//` inside a literal cannot cut a line
+/// short, literals KEPT because they are what is being counted — which is
+/// exactly what [`code_text`] removes.
+///
+/// The body runs from `signature` to the next `\n}` at column 0. Returns the
+/// body too, so a caller whose expected literal set is EMPTY can anchor its
+/// non-vacuity on something that is not a count: "no literals found" is also
+/// what a slice pointed at the wrong function reports (判据 §2).
+///
+/// # Panics
+///
+/// If `signature` is not in `code`, or its body never closes — a broken scan
+/// must say so rather than return an empty set that matches an empty
+/// expectation.
+#[cfg(test)]
+pub(crate) fn string_literals_in_fn(code: &str, signature: &str) -> (String, Vec<String>) {
+    let start = code.find(signature).unwrap_or_else(|| {
+        panic!("the scan is broken, not the tree: no `{signature}` in this file")
+    });
+    let end = start
+        + code[start..]
+            .find("\n}")
+            .unwrap_or_else(|| panic!("`{signature}`'s body never closes at column 0"));
+    let body = code[start..end].to_string();
+
+    let mut found: Vec<String> = Vec::new();
+    let mut rest = body.as_str();
+    while let Some(open) = rest.find('"') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        found.push(after[..close].to_string());
+        rest = &after[close + 1..];
+    }
+    found.sort();
+    found.dedup();
+    (body, found)
+}
+
 /// Test-only. Aleph already has 12+ independent copies of this walk in
 /// individual census guards; the four guards this round adds share this one
 /// instead of minting a 13th. The pre-existing copies are deliberately left
