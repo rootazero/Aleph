@@ -1,0 +1,538 @@
+//! The ONE builder (spec §7.3). Two fetchers in, one `PageState` out.
+
+use std::collections::HashMap;
+use std::time::Duration;
+
+use super::accname::{accessible_name, normalize, FrameIndex};
+use super::raw::{RawDom, RawNode, RawNodeKind, Rect};
+use super::refs::{FrameKey, RefKey, RefTable};
+use super::roles::{is_interactive, role_for};
+use super::{NodeStates, PageState, Role, StateNode};
+
+impl PageState {
+    /// Turn a capture into the tree the model reads.
+    ///
+    /// Resets `refs` when the MAIN frame's loader changed (spec §4.3). That
+    /// lives here, not in the caller: it is a property of a capture, and a
+    /// caller-side reset is a wire that can be forgotten silently — stale refs
+    /// would then resolve against a new document (判据 §7).
+    #[must_use]
+    pub fn build(
+        raw: &RawDom,
+        refs: &mut RefTable,
+        generation: u64,
+        url: &str,
+        title: &str,
+        fetch: Duration,
+    ) -> PageState {
+        if let Some(main) = raw.frames.first() {
+            refs.reset_for_document(&main.loader_id);
+        }
+
+        let mut nodes: Vec<StateNode> = Vec::new();
+        for frame in &raw.frames {
+            let fx = FrameIndex::build(frame);
+            let frame_key = FrameKey {
+                frame_id: frame.frame_id.clone(),
+                loader_id: frame.loader_id.clone(),
+            };
+            // raw index -> index in `nodes`, for the frame being walked.
+            let mut emitted: HashMap<usize, usize> = HashMap::new();
+            for (i, node) in frame.nodes.iter().enumerate() {
+                let Some(state) = state_node(i, node, &fx, &frame_key, frame.offset, &emitted)
+                else {
+                    continue;
+                };
+                emitted.insert(i, nodes.len());
+                nodes.push(state);
+            }
+        }
+
+        let no_box = (
+            nodes.iter().filter(|n| n.rect.is_none()).count(),
+            nodes.len(),
+        );
+        let mut state = PageState {
+            engine: raw.engine,
+            generation,
+            url: url.to_string(),
+            title: title.to_string(),
+            viewport: raw.viewport.clone(),
+            no_box,
+            fetch_ms: u64::try_from(fetch.as_millis()).unwrap_or(u64::MAX),
+            nodes,
+        };
+
+        // Refs are minted for exactly the nodes the RENDERER PRINTS, and in the
+        // order it prints them — so `ref_count()` equals the number of `[ref=`
+        // tokens the model can see, and the ids it is shown have no gaps.
+        //
+        // Minting for every visible interactive-or-text node instead would
+        // report a count larger than the model can address, and hand out
+        // numbers like `e1, e3, e4` that read as elements it was not shown
+        // (判据 §18 — a number must carry the predicate its label claims).
+        //
+        // `rendered_indices` reads `visible`, `interactive`, `name`, `role`,
+        // `text` and `parent` — never `r#ref` — so running it before minting is
+        // not circular. Containers earn a line but no ref: nothing addresses a
+        // `- banner`.
+        for i in super::render::rendered_indices(&state) {
+            let node = &state.nodes[i];
+            if !node.interactive && node.text.is_none() {
+                continue;
+            }
+            let key = RefKey {
+                frame_id: node.frame.frame_id.clone(),
+                loader_id: node.frame.loader_id.clone(),
+                backend_node_id: node.backend_node_id,
+            };
+            state.nodes[i].r#ref = Some(refs.mint(&key, generation));
+        }
+        state
+    }
+
+    /// How many nodes the model can address — which is exactly the number of
+    /// `[ref=` tokens in `render_text`'s output, because `build` mints only for
+    /// nodes the renderer prints.
+    /// `the_thirteen_node_fixture_renders_the_golden_tree` asserts that
+    /// equality rather than trusting it.
+    #[must_use]
+    pub fn ref_count(&self) -> usize {
+        self.nodes.iter().filter(|n| n.r#ref.is_some()).count()
+    }
+}
+
+/// Style decides when it is known; the box decides only when it is not.
+///
+/// **This replaces spec §4.1's "`rect=None` ⇒ hidden".** Part 5 measured real
+/// obscura returning a ZERO quad for inline `<a>` / `<span>` from both
+/// `getBoxModel` and `getBoundingClientRect`, while M11 measured real boxes
+/// for Hacker News's `<a>`. Nobody knows which generalises, so the visibility
+/// rule must not rest on it: a missing box would otherwise delete every inline
+/// link on some pages and none on others, and the model would have no way to
+/// tell those two worlds apart.
+///
+/// So a node with `computed` is judged by its styles alone. A missing box on
+/// such a node is not a verdict — it is counted in `PageState::no_box`, the
+/// node still earns a ref if it is interactive or carries text, and
+/// `render_text` simply omits the `@x,y wxh` token. The model sees "this is
+/// here and I could not measure it", which is the true statement.
+///
+/// `computed == None` is the cross-check failure (spec §3.3), and there the
+/// box is the only evidence left. It is spent as evidence of PRESENCE, never
+/// as evidence of absence beyond that (判据 §8).
+#[must_use]
+pub fn visibility_of(node: &RawNode) -> bool {
+    match node.computed {
+        Some(c) => !c.display_none && !c.visibility_hidden && !c.opacity_zero,
+        None => node.rect.is_some(),
+    }
+}
+
+/// One raw node → one state node, or `None` for nodes that carry nothing.
+fn state_node(
+    index: usize,
+    node: &RawNode,
+    fx: &FrameIndex<'_>,
+    frame: &FrameKey,
+    offset: (i32, i32),
+    emitted: &HashMap<usize, usize>,
+) -> Option<StateNode> {
+    let text = match node.kind {
+        // A document node has no role, no name and no box; a line for it would
+        // be a line of nothing.
+        RawNodeKind::Document | RawNodeKind::Other => return None,
+        RawNodeKind::Text => {
+            let t = normalize(node.text.as_deref().unwrap_or_default());
+            if t.is_empty() {
+                return None;
+            }
+            Some(t)
+        }
+        RawNodeKind::Element => None,
+    };
+
+    // The nearest EMITTED ancestor, so dropping a document node does not
+    // orphan its children. A parent index that points forward or off the end
+    // is dropped rather than guessed: the node keeps its place and loses only
+    // the edge (判据 §8).
+    let parent = nearest_emitted_ancestor(index, fx, emitted);
+
+    let (role, name, interactive) = if text.is_some() {
+        (Role::Text, String::new(), false)
+    } else {
+        let role = role_for(&node.tag_lower(), &node.attrs);
+        (role, accessible_name(index, fx), is_interactive(role, node))
+    };
+
+    Some(StateNode {
+        parent,
+        r#ref: None,
+        backend_node_id: node.backend_node_id,
+        frame: frame.clone(),
+        role,
+        name,
+        value: value_of(node),
+        states: states_of(node, role),
+        // The one place the frame offset is applied. Position moves; size does
+        // not.
+        rect: node.rect.as_ref().map(|r| Rect {
+            x: r.x + offset.0,
+            y: r.y + offset.1,
+            w: r.w,
+            h: r.h,
+        }),
+        interactive,
+        visible: visibility_of(node),
+        text,
+        href: node.attr("href").map(str::to_string),
+        placeholder: node.attr("placeholder").map(str::to_string),
+    })
+}
+
+fn nearest_emitted_ancestor(
+    index: usize,
+    fx: &FrameIndex<'_>,
+    emitted: &HashMap<usize, usize>,
+) -> Option<usize> {
+    let mut cursor = index;
+    for _ in 0..fx.frame.nodes.len() {
+        let parent = fx.frame.nodes[cursor].parent?;
+        if parent >= cursor {
+            return None;
+        }
+        if let Some(&out) = emitted.get(&parent) {
+            return Some(out);
+        }
+        cursor = parent;
+    }
+    None
+}
+
+/// A control's current value. A submit button's `value` is its NAME, not its
+/// value — accname rule 4 already spent it, and printing it twice would read
+/// as two different facts.
+fn value_of(node: &RawNode) -> Option<String> {
+    if node.tag_lower() == "input" {
+        let ty = node.attr("type").unwrap_or("text").to_ascii_lowercase();
+        if matches!(ty.as_str(), "button" | "submit" | "reset") {
+            return None;
+        }
+    }
+    node.attr("value").map(normalize).filter(|v| !v.is_empty())
+}
+
+/// The state bits, read from attributes — including the ones a fetcher
+/// synthesized (see `RawNode`'s doc).
+fn states_of(node: &RawNode, role: Role) -> NodeStates {
+    let aria_true = |name: &str| {
+        node.attr(name)
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    };
+    let aria_bool = |name: &str| {
+        node.attr(name)
+            .and_then(|v| match v.to_ascii_lowercase().as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            })
+    };
+    NodeStates {
+        disabled: node.has_attr("disabled") || aria_true("aria-disabled"),
+        // `None` for anything that is not checkable: "this is not a checkbox"
+        // and "this checkbox is off" are different facts, and the renderer
+        // prints them differently.
+        checked: match role {
+            Role::Checkbox | Role::Radio | Role::MenuItem => {
+                Some(node.has_attr("checked") || aria_true("aria-checked"))
+            }
+            _ => aria_bool("aria-checked"),
+        },
+        expanded: aria_bool("aria-expanded"),
+        selected: node.has_attr("selected") || aria_true("aria-selected"),
+        required: node.has_attr("required") || aria_true("aria-required"),
+        readonly: node.has_attr("readonly") || aria_true("aria-readonly"),
+        // No Chromium producer today: `DOMSnapshot` carries no focus bit, so
+        // only a fetcher that ran JS can set the `:focus` pseudo-attribute
+        // (Task 17). Until one does, this is false for every Chromium capture
+        // — if Task 17 does not supply it, CUT the field rather than ship a
+        // predicate that is constant (判据 §2).
+        focused: node.has_attr(":focus"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{render_text, RefTable, StaleReason};
+    use super::*;
+    use std::time::Duration;
+
+    const FIXTURE: &str = include_str!("fixtures/thirteen-node.rawdom.json");
+    const GOLDEN: &str = include_str!("fixtures/thirteen-node.golden.txt");
+
+    fn fixture() -> RawDom {
+        serde_json::from_str(FIXTURE).expect("the thirteen-node fixture parses as a RawDom")
+    }
+
+    fn build_once(refs: &mut RefTable) -> PageState {
+        PageState::build(
+            &fixture(),
+            refs,
+            7,
+            "https://example.test/hn",
+            "Hacker News",
+            Duration::from_millis(142),
+        )
+    }
+
+    /// The whole builder in one assertion: roles, names, refs, geometry,
+    /// visibility, the frame offset and the container rule.
+    #[test]
+    fn the_thirteen_node_fixture_renders_the_golden_tree() {
+        let mut refs = RefTable::new();
+        let state = build_once(&mut refs);
+        let rendered = render_text(&state);
+        assert_eq!(rendered, GOLDEN.trim_end_matches('\n'));
+
+        // The number the tool reports and the number the model can see are the
+        // same number. `SnapshotOutput.ref_count` is what Part 4 shows, and a
+        // count that included refs the text never printed would be a label on
+        // the wrong predicate (判据 §18). Ids are contiguous for the same
+        // reason: a gap reads as an element the model was not shown.
+        assert_eq!(
+            state.ref_count(),
+            rendered.matches("[ref=").count(),
+            "ref_count and the printed refs disagree:\n{rendered}"
+        );
+        assert_eq!(state.ref_count(), 6);
+        for i in 1..=6 {
+            assert!(
+                rendered.contains(&format!("[ref=e{i}]")),
+                "e{i} is missing, so the ids the model sees have a gap:\n{rendered}"
+            );
+        }
+    }
+
+    /// Thirteen raw nodes, eleven state nodes: the two `document` nodes carry
+    /// no role, no name and no box, and a line for either would be a line of
+    /// nothing.
+    ///
+    /// `no_box` counts BOTH boxless nodes — the `display: none` one and the
+    /// visible inline link — because it reports how much of the capture had no
+    /// geometry, which is a different question from what is visible.
+    #[test]
+    fn documents_are_dropped_and_everything_else_survives() {
+        let mut refs = RefTable::new();
+        let state = build_once(&mut refs);
+        assert_eq!(state.nodes.len(), 11);
+        assert_eq!(state.no_box, (2, 11), "two nodes generate no box");
+        assert_eq!(state.ref_count(), 6);
+        assert_eq!(state.generation, 7);
+        assert_eq!(
+            state.fetch_ms, 142,
+            "elapsed fetch time, not a barrier wait"
+        );
+    }
+
+    /// A child frame's rects are frame-local in `RawDom` and page-global in
+    /// `PageState`. The offset is `(40, 200)`, so the checkbox at `(10, 20)`
+    /// must land at `(50, 220)` — and its size must not move. The main frame's
+    /// rect is asserted too, so this also catches "the offset is applied twice".
+    #[test]
+    fn the_frame_offset_is_added_to_position_and_not_to_size() {
+        let mut refs = RefTable::new();
+        let state = build_once(&mut refs);
+        let checkbox = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 22)
+            .expect("the checkbox is in the tree");
+        let r = checkbox.rect.as_ref().expect("it has a box");
+        assert_eq!((r.x, r.y, r.w, r.h), (50, 220, 13, 13));
+        assert_eq!(checkbox.frame.frame_id, "F-child");
+        assert_eq!(checkbox.frame.loader_id, "L-2");
+
+        let link = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 3)
+            .expect("the link is in the tree");
+        let r = link.rect.as_ref().expect("it has a box");
+        assert_eq!((r.x, r.y, r.w, r.h), (130, 11, 83, 15));
+    }
+
+    /// `display: none` is what makes a node invisible. It keeps its place in
+    /// the JSON and gets no ref — a ref on something nothing can click is a
+    /// promise the driver cannot keep.
+    #[test]
+    fn a_display_none_node_is_invisible_kept_in_json_and_never_given_a_ref() {
+        let mut refs = RefTable::new();
+        let state = build_once(&mut refs);
+        let hidden = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 6)
+            .expect("the display:none div survives into the state");
+        assert!(!hidden.visible);
+        assert!(hidden.r#ref.is_none());
+        assert!(
+            !render_text(&state).contains("tooltip"),
+            "an invisible node must not reach the text tree"
+        );
+    }
+
+    /// **A missing box is not a verdict.** Real obscura returned a zero quad
+    /// for inline `<a>` while M11 measured real boxes for the same tag on
+    /// another page, so a rule that hid boxless nodes would delete every
+    /// inline link on some pages and none on others — and the model could not
+    /// tell those two worlds apart.
+    ///
+    /// So this node stays visible, keeps its ref, is counted in `no_box`, and
+    /// loses exactly one thing: the `@x,y wxh` token. The negative half is the
+    /// substance — asserting only that the line is present would stay green
+    /// over a renderer that printed `@0,0 0x0`, which is a coordinate rather
+    /// than an absence.
+    #[test]
+    fn a_boxless_but_styled_node_stays_visible_keeps_its_ref_and_loses_only_its_geometry() {
+        let mut refs = RefTable::new();
+        let state = build_once(&mut refs);
+        let inline = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 9)
+            .expect("the boxless inline link is in the tree");
+        assert!(inline.visible, "styles say visible, so it is visible");
+        assert!(inline.rect.is_none());
+        assert!(inline.interactive);
+        assert_eq!(
+            inline.r#ref.as_ref().map(|r| r.0.as_str()),
+            Some("e3"),
+            "a boxless node the model can still click must be addressable"
+        );
+
+        let line = render_text(&state)
+            .lines()
+            .find(|l| l.contains("Inline link"))
+            .expect("it reaches the text tree")
+            .to_string();
+        assert_eq!(line, "  - link \"Inline link\" [ref=e3] /url: \"/inline\"");
+        assert!(!line.contains('@'), "no geometry token: {line}");
+        assert!(!line.contains("0x0"), "and no invented zero box: {line}");
+    }
+
+    /// States are read, not guessed. And `checked: None` on a non-checkable
+    /// control is load-bearing: "this is not a checkbox" and "this checkbox is
+    /// off" are different facts, and the renderer prints them differently.
+    #[test]
+    fn disabled_and_checked_reach_node_states() {
+        let mut refs = RefTable::new();
+        let state = build_once(&mut refs);
+        let button = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 5)
+            .expect("button");
+        assert!(button.states.disabled);
+        assert_eq!(button.name, "Submit query");
+        assert!(button.interactive, "a disabled control is still a control");
+        assert_eq!(button.states.checked, None);
+
+        let checkbox = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 22)
+            .expect("checkbox");
+        assert_eq!(checkbox.states.checked, Some(true));
+    }
+
+    /// Two captures of the same document hand back the same numbers, and the
+    /// second capture mints nothing new (spec §4.3).
+    #[test]
+    fn refs_are_stable_across_two_builds_of_the_same_document() {
+        let mut refs = RefTable::new();
+        let first = build_once(&mut refs);
+        let second = PageState::build(
+            &fixture(),
+            &mut refs,
+            8,
+            "https://example.test/hn",
+            "Hacker News",
+            Duration::from_secs(0),
+        );
+        let ids = |s: &PageState| -> Vec<Option<String>> {
+            s.nodes
+                .iter()
+                .map(|n| n.r#ref.clone().map(|r| r.0))
+                .collect()
+        };
+        assert_eq!(ids(&first), ids(&second));
+        assert_eq!(refs.len(), 6, "the second build minted new numbers");
+    }
+
+    /// A navigation renumbers from scratch, inside `build` — the caller never
+    /// has to remember to reset.
+    #[test]
+    fn a_new_main_frame_loader_resets_the_table_inside_build() {
+        let mut refs = RefTable::new();
+        let first = build_once(&mut refs);
+        let first_link = first
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 3)
+            .and_then(|n| n.r#ref.clone())
+            .expect("the link had a ref");
+
+        let mut navigated = fixture();
+        navigated.frames[0].loader_id = "L-9".to_string();
+        let second = PageState::build(
+            &navigated,
+            &mut refs,
+            8,
+            "https://example.test/other",
+            "Other",
+            Duration::from_millis(7),
+        );
+        assert_eq!(refs.document(), Some("L-9"));
+        assert_eq!(refs.resolve(&first_link), Err(StaleReason::Navigated));
+        let second_link = second
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 3)
+            .and_then(|n| n.r#ref.clone())
+            .expect("the link has a new ref");
+        assert_ne!(second_link, first_link);
+        assert_eq!(second.fetch_ms, 7);
+    }
+
+    /// A malformed `RawDom` — a parent index pointing forward, or off the end
+    /// — must not panic and must not silently re-parent the node under
+    /// something unrelated. Dropping the edge is the fail-closed answer: the
+    /// node keeps its place and loses only its position in the tree.
+    #[test]
+    fn a_forward_or_out_of_range_parent_index_is_dropped_not_guessed() {
+        let mut broken = fixture();
+        broken.frames[0].nodes[2].parent = Some(99);
+        broken.frames[0].nodes[4].parent = Some(6);
+        let mut refs = RefTable::new();
+        let state = PageState::build(
+            &broken,
+            &mut refs,
+            1,
+            "https://example.test/hn",
+            "t",
+            Duration::from_secs(0),
+        );
+        let link = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 3)
+            .expect("the node itself survives");
+        assert_eq!(link.parent, None, "an unusable parent edge becomes no edge");
+        let button = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 5)
+            .expect("button");
+        assert_eq!(button.parent, None);
+    }
+}

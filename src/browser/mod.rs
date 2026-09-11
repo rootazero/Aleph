@@ -8,6 +8,7 @@ pub mod engine;
 pub mod error;
 pub mod manager;
 pub mod network_policy;
+pub mod page_state;
 pub mod playwright_cli;
 pub(crate) mod playwright_cli_backend;
 pub mod playwright_launch;

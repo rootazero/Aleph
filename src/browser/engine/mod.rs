@@ -206,6 +206,9 @@ pub struct TabTable {
 /// Per-tab state that outlives a single call.
 pub struct TabEntry {
     pub session: aleph_cdp::SessionId,
+    /// This tab's ref table. Beside the session because a ref's identity is
+    /// `(frame, loader, backend node)` within THIS tab's document.
+    pub refs: crate::browser::page_state::RefTable,
     /// Bumped once per page-state capture; refs carry the generation they were
     /// minted in (spec §4.3).
     pub generation: u64,
@@ -225,6 +228,7 @@ impl TabEntry {
     pub fn new(session: aleph_cdp::SessionId) -> Self {
         Self {
             session,
+            refs: crate::browser::page_state::RefTable::new(),
             generation: 0,
             url: "about:blank".to_string(),
             console: VecDeque::new(),
