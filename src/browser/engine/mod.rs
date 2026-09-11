@@ -132,6 +132,14 @@ pub const ENGINE_KILL_GRACE: Duration = Duration::from_millis(500);
 /// `std::process::exit(0)` after it waits for nobody, so this is a hard
 /// ceiling, not a hope (`src/bin/aleph-server/commands/start/helpers.rs`).
 ///
+/// "Hard ceiling" covers **taking the registry lock as well as the stops**, and
+/// that is the whole content of the claim: `EngineRegistry::handle` holds that
+/// lock across a launch (`chromium::DEVTOOLS_PORT_DEADLINE`, 30 s, plus an
+/// unbounded binary resolve, plus `readiness::READY_GATE_BUDGET`), so a
+/// deadline that started after the acquisition bounded only the kills and this
+/// sentence was false by an order of magnitude while reading as true.
+/// `shutdown_all` starts the clock before the lock for exactly that reason.
+///
 /// **Derived from [`ENGINE_KILL_GRACE`], not chosen.** It was a flat 1 s over a
 /// loop that waited up to `ENGINE_KILL_GRACE` per engine *in sequence*, so
 /// three stuck engines could not fit — an arithmetic impossibility nothing
@@ -332,44 +340,53 @@ impl EngineHandle {
             ))
         };
 
-        let session = tokio::time::timeout_at(deadline, self.conn.attach(target))
-            .await
-            .map_err(|_| stalled("Target.attachToTarget"))?
-            .map_err(|e| {
-                BrowserError::AttachFailed(format!(
-                    "could not attach to tab {} on {}: {e}",
-                    target.0,
-                    self.engine.as_str()
-                ))
-            })?;
-        for (domain, result) in [
-            (
-                "Page",
-                tokio::time::timeout_at(
-                    deadline,
-                    aleph_cdp::methods::page::enable(&self.conn, Some(&session)),
+        // No outer `timeout_at` on the attach: `conn.attach` already runs under
+        // the connection's own `command_timeout`, which IS this deadline, so
+        // wrapping it would only take the decision away from the arm that
+        // cleans up. `CdpConnection::call_with_timeout` removes its `pending`
+        // entry in its own `Err(_elapsed)` arm — an invariant that crate states
+        // and tests — and an outer timeout DROPS that future, so the cleanup
+        // never runs and the entry leaks into a connection that outlives the
+        // call.
+        let session = self.conn.attach(target).await.map_err(|e| {
+            BrowserError::AttachFailed(format!(
+                "could not attach to tab {} on {}: {e}",
+                target.0,
+                self.engine.as_str()
+            ))
+        })?;
+        // A LOOP, not an array literal, and each call gets what is LEFT of the
+        // budget rather than an outer wrapper.
+        //
+        // The array literal built all three futures before the loop body ran,
+        // so once the deadline passed `Runtime.enable` and `Network.enable`
+        // were still dispatched — constructed, inserted into `pending`, written
+        // to the socket — and then instantly timed out. Measured:
+        // `pending before=0 after=3`. One stalled attach leaked three entries
+        // AND sent two more requests to a browser the caller had already given
+        // up on, while holding this guard. Lazy evaluation is what stops the
+        // dispatch; the per-call budget is what lets the crate's own cleanup
+        // arm fire instead of ours.
+        //
+        // The method names are spelled here rather than reached through
+        // `aleph_cdp::methods::{page,runtime,network}::enable`, because those
+        // wrappers hardcode the connection's full `command_timeout` and cannot
+        // be given a remainder. What keeps that second spelling honest is
+        // `attach_tab_creates_the_entry_that_ensure_tab_only_finds`, which
+        // asserts the three names against what the fake peer actually received.
+        for domain in ["Page", "Runtime", "Network"] {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(stalled(&format!("{domain}.enable")));
+            }
+            self.conn
+                .call_with_timeout(
+                    Some(&session),
+                    &format!("{domain}.enable"),
+                    serde_json::json!({}),
+                    remaining,
                 )
-                .await,
-            ),
-            (
-                "Runtime",
-                tokio::time::timeout_at(
-                    deadline,
-                    aleph_cdp::methods::runtime::enable(&self.conn, Some(&session)),
-                )
-                .await,
-            ),
-            (
-                "Network",
-                tokio::time::timeout_at(
-                    deadline,
-                    aleph_cdp::methods::network::enable(&self.conn, Some(&session)),
-                )
-                .await,
-            ),
-        ] {
-            result
-                .map_err(|_| stalled(&format!("{domain}.enable")))?
+                .await
                 .map_err(|e| {
                     BrowserError::AttachFailed(format!(
                         "attached to tab {} but {domain} would not enable: {e}. Its \

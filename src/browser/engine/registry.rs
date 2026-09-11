@@ -217,11 +217,23 @@ impl EngineRegistry {
     /// session** — and a wrong label costs more than a missing one (判据 §17).
     /// The behaviour is deliberately unchanged, because the same `false` is
     /// still the right answer for the launch consumer and a display cannot be
-    /// allowed to dictate a safety default. What makes it acceptable is that
-    /// the window is now BOUNDED: the launch that holds this lock is capped by
-    /// the bring-up budget (`registry::bring_up`'s single deadline), where it
-    /// used to be an unbounded `connect_async`. A profile can read as inactive
-    /// while another is starting, for at most that budget, once.
+    /// allowed to dictate a safety default.
+    ///
+    /// **How long that wrong label can last**, derived rather than quoted, so
+    /// that when one of these moves this paragraph is wrong in a way a reader
+    /// can see instead of a way only a stopwatch can find. The lock is held by
+    /// [`Self::handle`] across, in order:
+    /// a dead handle's `shutdown()` (≤ [`super::ENGINE_KILL_GRACE`]),
+    /// `process.launch()` (≤ [`super::chromium::DEVTOOLS_PORT_DEADLINE`] for
+    /// the spawn, **plus an unbounded binary-resolve step that no constant
+    /// covers**), and `bring_up` (≤ [`super::readiness::READY_GATE_BUDGET`]).
+    /// Sum the three constants for the floor; the resolve makes it a floor
+    /// rather than a ceiling.
+    ///
+    /// An earlier version of this paragraph said "at most the bring-up budget,
+    /// once", which named only the last of the three and understated the window
+    /// by roughly an order of magnitude — while being the paragraph that exists
+    /// specifically to bound it.
     #[must_use]
     pub fn is_live(&self, profile: &str) -> bool {
         self.handles
@@ -269,10 +281,43 @@ impl EngineRegistry {
     /// Drained BEFORE stopping, so a caller that times this out cannot leave
     /// half-killed handles in the map for the next call to hand out.
     pub async fn shutdown_all(&self) -> usize {
-        let handles: Vec<Arc<EngineHandle>> = {
-            let mut map = self.handles.lock().await;
-            map.drain().map(|(_, handle)| handle).collect()
-        };
+        // The deadline starts HERE, before the lock, not after it.
+        //
+        // [`Self::handle`] holds this same lock across `process.launch()` —
+        // `chromium::DEVTOOLS_PORT_DEADLINE` (30 s) plus an unbounded binary
+        // resolve — plus `bring_up` (`READY_GATE_BUDGET`) plus a dead handle's
+        // `shutdown()`. Starting the clock after the acquisition made the
+        // declared budget describe only the kills: measured at 1.856 s and
+        // 2.856 s in two runs against a stated 1 s. A limit's POSITION decides
+        // what it limits (判据 §13), and the consumer here is the wedged-exit
+        // failsafe, where `SHUTDOWN_FAILSAFE` is already spent, `exit(0)`
+        // follows and nothing is behind it — so an overrun is not slow, it is
+        // the browsers never being stopped at all.
+        let deadline = tokio::time::Instant::now() + ENGINE_SHUTDOWN_BUDGET;
+
+        // Declared before either timed section, so both of them can report what
+        // actually died rather than losing it with the dropped future.
+        let died = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<Arc<EngineHandle>> =
+            match tokio::time::timeout_at(deadline, self.handles.lock()).await {
+                Ok(mut map) => map.drain().map(|(_, handle)| handle).collect(),
+                Err(_) => {
+                    // Its OWN error, deliberately distinct from the one below:
+                    // "I could not take the lock" is not "nothing died"
+                    // (判据 §8). Nothing was drained, so every engine is still
+                    // in the map and still running — which is a different
+                    // sentence from "the stops ran and none of them worked",
+                    // and the operator's next move differs between them.
+                    tracing::error!(
+                        budget_ms = ENGINE_SHUTDOWN_BUDGET.as_millis(),
+                        "could not take the engine registry lock within the shutdown \
+                         budget — a launch is in flight and holds it. NO engine was \
+                         stopped; every one of them is left for the next boot sweep"
+                    );
+                    return 0;
+                }
+            };
         if handles.is_empty() {
             return 0;
         }
@@ -286,7 +331,6 @@ impl EngineRegistry {
         // exactly when it has the most to say: the run that stopped two
         // browsers and then hit the wall reported 0, and the caller believed
         // the number rather than the world (判据 §11).
-        let died = Arc::new(AtomicUsize::new(0));
         let stops = handles.into_iter().map(|handle| {
             let died = Arc::clone(&died);
             async move {
@@ -303,7 +347,7 @@ impl EngineRegistry {
         // Run in sequence the cost was N x grace, and three stuck engines could
         // not fit in any fixed budget. The stops touch nothing in common: one
         // process and one sidecar path each.
-        if tokio::time::timeout(ENGINE_SHUTDOWN_BUDGET, futures::future::join_all(stops))
+        if tokio::time::timeout_at(deadline, futures::future::join_all(stops))
             .await
             .is_err()
         {
@@ -411,6 +455,15 @@ async fn launch_engine(
 /// why `ready_gate` is handed the remainder instead of `budget`: given the whole
 /// thing again, its own timeout could only fire after this one already had, and
 /// an inner limit that can never be reached is not a limit (判据 §2).
+///
+/// These outer `timeout_at`s DROP the CDP futures they wrap, so
+/// `call_with_timeout`'s own `Err(_elapsed)` arm — which is what removes the
+/// `pending` entry — never runs. `EngineHandle::attach_tab` had to stop doing
+/// that; here it is bounded rather than benign-by-assumption: every path out of
+/// this function on an error drops `conn`, and the connection's `Drop` tears
+/// the whole shared state down with it, so a leaked entry cannot outlive the
+/// call. The connect itself has no inner timeout to defer to at all
+/// (`connect_async` takes none), which is why the wrapper exists.
 async fn bring_up(
     launched: &Launched,
     engine: Engine,
@@ -905,6 +958,93 @@ mod tests {
                  at an empty string standing in for 'unknown'"
             );
         }
+
+        registry.shutdown_all().await;
+        server.shutdown().await;
+    }
+
+    /// M1's positive direction: an attach whose four round trips are all SLOW
+    /// but all answer still succeeds, and leaves nothing pending behind it.
+    ///
+    /// The negative half — a stalled attach is refused, bounded — is what
+    /// produced D2, so this is the other half of the same gate (判据 §14: ask
+    /// both directions). Without it, "bounded" and "refuses anything that is
+    /// not instant" are indistinguishable, and the second one would break every
+    /// real attach against a loaded browser.
+    ///
+    /// Each call is delayed by ~0.2 x `command_timeout`, so four of them
+    /// together sit at ~0.8 x — comfortably inside the single deadline and
+    /// comfortably outside "fast". `pending_len()` afterwards is the D2
+    /// assertion: the per-call budgets must have been spent by calls that
+    /// answered, not by futures dropped from under the crate's cleanup arm.
+    #[tokio::test]
+    async fn a_slow_but_answering_attach_succeeds_and_leaves_nothing_pending() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            &server,
+            dir.path(),
+        ));
+        // A generous command timeout so the delays below are a fraction of it
+        // rather than a race against it.
+        let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
+        processes.insert(Engine::Chromium, proc.clone());
+        let command_timeout = Duration::from_secs(2);
+        let registry = EngineRegistry::new(processes, command_timeout, Duration::from_secs(5));
+        let handle = registry
+            .handle(
+                Engine::Chromium,
+                &request("default", dir.path()),
+                EngineLaunch::Allow,
+            )
+            .await
+            .expect("launch");
+
+        // Only now make the peer slow, so the launch itself is unaffected and
+        // this measures the attach alone.
+        let slow = command_timeout / 5;
+        for method in [
+            "Target.attachToTarget",
+            "Page.enable",
+            "Runtime.enable",
+            "Network.enable",
+        ] {
+            let answer = engine_peer(&serde_json::json!({ "method": method }));
+            server.on(method, Responder::Delay(slow, Box::new(answer)));
+        }
+
+        let target = aleph_cdp::TargetId("T9".to_string());
+        let started = std::time::Instant::now();
+        let session = handle
+            .attach_tab(&target)
+            .await
+            .expect("four slow-but-answering calls are inside one command_timeout");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed >= slow * 4,
+            "the peer was not actually slow, so this proves nothing about the \
+             budget: {elapsed:?}"
+        );
+        assert!(
+            elapsed < command_timeout,
+            "four calls at a fifth of the budget each must fit inside it: {elapsed:?}"
+        );
+        assert_eq!(
+            handle
+                .ensure_tab("T9")
+                .await
+                .expect("the tab is in the table"),
+            session
+        );
+        assert_eq!(
+            handle.conn.pending_len(),
+            0,
+            "a call that ANSWERED left a pending entry behind — the per-call \
+             budgets are being pre-empted by an outer timeout that drops the \
+             future before the crate's own cleanup arm can run"
+        );
 
         registry.shutdown_all().await;
         server.shutdown().await;

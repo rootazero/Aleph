@@ -371,8 +371,10 @@ bench = false
 [dev-dependencies]
 # The same crate as the `[dependencies]` entry above, with the in-process fake
 # CDP peer switched on. `#[cfg(test)]` code in this crate drives the engine
-# registry against it; `--features test-helpers` reaches it through the normal
-# dependency instead (see the `test-helpers` feature above).
+# registry against it — and that is the ONLY consumer: `browser::testkit` is
+# `cfg(test)`-gated, so a lib built under `--features test-helpers` does not
+# compile it and does not need the fake at all (R84, and see the `test-helpers`
+# feature above, which this note used to contradict).
 aleph-cdp = { path = "crates/aleph-cdp", features = ["testkit"] }
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 tempfile = "3.8"

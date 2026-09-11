@@ -530,13 +530,26 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // line past this point may simply never execute. Ordering by cost is
         // therefore the rule: the browser stop is hard-bounded — a synchronous
         // playwright half (`kill()` plus a bounded `wait()`) and an engine half
-        // capped by `ENGINE_SHUTDOWN_BUDGET` (1 s) — so putting it first costs
-        // the bash reap at most that second, while putting it last is what
-        // would spend the browser's only chance on a sleep it does not need.
+        // capped by `ENGINE_SHUTDOWN_BUDGET` — so putting it first costs the
+        // bash reap at most that budget, while putting it last is what would
+        // spend the browser's only chance on a sleep it does not need.
+        //
+        // That cap covers the engine registry's LOCK as well as its kills. It
+        // briefly did not, and this comment did not know: a launch in flight
+        // holds that lock across a 30 s spawn deadline, so this block could
+        // block ~35 s, the external SIGKILL from `aleph-server stop` would land
+        // first, and neither the browsers nor the bash orphans below would be
+        // reaped. Naming a number from another crate turns that number from
+        // "can change" into "must not change without telling this line"
+        // (判据 §1) — so the figure is deliberately not repeated here; read it
+        // off the constant.
         // Idempotent with the `start_server` call site.
         let browsers = alephcore::browser::manager::shutdown_browsers_global().await;
         if browsers > 0 {
-            tracing::warn!(count = browsers, "stopped managed browsers before forced exit");
+            tracing::warn!(
+                count = browsers,
+                "stopped managed browsers before forced exit"
+            );
         }
         if reaped > 0 {
             // `abort()` only *marks* the task; the runtime drops its
@@ -676,17 +689,29 @@ mod tests {
                 ("start/mod.rs", include_str!("mod.rs")),
             ] {
                 let src = raw.replace('\r', "");
-                let production = alephcore::utils::source_scan::production_prefix(&src);
+                let prefix = alephcore::utils::source_scan::production_prefix(&src);
                 // Non-vacuity: prove the bound actually cut something off in
                 // the file that HAS a test module, so the split is doing real
-                // work.
+                // work. Taken on the PREFIX, before `code_text` below, because
+                // `code_text` shrinks the text on its own and would make this
+                // hold even for a prefix that matched nothing.
                 if label.ends_with("helpers.rs") {
                     assert!(
-                        production.len() < src.len(),
+                        prefix.len() < src.len(),
                         "{label}: the #[cfg(test)] bound matched nothing — this \
                          test would then be reading its own source"
                     );
                 }
+                // Comments stripped as well as the test module. The `ident(`
+                // trick below narrows what a stray mention can satisfy, but it
+                // does not close it: a comment spelling
+                // `// shutdown_browsers_global()` satisfies `contains` just as
+                // well as the call does, and this guard was non-vacuous only
+                // because no such comment happened to exist. Its twin in
+                // `browser::manager` was fixed first and this is the same fix
+                // carried across, rather than left for someone to rediscover
+                // here (判据 §16).
+                let production = alephcore::utils::source_scan::code_text(&prefix);
                 // Assert on the CALL (`ident(`), not the bare name: the prose
                 // above and the explanatory comments at both sites also spell
                 // the identifier, so `contains(reaper)` alone would stay green

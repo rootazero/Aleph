@@ -875,6 +875,12 @@ impl ProfileManager {
         // a number that under-reports work done is the same family as a no-op
         // that reports success (判据 §11). The registry owns both the budget
         // and the count because only it can still see what died.
+        //
+        // The bound covers `shutdown_all`'s **lock acquisition** as well as the
+        // stops. It briefly did not — the deadline started after the lock, so a
+        // launch in flight could hold this call for ~35 s against a stated 1 s.
+        // Worth knowing here rather than only at the definition, because this
+        // is the call site whose own caller is the wedged-exit failsafe.
         stopped += self.engines.shutdown_all().await;
         stopped
     }
@@ -1186,14 +1192,24 @@ mod tests {
         // call satisfies the assertion, so deleting the statement and leaving a
         // `// engines.shutdown_all()` behind would stay green — a guard a
         // comment can satisfy is not a guard (判据 §2).
-        let production = crate::utils::source_scan::code_text(
-            &crate::utils::source_scan::production_prefix(&src),
-        );
+        // Two separate measurements, because they answer two questions and
+        // one of them stopped being able to fail. The floor below is about the
+        // `#[cfg(test)]` BOUND, so it has to be taken before `code_text`:
+        // `code_text` strips comments and therefore shrinks the text on its
+        // own, so `code_text(&prefix).len() < src.len()` holds even when the
+        // prefix matched nothing at all — measured by substituting
+        // `code_text(&src)`, which is exactly what that failure produces, and
+        // the assertion stayed green. A predicate that can no longer detect the
+        // condition its own message names is 判据 §2's second face, and M5's
+        // fix is what created it here. `registry.rs`'s sibling keeps its own
+        // independent floor for the same reason.
+        let prefix = crate::utils::source_scan::production_prefix(&src);
         assert!(
-            production.len() < src.len(),
+            prefix.len() < src.len(),
             "the #[cfg(test)] bound matched nothing — this test would then be \
              reading its own source"
         );
+        let production = crate::utils::source_scan::code_text(&prefix);
         assert!(
             production.contains("shutdown_all_chromium("),
             "shutdown_browsers must still stop the playwright-owned browsers"
