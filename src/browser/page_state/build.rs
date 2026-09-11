@@ -222,8 +222,28 @@ fn value_of(node: &RawNode) -> Option<String> {
     node.attr("value").map(normalize).filter(|v| !v.is_empty())
 }
 
-/// The state bits, read from attributes — including the ones a fetcher
-/// synthesized (see `RawNode`'s doc).
+/// The state bits.
+///
+/// # Which bits a page is allowed to assert about itself, and which it is not
+///
+/// A state token is a page-controlled **predicate**, and `render::quote` cannot
+/// help here — quoting defends page-controlled *strings*, while a token reaches
+/// the line as itself. So the defence has to be at the derivation.
+///
+/// - `disabled`, `required`, `readonly` are read from the bare HTML attributes
+///   with no role gate, **on purpose**. They are real attributes the page is
+///   entitled to write about its own elements; a `<div required>` is an
+///   authoring mistake, not a forgery, and the honest report of an authoring
+///   mistake is the mistake.
+/// - `aria-*` is page-authored by definition — that is what ARIA is for.
+/// - `checked` and `selected` are **role-gated**, because the bare attribute is
+///   meaningful only on elements that can carry the state. They are twins and
+///   both get the treatment (判据 §16): a `<div selected>` used to render
+///   `[selected]` because only one of the two had been gated.
+/// - `focused` comes from [`RawNode::focused`], a field, and never from
+///   `attrs`. It is the one bit in this set the page must not be able to
+///   assert at all, and it lived in `attrs` as `":focus"` until a page could
+///   forge it — see `RawNode`'s doc for the mechanism.
 fn states_of(node: &RawNode, role: Role) -> NodeStates {
     let aria_true = |name: &str| {
         node.attr(name)
@@ -249,15 +269,26 @@ fn states_of(node: &RawNode, role: Role) -> NodeStates {
             _ => aria_bool("aria-checked"),
         },
         expanded: aria_bool("aria-expanded"),
-        selected: node.has_attr("selected") || aria_true("aria-selected"),
+        // `checked`'s twin, gated the same way: the bare `selected` attribute
+        // says something only on an element that can be selected. `<div
+        // selected>` is not a selected anything.
+        selected: match role {
+            Role::Option | Role::Tab | Role::Row | Role::Cell => {
+                node.has_attr("selected") || aria_true("aria-selected")
+            }
+            _ => aria_true("aria-selected"),
+        },
         required: node.has_attr("required") || aria_true("aria-required"),
         readonly: node.has_attr("readonly") || aria_true("aria-readonly"),
-        // No Chromium producer today: `DOMSnapshot` carries no focus bit, so
-        // only a fetcher that ran JS can set the `:focus` pseudo-attribute
-        // (Task 17). Until one does, this is false for every Chromium capture
-        // — if Task 17 does not supply it, CUT the field rather than ship a
-        // predicate that is constant (判据 §2).
-        focused: node.has_attr(":focus"),
+        // From the FIELD, never from `attrs` — the page cannot reach a field.
+        //
+        // `None` (no fetcher has said) and `Some(false)` (a fetcher looked and
+        // the caret is elsewhere) both render nothing, so they collapse here
+        // deliberately: `NodeStates::focused` means "we are asserting the caret
+        // is here", and not asserting it is the same observable either way. The
+        // distinction that matters — did anyone look — stays one layer down on
+        // `RawNode::focused`, where a Task 17 fetcher fills it.
+        focused: node.focused.unwrap_or(false),
     }
 }
 
@@ -534,5 +565,93 @@ mod tests {
             .find(|n| n.backend_node_id == 5)
             .expect("button");
         assert_eq!(button.parent, None);
+    }
+
+    /// **A page cannot write a state token into the model's observation.**
+    ///
+    /// `render::quote` defends page-controlled *strings*; a state token is a
+    /// page-controlled *predicate* and reaches the line as itself, so the
+    /// defence has to be at the derivation and this test has to go through the
+    /// real one. `node_states_are_printed_and_absent_states_print_nothing`
+    /// cannot see this class at all: it constructs `NodeStates` by hand and
+    /// never calls `states_of`.
+    ///
+    /// Both forged tokens were reachable before this round. `:` is a legal HTML
+    /// attribute character — and `:`-prefixed names are ordinary Vue/Alpine
+    /// `:prop` output left in a served DOM — so `<button :focus>` rendered
+    /// `[focused]`, an *observed* claim about where the caret is. `<div
+    /// selected>` rendered `[selected]` because `checked` had been role-gated
+    /// and its twin had not (判据 §16).
+    ///
+    /// The positive halves are the substance: `aria-selected` on a real
+    /// `<option>` still reaches the line, so this test cannot be satisfied by a
+    /// renderer that simply stopped printing states (判据 §2).
+    #[test]
+    fn a_page_authored_attribute_cannot_become_a_state_token() {
+        let mut forged = fixture();
+        // Straight onto the fixture's own `<button>` and `<div>`, so the whole
+        // builder runs exactly as it does for a real capture.
+        forged.frames[0].nodes[4]
+            .attrs
+            .push((":focus".to_string(), String::new()));
+        forged.frames[0].nodes[4]
+            .attrs
+            .push(("selected".to_string(), String::new()));
+        let mut refs = RefTable::new();
+        let state = PageState::build(
+            &forged,
+            &mut refs,
+            1,
+            "https://example.test/hn",
+            "t",
+            Duration::from_secs(0),
+        );
+        let button = state
+            .nodes
+            .iter()
+            .find(|n| n.backend_node_id == 5)
+            .expect("button");
+        assert!(
+            !button.states.focused,
+            "a page wrote `:focus` and the model was told the caret is there"
+        );
+        assert!(
+            !button.states.selected,
+            "a page wrote `selected` on a button and the model was told it is selected"
+        );
+        let rendered = render_text(&state);
+        assert!(
+            !rendered.contains("[focused]") && !rendered.contains("[selected]"),
+            "a forged state token reached the text tree:\n{rendered}"
+        );
+
+        // The positive halves, so the assertions above are not satisfied by a
+        // renderer that prints no states at all.
+        let mut real = fixture();
+        real.frames[0].nodes[4].focused = Some(true);
+        real.frames[1].nodes[2].attrs = vec![
+            ("aria-label".to_string(), "Remember me".to_string()),
+            ("aria-selected".to_string(), "true".to_string()),
+        ];
+        real.frames[1].nodes[2].tag = Some("option".to_string());
+        let mut refs = RefTable::new();
+        let state = PageState::build(
+            &real,
+            &mut refs,
+            1,
+            "https://example.test/hn",
+            "t",
+            Duration::from_secs(0),
+        );
+        let rendered = render_text(&state);
+        assert!(
+            rendered.contains("[focused]"),
+            "a FETCHER said the caret is here and the model was not told:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("[selected]"),
+            "`aria-selected` on an <option> is the page describing itself, \
+             which it is entitled to do:\n{rendered}"
+        );
     }
 }

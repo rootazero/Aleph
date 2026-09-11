@@ -611,6 +611,7 @@ mod tests {
                         rect: None,
                         computed: None,
                         clickable_hint: None,
+                        focused: None,
                     },
                     RawNode {
                         backend_node_id: 2,
@@ -630,6 +631,7 @@ mod tests {
                         }),
                         computed: visible,
                         clickable_hint: None,
+                        focused: None,
                     },
                     RawNode {
                         backend_node_id: 3,
@@ -649,6 +651,7 @@ mod tests {
                         }),
                         computed: visible,
                         clickable_hint: None,
+                        focused: None,
                     },
                 ],
             }],
@@ -751,6 +754,7 @@ mod tests {
                 rect: None,
                 computed: None,
                 clickable_hint: None,
+                focused: None,
             }];
             for (i, (parent_pick, kind, payload)) in specs.iter().enumerate() {
                 // The payload lands in EVERY page-controlled field the
@@ -792,6 +796,7 @@ mod tests {
                         cursor_pointer: false,
                     }),
                     clickable_hint: None,
+                    focused: None,
                 });
             }
             let raw = RawDom {

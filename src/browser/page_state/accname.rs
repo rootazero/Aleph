@@ -283,6 +283,7 @@ mod tests {
             rect: rect(),
             computed: None,
             clickable_hint: None,
+            focused: None,
         }
     }
 
@@ -297,6 +298,7 @@ mod tests {
             rect: rect(),
             computed: None,
             clickable_hint: None,
+            focused: None,
         }
     }
 

@@ -45,6 +45,20 @@ pub struct Viewport {
 /// `Option<Computed>` on a node means "the style read did not survive its own
 /// cross-check" (spec §3.3) — an unknown. It must not be spent as "visible",
 /// and must not be spent as "hidden" either; see `build::visibility_of`.
+///
+/// # Obligation on the fetcher: these are CASCADED values, not declared ones
+///
+/// `build::visibility_of` judges each node by its own `Computed` and nothing
+/// else — it does not walk ancestors. So a fetcher must report the **effective**
+/// style of each node: a child of a `display: none` subtree must itself carry
+/// `display_none: true`. A fetcher that reported only what each element
+/// declared would leave every descendant of a hidden container reading as
+/// visible, and the builder has no way to tell that apart from a genuinely
+/// visible node.
+///
+/// This is written here, on the field the fetchers fill, rather than only at
+/// the rule that consumes it: the person who must honour the contract reads
+/// this file (判据 §1 — the copy that drifts is the one its owner never sees).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Computed {
     pub display_none: bool,
@@ -65,17 +79,27 @@ pub enum RawNodeKind {
 /// One node, flattened. `parent` indexes this frame's `nodes` and always
 /// points BACKWARDS — the fetchers emit document order.
 ///
-/// ## Synthesized attributes
+/// ## `attrs` is the PAGE's namespace, and the page is a hostile writer
 ///
-/// A fetcher may add pairs the HTML never had, when the engine reports the
-/// fact somewhere other than the attribute list:
-/// - `("checked", "")` from `DOMSnapshot`'s `inputChecked` — the DOM
-///   *property*, which a user click changes and the attribute does not
-/// - `("selected", "")` from `optionSelected`
-/// - `(":focus", "")` when the fetcher ran JS and could see focus
+/// Everything in `attrs` came from the document. A fetcher may add pairs the
+/// HTML never had, when the engine reports the fact somewhere other than the
+/// attribute list — `("checked", "")` from `DOMSnapshot`'s `inputChecked` (the
+/// DOM *property*, which a user click changes and the attribute does not), or
+/// `("selected", "")` from `optionSelected`. Those are safe **only** because
+/// the names they borrow are names the page is entitled to write about itself:
+/// a page writing `checked` on its own `<input>` is asserting something it is
+/// allowed to assert.
 ///
-/// Written as attributes rather than as new fields so the two fetchers keep
-/// one shape between them.
+/// **A fact the page must NOT be able to assert does not go in `attrs`.** It
+/// gets a field, because a field is a namespace the page cannot reach. This is
+/// not a style preference — `:focus` used to live here, and `:` is a legal
+/// HTML attribute character, so `<button :focus>` rendered `[focused]` into
+/// the model's observation as an *observed* fact about where the caret was.
+/// `:`-prefixed attribute names are also ordinary Vue/Alpine `:prop` output
+/// left in a served DOM, so the collision was not merely adversarial. The
+/// defect was two writers of different trust sharing one namespace; a name
+/// filter would have needed a guard, and a guard only covers the shapes it
+/// recognises (判据 §3). See [`RawNode::focused`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawNode {
     pub backend_node_id: u64,
@@ -101,6 +125,22 @@ pub struct RawNode {
     /// (`shadow_root` was here and is CUT for the same reason as
     /// `Computed::overflow_clip`: both fetchers wrote it, nothing read it.)
     pub clickable_hint: Option<bool>,
+    /// Does the caret live here? `None` is **"the fetcher did not say"**, and
+    /// that is the only value any fetcher produces today: `DOMSnapshot` carries
+    /// no focus bit, so only a fetcher that ran JS (Task 17's obscura one) can
+    /// fill it. Until one does, `[focused]` never renders — which is the honest
+    /// state, and cheaper than a wrong one (判据 §17).
+    ///
+    /// **A field rather than a synthesized `attrs` entry, and that is the whole
+    /// point** — see this struct's doc. A page cannot write here. If Task 17
+    /// does not supply a producer, CUT this field and `NodeStates::focused`
+    /// together rather than shipping a predicate that is constant (判据 §2).
+    ///
+    /// `#[serde(default)]` because the fixtures predate the field and absent
+    /// means exactly what `None` means. It is not a value being filled in: a
+    /// fetcher that never mentions focus has not claimed the caret is elsewhere.
+    #[serde(default)]
+    pub focused: Option<bool>,
 }
 
 impl RawNode {
@@ -174,5 +214,6 @@ pub(crate) fn node_with(tag: &str, attrs: &[(&str, &str)]) -> RawNode {
         }),
         computed: None,
         clickable_hint: None,
+        focused: None,
     }
 }
