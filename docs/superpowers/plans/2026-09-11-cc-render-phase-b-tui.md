@@ -33,9 +33,15 @@ Already built and tested in Phase A; this phase adds the first caller for each.
 
 ## 1b. Status (2026-09-11)
 
-**B1, B2, B3 landed** — `6594bfca6` (shared `at_ms`) + `071fac0f0` (the TUI).
-340 `aleph-tui` tests green, zero warnings; `aleph-cli` and `aleph-panel`
-re-verified because the shared type moved.
+**B1–B5 landed.** B1/B2/B3 — `6594bfca6` (shared `at_ms`) + `071fac0f0` (the
+TUI). B4 — `3db635bed` (one flag set across four renderers) + `9e0c8eb7f`
+(lazy syntect). B5 — mouse, region table, `chat_scroll`. 377 `aleph-tui`
+tests green, zero warnings in both test and non-test builds; `aleph-cli`,
+`shared-ui-logic` and `aleph-panel` re-verified because shared types moved.
+
+**B5 found a severed wire it did not create:** `ctrl+o` has been printed under
+every folded tool row since B2 and was bound to nothing, and `ToolRow::expanded`
+had no writer in the crate. See B5's own section.
 
 Four things came out different from the plan below, and each is recorded where
 it happened rather than only here:
@@ -192,7 +198,7 @@ emitted one output row per source row, so an assistant paragraph that wrapped
 in the source rendered pre-broken. Transcripts will look different; this is
 the correct behaviour, not a regression.
 
-### B5 — Mouse, region table, scrolling
+### B5 — Mouse, region table, scrolling ✅
 
 - Enable crossterm mouse capture; wheel scroll; single click on a hint expands that row, double click (≤ 400 ms) collapses.
 - Build a `RegionTable{rect, kind, row_id}` while painting, priority: show-more > back-to-bottom > fold hint > expanded card.
@@ -201,6 +207,68 @@ the correct behaviour, not a regression.
 - Capture failure is not fatal: the keyboard path is unchanged and `expand_hint(Modality::Key)` supplies the wording.
 
 **Guard:** a test asserts that with mouse capture off the hint text is the `ctrl+o` form — the fail-closed branch of spec §8, which is otherwise only reachable on a terminal nobody tests on.
+Landed as `chat_area::click_tests::with_mouse_capture_off_the_hint_names_the_key`, which drives a real
+`render_chat_area` and reads the painted row; mutation-verified by making `AppState::modality` return
+`Mouse` unconditionally.
+
+#### Ctrl+O was advertised on every row and bound to nothing
+
+`KEY_MODALITY` has read `Modality::Key("ctrl+o")` since B2, so every folded tool row in the transcript
+has been telling the reader to press a key `keys.rs` had no arm for, and `ToolRow::expanded` had no
+writer anywhere in the crate. Both ends built, no wire (判据 §7) — and the searchable evidence was the
+hint string itself, which reads exactly like a working feature. B5 supplies the arm.
+
+It is a **bulk edit of the per-row `expanded` flags**, not a second sticky "expand everything" flag:
+two holders of "is this row unfolded" would be two answers to one question (判据 §1), and the row's own
+flag is the one the renderer and the click path already read. The visible consequence of choosing this
+way is that a tool row arriving *after* the keystroke arrives folded — wearing a hint that is true of it.
+
+#### Five deviations from this section as written
+
+1. **No 400 ms double-click timer.** Expanding deletes the hint the gesture was made on, so a second
+   click 400 ms later lands on whatever row moved into that cell — the collapse branch could never have
+   fired. Replaced by a plain toggle with two targets per row (see 2), which satisfies "click expands,
+   click again collapses" without a timer, a clock, or a flaky test.
+2. **Three click targets per row, not one.** The header toggles too, and an *unfolded* row closes with
+   `… (ctrl+o to collapse)` — a new `affordance::collapse_hint`, beside the expand wording so both
+   surfaces keep reaching it from one place. This was measured, not reasoned: the first version had the
+   header as the only surviving target, and
+   `clicking_the_hint_unfolds_and_the_closing_hint_folds_again` failed with the header scrolled off the
+   top, because a body taller than the viewport pushes it there the instant it unfolds.
+3. **Two `RegionKind`s, not four.** `show-more` and `expanded card` name regions this TUI does not
+   paint. Enumerating them would be two arms nothing can produce and nothing can be observed to handle
+   (判据 §17). The priority order is a `match` on the kind rather than declaration order, so a third
+   kind has to answer the question rather than inherit an answer from where it was typed.
+4. **`auto_scroll` was deleted outright, not ported.** `visible_window`'s `auto_scroll == true` branch
+   computed exactly `(total − height, total)`, which is what the offset branch already yields at
+   `scroll_offset == 0`. The bool was a weakened second spelling of "parked at the bottom" from birth.
+   `stuck_to_bottom()` is now `scroll_offset == 0`, and `chat_scroll::scroll_action` decides what may
+   override it — which also buys the case the old shape could not express: **the viewer sending while
+   scrolled up**, whose answer used to stream in off-screen. `settle_scroll` runs once per main-loop
+   iteration and the eighteen `ScrollToBottomIfAutoScroll` sites (and the `Action` variant) are gone.
+   `MarkUnseen` reaches the screen as the docked control's second wording, so no arm is decorative.
+5. **`Wrap` is off and every painted row is clipped to the pane** (`chat_area::clip_to_width`). This
+   widget sizes its scroll window in *logical* lines and now records click targets in them, so a line
+   that painted as two rows would slide every target below it — a latent defect the region table would
+   have inherited. Three producers never wrapped on their own: a tool header (one unbreakable
+   `Bash(…)`), a diff row (its gutter would have to be re-emitted on a continuation), and a turn
+   summary (a sentence that simply gets long). Enforced once, at the paint site that knows both the
+   line and the pane, rather than asked of each of them (判据 §12).
+
+#### Two guards of my own that were green for the wrong reason
+
+- A first `no_painted_row_is_wider_than_the_pane` called `clip_to_width` itself and so proved the
+  function agrees with a copy of itself (判据 §10). Deleted and replaced with
+  `an_over_wide_row_above_a_tool_row_does_not_shift_its_click_target`, which reads the painted buffer.
+  Its first fixture used a *system message* — which wraps itself — and stayed green under both
+  mutations; it is a tool header now.
+- A pre-pass scroll clamp against the cache's last-known heights survived its own removal (the test
+  stayed green), because the post-build clamp already covered every case. Deleted: a second derivation
+  that can never be the one that fires (判据 §2, §12). The surviving clamp is mutation-verified.
+
+**Cost to note:** with capture on, the terminal stops handling drag-select itself, so copying text out
+of the transcript needs the emulator's override (Shift+drag in most). Whether a given Windows Terminal
+profile honours that is on the real-machine list, unmeasured.
 
 ### B6 — Chrome
 
@@ -292,3 +360,13 @@ Two instrument notes earned in this phase:
 - **Pass rustfmt the crate's real edition.** These crates are edition 2021;
   `rustfmt --edition 2024` reorders import lists into a different sort and
   produces a diff that has nothing to do with the change.
+- **A widget test cannot see width overflow in the buffer.** The backend is
+  exactly `width` columns wide whether the paragraph wrapped, truncated or
+  fitted, so "no row is too wide" has to be asserted on a *consequence* — a
+  click target that did not move — not on the painted cells (判据 §2: a
+  check that cannot go red).
+- **Read the red NAMES before the count.** Two of B5's own guards were green
+  for the wrong reason and only the mutation runs said so: one applied the
+  function it was testing, one had a fixture that wrapped itself. A third
+  guard survived its own deletion, which is how the redundant scroll clamp
+  was found (判据 §18).
