@@ -33,18 +33,21 @@ Already built and tested in Phase A; this phase adds the first caller for each.
 
 ## 1b. Status (2026-09-11)
 
-**B1–B7 landed; only B8 is left.** B1/B2/B3 — `6594bfca6` (shared `at_ms`) +
+**Phase B is complete: B1–B8 landed.** B1/B2/B3 — `6594bfca6` (shared `at_ms`) +
 `071fac0f0` (the TUI). B4 — `3db635bed` (one flag set across four renderers) +
 `9e0c8eb7f` (lazy syntect). B5 — mouse, region table, `chat_scroll`
 (`4b5648464`, `1b91f285e`). B6 — header, boxless composer, hint line,
 width-aware status line, cost (`d94e67e95`) plus an entropy commit
-(`9712a87c3`). B7 — the `/context` overlay and a remembered `/theme`. 433
-`aleph-tui` tests green, zero warnings in both test and non-test builds;
-`aleph-cli` (241) and `shared-ui-logic` (154) re-verified. B6 touched only
-`interfaces/tui/`; B7 also touched `shared/ui_logic` (one label), so
-`shared-ui-logic` was re-run for it and `aleph-panel --lib --no-run` was built
-to prove the label change reaches nothing over there (it does not call
-`reconcile` at all — Phase C has not started).
+(`9712a87c3`). B7 — the `/context` overlay and a remembered `/theme`
+(`898d0ec16`, `c546d476f`, `5f1b4f547`). B8 — the spinner tables and the stale
+suppressions. 434 `aleph-tui` tests green, zero warnings in both test and
+non-test builds; `aleph-cli` (241) and `shared-ui-logic` (154) re-verified. B6
+touched only `interfaces/tui/`; B7 also touched `shared/ui_logic` (one label),
+so `shared-ui-logic` was re-run for it and `aleph-panel --lib --no-run` was
+built to prove the label change reaches nothing over there (it does not call
+`reconcile` at all — Phase C has not started). B8 touched `interfaces/tui/` and
+`interfaces/cli/` and changed nothing in `shared/ui_logic`, so the Panel build
+was not repeated.
 
 **Each of B5 and B6 found a severed wire it did not create.** B5: `ctrl+o`
 had been printed under every folded tool row since B2, bound to nothing, and
@@ -58,6 +61,15 @@ because both ends exist. B7 ran that grep and found no new severed wire; what
 it did find was a *weakened copy* — B6's own hand-rolled `home_dir()`, the
 shared one minus an arm (判据 §1). The rule generalises: the sweep is for the
 fact, not only for the wire.
+
+**B8 then found that a plan bullet is itself a count, and counts here are short
+by one.** The bullet named *one* second spinner (`btw_panel.rs`). Grepping for
+the glyphs instead of for the file name found `interfaces/cli/src/output/
+spinner.rs` holding a third copy of the braille table *and* a second copy of the
+80 ms period — beside a fourth copy of the same ASCII frames `btw_panel.rs` was
+being deleted for (判据 §6: 数错的方向永远是少一个). Neither client compares
+its spinner to the other's, so the drift would have been silent in the only
+place it shows: two Aleph surfaces open side by side.
 
 Four things came out different from the plan below, and each is recorded where
 it happened rather than only here:
@@ -498,11 +510,36 @@ Four things worth recording:
 **Cost to note:** `aleph-cli` depends on `aleph-tui`, so the CLI binary now
 carries syntect's syntax definitions too.
 
-### B8 — Entropy reduction (same phase, separate commit)
+### B8 — Entropy reduction (same phase, separate commit) ✅
 
 - ~~Delete `widgets/tool_block.rs`~~ (done in B3) and ~~the old `markdown.rs` body~~ (done in B4).
-- Delete `btw_panel.rs`'s second spinner (`affordance::spinner_frame` is the one source).
-- Delete the three stale `#[allow(dead_code)]` in `AgentPanelData`.
+- ~~Delete `btw_panel.rs`'s second spinner~~ — and, because the sweep was for
+  the glyphs rather than for the file, **two more copies in
+  `interfaces/cli/src/output/spinner.rs`**: a third spelling of the braille
+  table and a second spelling of the 80 ms period. All three now read
+  `SPINNER_FRAMES` / `SPINNER_PERIOD_MS` from `shared-ui-logic`. Output is
+  byte-identical in every case; that is the point of the change, not a caveat
+  to it.
+  - `btw_panel.rs`'s table was ASCII while every other spinner on the same
+    screen is braille, under a doc comment reading "matching the status bar's
+    cadence" — it matched neither the sequence nor the period. 判据 §1's fourth
+    shape, where the copy that lies is the comment.
+  - The CLI's `ASCII_FRAMES` **stays local**: `use_unicode()` is that crate's
+    gate and no other surface offers the fallback, so it has exactly one
+    holder. Moving it to the shared crate would create a second home for a
+    fact with one reader.
+  - Guard: `the_status_glyph_comes_from_the_shared_table` asserts against
+    `spinner_at(tick)` rather than a literal frame, over ticks that run past
+    the table's length so a table of a different *size* fails too. Mutation
+    (restore the four ASCII frames) → that one name red, nothing else.
+  - The CLI half gets **no** test. After the change the two expressions are the
+    same expression; an assertion would be reading its own value and could not
+    go red (判据 §2, 恒绿). The compiler is the guard.
+- ~~Delete the three stale `#[allow(dead_code)]` in `AgentPanelData`~~. Their
+  stated reason — "read by Task 8b's widget, not by anything in Task 8a's
+  scope" — stopped being true when 8b shipped. A suppression is a guard
+  switched off: while it is there nothing about it can go red, so the only way
+  to read one is to delete it and rebuild. Clean build ⇒ it was stale.
 - Done early, in `9712a87c3`, because B6 walked into them: the **second
   `SessionKnob` enum** (`app/mod.rs`'s, a four-arm identity relabelling of the
   parser's, defended by a comment that described a wiring the code does not
@@ -567,3 +604,49 @@ Two instrument notes earned in this phase:
   guard was weak when it had never run (判据 §18). Verified after the fact with
   `diff`. Apply mutations with the editor, or with a script written to a file
   and run by path.
+- **A suppression cannot be read while it is on.** `#[allow(dead_code)]` is a
+  guard switched off: nothing about it can go red, so no build and no test run
+  will ever tell you it went stale. The only instrument is deleting it and
+  rebuilding. All three of `AgentPanelData`'s were stale, and had been since
+  the task their `reason` strings pointed at shipped.
+- **Workspace `cargo fmt --check` over-reports by about ninety files here.**
+  It applies the root crate's edition to crates that are edition 2021 — the
+  same trap as the note above, seen from the workspace end. The useful reading
+  is *absence*: a file missing from that noisy list is formatted under any
+  narrower rule. Confirm with `rustfmt --edition 2021 --check <paths>`.
+
+## 5. Open after Phase B
+
+Phase B is code-complete. What it deliberately leaves for whoever picks up next:
+
+- **Nothing here has been seen on a real terminal.** Every paint in B5–B8 was
+  verified against `TestBackend`, which is a grid of cells and not a terminal:
+  it has no opinion about mouse capture, truecolor, or how wide `⏺`, `ℵ`, `❯`,
+  `⏵⏵`, `✻`, `⚡`, `█` and `░` actually are. A Windows Terminal pass over
+  mouse / truecolor / `/context` / `/theme` is UNRUN, not passed. Whether
+  Shift+drag text selection still works with capture on is likewise unmeasured.
+- **`trace.tool_output` is now the only zero-client Phase A RPC.** `transcript/`
+  and `context.breakdown` both got clients in this phase.
+- **Grouping is still deferred.** `group_entries` takes `Vec<TranscriptEntry>`
+  by value, so calling it per frame reinstates the O(transcript) deep copy that
+  `build_visible_lines` exists to avoid. Changing the signature is the
+  prerequisite, not the caller.
+- **Two duplications found by B8's sweep and left alone**, because both sit in
+  files no task in this phase touched and fixing them would widen the diff into
+  unrelated commands. Recorded here so the next sweep does not have to
+  rediscover them:
+  - `interfaces/cli/src/commands/heartbeat_cmd.rs` parses a `TaskState` whose
+    five fields are never read, behind an `#[allow(dead_code)]` placed on the
+    whole enclosing `TaskView` — wider than its reason, since five of
+    `TaskView`'s own fields *are* read. Every field is `#[serde(default)]`, so
+    the type cannot reject a malformed reply either: it is 判据 §2's
+    "不可失败" face. Note the product question underneath it — `heartbeat list`
+    shows no health column, and `consecutive_errors` / `last_error` are already
+    on the wire.
+  - Four spellings of "how long did it take" render the same transcript:
+    `shared_ui_logic::transcript::fmt_duration_ms`, the CLI's
+    `output::exec_echo::format_duration`, and two in the Panel
+    (`views/cron/helpers.rs`, `views/subagent_tree/visuals.rs`). Same shape as
+    `sanitize_link_event`, which `src/export/markdown.rs` and the Panel each
+    hold a copy of — that one is security-relevant and was flagged to the user
+    in B7.

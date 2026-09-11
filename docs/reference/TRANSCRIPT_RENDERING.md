@@ -9,8 +9,10 @@
 > ⚠️ **本文不复制代码拥有的事实**（判据 §1）。每个常量、每个枚举成员、每条顺序都带着**它的所有者**（符号 + 文件）出现；
 > 读到与代码不一致时**代码是权威**。行号是**对当前 HEAD 的断言**，最会腐烂——引用前重读。
 >
-> 🛑 **Phase A only.** 本轮交付的是**服务端线路 + 共享渲染核**。Phase B（TUI）与 Phase C（Panel）**没有建**，
-> 这是用户自己裁定的 A→B→C 顺序，不是遗漏。**因此 `shared/ui_logic/src/transcript/` 至今没有任何调用者**——见 §5.1。
+> 🛑 **本文描述 Phase A 的交付**：**服务端线路 + 共享渲染核**。A→B→C 的顺序是用户自己裁定的，不是遗漏。
+> **更新（2026-09-11）**：Phase B（TUI）已完成，`shared/ui_logic/src/transcript/` 不再是零调用者——
+> 见 §5.1 的已偿注记。Phase C（Panel）仍**没有建**。
+> 本文仍只描述 Phase A 那半边；B 侧的现状在 `docs/superpowers/plans/2026-09-11-cc-render-phase-b-tui.md`。
 
 ---
 
@@ -369,7 +371,7 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 
 ### 5.1 🛑 `shared/ui_logic/src/transcript/` 没有渲染器——**一笔有日期的债，不是沉默**
 
-> **已偿（2026-09-11，Phase B B1–B7）**：`aleph-tui` 现在是这棵树的客户端——`theme_tokens` /
+> **已偿（2026-09-11，Phase B B1–B8，全阶段完成）**：`aleph-tui` 现在是这棵树的客户端——`theme_tokens` /
 > `view_model` / `fold` / `affordance` / `summarize` / `md_enhance` / `turn_summary` / `context`
 > 都有生产调用点。`context.breakdown` 的第一个客户端是 `/context` 覆盖层
 > （`interfaces/tui/src/tui/{app/context_view.rs,widgets/context_overlay.rs}`）。
@@ -478,8 +480,13 @@ main 上某处加了一个生产 `CapabilitySlot` 而没有推这个数字，而
 
 ### 5.6 其他仍然开着的东西
 
-- **两个新 RPC 都还没有客户端。** 它们是 Phase B/C 要接的读面。
-  `context.breakdown` 的客户端在调 `reconcile` **之前**必须先从实时 `ContextGauge` 填上 `provider_reported`（§3.2）。
+- **`trace.tool_output` 还没有客户端。** 它是 Phase B/C 要接的读面。
+  `context.breakdown` **已有一个**（2026-09-11，Phase B B7：`/context` 覆盖层），它的客户端在调 `reconcile`
+  **之前**先从实时 `ContextGauge` 填上了 `provider_reported`（§3.2）——那句要求写在这里、写在 wire 类型上、
+  也写在 `reconcile` 上，三处都在对一个当时不存在的客户端说话，而**没有一处说得出应该由谁来做**。
+  ⚠️ 「两个新 RPC 都还没有客户端」这句话曾同时住在**四个**地方（CLAUDE.md 路由行、§5.1、本行、本文顶部横幅）；
+  B7 改了前两处就以为改完了，剩下两处由 B8 的扫查找到。一个事实住在四个地方时，
+  **数出来的那个数目本身就是要被证伪的东西**（判据 §1 / §6）。
 - **drain 的错误臂无条件丢弃 `presentation`**（`event_drain.rs`），零生产者：三个错误调用点全都传 `result: None`，
   而 `presentation` 是从 `result` 派生的，所以 error 有值时 presentation 结构性为 `None`。
   ⚠️ 更窄也更准的说法：一个**跑了但返回 `success: false`** 的工具走的是**成功**分支（`Some(&output)`、`error: None`），
