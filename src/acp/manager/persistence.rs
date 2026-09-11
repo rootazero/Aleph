@@ -182,17 +182,37 @@ pub async fn wire_persistence(
             // 2. Persist the just-updated snapshot under the file lock. The
             //    lock is now strictly an external-collision safeguard — within
             //    this worker there is exactly one concurrent writer (itself).
-            if let Err(e) = tokio::task::spawn_blocking(move || {
+            //
+            //    The lock file's directory is created *before* the lock, the
+            //    same way every other `with_file_lock` writer in this crate
+            //    does it: `with_file_lock` opens the lock file with
+            //    `create(true)` but never creates its parent, and
+            //    `save_persisted_sessions` only creates the directory once it
+            //    is already inside the lock. On a fresh data dir the lock
+            //    therefore failed with NotFound on every event — and the
+            //    first cut of this worker checked only the `spawn_blocking`
+            //    join, dropping the closure's own `io::Result`, so nothing was
+            //    ever written and nothing was ever logged.
+            let outcome = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
                 let lock_path = crate::acp::manager::persistence::acp_sessions_path()
                     .with_extension("json.lock");
+                if let Some(parent) = lock_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
                 crate::utils::atomic_io::with_file_lock(&lock_path, |_guard| {
                     save_persisted_sessions(&snapshot);
                     Ok(())
                 })
             })
-            .await
-            {
-                tracing::warn!(?e, "persist_sessions: spawn_blocking failed");
+            .await;
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!(
+                    error = %e,
+                    "persist_sessions: could not lock or write acp_sessions.json; \
+                     on-disk ACP sessions are now behind the in-memory state"
+                ),
+                Err(e) => tracing::warn!(?e, "persist_sessions: spawn_blocking failed"),
             }
         }
     });
@@ -249,13 +269,9 @@ mod wire_persistence_tests {
     /// Same discipline as every other `ALEPH_HOME` override in this crate:
     /// [`AlephHomeEnvGuard`] holds the process-wide guard so parallel tests
     /// cannot interleave their overrides, and restores the previous value
-    /// on drop.
-    ///
-    /// Known gap, left for the owner of these tests: the persistence worker
-    /// resolves the path on every write and is not awaited by `f`, so a
-    /// write still queued when `f` returns lands after the guard drops.
-    /// Closing that needs the tests to wait for the worker to drain rather
-    /// than sleep a fixed 300 ms.
+    /// on drop. The worker resolves the path on every write, so `f` must
+    /// not return while writes are still queued — [`drain_and_load`] is how
+    /// every test below makes sure of that before its last assertion.
     ///
     /// [`AlephHomeEnvGuard`]: crate::utils::paths::AlephHomeEnvGuard
     async fn with_temp_data_dir<F, Fut>(f: F)
@@ -266,6 +282,58 @@ mod wire_persistence_tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(tmp.path());
         f(tmp.path().to_path_buf()).await;
+    }
+
+    /// The key every test sends *last*. The worker applies events strictly
+    /// in arrival order and persists after each one, so once this entry is
+    /// on disk every event sent before it has been applied and written.
+    /// Waiting for it is how a test waits for the worker to drain.
+    ///
+    /// # Why not poll for the final state directly
+    ///
+    /// The interleaved test's final state is "empty", which is also the
+    /// state before the first event lands and after every `Removed` — a
+    /// poll for it passes vacuously (判据 §2). And the fixed 300 ms sleep
+    /// this replaced read a half-drained file on a slow disk: 168 of 200
+    /// on Windows.
+    const SENTINEL_HARNESS: &str = "h-sentinel";
+
+    fn mk_sentinel() -> crate::acp::AcpSessionEvent {
+        crate::acp::AcpSessionEvent::Created {
+            harness_id: SENTINEL_HARNESS.to_string(),
+            acp_session_id: "s-sentinel".to_string(),
+            cwd: "/tmp/cwd-sentinel".to_string(),
+            session_name: None,
+        }
+    }
+
+    /// Send the sentinel, poll the file until it lands, and return the
+    /// on-disk entries **without** it. Panics past `DRAIN_TIMEOUT` with the
+    /// last count it saw, so a worker that never writes reads as a failure
+    /// with a number in it rather than a stall.
+    async fn drain_and_load(
+        tx: &tokio::sync::mpsc::UnboundedSender<crate::acp::AcpSessionEvent>,
+    ) -> Vec<crate::acp::session::PersistedAcpSession> {
+        const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+        const POLL: std::time::Duration = std::time::Duration::from_millis(10);
+        tx.send(mk_sentinel()).expect("persistence worker is alive");
+        let deadline = std::time::Instant::now() + DRAIN_TIMEOUT;
+        loop {
+            let on_disk = load_persisted_sessions();
+            if on_disk.iter().any(|s| s.harness_id == SENTINEL_HARNESS) {
+                return on_disk
+                    .into_iter()
+                    .filter(|s| s.harness_id != SENTINEL_HARNESS)
+                    .collect();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "persistence worker did not drain within {DRAIN_TIMEOUT:?}; \
+                 last on-disk count {} — is it writing at all?",
+                on_disk.len()
+            );
+            tokio::time::sleep(POLL).await;
+        }
     }
 
     fn mk_event_created(i: usize, suffix: &str) -> crate::acp::AcpSessionEvent {
@@ -306,10 +374,7 @@ mod wire_persistence_tests {
             for h in handles {
                 h.await.expect("task join");
             }
-            // Drain
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-            let on_disk = load_persisted_sessions();
+            let on_disk = drain_and_load(&tx).await;
             assert_eq!(
                 on_disk.len(),
                 N,
@@ -340,9 +405,7 @@ mod wire_persistence_tests {
                 let _ = tx.send(mk_event_created(i, ""));
                 let _ = tx.send(mk_event_removed(i));
             }
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-            let on_disk = load_persisted_sessions();
+            let on_disk = drain_and_load(&tx).await;
             assert!(
                 on_disk.is_empty(),
                 "after {N} Created+Removed pairs the store must be empty, \
@@ -365,10 +428,9 @@ mod wire_persistence_tests {
             for _ in 0..5 {
                 let _ = tx.send(mk_event_created(7, ""));
             }
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let on_disk = drain_and_load(&tx).await;
             let after = chrono::Utc::now();
 
-            let on_disk = load_persisted_sessions();
             assert_eq!(on_disk.len(), 1, "exactly one entry expected");
             let entry = &on_disk[0];
             assert!(
