@@ -382,9 +382,9 @@ impl ToolResultStore {
     /// still **data** read back out of a log, so a path gets both available
     /// bindings before a single byte is read.
     ///
-    /// # One canonicalization, both gates
+    /// # One canonicalization, all three gates
     ///
-    /// The two gates deliberately live in one function because they must bind
+    /// The gates deliberately live in one function because they must bind
     /// the **same** file (判据 §12: the check and the thing it authorises have
     /// to be derived at one point). Splitting them — a name check on the raw
     /// path, a containment check on the resolved one — is a hole, not a style
@@ -398,10 +398,19 @@ impl ToolResultStore {
     ///   base, so checking against one handle's `blob_dir()` would reject every
     ///   other session's legitimate blob. Canonicalizing both sides is what
     ///   stops `<root>/../../etc/hosts` from passing the prefix test.
-    /// * **Ownership** — [`blob_belongs_to_call`], because containment alone
-    ///   admits every session's blobs (they share one root). Read that
-    ///   function's doc for exactly how strong that binding is; it is a name
-    ///   prefix, not set membership.
+    /// * **Session** — [`Self::blob_dir_is_in_read_scope`], because containment
+    ///   against the base admits every session's blobs and the call binding
+    ///   below is only a name prefix. This is the gate that carries the trust
+    ///   boundary this module's readers actually have: `trace.tool_output`
+    ///   loads the event log per session key, so a marker it followed must
+    ///   resolve inside that session's own blob directory (or an earlier epoch
+    ///   of it — [`Self::read_scope_keys`] owns that definition, and this gate
+    ///   reuses it rather than restating it).
+    /// * **Ownership** — [`blob_belongs_to_call`], because a session directory
+    ///   holds every call of that session. Read that function's doc for
+    ///   exactly how strong that binding is; it is a name prefix, not set
+    ///   membership, and the session gate above is what stops the prefix hole
+    ///   from crossing a trust boundary.
     ///
     /// Fail-closed in every direction, and none of them is allowed to soften
     /// into "here are some bytes" (判据 §8): a path that does not exist makes
@@ -431,6 +440,12 @@ impl ToolResultStore {
                 "blob path outside the tool_results root",
             ));
         }
+        if !self.blob_dir_is_in_read_scope(&root, &target) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "blob belongs to a different session",
+            ));
+        }
         if !blob_belongs_to_call(&target, tool_call_id) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -438,6 +453,47 @@ impl ToolResultStore {
             ));
         }
         std::fs::read_to_string(target)
+    }
+
+    /// Whether `target` sits **directly in** a blob directory this handle is
+    /// allowed to read: its own session's, an earlier epoch of the same base
+    /// key ([`Self::read_scope_keys`]), or the unscoped root.
+    ///
+    /// # Why parent equality, not `starts_with`
+    ///
+    /// `persist_if_large` writes every blob directly into [`Self::blob_dir`] —
+    /// never nested — so parent equality is exact. `starts_with` on the root
+    /// would be the same predicate as the containment check that already ran
+    /// (判据 §2: a gate that cannot be red is not a gate), and `starts_with` on
+    /// a session directory would additionally admit anything a future
+    /// subdirectory under it ever holds.
+    ///
+    /// # Why the unscoped root is in the set
+    ///
+    /// `blob_dir_for("")` IS the base directory, so an unscoped handle writes
+    /// flat. Production has one such writer left:
+    /// `browser_tools::offload_full_content` falls back to the unscoped store
+    /// when `turn_context::current_session_key()` is `None` (direct
+    /// `tools.invoke`, non-gateway paths), and tests construct unscoped stores
+    /// throughout. A flat blob was written under no session, so admitting it
+    /// cannot serve session B's bytes to session A — there is no B. It is
+    /// depth-1 only: `<root>/<other-session>/x.txt` has a different parent and
+    /// is refused, which is the whole point.
+    ///
+    /// Making that browser fallback fail-closed instead would let this arm go
+    /// away; it is left because refusing there would silently drop content the
+    /// model was told it could recover, which is the more expensive failure.
+    fn blob_dir_is_in_read_scope(&self, root: &Path, target: &Path) -> bool {
+        let Some(parent) = target.parent() else {
+            return false;
+        };
+        if parent == root {
+            return true;
+        }
+        self.read_scope_keys()
+            .iter()
+            .filter(|key| !key.is_empty())
+            .any(|key| parent == root.join(sanitize_for_filename(key)))
     }
 
     /// Lazily open (once) the FTS5 retrieval index in the shared `base_dir`.
@@ -799,9 +855,12 @@ pub fn extract_persisted_path(text: &str) -> Option<&str> {
 /// `{sanitize(call)}_{sanitize(tool)}.txt`, so a `tool_call_id` that is itself
 /// a **structural prefix of other ids** admits every blob under it: asking with
 /// the id `toolu` matches `toolu_01ABC…_bash.txt`, i.e. every Anthropic-shaped
-/// call in the store. The caller would need a `ToolResult` event of its own
-/// carrying that short id, plus a crafted marker naming the victim's path —
-/// but with both, this gate does not stop it.
+/// call **in the directories the reader may open**. The caller would need a
+/// `ToolResult` event of its own carrying that short id, plus a crafted marker
+/// naming the victim's path — but with both, this gate does not stop it. Since
+/// 2026-09-11 those directories are one session's own (plus earlier epochs of
+/// it), so what remains admissible is a sibling call of the same conversation,
+/// whose output that model already has.
 ///
 /// **Not reachable through any in-repo id generator.** Every one synthesises a
 /// fixed shape ending in a uuid nonce — `json_{name}_{nonce}`
@@ -814,17 +873,32 @@ pub fn extract_persisted_path(text: &str) -> Option<&str> {
 /// names one). A hostile or compromised "OpenAI-compatible" endpoint can
 /// therefore emit `id: "toolu"` and close the gap itself.
 ///
-/// # The fix that is not taken here, and its blocker
+/// # What closes it, and why it is not the exact match this doc used to name
 ///
-/// The exact formulation is `stem == format!("{}_{}", sanitize(call),
-/// sanitize(tool))` with `tool` read off `SessionEvent::ToolCallRequested.name`
-/// for the same call — set membership rather than a prefix. It is blocked, not
-/// forgotten: `browser_tools::offload_full_content` deliberately files a blob
-/// under the **calling** tool rather than the snapshot tool, and
-/// `browser_tools/exec.rs:1055-1057` asserts exactly that ("the entry must be
-/// filed under the calling tool, not the snapshot tool"). An exact match would
-/// therefore trade this narrow leak for a class of false `Expired` on every
-/// browser result. Sizing that trade needs measurement (ruled 2026-09-07).
+/// ⚠️ This section replaces a 2026-09-07 note that said an exact match was
+/// **blocked** by `browser_tools::offload_full_content` filing a blob "under
+/// the calling tool rather than the snapshot tool". That premise was false, and
+/// it was written in the form most expensive to be wrong in — an inherited
+/// decision, meant to stop the next reader re-deriving it (判据 §1). Measured
+/// 2026-09-11: all three production writers pass the name of the tool that owns
+/// the call id — `result_processing::apply_result_budget` from the dispatch,
+/// `harness/agent/act.rs`'s spill from a record holding both, and the browser
+/// offload from `BrowserExecTool::NAME` / `BrowserSnapshotTool::NAME` under
+/// `approval::current_tool_call_id()`. The `exec.rs` assertion it cited says
+/// `browser_exec` files under **its own** name, which is what an exact match
+/// wants, not what breaks it.
+///
+/// The exact match is still not taken, for a different and smaller reason: it
+/// costs the reader a second event-log lookup (`ToolCallRequested.name` for the
+/// same call) to bind a name recorded at write time and compared at read time —
+/// enumeration-shaped (判据 §5), and a rename or MCP alias drift turns real
+/// blobs into false `Expired`.
+///
+/// What actually closes the reachable half is
+/// [`ToolResultStore::blob_dir_is_in_read_scope`]: the gap only matters across
+/// sessions, and that gate is derived from what the reader already holds. A
+/// short id still collides inside one session's own directory, where every
+/// blob is already in that model's context anyway.
 ///
 /// The file-name shape is `persist_if_large`'s, and
 /// `persisted_blob_name_matches_its_call` fails if that shape ever changes —

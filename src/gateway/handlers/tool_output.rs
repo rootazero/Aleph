@@ -276,7 +276,11 @@ pub async fn handle_tool_output(
         );
     };
 
-    let (full, source) = resolve_source(text, call_id);
+    // `to_key_string()` rather than the raw `key_str` the caller sent: the
+    // writer scopes its store with `request.session_key.to_key_string()`
+    // (`run_loop/mod.rs`), so the reader has to reach the directory name
+    // through the same derivation or the gate refuses real blobs (判据 §12).
+    let (full, source) = resolve_source(text, call_id, &session_key.to_key_string());
     let masked = crate::exec::masker::SecretMasker::new().mask(&full);
     // Ceiling only. The FLOOR (`limit: 0`, which a client can send and nothing
     // upstream rejects) belongs to [`page`], which is what claims to make
@@ -321,12 +325,21 @@ pub async fn handle_tool_output(
 /// The marker line is written by the server, but it is read back out of a log
 /// whose neighbouring bytes are whatever a tool printed — a `file_read` of an
 /// attacker-authored file, a `bash` that echoed one, a fetched page. So the
-/// path is checked for containment (inside the store root) AND for ownership
-/// (written for THIS call), and neither alone is enough: containment does not
-/// exclude another session's blob, and ownership on its own does not exclude
-/// `/etc/hosts`.
+/// path is checked for containment (inside the store root), for **session**
+/// (inside this session's own blob directory, or an earlier epoch of it) and
+/// for ownership (written for THIS call). None alone is enough: containment
+/// does not exclude another session's blob, ownership is a name prefix that a
+/// structurally shorter call id satisfies, and ownership on its own does not
+/// exclude `/etc/hosts`.
 ///
-/// Both gates are inside
+/// The session gate is why this passes `session_key` down rather than reading
+/// through the process-wide handle. The store's scope is what arms it: an
+/// unscoped handle may read the whole root, so calling it with the global store
+/// would leave the gate green in every case (判据 §2) while the module doc
+/// above claimed there was "no cross-session read to gate separately" — a claim
+/// that was false for exactly this path until 2026-09-11.
+///
+/// All three gates are inside
 /// [`read_call_blob`](crate::tools::result_store::ToolResultStore::read_call_blob)
 /// rather than one here and one there, because they have to bind the **same
 /// file** and only the store can resolve the path once (判据 §12). Running the
@@ -338,11 +351,12 @@ pub async fn handle_tool_output(
 /// swept, unreadable file — lands on the same honest answer: the budgeted text,
 /// labelled `Expired`. "We could not read it" never becomes "here are some
 /// bytes" (判据 §8).
-fn resolve_source(text: String, call_id: &str) -> (String, ToolOutputSource) {
+fn resolve_source(text: String, call_id: &str, session_key: &str) -> (String, ToolOutputSource) {
     let Some(path) = crate::tools::result_store::extract_persisted_path(&text) else {
         return (text, ToolOutputSource::Inline);
     };
     let blob = crate::tools::result_store::global_tool_result_store()
+        .map(|store| crate::tools::result_store::ToolResultStore::for_session(&store, session_key))
         .and_then(|store| store.read_call_blob(Path::new(path), call_id).ok());
     match blob {
         Some(blob) => (blob, ToolOutputSource::Persisted),
@@ -627,6 +641,67 @@ mod tests {
         assert!(
             !served.text.contains(&"v".repeat(3000)),
             "another call's blob must never be served under this call's id"
+        );
+    }
+
+    /// The hole the call binding cannot cover, closed by the session gate: a
+    /// `tool_call_id` that is a **structural prefix** of the victim's.
+    ///
+    /// `blob_belongs_to_call` tests `name.starts_with("{call}_")` and the
+    /// prefix does not have to end at a name boundary, so the id `toolu`
+    /// satisfies it for `toolu_01ABC_bash.txt` — every Anthropic-shaped call in
+    /// reach. An upstream that supplies tool-call ids verbatim (the
+    /// OpenAI-compatible and Gemini paths do) can emit exactly that id, so this
+    /// is not hypothetical; what makes it harmless is that "in reach" is now
+    /// one session's own directory.
+    ///
+    /// # What makes this red
+    ///
+    /// Both halves. Drop the gate in `read_call_blob` and the victim's bytes
+    /// are served; drop the `for_session` narrowing in [`resolve_source`] and
+    /// the unscoped handle may read the whole root, so the gate is green for
+    /// every input and this test is the only thing that says so (判据 §2).
+    ///
+    /// The victim is written through a handle scoped to ITS OWN session, which
+    /// is what production does (`tool_service_builder` narrows the request's
+    /// handle) — writing it flat would put it in the unowned root, which is
+    /// admissible by design, and this test would pass while proving nothing.
+    #[tokio::test]
+    async fn a_prefix_shaped_call_id_cannot_reach_another_sessions_blob() {
+        let store = crate::tools::result_store::install_test_tool_result_store();
+        let victim_session = "conv-tool-output-prefix-victim";
+        let victim_store =
+            crate::tools::result_store::ToolResultStore::for_session(&store, victim_session);
+        let victim = victim_store
+            .persist_if_large("toolu_01VICTIM", "grep", &"v".repeat(3000), 1)
+            .expect("victim blob is over the threshold");
+        let victim_path = std::path::PathBuf::from(
+            crate::tools::result_store::extract_persisted_path(&victim).expect("marker path"),
+        );
+        assert!(
+            victim_store
+                .read_call_blob(&victim_path, "toolu_01VICTIM")
+                .is_ok(),
+            "the victim blob must be readable BY ITS OWN SESSION AND CALL, or this proves nothing"
+        );
+        assert!(
+            crate::tools::result_store::blob_belongs_to_call(&victim_path, "toolu"),
+            "the short id must clear the CALL binding, or the session gate is never what refuses"
+        );
+
+        let marker = marker_for(&victim_path);
+        let temp = TempDir::new().unwrap();
+        let sessions = session_store(&temp);
+        let key = SessionKey::main("conv-tool-output-prefix-thief");
+        seed_session(&sessions, &key, "u-alice").await;
+        seed_result(&key, 1, "toolu", json!(marker.clone())).await;
+
+        let served = parse(call(&key, sessions, json!({ "tool_call_id": "toolu" })).await);
+        assert_eq!(served.source, ToolOutputSource::Expired);
+        assert_eq!(served.text, marker);
+        assert!(
+            !served.text.contains(&"v".repeat(3000)),
+            "another session's blob must never be served under a prefix-shaped id"
         );
     }
 
