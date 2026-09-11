@@ -115,6 +115,18 @@ pub struct FileLockGuard {
 const LOCK_ACQUIRE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 const LOCK_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
+/// "A peer currently holds the lock" — the only error the retry loop may
+/// absorb. Derived from fs2's own contention error rather than from
+/// `ErrorKind::WouldBlock`: on Windows fs2 reports contention as
+/// `ERROR_LOCK_VIOLATION` (os error 33), which std classifies as
+/// `Uncategorized`, so a `kind()` comparison never retried there and every
+/// contended acquisition failed immediately. On Unix the contention error
+/// is `EWOULDBLOCK`, whose kind already *is* `WouldBlock`, so this predicate
+/// is a superset of the old one on every platform.
+fn is_lock_contended(err: &std::io::Error) -> bool {
+    err.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+}
+
 pub fn with_file_lock<T, F>(lock_path: &Path, f: F) -> std::io::Result<T>
 where
     F: FnOnce(&FileLockGuard) -> std::io::Result<T>,
@@ -128,7 +140,7 @@ where
     loop {
         match file.try_lock_exclusive() {
             Ok(()) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(e) if is_lock_contended(&e) => {
                 if std::time::Instant::now() >= deadline {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
@@ -222,6 +234,31 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(entries, vec!["foo.bin".to_string()]);
+    }
+
+    /// The negative half of the retry gate: only fs2's contention error may
+    /// be absorbed into the deadline loop. A permission or not-found error
+    /// from the lock file must surface immediately, not after a 5 s spin —
+    /// otherwise a bad ACL on `<data>/*.lock` would turn every caller into
+    /// a 5 s stall that then reports `TimedOut` with a misleading "peer
+    /// held" message.
+    #[test]
+    fn is_lock_contended_rejects_non_contention_os_errors() {
+        #[cfg(windows)]
+        let (denied, not_found) = (5, 2); // ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND
+        #[cfg(unix)]
+        let (denied, not_found) = (13, 2); // EACCES, ENOENT
+        for code in [denied, not_found] {
+            let err = std::io::Error::from_raw_os_error(code);
+            assert!(
+                !is_lock_contended(&err),
+                "os error {code} ({err}) must not be retried as contention"
+            );
+        }
+        assert!(
+            is_lock_contended(&fs2::lock_contended_error()),
+            "fs2's own contention error must be retried"
+        );
     }
 
     #[test]
