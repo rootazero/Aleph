@@ -66,19 +66,27 @@ fn anchor_flags(state: &PageState) -> Vec<bool> {
 /// button's name and once as its text child — and the model has to work out
 /// that they are the same thing.
 ///
-/// **The test is provenance, not substring.** `name.contains(text)` over every
-/// ancestor was wrong in both directions, and this is the one rule in the
-/// renderer that can remove content the page displayed, so both matter:
+/// **The test is coverage, not substring and not provenance.** This is the one
+/// rule in the renderer that can remove content the page displayed, and the two
+/// cheaper tests were each wrong in one direction:
 ///
-/// - it **deleted** a `"$29"` leaf under a link `aria-label`-named
-///   `"Plans from $29 per month"`, with no token saying anything had gone —
-///   the model was simply never shown the price;
-/// - it **duplicated** a node whose own text is longer than `NAME_MAX_CHARS`,
-///   because the capped name no longer contains it.
+/// - `name.contains(text)` **deleted** a `"$29"` leaf under a link
+///   `aria-label`-named `"Plans from $29 per month"`, with no token saying
+///   anything had gone — the model was simply never shown the price;
+/// - "did rule 8 build this name" **deleted more**: a rule-8 name is capped at
+///   `NAME_MAX_CHARS`, so a `<td>` holding a 178-character comment printed its
+///   first 80 characters and lost three whole text leaves, the only number in
+///   the subtree, and every ref the model could have addressed them by. That
+///   is a `<td>` on Hacker News, an `<li>` holding a sentence, an `<a>`
+///   wrapping a card — 10 of 27 roles take a name from content and this hit
+///   all of them.
 ///
-/// `name_from_content` is the fact both need and `accname` already knew. A
-/// capped name still absorbs, and the `…` the cap leaves is the elision token
-/// that keeps "content disappeared silently" from being true.
+/// The absorbed line has to be a **replacement**, and it is one only while the
+/// name is the whole text. `name_covers_all_text` is exactly that condition and
+/// `accname` already knew it (判据 §12). Past the cap the name is a prefix, the
+/// leaves are the remainder, and both print: a `…` says the NAME was cut, and a
+/// model cannot read it as "and three leaves under here were removed" (判据
+/// §17 — that comment used to claim it could, which made this read as settled).
 fn payload_flags(state: &PageState, anchors: &[bool]) -> Vec<bool> {
     state
         .nodes
@@ -91,7 +99,7 @@ fn payload_flags(state: &PageState, anchors: &[bool]) -> Vec<bool> {
             if n.text.is_none() || !n.visible {
                 return false;
             }
-            !ancestors(state, i).any(|a| anchors[a] && state.nodes[a].name_from_content)
+            !ancestors(state, i).any(|a| anchors[a] && state.nodes[a].name_covers_all_text)
         })
         .collect()
 }
@@ -367,7 +375,7 @@ mod tests {
             },
             role,
             name: name.to_string(),
-            name_from_content: false,
+            name_covers_all_text: false,
             value: None,
             states: NodeStates::default(),
             rect: Some(Rect {
@@ -576,18 +584,23 @@ mod tests {
     }
 
     /// **…and nothing may print twice**, which is the other direction of the
-    /// same rule and needs its own guard.
+    /// same rule and needs its own guard — but it holds only where the name IS
+    /// the text, and the cap is where it stops holding.
     ///
-    /// A name from rule 8 IS the node's text, so printing the text again is a
-    /// duplicate the model has to reconcile. The substring test got this right
-    /// only while the name was short enough to survive `NAME_MAX_CHARS`: past
-    /// the cap the name ends in `…`, no longer contains its own text, and the
-    /// leaf came back as a second line.
+    /// Both lengths are asserted here because the rule **changes sign** between
+    /// them, and this test used to assert the same answer for both under the
+    /// name `…absorbs_it_at_any_length`. It was written on a 92-character
+    /// button, where the deletion is 12 characters and reads like rounding;
+    /// generalised to "any length" it ratified deleting a whole `<td>` of
+    /// comment text. The long half was the finding, not the contract.
     ///
-    /// Both lengths are asserted here, because the defect was length-dependent
-    /// and one of them passed throughout.
+    /// - **Short**: the name is the whole text, so the leaf is a duplicate and
+    ///   the name line replaces it.
+    /// - **Long**: the name is the first 80 characters and a `…`. It replaces
+    ///   nothing, so the leaf stays, and the model gets both the summary line
+    ///   and the content.
     #[test]
-    fn a_name_built_from_its_own_text_absorbs_it_at_any_length() {
+    fn a_name_absorbs_its_text_only_while_the_name_is_all_of_it() {
         let short = built(&[
             (Some("button"), &[], None, 0),
             (None, &[], Some("Submit"), 1),
@@ -600,8 +613,9 @@ mod tests {
         );
         assert!(!rendered.contains("- text:"), "{rendered}");
 
-        // Past the cap. `NAME_MAX_CHARS` is 80, so this name is truncated and
-        // the `…` is the elision token that keeps the absorption honest.
+        // Past the cap. `NAME_MAX_CHARS` is 80, so this name keeps 80
+        // characters of the sentence and drops the rest — including the word
+        // the sentence turns on.
         let long_text = "Agree to the terms and conditions of this service, \
                          including the parts nobody reads, forever";
         assert!(long_text.chars().count() > super::super::NAME_MAX_CHARS);
@@ -612,12 +626,103 @@ mod tests {
         let rendered = render_text(&long);
         assert_eq!(
             rendered.lines().count(),
-            2,
-            "a node whose text outran the name cap printed twice:\n{rendered}"
+            3,
+            "a capped name is a prefix, not a replacement — the text it cut \
+             must still print:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("- text: {}", quote(long_text))),
+            "the leaf under a capped name is the remainder and must survive \
+             whole:\n{rendered}"
         );
         assert!(
             rendered.contains('…'),
-            "a capped name must carry the token that says content was cut:\n{rendered}"
+            "a capped name must carry the token that says the NAME was cut:\n{rendered}"
+        );
+    }
+
+    /// **The shape this branch's own fixture page is made of**, and the one
+    /// the absorb-on-provenance rule emptied.
+    ///
+    /// A `<td>` holding a comment: three sentences, 178 visible characters. The
+    /// name cap keeps 80 of them. Measured under the rule this replaces, the
+    /// whole subtree rendered as **one line** — three text leaves gone, `42`
+    /// (the only number in it) gone, and all three refs gone, so the model
+    /// could not even ask to read what it had not been shown. Nothing said so.
+    ///
+    /// Asserted as whole lines rather than as `contains`: the refs and the
+    /// indentation are part of what was lost, and a `contains` assertion would
+    /// have passed on a render that kept the text and dropped the refs.
+    #[test]
+    fn a_comment_cell_past_the_name_cap_keeps_its_leaves_its_number_and_its_refs() {
+        let first = "The first paragraph of this comment explains the problem.";
+        let second = "The second paragraph proposes a fix that nobody implemented.";
+        let third = "The third paragraph holds the only number that matters: 42.";
+        let state = built(&[
+            (Some("table"), &[], None, 0),
+            (Some("tr"), &[], None, 1),
+            (Some("td"), &[], None, 2),
+            (None, &[], Some(first), 3),
+            (None, &[], Some(second), 3),
+            (None, &[], Some(third), 3),
+        ]);
+        let rendered = render_text(&state);
+        assert_eq!(
+            rendered.lines().collect::<Vec<_>>(),
+            vec![
+                "# engine=chromium gen=1 url=\"https://x.test/\" viewport=800x600 \
+                 scroll=0,0 doc=800x600 no_box=0/6 fetch=1ms",
+                "- table",
+                "  - row",
+                "    - cell \"The first paragraph of this comment explains the problem. \
+                 The second paragraph p…\"",
+                "      - text: \"The first paragraph of this comment explains the problem.\" [ref=e1]",
+                "      - text: \"The second paragraph proposes a fix that nobody implemented.\" [ref=e2]",
+                "      - text: \"The third paragraph holds the only number that matters: 42.\" [ref=e3]",
+            ],
+            "178 characters of comment became 80 and the model was not told"
+        );
+        assert_eq!(
+            state.ref_count(),
+            3,
+            "a leaf the model cannot address is a leaf it cannot read in full"
+        );
+    }
+
+    /// **The wrapping `<label>`, measured rather than assumed** — the most
+    /// common naming pattern in HTML forms, and the one shape absorption could
+    /// plausibly be asked to collapse.
+    ///
+    /// It prints **both**: the label's own text leaf, and the control that
+    /// borrowed it as a name. That is not an accident of this rule — absorption
+    /// is ancestor-only and a `<label>` is `Generic`, so it is not an anchor and
+    /// absorbs nothing. It is also the already-ratified answer next door
+    /// (`a_label_and_the_text_under_it_are_two_facts_and_both_are_shown`):
+    /// "there is text here" and "this checkbox is named that" are two
+    /// observations, and a model that sees only the second cannot tell whether
+    /// the words are on the page or only in the accessibility tree.
+    ///
+    /// Pinned here because the cheap fix for the visible repetition — absorbing
+    /// a leaf whose text some nearby control carries as a name — is a
+    /// non-ancestor rule, and this is the case that goes red when someone
+    /// writes one.
+    #[test]
+    fn a_wrapping_label_prints_its_text_and_the_control_it_names() {
+        let state = built(&[
+            (Some("label"), &[], None, 0),
+            (None, &[], Some("Remember me"), 1),
+            (Some("input"), &[("type", "checkbox")], None, 1),
+        ]);
+        assert_eq!(
+            render_text(&state).lines().collect::<Vec<_>>(),
+            vec![
+                "# engine=chromium gen=1 url=\"https://x.test/\" viewport=800x600 \
+                 scroll=0,0 doc=800x600 no_box=0/3 fetch=1ms",
+                "- generic",
+                "  - text: \"Remember me\" [ref=e1]",
+                "  - checkbox \"Remember me\" [unchecked] [ref=e2] @1,2 3x4",
+            ],
+            "the label's visible text and the control's name are two facts"
         );
     }
 

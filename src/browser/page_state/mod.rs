@@ -264,15 +264,17 @@ pub struct StateNode {
     pub frame: FrameKey,
     pub role: Role,
     pub name: String,
-    /// Whether [`accname`]'s rule 8 built [`Self::name`] out of this node's own
-    /// visible descendant text.
+    /// Whether [`Self::name`] is this node's **complete** visible descendant
+    /// text: [`accname`]'s rule 8 built it, and the cap did not cut it.
     ///
     /// Carried rather than re-derived, because the renderer's absorption rule
     /// needs exactly this fact and the derivation already had it. Asking
     /// `name.contains(text)` instead deleted a `"$29"` leaf under a link named
-    /// `"Plans from $29 per month"`, and double-printed a node whose own text
-    /// ran past `NAME_MAX_CHARS` — see [`accname::AccName`].
-    pub name_from_content: bool,
+    /// `"Plans from $29 per month"`; asking only "did rule 8 build it" deleted
+    /// every leaf under any capped name. Both directions and the measurements
+    /// are on [`accname::AccName::covers_all_text`], which is where the fact is
+    /// derived — this field is its carrier and not a second account of it.
+    pub name_covers_all_text: bool,
     pub value: Option<String>,
     pub states: NodeStates,
     /// Page coordinates — the frame offset is already applied.

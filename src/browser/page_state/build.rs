@@ -171,7 +171,7 @@ fn state_node(
         backend_node_id: node.backend_node_id,
         frame: frame.clone(),
         role,
-        name_from_content: name.from_content,
+        name_covers_all_text: name.covers_all_text,
         name: name.text,
         value: value_of(node),
         states: states_of(node, role),

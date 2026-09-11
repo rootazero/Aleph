@@ -41,19 +41,35 @@ pub const NAME_MAX_CHARS: usize = 80;
 ///   of that name. The model was never shown the price, and no token said
 ///   anything had been removed. Short leaves — prices, counts, badges, single
 ///   glyphs — are exactly the shapes that collide.
-/// - It **printed twice**: a name from rule 8 is capped at
-///   [`NAME_MAX_CHARS`] with a trailing `…`, so a node whose own text is longer
-///   than that failed `contains` against its own text and rendered both.
+/// - It **printed twice**: a node whose own text is longer than
+///   [`NAME_MAX_CHARS`] got a name ending in `…`, which no longer `contains`
+///   that text, so the leaf came back as a second line.
 ///
-/// Both disappear once the question is "did rule 8 build this name out of this
-/// node's contents", which is a `bool` the derivation already knows.
+/// The first is a defect. **The second is not** — see [`Self::covers_all_text`]:
+/// past the cap the name is a *prefix* of the text, and the leaves under it are
+/// the remainder rather than a duplicate of it. `contains` got the right answer
+/// there for the wrong reason, and a rule that absorbed on provenance alone got
+/// the wrong answer for a reason that looked principled.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccName {
     pub text: String,
-    /// True only for rule 8 — the name IS this node's visible descendant text,
-    /// so printing that text again would print it twice. False for every
-    /// attribute-derived name, including one that happens to quote the text.
-    pub from_content: bool,
+    /// **Is [`Self::text`] this node's complete visible descendant text?**
+    ///
+    /// True only for rule 8, and only when the contents fit under
+    /// [`NAME_MAX_CHARS`]. That is the exact condition under which printing the
+    /// text leaves again would print them *twice*, which is what the renderer
+    /// uses this for.
+    ///
+    /// False for every attribute-derived name, including one that happens to
+    /// quote the text — and false for a rule-8 name the cap **truncated**. A
+    /// capped name keeps the first 80 characters and a `…`; the `…` says the
+    /// NAME was cut and can say nothing else. A renderer that absorbed on
+    /// truncated names too deleted three whole text leaves — and the only
+    /// number in the subtree — out of one `<td>` carrying a 178-character
+    /// comment, which is the shape of every comment thread and every card link
+    /// on the web, with no token saying anything had gone (判据 §17: the label
+    /// was not wrong, it was doing work it could not do).
+    pub covers_all_text: bool,
 }
 
 impl AccName {
@@ -63,20 +79,22 @@ impl AccName {
     pub fn from_attribute(text: String) -> Self {
         Self {
             text,
-            from_content: false,
+            covers_all_text: false,
         }
     }
 
-    /// Rule 8: the name IS the contents.
+    /// Rule 8: the name was built from the contents — and `truncated` says
+    /// whether it got **all** of them. Only an untruncated one covers its text;
+    /// see [`Self::covers_all_text`].
     #[must_use]
-    pub fn from_content(text: String) -> Self {
+    pub fn from_content(text: String, truncated: bool) -> Self {
         Self {
             text,
-            from_content: true,
+            covers_all_text: !truncated,
         }
     }
 
-    /// No rule produced a name. Not `from_content` — nothing was consumed.
+    /// No rule produced a name. Nothing was consumed, so nothing is covered.
     #[must_use]
     pub fn none() -> Self {
         Self::from_attribute(String::new())
@@ -177,7 +195,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
             .filter(|s| !s.is_empty())
             .collect();
         if !joined.is_empty() {
-            return AccName::from_attribute(cap(&joined.join(" ")));
+            return AccName::from_attribute(cap_text(&joined.join(" ")));
         }
         // A dangling reference is an author mistake, not a decision to have no
         // name: fall through rather than returning "".
@@ -187,7 +205,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
     if let Some(v) = node.attr("aria-label") {
         let v = normalize(v);
         if !v.is_empty() {
-            return AccName::from_attribute(cap(&v));
+            return AccName::from_attribute(cap_text(&v));
         }
     }
 
@@ -196,7 +214,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
         if let Some(&label) = fx.label_for.get(id) {
             let v = descendant_text(label, fx);
             if !v.is_empty() {
-                return AccName::from_attribute(cap(&v));
+                return AccName::from_attribute(cap_text(&v));
             }
         }
     }
@@ -204,7 +222,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
         if fx.frame.nodes[ancestor].tag_lower() == "label" {
             let v = descendant_text(ancestor, fx);
             if !v.is_empty() {
-                return AccName::from_attribute(cap(&v));
+                return AccName::from_attribute(cap_text(&v));
             }
             break;
         }
@@ -217,7 +235,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
             if let Some(v) = node.attr("value") {
                 let v = normalize(v);
                 if !v.is_empty() {
-                    return AccName::from_attribute(cap(&v));
+                    return AccName::from_attribute(cap_text(&v));
                 }
             }
         }
@@ -227,7 +245,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
     if let Some(v) = node.attr("placeholder") {
         let v = normalize(v);
         if !v.is_empty() {
-            return AccName::from_attribute(cap(&v));
+            return AccName::from_attribute(cap_text(&v));
         }
     }
 
@@ -235,7 +253,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
     if let Some(v) = node.attr("alt") {
         let v = normalize(v);
         if !v.is_empty() || tag == "img" {
-            return AccName::from_attribute(cap(&v));
+            return AccName::from_attribute(cap_text(&v));
         }
     }
 
@@ -243,7 +261,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
     if let Some(v) = node.attr("title") {
         let v = normalize(v);
         if !v.is_empty() {
-            return AccName::from_attribute(cap(&v));
+            return AccName::from_attribute(cap_text(&v));
         }
     }
 
@@ -252,7 +270,8 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
     // is a name nobody can use, and it turns every `<header>` into a rendered
     // line quoting its whole nav bar.
     if super::roles::role_for(&tag, &node.attrs).supports_name_from_content() {
-        return AccName::from_content(cap(&descendant_text(node_index, fx)));
+        let (text, truncated) = cap(&descendant_text(node_index, fx));
+        return AccName::from_content(text, truncated);
     }
     AccName::none()
 }
@@ -300,15 +319,32 @@ pub fn normalize(s: &str) -> String {
 
 /// Truncate to [`NAME_MAX_CHARS`] characters on a char boundary, marking the
 /// cut. Chars, never bytes (P7).
-fn cap(s: &str) -> String {
+///
+/// Returns **whether it cut**, because rule 8's caller has to know: a cut name
+/// is a prefix of the node's text rather than all of it, and
+/// [`AccName::covers_all_text`] is the difference between absorbing the text
+/// leaves under a node and deleting them. Derived here and returned rather than
+/// re-asked later as `name.ends_with('…')` or `text.chars().count() > 80` — a
+/// boundary has to be derived in ONE place or the two derivations part company
+/// (判据 §12), and a page whose own text ends in `…` would answer the first of
+/// those wrongly.
+fn cap(s: &str) -> (String, bool) {
     match s.char_indices().nth(NAME_MAX_CHARS) {
         Some((idx, _)) => {
             let mut out = s[..idx].to_string();
             out.push('…');
-            out
+            (out, true)
         }
-        None => s.to_string(),
+        None => (s.to_string(), false),
     }
+}
+
+/// [`cap`]'s text alone, for rules 1–7.
+///
+/// Their names come from attributes, so they never absorb anything and the cut
+/// bit has no reader there. One derivation, one forwarder — not a second cap.
+fn cap_text(s: &str) -> String {
+    cap(s).0
 }
 
 #[cfg(test)]
@@ -569,5 +605,56 @@ mod tests {
             "the cap plus the ellipsis that marks the cut"
         );
         assert!(name.ends_with('…'));
+    }
+
+    /// **`covers_all_text` is a claim about coverage, and the cap is where it
+    /// stops being true.**
+    ///
+    /// The renderer deletes every text leaf under a node this bit is true for,
+    /// so a `true` here is an instruction to remove content. All three cases
+    /// are asserted together because the defect lived in the gap between the
+    /// first two: a rule-8 name that the cap cut is *provenance*-identical to
+    /// one it did not, and telling them apart is the whole job.
+    #[test]
+    fn a_name_covers_its_text_only_when_the_cap_left_it_whole() {
+        let whole = frame(vec![
+            el(1, None, "div", &[]),
+            el(2, Some(0), "button", &[]),
+            txt(3, 1, "Submit"),
+        ]);
+        let whole = accessible_name(1, &FrameIndex::build(&whole));
+        assert_eq!(whole.text, "Submit");
+        assert!(
+            whole.covers_all_text,
+            "an uncapped rule-8 name IS the text, so the leaf is a duplicate"
+        );
+
+        let long = "word ".repeat(40);
+        let cut = frame(vec![
+            el(1, None, "div", &[]),
+            el(2, Some(0), "button", &[]),
+            txt(3, 1, &long),
+        ]);
+        let cut = accessible_name(1, &FrameIndex::build(&cut));
+        assert!(cut.text.ends_with('…'));
+        assert!(
+            !cut.covers_all_text,
+            "a capped name is a PREFIX of the text — claiming it covers the \
+             text deletes the remainder, and the `…` says only that the name \
+             was cut"
+        );
+
+        let labelled = frame(vec![
+            el(1, None, "div", &[]),
+            el(2, Some(0), "button", &[("aria-label", "Save document")]),
+            txt(3, 1, "Save"),
+        ]);
+        let labelled = accessible_name(1, &FrameIndex::build(&labelled));
+        assert_eq!(labelled.text, "Save document");
+        assert!(
+            !labelled.covers_all_text,
+            "an attribute name is not the node's text, however much it reads \
+             like it"
+        );
     }
 }
