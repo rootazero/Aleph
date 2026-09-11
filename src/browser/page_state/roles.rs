@@ -79,23 +79,60 @@ pub fn role_for(tag: &str, attrs: &[(String, String)]) -> Role {
                 Role::Combobox
             }
         }
-        "option" => Role::Option,
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Role::Heading,
-        "img" | "svg" | "picture" => Role::Image,
-        "header" => Role::Banner,
-        "footer" => Role::Contentinfo,
-        "nav" => Role::Navigation,
-        "main" => Role::Main,
-        "ul" | "ol" | "menu" => Role::List,
-        "li" => Role::ListItem,
-        "table" => Role::Table,
-        "tr" => Role::Row,
-        "td" | "th" => Role::Cell,
-        "article" => Role::Article,
-        "form" => Role::Form,
-        "dialog" => Role::Dialog,
-        _ => Role::Generic,
+        other => tag_role(other).unwrap_or(Role::Generic),
     }
+}
+
+/// Every tag whose role is a **constant** — the whole mapping, as data.
+///
+/// A table rather than more `match` arms, and the reason is a guard rather
+/// than taste. `the_structural_tag_table_is_complete` used to enumerate its own
+/// 23 tags, so it covered 23 of the 32 keys this file routes and its name said
+/// otherwise: deleting `"h2" | "h3" | "h4" | "h5"` from the heading arm left it
+/// green while every real page's structural backbone went flat (判据 §3, §5).
+///
+/// A `match` over `&str` cannot be made exhaustive, so the only way a test can
+/// notice a deleted key is for the key set to be a **value it can read**. That
+/// is this. The four tags whose role depends on their attributes — `a`, `area`,
+/// `input`, `select` — cannot live here and keep their own dedicated tests.
+const SIMPLE_TAGS: &[(&str, Role)] = &[
+    ("button", Role::Button),
+    ("summary", Role::Button),
+    ("textarea", Role::Textbox),
+    ("option", Role::Option),
+    ("h1", Role::Heading),
+    ("h2", Role::Heading),
+    ("h3", Role::Heading),
+    ("h4", Role::Heading),
+    ("h5", Role::Heading),
+    ("h6", Role::Heading),
+    ("img", Role::Image),
+    ("svg", Role::Image),
+    ("picture", Role::Image),
+    ("header", Role::Banner),
+    ("footer", Role::Contentinfo),
+    ("nav", Role::Navigation),
+    ("main", Role::Main),
+    ("ul", Role::List),
+    ("ol", Role::List),
+    ("menu", Role::List),
+    ("li", Role::ListItem),
+    ("table", Role::Table),
+    ("tr", Role::Row),
+    ("td", Role::Cell),
+    ("th", Role::Cell),
+    ("article", Role::Article),
+    ("form", Role::Form),
+    ("dialog", Role::Dialog),
+];
+
+/// [`SIMPLE_TAGS`] lookup. `None` is "this build models no role for that tag",
+/// which [`role_for`] spends as `Generic` — never as "not an element".
+fn tag_role(tag: &str) -> Option<Role> {
+    SIMPLE_TAGS
+        .iter()
+        .find(|(k, _)| *k == tag)
+        .map(|(_, role)| *role)
 }
 
 /// `<input>` is nine controls wearing one tag.
@@ -239,39 +276,78 @@ mod tests {
         );
     }
 
-    /// Every landmark and structural tag in the table, so a deletion is a
-    /// failing assertion rather than a silently flatter tree.
+    /// Every constant-role tag, derived from the production table rather than
+    /// re-typed beside it.
+    ///
+    /// The old version of this test enumerated its own 23 tags and was named
+    /// "complete". It covered 23 of the 32 keys `role_for` routes, and deleting
+    /// `"picture"`, `"area"` and `"h2" | "h3" | "h4" | "h5"` from the production
+    /// arms left it **green** — measured. `<h2>`–`<h5>` quietly becoming
+    /// `Generic` flattens the structural backbone of nearly every real page.
+    ///
+    /// A `match` over `&str` cannot be exhaustive, so "a deleted arm cannot
+    /// pass" needs the key set to be readable data — `SIMPLE_TAGS` — plus ONE
+    /// hand-written expectation of what that data should say. Any add, delete
+    /// or remap reddens the first assertion with a readable diff; the second
+    /// proves the table is what `role_for` actually consults rather than dead
+    /// data beside a surviving match (判据 §7).
     #[test]
     fn the_structural_tag_table_is_complete() {
-        for (tag, expected) in [
-            ("header", Role::Banner),
-            ("footer", Role::Contentinfo),
-            ("nav", Role::Navigation),
-            ("main", Role::Main),
-            ("article", Role::Article),
-            ("form", Role::Form),
-            ("dialog", Role::Dialog),
-            ("ul", Role::List),
-            ("ol", Role::List),
-            ("menu", Role::List),
-            ("li", Role::ListItem),
-            ("table", Role::Table),
-            ("tr", Role::Row),
-            ("td", Role::Cell),
-            ("th", Role::Cell),
-            ("h1", Role::Heading),
-            ("h6", Role::Heading),
-            ("img", Role::Image),
-            ("svg", Role::Image),
-            ("button", Role::Button),
-            ("summary", Role::Button),
-            ("textarea", Role::Textbox),
-            ("option", Role::Option),
-            ("span", Role::Generic),
-            ("div", Role::Generic),
-        ] {
-            assert_eq!(role_for(tag, &attrs(&[])), expected, "<{tag}>");
+        let actual: Vec<String> = SIMPLE_TAGS
+            .iter()
+            .map(|(tag, role)| format!("{tag}={}", role.as_str()))
+            .collect();
+        let expected = [
+            "button=button",
+            "summary=button",
+            "textarea=textbox",
+            "option=option",
+            "h1=heading",
+            "h2=heading",
+            "h3=heading",
+            "h4=heading",
+            "h5=heading",
+            "h6=heading",
+            "img=image",
+            "svg=image",
+            "picture=image",
+            "header=banner",
+            "footer=contentinfo",
+            "nav=navigation",
+            "main=main",
+            "ul=list",
+            "ol=list",
+            "menu=list",
+            "li=listitem",
+            "table=table",
+            "tr=row",
+            "td=cell",
+            "th=cell",
+            "article=article",
+            "form=form",
+            "dialog=dialog",
+        ];
+        assert_eq!(actual, expected, "the tag table changed");
+
+        // Not dead data: every key routes through `role_for`.
+        for (tag, role) in SIMPLE_TAGS {
+            assert_eq!(role_for(tag, &attrs(&[])), *role, "<{tag}>");
         }
+
+        // The four attribute-dependent tags are deliberately absent — their
+        // role is not a constant, and each has its own test above.
+        for tag in ["a", "area", "input", "select"] {
+            assert!(
+                !SIMPLE_TAGS.iter().any(|(k, _)| *k == tag),
+                "<{tag}>'s role depends on its attributes and cannot be a \
+                 constant in this table"
+            );
+        }
+
+        // A tag the table has never heard of is `Generic`, not a panic and not
+        // an absence.
+        assert_eq!(role_for("span", &attrs(&[])), Role::Generic);
+        assert_eq!(role_for("blink", &attrs(&[])), Role::Generic);
     }
 
     /// Interactivity is a HINT built from six independent signals, not a
