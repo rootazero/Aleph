@@ -654,61 +654,6 @@ mod tests {
         assert_eq!(json, Some(serde_json::json!(true)));
     }
 
-    /// **No state bit may vanish from the JSON face when it happens to be
-    /// unset.** The class, rather than the one member of it that had a ruling.
-    ///
-    /// `focused`'s guard above is about one field because one field had a
-    /// ruling attached. The defect underneath it is not about `focused` at
-    /// all: a `skip_serializing_if` on ANY of these seven turns "we looked and
-    /// the answer is no" into the same silence as "nobody looked", and
-    /// `checked` and `expanded` are `Option<bool>` for exactly the reason
-    /// `focused` now is — while having **no JSON assertion anywhere**
-    /// (censused at `59d6c8c04`: `to_json` has two call sites in tests, and the
-    /// other one asserts only non-null values, where `[]` cannot hide an absent
-    /// key). So they were one attribute away from losing the distinction with
-    /// nothing to notice.
-    ///
-    /// Derived from the type on both sides rather than checked against a
-    /// written-down key list (判据 §5): an all-unset `NodeStates` and an
-    /// all-set one must serialise to the **same key set**, and the struct
-    /// literal below is exhaustive, so an eighth field cannot be added without
-    /// being written into it.
-    #[test]
-    fn every_state_bit_keeps_its_key_in_json_whatever_its_value() {
-        let keys = |states: NodeStates| -> Vec<String> {
-            let value = serde_json::to_value(states).expect("NodeStates serialises");
-            let mut out: Vec<String> = value
-                .as_object()
-                .expect("NodeStates is a JSON object")
-                .keys()
-                .cloned()
-                .collect();
-            out.sort();
-            out
-        };
-
-        let unset = keys(NodeStates::default());
-        let set = keys(NodeStates {
-            disabled: true,
-            checked: Some(true),
-            expanded: Some(true),
-            selected: true,
-            required: true,
-            readonly: true,
-            focused: Some(true),
-        });
-        assert_eq!(
-            unset, set,
-            "a state bit disappears from JSON when it is unset, so \"we looked \
-             and the answer is no\" and \"nobody looked\" read identically to \
-             anything consuming the attachment"
-        );
-        assert!(
-            !unset.is_empty(),
-            "non-vacuity: the key sets are equal because both are empty"
-        );
-    }
-
     /// **A page cannot write a state token into the model's observation.**
     ///
     /// `render::quote` defends page-controlled *strings*; a state token is a

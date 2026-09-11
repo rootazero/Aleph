@@ -318,6 +318,220 @@ pub struct PageState {
 }
 
 #[cfg(test)]
+mod wire_face {
+    //! The keys the model's JSON face is made of, written down.
+    //!
+    //! `render::to_json` is `serde_json::to_value` of [`PageState`], so every
+    //! field of every struct it reaches is a wire key that some consumer — and
+    //! after Task 14, a model — reads by name.
+
+    use super::*;
+
+    /// The sorted key set of one serialised value.
+    fn keys<T: Serialize>(value: &T) -> Vec<String> {
+        let value = serde_json::to_value(value).expect("the wire types serialise");
+        let mut out: Vec<String> = value
+            .as_object()
+            .expect("a wire struct is a JSON object")
+            .keys()
+            .cloned()
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// A written-down key list, sorted so the list's own order is not a
+    /// contract.
+    fn expected(names: &[&str]) -> Vec<String> {
+        assert!(
+            !names.is_empty(),
+            "non-vacuity: an empty expectation passes against anything that \
+             serialises to {{}}"
+        );
+        let mut out: Vec<String> = names.iter().map(|s| (*s).to_string()).collect();
+        out.sort();
+        out
+    }
+
+    fn frame_key() -> FrameKey {
+        FrameKey {
+            frame_id: "F".into(),
+            loader_id: "L".into(),
+        }
+    }
+
+    fn viewport() -> Viewport {
+        Viewport {
+            width: 800,
+            height: 600,
+            scroll_x: 0,
+            scroll_y: 0,
+            content_width: 800,
+            content_height: 600,
+            dpr: 1.0,
+        }
+    }
+
+    /// **Every wire field keeps its key, whatever its value and whatever
+    /// anyone writes above it.**
+    ///
+    /// Three ways a key can leave the model's JSON face, and this has to see
+    /// all three:
+    ///
+    /// 1. **value-dependent** — a `skip_serializing_if` on an `Option` turns
+    ///    "we looked and the answer is no" into the same silence as "nobody
+    ///    looked". That is the one-line change that undoes the `focused`
+    ///    ruling, and `checked`/`expanded` are `Option` for the same reason
+    ///    while having no JSON assertion of their own.
+    /// 2. **`#[serde(skip)]`** — the key leaves in every state.
+    /// 3. **`#[serde(rename)]`** — the key every consumer reads by name
+    ///    becomes a different word, and nothing that reads back what it just
+    ///    wrote can tell (判据 §10).
+    ///
+    /// The round-3 version of this guard saw only (1), because it derived
+    /// **both** sides from `NodeStates` and compared them to each other: a
+    /// change that moves both sides together is invisible to it. Measured — a
+    /// `skip` on `checked` and a `rename` to `is_checked` each left it green,
+    /// with `checked` gone from the JSON face entirely. That is the tag-table
+    /// ruling one file over and not applied here (判据 §16): a test deriving
+    /// both halves from production asserts the table against itself. So the
+    /// key list below is **written down**, and the struct literals are
+    /// **exhaustive** — the first authority catches a rename or a skip, the
+    /// second means a new field cannot be added without someone writing it
+    /// here.
+    ///
+    /// **Scope, censused at `63e7a4b78`** (predicate: fields declared on a
+    /// struct `to_value(&PageState)` reaches): `PageState` 8, `StateNode` 15,
+    /// `NodeStates` 7, `Viewport` 7, `Rect` 4, `FrameKey` 2 — **43 fields, all
+    /// six structs, all covered here**. `RefId` is a newtype over `String` and
+    /// carries no keys; `Role` and `Engine` are enums whose *vocabulary* is a
+    /// different contract (`every_role_renders_the_same_word_it_serialises_as`
+    /// pins `Role`'s). `RawNode` and friends are the fetchers' INPUT face, not
+    /// this one, and a rename there fails the fixture load — except on
+    /// `RawNode::focused`, whose `#[serde(default)]` would absorb it silently;
+    /// that face gets its producer in Tasks 11/17 and its guard with it.
+    #[test]
+    fn every_wire_field_keeps_its_json_key_whatever_its_value() {
+        let states = expected(&[
+            "disabled", "checked", "expanded", "selected", "required", "readonly", "focused",
+        ]);
+        assert_eq!(keys(&NodeStates::default()), states, "unset NodeStates");
+        assert_eq!(
+            keys(&NodeStates {
+                disabled: true,
+                checked: Some(true),
+                expanded: Some(true),
+                selected: true,
+                required: true,
+                readonly: true,
+                focused: Some(true),
+            }),
+            states,
+            "a state bit disappears from JSON when it is set — or the key set \
+             is no longer the one written down here"
+        );
+
+        let node = expected(&[
+            "parent",
+            "ref",
+            "backend_node_id",
+            "frame",
+            "role",
+            "name",
+            "name_covers_all_text",
+            "value",
+            "states",
+            "rect",
+            "interactive",
+            "visible",
+            "text",
+            "href",
+            "placeholder",
+        ]);
+        let empty = StateNode {
+            parent: None,
+            r#ref: None,
+            backend_node_id: 1,
+            frame: frame_key(),
+            role: Role::Generic,
+            name: String::new(),
+            name_covers_all_text: false,
+            value: None,
+            states: NodeStates::default(),
+            rect: None,
+            interactive: false,
+            visible: true,
+            text: None,
+            href: None,
+            placeholder: None,
+        };
+        assert_eq!(keys(&empty), node, "a StateNode with nothing known");
+        let full = StateNode {
+            parent: Some(0),
+            r#ref: Some(RefId("e1".into())),
+            value: Some("v".into()),
+            rect: Some(Rect {
+                x: 1,
+                y: 2,
+                w: 3,
+                h: 4,
+            }),
+            text: Some("t".into()),
+            href: Some("/h".into()),
+            placeholder: Some("p".into()),
+            ..empty.clone()
+        };
+        assert_eq!(keys(&full), node, "a StateNode with everything known");
+
+        assert_eq!(
+            keys(&PageState {
+                engine: Engine::Chromium,
+                generation: 1,
+                url: "https://x.test/".into(),
+                title: "t".into(),
+                viewport: viewport(),
+                no_box: (0, 1),
+                fetch_ms: 1,
+                nodes: vec![full],
+            }),
+            expected(&[
+                "engine",
+                "generation",
+                "url",
+                "title",
+                "viewport",
+                "no_box",
+                "fetch_ms",
+                "nodes",
+            ])
+        );
+
+        assert_eq!(
+            keys(&viewport()),
+            expected(&[
+                "width",
+                "height",
+                "scroll_x",
+                "scroll_y",
+                "content_width",
+                "content_height",
+                "dpr",
+            ])
+        );
+        assert_eq!(
+            keys(&Rect {
+                x: 1,
+                y: 2,
+                w: 3,
+                h: 4
+            }),
+            expected(&["x", "y", "w", "h"])
+        );
+        assert_eq!(keys(&frame_key()), expected(&["frame_id", "loader_id"]));
+    }
+}
+
+#[cfg(test)]
 mod census {
     /// `PageState::build` is the ONE builder (spec §7.3): both fetchers
     /// produce a `RawDom`, and exactly one place turns it into a `PageState`.
