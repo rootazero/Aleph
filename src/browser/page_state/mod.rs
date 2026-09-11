@@ -274,6 +274,16 @@ pub struct PageState {
     pub engine: Engine,
     pub generation: u64,
     pub url: String,
+    /// The page's own `<title>`, and therefore **page-controlled** — the sixth
+    /// such string this struct carries, after the accessible name, a text leaf,
+    /// an `href`, a `placeholder` and `url`.
+    ///
+    /// `render_text` does not print it, so ruling R40's five quoting sites are
+    /// the complete list *for this task's renderer* and no more than that.
+    /// Task 14 renders url and title in `browser_snapshot`: **that render goes
+    /// through [`render::quote`]**, which is re-exported from this module for
+    /// the purpose. A page picks its own title, and a title is as good a place
+    /// to forge a `[ref=` token as a placeholder was.
     pub title: String,
     pub viewport: Viewport,
     /// `(nodes with no box, nodes total)` — a runtime fact for the model, not
@@ -339,15 +349,15 @@ mod census {
 
         let mut outside: Vec<String> = Vec::new();
         for (rel, text) in sources {
+            if rel.starts_with("src/browser/page_state/") {
+                continue;
+            }
             // `production_text`, not `production_prefix`: a whole-file test
             // module carries no `#[cfg(test)]` of its own, so the per-file cut
             // would hand this walk 100% of a test file as production.
             // `code_text` on top, so a mention inside a string literal or a
             // doc comment is not a call site.
             let code = code_text(&production_text(std::path::Path::new(&rel), &text));
-            if rel.starts_with("src/browser/page_state/") {
-                continue;
-            }
             for _ in 0..code.matches("PageState::build(").count() {
                 outside.push(rel.clone());
             }

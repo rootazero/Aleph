@@ -100,6 +100,17 @@ impl RefTable {
     }
 
     /// What `r` points at, or why it does not.
+    ///
+    /// # Which variants this function can actually return
+    ///
+    /// `Navigated` and `Unknown` — **never `NodeGone`**, and the signature
+    /// cannot say so. This table only knows what it minted and what it retired;
+    /// "the document is the same and the node has left it" is a fact only the
+    /// driver learns, from `DOM.resolveNode` failing on a ref this function
+    /// just resolved happily (Task 12/14). A caller writing a `match` with a
+    /// `NodeGone` arm against THIS function has written an arm nothing can
+    /// reach (判据 §2); a caller matching on a `BrowserError::StaleRef` coming
+    /// back from the driver needs all three.
     pub fn resolve(&self, r: &RefId) -> Result<RefEntry, StaleReason> {
         if let Some(entry) = self.by_id.get(r) {
             return Ok(entry.clone());

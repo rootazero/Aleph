@@ -99,10 +99,11 @@ fn payload_flags(state: &PageState, anchors: &[bool]) -> Vec<bool> {
 /// How many payload nodes sit strictly below each node.
 fn payload_below(state: &PageState, payload: &[bool]) -> Vec<usize> {
     let mut below = vec![0usize; state.nodes.len()];
-    for i in 0..state.nodes.len() {
-        if !payload[i] {
-            continue;
-        }
+    for i in payload
+        .iter()
+        .enumerate()
+        .filter_map(|(i, carries)| carries.then_some(i))
+    {
         for a in ancestors(state, i) {
             below[a] += 1;
         }
@@ -310,10 +311,22 @@ pub fn quote(s: &str) -> String {
 }
 
 /// The full state as JSON, for `browser_snapshot{format:"json"}`.
-/// `serde_json::to_value` of the same struct the text came from —
-/// one derivation, so the attachment and the tree cannot describe different
-/// pages. A serialisation that somehow fails degrades to `null` rather than
-/// panicking on a page-derived value.
+///
+/// `serde_json::to_value` of the same struct the text came from — one
+/// derivation, so the attachment and the tree cannot describe different pages.
+///
+/// `unwrap_or(Value::Null)` is a defensive branch with **no reachable
+/// trigger**: every field here is a plain scalar, `String`, `Option` or `Vec`,
+/// and `to_value` does not error on a non-finite `f64` — it writes `null` for
+/// the field and returns `Ok`. The doc used to claim the branch caught a
+/// serialisation failure, which named a path that cannot occur (判据 §2 asks
+/// what makes a thing go red; nothing here does). It is kept because deleting
+/// it would put an `expect` on a page-derived value, not because it fires.
+///
+/// One consequence of that same `dpr` behaviour: a state whose viewport is
+/// non-finite serialises to `dpr: null` and will NOT deserialise back, so
+/// `to_json_round_trips_the_state` proves the round trip over finite viewports
+/// only — parsing proves a superset, never equality (判据 §10).
 #[must_use]
 pub fn to_json(state: &PageState) -> serde_json::Value {
     serde_json::to_value(state).unwrap_or(serde_json::Value::Null)
@@ -692,7 +705,7 @@ mod tests {
         // Indentation is ASCII spaces only, so this byte count lands on a char
         // boundary (P7).
         let indent = line.len() - line.trim_start_matches(' ').len();
-        if indent % 2 != 0 {
+        if !indent.is_multiple_of(2) {
             return None;
         }
         let body = line.get(indent..)?.strip_prefix("- ")?;
