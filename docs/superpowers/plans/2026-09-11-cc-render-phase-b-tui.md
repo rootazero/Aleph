@@ -124,16 +124,73 @@ Delete `widgets/tool_block.rs` (221 lines, 3–5 lines of box per call).
 
 **Guard:** a 6 KB single-line JSON body asserts the hint counts **physical** rows, not logical lines — the assertion `fold` already makes in `shared-ui-logic`, re-made at the surface that decides the width.
 
-### B4 — Markdown: pulldown-cmark + `md_enhance`
+### B4 — Markdown: pulldown-cmark + `md_enhance` ✅ (syntect deferred to B4c)
 
 Replace the hand-written 837-line `markdown.rs` subset (no tables, no highlighting).
 
 - `md_enhance::enhance` first, then pulldown-cmark → `Line`/`Span`, with the **same flag constant the Panel uses**.
-- Tables (pi's column algorithm), ordered/nested lists, strikethrough, task lists, `hr`, block quotes, admonition left rail, dimmed link URLs.
-- `syntect` loaded lazily on a background thread; until it is ready, code blocks render as plain text and never block a frame. Highlighted results memoised per line.
+- Tables, ordered/nested lists, strikethrough, task lists, `hr`, block quotes, admonition left rail, dimmed link URLs.
 - Mermaid fences render as a framed source block (R-4: no ASCII rendering in the TUI).
+- **B4c, not done here:** `syntect` loaded lazily on a background thread; until it is ready, code blocks render as plain text and never block a frame. Highlighted results memoised per line.
 
 **Guard:** the flag constant is imported from one place, and a test asserts the TUI's parser options equal the Panel's — a wire-shaped fact with two holders otherwise (判据 §10).
+
+#### What the count turned up
+
+The plan said "the same flag constant the Panel uses", which assumed two
+holders. There are **six** `pulldown_cmark` parser construction points, and
+three of them claim to hold the same fact:
+
+| Site | Flags | Verdict |
+|---|---|---|
+| `webchat/components/markdown.rs` | `STRIKETHROUGH TABLES TASKLISTS` | same fact |
+| `src/export/markdown.rs` | same, justified by the comment *"Same extension set as the Panel renderer"* | same fact |
+| `cli/output/markdown.rs` | `STRIKETHROUGH TABLES` — **drifted** | same fact |
+| `pdf_generate/{browser,native}_engine.rs` | `Options::all()` | different question |
+| `webchat/memory_graph/markdown_excerpt.rs` | none | different question |
+
+So the fact now lives in `shared_ui_logic::transcript::md_flags`. The Panel,
+the CLI and the TUI call it; `alephcore` cannot (that crate has
+`shared-ui-logic` only as a **dev**-dependency, and promoting it would point
+core at an interface crate), so the exporter keeps a local copy pinned by a
+test that reads the real constant instead of restating its three flags.
+
+Two live defects fell out of the count:
+
+1. The CLI never rendered task lists. `Event::TaskListMarker` has had an arm
+   in that renderer since it was written, but `ENABLE_TASKLISTS` was not in
+   its flag set, so the arm was unreachable and `- [x] done` printed as the
+   literal text `• [x] done` — both ends built, no wire (判据 §7). The
+   regression test uses an **uppercase** `[X]`, because a lowercase source
+   renders byte-identically whether or not the marker was parsed; the first
+   version of that test passed before the fix.
+2. `src/export/markdown.rs` justified its flags by naming another
+   subsystem's behaviour. That claim was already false for the CLI's copy.
+
+#### The streaming seam had to change with the parser
+
+`safe_freeze_offset` advances past any complete line outside a fence. That is
+right for a line scanner — which this renderer was — and wrong for a block
+parser: a frozen prefix cut mid-paragraph is two paragraphs forever, and a
+half-arrived table is a header row plus literal pipes forever.
+
+`chat_area`'s `build_visible_lines_window_matches_the_full_build_sliced`
+caught it as a one-row disagreement between the streaming and settled builds,
+which is a clipped last line in the scroll window, not a cosmetic difference.
+
+Fixed by adding `block_freeze_offset` — the same scan, a second answer, cut
+only after a blank line or a closing fence — and a seam that re-inserts the
+blank row neither half can emit. The Panel still takes the line boundary; its
+render is transient (a settled message re-renders whole), so it flickers
+rather than freezing a mistake. Moving it over is a one-line change and a
+measurement this session cannot make.
+
+#### Deliberately different from the old renderer
+
+Soft breaks now join into one paragraph, as CommonMark says. The old scanner
+emitted one output row per source row, so an assistant paragraph that wrapped
+in the source rendered pre-broken. Transcripts will look different; this is
+the correct behaviour, not a regression.
 
 ### B5 — Mouse, region table, scrolling
 
@@ -162,11 +219,28 @@ Replace the hand-written 837-line `markdown.rs` subset (no tables, no highlighti
 
 **Guard:** a `provider_reported: None` fixture must render `?`; asserting on `0` would pass on a broken path.
 
+### B4c — Lazy syntax highlighting
+
+Split out of B4 because it is a concurrency question, not a parsing one.
+
+- `syntect` loaded on a background thread; until it is ready, code blocks
+  render plain and never block a frame. Results memoised per line.
+
+**Guard:** a test that renders a code block with the highlighter deliberately
+not-yet-ready must produce the same rows as one with no highlighter at all —
+"still loading" must not be a different layout, or the transcript reflows when
+the load lands.
+
 ### B8 — Entropy reduction (same phase, separate commit)
 
-- Delete `widgets/tool_block.rs` and the old `markdown.rs` body.
+- ~~Delete `widgets/tool_block.rs`~~ (done in B3) and ~~the old `markdown.rs` body~~ (done in B4).
 - Delete `btw_panel.rs`'s second spinner (`affordance::spinner_frame` is the one source).
 - Delete the three stale `#[allow(dead_code)]` in `AgentPanelData`.
+- Done along the way, because the compiler named them: `Theme::code_bg`,
+  `Theme::link`, `Theme::quote`, `Theme::code_block_border` had no readers left
+  once the renderer moved to `palette().color(role)`. Note that
+  `cargo test -p aleph-tui` hides these — the derivation test reads every field,
+  so only a non-test build reports them (判据 §18).
 
 ## 3. Deliberately not done (spec §6)
 

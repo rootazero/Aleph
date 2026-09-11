@@ -177,18 +177,35 @@ fn sanitize_link_event(event: Event<'_>) -> Event<'_> {
     }
 }
 
-/// Render Markdown to an HTML fragment with raw HTML escaped and URL schemes
-/// allowlisted.
-pub(super) fn render_markdown(src: &str) -> String {
-    // Same extension set as the Panel renderer. Notably NOT `Options::all()`:
-    // the fewer constructs the parser recognises, the smaller the surface.
+/// Markdown extensions this exporter parses assistant text with.
+///
+/// # This is a copy, and it is pinned as one
+///
+/// The real derivation point is
+/// `shared_ui_logic::transcript::md_flags::markdown_options`, which the Panel,
+/// the TUI and the CLI all call directly. This crate cannot: `shared-ui-logic`
+/// is a client crate and is a **dev**-dependency here, so calling it from
+/// production code would point `alephcore` at an interface crate.
+///
+/// What used to stand here instead was the comment "Same extension set as the
+/// Panel renderer" — a claim about another subsystem, restated by hand, with
+/// nothing to notice when it stopped being true. (It had already stopped being
+/// true for the CLI's copy.) The claim is now made by
+/// `tests::the_exporter_parses_with_the_shared_flag_set`, which reads the real
+/// constant rather than repeating it.
+fn markdown_options() -> Options {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_TASKLISTS);
+    options
+}
 
+/// Render Markdown to an HTML fragment with raw HTML escaped and URL schemes
+/// allowlisted.
+pub(super) fn render_markdown(src: &str) -> String {
     let mut out = String::with_capacity(src.len() * 2);
-    for event in Parser::new_ext(src, options) {
+    for event in Parser::new_ext(src, markdown_options()) {
         match event {
             // Raw HTML in model output renders as literal text.
             Event::Html(text) | Event::InlineHtml(text) => out.push_str(&escape_text(&text)),
@@ -201,6 +218,29 @@ pub(super) fn render_markdown(src: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This exporter parses with the same extensions as every other renderer
+    /// of assistant text.
+    ///
+    /// # When this goes red
+    ///
+    /// Either side changing alone: a flag added to
+    /// `shared_ui_logic::transcript::markdown_options` and not here, or here
+    /// and not there. That is the whole job — a reader comparing an exported
+    /// HTML file against the Panel it was exported from cannot tell which one
+    /// is wrong when a table renders in one and not the other.
+    ///
+    /// Reads the real constant rather than restating its three flags, so this
+    /// cannot pass by agreeing with a stale copy of itself (判据 §10: an
+    /// assertion that only reads its own literal tests nothing).
+    #[test]
+    fn the_exporter_parses_with_the_shared_flag_set() {
+        assert_eq!(
+            markdown_options(),
+            shared_ui_logic::transcript::markdown_options(),
+            "the exporter's extensions drifted from the shared set"
+        );
+    }
 
     #[test]
     fn raw_html_is_rendered_as_literal_text() {

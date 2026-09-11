@@ -1,99 +1,714 @@
+//! Markdown → styled `ratatui` lines.
+//!
+//! # Why a real parser
+//!
+//! This was 837 lines of hand-written line scanning: `starts_with('#')`,
+//! `starts_with("- ")`, a bespoke inline scanner for `*`/`_`/`` ` ``/`[]()`.
+//! It recognised a subset, and the constructs outside that subset did not
+//! degrade — they rendered as their source text, so a table arrived as a wall
+//! of pipes and a numbered list as literal `1.` on every row. The Panel, the
+//! CLI and the session exporter all parse the same assistant text with
+//! `pulldown-cmark`; this file was the one surface answering a different
+//! question about the same bytes.
+//!
+//! Extensions come from [`markdown_options`] — a single derivation point, not
+//! a fourth copy of the flag set. See its module docs for why.
+//!
+//! # The pre-pass
+//!
+//! [`enhance`] runs first: it lifts bare URLs into links, folds GitHub
+//! admonitions (`> [!WARNING]`) into a marked blockquote, and replaces
+//! ```mermaid fences with a placeholder the renderer swaps back. Both surfaces
+//! share it, so an admonition is an admonition in both. Mermaid renders as a
+//! framed source block here — a terminal has no diagram, and ASCII art of one
+//! is worse than the source (spec §6).
+//!
+//! # What is deliberately not done
+//!
+//! Syntax highlighting. A code block renders plain, in the code frame, and the
+//! `syntect` load that B4c adds must not block a frame to do better.
+
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use shared_ui_logic::transcript::{
+    enhance, markdown_options, AdmonitionKind, Block, SemanticColor, MERMAID_PLACEHOLDER_PREFIX,
+};
 use std::rc::Rc;
 use unicode_width::UnicodeWidthStr;
 
-use super::theme::theme;
+use super::theme::palette;
 
-/// Convert markdown text to styled ratatui Lines for terminal display.
+fn style(role: SemanticColor) -> Style {
+    Style::default().fg(palette().color(role))
+}
+
+/// Columns one list nesting level indents by.
+const LIST_INDENT: usize = 2;
+/// The blockquote rail. Its width is measured, never assumed: it is what
+/// every row of a quoted block is offset by.
+const QUOTE_RAIL: &str = "\u{250a} ";
+
+/// Convert markdown to styled lines wrapped to `width`.
 ///
-/// Supports a subset of markdown: bold, italic, inline code, fenced code blocks,
-/// headings (h1-h3), bulleted lists, blockquotes, and links.
+/// `width` is the column budget for the whole block including any rail or
+/// bullet, so a caller passes the pane width and gets back rows that fit it.
+#[must_use]
 pub fn markdown_to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
-    let width = width as usize;
-    let mut result: Vec<Line<'static>> = Vec::new();
-    let mut in_code_block = false;
-    let mut code_lang = String::new();
-    let mut code_lines: Vec<String> = Vec::new();
+    render(text, width, false)
+}
 
-    for line in text.lines() {
-        if in_code_block {
-            if line.trim_start().starts_with("```") {
-                // Close code block
-                in_code_block = false;
-                render_code_block(&code_lang, &code_lines, width, &mut result);
-                code_lang.clear();
-                code_lines.clear();
+/// The `streaming` seam: [`enhance`]'s block-level rewrites need to see whole
+/// fences and whole admonitions, which a still-growing tail does not have, so
+/// it does only the line-local work when told the text is unfinished. Exactly
+/// the flag the Panel passes on the same path.
+fn render(text: &str, width: u16, streaming: bool) -> Vec<Line<'static>> {
+    let enhanced = enhance(text, streaming);
+    let mut r = Renderer::new(width as usize, enhanced.blocks);
+    for event in Parser::new_ext(&enhanced.markdown, markdown_options()) {
+        r.handle(event);
+    }
+    r.finish()
+}
+
+/// One table being accumulated until its closing tag. Cells are plain text:
+/// a column width has to be known before any row can be emitted, and that
+/// cannot be answered per-span.
+#[derive(Default)]
+struct TableAcc {
+    rows: Vec<Vec<String>>,
+    current: Vec<String>,
+    cell: String,
+    header_rows: usize,
+}
+
+/// One open `[text](url)`, buffered so the destination can be appended dimmed
+/// after the label. `CommonMark` links do not nest, so one slot suffices.
+struct LinkAcc {
+    url: String,
+    start_span: usize,
+}
+
+/// One open fenced block: its info string and its body.
+#[derive(Default)]
+struct CodeAcc {
+    lang: String,
+    body: String,
+}
+
+struct Renderer {
+    width: usize,
+    out: Vec<Line<'static>>,
+    /// Inline spans of the block being built, flushed by its closing tag.
+    spans: Vec<Span<'static>>,
+    /// Nested emphasis; the top is the style new text is painted in.
+    styles: Vec<Style>,
+    /// One entry per open list: `None` bullets, `Some(n)` numbers from `n`.
+    lists: Vec<Option<u64>>,
+    /// One entry per open blockquote; the kind is filled in when the
+    /// admonition marker [`enhance`] wrote is recognised.
+    quotes: Vec<Option<AdmonitionKind>>,
+    /// Set while the next inline run could be the admonition label, so it is
+    /// consumed as the heading rather than painted as literal `[!WARNING]`.
+    expect_admonition_label: bool,
+    /// Text collected between the `Strong` tags [`enhance`] wraps the marker
+    /// in.
+    ///
+    /// The marker cannot be matched against one `Event::Text`: the inline
+    /// parser splits `[!WARNING]` into `"["`, `"!WARNING"`, `"]"`, because `[`
+    /// opens a potential link. Measured, not assumed — matching a whole
+    /// `Event::Text` looked obviously right and never fired once.
+    label_buf: Option<String>,
+    code: Option<CodeAcc>,
+    table: Option<TableAcc>,
+    link: Option<LinkAcc>,
+    /// Mermaid sources, indexed by the placeholder that stands for them.
+    blocks: Vec<Block>,
+    /// A task-list checkbox waiting for its item's text.
+    task: Option<bool>,
+    /// Whether the open item still owes its marker.
+    ///
+    /// An item is flushed by whatever ends first — its paragraph, a nested
+    /// list starting inside it, or its own closing tag — and a **loose** item
+    /// holds several paragraphs. Without this, the second paragraph of
+    /// `- one\n\n  two` gets its own bullet, and in an ordered list it also
+    /// burns an ordinal, so the list counts 1, 2 where the source says 1.
+    item_owes_marker: bool,
+}
+
+impl Renderer {
+    fn new(width: usize, blocks: Vec<Block>) -> Self {
+        Self {
+            width: width.max(1),
+            out: Vec::new(),
+            spans: Vec::new(),
+            styles: vec![Style::default().fg(palette().color(SemanticColor::Fg))],
+            lists: Vec::new(),
+            quotes: Vec::new(),
+            expect_admonition_label: false,
+            label_buf: None,
+            code: None,
+            table: None,
+            link: None,
+            blocks,
+            task: None,
+            item_owes_marker: false,
+        }
+    }
+
+    fn finish(mut self) -> Vec<Line<'static>> {
+        // An unterminated fence still has to show its content: the text
+        // exists, and dropping it because the model has not closed the fence
+        // yet would make a streaming code block invisible until it ended.
+        if self.code.is_some() {
+            self.close_code();
+        }
+        self.flush(Vec::new(), Vec::new());
+        // Trailing blank rows are layout noise; the chat area decides the gap
+        // between messages.
+        while self.out.last().is_some_and(line_is_blank) {
+            self.out.pop();
+        }
+        self.out
+    }
+
+    fn cur(&self) -> Style {
+        *self.styles.last().unwrap_or(&Style::default())
+    }
+
+    fn push_text(&mut self, text: &str, style: Style) {
+        if text.is_empty() {
+            return;
+        }
+        self.spans.push(Span::styled(text.to_string(), style));
+    }
+
+    // ---- block emission ------------------------------------------------
+
+    /// The rail every row of a quoted block carries, painted by the
+    /// admonition kind when there is one.
+    fn rail(&self) -> Vec<Span<'static>> {
+        self.quotes
+            .iter()
+            .map(|kind| {
+                let role = kind.map_or(SemanticColor::Dim, AdmonitionKind::color);
+                Span::styled(QUOTE_RAIL.to_string(), style(role))
+            })
+            .collect()
+    }
+
+    /// Emit the accumulated spans as wrapped rows.
+    ///
+    /// `first` is the marker (a bullet, an ordinal, a checkbox) and `cont` is
+    /// what continuation rows carry in its place. They must be the same width
+    /// — that is what makes a wrapped list item line up under its own text
+    /// instead of under its bullet.
+    fn flush(&mut self, first: Vec<Span<'static>>, cont: Vec<Span<'static>>) {
+        if self.spans.is_empty() {
+            return;
+        }
+        let lead = span_cols(&first).max(span_cols(&cont));
+        let body_width = self.width.saturating_sub(lead).max(1);
+        let spans = std::mem::take(&mut self.spans);
+        for (i, line) in wrap_line_spans(&spans, body_width).into_iter().enumerate() {
+            let mut row = if i == 0 { first.clone() } else { cont.clone() };
+            row.extend(line.spans);
+            self.out.push(Line::from(row));
+        }
+    }
+
+    /// Flush a block that carries only the ambient rail/indent.
+    fn flush_plain(&mut self) {
+        let mut first = self.rail();
+        let pad = self.lists.len().saturating_sub(1) * LIST_INDENT;
+        if pad > 0 {
+            first.push(Span::raw(" ".repeat(pad)));
+        }
+        let cont = first.clone();
+        self.flush(first, cont);
+    }
+
+    fn blank_line(&mut self) {
+        if self.out.last().is_some_and(line_is_blank) || self.out.is_empty() {
+            return;
+        }
+        self.out.push(Line::default());
+    }
+
+    // ---- events --------------------------------------------------------
+
+    fn handle(&mut self, event: Event<'_>) {
+        match event {
+            Event::Start(tag) => self.start(tag),
+            Event::End(tag) => self.end(tag),
+            Event::Text(t) => self.text(&t),
+            Event::Code(c) => {
+                // Inline code keeps its ticks: a terminal has no background
+                // shading that survives every theme, and a bare word is
+                // indistinguishable from prose.
+                let s = self.cur().fg(palette().color(SemanticColor::Accent));
+                self.push_text(&format!("`{c}`"), s);
+            }
+            Event::SoftBreak => {
+                let s = self.cur();
+                self.push_text(" ", s);
+            }
+            Event::HardBreak => {
+                self.flush_plain();
+            }
+            Event::Rule => {
+                self.blank_line();
+                self.out.push(Line::from(Span::styled(
+                    "\u{2500}".repeat(self.width.min(60)),
+                    style(SemanticColor::Dim),
+                )));
+                self.blank_line();
+            }
+            Event::TaskListMarker(done) => self.task = Some(done),
+            Event::Html(t) | Event::InlineHtml(t) => self.html(&t),
+            // Footnotes are not in the enabled flag set, so no event for them
+            // can arrive here; anything else is inert by construction.
+            _ => {}
+        }
+    }
+
+    fn text(&mut self, t: &str) {
+        if let Some(code) = self.code.as_mut() {
+            code.body.push_str(t);
+            return;
+        }
+        if let Some(table) = self.table.as_mut() {
+            table.cell.push_str(t);
+            return;
+        }
+        if let Some(buf) = self.label_buf.as_mut() {
+            buf.push_str(t);
+            return;
+        }
+        // Content that is not the marker settles the question: this quote is
+        // an ordinary one, and nothing later in it may be eaten as a label.
+        self.expect_admonition_label = false;
+        let s = self.cur();
+        self.push_text(t, s);
+    }
+
+    /// The only HTML this renderer acts on is [`enhance`]'s own mermaid
+    /// placeholder. Everything else is model-authored and renders as the text
+    /// it is — a terminal cannot execute it, but silently dropping it would
+    /// hide content the model meant to show.
+    fn html(&mut self, t: &str) {
+        let trimmed = t.trim();
+        if let Some(rest) = trimmed.strip_prefix(MERMAID_PLACEHOLDER_PREFIX) {
+            if let Some(idx) = rest
+                .strip_suffix("-->")
+                .and_then(|n| n.parse::<usize>().ok())
+            {
+                let source = self.blocks.iter().find_map(|b| match b {
+                    Block::Mermaid { index, source } if *index == idx => Some(source.clone()),
+                    _ => None,
+                });
+                if let Some(source) = source {
+                    self.flush_plain();
+                    self.blank_line();
+                    let lines: Vec<String> = source
+                        .lines()
+                        .map(std::string::ToString::to_string)
+                        .collect();
+                    let width = self.width;
+                    render_code_block("mermaid", &lines, width, &mut self.out);
+                    return;
+                }
+            }
+        }
+        let s = self.cur();
+        self.push_text(t, s);
+    }
+
+    fn start(&mut self, tag: Tag<'_>) {
+        match tag {
+            Tag::Paragraph => self.blank_line(),
+            Tag::Heading { level, .. } => {
+                self.blank_line();
+                let base = style(SemanticColor::Accent).add_modifier(Modifier::BOLD);
+                // `h1`/`h2` keep a visible hash run: a bold line in a
+                // transcript already full of bold is not a level.
+                let hashes = match level {
+                    HeadingLevel::H1 => "# ",
+                    HeadingLevel::H2 => "## ",
+                    HeadingLevel::H3 => "### ",
+                    _ => "",
+                };
+                if !hashes.is_empty() {
+                    self.spans
+                        .push(Span::styled(hashes.to_string(), style(SemanticColor::Dim)));
+                }
+                self.styles.push(base);
+            }
+            Tag::BlockQuote(_) => {
+                self.blank_line();
+                self.quotes.push(None);
+                self.expect_admonition_label = true;
+            }
+            Tag::CodeBlock(kind) => {
+                self.flush_plain();
+                self.blank_line();
+                let lang = match kind {
+                    CodeBlockKind::Fenced(info) => {
+                        info.split_whitespace().next().unwrap_or("").to_string()
+                    }
+                    CodeBlockKind::Indented => String::new(),
+                };
+                self.code = Some(CodeAcc {
+                    lang,
+                    body: String::new(),
+                });
+            }
+            Tag::List(start) => {
+                if self.lists.is_empty() {
+                    self.blank_line();
+                } else {
+                    // A nested list interrupts its parent's item. Emit the
+                    // parent's own text first, or the two run together on one
+                    // row: `• outerinner`.
+                    self.flush_item();
+                }
+                self.lists.push(start);
+            }
+            Tag::Item => self.item_owes_marker = true,
+            Tag::Emphasis => {
+                let s = self.cur().add_modifier(Modifier::ITALIC);
+                self.styles.push(s);
+            }
+            Tag::Strong => {
+                let s = self.cur().add_modifier(Modifier::BOLD);
+                self.styles.push(s);
+                if self.expect_admonition_label {
+                    self.label_buf = Some(String::new());
+                }
+            }
+            Tag::Strikethrough => {
+                let s = self.cur().add_modifier(Modifier::CROSSED_OUT);
+                self.styles.push(s);
+            }
+            Tag::Link { dest_url, .. } => {
+                self.link = Some(LinkAcc {
+                    url: dest_url.to_string(),
+                    start_span: self.spans.len(),
+                });
+                let s = self
+                    .cur()
+                    .fg(palette().color(SemanticColor::Link))
+                    .add_modifier(Modifier::UNDERLINED);
+                self.styles.push(s);
+            }
+            Tag::Table(_) => {
+                self.flush_plain();
+                self.blank_line();
+                self.table = Some(TableAcc::default());
+            }
+            Tag::TableCell => {
+                if let Some(t) = self.table.as_mut() {
+                    t.cell.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn end(&mut self, tag: TagEnd) {
+        match tag {
+            TagEnd::Paragraph | TagEnd::Heading(_) => {
+                if matches!(tag, TagEnd::Heading(_)) {
+                    self.styles.pop();
+                }
+                if self.lists.is_empty() {
+                    self.flush_plain();
+                } else {
+                    self.flush_item();
+                }
+            }
+            TagEnd::BlockQuote(_) => {
+                self.flush_plain();
+                self.quotes.pop();
+                self.expect_admonition_label = false;
+                self.blank_line();
+            }
+            TagEnd::CodeBlock => self.close_code(),
+            TagEnd::List(_) => {
+                self.lists.pop();
+                if self.lists.is_empty() {
+                    self.blank_line();
+                }
+            }
+            TagEnd::Item => {
+                // A loose list's item ends after its paragraph already
+                // flushed; a tight one's text is still pending.
+                self.flush_item();
+            }
+            TagEnd::Strong => {
+                let strong = self.styles.pop().unwrap_or_default();
+                let Some(buf) = self.label_buf.take() else {
+                    return;
+                };
+                self.expect_admonition_label = false;
+                // `enhance` wrote `**[!WARNING]**` as the quote's first inline
+                // run. Consume it: the rail's colour and the label say it
+                // once, and leaving the marker in the prose says it twice.
+                let kind = buf
+                    .strip_prefix("[!")
+                    .and_then(|r| r.strip_suffix(']'))
+                    .and_then(AdmonitionKind::parse);
+                match kind {
+                    Some(kind) => {
+                        if let Some(slot) = self.quotes.last_mut() {
+                            *slot = Some(kind);
+                        }
+                        self.spans.push(Span::styled(
+                            format!("{} ", kind.label()),
+                            style(kind.color()).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    // Bold text that merely opened a quote. It is ordinary
+                    // content and has to reach the screen — swallowing it
+                    // because the guess was wrong would delete a sentence.
+                    None => self.push_text(&buf, strong),
+                }
+            }
+            TagEnd::Emphasis | TagEnd::Strikethrough => {
+                self.styles.pop();
+            }
+            TagEnd::Link => {
+                self.styles.pop();
+                if let Some(link) = self.link.take() {
+                    // A label that already IS its destination (what
+                    // `linkify_bare_urls` produces from a bare URL) would
+                    // otherwise print the same string twice.
+                    let label: String = self.spans[link.start_span..]
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect();
+                    if label.trim() != link.url.trim() {
+                        self.spans.push(Span::styled(
+                            format!(" ({})", link.url),
+                            style(SemanticColor::Dim),
+                        ));
+                    }
+                }
+            }
+            TagEnd::Table => self.close_table(),
+            TagEnd::TableHead => {
+                if let Some(t) = self.table.as_mut() {
+                    t.rows.push(std::mem::take(&mut t.current));
+                    t.header_rows = t.rows.len();
+                }
+            }
+            TagEnd::TableRow => {
+                if let Some(t) = self.table.as_mut() {
+                    t.rows.push(std::mem::take(&mut t.current));
+                }
+            }
+            TagEnd::TableCell => {
+                if let Some(t) = self.table.as_mut() {
+                    let cell = std::mem::take(&mut t.cell);
+                    t.current.push(cell);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Emit the pending inline run as a list item: marker on the first row,
+    /// aligned padding on the rest.
+    fn flush_item(&mut self) {
+        if self.spans.is_empty() {
+            return;
+        }
+        // Only the first flush of an item wears the marker. A later
+        // paragraph of the same (loose) item is body text that lines up
+        // under it.
+        let owed = std::mem::take(&mut self.item_owes_marker);
+        let marker = match self.lists.last_mut() {
+            Some(Some(n)) if owed => {
+                let m = format!("{n}. ");
+                *n += 1;
+                m
+            }
+            Some(Some(n)) => " ".repeat(format!("{n}. ").len()),
+            _ if owed => "\u{2022} ".to_string(),
+            _ => "  ".to_string(),
+        };
+        let check = self.task.take().map(|done| {
+            let mark = if done { "[x] " } else { "[ ] " };
+            Span::styled(
+                mark.to_string(),
+                style(if done {
+                    SemanticColor::ToolOk
+                } else {
+                    SemanticColor::Dim
+                }),
+            )
+        });
+
+        let mut first = self.rail();
+        let pad = self.lists.len().saturating_sub(1) * LIST_INDENT;
+        if pad > 0 {
+            first.push(Span::raw(" ".repeat(pad)));
+        }
+        let mut cont = first.clone();
+        first.push(Span::styled(marker.clone(), style(SemanticColor::Accent)));
+        cont.push(Span::raw(
+            " ".repeat(UnicodeWidthStr::width(marker.as_str())),
+        ));
+        if let Some(check) = check {
+            let cols = UnicodeWidthStr::width(check.content.as_ref());
+            first.push(check);
+            cont.push(Span::raw(" ".repeat(cols)));
+        }
+        self.flush(first, cont);
+    }
+
+    fn close_code(&mut self) {
+        let Some(code) = self.code.take() else { return };
+        let body: Vec<String> = code
+            .body
+            .strip_suffix('\n')
+            .unwrap_or(&code.body)
+            .lines()
+            .map(std::string::ToString::to_string)
+            .collect();
+        let width = self.width;
+        render_code_block(&code.lang, &body, width, &mut self.out);
+    }
+
+    fn close_table(&mut self) {
+        let Some(table) = self.table.take() else {
+            return;
+        };
+        render_table(&table, self.width, &mut self.out);
+    }
+}
+
+fn line_is_blank(line: &Line<'_>) -> bool {
+    line.spans.iter().all(|s| s.content.trim().is_empty())
+}
+
+fn span_cols(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum()
+}
+
+/// A GFM table as box-drawn rows.
+///
+/// Column widths are measured with `unicode-width`, not `len()`: a CJK cell is
+/// two columns per character, and padding it by bytes puts every following
+/// column in the wrong place on exactly the content most likely to need a
+/// table.
+fn render_table(table: &TableAcc, width: usize, out: &mut Vec<Line<'static>>) {
+    if table.rows.is_empty() {
+        return;
+    }
+    let cols = table.rows.iter().map(Vec::len).max().unwrap_or(0);
+    if cols == 0 {
+        return;
+    }
+    let mut widths = vec![0usize; cols];
+    for row in &table.rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(UnicodeWidthStr::width(cell.as_str()));
+        }
+    }
+    // Fit the budget by shrinking the widest column first, so one long cell
+    // does not squeeze every other column to nothing.
+    let border_cols = cols * 3 + 1;
+    while widths.iter().sum::<usize>() + border_cols > width {
+        let Some(widest) = widths
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, w)| **w)
+            .map(|(i, _)| i)
+        else {
+            break;
+        };
+        if widths[widest] <= 1 {
+            break;
+        }
+        widths[widest] -= 1;
+    }
+
+    let border = style(SemanticColor::Dim);
+    let rule = |l: &str, m: &str, r: &str| {
+        let mut s = String::from(l);
+        for (i, w) in widths.iter().enumerate() {
+            if i > 0 {
+                s.push_str(m);
+            }
+            s.push_str(&"\u{2500}".repeat(w + 2));
+        }
+        s.push_str(r);
+        s
+    };
+
+    out.push(Line::from(Span::styled(
+        rule("\u{250c}", "\u{252c}", "\u{2510}"),
+        border,
+    )));
+    for (r, row) in table.rows.iter().enumerate() {
+        let header = r < table.header_rows;
+        let mut spans = vec![Span::styled("\u{2502}".to_string(), border)];
+        for (i, w) in widths.iter().enumerate() {
+            let cell = row.get(i).map_or("", String::as_str);
+            let text = clip_to_cols(cell, *w);
+            let pad = w.saturating_sub(UnicodeWidthStr::width(text.as_str()));
+            let cell_style = if header {
+                style(SemanticColor::Accent).add_modifier(Modifier::BOLD)
             } else {
-                code_lines.push(line.to_string());
-            }
-            continue;
+                style(SemanticColor::Fg)
+            };
+            spans.push(Span::styled(
+                format!(" {text}{} ", " ".repeat(pad)),
+                cell_style,
+            ));
+            spans.push(Span::styled("\u{2502}".to_string(), border));
         }
-
-        // Check for code block opening
-        if line.trim_start().starts_with("```") {
-            in_code_block = true;
-            let trimmed = line.trim_start().trim_start_matches('`');
-            code_lang = trimmed.trim().to_string();
-            continue;
+        out.push(Line::from(spans));
+        if header && r + 1 == table.header_rows {
+            out.push(Line::from(Span::styled(
+                rule("\u{251c}", "\u{253c}", "\u{2524}"),
+                border,
+            )));
         }
-
-        // Empty line
-        if line.trim().is_empty() {
-            result.push(Line::default());
-            continue;
-        }
-
-        // Heading
-        if line.starts_with('#') {
-            if let Some(heading_line) = parse_heading(line) {
-                result.push(heading_line);
-                continue;
-            }
-        }
-
-        // Blockquote
-        if line.starts_with('>') {
-            let content = line.trim_start_matches('>').trim_start();
-            let mut spans = vec![Span::styled(
-                "\u{250a} ".to_string(),
-                Style::default().fg(theme().quote),
-            )];
-            let inline = parse_inline(content, Style::default().fg(theme().quote));
-            spans.extend(inline);
-            let wrapped = wrap_line_spans(&spans, width);
-            result.extend(wrapped);
-            continue;
-        }
-
-        // List item
-        if is_list_item(line) {
-            let content = strip_list_marker(line);
-            let mut spans = vec![Span::styled(
-                "  \u{2022} ".to_string(),
-                Style::default().fg(theme().primary),
-            )];
-            let inline = parse_inline(&content, Style::default());
-            spans.extend(inline);
-            let wrapped = wrap_line_spans(&spans, width);
-            result.extend(wrapped);
-            continue;
-        }
-
-        // Normal paragraph line
-        let spans = parse_inline(line, Style::default());
-        let wrapped = wrap_line_spans(&spans, width);
-        result.extend(wrapped);
     }
+    out.push(Line::from(Span::styled(
+        rule("\u{2514}", "\u{2534}", "\u{2518}"),
+        border,
+    )));
+}
 
-    // Handle unterminated code block — render what we have
-    if in_code_block {
-        render_code_block(&code_lang, &code_lines, width, &mut result);
+/// Truncate to a column budget on char boundaries, with an ellipsis when
+/// anything was dropped.
+fn clip_to_cols(text: &str, cols: usize) -> String {
+    if UnicodeWidthStr::width(text) <= cols {
+        return text.to_string();
     }
-
-    result
+    if cols <= 1 {
+        return "\u{2026}".to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let w = UnicodeWidthStr::width(ch.to_string().as_str());
+        if used + w > cols - 1 {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('\u{2026}');
+    out
 }
 
 /// Frozen-prefix half of an incremental streaming render — see
@@ -143,32 +758,34 @@ impl StreamLines {
 /// `cache` holds the [`StreamPrefix`] from the previous call. Only the text
 /// from `cache.safe_offset` to the new
 /// `shared_ui_logic::markdown_stream::safe_freeze_offset` boundary is
-/// re-converted; the frozen prefix is reused via `Rc` with **zero deep
-/// copies** (the previous signature cloned the whole cached `Vec<Line>` on
-/// every call — twice on boundary-advance calls — purely to satisfy the
-/// borrow checker). Falls back to a full re-run of [`markdown_to_lines`] on
-/// the very first call (`cache == None`) and whenever the requested `width`
-/// no longer matches the cached one (a resize mid-stream).
+/// re-converted; the frozen prefix is reused via `Rc` with zero deep copies.
+/// Falls back to a full re-run on the very first call (`cache == None`) and
+/// whenever `width` no longer matches the cached one (a resize mid-stream).
 ///
 /// A stale cached offset (longer than `text` or off its char boundary —
 /// possible only after a wholesale content swap the cache didn't observe) is
-/// treated as "no cache": the prefix is dropped and the whole text renders
-/// as tail, so a stale prefix can never paint text that is no longer there.
+/// treated as "no cache": the prefix is dropped and the whole text renders as
+/// tail, so a stale prefix can never paint text that is no longer there.
 ///
-/// **Note on the cost model**: unlike Panel's HTML-string cache (which only
-/// re-processes the newly-safe delta and appends pre-rendered HTML), this
-/// re-runs `markdown_to_lines` on the whole safe prefix `text[..new_offset]`
-/// when the boundary advances, because `markdown_to_lines` returns
-/// `Vec<Line<'static>>` with wrapped/styled spans that aren't trivially
-/// concatenable the way HTML strings are (a `Line` wrapped at a width
-/// boundary can differ depending on what came before it in the same
-/// paragraph). This still avoids reprocessing whenever the boundary DOESN'T
-/// advance (the common case — most ticks arrive between safe-offset
-/// advances), and the tail-only reprocessing is always bounded by "how far
-/// behind the safe boundary trails," not by total message length. If
-/// profiling after this ships shows the prefix reformat is still too costly
-/// for very long streaming messages, that's a Phase 2 candidate — not
-/// attempted here (YAGNI).
+/// # The seam is a BLOCK boundary, not a line boundary
+///
+/// `block_freeze_offset`, not `safe_freeze_offset`. The latter advances past
+/// any complete line outside a fence, which is exactly right for a renderer
+/// that maps one source line to one output line — this file's was one until
+/// pulldown-cmark replaced it. A block parser cut there sees two documents
+/// where the finished text is one, and the prefix is frozen, so it never
+/// settles: a half-arrived table stays a header row plus literal pipes.
+///
+/// It is also what makes this function's output equal
+/// [`markdown_to_lines`]'s on the same complete text — the invariant the
+/// chat area's window arithmetic rests on, since it measures the transcript
+/// through this path and slices it through that one.
+///
+/// The Panel's HTML cache (`extend_stable_prefix`) still takes the line
+/// boundary and still chops a streaming table; its render is transient
+/// (a settled message re-renders whole), so it is a flicker rather than a
+/// frozen mistake. Moving it over is a one-line change and a measurement
+/// this session cannot make.
 pub fn markdown_to_lines_incremental(
     text: &str,
     width: u16,
@@ -183,14 +800,12 @@ pub fn markdown_to_lines_incremental(
         }
     };
     let (prefix, tail_start) =
-        match shared_ui_logic::markdown_stream::safe_freeze_offset(text, prev_offset) {
+        match shared_ui_logic::markdown_stream::block_freeze_offset(text, prev_offset) {
             Some(new_offset) if new_offset > prev_offset => {
-                // The safe prefix grew. Re-run full conversion ONLY on the
-                // safe prefix (cheap relative to the whole growing text as
-                // long as fences close reasonably often), matching
-                // markdown_to_lines's own fence-tracking semantics (it always
-                // starts a fresh scan at `in_code_block = false`, which is
-                // valid exactly at a safe-offset boundary by construction).
+                // The safe prefix grew. Re-run the full conversion on it —
+                // the prefix is finished text, so it gets the finished-text
+                // pre-pass (fences and admonitions are whole by definition of
+                // the boundary), which is what `streaming = false` asks for.
                 let lines = Rc::new(markdown_to_lines(&text[..new_offset], width));
                 *cache = Some(StreamPrefix {
                     safe_offset: new_offset,
@@ -214,225 +829,28 @@ pub fn markdown_to_lines_incremental(
             },
         };
     let tail_text = &text[tail_start..];
-    let tail = if tail_text.is_empty() {
+    let mut tail = if tail_text.is_empty() {
         Vec::new()
     } else {
-        markdown_to_lines(tail_text, width)
+        // The tail is unfinished: an open fence has no closing line yet, so
+        // the block-level pre-pass would mis-read it.
+        render(tail_text, width, true)
     };
+    // The blank row between two blocks belongs to the seam, and neither half
+    // can emit it: each render trims its own trailing blanks and suppresses a
+    // leading one. Without this the incremental build is exactly one row
+    // shorter than the settled build per frozen block, and the chat area
+    // measures with one and slices with the other.
+    if !prefix.is_empty() && !tail.is_empty() {
+        tail.insert(0, Line::default());
+    }
     StreamLines { prefix, tail }
 }
 
-/// Check if a line is a list item (starts with `- ` or `* `)
-fn is_list_item(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    trimmed.starts_with("- ") || trimmed.starts_with("* ")
-}
-
-/// Strip the list marker from a line, returning the content after `- ` or `* `
-fn strip_list_marker(line: &str) -> String {
-    let trimmed = line.trim_start();
-    trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix("* "))
-        .unwrap_or(trimmed)
-        .to_string()
-}
-
-/// Parse heading lines. Returns None if the line isn't actually a heading.
-fn parse_heading(line: &str) -> Option<Line<'static>> {
-    let trimmed = line.trim_start();
-    let level = trimmed.chars().take_while(|c| *c == '#').count();
-    if level == 0 || level > 3 {
-        return None;
-    }
-
-    // Must have a space after the hashes
-    let after_hashes = trimmed.get(level..)?;
-    if !after_hashes.starts_with(' ') {
-        return None;
-    }
-    let text = after_hashes.trim_start().to_string();
-
-    let style = match level {
-        1 => Style::default()
-            .fg(theme().heading)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        _ => Style::default()
-            .fg(theme().heading)
-            .add_modifier(Modifier::BOLD),
-    };
-
-    Some(Line::from(Span::styled(text, style)))
-}
-
-/// Parse inline markdown formatting, returning styled spans.
-///
-/// Handles: **bold**, *italic*, `inline code`, [link text](url)
-fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let len = chars.len();
-    let mut i = 0;
-    let mut plain_start = 0;
-
-    while i < len {
-        let Some(&(byte_idx, ch)) = chars.get(i) else {
-            break;
-        };
-
-        match ch {
-            '*' => {
-                // Check for bold (**) or italic (*)
-                let is_bold = chars.get(i + 1).is_some_and(|&(_, c)| c == '*');
-                if is_bold {
-                    // Bold: **text**
-                    if let Some(end) = find_double_marker(&chars, i + 2, '*') {
-                        // Flush plain text before this marker
-                        flush_plain(text, plain_start, byte_idx, base_style, &mut spans);
-                        let inner_start = chars.get(i + 2).map_or(text.len(), |c| c.0);
-                        let inner_end = chars.get(end).map_or(text.len(), |c| c.0);
-                        let inner = text.get(inner_start..inner_end).unwrap_or("");
-                        spans.push(Span::styled(
-                            inner.to_string(),
-                            base_style.add_modifier(Modifier::BOLD),
-                        ));
-                        i = end + 2; // skip past closing **
-                        plain_start = chars.get(i).map_or(text.len(), |c| c.0);
-                        continue;
-                    }
-                }
-                // Single italic: *text*
-                if let Some(end) = find_single_marker(&chars, i + 1, '*') {
-                    flush_plain(text, plain_start, byte_idx, base_style, &mut spans);
-                    let inner_start = chars.get(i + 1).map_or(text.len(), |c| c.0);
-                    let inner_end = chars.get(end).map_or(text.len(), |c| c.0);
-                    let inner = text.get(inner_start..inner_end).unwrap_or("");
-                    spans.push(Span::styled(
-                        inner.to_string(),
-                        base_style.add_modifier(Modifier::ITALIC),
-                    ));
-                    i = end + 1;
-                    plain_start = chars.get(i).map_or(text.len(), |c| c.0);
-                    continue;
-                }
-                i += 1;
-            }
-            '`' => {
-                // Inline code: `text`
-                if let Some(end) = find_single_marker(&chars, i + 1, '`') {
-                    flush_plain(text, plain_start, byte_idx, base_style, &mut spans);
-                    let inner_start = chars.get(i + 1).map_or(text.len(), |c| c.0);
-                    let inner_end = chars.get(end).map_or(text.len(), |c| c.0);
-                    let inner = text.get(inner_start..inner_end).unwrap_or("");
-                    spans.push(Span::styled(
-                        inner.to_string(),
-                        Style::default().bg(theme().code_bg),
-                    ));
-                    i = end + 1;
-                    plain_start = chars.get(i).map_or(text.len(), |c| c.0);
-                    continue;
-                }
-                i += 1;
-            }
-            '[' => {
-                // Link: [text](url)
-                if let Some((link_text, after_link_idx)) = parse_link(&chars, text, i) {
-                    flush_plain(text, plain_start, byte_idx, base_style, &mut spans);
-                    spans.push(Span::styled(
-                        link_text,
-                        Style::default()
-                            .fg(theme().link)
-                            .add_modifier(Modifier::UNDERLINED),
-                    ));
-                    i = after_link_idx;
-                    plain_start = chars.get(i).map_or(text.len(), |c| c.0);
-                    continue;
-                }
-                i += 1;
-            }
-            _ => {
-                i += 1;
-            }
-        }
-    }
-
-    // Flush remaining plain text
-    if plain_start < text.len() {
-        let remaining = text.get(plain_start..).unwrap_or("");
-        if !remaining.is_empty() {
-            spans.push(Span::styled(remaining.to_string(), base_style));
-        }
-    }
-
-    spans
-}
-
-/// Flush accumulated plain text (from `plain_start` to current byte index) as a styled span.
-fn flush_plain(text: &str, start: usize, end: usize, style: Style, spans: &mut Vec<Span<'static>>) {
-    if start < end {
-        if let Some(s) = text.get(start..end) {
-            if !s.is_empty() {
-                spans.push(Span::styled(s.to_string(), style));
-            }
-        }
-    }
-}
-
-/// Find a single closing marker character, returning the char index (not byte index).
-fn find_single_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
-    (from..chars.len()).find(|&idx| chars.get(idx).is_some_and(|c| c.1 == marker))
-}
-
-/// Find a double closing marker (e.g., **), returning the char index of the first char.
-fn find_double_marker(chars: &[(usize, char)], from: usize, marker: char) -> Option<usize> {
-    let len = chars.len();
-    (from..len.saturating_sub(1)).find(|&idx| {
-        let first = chars.get(idx).is_some_and(|c| c.1 == marker);
-        let second = chars.get(idx + 1).is_some_and(|c| c.1 == marker);
-        first && second
-    })
-}
-
-/// Parse a markdown link: [text](url). Returns (`link_text`, `char_index_after_closing_paren`).
-fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(String, usize)> {
-    // start is at '['
-    // Find closing ']'
-    let mut i = start + 1;
-    while chars.get(i).is_some_and(|&(_, c)| c != ']') {
-        i += 1;
-    }
-    if i >= chars.len() {
-        return None;
-    }
-    let bracket_close = i;
-
-    // Next char must be '('
-    i += 1;
-    if chars.get(i).is_none_or(|&(_, c)| c != '(') {
-        return None;
-    }
-
-    // Find closing ')'
-    i += 1;
-    while chars.get(i).is_some_and(|&(_, c)| c != ')') {
-        i += 1;
-    }
-    if i >= chars.len() {
-        return None;
-    }
-
-    // Extract link text
-    let text_start = chars.get(start + 1).map_or(text.len(), |c| c.0);
-    let text_end = chars.get(bracket_close).map_or(text.len(), |c| c.0);
-    let link_text = text.get(text_start..text_end).unwrap_or("").to_string();
-
-    Some((link_text, i + 1))
-}
-
-/// Render a fenced code block with borders and language label.
+/// A fenced block as a framed, gutter-prefixed run of rows.
 fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Vec<Line<'static>>) {
-    let border_style = Style::default().fg(theme().code_block_border);
-    let code_style = Style::default().bg(theme().code_bg);
+    let border_style = style(SemanticColor::CodeBorder);
+    let code_style = style(SemanticColor::Fg);
     let inner_width = if width > 4 { width - 2 } else { width };
 
     // Top border: ┌─ lang ──────
@@ -455,13 +873,15 @@ fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Ve
         if code_line.is_empty() {
             result.push(Line::from(Span::styled(
                 "\u{2502} ".to_string(),
-                code_style,
+                border_style,
             )));
             continue;
         }
         for wrapped in textwrap::wrap(code_line, code_wrap_width) {
-            let display = format!("\u{2502} {wrapped}");
-            result.push(Line::from(Span::styled(display, code_style)));
+            result.push(Line::from(vec![
+                Span::styled("\u{2502} ".to_string(), border_style),
+                Span::styled(wrapped.to_string(), code_style),
+            ]));
         }
     }
 
@@ -548,263 +968,367 @@ fn wrap_line_spans(spans: &[Span<'static>], width: usize) -> Vec<Line<'static>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::{Color, Modifier};
 
-    /// Helper to extract plain text from a Line
-    fn line_to_plain_text(line: &Line) -> String {
-        line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    /// Helper to check if any span in a line has a given modifier
-    fn has_modifier(line: &Line, modifier: Modifier) -> bool {
-        line.spans
+    fn text_of(lines: &[Line<'_>]) -> Vec<String> {
+        lines
             .iter()
-            .any(|s| s.style.add_modifier.contains(modifier))
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
     }
 
-    /// Helper to check if any span in a line has a given bg color
-    fn has_bg_color(line: &Line, color: Color) -> bool {
-        line.spans.iter().any(|s| s.style.bg == Some(color))
+    fn render_text(md: &str, width: u16) -> Vec<String> {
+        text_of(&markdown_to_lines(md, width))
     }
 
-    /// Helper to check if any span in a line has a given fg color
-    fn has_fg_color(line: &Line, color: Color) -> bool {
-        line.spans.iter().any(|s| s.style.fg == Some(color))
-    }
-
+    /// A GFM table renders as a grid, not as its source pipes.
+    ///
+    /// # When this goes red
+    ///
+    /// Dropping `ENABLE_TABLES`, or reverting to a line scanner. Asserting on
+    /// the box-drawing border rather than on the cell text is deliberate: the
+    /// cell text is present either way — that is exactly how the old renderer
+    /// passed for a reader skimming the output.
     #[test]
-    fn plain_text() {
-        let lines = markdown_to_lines("Hello world", 80);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(line_to_plain_text(&lines[0]), "Hello world");
-    }
-
-    #[test]
-    fn bold_text() {
-        let lines = markdown_to_lines("Hello **world**", 80);
-        assert_eq!(lines.len(), 1);
-        let text = line_to_plain_text(&lines[0]);
-        assert!(text.contains("world"));
-        assert!(has_modifier(&lines[0], Modifier::BOLD));
-    }
-
-    #[test]
-    fn italic_text() {
-        let lines = markdown_to_lines("Hello *world*", 80);
-        assert_eq!(lines.len(), 1);
-        let text = line_to_plain_text(&lines[0]);
-        assert!(text.contains("world"));
-        assert!(has_modifier(&lines[0], Modifier::ITALIC));
-    }
-
-    #[test]
-    fn inline_code() {
-        let lines = markdown_to_lines("Use `cargo build`", 80);
-        assert_eq!(lines.len(), 1);
-        let text = line_to_plain_text(&lines[0]);
-        assert!(text.contains("cargo build"));
-        assert!(has_bg_color(&lines[0], theme().code_bg));
-    }
-
-    #[test]
-    fn code_block() {
-        let input = "```rust\nfn main() {}\n```";
-        let lines = markdown_to_lines(input, 80);
-        // Should produce at least 3 lines: top border, code line, bottom border
+    fn a_table_renders_as_a_grid() {
+        let out = render_text("| name | qty |\n| --- | --- |\n| bolt | 12 |", 60);
         assert!(
-            lines.len() >= 3,
-            "code block should have >= 3 lines, got {}",
-            lines.len()
+            out.iter().any(|l| l.contains('\u{250c}')),
+            "no top border: {out:?}"
         );
-        // Top border should contain the language
-        let top = line_to_plain_text(&lines[0]);
         assert!(
-            top.contains("rust"),
-            "top border should contain language label"
+            out.iter()
+                .any(|l| l.contains("bolt") && l.contains('\u{2502}')),
+            "cell not in a grid: {out:?}"
         );
-        // Code line should contain the code
-        let code = line_to_plain_text(&lines[1]);
         assert!(
-            code.contains("fn main()"),
-            "code line should contain the code"
+            !out.iter().any(|l| l.contains("---")),
+            "delimiter row leaked as text: {out:?}"
         );
     }
 
+    /// CJK cells are padded by columns, not by bytes.
     #[test]
-    fn heading_h1() {
-        let lines = markdown_to_lines("# Title", 80);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(line_to_plain_text(&lines[0]), "Title");
-        assert!(has_modifier(&lines[0], Modifier::BOLD));
-        assert!(has_modifier(&lines[0], Modifier::UNDERLINED));
+    fn a_cjk_table_keeps_its_columns_aligned() {
+        let out = render_text("| 名 | v |\n| - | - |\n| 中文字 | 1 |\n| a | 2 |", 60);
+        let body: Vec<&String> = out
+            .iter()
+            .filter(|l| l.contains('1') || l.contains('2'))
+            .collect();
+        assert_eq!(body.len(), 2, "{out:?}");
+        let bar_at = |s: &str| s.char_indices().filter(|(_, c)| *c == '\u{2502}').count();
+        assert_eq!(bar_at(body[0]), bar_at(body[1]), "{out:?}");
+        let cols = |s: &str| UnicodeWidthStr::width(s);
+        assert_eq!(cols(body[0]), cols(body[1]), "ragged: {out:?}");
     }
 
+    /// An ordered list numbers its items.
+    ///
+    /// # When this goes red
+    ///
+    /// The old renderer had no ordered-list branch at all: `1.` reached the
+    /// screen as literal text, so `1. a\n1. b` printed `1.` twice. This
+    /// asserts the second item is `2.`, which only a parser that counts can
+    /// produce.
     #[test]
-    fn heading_h2() {
-        let lines = markdown_to_lines("## Title", 80);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(line_to_plain_text(&lines[0]), "Title");
-        assert!(has_modifier(&lines[0], Modifier::BOLD));
-        // h2 should NOT be underlined
-        assert!(!has_modifier(&lines[0], Modifier::UNDERLINED));
+    fn an_ordered_list_counts() {
+        let out = render_text("1. first\n1. second", 40);
+        assert!(out.iter().any(|l| l.contains("1. first")), "{out:?}");
+        assert!(out.iter().any(|l| l.contains("2. second")), "{out:?}");
     }
 
+    /// Columns before the first non-space character.
+    fn lead_cols(s: &str) -> usize {
+        UnicodeWidthStr::width(&s[..s.len() - s.trim_start().len()])
+    }
+
+    /// A loose item's second paragraph is body text, not a second item.
+    ///
+    /// # When this goes red
+    ///
+    /// Flushing an item's marker on every paragraph rather than the first.
+    /// The ordered case is the one that cannot be mistaken for a styling
+    /// choice: the list would count 1, 2 where the source has one item.
     #[test]
-    fn list_item() {
-        let input = "- item one\n- item two";
-        let lines = markdown_to_lines(input, 80);
+    fn a_loose_item_wears_its_marker_once() {
+        let out = render_text("1. one\n\n   still one\n\n2. two\n", 40);
+        let joined = out.join("\n");
+        assert!(joined.contains("1. one"), "{out:?}");
+        assert!(joined.contains("2. two"), "{out:?}");
         assert!(
-            lines.len() >= 2,
-            "list should have >= 2 lines, got {}",
-            lines.len()
+            !joined.contains("2. still one") && !joined.contains("3. two"),
+            "the continuation took an ordinal: {out:?}"
         );
-        let first = line_to_plain_text(&lines[0]);
-        let second = line_to_plain_text(&lines[1]);
-        assert!(first.contains("\u{2022}"), "first line should have bullet");
-        assert!(first.contains("item one"));
-        assert!(
-            second.contains("\u{2022}"),
-            "second line should have bullet"
-        );
-        assert!(second.contains("item two"));
+        let cont = out.iter().find(|l| l.contains("still one")).expect("cont");
+        assert_eq!(lead_cols(cont), 3, "not aligned under the text: {out:?}");
     }
 
     #[test]
-    fn blockquote() {
-        let lines = markdown_to_lines("> quoted text", 80);
-        assert!(!lines.is_empty());
-        let text = line_to_plain_text(&lines[0]);
-        assert!(
-            text.contains("\u{250a}"),
-            "blockquote should contain ┊ prefix"
-        );
-        assert!(text.contains("quoted text"));
+    fn a_nested_list_indents_under_its_parent() {
+        let out = render_text("- outer\n  - inner", 40);
+        let outer = out.iter().position(|l| l.contains("outer")).expect("outer");
+        let inner = out.iter().position(|l| l.contains("inner")).expect("inner");
+        assert_ne!(outer, inner, "items merged onto one row: {out:?}");
+        assert!(lead_cols(&out[inner]) > lead_cols(&out[outer]), "{out:?}");
     }
 
+    /// A wrapped list item's continuation lines up under its own text, not
+    /// under its bullet.
+    ///
+    /// Measured in COLUMNS. `str::find` returns a byte offset, and the bullet
+    /// is a three-byte `•`, so a byte-based version of this test reports the
+    /// text starting at column 4 when it starts at column 2 — and fails a
+    /// correct renderer.
     #[test]
-    fn link_text() {
-        let lines = markdown_to_lines("[click](http://example.com)", 80);
-        assert_eq!(lines.len(), 1);
-        let text = line_to_plain_text(&lines[0]);
-        assert!(text.contains("click"), "link text should be present");
-        // URL should be discarded from display
-        assert!(!text.contains("http://"), "URL should not appear in output");
-        assert!(has_modifier(&lines[0], Modifier::UNDERLINED));
-        assert!(has_fg_color(&lines[0], theme().link));
+    fn a_wrapped_item_hangs_under_its_text() {
+        let out = render_text("- alpha beta gamma delta epsilon zeta", 20);
+        assert!(out.len() > 1, "did not wrap: {out:?}");
+        let byte = out[0].find("alpha").expect("first row has the text");
+        let first_text = UnicodeWidthStr::width(&out[0][..byte]);
+        assert_eq!(lead_cols(&out[1]), first_text, "not hung: {out:?}");
     }
 
+    /// A task list paints a checkbox rather than the literal marker.
+    ///
+    /// Uppercase `[X]` on purpose — a lowercase source renders identically
+    /// whether or not the marker was parsed, so it would pass both ways.
     #[test]
-    fn wraps_long_lines() {
-        let long_text = "a ".repeat(50); // 100 chars
-        let lines = markdown_to_lines(&long_text, 40);
+    fn a_task_list_paints_its_checkbox() {
+        let out = render_text("- [ ] open\n- [X] closed", 40);
+        assert!(out.iter().any(|l| l.contains("[ ] open")), "{out:?}");
         assert!(
-            lines.len() > 1,
-            "100-char text at width=40 should wrap to > 1 line, got {}",
-            lines.len()
+            out.iter().any(|l| l.contains("[x] closed")),
+            "not normalised — parsed as text: {out:?}"
         );
     }
 
+    /// An admonition takes the rail colour of its kind and drops the literal
+    /// `[!WARNING]` marker `enhance` wrote for the renderers to find.
     #[test]
-    fn wrapped_lines_preserve_styling() {
-        // A bold run long enough to wrap at width 40 must keep BOLD on every row.
-        let input = format!("**{}**", "bold ".repeat(20));
-        let lines = markdown_to_lines(&input, 40);
+    fn an_admonition_is_labelled_not_left_as_its_marker() {
+        let lines = markdown_to_lines("> [!WARNING] disk is full\n", 60);
+        let out = text_of(&lines);
         assert!(
-            lines.len() > 1,
-            "long bold text should wrap to > 1 line, got {}",
-            lines.len()
+            out.iter()
+                .any(|l| l.contains("WARNING") && l.contains("disk is full")),
+            "{out:?}"
         );
-        for (i, line) in lines.iter().enumerate() {
-            assert!(
-                has_modifier(line, Modifier::BOLD),
-                "row {i} lost BOLD styling after wrapping"
+        assert!(
+            !out.iter().any(|l| l.contains("[!WARNING]")),
+            "raw marker survived: {out:?}"
+        );
+        let rail = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .find(|s| s.content.contains(QUOTE_RAIL))
+            .expect("a rail span");
+        assert_eq!(
+            rail.style.fg,
+            Some(palette().color(SemanticColor::AdmonitionWarning)),
+            "rail not painted by kind"
+        );
+    }
+
+    /// A mermaid fence shows its source in a frame. The TUI draws no diagram
+    /// (spec §6) — but it must not drop the block either.
+    #[test]
+    fn a_mermaid_fence_shows_its_source_framed() {
+        let out = render_text("```mermaid\ngraph TD;\n  A-->B;\n```", 60);
+        assert!(
+            out.iter().any(|l| l.contains("mermaid")),
+            "no label: {out:?}"
+        );
+        assert!(
+            out.iter().any(|l| l.contains("graph TD;")),
+            "no source: {out:?}"
+        );
+        assert!(
+            !out.iter().any(|l| l.contains(MERMAID_PLACEHOLDER_PREFIX)),
+            "placeholder leaked: {out:?}"
+        );
+    }
+
+    /// Strikethrough is a modifier, not the surviving `~~` markers.
+    #[test]
+    fn strikethrough_is_styled_not_spelled() {
+        let lines = markdown_to_lines("~~gone~~", 40);
+        let out = text_of(&lines);
+        assert!(
+            !out.iter().any(|l| l.contains("~~")),
+            "markers left: {out:?}"
+        );
+        assert!(
+            lines.iter().flat_map(|l| l.spans.iter()).any(|s| {
+                s.content.contains("gone") && s.style.add_modifier.contains(Modifier::CROSSED_OUT)
+            }),
+            "not struck: {out:?}"
+        );
+    }
+
+    /// A link shows its destination dimmed after the label — except when the
+    /// label already is the destination, which is what a bare URL becomes.
+    #[test]
+    fn a_link_shows_its_url_once() {
+        let out = render_text("see [docs](https://a.io/x) here", 60);
+        assert_eq!(out.concat().matches("https://a.io/x").count(), 1, "{out:?}");
+        assert!(out.concat().contains("docs"), "{out:?}");
+
+        let bare = render_text("see https://a.io/x here", 60);
+        assert_eq!(
+            bare.concat().matches("https://a.io/x").count(),
+            1,
+            "bare URL printed twice: {bare:?}"
+        );
+    }
+
+    /// An unclosed fence still shows what has arrived. A streaming code block
+    /// that stayed invisible until its closing ``` would be a blank pane for
+    /// the whole time the model is writing it.
+    #[test]
+    fn an_unterminated_fence_still_renders_its_body() {
+        let out = render_text("```rust\nlet x = 1;\n", 60);
+        assert!(out.iter().any(|l| l.contains("let x = 1;")), "{out:?}");
+    }
+
+    /// Nothing rendered here may exceed the width it was given: the chat
+    /// scroll window is computed from this line count, so an overflowing row
+    /// desyncs the viewport rather than just looking wrong.
+    #[test]
+    fn no_row_exceeds_the_requested_width() {
+        let md = "# A heading that runs on and on and on\n\n\
+                  | a very wide column indeed | and another one |\n\
+                  | --- | --- |\n\
+                  | with a long cell value here | and more text |\n\n\
+                  - a list item long enough to need wrapping at this width\n\n\
+                  > [!NOTE] a quoted admonition that also needs to wrap somewhere\n\n\
+                  ```sh\necho a-very-long-command-line-that-will-not-fit\n```\n";
+        for width in [20u16, 40, 80] {
+            for line in markdown_to_lines(md, width) {
+                let cols: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                assert!(
+                    cols <= width as usize,
+                    "width {width}: {cols} cols in {:?}",
+                    text_of(&[line.clone()])
+                );
+            }
+        }
+    }
+
+    /// Rendering complete text incrementally gives the same rows as
+    /// rendering it settled.
+    ///
+    /// # Why this is the invariant that matters
+    ///
+    /// `chat_area` measures the transcript's height through the incremental
+    /// path and slices the reference build out of the settled one. A
+    /// one-row disagreement is not cosmetic there — the scroll window lands
+    /// off by a row and clips the newest line, which reads as "the answer
+    /// stopped early".
+    ///
+    /// # When this goes red
+    ///
+    /// Swapping `block_freeze_offset` back for `safe_freeze_offset` (a
+    /// paragraph freezes mid-soft-break and renders as two paragraphs), or
+    /// dropping the seam's blank separator (one row short per frozen block).
+    /// Both were measured red while writing this.
+    #[test]
+    fn the_incremental_render_equals_the_settled_one() {
+        let corpus = [
+            "one paragraph only",
+            "answer\nwith a second line",
+            "first\n\nsecond\n\nthird\n",
+            "intro\n\n```rust\nlet x = 1;\n```\n\nafter\n",
+            "| a | b |\n| - | - |\n| 1 | 2 |\n\ntail\n",
+            "- one\n- two\n\n# Heading\n\nbody text here\n",
+            "> [!NOTE] quoted\n\nplain\n",
+        ];
+        for md in corpus {
+            let mut cache = None;
+            let s = markdown_to_lines_incremental(md, 40, &mut cache);
+            let incremental: Vec<Line<'static>> = (0..s.line_count())
+                .filter_map(|i| s.get(i))
+                .cloned()
+                .collect();
+            let settled = markdown_to_lines(md, 40);
+            assert_eq!(
+                text_of(&incremental),
+                text_of(&settled),
+                "seam differs for {md:?}"
             );
         }
     }
 
+    /// Inline emphasis is styling, not surviving markers.
+    ///
+    /// One test for four constructs because they share a mechanism (the
+    /// style stack) and would fail together; the ones with their own failure
+    /// mode — strikethrough, links, task markers — have their own tests.
     #[test]
-    fn empty_lines_preserved() {
-        let input = "a\n\nb";
-        let lines = markdown_to_lines(input, 80);
-        assert_eq!(lines.len(), 3, "should have 3 lines: a, empty, b");
-        assert_eq!(line_to_plain_text(&lines[0]), "a");
-        assert!(line_to_plain_text(&lines[1]).is_empty());
-        assert_eq!(line_to_plain_text(&lines[2]), "b");
-    }
-
-    #[test]
-    fn unterminated_code_block() {
-        let input = "```rust\nfn main()";
-        let lines = markdown_to_lines(input, 80);
-        // Should still render something (graceful degradation)
+    fn inline_emphasis_is_styled_and_its_markers_removed() {
+        let lines = markdown_to_lines("**bold** and *italic* and `code`", 60);
+        let out = text_of(&lines);
+        let joined = out.concat();
+        assert!(!joined.contains("**"), "bold markers left: {out:?}");
+        assert!(!joined.contains('*'), "italic markers left: {out:?}");
         assert!(
-            !lines.is_empty(),
-            "unterminated code block should produce output"
+            joined.contains("`code`"),
+            "inline code lost its ticks: {out:?}"
         );
-        // Should contain the code
-        let all_text: String = lines
-            .iter()
-            .map(|l| line_to_plain_text(l))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(all_text.contains("fn main()"), "code should still appear");
+        let has = |needle: &str, m: Modifier| {
+            lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .any(|s| s.content.contains(needle) && s.style.add_modifier.contains(m))
+        };
+        assert!(has("bold", Modifier::BOLD), "{out:?}");
+        assert!(has("italic", Modifier::ITALIC), "{out:?}");
     }
 
     #[test]
-    fn incremental_and_full_conversion_produce_identical_lines() {
-        let text = "line one\n```rust\nfn f() {}\n```\nline two\n";
-        let full = markdown_to_lines(text, 80);
+    fn headings_keep_a_level_marker() {
+        let out = render_text("# One\n\n## Two\n\n### Three\n", 60);
+        assert!(out.iter().any(|l| l.starts_with("# One")), "{out:?}");
+        assert!(out.iter().any(|l| l.starts_with("## Two")), "{out:?}");
+        assert!(out.iter().any(|l| l.starts_with("### Three")), "{out:?}");
+    }
 
-        let mut cache: Option<StreamPrefix> = None;
-        let incremental = markdown_to_lines_incremental(text, 80, &mut cache);
-        let combined: Vec<Line<'static>> = incremental
-            .prefix
-            .iter()
-            .cloned()
-            .chain(incremental.tail.iter().cloned())
-            .collect();
-        assert_eq!(full, combined);
+    /// A quote that is not an admonition keeps its bold text.
+    ///
+    /// # When this goes red
+    ///
+    /// The admonition detector buffers the first `**…**` of a blockquote to
+    /// see whether it is a `[!KIND]` marker. If the "it wasn't" branch ever
+    /// stops re-emitting what it buffered, that sentence disappears from the
+    /// transcript — a silent deletion, not a formatting slip.
+    #[test]
+    fn a_plain_quote_keeps_bold_text_the_admonition_probe_looked_at() {
+        let out = render_text("> **Note well:** something matters\n", 60);
+        assert!(
+            out.iter().any(|l| l.contains("Note well:")),
+            "buffered text was swallowed: {out:?}"
+        );
+        assert!(
+            out.iter().any(|l| l.contains(QUOTE_RAIL)),
+            "no quote rail: {out:?}"
+        );
     }
 
     #[test]
     fn incremental_conversion_reuses_the_cache_on_a_second_call_with_more_text() {
         let mut cache: Option<StreamPrefix> = None;
-        let first_text = "line one\n";
-        let first = markdown_to_lines_incremental(first_text, 80, &mut cache);
+        // A blank line, because the boundary is block-granular: `para one\n`
+        // alone is an open paragraph and freezes nothing.
+        let first_text = "para one\n\n";
+        let _first = markdown_to_lines_incremental(first_text, 80, &mut cache);
         let offset1 = cache.as_ref().map(|p| p.safe_offset);
-        assert!(offset1.unwrap_or(0) > 0);
+        assert!(offset1.unwrap_or(0) > 0, "nothing froze");
 
-        let grown_text = "line one\nline two\n";
+        let grown_text = "para one\n\npara two\n";
         let second = markdown_to_lines_incremental(grown_text, 80, &mut cache);
-        let offset2 = cache.as_ref().map(|p| p.safe_offset);
-        assert!(offset2 >= offset1);
-        let combined: Vec<Line<'static>> = second
-            .prefix
-            .iter()
-            .cloned()
-            .chain(second.tail.iter().cloned())
-            .collect();
-        assert_eq!(combined, markdown_to_lines(grown_text, 80));
-        let _ = first;
-    }
-
-    #[test]
-    fn incremental_conversion_does_not_duplicate_a_tail_baked_into_an_earlier_cache_write() {
-        let mut cache: Option<StreamPrefix> = None;
-        // First call: boundary advances (closing fence), but there's already
-        // a non-empty tail past it ("af") — this must NOT get baked into
-        // what's cached for the prefix.
-        let text1 = "before\n```rust\ncode\n```\naf";
-        markdown_to_lines_incremental(text1, 80, &mut cache);
-        let offset1 = cache.as_ref().map(|p| p.safe_offset).unwrap_or(0);
-        assert!(offset1 > 0);
-
-        // Second call: boundary does NOT advance further, but the tail
-        // grows ("af" -> "after"). The old tail render must not survive
-        // into the output alongside the new one.
-        let text2 = "before\n```rust\ncode\n```\nafter";
-        let second = markdown_to_lines_incremental(text2, 80, &mut cache);
-        assert_eq!(cache.as_ref().map(|p| p.safe_offset), Some(offset1)); // boundary hasn't moved
+        assert!(cache.as_ref().map(|p| p.safe_offset) >= offset1);
         let combined: Vec<Line<'static>> = second
             .prefix
             .iter()
@@ -812,26 +1336,80 @@ mod tests {
             .chain(second.tail.iter().cloned())
             .collect();
         assert_eq!(
-            combined,
-            markdown_to_lines(text2, 80),
-            "must match a full, non-incremental re-render exactly — no stale/duplicated tail"
+            text_of(&combined),
+            text_of(&markdown_to_lines(grown_text, 80))
         );
     }
 
+    /// A tail rendered on one frame must never survive into the next
+    /// alongside its replacement.
+    #[test]
+    fn incremental_conversion_does_not_duplicate_a_tail_baked_into_an_earlier_cache_write() {
+        let mut cache: Option<StreamPrefix> = None;
+        // The boundary advances (closing fence) while a non-empty tail
+        // ("af") already sits past it.
+        let text1 = "before\n\n```rust\ncode\n```\naf";
+        markdown_to_lines_incremental(text1, 80, &mut cache);
+        let offset1 = cache.as_ref().map(|p| p.safe_offset).unwrap_or(0);
+        assert!(offset1 > 0, "the closed fence should have frozen");
+
+        // The boundary does not move, but the tail grows.
+        let text2 = "before\n\n```rust\ncode\n```\nafter";
+        let second = markdown_to_lines_incremental(text2, 80, &mut cache);
+        assert_eq!(cache.as_ref().map(|p| p.safe_offset), Some(offset1));
+        let combined: Vec<Line<'static>> = second
+            .prefix
+            .iter()
+            .cloned()
+            .chain(second.tail.iter().cloned())
+            .collect();
+        assert_eq!(
+            text_of(&combined),
+            text_of(&markdown_to_lines(text2, 80)),
+            "stale or duplicated tail"
+        );
+    }
+
+    /// The `Rc`-sharing contract: across a no-advance frame the returned
+    /// prefix is the SAME allocation as the cached one. The signature this
+    /// replaced deep-copied the whole prefix `Vec` on every frame.
     #[test]
     fn incremental_conversion_shares_the_frozen_prefix_without_copying() {
-        // The Rc-sharing contract: across a no-advance frame, the returned
-        // prefix must be the SAME allocation as the cached one (the previous
-        // tuple API deep-copied the whole prefix Vec on every call).
         let mut cache: Option<StreamPrefix> = None;
-        let text = "line one\npartial";
-        markdown_to_lines_incremental(text, 80, &mut cache);
-        let cached_lines = Rc::clone(&cache.as_ref().expect("cache populated").lines);
-        let grown = "line one\npartially";
-        let frame = markdown_to_lines_incremental(grown, 80, &mut cache);
+        markdown_to_lines_incremental("para one\n\npartial", 80, &mut cache);
+        let cached = Rc::clone(&cache.as_ref().expect("cache populated").lines);
+        let frame = markdown_to_lines_incremental("para one\n\npartially", 80, &mut cache);
         assert!(
-            Rc::ptr_eq(&cached_lines, &frame.prefix),
+            Rc::ptr_eq(&cached, &frame.prefix),
             "a no-advance frame must reuse the cached prefix allocation"
         );
+    }
+
+    /// The streaming seam does not duplicate or drop text across a boundary
+    /// advance.
+    #[test]
+    fn the_streaming_seam_neither_duplicates_nor_drops() {
+        let full = "para one\n\nsecond para\n\nthird\n";
+        let mut cache = None;
+        let mut last = String::new();
+        for end in 1..=full.len() {
+            if !full.is_char_boundary(end) {
+                continue;
+            }
+            let s = markdown_to_lines_incremental(&full[..end], 40, &mut cache);
+            last = (0..s.line_count())
+                .filter_map(|i| s.get(i))
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|sp| sp.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        for word in ["para one", "second para", "third"] {
+            assert_eq!(last.matches(word).count(), 1, "{last:?}");
+        }
     }
 }

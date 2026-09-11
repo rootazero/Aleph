@@ -6,7 +6,8 @@ use crate::state::typewriter::TypewriterClock;
 use crate::views::chat::state::ChatMessage;
 use crate::views::chat::timeline;
 use leptos::prelude::*;
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use shared_ui_logic::transcript::markdown_options;
 use std::sync::LazyLock;
 use syntect::highlighting::ThemeSet;
 use syntect::html::highlighted_html_for_string;
@@ -17,12 +18,10 @@ static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 /// Render a Markdown string to HTML with syntax-highlighted code blocks.
 fn render_markdown(content: &str) -> String {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_TASKLISTS);
-
-    let parser = Parser::new_ext(content, options).map(sanitize_link_event);
+    // Not spelled out here: three other renderers parse the same assistant
+    // text, and a flag only one of them has changes what a construct MEANS
+    // rather than how it looks. See `shared_ui_logic::transcript::md_flags`.
+    let parser = Parser::new_ext(content, markdown_options()).map(sanitize_link_event);
 
     let mut html_output = String::new();
     let mut in_code_block = false;

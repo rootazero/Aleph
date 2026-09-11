@@ -38,6 +38,9 @@ pub use diff_view::{
     EXPANDED_DIFF_ROWS, LCS_CELL_BUDGET_COLLAPSED, LCS_CELL_BUDGET_EXPANDED, MAX_INLINE_LINE_CHARS,
 };
 
+mod md_flags;
+pub use md_flags::markdown_options;
+
 mod md_enhance;
 pub use md_enhance::{
     enhance, find_path_refs, linkify_bare_urls, trim_url, AdmonitionKind, Block, Enhanced, PathRef,

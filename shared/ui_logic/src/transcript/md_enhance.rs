@@ -2,6 +2,8 @@
 //! patterns are fixed machine text (fences, `> [!TYPE]`, `https://`,
 //! `name.ext:NN`), so hand scanners are smaller for WASM and easier to test.
 
+use super::theme_tokens::SemanticColor;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdmonitionKind {
     Note,
@@ -37,6 +39,25 @@ impl AdmonitionKind {
     #[must_use]
     pub fn marker(self) -> String {
         format!("> **[!{}]**", self.label())
+    }
+
+    /// The role this kind is painted in.
+    ///
+    /// Here rather than in each renderer because a WARNING that is amber in
+    /// the Panel and red in the TUI is not a theming difference — the colour
+    /// IS the severity, and two surfaces disagreeing about it say two
+    /// different things about the same sentence (判据 §12: one derivation
+    /// point). Adding a kind goes red here until it has a role, and the role
+    /// tables on both surfaces already go red until they paint it.
+    #[must_use]
+    pub const fn color(self) -> SemanticColor {
+        match self {
+            Self::Note => SemanticColor::AdmonitionNote,
+            Self::Tip => SemanticColor::AdmonitionTip,
+            Self::Important => SemanticColor::AdmonitionImportant,
+            Self::Warning => SemanticColor::AdmonitionWarning,
+            Self::Caution => SemanticColor::AdmonitionCaution,
+        }
     }
 }
 

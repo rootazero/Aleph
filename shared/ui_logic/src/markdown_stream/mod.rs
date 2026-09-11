@@ -5,4 +5,4 @@
 
 mod boundary;
 
-pub use boundary::safe_freeze_offset;
+pub use boundary::{block_freeze_offset, safe_freeze_offset};

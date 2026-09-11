@@ -13,6 +13,12 @@ async-trait = "0.1"
 futures = "0.3"
 # Same 0.2 copy alephcore/tui/webchat already pin — `cargo tree -i unicode-width`
 unicode-width = "0.2"
+# Only for the `Options` value in `transcript::md_flags`, which is the single
+# derivation point four renderers read. `default-features = false` drops the
+# `html` module none of them wants from here (webchat enables it itself), and
+# this is the same 0.12 copy alephcore/cli/webchat already pin, so it adds no
+# new crate to any graph — verify with `cargo tree -i pulldown-cmark`.
+pulldown-cmark = { version = "0.12", default-features = false }
 
 # Internal
 aleph-protocol = { path = "../protocol" }

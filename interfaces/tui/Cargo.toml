@@ -42,6 +42,11 @@ ratatui = "0.29"
 tui-textarea = "0.7"
 unicode-width = "0.2"
 textwrap = "0.16"
+# The same parser the Panel, the CLI and the session exporter read assistant
+# markdown with; the extension set comes from `shared-ui-logic` so all four
+# agree. `default-features = false` drops the `html` module a terminal has no
+# use for. Same 0.12 copy already in the workspace graph.
+pulldown-cmark = { version = "0.12", default-features = false }
 
 # Logging
 tracing = "0.1"

@@ -61,8 +61,13 @@ uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
 dirs = "6.0"
 
-# Markdown → ANSI rendering for human-facing assistant output
+# Markdown → ANSI rendering for human-facing assistant output. The extension
+# set comes from `shared-ui-logic` so this renderer cannot drift from the three
+# others that parse the same assistant text (it had: no tasklists until
+# 2026-09-11). Already in this crate's graph via `aleph-tui`; `default-features
+# = false` keeps wasm-bindgen out, the same spelling `aleph-tui` uses.
 pulldown-cmark = { version = "0.12", default-features = false }
+shared-ui-logic = { path = "../../shared/ui_logic", default-features = false }
 
 # CJK / wide-character aware display widths for aligned table/detail output
 unicode-width = "0.2"
