@@ -1,6 +1,6 @@
 //! Atomic file writes + advisory file locks.
 //!
-//! `write_atomic` writes via `<path>.tmp.<rand>` + fsync + rename so
+//! `write_atomic` writes via a sibling `.aleph_atomic_<rand>` file + fsync + rename so
 //! readers always see either a complete old file or a complete new file
 //! (never half-written).
 //!
@@ -14,7 +14,7 @@ use std::path::Path;
 
 use fs2::FileExt;
 
-/// Write bytes to `path` atomically: write to a sibling `.tmp.<rand>` file,
+/// Write bytes to `path` atomically: write to a sibling `.aleph_atomic_<rand>` file,
 /// fsync, then rename over the destination. Readers always see either the
 /// complete old file (or no file) or the complete new file — never a
 /// half-written intermediate.
@@ -26,24 +26,61 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         )
     })?;
 
+    // `make_in` with a plain `create_new` open rather than `tempfile_in`,
+    // and `std::fs::rename` rather than `NamedTempFile::persist`, on purpose:
+    //
+    // * `tempfile_in` marks the file FILE_ATTRIBUTE_TEMPORARY on Windows and
+    //   relies on `persist` to clear that again; a file that keeps the
+    //   attribute past the rename is a file Windows may decline to flush.
+    // * `persist` is `MoveFileEx(REPLACE_EXISTING)`, which fails with
+    //   ERROR_ACCESS_DENIED whenever *any* handle has the destination open —
+    //   a reader polling the file, an indexer, Defender — even one opened
+    //   with every share flag. `std::fs::rename` uses POSIX-semantics rename
+    //   on Windows (Rust ≥ 1.85) and replaces an open destination; the old
+    //   handle keeps reading the old bytes. The acp persistence worker lost
+    //   its final write to a 10 ms poll before this was the case.
+    //
+    // `make_in` still owns the random-name-and-retry-on-collision part, and
+    // `TempPath` still removes the temp file if the rename fails.
+    //
+    // 0600 on Unix is what `tempfile_in` gave every file this function ever
+    // wrote — `secrets.vault` among them — so the mode is kept explicit here
+    // rather than left to the umask.
+    let open_fresh = |candidate: &Path| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(candidate)
+    };
     let mut tmp = tempfile::Builder::new()
         .prefix(".aleph_atomic_")
-        .tempfile_in(parent)?;
+        .make_in(parent, open_fresh)?;
     tmp.write_all(bytes)?;
     tmp.as_file_mut().sync_all()?;
-    tmp.persist(path).map_err(|e| {
+    // Closes the handle before the rename; the path stays owned so a failed
+    // rename still cleans up.
+    let tmp_path = tmp.into_temp_path();
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
         // Best-effort cleanup of the leaked temp file. We log rather than
         // swallow because a directory populated with .aleph_atomic_* stubs
         // is an ops surprise the caller should be able to find.
-        if let Err(cleanup_err) = std::fs::remove_file(e.file.path()) {
+        let leaked = tmp_path.display().to_string();
+        if let Err(cleanup_err) = tmp_path.close() {
             tracing::warn!(
-                temp_file = %e.file.path().display(),
+                temp_file = %leaked,
                 error = %cleanup_err,
-                "write_atomic: failed to remove leaked temp file after persist error",
+                "write_atomic: failed to remove leaked temp file after rename error",
             );
         }
-        e.error
-    })?;
+        return Err(e);
+    }
+    // After a successful rename the temp path no longer exists; `TempPath`'s
+    // drop tolerates that.
+    drop(tmp_path);
     // fsync the parent directory so the rename survives a crash. On Linux
     // the new directory entry lives in the parent dir's metadata; without
     // this sync, the file can be on disk but absent from the directory
@@ -134,6 +171,45 @@ mod tests {
         std::fs::write(&path, b"old").unwrap();
         write_atomic(&path, b"new").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    /// A reader that happens to have the destination open must not make the
+    /// write fail. On Windows this is exactly what `tempfile::persist`
+    /// (`MoveFileEx`) does — ERROR_ACCESS_DENIED whenever any handle holds
+    /// the target, even one opened with every share flag — and the acp
+    /// persistence worker lost its final write to a 10 ms poll because of
+    /// it. On Unix the rename never cared, so this passes trivially there;
+    /// the guard is for the platform where it can go red.
+    #[test]
+    fn write_atomic_replaces_a_target_another_handle_holds_open() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("foo.bin");
+        std::fs::write(&path, b"old").unwrap();
+        let mut reader = File::open(&path).unwrap();
+        write_atomic(&path, b"new").expect("replace must succeed while the old file is open");
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        // The old handle keeps reading the file it opened, as POSIX promises.
+        let mut still_old = String::new();
+        reader.read_to_string(&mut still_old).unwrap();
+        assert_eq!(still_old, "old");
+    }
+
+    /// `tempfile_in` created every file this function wrote with mode 0600;
+    /// the hand-rolled open that replaced it must not quietly widen that to
+    /// the umask default — `secrets.vault` goes through here.
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_keeps_owner_only_mode_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.bin");
+        write_atomic(&path, b"s3cret").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "atomic writes must stay owner-only, got {mode:o}"
+        );
     }
 
     #[test]
