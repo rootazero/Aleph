@@ -80,7 +80,7 @@ fn apply_policy_to(handle: Option<&Weak<ProfileManager>>, policy: SsrfConfig) ->
 /// automatic teardown is best-effort once the runtime itself is being torn
 /// down, so the daemon calls this explicitly. Returns 0 — honestly — when no
 /// manager is published (a CLI process, a test, or before boot wired one up).
-pub async fn shutdown_browsers_global() -> usize {
+pub async fn shutdown_browsers_global(budget: Duration) -> usize {
     // The `.clone()` drops the `MutexGuard` before the await below: holding a
     // `std::sync::MutexGuard` across a yield point is what this shape avoids,
     // and it became load-bearing the moment `shutdown_browsers` went async.
@@ -89,7 +89,7 @@ pub async fn shutdown_browsers_global() -> usize {
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     match handle.as_ref().and_then(Weak::upgrade) {
-        Some(mgr) => mgr.shutdown_browsers().await,
+        Some(mgr) => mgr.shutdown_browsers(budget).await,
         None => 0,
     }
 }
@@ -863,13 +863,13 @@ impl ProfileManager {
     /// Chromiums and the CDP engines in [`Self::engines`]. One function, one
     /// count — a second global for the engines would make each number a
     /// half-truth about "did we stop the browsers".
-    pub async fn shutdown_browsers(&self) -> usize {
+    pub async fn shutdown_browsers(&self, budget: Duration) -> usize {
         // The playwright-owned Chromiums first, unchanged and synchronous:
         // this half has always had to fit inside SHUTDOWN_FAILSAFE and still
         // does, and it costs the engine half nothing to run first.
         let mut stopped = self.playwright_cli_driver.shutdown_all_chromium();
-        // Still hard-bounded by `engine::ENGINE_SHUTDOWN_BUDGET`, but the bound
-        // lives INSIDE `shutdown_all` now. A `timeout` wrapped around the call
+        // Still hard-bounded, but by the CALLER's budget and inside
+        // `shutdown_all`. A `timeout` wrapped around the call
         // here drops the future and takes the count with it, so a run that
         // stopped two engines and then hit the wall added 0 to this total —
         // a number that under-reports work done is the same family as a no-op
@@ -881,7 +881,7 @@ impl ProfileManager {
         // launch in flight could hold this call for ~35 s against a stated 1 s.
         // Worth knowing here rather than only at the definition, because this
         // is the call site whose own caller is the wedged-exit failsafe.
-        stopped += self.engines.shutdown_all().await;
+        stopped += self.engines.shutdown_all(budget).await;
         stopped
     }
 
@@ -1118,7 +1118,9 @@ mod tests {
         drop(from_registry);
         drop(same);
 
-        manager.shutdown_browsers().await;
+        manager
+            .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
+            .await;
         assert!(
             !manager.session_active("default"),
             "a stopped engine must stop reading as an active session"
@@ -1162,14 +1164,18 @@ mod tests {
         drop(handle);
 
         assert_eq!(
-            manager.shutdown_browsers().await,
+            manager
+                .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
+                .await,
             1,
             "one engine was stopped and the count must say so"
         );
         assert_eq!(proc.kills(), vec![pid], "the engine's pid was never killed");
         assert!(!sidecar.exists(), "the sidecar outlived the engine");
         assert_eq!(
-            manager.shutdown_browsers().await,
+            manager
+                .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
+                .await,
             0,
             "a second stop must find nothing, not re-report the first"
         );
@@ -1469,12 +1475,18 @@ mod tests {
     #[test]
     fn the_boot_hook_still_calls_the_orphan_sweep() {
         let src = include_str!("manager.rs").replace('\r', "");
-        let production = crate::utils::source_scan::production_prefix(&src);
+        // The non-vacuity floor on the PREFIX, the containment checks on
+        // `code_text` of it — the same two measurements, in the same order, as
+        // `shutdown_browsers_reaches_both_browser_families`, which this test's
+        // doc already names as its template. It was still using the bare
+        // prefix, so a comment spelling either identifier below satisfied it.
+        let prefix = crate::utils::source_scan::production_prefix(&src);
         assert!(
-            production.len() < src.len(),
+            prefix.len() < src.len(),
             "the #[cfg(test)] bound matched nothing — this test would then be \
              reading its own source"
         );
+        let production = crate::utils::source_scan::code_text(&prefix);
         assert!(
             production.contains("Self::sweep_orphaned_engines()"),
             "spawn_idle_reaper must still call the boot sweep"
@@ -1616,7 +1628,9 @@ mod tests {
              be handed an endpoint even when the driver has one under its key"
         );
         assert_eq!(
-            manager.shutdown_browsers().await,
+            manager
+                .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
+                .await,
             1,
             "precondition: the driver really was holding a child to answer with"
         );
@@ -1679,7 +1693,12 @@ mod tests {
         let manager = ProfileManager::new(BrowserSystemConfig::default());
 
         // Nothing launched → nothing to stop, and it must not pretend otherwise.
-        assert_eq!(manager.shutdown_browsers().await, 0);
+        assert_eq!(
+            manager
+                .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
+                .await,
+            0
+        );
 
         // A stand-in browser: long-lived, harmless, and observable by pid.
         let child = std::process::Command::new("sleep")
@@ -1693,13 +1712,23 @@ mod tests {
             "precondition: the stand-in is running"
         );
 
-        assert_eq!(manager.shutdown_browsers().await, 1);
+        assert_eq!(
+            manager
+                .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
+                .await,
+            1
+        );
         assert!(
             !crate::utils::process_alive::is_process_alive(pid as i32),
             "the stand-in browser is still running after shutdown_browsers"
         );
         // Idempotent: a second stop finds nothing and says so.
-        assert_eq!(manager.shutdown_browsers().await, 0);
+        assert_eq!(
+            manager
+                .shutdown_browsers(engine::ENGINE_SHUTDOWN_BUDGET)
+                .await,
+            0
+        );
     }
 
     /// The central behavioural claim of the launch-chain flip, asserted in the

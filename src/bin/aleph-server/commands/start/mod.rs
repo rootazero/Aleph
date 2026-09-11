@@ -3669,7 +3669,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // every restart leaves a Chromium behind for the next boot's sweep to
     // find — and on a host where argv is unreadable that sweep declines to
     // act, by design, so the leak would be permanent.
-    let browsers = alephcore::browser::manager::shutdown_browsers_global().await;
+    // The ORDERLY budget, not the failsafe's. Nothing here is racing an
+    // external SIGKILL — the projector flush below spends 5 s on its own — and
+    // an engine this path fails to stop is not merely deferred to the next
+    // boot's sweep: that sweep declines to act on a pid whose argv it cannot
+    // read, so on such a host the browser is orphaned for good.
+    let browsers = alephcore::browser::manager::shutdown_browsers_global(
+        alephcore::browser::engine::ENGINE_ORDERLY_SHUTDOWN_BUDGET,
+    )
+    .await;
     if browsers > 0 {
         tracing::info!(count = browsers, "stopped managed browsers on shutdown");
     }

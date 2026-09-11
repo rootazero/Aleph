@@ -224,7 +224,10 @@ impl EngineRegistry {
     /// can see instead of a way only a stopwatch can find. The lock is held by
     /// [`Self::handle`] across, in order:
     /// a dead handle's `shutdown()` (≤ [`super::ENGINE_KILL_GRACE`]),
-    /// `process.launch()` (≤ [`super::chromium::DEVTOOLS_PORT_DEADLINE`] for
+    /// `process.launch()` (≤ `chromium::DEVTOOLS_PORT_DEADLINE`, deliberately
+    /// not an intra-doc link: this fn is `pub` and that constant is
+    /// `pub(crate)`, so the link would not resolve for a reader outside the
+    /// crate — for
     /// the spawn, **plus an unbounded binary-resolve step that no constant
     /// covers**), and `bring_up` (≤ [`super::readiness::READY_GATE_BUDGET`]).
     /// Sum the three constants for the floor; the resolve makes it a floor
@@ -280,7 +283,11 @@ impl EngineRegistry {
     ///
     /// Drained BEFORE stopping, so a caller that times this out cannot leave
     /// half-killed handles in the map for the next call to hand out.
-    pub async fn shutdown_all(&self) -> usize {
+    /// `budget` is the CALLER's, not this function's. The wedged-exit failsafe
+    /// and the orderly path have opposite economics — see
+    /// [`super::ENGINE_ORDERLY_SHUTDOWN_BUDGET`], which is the whole argument —
+    /// and a budget derived from one of them silently makes the other wrong.
+    pub async fn shutdown_all(&self, budget: Duration) -> usize {
         // The deadline starts HERE, before the lock, not after it.
         //
         // [`Self::handle`] holds this same lock across `process.launch()` —
@@ -293,7 +300,7 @@ impl EngineRegistry {
         // failsafe, where `SHUTDOWN_FAILSAFE` is already spent, `exit(0)`
         // follows and nothing is behind it — so an overrun is not slow, it is
         // the browsers never being stopped at all.
-        let deadline = tokio::time::Instant::now() + ENGINE_SHUTDOWN_BUDGET;
+        let deadline = tokio::time::Instant::now() + budget;
 
         // Declared before either timed section, so both of them can report what
         // actually died rather than losing it with the dropped future.
@@ -310,10 +317,13 @@ impl EngineRegistry {
                     // sentence from "the stops ran and none of them worked",
                     // and the operator's next move differs between them.
                     tracing::error!(
-                        budget_ms = ENGINE_SHUTDOWN_BUDGET.as_millis(),
+                        budget_ms = budget.as_millis(),
                         "could not take the engine registry lock within the shutdown \
                          budget — a launch is in flight and holds it. NO engine was \
-                         stopped; every one of them is left for the next boot sweep"
+                         stopped, and they may NOT be collected later: the boot sweep \
+                         declines to act on a pid whose argv it cannot read, so on such \
+                         a host these browsers are orphaned permanently rather than \
+                         deferred"
                     );
                     return 0;
                 }
@@ -353,7 +363,7 @@ impl EngineRegistry {
         {
             tracing::error!(
                 ?pids,
-                budget_ms = ENGINE_SHUTDOWN_BUDGET.as_millis(),
+                budget_ms = budget.as_millis(),
                 stopped = died.load(Ordering::Relaxed),
                 "the engine shutdown did not finish inside its budget; the engines \
                  among these pids that had not been stopped yet are left for the next \
@@ -637,7 +647,7 @@ mod tests {
         assert_eq!(first.ensure_tab(&tab_id).await.expect("known tab").0, "S1");
         assert!(first.ensure_tab("no-such-tab").await.is_err());
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -728,7 +738,7 @@ mod tests {
             "the refused engine must not have been started anyway"
         );
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -794,7 +804,7 @@ mod tests {
         assert!(sidecar.exists(), "precondition: the launch wrote a record");
         drop(handle);
 
-        assert_eq!(registry.shutdown_all().await, 1);
+        assert_eq!(registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await, 1);
         assert_eq!(proc.kills(), vec![pid], "the engine's pid was never killed");
         assert!(!sidecar.exists(), "the sidecar outlived the engine");
         assert!(
@@ -802,7 +812,7 @@ mod tests {
             "the map was not drained"
         );
         assert_eq!(
-            registry.shutdown_all().await,
+            registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await,
             0,
             "a second stop must find nothing, not re-report the first"
         );
@@ -969,7 +979,138 @@ mod tests {
             );
         }
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
+        server.shutdown().await;
+    }
+
+    /// D12. A stalled enable and a rejected one say different things, and D11:
+    /// the names `attach_tab` sends are the names the wrappers that own them
+    /// send.
+    ///
+    /// Both facts in one test because they are read off the same attach. The
+    /// two messages collapsed into one when the per-call budget replaced the
+    /// outer wrapper, and nothing pinned either — an unreachable branch naming
+    /// a specific cause is a wrong label waiting to happen (判据 §17).
+    #[tokio::test]
+    async fn a_stalled_enable_and_a_refused_enable_are_told_apart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // --- D11 first: what do the OWNERS send? Derived by calling them,
+        // not by a third copy of the three literals. Two copies agreeing with
+        // a third copy is not either of them agreeing with the owner.
+        let owner_server = FakeCdpServer::start(engine_peer).await;
+        let (owner_conn, owner_session) = owner_server.connect_and_attach().await;
+        aleph_cdp::methods::page::enable(&owner_conn, Some(&owner_session))
+            .await
+            .expect("Page.enable");
+        aleph_cdp::methods::runtime::enable(&owner_conn, Some(&owner_session))
+            .await
+            .expect("Runtime.enable");
+        aleph_cdp::methods::network::enable(&owner_conn, Some(&owner_session))
+            .await
+            .expect("Network.enable");
+        let owned: Vec<String> = owner_server
+            .received()
+            .iter()
+            .filter_map(|m| m.get("method").and_then(serde_json::Value::as_str))
+            .filter(|m| m.ends_with(".enable"))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            owned.len(),
+            3,
+            "the three wrappers must have been exercised"
+        );
+        drop(owner_conn);
+        owner_server.shutdown().await;
+
+        // --- What does `attach_tab` send? Same question, different caller.
+        let server = FakeCdpServer::start(engine_peer).await;
+        let proc = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            &server,
+            dir.path(),
+        ));
+        let registry = registry_with(Engine::Chromium, &proc);
+        let handle = registry
+            .handle(
+                Engine::Chromium,
+                &request("default", dir.path()),
+                EngineLaunch::Allow,
+            )
+            .await
+            .expect("launch");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T2".to_string()))
+            .await
+            .expect("attach");
+        let sent: Vec<String> = server
+            .received()
+            .iter()
+            .filter_map(|m| m.get("method").and_then(serde_json::Value::as_str))
+            .filter(|m| m.ends_with(".enable"))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            sent, owned,
+            "the method names attach_tab spells itself have drifted from the ones \
+             aleph_cdp::methods::{{page,runtime,network}}::enable actually send. \
+             attach_tab carries its own copies because those wrappers hardcode the \
+             connection's full command_timeout and cannot take a remainder (R89); \
+             this is what keeps the two copies answerable to the owner rather than \
+             to each other"
+        );
+
+        // --- D12: a REFUSED enable names the refusal.
+        server.on(
+            "Network.enable",
+            Responder::Error {
+                code: -32000,
+                message: "target closed".into(),
+            },
+        );
+        let refused = refusal(
+            handle
+                .attach_tab(&aleph_cdp::TargetId("T3".to_string()))
+                .await,
+            "an enable the browser rejects must refuse the tab",
+        );
+        let refused = refused.to_string();
+        assert!(
+            refused.contains("would not enable") && refused.contains("target closed"),
+            "a rejection must carry what the browser objected to: {refused}"
+        );
+        assert!(
+            !refused.contains("stalled"),
+            "a rejection is not a stall: {refused}"
+        );
+
+        // --- D12: a STALLED enable names the stall, not a refusal.
+        server.on(
+            "Network.enable",
+            Responder::Delay(
+                Duration::from_secs(30),
+                Box::new(Responder::Reply(serde_json::json!({}))),
+            ),
+        );
+        let stalled_err = refusal(
+            handle
+                .attach_tab(&aleph_cdp::TargetId("T4".to_string()))
+                .await,
+            "an enable that never answers must refuse the tab",
+        );
+        let stalled_err = stalled_err.to_string();
+        assert!(
+            stalled_err.contains("stalled at Network.enable"),
+            "a stall must name the step and say it stalled: {stalled_err}"
+        );
+        assert!(
+            !stalled_err.contains("would not enable"),
+            "a stall is not a rejection — they were one message and the reader's \
+             next move differs: {stalled_err}"
+        );
+
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -984,9 +1125,25 @@ mod tests {
     ///
     /// Each call is delayed by ~0.2 x `command_timeout`, so four of them
     /// together sit at ~0.8 x — comfortably inside the single deadline and
-    /// comfortably outside "fast". `pending_len()` afterwards is the D2
-    /// assertion: the per-call budgets must have been spent by calls that
-    /// answered, not by futures dropped from under the crate's cleanup arm.
+    /// comfortably outside "fast".
+    ///
+    /// ⚠️ **`pending_len()` here is NOT the D2 guard, and this doc used to say
+    /// it was.** Measured, as a second seat on that finding: reverting the
+    /// entire D2 fix — the file restored from the pre-fix commit, array literal
+    /// and outer wrappers back, verified by file content rather than by
+    /// trusting the checkout (`call_with_timeout` count 0, array-literal count
+    /// 1) — leaves this test **green**, and leaves the whole `browser::` suite
+    /// green at 306. Where every call answers, no outer timeout fires, nothing
+    /// is dropped, and `pending` is 0 under both shapes, so this assertion
+    /// cannot be about D2 (判据 §2's second face). A test named for a defect it
+    /// cannot detect gets cited as coverage, which costs more than no test at
+    /// all (判据 §3).
+    ///
+    /// What it *does* pin: the positive direction of M1's bound — four slow but
+    /// ANSWERING calls fit inside one deadline rather than being refused — and
+    /// that the bookkeeping is clean on that success path. D2's actual guard is
+    /// `an_outer_timeout_leaks_a_pending_entry_and_bring_ups_connection_has_none`,
+    /// whose first half reddens when an outer wrapper stops stranding an entry.
     #[tokio::test]
     async fn a_slow_but_answering_attach_succeeds_and_leaves_nothing_pending() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1032,11 +1189,9 @@ mod tests {
             .expect("four slow-but-answering calls are inside one command_timeout");
         let elapsed = started.elapsed();
 
-        assert!(
-            elapsed >= slow * 4,
-            "the peer was not actually slow, so this proves nothing about the \
-             budget: {elapsed:?}"
-        );
+        // Subject assertions first, non-vacuity after — the same ordering its
+        // sibling was corrected to one commit later, carried here rather than
+        // left to be rediscovered (判据 §16).
         assert!(
             elapsed < command_timeout,
             "four calls at a fifth of the budget each must fit inside it: {elapsed:?}"
@@ -1055,8 +1210,13 @@ mod tests {
              budgets are being pre-empted by an outer timeout that drops the \
              future before the crate's own cleanup arm can run"
         );
+        assert!(
+            elapsed >= slow * 4,
+            "the peer was not actually slow, so this proves nothing about the \
+             budget: {elapsed:?}"
+        );
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -1101,7 +1261,7 @@ mod tests {
         );
         assert!(registry.all().await.is_empty());
         assert_eq!(
-            registry.shutdown_all().await,
+            registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await,
             0,
             "a detached handle is not the registry's to stop, and the count \
              must not claim it was"
@@ -1169,7 +1329,7 @@ mod tests {
             displaced.shutdown().await,
             "the caller retires the old engine"
         );
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -1222,7 +1382,7 @@ mod tests {
         );
         assert_eq!(registry.all().await.len(), 2);
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -1258,7 +1418,7 @@ mod tests {
         drop(handle);
 
         assert_eq!(
-            registry.shutdown_all().await,
+            registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await,
             0,
             "a process that is still running must not be counted as stopped"
         );
@@ -1269,7 +1429,7 @@ mod tests {
              sweep reads that record and nothing else, so the process is now \
              unreapable and the next launch of this profile will overwrite its slot"
         );
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -1299,7 +1459,11 @@ mod tests {
         let sidecar = handle.launched.sidecar_path.clone();
         drop(handle);
 
-        assert_eq!(registry.shutdown_all().await, 0, "an Err is not a death");
+        assert_eq!(
+            registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await,
+            0,
+            "an Err is not a death"
+        );
         assert!(
             sidecar.exists(),
             "a kill that errored deleted the record anyway — 'I could not kill it' \
@@ -1426,7 +1590,7 @@ mod tests {
              writes over exactly the slot the orphan would have been reaped from"
         );
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -1481,7 +1645,7 @@ mod tests {
             "and it must not have launched one"
         );
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -1530,7 +1694,7 @@ mod tests {
         assert!(obscura.launches().is_empty());
         assert!(chromium.kills().is_empty(), "observing killed something");
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 
@@ -1658,7 +1822,7 @@ mod tests {
         assert_eq!(registry.all().await.len(), 3);
 
         let started = std::time::Instant::now();
-        let stopped = registry.shutdown_all().await;
+        let stopped = registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         let elapsed = started.elapsed();
 
         assert_eq!(
@@ -1710,7 +1874,7 @@ mod tests {
         }
 
         let started = std::time::Instant::now();
-        let stopped = registry.shutdown_all().await;
+        let stopped = registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         let elapsed = started.elapsed();
 
         assert_eq!(
@@ -1743,10 +1907,14 @@ mod tests {
     /// written as a multiple of `ENGINE_SHUTDOWN_BUDGET` rather than a literal,
     /// so the test and the constant it guards derive from one place (判据 §12).
     ///
-    /// Headroom, both directions: the fixed shape returns at ~1 x the budget
-    /// and the threshold is 2 x, while the broken shape waits out the whole
-    /// lock hold at 3 x. A loaded machine has to be off by 2 x before this
-    /// misreports in either direction.
+    /// Headroom is **not** symmetric, and an earlier version of this doc said
+    /// it was. Measured: the fixed shape returns at **1.003235791 s** against a
+    /// 1 s budget, so the LOWER bound's margin is ~3 ms, not "2 x". It does not
+    /// flake, but not because of headroom — structurally, the timeout fires at
+    /// the budget, so elapsed is always the budget plus scheduling overhead and
+    /// can never be below it. The upper bound is where the real margin lives:
+    /// fixed ~1 x against a threshold of `SLACK` above the budget, broken shape
+    /// out at the full lock hold.
     #[tokio::test]
     async fn the_shutdown_budget_bounds_taking_the_lock_not_only_the_kills() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1772,10 +1940,24 @@ mod tests {
         ));
         let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
         processes.insert(Engine::Chromium, proc.clone());
-        // How long the launch holds the lock. Three budgets: long enough that
-        // an unbounded acquisition is unmistakable, short enough to keep the
-        // test a few seconds.
-        let lock_hold = ENGINE_SHUTDOWN_BUDGET * 3;
+        // ⚠️ ONE knob. The threshold and the hold are both derived from
+        // `SLACK`, and the hold is derived FROM the threshold — so widening
+        // `SLACK` to quiet a flake moves them together and can never put the
+        // hold below the threshold (判据 §12).
+        //
+        // They used to be two independent multiples of the same constant
+        // (hold 3 x, threshold 2 x), and the documented remedy for a flake was
+        // "widen the multiple" — which at 4 x lets the broken shape pass. The
+        // advice switched the guard off, so the shape that could take it is
+        // gone rather than the advice.
+        const SLACK: Duration = ENGINE_SHUTDOWN_BUDGET;
+        let threshold = ENGINE_SHUTDOWN_BUDGET.saturating_add(SLACK);
+        let lock_hold = threshold.saturating_add(SLACK);
+        assert!(
+            lock_hold > threshold && threshold > ENGINE_SHUTDOWN_BUDGET,
+            "the fixture must hold the lock longer than the threshold, or the \
+             broken shape passes and this test guards nothing"
+        );
         let registry = Arc::new(EngineRegistry::new(
             processes,
             Duration::from_secs(30),
@@ -1808,7 +1990,7 @@ mod tests {
         );
 
         let started = std::time::Instant::now();
-        let stopped = registry.shutdown_all().await;
+        let stopped = registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         let elapsed = started.elapsed();
 
         // Non-vacuity first: an UNCONTENDED lock would satisfy the upper bound
@@ -1821,7 +2003,7 @@ mod tests {
              the lock was NOT held and this test measured nothing: {elapsed:?}"
         );
         assert!(
-            elapsed < ENGINE_SHUTDOWN_BUDGET * 2,
+            elapsed < threshold,
             "the shutdown budget did not bound the LOCK acquisition: {elapsed:?} \
              against a {ENGINE_SHUTDOWN_BUDGET:?} budget, with a launch holding \
              the guard. The caller is the wedged-exit failsafe, where \
@@ -1829,10 +2011,19 @@ mod tests {
              there is the external SIGKILL landing first and the browsers never \
              being stopped at all"
         );
+        // ⚠️ This asserts the COUNT only. It deliberately does not claim to
+        // tell "gave up on the lock" apart from "took the lock and found
+        // nothing": in this fixture the launch never completes, so the map is
+        // empty either way and both answers are 0. The thing that separates
+        // them is which of `shutdown_all`'s two `tracing::error!`s fired, and
+        // this test does not capture logs. Saying so here rather than writing
+        // a message that implies a distinction the assertion cannot make
+        // (判据 §17 — an unrecognised state word reads as "I cannot vouch").
         assert_eq!(
             stopped, 0,
-            "nothing was drained, so nothing can have died — a lock we could not \
-             take must not be reported as engines that did not exist"
+            "a shutdown that stopped nothing must report 0 — note this cannot \
+             distinguish 'could not take the lock' from 'took it and found an \
+             empty map'; only the two error logs do that"
         );
 
         launcher.abort();
@@ -1950,7 +2141,7 @@ mod tests {
             "the peer was not actually slow, so this proves nothing: {elapsed:?}"
         );
 
-        registry.shutdown_all().await;
+        registry.shutdown_all(ENGINE_SHUTDOWN_BUDGET).await;
         server.shutdown().await;
     }
 

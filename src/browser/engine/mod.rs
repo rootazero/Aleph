@@ -151,6 +151,31 @@ pub const ENGINE_KILL_GRACE: Duration = Duration::from_millis(500);
 /// `the_shutdown_budget_is_derived_from_one_kill_grace` pins it.
 pub const ENGINE_SHUTDOWN_BUDGET: Duration = ENGINE_KILL_GRACE.saturating_mul(2);
 
+/// The same work, for the caller that can afford to wait.
+///
+/// **`shutdown_all` has two callers with opposite economics, and one budget
+/// derived from one of them is wrong for the other** (判据 §9 — one verb, two
+/// faces, and the judgement has to be derived the same way on both).
+///
+/// * The **wedged-exit failsafe** (`start/helpers.rs`) has already spent
+///   `SHUTDOWN_FAILSAFE`, `exit(0)` follows, and nothing is behind it. Giving
+///   up fast is right there: whatever it does not stop, it was never going to.
+/// * The **orderly** path (`start/mod.rs`) spends 5 s on a projector flush
+///   immediately afterwards, so it had the time all along — and giving up
+///   costs it far more than the wait. An engine left running goes to the next
+///   boot's sweep, and that sweep **declines to act when a pid's argv is
+///   unreadable** (`process::reap_orphans`'s `ArgvProbe::Unreadable` arm,
+///   pinned by `an_unreadable_argv_kills_nothing_and_keeps_everything`). On
+///   such a host the leak is permanent, not deferred.
+///
+/// Derived from what can hold the registry lock, not from what the caller can
+/// spare: the spawn deadline, the readiness gate, and a dead handle's kill.
+/// **A floor, not a ceiling** — `process.launch()` also resolves a binary on
+/// disk and no constant bounds that.
+pub const ENGINE_ORDERLY_SHUTDOWN_BUDGET: Duration = chromium::DEVTOOLS_PORT_DEADLINE
+    .saturating_add(readiness::READY_GATE_BUDGET)
+    .saturating_add(ENGINE_KILL_GRACE);
+
 /// May this call start a browser?
 ///
 /// A payload-free gate, deliberately NOT `super::playwright_launch::LaunchPolicy`.
@@ -387,13 +412,20 @@ impl EngineHandle {
                     remaining,
                 )
                 .await
-                .map_err(|e| {
-                    BrowserError::AttachFailed(format!(
-                        "attached to tab {} but {domain} would not enable: {e}. Its \
+                // Two different facts, two different messages. A per-call
+                // budget expiring says "this engine is not answering"; a CDP
+                // error says "this engine refused". They collapsed into one
+                // sentence when the per-call budget replaced the outer
+                // wrapper, and the reader's next move differs: wait and retry
+                // versus look at what the browser objected to (判据 §17).
+                .map_err(|e| match e {
+                    aleph_cdp::CdpError::Timeout { .. } => stalled(&format!("{domain}.enable")),
+                    other => BrowserError::AttachFailed(format!(
+                        "attached to tab {} but {domain} would not enable: {other}. Its \
                          events would be silently absent, so the tab is refused \
                          rather than half-wired.",
                         target.0
-                    ))
+                    )),
                 })?;
         }
         tabs.entries

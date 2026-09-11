@@ -544,7 +544,10 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // (判据 §1) — so the figure is deliberately not repeated here; read it
         // off the constant.
         // Idempotent with the `start_server` call site.
-        let browsers = alephcore::browser::manager::shutdown_browsers_global().await;
+        let browsers = alephcore::browser::manager::shutdown_browsers_global(
+            alephcore::browser::engine::ENGINE_SHUTDOWN_BUDGET,
+        )
+        .await;
         if browsers > 0 {
             tracing::warn!(
                 count = browsers,
@@ -655,7 +658,15 @@ mod tests {
     #[test]
     fn the_browser_stop_precedes_the_kill_on_drop_sleep() {
         let src = include_str!("helpers.rs").replace('\r', "");
-        let production = alephcore::utils::source_scan::production_prefix(&src);
+        // Comments stripped as well as the test module: this searches for a
+        // CALL by containment, so a comment spelling `shutdown_browsers_global(`
+        // would satisfy `find` and could even be positioned to satisfy the
+        // ordering below. Same fix as its two siblings in this file and in
+        // `browser::manager` — carried to the whole class rather than to the
+        // member that was named (判据 §16).
+        let production = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(&src),
+        );
         let stop = production
             .find("shutdown_browsers_global(")
             .expect("the wedged path must stop the managed browsers");
@@ -667,6 +678,44 @@ mod tests {
             "the browser stop sits after the 2s kill_on_drop sleep — on a \
              wedged shutdown the external SIGKILL can land first, and the \
              browser then outlives the daemon"
+        );
+    }
+
+    /// The two exit paths must pass DIFFERENT shutdown budgets.
+    ///
+    /// They have opposite economics and one number cannot serve both: the
+    /// wedged path is racing an external SIGKILL and should give up, the
+    /// orderly path has 5 s of projector flush after it and must not, because
+    /// an engine it fails to stop can be orphaned permanently rather than
+    /// deferred (the boot sweep declines to act on an unreadable argv). A
+    /// single budget derived from the wedged caller is what made the orderly
+    /// one wrong, and nothing said so — so this says so.
+    ///
+    /// A source pin because the difference is a decision, not an effect: both
+    /// calls do the same thing, and only the constant they name distinguishes
+    /// them.
+    #[test]
+    fn the_two_exit_paths_pass_different_shutdown_budgets() {
+        let wedged = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(
+                &include_str!("helpers.rs").replace('\r', ""),
+            ),
+        );
+        let orderly = alephcore::utils::source_scan::code_text(
+            &alephcore::utils::source_scan::production_prefix(
+                &include_str!("mod.rs").replace('\r', ""),
+            ),
+        );
+        assert!(
+            wedged.contains("ENGINE_SHUTDOWN_BUDGET")
+                && !wedged.contains("ENGINE_ORDERLY_SHUTDOWN_BUDGET"),
+            "the wedged-exit path must spend the failsafe budget: it is already \
+             past SHUTDOWN_FAILSAFE and exit(0) follows"
+        );
+        assert!(
+            orderly.contains("ENGINE_ORDERLY_SHUTDOWN_BUDGET"),
+            "the orderly path must spend the orderly budget — giving up there \
+             can orphan a browser permanently, not merely defer it"
         );
     }
 
