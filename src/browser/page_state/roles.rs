@@ -231,6 +231,14 @@ mod tests {
         assert_eq!(role_for("a", &attrs(&[])), Role::Generic);
         assert_eq!(role_for("a", &attrs(&[("name", "top")])), Role::Generic);
         assert_eq!(role_for("a", &attrs(&[("href", "")])), Role::Link);
+
+        // `<area>` shares the arm and had no assertion anywhere: it is
+        // attribute-dependent, so it cannot live in `SIMPLE_TAGS`, and the
+        // table guard's absence check passes whether the match still routes it
+        // or not. Deleting `"area"` from the arm was green until this line —
+        // measured, and the last of the six keys the review counted uncovered.
+        assert_eq!(role_for("area", &attrs(&[("href", "/x")])), Role::Link);
+        assert_eq!(role_for("area", &attrs(&[])), Role::Generic);
     }
 
     /// `<input>` is nine controls wearing one tag.
