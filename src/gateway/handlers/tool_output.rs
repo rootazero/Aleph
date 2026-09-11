@@ -494,15 +494,27 @@ mod tests {
     #[tokio::test]
     async fn an_offloaded_result_is_read_back_out_of_its_blob() {
         let store = crate::tools::result_store::install_test_tool_result_store();
-        let content = "x".repeat(9000);
-        // threshold = 1 token forces the offload.
-        let marker = store
-            .persist_if_large("c-persisted", "grep", &content, 1)
-            .expect("content over the threshold is persisted");
-
         let temp = TempDir::new().unwrap();
         let sessions = session_store(&temp);
         let key = SessionKey::main("conv-tool-output-persisted");
+
+        // Written through a handle scoped to the SAME session the reader will
+        // name, because that is what production does
+        // (`tool_service_builder` narrows the request's handle) and because it
+        // is what makes this test the witness for [`resolve_source`]'s own
+        // narrowing. A flat write would land in the unowned root, which the
+        // session gate admits from any handle — so the read would pass whether
+        // or not the handler scoped its store, and the one arrangement that
+        // could silently turn every offloaded read into `Expired` would go
+        // unnoticed here.
+        let scoped =
+            crate::tools::result_store::ToolResultStore::for_session(&store, key.to_key_string());
+        let content = "x".repeat(9000);
+        // threshold = 1 token forces the offload.
+        let marker = scoped
+            .persist_if_large("c-persisted", "grep", &content, 1)
+            .expect("content over the threshold is persisted");
+
         seed_session(&sessions, &key, "u-alice").await;
         seed_result(&key, 1, "c-persisted", json!(marker)).await;
 
