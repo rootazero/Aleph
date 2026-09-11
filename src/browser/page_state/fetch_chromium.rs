@@ -751,9 +751,26 @@ fn rect_from(bounds: &[serde_json::Value]) -> Option<Rect> {
 }
 
 /// A CSS pixel value rounded to a whole pixel, or `None` when it is not a
-/// finite number.
+/// coordinate this type can hold.
+///
+/// **The half of this predicate that can actually fire is the RANGE check, and
+/// it took a measurement to find out.** The obvious guard is `is_finite`, and
+/// on this path it is a predicate that can never go red (判据 §2): a
+/// `serde_json::Value` cannot hold a non-finite float at all — serde_json
+/// (1.0.150, the version in `Cargo.lock`) fails the parse with
+/// `ErrorCode::NumberOutOfRange` the moment `f64_from_parts` produces an
+/// infinity, and `Number::from_f64` refuses one on the way in. What JSON *can*
+/// carry is a finite number far outside `i32`, and `1e300 as i32` is
+/// `i32::MAX` — a coordinate at the right edge of a 2-billion-pixel page, not
+/// an absence. Fail-closed: no box.
+///
+/// The `is_finite` half stays because the parameter is an `f64` and a future
+/// caller need not have come through serde — but it is documented as defence
+/// rather than sold as a gate.
 fn px(v: f64) -> Option<i32> {
-    v.is_finite().then(|| v.round() as i32)
+    let rounded = v.round();
+    (rounded.is_finite() && rounded >= f64::from(i32::MIN) && rounded <= f64::from(i32::MAX))
+        .then_some(rounded as i32)
 }
 
 fn non_negative_u32(v: f64) -> u32 {
@@ -1244,16 +1261,37 @@ mod tests {
         assert!(text.contains('8') && text.contains('7'), "{text}");
     }
 
-    /// A bound that is not a finite number is an ABSENT box, not `(0, 0)`.
-    /// `f64::NAN as i32` is `0`, which reads as "at the page origin" — a
-    /// coordinate rather than an absence.
+    /// A bound that is not a usable coordinate is an ABSENT box, not a number.
+    ///
+    /// Two ways it can fail and they are not the same way, which is why both
+    /// are here. A JSON value that is not a number at all (`as_f64() == None`)
+    /// is the easy one. The one that took a measurement is a finite number
+    /// outside `i32`: `1e300 as i32` saturates to `i32::MAX`, a coordinate at
+    /// the right edge of a two-billion-pixel page rather than an absence. The
+    /// `is_finite` guard everyone reaches for cannot fire here at all —
+    /// serde_json refuses to parse an infinity in the first place, so a
+    /// `Value` never holds one (see [`px`]).
     #[test]
-    fn a_non_finite_bound_produces_no_rect_rather_than_the_origin() {
+    fn a_bound_that_is_not_a_usable_coordinate_produces_no_rect_rather_than_a_number() {
         let mut value = json(TWO_DOCS);
         value["documents"][0]["layout"]["bounds"][2] =
-            serde_json::json!([10.0, "NaN-is-not-a-number", 120.0, 16.0]);
+            serde_json::json!([10.0, "not-a-number-at-all", 120.0, 16.0]);
         let dom = parse_snapshot(&value, viewport(), &loaders()).expect("parses");
-        assert!(dom.frames[0].nodes[2].rect.is_none());
+        assert!(dom.frames[0].nodes[2].rect.is_none(), "a non-numeric bound");
+
+        let mut value = json(TWO_DOCS);
+        let huge = serde_json::json!([10.0, 1e300, 120.0, 16.0]);
+        assert!(
+            huge[1].as_f64().is_some_and(f64::is_finite),
+            "non-vacuity: this test is about a FINITE out-of-range number, and \
+             serde_json parsed it into something else"
+        );
+        value["documents"][0]["layout"]["bounds"][2] = huge;
+        let dom = parse_snapshot(&value, viewport(), &loaders()).expect("parses");
+        assert!(
+            dom.frames[0].nodes[2].rect.is_none(),
+            "1e300 was spent as a coordinate"
+        );
     }
 
     // ---- the real captures ----
