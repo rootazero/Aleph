@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use super::process::{EngineProcess, LaunchRequest, Launched};
 use super::readiness::ready_gate;
-use super::{stop_launched, Engine, EngineHandle, EngineLaunch, ENGINE_SHUTDOWN_BUDGET};
+use super::{stop_launched, Engine, EngineHandle, EngineLaunch};
 use crate::browser::error::BrowserError;
 
 pub struct EngineRegistry {
@@ -546,7 +546,11 @@ async fn bring_up(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::engine::ENGINE_KILL_GRACE;
+    // Both budgets are test-only in this file now: D6 made the production
+    // side take one as a parameter, so nothing here names a constant. The
+    // import moving into the test module is the evidence that the budget
+    // really did become the caller's.
+    use crate::browser::engine::{ENGINE_KILL_GRACE, ENGINE_SHUTDOWN_BUDGET};
     use crate::browser::profile::BrowserType;
     use crate::browser::testkit::{engine_peer, FakeEngineProcess, ScriptedKill};
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
