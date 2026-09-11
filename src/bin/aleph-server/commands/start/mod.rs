@@ -45,7 +45,7 @@ use helpers::{
     build_http_provider, build_sqlite_session_service, format_socket_addr,
     initialize_extension_manager, initialize_session_store, initialize_tracing,
     install_mask_patterns, load_gateway_config, print_boot_marker, print_startup_banner,
-    setup_graceful_shutdown, validate_bind_address,
+    setup_graceful_shutdown, validate_bind_address, ORDERLY_BROWSER_STOP_BUDGET,
 };
 
 mod runtime_warmup;
@@ -3669,15 +3669,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // every restart leaves a Chromium behind for the next boot's sweep to
     // find — and on a host where argv is unreadable that sweep declines to
     // act, by design, so the leak would be permanent.
-    // The ORDERLY budget, not the failsafe's. Nothing here is racing an
-    // external SIGKILL — the projector flush below spends 5 s on its own — and
-    // an engine this path fails to stop is not merely deferred to the next
-    // boot's sweep: that sweep declines to act on a pid whose argv it cannot
-    // read, so on such a host the browser is orphaned for good.
-    let browsers = alephcore::browser::manager::shutdown_browsers_global(
-        alephcore::browser::engine::ENGINE_ORDERLY_SHUTDOWN_BUDGET,
-    )
-    .await;
+    // The ORDERLY budget — larger than the wedged path's, because an engine
+    // this path fails to stop is not merely deferred to the next boot's sweep
+    // (that sweep declines to act on a pid whose argv it cannot read, so on
+    // such a host the browser is orphaned for good) — but still strictly
+    // inside `SHUTDOWN_FAILSAFE`, because this block RACES the watchdog that
+    // spends it. An earlier version passed 35.5 s and was force-exited
+    // mid-wait, losing the browsers AND everything below.
+    let browsers =
+        alephcore::browser::manager::shutdown_browsers_global(ORDERLY_BROWSER_STOP_BUDGET).await;
     if browsers > 0 {
         tracing::info!(count = browsers, "stopped managed browsers on shutdown");
     }
@@ -3876,7 +3876,7 @@ mod tests {
              reading its own source, and would trivially pass by finding \
              its own doc comment"
         );
-        let production = alephcore::utils::source_scan::strip_comment_lines(&production);
+        let production = alephcore::utils::source_scan::code_text(&production);
         for call in ["install_policy(", "install_ledger("] {
             assert!(
                 production.contains(call),
@@ -3919,10 +3919,11 @@ mod tests {
             "the #[cfg(test)] split matched nothing — this test would be \
              reading its own source"
         );
-        let boot_production = alephcore::utils::source_scan::strip_comment_lines(&boot_production);
+        let boot_production =
+            alephcore::utils::source_scan::code_keeping_literals(&boot_production);
 
         let defaults = include_str!("../../../../gateway/handlers/mod.rs").replace('\r', "");
-        let defaults = alephcore::utils::source_scan::strip_comment_lines(
+        let defaults = alephcore::utils::source_scan::code_keeping_literals(
             &alephcore::utils::source_scan::production_prefix(&defaults),
         );
         let wanted = registered_users_methods(&defaults);

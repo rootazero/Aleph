@@ -127,10 +127,18 @@ impl std::fmt::Display for Engine {
 /// not. Short on purpose: this runs on the daemon's wedged-shutdown path.
 pub const ENGINE_KILL_GRACE: Duration = Duration::from_millis(500);
 
-/// The whole engine half of a shutdown. The wedged-shutdown watchdog has
+/// The **wedged-exit path's** budget for the engine half of a shutdown, and
+/// the default this crate's own tests spend.
+///
+/// Not "the" shutdown budget: `EngineRegistry::shutdown_all` takes the budget
+/// as a parameter, because its two callers have opposite economics, and the
+/// orderly caller derives its own from the watchdog it runs inside
+/// (`start/helpers.rs`'s `ORDERLY_BROWSER_STOP_BUDGET`). Production in the
+/// registry names no shutdown constant at all.
+///
+/// For the wedged path this is a hard ceiling, not a hope: that watchdog has
 /// already spent `SHUTDOWN_FAILSAFE` before it reaches us and the
-/// `std::process::exit(0)` after it waits for nobody, so this is a hard
-/// ceiling, not a hope (`src/bin/aleph-server/commands/start/helpers.rs`).
+/// `std::process::exit(0)` after it waits for nobody.
 ///
 /// "Hard ceiling" covers **taking the registry lock as well as the stops**, and
 /// that is the whole content of the claim: `EngineRegistry::handle` holds that
@@ -150,31 +158,6 @@ pub const ENGINE_KILL_GRACE: Duration = Duration::from_millis(500);
 /// because there is only one.
 /// `the_shutdown_budget_is_derived_from_one_kill_grace` pins it.
 pub const ENGINE_SHUTDOWN_BUDGET: Duration = ENGINE_KILL_GRACE.saturating_mul(2);
-
-/// The same work, for the caller that can afford to wait.
-///
-/// **`shutdown_all` has two callers with opposite economics, and one budget
-/// derived from one of them is wrong for the other** (判据 §9 — one verb, two
-/// faces, and the judgement has to be derived the same way on both).
-///
-/// * The **wedged-exit failsafe** (`start/helpers.rs`) has already spent
-///   `SHUTDOWN_FAILSAFE`, `exit(0)` follows, and nothing is behind it. Giving
-///   up fast is right there: whatever it does not stop, it was never going to.
-/// * The **orderly** path (`start/mod.rs`) spends 5 s on a projector flush
-///   immediately afterwards, so it had the time all along — and giving up
-///   costs it far more than the wait. An engine left running goes to the next
-///   boot's sweep, and that sweep **declines to act when a pid's argv is
-///   unreadable** (`process::reap_orphans`'s `ArgvProbe::Unreadable` arm,
-///   pinned by `an_unreadable_argv_kills_nothing_and_keeps_everything`). On
-///   such a host the leak is permanent, not deferred.
-///
-/// Derived from what can hold the registry lock, not from what the caller can
-/// spare: the spawn deadline, the readiness gate, and a dead handle's kill.
-/// **A floor, not a ceiling** — `process.launch()` also resolves a binary on
-/// disk and no constant bounds that.
-pub const ENGINE_ORDERLY_SHUTDOWN_BUDGET: Duration = chromium::DEVTOOLS_PORT_DEADLINE
-    .saturating_add(readiness::READY_GATE_BUDGET)
-    .saturating_add(ENGINE_KILL_GRACE);
 
 /// May this call start a browser?
 ///
@@ -397,8 +380,11 @@ impl EngineHandle {
         // `aleph_cdp::methods::{page,runtime,network}::enable`, because those
         // wrappers hardcode the connection's full `command_timeout` and cannot
         // be given a remainder. What keeps that second spelling honest is
-        // `attach_tab_creates_the_entry_that_ensure_tab_only_finds`, which
-        // asserts the three names against what the fake peer actually received.
+        // `a_stalled_enable_and_a_refused_enable_are_told_apart`, which obtains
+        // the names by CALLING those wrappers and compares. It is deliberately
+        // not `attach_tab_creates_the_entry_that_ensure_tab_only_finds`, which
+        // this comment used to name: that one asserts against a third copy, so
+        // measured, it stays green when the owner drifts.
         for domain in ["Page", "Runtime", "Network"] {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {

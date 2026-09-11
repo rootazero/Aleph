@@ -436,6 +436,42 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
 /// hang until the supervisor's SIGKILL.
 const SHUTDOWN_FAILSAFE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The orderly path's share of [`SHUTDOWN_FAILSAFE`] for stopping browsers.
+///
+/// **Derived here, in the crate that owns the watchdog, and not in
+/// `alephcore`.** It was briefly `browser::engine::ENGINE_ORDERLY_SHUTDOWN_BUDGET`
+/// at 35.5 s — seven times the failsafe it runs inside. The watchdog above is
+/// spawned with its `JoinHandle` dropped, so nothing cancels it and the orderly
+/// block races it: at 35.5 s the process is force-exited mid-wait, the browsers
+/// are still not stopped, and the projector flush, monitor shutdown, MCP stop,
+/// endpoint cleanup and `GatewayStop` hooks that used to run are skipped too.
+///
+/// **Widening the failsafe is not the alternative.** Its own doc matches it to
+/// `aleph stop`'s escalation window, measured at `daemon.rs`: SIGTERM ≤5 s then
+/// SIGKILL ≤2 s. Past 5 s the supervisor's SIGKILL lands instead of our
+/// `exit(0)`, which skips even the wedged path's reaps — strictly worse. The
+/// 5 s is an external ceiling, so the budget has to fit inside it.
+///
+/// **Half**, because the engine stop is one step of the orderly teardown and
+/// everything after it has to fit in the same 5 s. Half is the largest share
+/// that leaves an equal one for all the rest, and it is still 2.5x the wedged
+/// path's budget — so the orderly caller does wait meaningfully longer, which
+/// was the whole point of giving it its own number. When the lock cannot be had
+/// inside it, `shutdown_all` reports the leak rather than waiting past its own
+/// deadline.
+pub(super) const ORDERLY_BROWSER_STOP_BUDGET: std::time::Duration =
+    std::time::Duration::from_millis((SHUTDOWN_FAILSAFE.as_millis() / 2) as u64);
+
+/// The relation, enforced at compile time rather than left to two constants
+/// that happen to be ordered correctly today — the construction D9 arrived at
+/// after "widen the multiple" turned out to be advice that could switch a guard
+/// off. Moving either constant without the other stops the build.
+const _: () = assert!(
+    ORDERLY_BROWSER_STOP_BUDGET.as_millis() * 2 <= SHUTDOWN_FAILSAFE.as_millis(),
+    "the orderly browser-stop budget must leave at least as much of the failsafe \
+     for the rest of the orderly teardown as it takes for itself"
+);
+
 /// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for `run_until_shutdown`.
 ///
 /// Both signals share one graceful path: forensics → remove PID file → signal
@@ -661,12 +697,20 @@ mod tests {
         // Comments stripped as well as the test module: this searches for a
         // CALL by containment, so a comment spelling `shutdown_browsers_global(`
         // would satisfy `find` and could even be positioned to satisfy the
-        // ordering below. Same fix as its two siblings in this file and in
+        // ordering below. Same fix as its siblings in this file and in
         // `browser::manager` — carried to the whole class rather than to the
-        // member that was named (判据 §16).
-        let production = alephcore::utils::source_scan::code_text(
-            &alephcore::utils::source_scan::production_prefix(&src),
+        // member that was named (判据 §16). The floor is taken on the PREFIX
+        // first, because `code_text` shrinks the text on its own and a floor
+        // measured after it cannot detect the condition its message names;
+        // that comment claimed "same fix as its two siblings" while lacking
+        // the half of it the siblings have.
+        let prefix = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(
+            prefix.len() < src.len(),
+            "the #[cfg(test)] bound matched nothing — this test would then be \
+             reading its own source"
         );
+        let production = alephcore::utils::source_scan::code_text(&prefix);
         let stop = production
             .find("shutdown_browsers_global(")
             .expect("the wedged path must stop the managed browsers");
@@ -696,26 +740,43 @@ mod tests {
     /// them.
     #[test]
     fn the_two_exit_paths_pass_different_shutdown_budgets() {
-        let wedged = alephcore::utils::source_scan::code_text(
-            &alephcore::utils::source_scan::production_prefix(
-                &include_str!("helpers.rs").replace('\r', ""),
-            ),
+        // Floors on the prefixes, before `code_text` — same reason as every
+        // other member of this class: `code_text` shrinks the text by itself,
+        // so a floor taken after it is always satisfied.
+        let wedged_src = include_str!("helpers.rs").replace('\r', "");
+        let wedged_prefix = alephcore::utils::source_scan::production_prefix(&wedged_src);
+        assert!(
+            wedged_prefix.len() < wedged_src.len(),
+            "helpers.rs: the #[cfg(test)] bound matched nothing"
         );
-        let orderly = alephcore::utils::source_scan::code_text(
-            &alephcore::utils::source_scan::production_prefix(
-                &include_str!("mod.rs").replace('\r', ""),
-            ),
+        let orderly_src = include_str!("mod.rs").replace('\r', "");
+        let orderly_prefix = alephcore::utils::source_scan::production_prefix(&orderly_src);
+        assert!(
+            orderly_prefix.len() < orderly_src.len(),
+            "start/mod.rs: the #[cfg(test)] bound matched nothing"
         );
+        let wedged = alephcore::utils::source_scan::code_text(&wedged_prefix);
+        let orderly = alephcore::utils::source_scan::code_text(&orderly_prefix);
         assert!(
             wedged.contains("ENGINE_SHUTDOWN_BUDGET")
-                && !wedged.contains("ENGINE_ORDERLY_SHUTDOWN_BUDGET"),
+                && !wedged.contains("ORDERLY_BROWSER_STOP_BUDGET("),
             "the wedged-exit path must spend the failsafe budget: it is already \
              past SHUTDOWN_FAILSAFE and exit(0) follows"
         );
         assert!(
-            orderly.contains("ENGINE_ORDERLY_SHUTDOWN_BUDGET"),
+            orderly.contains("ORDERLY_BROWSER_STOP_BUDGET"),
             "the orderly path must spend the orderly budget — giving up there \
              can orphan a browser permanently, not merely defer it"
+        );
+        // And that budget must be DERIVED from the watchdog it races, not
+        // quoted from another crate. F1 was exactly that: 35.5 s inside a 5 s
+        // failsafe, so the force-exit skipped everything below the browser stop.
+        assert!(
+            wedged.contains("ORDERLY_BROWSER_STOP_BUDGET: std::time::Duration")
+                && wedged.contains("SHUTDOWN_FAILSAFE.as_millis()"),
+            "the orderly budget must be defined in this file and derived from \
+             SHUTDOWN_FAILSAFE — a constant in another crate cannot know about \
+             the watchdog it runs inside"
         );
     }
 
