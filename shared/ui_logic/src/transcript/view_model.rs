@@ -171,6 +171,13 @@ pub enum TranscriptEntry {
     UserText {
         id: String,
         text: String,
+        /// When the user sent it, unix ms. `None` for a message this client
+        /// has not been told a time for — a locally-echoed send before the
+        /// server's row comes back, or a history row whose `timestamp` did not
+        /// parse. A surface that shows a clock must show nothing for `None`
+        /// rather than "now", which would date a restored message to the
+        /// moment it was restored.
+        at_ms: Option<u64>,
     },
     AssistantText {
         id: String,
