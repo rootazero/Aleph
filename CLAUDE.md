@@ -127,7 +127,7 @@
 | `interfaces/webchat/` | [DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) · FL §4.7 §6.8 §6.9 | E.7 | `qa/picker_nav/run.sh` |
 | `src/canvas/` + Panel canvas 视图 | [CANVAS.md](docs/reference/CANVAS.md) · FL §6.10 | E.7 | `qa/canvas/run.sh` |
 | `interfaces/tui/` `interfaces/cli/` `shared/protocol/` | FL §5.4 §5.11 §5.13 §5.23 | E.0（跨 crate wire 契约） | `qa/agents_viz/run.sh claims`（无过滤连接 = TUI 的形状；没有 pty，不启动 `aleph-tui`） |
-| `shared/ui_logic/` + 呈现侧信道（`protocol/src/{file_change,context_breakdown}.rs` · `exec/masker.rs` · `handlers/{tool_output,context_breakdown}.rs`） | [TRANSCRIPT_RENDERING.md](docs/reference/TRANSCRIPT_RENDERING.md) · FL §6.13 | E.0 E.1 E.3 E.4 E.7 | — （Phase A 只有服务端：`transcript/` 整棵树**零调用者**，两个新 RPC **零客户端**）|
+| `shared/ui_logic/` + 呈现侧信道（`protocol/src/{file_change,context_breakdown}.rs` · `exec/masker.rs` · `handlers/{tool_output,context_breakdown}.rs`） | [TRANSCRIPT_RENDERING.md](docs/reference/TRANSCRIPT_RENDERING.md) · FL §6.13 | E.0 E.1 E.3 E.4 E.7 | — （Phase B 起 TUI 是 `transcript/` 与 `context.breakdown` 的客户端；**`trace.tool_output` 仍零客户端**）|
 
 > **对照表已做完，别重做**：openclaw · codex · hermes · pi · LangGraph · RouteLLM/LiteLLM/Bifrost · DeepSeek-Reasonix · FluidVoice/WhisperLive · SkillOpt · buzz · deepseek-harness。逐项结论与"刻意不做清单"都在对应 reference 文档里。
 

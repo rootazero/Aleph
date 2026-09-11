@@ -33,14 +33,18 @@ Already built and tested in Phase A; this phase adds the first caller for each.
 
 ## 1b. Status (2026-09-11)
 
-**B1–B6 landed.** B1/B2/B3 — `6594bfca6` (shared `at_ms`) + `071fac0f0` (the
-TUI). B4 — `3db635bed` (one flag set across four renderers) + `9e0c8eb7f`
-(lazy syntect). B5 — mouse, region table, `chat_scroll` (`4b5648464`,
-`1b91f285e`). B6 — header, boxless composer, hint line, width-aware status
-line, cost (`d94e67e95`) plus an entropy commit (`9712a87c3`). 414
+**B1–B7 landed; only B8 is left.** B1/B2/B3 — `6594bfca6` (shared `at_ms`) +
+`071fac0f0` (the TUI). B4 — `3db635bed` (one flag set across four renderers) +
+`9e0c8eb7f` (lazy syntect). B5 — mouse, region table, `chat_scroll`
+(`4b5648464`, `1b91f285e`). B6 — header, boxless composer, hint line,
+width-aware status line, cost (`d94e67e95`) plus an entropy commit
+(`9712a87c3`). B7 — the `/context` overlay and a remembered `/theme`. 433
 `aleph-tui` tests green, zero warnings in both test and non-test builds;
 `aleph-cli` (241) and `shared-ui-logic` (154) re-verified. B6 touched only
-`interfaces/tui/`, so `aleph-panel` was not re-run for it.
+`interfaces/tui/`; B7 also touched `shared/ui_logic` (one label), so
+`shared-ui-logic` was re-run for it and `aleph-panel --lib --no-run` was built
+to prove the label change reaches nothing over there (it does not call
+`reconcile` at all — Phase C has not started).
 
 **Each of B5 and B6 found a severed wire it did not create.** B5: `ctrl+o`
 had been printed under every folded tool row since B2, bound to nothing, and
@@ -50,7 +54,10 @@ had a renderer in `chat_area` since B3 and no producer anywhere, and
 sections below have the detail. The pattern is now three for three: **a round
 that adds a renderer, a label or a field should grep for the other end in the
 same sitting** — dead-code analysis is structurally blind to this shape,
-because both ends exist.
+because both ends exist. B7 ran that grep and found no new severed wire; what
+it did find was a *weakened copy* — B6's own hand-rolled `home_dir()`, the
+shared one minus an arm (判据 §1). The rule generalises: the sweep is for the
+fact, not only for the wire.
 
 Four things came out different from the plan below, and each is recorded where
 it happened rather than only here:
@@ -68,9 +75,13 @@ it happened rather than only here:
 3. **The per-message `┃ Aleph` label is gone.** Spec §6 makes the identity a
    one-time header entry; repeating a label above every fragment of an
    interleaved turn is noise. The `┃ ` bar and the colour still mark it.
-4. **`/theme` persists through `ALEPH_TUI_THEME`, not a settings file.** R4:
+4. ~~**`/theme` persists through `ALEPH_TUI_THEME`, not a settings file.** R4:
    an interface does not persist, and this crate has no config of its own. A
-   terminal's colour preference is the same kind of fact as `COLORTERM`.
+   terminal's colour preference is the same kind of fact as `COLORTERM`.~~
+   **Overturned in B7** — see that section. The R4 reading was too wide, and
+   the Panel, an interface under the same redline, persists its six appearance
+   axes to `localStorage`. `/theme` now writes `<aleph_home>/tui-theme`;
+   `ALEPH_TUI_THEME` still outranks it for a single run.
 
 A correction to the spec, measured while writing B3's tests: §5's summary
 table writes `shell→Bash`. There is no `shell` tool — the real name is `bash`
@@ -360,12 +371,94 @@ columns. That version reddens under the mutation.
 the hint line takes one of them back — net one row returned to the transcript. The chat area
 still has its own box; only the input lost one.
 
-### B7 — `/context` overlay, `/theme` command
+### B7 — `/context` overlay, `/theme` command ✅
 
 - `/context` calls `context.breakdown` (Phase A RPC, zero clients so far), renders `reconcile` rows with proportion bars, and shows `?` for an unknown — never `0` (spec §8).
 - `/theme <name>` switches and persists.
 
 **Guard:** a `provider_reported: None` fixture must render `?`; asserting on `0` would pass on a broken path.
+
+Landed as `app/context_view.rs` (the join), `widgets/context_overlay.rs` (the
+paint), a `Focus::Context` key path, and `theme.rs`'s remembered preset.
+`aleph-tui` 433, `aleph-cli` 241, `shared-ui-logic` 154, clippy `-D warnings`
+clean on both touched crates.
+
+#### The join the three doc comments asked for
+
+`context.breakdown` **always** sends `provider_reported: None` — it measures
+the prompt, and only a provider's response carries a provider's count — and
+`reconcile` turns that `None` into `total: None` / `percent: None` rather than
+dressing our own sum as the provider's. So a client that renders the response
+verbatim gets rows with no total and no bar. The wire type, the handler and
+`reconcile` each say so; **B7 is the first client that exists**, and
+`ContextView::new` is that join.
+
+Two choices inside it that are not obvious from the diff:
+
+- **The whole gauge occupancy goes into `UsageTokens::input`.** The struct has
+  four fields because that is the shape a provider reports; the gauge is one
+  number. `reconcile` sums `input + cache_read + cache_creation`, so this is
+  what makes the sum equal the gauge. Splitting it across the cache fields
+  would invent a cache breakdown this client does not have.
+- **The gauge's window overwrites the server's.** They are meant to be the
+  same number, and if they ever differ the screen must not show `/context`
+  disagreeing with the status bar one row below it about the size of this
+  window (判据 §12). The server's answer stays as the fallback for a session
+  that has not run yet.
+
+The rows therefore describe the **system prompt**, and the remainder — the
+conversation, the last response, anything else in the window — lands in
+`reconcile`'s `Other`. `Other` is the honest name for it: this view never
+measured those bytes, and labelling the row "Messages" would be a specific
+claim about a number nobody counted (判据 §17). The footer says so in words.
+
+#### Four deviations
+
+1. **`/theme` persists, and §1b's item 4 is overturned.** That entry said R4
+   forbade it. The twin says otherwise (判据 §16): the Panel is an interface
+   under the same redline and persists its six appearance axes to
+   `localStorage`. R4 forbids an interface holding *business* state — sessions,
+   memory, plans — and a per-device display preference is what `localStorage`
+   is for. `<aleph_home>/tui-theme` is this surface's `localStorage`; the path
+   hangs off `aleph_protocol::paths::aleph_home`, so `ALEPH_HOME` isolates a QA
+   instance from the developer's own preference. `ALEPH_TUI_THEME` still wins,
+   because that is the form a script or a one-off invocation can use. **The
+   file is not read in this crate's test binary**: a maintainer who once ran
+   `/theme terminal` would otherwise run every colour-sensitive test in a
+   different palette from CI (判据 §18), and the precedence rule is tested with
+   both sources as parameters instead.
+2. **The overlay is sized to its content, not to a fraction of the frame.** A
+   fixed 80% box leaves a tall empty rectangle under a three-layer prompt and
+   clips a thirty-layer one just the same.
+3. **The footer is two short lines rather than one long one.** The overlay does
+   not wrap — a row that wraps stops being a table — so a long footer is a
+   *clipped* footer, and a clipped label is a wrong label, not a shorter one.
+   Found by looking at the paint, not by a test.
+4. **A row under one percent reads `<1%`.** A bare `0%` beside a visible sliver
+   of bar says the row costs nothing, which is a different claim.
+
+#### One guard of mine that was green for the wrong reason, again
+
+`a_short_overlay_keeps_the_headline_and_the_footer` first used the same
+two-layer fixture as its neighbours. With four rows the list is short enough
+that a *wrong* row budget still leaves the footer on screen, so the test passed
+without measuring anything (判据 §10) — verified: `inner.height - 4` → `- 2`
+left it green. It now uses a twelve-layer fixture, which reddens under that
+mutation. Eight mutations in total, each producing the expected red name.
+
+#### Two things found along the way
+
+- **B6 wrote its own `home_dir()`** in `widgets/header.rs`: `HOME` then
+  `USERPROFILE`, which is `aleph_protocol::paths::home_dir` **minus its
+  `HOMEDRIVE` + `HOMEPATH` arm** — a copy born weaker than its original, and
+  one that agrees with it on every machine except the ones the missing arm
+  exists for (判据 §1). Now delegates.
+- **`local_commands_returns_catalog` asserted `cmds.len() == 22`.** A count
+  that has to be hand-bumped can only ever catch the author forgetting to bump
+  it; it cannot catch an advertised word the parser does not know. Replaced by
+  exactly that check, over every entry.
+
+Also fixed in passing: `reconcile`'s `Tools (1 schemas)`.
 
 ### B4c — Lazy syntax highlighting ✅
 
@@ -464,3 +557,13 @@ Two instrument notes earned in this phase:
   name something only dropping can produce: the segment to the RIGHT of the
   shed ones appearing. Same family as the width note above — the backend's
   own size is not evidence about the code that filled it.
+- **A fixture too small for the budget under test proves nothing.** B7's
+  "short overlay keeps its footer" test used a four-row list; at that size the
+  footer stays on screen even with the row budget computed wrongly. The
+  fixture has to be larger than what fits, or the test is measuring the
+  fixture (判据 §10).
+- **`python - <<EOF` silently does nothing on this host.** A mutation applied
+  that way reported "19 passed" for *unmutated* code — the instrument said the
+  guard was weak when it had never run (判据 §18). Verified after the fact with
+  `diff`. Apply mutations with the editor, or with a script written to a file
+  and run by path.

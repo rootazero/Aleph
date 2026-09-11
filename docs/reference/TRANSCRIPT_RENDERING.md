@@ -369,6 +369,13 @@ identifier 形状的字段只花一次不会命中的正则，比一条需要人
 
 ### 5.1 🛑 `shared/ui_logic/src/transcript/` 没有渲染器——**一笔有日期的债，不是沉默**
 
+> **已偿（2026-09-11，Phase B B1–B7）**：`aleph-tui` 现在是这棵树的客户端——`theme_tokens` /
+> `view_model` / `fold` / `affordance` / `summarize` / `md_enhance` / `turn_summary` / `context`
+> 都有生产调用点。`context.breakdown` 的第一个客户端是 `/context` 覆盖层
+> （`interfaces/tui/src/tui/{app/context_view.rs,widgets/context_overlay.rs}`）。
+> **`trace.tool_output` 仍然零客户端**——下面这份测量对它依然成立。Panel（Phase C）未动。
+> 保留原文是因为它是一次带谓词和 commit 的测量，不是一句会过期的断言（判据 §18）。
+
 **测量（2026-09-07，在本分支 HEAD 上）**：`transcript::` 在 `interfaces/` 里**一次都没有出现**；
 `aleph-tui` 与 `aleph-panel` 都依赖这个 crate，但用的是它的**别的**模块（`state::agent_panel`、`markdown_stream`、
 `connection`、`state::SessionKnobs`、`state::chat_scroll`），从来不是这一个。
