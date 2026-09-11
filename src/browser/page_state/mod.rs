@@ -11,10 +11,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::engine::Engine;
 
-pub use accname::{accessible_name, FrameIndex, NAME_MAX_CHARS};
+pub use accname::{accessible_name, AccName, FrameIndex, NAME_MAX_CHARS};
 pub use raw::{attr_of, Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, Viewport};
 pub use refs::{FrameKey, RefEntry, RefId, RefKey, RefTable, StaleReason};
-pub use render::{render_text, rendered_indices, to_json, TEXT_MAX_CHARS};
+pub use render::{quote, render_text, rendered_indices, to_json, TEXT_MAX_CHARS};
 pub use roles::{is_interactive, role_for, role_from_aria};
 
 /// The roles this build models. A closed set on purpose: an open one would
@@ -248,6 +248,15 @@ pub struct StateNode {
     pub frame: FrameKey,
     pub role: Role,
     pub name: String,
+    /// Whether [`accname`]'s rule 8 built [`Self::name`] out of this node's own
+    /// visible descendant text.
+    ///
+    /// Carried rather than re-derived, because the renderer's absorption rule
+    /// needs exactly this fact and the derivation already had it. Asking
+    /// `name.contains(text)` instead deleted a `"$29"` leaf under a link named
+    /// `"Plans from $29 per month"`, and double-printed a node whose own text
+    /// ran past `NAME_MAX_CHARS` — see [`accname::AccName`].
+    pub name_from_content: bool,
     pub value: Option<String>,
     pub states: NodeStates,
     /// Page coordinates — the frame offset is already applied.

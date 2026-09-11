@@ -28,6 +28,61 @@ use super::raw::{RawFrame, RawNodeKind};
 /// The cap on a name derived from descendant text (spec §4.1: ≤80 chars).
 pub const NAME_MAX_CHARS: usize = 80;
 
+/// A name, and **which rule produced it**.
+///
+/// The provenance is not decoration: the renderer has to decide whether a text
+/// leaf is already reported as some ancestor's name, and that fact is known
+/// *here*, at the moment the name is derived. It used to be re-derived later by
+/// asking `name.contains(text)` — a second derivation of a fact its owner
+/// already had (判据 §12), and it was wrong in both directions.
+///
+/// - It **deleted content**: a link named `"Plans from $29 per month"` by its
+///   `aria-label` swallowed a `"$29"` text child, because `$29` is a substring
+///   of that name. The model was never shown the price, and no token said
+///   anything had been removed. Short leaves — prices, counts, badges, single
+///   glyphs — are exactly the shapes that collide.
+/// - It **printed twice**: a name from rule 8 is capped at
+///   [`NAME_MAX_CHARS`] with a trailing `…`, so a node whose own text is longer
+///   than that failed `contains` against its own text and rendered both.
+///
+/// Both disappear once the question is "did rule 8 build this name out of this
+/// node's contents", which is a `bool` the derivation already knows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccName {
+    pub text: String,
+    /// True only for rule 8 — the name IS this node's visible descendant text,
+    /// so printing that text again would print it twice. False for every
+    /// attribute-derived name, including one that happens to quote the text.
+    pub from_content: bool,
+}
+
+impl AccName {
+    /// Rules 1–7: the name came from an attribute, so the node's text is
+    /// separate content and still has to be shown.
+    #[must_use]
+    pub fn from_attribute(text: String) -> Self {
+        Self {
+            text,
+            from_content: false,
+        }
+    }
+
+    /// Rule 8: the name IS the contents.
+    #[must_use]
+    pub fn from_content(text: String) -> Self {
+        Self {
+            text,
+            from_content: true,
+        }
+    }
+
+    /// No rule produced a name. Not `from_content` — nothing was consumed.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::from_attribute(String::new())
+    }
+}
+
 /// One frame, indexed for the lookups accname needs: id → node, `label[for]` →
 /// node, parent → children.
 ///
@@ -104,11 +159,12 @@ impl<'a> FrameIndex<'a> {
     }
 }
 
-/// The accessible name of `node_index` in `fx`'s frame.
+/// The accessible name of `node_index` in `fx`'s frame, **and where it came
+/// from**.
 #[must_use]
-pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
+pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> AccName {
     let Some(node) = fx.frame.nodes.get(node_index) else {
-        return String::new();
+        return AccName::none();
     };
     let tag = node.tag_lower();
 
@@ -121,7 +177,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
             .filter(|s| !s.is_empty())
             .collect();
         if !joined.is_empty() {
-            return cap(&joined.join(" "));
+            return AccName::from_attribute(cap(&joined.join(" ")));
         }
         // A dangling reference is an author mistake, not a decision to have no
         // name: fall through rather than returning "".
@@ -131,7 +187,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
     if let Some(v) = node.attr("aria-label") {
         let v = normalize(v);
         if !v.is_empty() {
-            return cap(&v);
+            return AccName::from_attribute(cap(&v));
         }
     }
 
@@ -140,7 +196,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
         if let Some(&label) = fx.label_for.get(id) {
             let v = descendant_text(label, fx);
             if !v.is_empty() {
-                return cap(&v);
+                return AccName::from_attribute(cap(&v));
             }
         }
     }
@@ -148,7 +204,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
         if fx.frame.nodes[ancestor].tag_lower() == "label" {
             let v = descendant_text(ancestor, fx);
             if !v.is_empty() {
-                return cap(&v);
+                return AccName::from_attribute(cap(&v));
             }
             break;
         }
@@ -161,7 +217,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
             if let Some(v) = node.attr("value") {
                 let v = normalize(v);
                 if !v.is_empty() {
-                    return cap(&v);
+                    return AccName::from_attribute(cap(&v));
                 }
             }
         }
@@ -171,7 +227,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
     if let Some(v) = node.attr("placeholder") {
         let v = normalize(v);
         if !v.is_empty() {
-            return cap(&v);
+            return AccName::from_attribute(cap(&v));
         }
     }
 
@@ -179,7 +235,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
     if let Some(v) = node.attr("alt") {
         let v = normalize(v);
         if !v.is_empty() || tag == "img" {
-            return cap(&v);
+            return AccName::from_attribute(cap(&v));
         }
     }
 
@@ -187,7 +243,7 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
     if let Some(v) = node.attr("title") {
         let v = normalize(v);
         if !v.is_empty() {
-            return cap(&v);
+            return AccName::from_attribute(cap(&v));
         }
     }
 
@@ -196,9 +252,9 @@ pub fn accessible_name(node_index: usize, fx: &FrameIndex<'_>) -> String {
     // is a name nobody can use, and it turns every `<header>` into a rendered
     // line quoting its whole nav bar.
     if super::roles::role_for(&tag, &node.attrs).supports_name_from_content() {
-        return cap(&descendant_text(node_index, fx));
+        return AccName::from_content(cap(&descendant_text(node_index, fx)));
     }
-    String::new()
+    AccName::none()
 }
 
 /// The visible text under `index`, in document order, whitespace-collapsed.
@@ -312,7 +368,7 @@ mod tests {
     }
 
     fn name_of(f: &RawFrame, index: usize) -> String {
-        accessible_name(index, &FrameIndex::build(f))
+        accessible_name(index, &FrameIndex::build(f)).text
     }
 
     /// Rule 1 beats rule 2: `aria-labelledby` wins over `aria-label`, and

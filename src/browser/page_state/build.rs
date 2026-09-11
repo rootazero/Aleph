@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use super::accname::{accessible_name, normalize, FrameIndex};
+use super::accname::{accessible_name, normalize, AccName, FrameIndex};
 use super::raw::{RawDom, RawNode, RawNodeKind, Rect};
 use super::refs::{FrameKey, RefKey, RefTable};
 use super::roles::{is_interactive, role_for};
@@ -159,7 +159,7 @@ fn state_node(
     let parent = nearest_emitted_ancestor(index, fx, emitted);
 
     let (role, name, interactive) = if text.is_some() {
-        (Role::Text, String::new(), false)
+        (Role::Text, AccName::none(), false)
     } else {
         let role = role_for(&node.tag_lower(), &node.attrs);
         (role, accessible_name(index, fx), is_interactive(role, node))
@@ -171,7 +171,8 @@ fn state_node(
         backend_node_id: node.backend_node_id,
         frame: frame.clone(),
         role,
-        name,
+        name_from_content: name.from_content,
+        name: name.text,
         value: value_of(node),
         states: states_of(node, role),
         // The one place the frame offset is applied. Position moves; size does

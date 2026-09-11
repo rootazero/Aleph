@@ -59,12 +59,26 @@ fn anchor_flags(state: &PageState) -> Vec<bool> {
         .collect()
 }
 
-/// Anchors, plus text leaves whose words are not already inside an ancestor's
+/// Anchors, plus every text leaf an ancestor is not already reporting AS its
 /// name.
 ///
-/// Without the absorption rule a `<button>Submit</button>` prints twice — once
-/// as the button's name and once as its text child — and the model has to work
-/// out that they are the same thing.
+/// Without absorption a `<button>Submit</button>` prints twice — once as the
+/// button's name and once as its text child — and the model has to work out
+/// that they are the same thing.
+///
+/// **The test is provenance, not substring.** `name.contains(text)` over every
+/// ancestor was wrong in both directions, and this is the one rule in the
+/// renderer that can remove content the page displayed, so both matter:
+///
+/// - it **deleted** a `"$29"` leaf under a link `aria-label`-named
+///   `"Plans from $29 per month"`, with no token saying anything had gone —
+///   the model was simply never shown the price;
+/// - it **duplicated** a node whose own text is longer than `NAME_MAX_CHARS`,
+///   because the capped name no longer contains it.
+///
+/// `name_from_content` is the fact both need and `accname` already knew. A
+/// capped name still absorbs, and the `…` the cap leaves is the elision token
+/// that keeps "content disappeared silently" from being true.
 fn payload_flags(state: &PageState, anchors: &[bool]) -> Vec<bool> {
     state
         .nodes
@@ -74,13 +88,10 @@ fn payload_flags(state: &PageState, anchors: &[bool]) -> Vec<bool> {
             if anchors[i] {
                 return true;
             }
-            let Some(text) = &n.text else {
-                return false;
-            };
-            if !n.visible {
+            if n.text.is_none() || !n.visible {
                 return false;
             }
-            !ancestors(state, i).any(|a| anchors[a] && state.nodes[a].name.contains(text.as_str()))
+            !ancestors(state, i).any(|a| anchors[a] && state.nodes[a].name_from_content)
         })
         .collect()
 }
@@ -337,6 +348,7 @@ mod tests {
             },
             role,
             name: name.to_string(),
+            name_from_content: false,
             value: None,
             states: NodeStates::default(),
             rect: Some(Rect {
@@ -395,6 +407,163 @@ mod tests {
         assert_eq!(lines[1], "- generic");
         assert_eq!(lines[2], "  - button \"A\" @1,2 3x4");
         assert_eq!(lines[3], "  - button \"B\" @1,2 3x4");
+    }
+
+    /// Build a one-frame `RawDom` from `(tag, attrs, text)` triples, each
+    /// parented on the node before it in the list (index 0 is the document).
+    /// The real path, so absorption is exercised where it actually runs.
+    fn built(nodes: &[(Option<&str>, &[(&str, &str)], Option<&str>, usize)]) -> PageState {
+        use crate::browser::page_state::{Computed, RawDom, RawFrame, RawNode, RawNodeKind};
+        use std::time::Duration;
+
+        let mut raw = vec![RawNode {
+            backend_node_id: 1,
+            parent: None,
+            kind: RawNodeKind::Document,
+            tag: None,
+            attrs: vec![],
+            text: None,
+            rect: None,
+            computed: None,
+            clickable_hint: None,
+            focused: None,
+        }];
+        for (i, (tag, attrs, text, parent)) in nodes.iter().enumerate() {
+            raw.push(RawNode {
+                backend_node_id: (i + 2) as u64,
+                parent: Some(*parent),
+                kind: if text.is_some() {
+                    RawNodeKind::Text
+                } else {
+                    RawNodeKind::Element
+                },
+                tag: tag.map(str::to_string),
+                attrs: attrs
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+                text: text.map(str::to_string),
+                rect: Some(Rect {
+                    x: 1,
+                    y: 2,
+                    w: 3,
+                    h: 4,
+                }),
+                computed: Some(Computed {
+                    display_none: false,
+                    visibility_hidden: false,
+                    opacity_zero: false,
+                    cursor_pointer: false,
+                }),
+                clickable_hint: None,
+                focused: None,
+            });
+        }
+        PageState::build(
+            &RawDom {
+                engine: Engine::Chromium,
+                viewport: viewport(),
+                frames: vec![RawFrame {
+                    frame_id: "F".into(),
+                    loader_id: "L".into(),
+                    offset: (0, 0),
+                    nodes: raw,
+                }],
+            },
+            &mut crate::browser::page_state::RefTable::new(),
+            1,
+            "https://x.test/",
+            "t",
+            Duration::from_millis(1),
+        )
+    }
+
+    /// **Nothing the page displayed may vanish from the tree.**
+    ///
+    /// Absorption is the one rule in the renderer that can remove content, and
+    /// it used to remove the wrong things: `name.contains(text)` over every
+    /// ancestor deleted any leaf that happened to be a substring of any
+    /// ancestor anchor's name. A link `aria-label`-named
+    /// `"Plans from $29 per month"` swallowed its own `"$29"` child and no
+    /// token said so — the model was never shown the price. Short leaves are
+    /// exactly the colliding shapes: prices, counts, badges, single glyphs.
+    ///
+    /// The name here comes from an ATTRIBUTE, so the text under it is separate
+    /// content and has to survive. The `"Upgrade"` half is the control: it did
+    /// not collide, so it printed before this fix too, and asserting only that
+    /// one would have stayed green over the whole defect.
+    #[test]
+    fn a_leaf_that_merely_reads_like_part_of_a_name_is_still_shown() {
+        let state = built(&[
+            (
+                Some("a"),
+                &[("href", "/p"), ("aria-label", "Plans from $29 per month")],
+                None,
+                0,
+            ),
+            (None, &[], Some("Upgrade"), 1),
+            (None, &[], Some("$29"), 1),
+        ]);
+        let rendered = render_text(&state);
+        assert!(
+            rendered.contains("- text: \"$29\""),
+            "a price the page displayed is missing from the model's \
+             observation:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("- text: \"Upgrade\""),
+            "control: a non-colliding leaf must print too:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Plans from $29 per month"),
+            "and the name itself is still there:\n{rendered}"
+        );
+    }
+
+    /// **…and nothing may print twice**, which is the other direction of the
+    /// same rule and needs its own guard.
+    ///
+    /// A name from rule 8 IS the node's text, so printing the text again is a
+    /// duplicate the model has to reconcile. The substring test got this right
+    /// only while the name was short enough to survive `NAME_MAX_CHARS`: past
+    /// the cap the name ends in `…`, no longer contains its own text, and the
+    /// leaf came back as a second line.
+    ///
+    /// Both lengths are asserted here, because the defect was length-dependent
+    /// and one of them passed throughout.
+    #[test]
+    fn a_name_built_from_its_own_text_absorbs_it_at_any_length() {
+        let short = built(&[
+            (Some("button"), &[], None, 0),
+            (None, &[], Some("Submit"), 1),
+        ]);
+        let rendered = render_text(&short);
+        assert_eq!(
+            rendered.matches("Submit").count(),
+            1,
+            "the button's text printed as well as its name:\n{rendered}"
+        );
+        assert!(!rendered.contains("- text:"), "{rendered}");
+
+        // Past the cap. `NAME_MAX_CHARS` is 80, so this name is truncated and
+        // the `…` is the elision token that keeps the absorption honest.
+        let long_text = "Agree to the terms and conditions of this service, \
+                         including the parts nobody reads, forever";
+        assert!(long_text.chars().count() > super::super::NAME_MAX_CHARS);
+        let long = built(&[
+            (Some("button"), &[], None, 0),
+            (None, &[], Some(long_text), 1),
+        ]);
+        let rendered = render_text(&long);
+        assert_eq!(
+            rendered.lines().count(),
+            2,
+            "a node whose text outran the name cap printed twice:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('…'),
+            "a capped name must carry the token that says content was cut:\n{rendered}"
+        );
     }
 
     /// Geometry is printed on interactive nodes only (spec §4.2). A heading's
