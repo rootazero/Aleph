@@ -248,10 +248,13 @@ pub fn target_has_victory_claim(node_id: &str) -> bool {
 fn one_line(s: &str) -> String {
     s.chars()
         .map(|c| match c {
-            // `\n` plus the Unicode line/paragraph separators map to a space
-            // so a stray newline inside `label` cannot masquerade as the next
-            // header line at the render seam.
-            '\n' | '\u{2028}' | '\u{2029}' => ' ',
+            // `\n` plus the Unicode line/paragraph separators and NEL map to
+            // a space so a stray newline inside `label` cannot masquerade as
+            // the next header line at the render seam. U+0085 (NEL,
+            // NEXT LINE) is normalized too: some tokenizers and terminals
+            // treat it as a line terminator, and the threat model that
+            // covers U+2028/U+2029 must not stop at the BMP boundary.
+            '\n' | '\u{0085}' | '\u{2028}' | '\u{2029}' => ' ',
             // `\r` is stripped rather than replaced with a space so a trailing
             // `\r\n` does not leave a stray space at the line end (matches
             // `indented_body`'s `trim_end_matches('\r')` discipline).
@@ -282,7 +285,13 @@ fn indented_body(body: &str) -> String {
     let normalized: String = body
         .chars()
         .map(|c| match c {
-            '\u{2028}' | '\u{2029}' => '\n',
+            // U+2028 / U+2029 (LS / PS) are the Unicode line/paragraph
+            // separators named in the threat model. U+0085 (NEL, NEXT LINE)
+            // is normalized to `\n` here for the same reason — a model-
+            // authored body containing NEL could otherwise forge a column-0
+            // continuation in the rendered prompt, since some tokenizers
+            // split on NEL exactly like `\n`.
+            '\u{0085}' | '\u{2028}' | '\u{2029}' => '\n',
             other => other,
         })
         .collect();
@@ -372,12 +381,16 @@ async fn notify_node_settled(node_id: &str) -> bool {
     poke_all_watchers(cron.clone(), &watcher_jobs, node_id).await
 }
 
-/// Poke every paired watcher concurrently — they hold separate cron mutex
-/// slots and a settle against a goal with N watchers should not pay
-/// N × (one-cron-run latency). The debounce map is already keyed by
-/// watcher_job_id, so concurrent jobs do not race each other there; what they
-/// share is the cron trigger handle, and `Mutex::lock().await` serialises
-/// access to it cleanly per-job.
+/// Poke every paired watcher concurrently — they are joined via
+/// `join_all`, but each individual `poke_one_watcher` ends up taking the
+/// SINGLE global `SharedCronService` mutex (`Arc<tokio::sync::Mutex<CronService>>`
+/// in `src/tasks/cron/`), so the runs themselves are serialised: a goal
+/// with N watchers pays roughly N × (one-cron-run latency), not 1 ×. The
+/// debounce map is keyed by `watcher_job_id` so concurrent jobs do not
+/// race each other there; the lock that actually serialises the runs is
+/// the one shared cron handle. A future per-job mutex refactor would live
+/// in `src/tasks/cron/` — the latency budget for that work is not settled
+/// here, only honestly described.
 ///
 /// The aggregate is an AND, never an OR: the claim is earned only when every
 /// pokeable watcher ran (or was covered). One failure sinks the whole settle —
@@ -525,10 +538,25 @@ fn governing_owner_in(
     // Raw-column read, not `list_edges`: that one is fail-soft and DROPS a row
     // it cannot decode, which for an ACL is indistinguishable from "no such
     // edge" — i.e. a grant. See `LoopGraphStore::owns_reference_sources`.
-    Ok(store
-        .owns_reference_sources(DEFAULT_AGENT, &node_id)?
-        .into_iter()
-        .next())
+    //
+    // Drop any source equal to `node_id` before picking the first owner.
+    // A legacy `from_id == to_id` row is an invariant violation, but if it
+    // existed the session would refuse its own update with an "owned by
+    // itself" denial — which is wrong in two directions: the session is
+    // either genuinely ungoverned (no real owner) or governed by something
+    // ELSE on the same row set, and either way the self-loop must not be
+    // the answer. Log when we see one so operators see the invariant
+    // violation, then move on to the next source (or `None`).
+    let mut sources = store.owns_reference_sources(DEFAULT_AGENT, &node_id)?;
+    if let Some(pos) = sources.iter().position(|s| s == &node_id) {
+        warn!(
+            session = %session,
+            node = %node_id,
+            "loop_graph: owns_reference self-edge (from_id == to_id) ignored — invariant violation"
+        );
+        sources.swap_remove(pos);
+    }
+    Ok(sources.into_iter().next())
 }
 
 /// Char cap for a node id or label on its way into the prompt.

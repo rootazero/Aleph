@@ -247,9 +247,7 @@ impl McpManagerActor {
         // `cmd_tx.try_send(McpCommand::ServerListChanged { ... })` for every
         // server whose TTL refreshed; those events would otherwise be lost
         // when we drop the channel, and the bridge sees an abrupt gap.
-        if !shutting_down {
-            // Entered via `None` from the receiver — no need to drain.
-        } else {
+        if shutting_down {
             while let Ok(cmd) = self.cmd_rx.try_recv() {
                 if matches!(cmd, McpCommand::Shutdown { respond_to: _ }) {
                     // A second shutdown is a no-op; the first wins.

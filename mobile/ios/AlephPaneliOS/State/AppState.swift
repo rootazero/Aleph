@@ -56,7 +56,7 @@ final class AppState: ObservableObject {
     func resolve() async {
         if let env = envURL(), !env.isEmpty,
            case .success(let target) = PairingTarget.parse(env) {
-            Self.persist(store: store, logger: Self.logger, url: target.url)
+            Self.persistOutcome(store: store, logger: Self.logger, url: target.url, fallbackScreen: self)
             await connectOrPair(target)
             return
         }
@@ -75,7 +75,7 @@ final class AppState: ObservableObject {
             screen = .pairing(message: Self.message(for: error))
         case .success(let target):
             if await probe.probe(target) {
-                Self.persist(store: store, logger: Self.logger, url: target.url)
+                Self.persistOutcome(store: store, logger: Self.logger, url: target.url, fallbackScreen: self)
                 screen = .connected(target.url)
             } else {
                 // `unreachableMessage` names the resolved origin and says what
@@ -164,14 +164,26 @@ final class AppState: ObservableObject {
     /// Persist the chosen target. A keychain failure here is not fatal — the
     /// shell still navigates to the panel for this session — but if it goes
     /// silent the user thinks pairing worked and loses the setting on the
-    /// next launch. Log the OSStatus so the failure surfaces in Console.app /
-    /// `log stream` (the only diagnostic the AppState has; the pairing UI
-    /// stays in the dark by design).
-    private static func persist(store: ConnectionStoring, logger: Logger, url: URL) {
+    /// next launch. The caller is bounced back to the pairing screen with an
+    /// explicit inline message naming the resolved origin, so the user knows
+    /// they need to re-enter on the next launch. The OSStatus is still logged
+    /// for Console.app / `log stream` triage.
+    private static func persistOutcome(
+        store: ConnectionStoring,
+        logger: Logger,
+        url: URL,
+        fallbackScreen: AppState
+    ) {
         do {
             try store.save(url)
         } catch {
             logger.error("Keychain save failed: \(error.localizedDescription, privacy: .public)")
+            let origin = PairingTarget(url: url).origin
+            Task { @MainActor in
+                fallbackScreen.screen = .pairing(
+                    message: "Connected for this session, but the server address couldn't be saved — please re-enter on next launch. (\(origin))"
+                )
+            }
         }
     }
 }

@@ -115,6 +115,22 @@ fn ensure_dir_at(dir: &Path) -> Result<()> {
 
 /// Persist `manifest` under its own name into `dir`. Validates before writing —
 /// an invalid template never reaches disk.
+///
+/// **Concurrency caveat.** `save_at` is *not* safe for two callers racing on
+/// the same `manifest.name`: both writers pick distinct temp paths
+/// (`{pid}.{AtomicU64 seq}.tmp` via [`unique_tmp_path`]) so the writes do not
+/// collide on the temp side, but `fs::rename(tmp, final)` is POSIX-atomic
+/// *last-writer-wins*, and both writers report `Ok(())`. The earlier writer's
+/// content is silently overwritten by the later one.
+///
+/// In Aleph's actual call sites this race is rare: workflow names are owned
+/// by the user or by an LLM `proposal.accept` that holds the manager's
+/// internal lock through the save. If you wire `save_at` into a path where
+/// concurrent same-name saves are possible (a tool that accepts external
+/// input, or a batch importer), add an out-of-process lockfile or fence the
+/// call behind an in-process `Mutex<HashSet<String>>` first. The store does
+/// not provide one because the documented single-writer model does not need
+/// it.
 pub fn save_at(dir: &Path, manifest: &WorkflowManifest) -> Result<PathBuf> {
     manifest.validate()?;
     ensure_dir_at(dir)?;

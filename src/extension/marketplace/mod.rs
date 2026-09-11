@@ -386,6 +386,21 @@ impl MarketplaceManager {
                     ));
                 }
                 let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
+                // review(extension): refuse symlink escapes at the install
+                // boundary, mirroring the gateway install handler. Without
+                // this the marketplace path would skip the pre-planted
+                // symlink check that `ensure_plugin_destination_is_safe`
+                // exists to perform, so a symlink planted at
+                // `<plugins_root>/<plugin_name>` could redirect a plugin
+                // install into attacker-controlled territory.
+                let dest_path = install_dir.join(plugin_name);
+                if let Err(e) =
+                    crate::extension::ensure_plugin_destination_is_safe(&install_dir, &dest_path)
+                {
+                    return Err(format!(
+                        "Refusing to install '{plugin_name}' into unsafe location: {e}"
+                    ));
+                }
                 installer::install_plugin_from_cache(plugin_path, &install_dir, plugin_name)
             }
             _ => {

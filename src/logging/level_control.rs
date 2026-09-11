@@ -4,7 +4,7 @@
 /// It uses an atomic variable to track the current level and allows
 /// dynamic modification without restarting the application.
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 
 use crate::logging::LoggingError;
 
@@ -112,6 +112,18 @@ static INIT: Once = Once::new();
 /// the log on every `from_u8` read.
 static INVALID_LEVEL_WARNED: AtomicBool = AtomicBool::new(false);
 
+/// Process-wide serialisation for [`set_log_level`] — pairs the reported
+/// atomic with the live `EnvFilter` as a single critical section so two
+/// concurrent RPC callers cannot interleave one writer's atomic update with
+/// another writer's filter install (the resulting state had the reported
+/// level and the live filter disagreeing, so `logs.getLevel` lied about
+/// what was actually being logged).
+///
+/// `unwrap_or_else(|p| p.into_inner())` per P7: a poisoned lock would still
+/// admit the update; refusing on poison would be `fail-dead` on a transient
+/// panic during one prior install.
+static SET_LOCK: Mutex<()> = Mutex::new(());
+
 fn warn_invalid_level_once(value: u8) {
     if INVALID_LEVEL_WARNED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -173,10 +185,12 @@ fn is_alephcore_target(target: &str) -> bool {
 
 /// Get the current log level
 pub fn get_log_level() -> LogLevel {
-    // Ensure the level is seeded from RUST_LOG before the first read, so the
-    // reported level matches the EnvFilter the logging backend actually uses.
-    // `init_log_level` is idempotent (guarded by `Once`).
-    init_log_level();
+    // `Once::is_completed()` is a cheap lock-free probe; skip `init_log_level`'s
+    // `call_once` fast-path on every read after the first. The first call still
+    // pays the full `init_log_level` cost (idempotent under the `Once`).
+    if !INIT.is_completed() {
+        init_log_level();
+    }
     let raw = CURRENT_LOG_LEVEL.load(Ordering::Acquire);
     try_self_heal(raw);
     LogLevel::from_u8(raw)
@@ -214,38 +228,37 @@ fn try_self_heal(raw: u8) {
 /// silently lying about it.
 pub fn set_log_level(level: LogLevel) -> Result<(), LoggingError> {
     init_log_level();
-    // CAS loop: read-modify-write so concurrent setters do not interleave
-    // reads/stores between themselves and lose audit context.
-    let mut current = CURRENT_LOG_LEVEL.load(Ordering::Acquire);
-    let next = level.to_u8();
-    let old_u8 = loop {
-        if current == next {
-            break current;
-        }
-        match CURRENT_LOG_LEVEL.compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(prev) => break prev,
-            Err(observed) => current = observed,
-        }
-    };
-    let old_level = LogLevel::from_u8(old_u8);
-    if old_u8 != next {
-        if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
-            tracing::warn!(%error, "Runtime log filter is unavailable");
-            return Err(LoggingError::FilterUnavailable(error));
-        }
-        tracing::info!(
-            old_level = ?old_level,
-            new_level = ?level,
-            "Log level changed"
-        );
-    } else {
+    // Hold the lock across the atomic *and* the live-filter update. Without
+    // this, two concurrent setters could update the atomic in one order and
+    // the filter in another, leaving the reported level (what
+    // `logs.getLevel` returns) and the live `EnvFilter` (what the subscriber
+    // actually emits) disagreeing. The atomic update remains unconditional
+    // — filter failure is surfaced separately via `FilterUnavailable`.
+    let _guard = SET_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let old_u8 = CURRENT_LOG_LEVEL.swap(level.to_u8(), Ordering::AcqRel);
+    if old_u8 == level.to_u8() {
         tracing::trace!(
-            old_level = ?old_level,
+            old_level = ?LogLevel::from_u8(old_u8),
             new_level = ?level,
             "log level set was a no-op"
         );
+        return Ok(());
     }
+    if let Err(error) = aleph_logging::set_log_level(level.to_filter_string()) {
+        // The just-failed install means the live filter still reflects the
+        // OLD level, so this `tracing::warn!` is not at risk of being dropped
+        // by the very filter it reports on — but mirror to stderr so an
+        // operator with stdout captured but no tracing backend installed can
+        // still see the failure during debugging.
+        eprintln!("[aleph-logging] runtime filter unavailable: {error}");
+        tracing::warn!(%error, "Runtime log filter is unavailable");
+        return Err(LoggingError::FilterUnavailable(error));
+    }
+    tracing::info!(
+        old_level = ?LogLevel::from_u8(old_u8),
+        new_level = ?level,
+        "Log level changed"
+    );
     Ok(())
 }
 
@@ -258,6 +271,16 @@ mod tests {
     /// guard, `cargo test`'s parallel test runner would let one test's
     /// `set_log_level` leak into the next test's `get_log_level` assertion.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard: restores the global atomic to a captured value on drop.
+    /// Pair with `TEST_LOCK` so a `panic!` between `store` and `set_log_level`
+    /// still leaves the next test in the binary with a sane baseline.
+    struct RestoreOnDrop<'a>(&'a AtomicU8, u8);
+    impl Drop for RestoreOnDrop<'_> {
+        fn drop(&mut self) {
+            self.0.store(self.1, Ordering::Release);
+        }
+    }
 
     #[test]
     fn test_log_level_to_filter_string() {
@@ -360,8 +383,8 @@ mod tests {
     /// reported level at Info.
     #[test]
     fn test_set_log_level_overwrites_corrupt_atomic_state() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let prev = get_log_level();
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _restore = RestoreOnDrop(&CURRENT_LOG_LEVEL, get_log_level().to_u8());
         // Seed a corrupt byte (out of the documented 0..=4 range).
         CURRENT_LOG_LEVEL.store(99, Ordering::Release);
         // Calling get_log_level first triggers self-heal: atomic -> Info.
@@ -369,16 +392,15 @@ mod tests {
         // setter's write, this assertion will fail.
         let _ = set_log_level(LogLevel::Trace);
         assert_eq!(get_log_level(), LogLevel::Trace, "set value must survive");
-        // Restore for parallel-test safety.
-        let _ = set_log_level(prev);
+        // _restore runs on drop, even if the assertion above panics.
     }
 
     /// Regression: `get_log_level` self-heals the atomic so a single
     /// subsequent read no longer reports the corrupt byte.
     #[test]
     fn test_get_log_level_selfheals_corrupt_atomic() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let prev = get_log_level();
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _restore = RestoreOnDrop(&CURRENT_LOG_LEVEL, get_log_level().to_u8());
         CURRENT_LOG_LEVEL.store(77, Ordering::Release);
         assert_eq!(
             get_log_level(),
@@ -390,6 +412,6 @@ mod tests {
             LogLevel::Info.to_u8(),
             "self-heal rewrites the atomic"
         );
-        let _ = set_log_level(prev);
+        // _restore runs on drop, even if the assertions above panic.
     }
 }

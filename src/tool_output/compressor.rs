@@ -67,6 +67,13 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "slider",
 ];
 
+/// Server-prefixes we accept as DevTools-flavoured when computing the bare
+/// tool name. A user tool literally named `take_snapshot` (no MCP prefix) is
+/// *not* a browser-automation tool — routing it through DevTools-specific
+/// compression (interactive-node filter / 500-char cap / network-request
+/// parser) silently mangles non-shape payloads.
+const DEVTOOLS_SERVER_PREFIXES: &[&str] = &["chrome_devtools", "chrome-devtools", "devtools"];
+
 /// The bare `DevTools` tool name behind `name`, or `None` when this isn't one.
 ///
 /// **MCP tools register server-qualified as `{server}__{tool}`** (see
@@ -75,13 +82,19 @@ const INTERACTIVE_ROLES: &[&str] = &[
 /// production, silently, for every one of these tools. Stripping the prefix is
 /// the whole fix.
 ///
-/// It also widens the match from "the Chrome DevTools MCP" to "any MCP server
-/// exposing these names", which is correct: all seven are browser-automation
-/// verbs, and the compression each one gets (base64 → marker, interactive-node
-/// filtering, entry caps) follows from the *shape* of that output, not from which
-/// server produced it.
+/// The match is gated on a known DevTools-server prefix. Without that gate, a
+/// non-DevTools MCP server whose tool happens to be named `take_snapshot` or
+/// `click` would be routed through DevTools-specific compression and have its
+/// (possibly non-shape-matching) output mangled by the interactive-node
+/// filter, 500-char cap, and network-request parser.
 fn devtools_tool_name(name: &str) -> Option<&str> {
-    let bare = name.rsplit("__").next().unwrap_or(name);
+    let (server, bare) = name.split_once("__")?;
+    if !DEVTOOLS_SERVER_PREFIXES
+        .iter()
+        .any(|p| server.eq_ignore_ascii_case(p))
+    {
+        return None;
+    }
     DEVTOOLS_TOOLS.contains(&bare).then_some(bare)
 }
 
@@ -229,7 +242,14 @@ fn compress_screenshot(output: &str) -> String {
             .filter(|b| *b == b'+' || *b == b'/')
             .count()
     };
-    let looks_like_base64 = base64_marker_count() >= 2 || has_base64_padding();
+    // Real base64 is always 4-byte aligned (len % 4 in {0, 1} for a payload
+    // that ends mid-padding). A 100+ char string that ends in `=` but has
+    // length % 4 == 2 is just an alphanumeric token that happened to have
+    // an `=` at the tail (CSV cell, hex dump tail) — not a screenshot.
+    let length_aligned_to_base64 = || matches!(output.len() % 4, 0 | 1);
+    let looks_like_base64 = base64_marker_count() >= 2
+        && length_aligned_to_base64()
+        && (base64_marker_count() >= 2 || has_base64_padding());
     if starts_with_data_image
         || (output.len() > 100 && prefix_is_base64_chars() && looks_like_base64)
     {
@@ -445,14 +465,26 @@ mod tests {
 
     #[test]
     fn test_is_devtools_tool() {
-        assert_eq!(devtools_tool_name("take_snapshot"), Some("take_snapshot"));
-        assert_eq!(devtools_tool_name("click"), Some("click"));
+        // Bare names without a server prefix must NOT match — a user tool
+        // literally named `take_snapshot` is not a browser-automation tool.
+        assert_eq!(devtools_tool_name("take_snapshot"), None);
+        assert_eq!(devtools_tool_name("click"), None);
+        // Server-qualified names match the prefix gate.
         assert_eq!(
-            devtools_tool_name("lighthouse_audit"),
+            devtools_tool_name("chrome_devtools__take_snapshot"),
+            Some("take_snapshot")
+        );
+        assert_eq!(devtools_tool_name("chrome-devtools__click"), Some("click"));
+        assert_eq!(
+            devtools_tool_name("chrome_devtools__lighthouse_audit"),
             Some("lighthouse_audit")
         );
-        assert_eq!(devtools_tool_name("bash"), None);
-        assert_eq!(devtools_tool_name("web_search"), None);
+        // Unknown server with a DevTools-shaped tool name: refuse.
+        assert_eq!(devtools_tool_name("acme__take_snapshot"), None);
+        // Known server but unknown tool: refuse.
+        assert_eq!(devtools_tool_name("chrome_devtools__bash"), None);
+        assert_eq!(devtools_tool_name("chrome_devtools__web_search"), None);
+        // Empty / non-prefixed inputs: refuse.
         assert_eq!(devtools_tool_name(""), None);
     }
 

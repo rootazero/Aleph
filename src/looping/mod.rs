@@ -549,6 +549,19 @@ impl LoopRegistry {
                 };
                 next.owner_user_id = owner_user_id;
                 next.scope_id = scope_id;
+                // Honest accounting: `is_adjustable` accepts an Active loop that
+                // has already hit the iteration cap (Active means "the hook will
+                // look at it", not "the hook will fire it"). Without this, a
+                // `loop(action='update', max_iterations=10)` on a 5/5 Active
+                // loop silently succeeds and the next claim Exhausted-stops it
+                // anyway — the user reported a change that never ran. Pass 0 for
+                // `tokens_now` and `now_ms`: only the iteration-cap arm of
+                // `exhausted` fires without inputs, and that is the case the
+                // caller here actually has visibility into (deadline/budget
+                // exhaustion is the hook's own stop path).
+                if pursuit::exhausted(&next, 0, 0) {
+                    return false;
+                }
                 map.insert(
                     session,
                     next.with_status(status)

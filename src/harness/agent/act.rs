@@ -366,6 +366,24 @@ impl AgentHarness {
         canonical: Option<&[String]>,
         claims: Option<&[crate::tools::concurrency::ConcurrencyClaim]>,
     ) -> Result<usize, HarnessError> {
+        // Cross-length invariant: `canonical` and `claims` (when provided)
+        // are pre-computed by the parallel-admission probe in `act()` to
+        // match `tool_calls.len()` element-for-element. The `start..end`
+        // slicing below trusts that alignment; pin it locally so a future
+        // edit to the probe surfaces here instead of in an
+        // out-of-bounds panic at the call site.
+        if let (Some(c), Some(cl)) = (canonical, claims) {
+            debug_assert_eq!(
+                c.len(),
+                tool_calls.len(),
+                "canonical slice length must match tool_calls"
+            );
+            debug_assert_eq!(
+                cl.len(),
+                tool_calls.len(),
+                "claims slice length must match tool_calls"
+            );
+        }
         let mut executed_count: usize = 0;
 
         // Within-batch idempotency memo. Scoped to this single dispatch group:

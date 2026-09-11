@@ -38,6 +38,7 @@ use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
     InboundMessageSender, MessageId, MessageMeta, OutboundMessage, SendResult, UserId,
+    CB_MESSAGE_ID_PREFIX,
 };
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -276,7 +277,7 @@ impl Handler {
         };
 
         let inbound = InboundMessage {
-            id: MessageId::new(format!("cb_{}", component.id)),
+            id: MessageId::new(format!("{CB_MESSAGE_ID_PREFIX}{}", component.id)),
             channel_id: ChannelId::new("discord"),
             conversation_id,
             sender_id: UserId::new(component.user.id.to_string()),

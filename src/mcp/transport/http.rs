@@ -30,6 +30,7 @@
 //!   confronted with a handshake-less request produces something else entirely.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -112,6 +113,17 @@ pub struct HttpTransport {
     /// Only ever populated on the legacy path; revision 2026-07-28 removed
     /// protocol-level sessions.
     session_id: RwLock<Option<String>>,
+    /// Slot for the trait-mandated notification handler.
+    ///
+    /// HttpTransport cannot deliver server-initiated notifications: the
+    /// Streamable HTTP transport has no standalone server-to-client stream
+    /// (the 2026-07-28 revision removed it; older servers also never push
+    /// unsolicited frames here). We retain the handler so the API contract
+    /// is honoured and any caller that wants to assert the handler was
+    /// accepted can read it back, but we also warn loudly so a caller
+    /// wiring a transport that does need notifications is steered toward
+    /// SseTransport instead.
+    notification_handler: Mutex<Option<NotificationCallback>>,
     /// The dialect settled on for this connection — the era plus the revision
     /// to echo on `MCP-Protocol-Version`. `None` until the connection layer has
     /// probed, which is why the pre-probe default below has to be the modern
@@ -137,6 +149,7 @@ impl HttpTransport {
             config,
             alive: RwLock::new(true),
             session_id: RwLock::new(None),
+            notification_handler: Mutex::new(None),
             dialect: std::sync::RwLock::new(None),
         })
     }
@@ -550,14 +563,21 @@ impl McpTransport for HttpTransport {
     }
 
     fn set_notification_handler(&self, handler: NotificationCallback) {
-        // HTTP transport doesn't support server-initiated notifications
-        // in basic mode; the trait requires the hook, so accept and drop.
-        tracing::debug!(
+        // HTTP transport cannot deliver server-initiated notifications:
+        // the Streamable HTTP transport has no standalone server-to-client
+        // stream (the 2026-07-28 revision removed it; older servers also
+        // never push unsolicited frames here). We retain the handler so the
+        // trait contract is honoured but warn loudly so any caller wiring a
+        // transport that DOES need notifications picks SseTransport instead.
+        tracing::warn!(
             server = %self.server_name,
-            "Notification handler set (HTTP transport has limited notification support)"
+            "HttpTransport cannot deliver server-initiated notifications; stored handler will never fire. Use SseTransport for legacy servers, or accept the loss for modern servers (TTL-driven cache refresh covers freshness)."
         );
-        // Could implement polling here in the future
-        let _ = handler; // Acknowledge but don't use
+        let mut slot = self
+            .notification_handler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *slot = Some(handler);
     }
 
     fn mirrors_param_headers(&self) -> bool {

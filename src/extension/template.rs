@@ -8,7 +8,7 @@
 use super::error::{ExtensionError, ExtensionResult};
 use once_cell::sync::OnceCell;
 use regex::Regex;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Regex for matching file references: @./path or @/path
 /// Matches @./relative/path or @/absolute/path, stopping at whitespace or common delimiters
@@ -164,9 +164,14 @@ impl SkillTemplate {
 
     /// Validate that a path doesn't escape the base directory (for relative paths)
     fn validate_path_security(&self, resolved: &Path) -> ExtensionResult<()> {
-        // Check for obvious traversal patterns
-        let path_str = resolved.to_string_lossy();
-        if path_str.contains("..") {
+        // review(extension): use component check, not substring — a legitimate
+        // filename like `notes..txt` would otherwise be falsely rejected as
+        // traversal. The previous substring `..` check rejected every filename
+        // containing two adjacent dots regardless of position.
+        if resolved
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
             return Err(ExtensionError::file_reference(
                 resolved,
                 "Path traversal (..) not allowed in relative file references",

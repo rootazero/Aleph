@@ -606,7 +606,26 @@ impl ToolResultStore {
     /// Remove the shared base directory and all its contents — *every*
     /// session's blobs plus the index. Process-teardown scale; a session that
     /// wants only its own artifacts gone calls [`Self::purge_all`].
+    ///
+    /// **Session-scoped handles must not call this.** A session-scoped
+    /// handle (`for_session(...)`) shares the underlying base directory
+    /// with every other live session — calling `cleanup()` from one would
+    /// silently delete every other session's offloaded output. This guard
+    /// panics with a pointer to the correct API rather than letting that
+    /// happen at runtime; the boot-time unscoped root is the only safe
+    /// caller, and the deny-breaker's `purge_all` is the per-session
+    /// counterpart.
     pub fn cleanup(&self) {
+        if !self.session.is_empty() {
+            panic!(
+                "ToolResultStore::cleanup called on a session-scoped handle \
+                 (session={:?}); this would delete every other concurrent \
+                 session's offloaded output. Use purge_all() to remove only \
+                 this session's artifacts, or call cleanup() from the \
+                 unscoped root handle created by ToolResultStore::new().",
+                self.session,
+            );
+        }
         if self.inner.base_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&self.inner.base_dir) {
                 tracing::warn!(
@@ -1279,6 +1298,16 @@ mod tests {
         assert!(base.exists());
         store.cleanup();
         assert!(!base.exists(), "cleanup should remove the base directory");
+    }
+
+    #[test]
+    #[should_panic(expected = "session-scoped handle")]
+    fn cleanup_on_session_scoped_handle_panics() {
+        let (_scratch, base) = crate::utils::scratch::scratch_root();
+        std::fs::create_dir_all(&base).unwrap();
+        let root = Arc::new(ToolResultStore::with_dir_for_tests(base.clone()));
+        let scoped = ToolResultStore::for_session(&root, "agent:main:sess-x");
+        scoped.cleanup();
     }
 
     #[test]

@@ -180,7 +180,12 @@ impl A2AMessageHandler for AgentLoopBridge {
         let agent = match self.agent_registry.get_default().await {
             Some(a) => a,
             None => {
-                let _ = self
+                // The task was atomically claimed by `claim_task` and is now in
+                // `Working`. A swallowed `update_status` failure here leaves it
+                // stuck in `Working` forever; surface the error in logs and
+                // still return the user-facing `InternalError` so the caller
+                // does not block waiting for a completion that will never come.
+                if let Err(e) = self
                     .task_manager
                     .update_status(
                         task_id,
@@ -190,7 +195,14 @@ impl A2AMessageHandler for AgentLoopBridge {
                             "No default agent registered",
                         )),
                     )
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        task_id,
+                        error = %e,
+                        "A2A bridge: failed to mark task Failed after missing-default-agent"
+                    );
+                }
                 return Err(A2AError::InternalError(
                     "No default agent registered".to_string(),
                 ));
@@ -260,7 +272,11 @@ impl A2AMessageHandler for AgentLoopBridge {
         let agent = match self.agent_registry.get_default().await {
             Some(a) => a,
             None => {
-                let _ = self
+                // Companion arm of the sync path above — see that block for the
+                // rationale. The streaming path additionally has a
+                // half-subscribed SSE stream attached, so the log line must be
+                // just as loud here.
+                if let Err(e) = self
                     .task_manager
                     .update_status(
                         task_id,
@@ -270,7 +286,14 @@ impl A2AMessageHandler for AgentLoopBridge {
                             "No default agent registered",
                         )),
                     )
-                    .await;
+                    .await
+                {
+                    tracing::error!(
+                        task_id,
+                        error = %e,
+                        "A2A bridge: failed to mark task Failed after missing-default-agent (streaming)"
+                    );
+                }
                 return Err(A2AError::InternalError(
                     "No default agent registered".to_string(),
                 ));
@@ -294,10 +317,20 @@ impl A2AMessageHandler for AgentLoopBridge {
             is_final: false,
             metadata: None,
         };
-        let _ = self
+        if let Err(e) = self
             .streaming
             .broadcast_status(task_id, working_event)
-            .await;
+            .await
+        {
+            // A dropped `Working` event silently turns the consumer-side
+            // `fold_stream` into a `success=false` outcome even when the run
+            // later completes. Log loudly so this is at least diagnosable.
+            tracing::error!(
+                task_id,
+                error = %e,
+                "A2A bridge: failed to broadcast Working event; SSE consumers may miss task progression"
+            );
+        }
 
         // Build the run request
         let request = Self::build_run_request(task_id, &input);
@@ -359,9 +392,17 @@ impl A2AMessageHandler for AgentLoopBridge {
                                 is_final: true,
                                 metadata: None,
                             };
-                            let _ = streaming
+                            if let Err(e) = streaming
                                 .broadcast_status(&task_id_owned, completed_event)
-                                .await;
+                                .await
+                            {
+                                tracing::error!(
+                                    task_id = %task_id_owned,
+                                    error = %e,
+                                    "A2A bridge: failed to broadcast completion event; \
+                                     downstream SSE consumers may not see the task as finished"
+                                );
+                            }
                             info!(task_id = %task_id_owned, "A2A bridge: streaming task completed");
                         }
                         Err(e) => {
@@ -392,9 +433,16 @@ impl A2AMessageHandler for AgentLoopBridge {
                                 is_final: true,
                                 metadata: None,
                             };
-                            let _ = streaming
+                            if let Err(bcast_err) = streaming
                                 .broadcast_status(&task_id_owned, failed_event)
-                                .await;
+                                .await
+                            {
+                                tracing::error!(
+                                    task_id = %task_id_owned,
+                                    error = %bcast_err,
+                                    "A2A bridge: failed to broadcast failed-state event"
+                                );
+                            }
                             error!(task_id = %task_id_owned, error = %e, "A2A bridge: streaming task failed");
                         }
                     }
@@ -410,7 +458,13 @@ impl A2AMessageHandler for AgentLoopBridge {
                     );
                 }
                 // Cleanup runs in BOTH the success and the panic branches.
-                let _ = streaming.cleanup_task(&task_id_owned).await;
+                if let Err(e) = streaming.cleanup_task(&task_id_owned).await {
+                    tracing::warn!(
+                        task_id = %task_id_owned,
+                        error = %e,
+                        "A2A bridge: cleanup_task failed; broadcast channel entry may leak in StreamHub"
+                    );
+                }
             },
         ));
 

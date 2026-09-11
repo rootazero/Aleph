@@ -23,6 +23,7 @@ mod styles;
 #[cfg(test)]
 mod tests;
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -136,70 +137,74 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
         &self,
         output_path: &str,
     ) -> std::result::Result<PathBuf, ToolError> {
+        use crate::builtin_tools::file_ops::{check_and_resolve_path, get_denied_paths};
+
         let output_path = Path::new(output_path);
 
-        // BT-C-R4-01: previously absolute paths were returned as-is,
-        // bypassing the FsScope sandbox and `create_dir_all`-ing
-        // arbitrary parent directories (an LLM-supplied
-        // `/tmp/alice/.ssh/authorized_keys` would have created `.ssh/`
-        // and let the agent write a public key there). Now we always
-        // anchor under the workspace output dir; only the file name is
-        // taken from the model. This brings pdf_generate in line with
-        // what file_ops::check_and_resolve_path does for read/write.
-        if output_path.is_absolute() {
+        // BT-C-R4-01 + denylist gate: previously absolute paths were
+        // returned as-is, bypassing the FsScope sandbox and
+        // `create_dir_all`-ing arbitrary parent directories (an
+        // LLM-supplied `/tmp/alice/.ssh/authorized_keys` would have
+        // created `.ssh/` and let the agent write a public key
+        // there). The relative-path branch had a similar gap: it joined
+        // the LLM-supplied path onto `output_dir` without canonicalizing
+        // or checking that the result stayed inside `output_dir` (a
+        // `../../tmp/evil.pdf` escapes the FsScope). Now both branches
+        // route through the shared `check_and_resolve_path` so the
+        // credential denylist (~/.ssh, ~/.aws, ~/.netrc, /etc/passwd,
+        // /etc/shadow, /etc/sudoers, ~/.aleph/secrets.vault,
+        // ~/.aleph/data, …), the operator's `[sandbox] deny_read_globs`,
+        // and the /proc secret-leaves block all run.
+        //
+        // For absolute / `~` paths we first rewrite to the basename and
+        // anchor under the per-run FsScope / workspace output dir, then
+        // pass the rewritten path through `check_and_resolve_path` so the
+        // denylist still applies (e.g. a basename that itself matches a
+        // denied pattern).
+        let output_dir = self.choose_output_dir().await?;
+        let input = if output_path.is_absolute() {
             let filename = output_path.file_name().ok_or_else(|| {
                 ToolError::InvalidArgs(
                     "absolute output path has no file name component".to_string(),
                 )
             })?;
-            // Inline the base-dir resolution (the existing relative-path
-            // branch below) so the absolute and `~` cases anchor under
-            // the same FsScope / workspace as everything else. BT-C-R4-01
-            // closes the prior bypass where absolute paths wrote
-            // anywhere on the host.
-            let output_dir = self.choose_output_dir().await?;
-            return Ok(output_dir.join(filename));
-        }
-
-        if let Some(s) = output_path.to_str() {
-            if s.starts_with('~') {
-                // BT-C-R4-01: same — take only the file name component and
-                // anchor under the workspace, so `~/foo.pdf` resolves to
-                // `<workspace>/foo.pdf` not `~/foo.pdf`.
-                let filename = output_path.file_name().ok_or_else(|| {
-                    ToolError::InvalidArgs("~-prefixed path has no file name component".to_string())
-                })?;
-                let output_dir = self.choose_output_dir().await?;
-                return Ok(output_dir.join(filename));
-            }
-        }
-
-        // For relative paths, anchor at the per-run `FsScope` task-local first
-        // (per-run truth, immune to a concurrent run rewriting the shared
-        // `ToolContextHandle` mid-run — the same precedence file tools use in
-        // `file_ops::check_and_resolve_path`). A normal run's scope base is
-        // already `<workspace>/output/documents`, so this is identical to the
-        // shared-handle branch below for non-isolated runs; a worktree-isolated
-        // agent anchors at its checkout root, matching where its file writes go.
-        // Falls back to the shared handle, then a global default, outside any scope.
-        let output_dir = if let Some(scope) = crate::tools::fs_scope::current() {
-            scope.base
-        } else if let Some(ref handle) = self.tool_context_handle {
-            let ctx = handle.read().await;
-            ctx.output_dir.join("documents")
+            Cow::Owned(output_dir.join(filename))
+        } else if output_path
+            .to_str()
+            .map(|s| s.starts_with('~'))
+            .unwrap_or(false)
+        {
+            let filename = output_path.file_name().ok_or_else(|| {
+                ToolError::InvalidArgs("~-prefixed path has no file name component".to_string())
+            })?;
+            Cow::Owned(output_dir.join(filename))
         } else {
-            crate::utils::paths::get_workspaces_dir()
-                .map_err(|_| {
-                    ToolError::Execution(
-                        "Cannot determine home directory for output path".to_string(),
-                    )
-                })?
-                .join("main")
-                .join("output")
-                .join("documents")
+            Cow::Borrowed(output_path)
         };
 
-        Ok(output_dir.join(output_path))
+        // `check_and_resolve_path` canonicalizes the input, applies the
+        // denylist, and (when `output_dir_override` is Some) joins
+        // relative paths onto the override — so the relative branch is
+        // anchored at the same `output_dir` the absolute / `~` branches
+        // already use.
+        let denied = get_denied_paths();
+        let resolved = check_and_resolve_path(&input, &denied, Some(&output_dir))?;
+
+        // Containment: the resolved path MUST sit inside the per-run
+        // output dir. `check_and_resolve_path` canonicalizes, so this is
+        // a real check even for paths that exist on disk and even when
+        // the input went through a `..` component.
+        let canonical_output_dir = output_dir
+            .canonicalize()
+            .unwrap_or_else(|_| output_dir.clone());
+        if !resolved.starts_with(&canonical_output_dir) {
+            return Err(ToolError::InvalidArgs(format!(
+                "output_path escapes the workspace output dir: {}",
+                output_path.display()
+            )));
+        }
+
+        Ok(resolved)
     }
 
     /// BT-C-R4-01: helper that returns the workspace base directory used

@@ -292,13 +292,23 @@ impl WasmCapabilityKernel {
     }
 
     fn validate_path(&self, path: &str) -> Result<(), CapabilityError> {
+        // review(extension): use a path-component check instead of substring so
+        // a legitimate filename like `notes..txt` is not falsely refused. The
+        // previous substring check rejected every path containing two adjacent
+        // dots regardless of position.
+        fn has_parent_segment(p: &str) -> bool {
+            p.split(['/', '\\']).any(|seg| seg == "..")
+        }
+        fn has_abs_prefix(p: &str) -> bool {
+            p.starts_with('/') || p.starts_with('\\')
+        }
         // Check raw path first
-        if path.contains("..") {
+        if has_parent_segment(path) {
             return Err(CapabilityError::PathTraversal(
                 "'..' not allowed".to_string(),
             ));
         }
-        if path.starts_with('/') {
+        if has_abs_prefix(path) {
             return Err(CapabilityError::PathTraversal(
                 "absolute paths not allowed".to_string(),
             ));
@@ -311,12 +321,12 @@ impl WasmCapabilityKernel {
 
         // Also check percent-decoded form to prevent encoded traversal (%2e%2e)
         let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
-        if decoded.contains("..") {
+        if has_parent_segment(&decoded) {
             return Err(CapabilityError::PathTraversal(
                 "encoded '..' not allowed".to_string(),
             ));
         }
-        if decoded.starts_with('/') {
+        if has_abs_prefix(&decoded) {
             return Err(CapabilityError::PathTraversal(
                 "encoded absolute path not allowed".to_string(),
             ));

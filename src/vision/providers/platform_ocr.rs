@@ -27,8 +27,15 @@ pub struct PlatformOcrProvider {
 /// Where the provider obtains its OCR-capable screen capability.
 #[derive(Clone)]
 enum ScreenSource {
-    /// A directly-injected screen capability (tests and the bare `new()` default).
+    /// A directly-injected screen capability (tests).
     Direct(Arc<dyn aleph_desktop::ScreenCapability>),
+    /// Lazy variant used by [`PlatformOcrProvider::new`]. The first
+    /// [`ocr`](PlatformOcrProvider::ocr) call instantiates a
+    /// `NativeScreen`; subsequent calls reuse it. Avoids paying the
+    /// platform-side setup cost (accessibility permissions, window-server
+    /// connection on macOS) at registry build time when the provider may
+    /// never actually serve an OCR request.
+    LazyDirect(tokio::sync::OnceCell<Arc<dyn aleph_desktop::ScreenCapability>>),
     /// The full desktop platform; the screen is resolved per call via
     /// `platform.screen()`. Production uses this so OCR reuses the injected,
     /// bridge-backed platform screen (macOS routes OCR through the Swift helper)
@@ -43,10 +50,19 @@ impl PlatformOcrProvider {
     /// routed through the Swift bridge), so the production registry should use
     /// [`with_platform`](Self::with_platform) to reuse the injected,
     /// bridge-backed platform screen instead.
+    ///
+    /// The screen capability is **lazily** instantiated on first [`ocr`](Self::ocr)
+    /// call rather than at construction time. Constructing a `NativeScreen`
+    /// touches platform state (accessibility permissions, window-server
+    /// connections on macOS) that is wasteful to pay at registry build time
+    /// when the provider may never actually serve an OCR request (test
+    /// scaffolding, capability-only introspection, etc.). The
+    /// `with_platform` path was already lazy by virtue of its
+    /// `platform.screen()` lookup inside `ocr`.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            source: ScreenSource::Direct(Arc::new(aleph_desktop::NativeScreen::new())),
+            source: ScreenSource::LazyDirect(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -156,10 +172,29 @@ impl PlatformOcrProvider {
                         crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
                     )));
                 }
+                // Symmetric with the Base64 arm: a mislabeled JPEG-as-PNG
+                // payload gets caught at the boundary rather than handed to
+                // the platform OCR backend, which on some platforms silently
+                // produces wrong text instead of failing fast. The upstream
+                // Vision framework detects format from magic bytes too, so
+                // this matches its expectations rather than fighting them.
+                const PNG_MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+                if !bytes.starts_with(PNG_MAGIC) {
+                    return Err(VisionError::ImageError(format!(
+                        "image file {} does not start with PNG magic signature; \
+                         Platform OCR currently accepts only PNG. Route the \
+                         request through a transcoding pipeline or add a \
+                         transcode step.",
+                        path.display()
+                    )));
+                }
                 Ok(bytes)
             }
             ImageInput::Url { url } => Err(VisionError::ImageError(format!(
-                "Platform OCR does not support URL images directly: {url}"
+                "Platform OCR does not support URL images directly (no HTTP \
+                 fetch in this provider; bytes-only backend). Add an \
+                 HTTP-fetching provider upstream or pre-fetch the URL and \
+                 re-issue with Base64/FilePath. Rejected URL: {url}"
             ))),
         }
     }
@@ -187,8 +222,26 @@ impl VisionProvider for PlatformOcrProvider {
 
     async fn ocr(&self, image: &ImageInput) -> Result<OcrResult, VisionError> {
         let png_bytes = Self::resolve_png_bytes(image).await?;
+        let image_ctx = format!(
+            "variant={} bytes={}",
+            match image {
+                ImageInput::Base64 { format, .. } => format!("base64({format:?})"),
+                ImageInput::FilePath { path } => format!("FilePath({})", path.display()),
+                ImageInput::Url { .. } => "Url".to_string(),
+            },
+            png_bytes.len()
+        );
         let result = match &self.source {
             ScreenSource::Direct(screen) => screen.ocr(Some(&png_bytes)).await,
+            ScreenSource::LazyDirect(cell) => {
+                let screen = cell
+                    .get_or_init(|| async {
+                        Arc::new(aleph_desktop::NativeScreen::new())
+                            as Arc<dyn aleph_desktop::ScreenCapability>
+                    })
+                    .await;
+                screen.ocr(Some(&png_bytes)).await
+            }
             ScreenSource::Platform(platform) => {
                 let screen = platform.screen().ok_or_else(|| {
                     VisionError::ProviderError(
@@ -198,7 +251,11 @@ impl VisionProvider for PlatformOcrProvider {
                 screen.ocr(Some(&png_bytes)).await
             }
         }
-        .map_err(|e| VisionError::ProviderError(format!("Platform OCR failed: {e}")))?;
+        .map_err(|e| {
+            VisionError::ProviderError(format!(
+                "Platform OCR failed ({image_ctx}): {e}"
+            ))
+        })?;
 
         Ok(convert_platform_ocr_result(result))
     }
@@ -221,15 +278,30 @@ impl VisionProvider for PlatformOcrProvider {
 
 /// Convert the desktop-layer OCR result into the vision-layer OCR shape.
 ///
-/// TODO(vision): expose `lines` (bounding box, confidence, recognition
-/// candidates) once a consumer asks for them — per CLAUDE.md R10 YAGNI, defer
-/// until a real caller. Until then, retain the field on the input type so
-/// future migration is cheap; the explicit `let _lines =` binding makes the
-/// omission greppable so future readers don't 'fix' it by mistake.
+/// Forwards the per-line structured output (`text`, `bounding_box`,
+/// `confidence`) when the platform-side backend produced it — the
+/// platform layer already paid the cost of recognising these on the
+/// Vision framework side, and discarding them at the boundary meant a
+/// downstream consumer could not debug or post-process OCR output.
 fn convert_platform_ocr_result(result: aleph_desktop::OcrResult) -> OcrResult {
-    let _lines = result.lines; // tracked above; intentional discard
     OcrResult {
         full_text: result.full_text,
+        lines: result
+            .lines
+            .into_iter()
+            .map(|line| crate::vision::types::OcrLine {
+                text: line.text,
+                bounding_box: line.bounding_box.map(|bb| {
+                    crate::vision::types::BoundingBox {
+                        x: bb.x,
+                        y: bb.y,
+                        w: bb.w,
+                        h: bb.h,
+                    }
+                }),
+                confidence: line.confidence,
+            })
+            .collect(),
     }
 }
 

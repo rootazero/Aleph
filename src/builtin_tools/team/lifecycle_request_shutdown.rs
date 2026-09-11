@@ -69,6 +69,15 @@ impl AlephTool for LifecycleRequestShutdownTool {
     type Output = LifecycleRequestShutdownOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // BT-D-R4-23: gate before any team read or message send. The
+        // team-existence + leader-self checks below do not verify the
+        // caller is a team member — a non-member could pass both and
+        // still fire a ShutdownRequest to the leader with arbitrary
+        // `reason` text. The leader's lifecycle_resolve_shutdown is
+        // gated; this inbound half must be too, or the inbox and event
+        // log can be spammed from outside the team.
+        super::require_team_auth(&*self.team_store, &args.team_id, &self.actor()).await?;
+
         let team = self
             .team_store
             .get_team(&args.team_id)

@@ -25,6 +25,7 @@ use crate::sync_primitives::Arc;
 use crate::utils::no_window::NoWindow;
 use std::time::Duration;
 
+use futures::FutureExt;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -232,20 +233,33 @@ impl StopHookAggregateResult {
 // ---------------------------------------------------------------------------
 
 /// Execute all stop hooks in parallel.
+///
+/// `join_all` preserves the input order of the futures it polls, so
+/// tagging each verdict with its hook index at spawn time and re-sorting
+/// by that index on completion gives deterministic ordering in
+/// [`StopHookAggregateResult::blocking_reason`] and
+/// [`StopHookAggregateResult::halt_reason`]. Without that fix, hooks of
+/// varying latency surface their reasons in completion order rather than
+/// declaration order, which makes audit-log reproducibility depend on
+/// per-hook runtime jitter.
 pub async fn execute_stop_hooks(
     hooks: &[Box<dyn StopHookHandler>],
     context: &StopHookContext,
     cancel: &CancellationToken,
 ) -> StopHookAggregateResult {
-    use futures::future::join_all;
-
-    let futures: Vec<_> = hooks
-        .iter()
-        .map(|hook| hook.evaluate(context, cancel))
-        .collect();
-
-    let verdicts = join_all(futures).await;
-    StopHookAggregateResult { verdicts }
+    let mut verdicts_with_idx: Vec<(usize, StopHookVerdict)> =
+        futures::future::join_all(hooks.iter().enumerate().map(|(idx, hook)| {
+            hook.evaluate(context, cancel)
+                .map(move |v| (idx, v))
+        }))
+        .await;
+    // join_all already preserves spawn order on a Vec, but we restate the
+    // invariant explicitly so a future refactor (e.g. switching to an
+    // unordered join) cannot silently break declaration-order semantics.
+    verdicts_with_idx.sort_by_key(|(idx, _)| *idx);
+    StopHookAggregateResult {
+        verdicts: verdicts_with_idx.into_iter().map(|(_, v)| v).collect(),
+    }
 }
 
 /// `Arc`-parameter version of `execute_stop_hooks` — for consumers outside the
@@ -302,7 +316,14 @@ const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 /// silently, several autonomous iterations later, at the completion claim.
 #[must_use]
 pub fn is_shell_safe(command: &str) -> bool {
-    const SAFE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=";
+    // Backslash is the standard Windows path separator and a perfectly
+    // legal character in a `cmd /C C:\path\to\script.ps1` goal-gate
+    // command. cmd.exe does not treat `\` as a metacharacter on its own
+    // — only the `^` escape and unescaped `"` introduce quoting — so
+    // adding `\` here costs no safety and stops legitimate Windows
+    // goal-gates from being silently rejected.
+    const SAFE: &str =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /._-:\"'=\\";
     // Newline / carriage-return are already absent from `SAFE`, so the
     // single `contains` check covers them — no extra explicit comparison.
     command.chars().all(|c| SAFE.contains(c))

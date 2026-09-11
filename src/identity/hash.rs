@@ -58,9 +58,14 @@ pub struct Preimage<'a> {
 /// This is what makes the concatenation unambiguous — no two distinct field
 /// tuples can produce the same byte run.
 fn lp(hasher: &mut Sha256, bytes: &[u8]) {
-    let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+    // Fail loud on fields >4 GiB: `unwrap_or(u32::MAX)` + the slice-truncation
+    // below would silently collapse any two inputs that agree on the first
+    // u32::MAX bytes to the same digest. Real-world fields are short; the
+    // panic surfaces the framing-invariant break instead of hiding it.
+    let len = u32::try_from(bytes.len())
+        .expect("preimage field exceeds u32 length");
     hasher.update(len.to_be_bytes());
-    hasher.update(&bytes[..bytes.len().min(len as usize)]);
+    hasher.update(bytes);
 }
 
 /// Optional length-prefixed field: presence tag, then (if present) the field.

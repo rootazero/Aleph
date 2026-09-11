@@ -1076,7 +1076,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
 
             let manager = Arc::new(AcpAdapterManager::from_entries(entries));
-            alephcore::acp::manager::wire_persistence(&manager).await;
+            let _event_tx = alephcore::acp::manager::wire_persistence(&manager).await;
 
             // Wire the gateway broadcast hook so panels subscribed to
             // `acp.sessions.changed` get live re-fetch signals on every

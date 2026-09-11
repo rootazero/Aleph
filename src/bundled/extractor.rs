@@ -102,7 +102,15 @@ pub(crate) fn sync_official_with_urls(
                 if let Err(e) = manifest.reconcile(&skills_dir) {
                     warn!("reconcile failed: {e}");
                 }
-                manifest.bundled_version = BUNDLED_VERSION.to_string();
+                // BUNDLED-R4-05: do NOT set `manifest.bundled_version`
+                // here. If skills succeeded but the plugins block
+                // below fails, the next startup would observe
+                // `bundled_version == BUNDLED_VERSION` and short-circuit
+                // the extract_bundled_content path, leaving plugins
+                // permanently stale. The `bundled_version` is set
+                // AFTER both kinds succeed (see the end of this
+                // function), so a partial sync is retried on next
+                // startup.
                 if let Err(e) = manifest.save(&skills_dir) {
                     warn!("save failed: {e}");
                 }
@@ -126,6 +134,19 @@ pub(crate) fn sync_official_with_urls(
 
     if !report.skills && !report.plugins {
         return Err(last_err.unwrap_or_else(|| "nothing synced".into()));
+    }
+    // BUNDLED-R4-05: stamp `bundled_version` ONLY when both kinds
+    // succeeded. A partial sync (skills OK, plugins failed) leaves the
+    // version at its previous value so the next startup's
+    // `bundled_version == BUNDLED_VERSION` short-circuit does not fire
+    // and the failed kind is retried.
+    if matches!(kind, SyncKind::All) && report.skills && report.plugins {
+        if let Some(mut manifest) = InstallRegistry::load(&skills_dir) {
+            manifest.bundled_version = BUNDLED_VERSION.to_string();
+            if let Err(e) = manifest.save(&skills_dir) {
+                warn!("save failed (final): {e}");
+            }
+        }
     }
     Ok(report)
 }
@@ -557,9 +578,32 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
                 .as_nanos()
         );
         let tmp = target.join(&tmp_name);
-        if let Err(e) = std::fs::write(&tmp, file.contents()) {
+        // BUNDLED-R4-04: refuse to write if the tmp path already exists.
+        // The tmp name is predictable from PID + counter + nanos, so a
+        // co-resident process running as the same user could
+        // pre-create a symlink at this path and `std::fs::write`
+        // would silently follow it, overwriting an arbitrary file
+        // with the bundled contents. `create_new(true)` requires the
+        // path to not exist (O_CREAT|O_EXCL semantics) and, on
+        // POSIX, the file is created atomically without following a
+        // trailing symlink component.
+        let write_result = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, file.contents()));
+        if let Err(e) = write_result {
             // Clean up the (possibly partial) temp file so we don't leak it.
             let _ = std::fs::remove_file(&tmp);
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "refusing to extract: tmp path {tmp_name:?} already exists in \
+                         {target:?} (likely symlink planted by co-resident process)"
+                    ),
+                ));
+            }
             return Err(e);
         }
         if let Err(e) = std::fs::rename(&tmp, &dest) {

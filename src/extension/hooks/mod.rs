@@ -492,6 +492,14 @@ pub fn substitute_variables(
 
     // Custom environment variables
     for (key, value) in &context.env {
+        // review(extension): skip empty keys — `format!("${key}")` with an
+        // empty `key` produces `"$"`, and a literal `$` match would
+        // substitute the value into every remaining `$`-prefixed variable
+        // (including `$ARGUMENTS`, `$TOOL_NAME`, `$SESSION_ID`, …) silently
+        // clobbering them.
+        if key.is_empty() {
+            continue;
+        }
         result = result.replace(&format!("${key}"), value);
         result = result.replace(&format!("${{{key}}}"), value);
     }

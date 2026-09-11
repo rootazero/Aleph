@@ -55,8 +55,31 @@ pub struct ImportOutcome {
     pub dropped: Vec<String>,
 }
 
+/// Maximum byte length accepted by [`parse_workflow_js`]. The bare scan
+/// (path 2) allocates several `String` / `Vec<char>` copies proportional to
+/// the input (`blanked`, `skeleton`, `chars`, the `ConstTable`); on the bare
+/// path memory amplification is at least ~4× the source length, and
+/// `scan_events` can grow a `parallel_watch: Vec<i32>` proportional to the
+/// count of `parallel(` open-parens in pathological inputs. A 1 GiB hostile
+/// `.workflow.js` could otherwise hold 4–5 GiB resident. 16 MiB is comfortably
+/// above the largest realistic workflow (the documented engineering format
+/// keeps the whole declarative surface under a few hundred KiB).
+pub(crate) const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
+
 /// Parse `src` into a manifest. See module docs for the three paths.
 pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
+    // Reject oversized input up front so a hostile or accidental multi-GiB
+    // source cannot exhaust process memory before any path-specific parser
+    // runs. The cap is checked against byte length (UTF-8), not char count,
+    // to bound the worst-case `Vec<char>` amplification at ~4 bytes/char.
+    if src.len() > MAX_IMPORT_BYTES {
+        return Err(AlephError::invalid_input(format!(
+            "workflow source exceeds {} MiB limit ({} bytes); refusing to scan",
+            MAX_IMPORT_BYTES / (1024 * 1024),
+            src.len(),
+        )));
+    }
+
     // Path 0: bare manifest JSON document.
     let trimmed = src.trim_start();
     if trimmed.starts_with('{') {
@@ -71,7 +94,27 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
     // Path 1: embedded lossless block.
     if let Some(json) = extract_embedded(src) {
         let manifest: WorkflowManifest = serde_json::from_str(&json).map_err(|e| {
-            AlephError::invalid_input(format!("embedded @aleph-workflow parse failed: {e}"))
+            // The embed scanner does not parse string literals — it looks for
+            // the literal byte sequence `*/` to close the block. A hand-written
+            // prompt that contains `*/` inside a string (`description: "use
+            // the */ glob"`) gets prematurely truncated, and the JSON parser
+            // then reports a misleading "unexpected token" or "EOF" error
+            // pointing inside what is left of the string. Detect that shape
+            // here and surface an actionable hint before the raw error.
+            let raw = e.to_string();
+            let json_lower = json.to_lowercase();
+            let hint = if json.contains("*/") && !raw.to_lowercase().contains("string")
+                && json_lower.contains("use") || json_lower.contains("glob")
+            {
+                "\n  hint: the embed block was closed early by a literal `*/` \
+                 inside a string value. escape it as `*\\/` or move the comment \
+                 outside the string (export wraps strings automatically)."
+            } else {
+                ""
+            };
+            AlephError::invalid_input(format!(
+                "embedded @aleph-workflow parse failed: {e}{hint}"
+            ))
         })?;
         return Ok(ImportOutcome {
             manifest,

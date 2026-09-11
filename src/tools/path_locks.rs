@@ -52,6 +52,20 @@ pub async fn lock_path(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
 /// Acquire the write locks for a two-endpoint mutation (move / copy source +
 /// destination) in **sorted order**, so two concurrent operations with
 /// crossed endpoints (A→B racing B→A) cannot ABBA-deadlock — the same
+/// Lock two paths in a globally-consistent order to prevent ABBA deadlock
+/// between two tasks that each want both paths.
+///
+/// **Caller contract: `a` and `b` MUST already be canonical (absolute,
+/// symlink-resolved) and identical-or-prefix-equal across every caller
+/// that touches the same real file.** The function sorts by raw byte
+/// order — `/foo` vs `./foo` vs `foo` vs `/./foo` will sort
+/// inconsistently across callers on the same underlying file, and two
+/// concurrent callers can therefore acquire the two paths in opposite
+/// orders, hitting the ABBA deadlock this helper exists to prevent. The
+/// existing callers canonicalise via `check_and_resolve_path`; any
+/// future caller passing raw user-supplied paths should canonicalise
+/// first or call `lock_path` once on the resolved path instead.
+///
 /// discipline `apply_patch` follows for its move destinations. Equal paths
 /// lock once (the second slot stays `None`); re-acquiring the same async
 /// mutex in one task would deadlock, not panic.

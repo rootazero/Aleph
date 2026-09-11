@@ -9,7 +9,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::agents::{AgentDef, AgentMode};
+    use crate::agents::{AgentDef, AgentIdentity, AgentMode, Lifecycle, SpawnOverride};
     use crate::error::Result as AlephResult;
     use crate::harness::chain_context::ChainContext;
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
@@ -1547,16 +1547,20 @@ mod tests {
         .with_routing_store(store.clone());
 
         let config = AgentRuntimeConfig {
-            agent_def: agent_with_allowed("planner", vec!["*"])
-                .with_model_hint("claude-opus-4-8")
-                .with_provider_hint("anthropic"),
-            task: "plan it".to_string(),
-            context_summary: None,
-            spawn_context: None,
-            fork_source: None,
-            model: None,
-            timeout_secs: 5,
-            request_id: None,
+            identity: AgentIdentity {
+                agent_def: agent_with_allowed("planner", vec!["*"])
+                    .with_model_hint("claude-opus-4-8")
+                    .with_provider_hint("anthropic"),
+                task: "plan it".to_string(),
+                context_summary: None,
+            },
+            spawn_override: SpawnOverride {
+                spawn_context: None,
+                fork_source: None,
+                model: None,
+                request_id: None,
+            },
+            lifecycle: Lifecycle { timeout_secs: 5 },
         };
 
         runtime.run(config).await.expect("spawn ok");

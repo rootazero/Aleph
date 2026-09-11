@@ -312,11 +312,21 @@ impl A2ARequestProcessor {
                     is_final: true,
                     metadata: None,
                 };
-                let _ = self
+                if let Err(e) = self
                     .state
                     .streaming
                     .broadcast_status(&task.id, cancel_event)
-                    .await;
+                    .await
+                {
+                    // Symmetric with the bridge.rs streaming path: a dropped
+                    // cancel event leaves SSE subscribers attached to a stream
+                    // that never emits a terminal state.
+                    tracing::error!(
+                        task_id = %task.id,
+                        error = %e,
+                        "A2A request processor: failed to broadcast cancel event"
+                    );
+                }
                 JsonRpcResponse::serialize_ok(request.id, &task)
             }
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),

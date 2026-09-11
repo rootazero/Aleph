@@ -32,9 +32,26 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     tmp.write_all(bytes)?;
     tmp.as_file_mut().sync_all()?;
     tmp.persist(path).map_err(|e| {
-        let _ = std::fs::remove_file(e.file.path());
+        // Best-effort cleanup of the leaked temp file. We log rather than
+        // swallow because a directory populated with .aleph_atomic_* stubs
+        // is an ops surprise the caller should be able to find.
+        if let Err(cleanup_err) = std::fs::remove_file(e.file.path()) {
+            tracing::warn!(
+                temp_file = %e.file.path().display(),
+                error = %cleanup_err,
+                "write_atomic: failed to remove leaked temp file after persist error",
+            );
+        }
         e.error
     })?;
+    // fsync the parent directory so the rename survives a crash. On Linux
+    // the new directory entry lives in the parent dir's metadata; without
+    // this sync, the file can be on disk but absent from the directory
+    // listing after a power cut. Other platforms return EINVAL on
+    // dir-fsync — we treat that as best-effort rather than fail the write.
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 

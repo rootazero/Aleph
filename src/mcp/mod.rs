@@ -72,7 +72,7 @@ pub use redact::redact_mcp_error;
 pub use resources::ResourceContent;
 pub use sampling::{SamplingCallback, SamplingHandler};
 pub use sampling_bridge::{
-    decline_sampling_llm, register_sampling_llm, sampling_llm_registered, serve_sampling,
+    decline_sampling_llm, register_sampling_llm, serve_sampling,
 };
 pub use tool_bridge::spawn_tool_bridge;
 #[cfg(test)]

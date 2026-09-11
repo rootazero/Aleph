@@ -911,6 +911,41 @@ impl ExecApprovalManager {
         out
     }
 
+    /// Retire a pending entry **without stamping a decision** and **without
+    /// cascading** to identical siblings.
+    ///
+    /// Distinct from [`Self::resolve_with_reason`], which both stamps a
+    /// decision on the record AND cascades session-level grants/denials to
+    /// every other live pending entry in the same session carrying the same
+    /// `grant_key`. Both behaviors are wrong for "nobody was ever asked": a
+    /// `Deny` stamp records a refusal the user never made (the
+    /// [`DenialLedger`](crate::sandbox::exec_approval::denial_ledger::DenialLedger)'s
+    /// brute-force breaker counts it), and cascading that fake refusal would
+    /// deny sibling cards parked beside this one — three transient delivery
+    /// hiccups in a row would pause every gate in the conversation.
+    ///
+    /// `true` if a live entry was retired, `false` if no such entry existed
+    /// (already resolved / expired / unknown id / sender already dropped).
+    /// Any live waiter is woken with `None` — the same signal a sweep would
+    /// give it — so the requester's `await_registered` returns
+    /// `ResolvedDecision { decision: None, .. }` and the call is treated as
+    /// a non-decision rather than a refusal.
+    pub fn retire_pending(&self, id: &str) -> bool {
+        let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
+        if !pending.get(id).is_some_and(|e| e.is_live()) {
+            return false;
+        }
+        // Liveness checked above; the `take()` extracts the sender so the
+        // waiter (if any) wakes on a channel close and treats it as
+        // "no decision" — semantically the same path a sweep would take,
+        // with the cascade and the decision stamp suppressed.
+        let mut entry = pending.remove(id).expect("just checked live");
+        if let Some(sender) = entry.sender.take() {
+            let _ = sender.send(None);
+        }
+        true
+    }
+
     /// Clean up expired pending requests
     pub(crate) fn cleanup_expired(&self) {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
@@ -1825,5 +1860,88 @@ mod tests {
         ));
         let resolved = manager.await_registered(id, rx, timeout).await;
         assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
+
+    /// `retire_pending` removes a live entry without stamping a decision and
+    /// without cascading — the bridge uses this on a delivery failure (the
+    /// card never reached anyone) so a transient channel hiccup is not
+    /// misfiled as a `UserRejected` denial by the brute-force breaker.
+    #[tokio::test]
+    async fn retire_pending_removes_live_entry_without_stamping_decision() {
+        let manager = ExecApprovalManager::new();
+        let record = manager.create(&mock_request(), 60_000);
+        let (id, rx, timeout) = manager.register_pending(record);
+
+        assert!(manager.retire_pending(&id));
+        assert!(
+            manager.get_pending(&id).is_none(),
+            "retired entry must not be listable"
+        );
+
+        let resolved = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(
+            resolved.decision, None,
+            "a retired entry wakes its waiter with None, not a stamped decision"
+        );
+        assert_eq!(
+            resolved.deny_reason, None,
+            "a retire must not stamp a deny_reason (no Deny ever happened)"
+        );
+    }
+
+    /// Regression for the cascade-on-delivery-failure bug: a `Deny` stamped by
+    /// the bridge when the channel refused to deliver would cascade to every
+    /// OTHER live pending card with the same `grant_key`, and those cascaded
+    /// `Deny` outcomes flow into `DenialLedger::record_denial` as
+    /// `UserRejected`. `retire_pending` must not cascade.
+    #[tokio::test]
+    async fn retire_pending_does_not_cascade_to_identical_sibling_cards() {
+        let manager = ExecApprovalManager::new();
+        let rec_a = manager.create(&keyed_request("rcv-a", "s1", Some("k1")), 60_000);
+        let rec_b = manager.create(&keyed_request("rcv-b", "s1", Some("k1")), 60_000);
+        let (id_a, _rx_a, _t_a) = manager.register_pending(rec_a);
+        let (id_b, rx_b, t_b) = manager.register_pending(rec_b);
+
+        // Retiring a (simulating a delivery failure on a) must NOT resolve b.
+        assert!(manager.retire_pending(&id_a));
+        assert!(
+            manager.get_pending(&id_b).is_some(),
+            "sibling card must still be pending — retire must not cascade"
+        );
+        assert_eq!(
+            manager
+                .get_pending(&id_b)
+                .expect("still pending")
+                .record
+                .decision,
+            None,
+            "sibling card must not be stamped with any decision"
+        );
+
+        // And b remains resolvable the normal way afterwards.
+        assert!(manager.resolve(&id_b, ApprovalDecisionType::AllowOnce, None));
+        let resolved = manager.await_registered(id_b, rx_b, t_b).await;
+        assert_eq!(resolved.decision, Some(ApprovalDecisionType::AllowOnce));
+    }
+
+    /// `retire_pending` is idempotent on a dead/already-resolved entry: the
+    /// bridge may call it twice if a delivery succeeds-then-fails across
+    /// transports, and the second call must be a no-op false.
+    #[tokio::test]
+    async fn retire_pending_is_a_noop_for_dead_or_unknown_ids() {
+        let manager = ExecApprovalManager::new();
+        assert!(!manager.retire_pending("does-not-exist"));
+
+        let record = manager.create(&mock_request(), 60_000);
+        let (id, _rx, _timeout) = manager.register_pending(record);
+        assert!(manager.retire_pending(&id));
+        // Second call on the now-retired id.
+        assert!(!manager.retire_pending(&id));
+
+        // Resolved (decision stamped) entries are also no-op false.
+        let record2 = manager.create(&mock_request(), 60_000);
+        let (id2, _rx2, _t2) = manager.register_pending(record2);
+        assert!(manager.resolve(&id2, ApprovalDecisionType::AllowOnce, None));
+        assert!(!manager.retire_pending(&id2));
     }
 }

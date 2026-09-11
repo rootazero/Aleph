@@ -5,7 +5,7 @@
 
 use super::constants::DEFAULT_ENDPOINT;
 use super::provider::ReplicateProvider;
-use crate::generation::GenerationType;
+use crate::generation::{GenerationError, GenerationType};
 use reqwest::Client;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -93,12 +93,33 @@ impl ReplicateProviderBuilder {
     }
 
     /// Build the `ReplicateProvider`
+    ///
+    /// Returns a provider even if the underlying `reqwest::Client` builder
+    /// failed — the failure path silently substitutes a default-constructed
+    /// client (no timeout, no other configuration). This mirrors the
+    /// pre-fix behaviour and is retained for the unit-test call sites that
+    /// only need an instance to exercise request-handling code.
+    ///
+    /// Production paths (the factory arm in
+    /// `src/generation/providers/factory.rs`) must use [`Self::try_build`]
+    /// so a TLS / DNS resolver misconfiguration surfaces at startup instead
+    /// of producing a provider with no per-request timeout.
     #[must_use]
     pub fn build(self) -> ReplicateProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs.max(1)))
             .build()
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    subsystem = "generation",
+                    provider = "replicate",
+                    error = %e,
+                    "reqwest::Client::builder() failed; substituting default client \
+                     (no timeout). Production should use ReplicateProviderBuilder::try_build \
+                     via the factory arm."
+                );
+                Client::new()
+            });
 
         ReplicateProvider {
             client,
@@ -107,5 +128,34 @@ impl ReplicateProviderBuilder {
             model_mappings: self.model_mappings,
             supported_types: self.supported_types,
         }
+    }
+
+    /// Build the `ReplicateProvider`, propagating reqwest client-build errors
+    /// to the caller.
+    ///
+    /// Every other builder in this module (`with_timeout`,
+    /// `generation_http_client`, `voice_http_client`) propagates the error.
+    /// The Replicate builder's `unwrap_or_default()` was the only one that
+    /// silently swallowed it, masking a process-startup misconfiguration.
+    /// Production callers (factory arms) must use this method; the
+    /// infallible [`Self::build`] is retained for unit tests that exercise
+    /// request-handling logic and never actually dispatch the HTTP client.
+    pub fn try_build(self) -> Result<ReplicateProvider, GenerationError> {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
+            .build()
+            .map_err(|e| {
+                GenerationError::network(format!(
+                    "replicate: failed to build HTTP client: {e}"
+                ))
+            })?;
+
+        Ok(ReplicateProvider {
+            client,
+            api_key: self.api_key,
+            endpoint: self.endpoint,
+            model_mappings: self.model_mappings,
+            supported_types: self.supported_types,
+        })
     }
 }

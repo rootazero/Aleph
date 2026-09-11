@@ -252,9 +252,16 @@ impl GenerationProviderRegistry {
     /// # Returns
     ///
     /// `true` if provider exists, `false` otherwise
+    ///
+    /// `contains` agrees with [`Self::get`]: a provider registered under its
+    /// config section name (e.g. `"dalle"`) is also reported as present when
+    /// queried under its canonical name (e.g. `"openai-image"`), since `get`
+    /// resolves through `canonical_index`. Without this parity, callers that
+    /// guard on `contains` and then call `get(...).unwrap()` would silently
+    /// miss the canonical-name alias and panic.
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
-        self.providers.contains_key(name)
+        self.providers.contains_key(name) || self.canonical_index.contains_key(name)
     }
 
     /// Get the number of registered providers

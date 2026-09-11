@@ -260,6 +260,7 @@ struct CompletedAgent {
 /// tool_calls_made}` response shape so `check_status` of a finished
 /// background agent surfaces the same metrics regardless of which path
 /// produced it. `Err` carries the failure message.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum CompletedOutcome {
     Ok {
@@ -307,6 +308,7 @@ pub struct RunningMeta {
 /// would return; `TimedOut` means the bounded wait window closed with the
 /// agent still running (the caller may `wait` again); `NotFound` means the
 /// `request_id` is unknown (never registered, or TTL-pruned).
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum WaitOutcome {
     Completed(CompletedSnapshot),
@@ -321,6 +323,7 @@ pub enum WaitOutcome {
 /// running when the window closed. `AllDelivered` means every id has already
 /// been handed over and none is still running — the fan-out is drained.
 /// `NotFound` means none of the ids is known (all unregistered / TTL-pruned).
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum WaitAnyOutcome {
     Completed {

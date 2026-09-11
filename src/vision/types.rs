@@ -76,11 +76,46 @@ pub struct VisionResult {
 // OCR Result
 // ---------------------------------------------------------------------------
 
+/// A single line of text recognised by OCR, with optional bounding box and
+/// confidence. Mirrors `aleph_desktop::OcrLine` at the vision-module boundary
+/// so platform-side detail (raw recognition candidates, locale, etc.) does
+/// not leak into the core result type.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OcrLine {
+    /// The recognised text content.
+    pub text: String,
+    /// Optional bounding box for this line (screen coordinates).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bounding_box: Option<BoundingBox>,
+    /// Optional confidence score in the range `0.0..=1.0`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
+}
+
+/// A bounding box in screen coordinates.
+///
+/// Field types are `f64` to match the desktop-side [`aleph_desktop::BoundingBox`]
+/// exactly; conversion happens at the boundary so the core result type
+/// does not force downstream consumers to know about pixel-precision loss.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct BoundingBox {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
 /// Result of an OCR (Optical Character Recognition) request.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OcrResult {
-    /// Full recognized text concatenated from all lines.
+    /// Full recognised text concatenated from all lines.
     pub full_text: String,
+    /// Per-line structured output (bounding box, confidence, text).
+    /// Empty when the underlying provider does not surface line-level
+    /// detail. Additive — existing consumers reading only `full_text`
+    /// are unaffected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<OcrLine>,
 }
 
 // ---------------------------------------------------------------------------

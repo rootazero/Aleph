@@ -134,10 +134,18 @@ pub enum GenerationError {
     },
 
     /// Failed to download generated content
+    ///
+    /// `status_code` carries the HTTP status the download attempt saw, when
+    /// one was available. `None` means the failure was transport-level
+    /// (timeout, reset, TLS) and IS retryable; `Some(code)` lets
+    /// [`Self::is_retryable`] gate retries on a sensible status range —
+    /// retrying a 404 (expired signed URL) or a 403 (region-locked asset)
+    /// would burn the budget without making progress.
     #[error("Download failed: {message}")]
     DownloadError {
         message: String,
         url: Option<String>,
+        status_code: Option<u16>,
     },
 
     /// Serialization/deserialization error
@@ -294,9 +302,22 @@ impl GenerationError {
 
     /// Create a download error
     pub fn download<S: Into<String>>(message: S, url: Option<String>) -> Self {
+        Self::download_with_status(message, url, None)
+    }
+
+    /// Create a download error that also carries the HTTP status code
+    /// observed on the failed download. Pass `None` for transport-level
+    /// failures (timeout, reset, TLS handshake) where retrying is the right
+    /// response.
+    pub fn download_with_status<S: Into<String>>(
+        message: S,
+        url: Option<String>,
+        status_code: Option<u16>,
+    ) -> Self {
         Self::DownloadError {
             message: message.into(),
             url,
+            status_code,
         }
     }
 
@@ -341,7 +362,22 @@ impl GenerationError {
                     status_code: Some(429),
                     ..
                 }
-                | Self::DownloadError { .. }
+                | Self::ProviderError {
+                    status_code: Some(408),
+                    ..
+                }
+                | Self::DownloadError {
+                    status_code: None,
+                    ..
+                }
+                | Self::DownloadError {
+                    status_code: Some(500..=599),
+                    ..
+                }
+                | Self::DownloadError {
+                    status_code: Some(408),
+                    ..
+                }
         )
     }
 
@@ -458,10 +494,25 @@ impl GenerationError {
             }
             Self::RateLimitError { retry_after, .. } => {
                 if let Some(duration) = retry_after {
-                    format!(
-                        "Rate limit exceeded. Please wait {} seconds before trying again.",
-                        duration.as_secs()
-                    )
+                    // Sub-second retries would otherwise render as
+                    // "wait 0 seconds" — a useless instruction. Use
+                    // sub-second units when the duration is < 1s, and
+                    // a generic "moment" fallback for an exactly-zero
+                    // duration (which should not happen in practice but
+                    // the explicit case is cheap).
+                    if duration.is_zero() {
+                        "Rate limit exceeded. Please wait a moment before trying again.".to_string()
+                    } else if duration.as_secs() == 0 {
+                        format!(
+                            "Rate limit exceeded. Please wait {} ms before trying again.",
+                            duration.as_millis()
+                        )
+                    } else {
+                        format!(
+                            "Rate limit exceeded. Please wait {} seconds before trying again.",
+                            duration.as_secs()
+                        )
+                    }
                 } else {
                     "Rate limit exceeded. Please wait a moment before trying again.".to_string()
                 }
@@ -555,11 +606,18 @@ impl GenerationError {
                     format!("Generation job failed: {message}")
                 }
             }
-            Self::DownloadError { message, url } => {
+            Self::DownloadError {
+                message,
+                url,
+                status_code,
+            } => {
+                let status_hint = status_code
+                    .map(|c| format!(" (HTTP {c})"))
+                    .unwrap_or_default();
                 if let Some(u) = url {
-                    format!("Failed to download from {u}: {message}")
+                    format!("Failed to download from {u}{status_hint}: {message}")
                 } else {
-                    format!("Download failed: {message}")
+                    format!("Download failed{status_hint}: {message}")
                 }
             }
             Self::SerializationError { message } => {
@@ -575,14 +633,47 @@ impl GenerationError {
     }
 }
 
-/// Convert `GenerationError` to `AlephError` for integration with core error handling
+/// Convert `GenerationError` to `AlephError` for integration with core error handling.
+///
+/// The conversion preserves as much of the typed information as the receiving
+/// `AlephError` variant can carry: status_code (when the receiving variant has
+/// one), retry_after (folded into the suggestion string since `AlephError`'s
+/// rate-limit variant has no `retry_after` field), provider name, and the
+/// correct error classifier (e.g. `SerializationError` is `other`, not `IoError`,
+/// so downstream classifiers that key on `IoError` for transport problems are
+/// not falsely tripped).
 impl From<GenerationError> for AlephError {
     fn from(err: GenerationError) -> Self {
         match err {
             GenerationError::AuthenticationError { message, provider } => {
                 Self::authentication(provider, message)
             }
-            GenerationError::RateLimitError { message, .. } => Self::rate_limit(message),
+            GenerationError::RateLimitError {
+                message,
+                retry_after,
+            } => {
+                // Surface the upstream-supplied `Retry-After` hint in the
+                // suggestion string so gateway/voice/outbound.rs retry
+                // classifiers can wait the right amount instead of falling
+                // back to the Aleph-side default (60 s). AlephError's
+                // rate-limit variant has no retry_after field of its own,
+                // so we bake the hint into the suggestion.
+                let suggestion = match retry_after {
+                    Some(d) if !d.is_zero() => Some(format!(
+                        "Wait {} seconds or upgrade your API plan",
+                        d.as_secs().max(1)
+                    )),
+                    Some(_) => Some(
+                        "Wait a moment, then retry. Upgrade your API plan if this persists."
+                            .to_string(),
+                    ),
+                    None => Some("Wait 60 seconds or upgrade your API plan".to_string()),
+                };
+                Self::RateLimitError {
+                    message,
+                    suggestion,
+                }
+            }
             GenerationError::QuotaExceededError { message, .. } => {
                 Self::rate_limit(format!("Quota exceeded: {message}"))
             }
@@ -600,7 +691,26 @@ impl From<GenerationError> for AlephError {
                 Self::provider(format!("Content filtered: {message}"))
             }
             GenerationError::UnsupportedFeatureError { message, .. } => Self::provider(message),
-            GenerationError::ProviderError { message, .. } => Self::provider(message),
+            GenerationError::ProviderError {
+                message,
+                provider,
+                status_code,
+            } => {
+                // Preserve provider name + status code in the message so the
+                // AlephError downstream retains the diagnostic info the typed
+                // GenerationError had. AlephError::provider() would discard both.
+                let provider_hint = if provider.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (provider: {provider})")
+                };
+                let status_hint = status_code
+                    .map(|c| format!(" (HTTP {c})"))
+                    .unwrap_or_default();
+                Self::provider(format!(
+                    "{message}{provider_hint}{status_hint}"
+                ))
+            }
             GenerationError::Cancelled => Self::cancelled(),
             GenerationError::InternalError { message } => Self::other(message),
             GenerationError::ModelNotFoundError { model, provider } => {
@@ -619,8 +729,27 @@ impl From<GenerationError> for AlephError {
                 Self::invalid_config(message)
             }
             GenerationError::JobFailedError { message, .. } => Self::provider(message),
-            GenerationError::DownloadError { message, .. } => Self::network(message),
-            GenerationError::SerializationError { message } => Self::IoError(message),
+            GenerationError::DownloadError {
+                message,
+                status_code,
+                ..
+            } => {
+                // Preserve the status code hint in the message so the
+                // AlephError downstream retains the diagnostic info the
+                // typed GenerationError had. AlephError::network() would
+                // discard it.
+                let status_hint = status_code
+                    .map(|c| format!(" (HTTP {c})"))
+                    .unwrap_or_default();
+                Self::network(format!("{message}{status_hint}"))
+            }
+            // SerializationError is a data-shape mismatch (JSON parse, schema
+            // mismatch), NOT a transport problem. Mapping it to AlephError::IoError
+            // would trip downstream classifiers that key on IoError for transport
+            // retries — leading to bogus retry budget on a payload that will
+            // never parse differently on retry. Use `other` so the message
+            // survives but no transport-retry classification kicks in.
+            GenerationError::SerializationError { message } => Self::other(message),
             GenerationError::DuplicateProvider { name } => Self::invalid_config(format!(
                 "Duplicate generation provider '{name}' — remove the duplicate \
                  [generation.{name}] section from your config"
@@ -734,7 +863,35 @@ mod tests {
         assert!(GenerationError::provider("test", Some(500), "test").is_retryable());
         assert!(GenerationError::provider("test", Some(503), "test").is_retryable());
         assert!(GenerationError::provider("test", Some(429), "test").is_retryable());
+        assert!(GenerationError::provider("test", Some(408), "test").is_retryable());
         assert!(GenerationError::download("test", None).is_retryable());
+        // 5xx and 408 (transport-class) downloads remain retryable.
+        assert!(GenerationError::download_with_status(
+            "test",
+            None,
+            Some(503)
+        )
+        .is_retryable());
+        assert!(GenerationError::download_with_status(
+            "test",
+            None,
+            Some(408)
+        )
+        .is_retryable());
+        // 404 (expired signed URL) and 403 (region-locked asset) are NOT
+        // retryable — retrying them would burn the budget without progress.
+        assert!(!GenerationError::download_with_status(
+            "test",
+            None,
+            Some(404)
+        )
+        .is_retryable());
+        assert!(!GenerationError::download_with_status(
+            "test",
+            None,
+            Some(403)
+        )
+        .is_retryable());
 
         // Non-retryable errors
         assert!(!GenerationError::authentication("test", "test").is_retryable());
@@ -871,6 +1028,59 @@ mod tests {
         let aleph_err: AlephError = gen_err.into();
 
         assert!(matches!(aleph_err, AlephError::RateLimitError { .. }));
+    }
+
+    #[test]
+    fn test_from_rate_limit_with_retry_after_to_aleph_error() {
+        // The provider gave us a Retry-After: 30 hint. The From boundary
+        // must fold it into the AlephError suggestion so gateway/voice/outbound
+        // can wait 30s instead of the Aleph-side 60s default.
+        let gen_err = GenerationError::rate_limit(
+            "Too many requests",
+            Some(Duration::from_secs(30)),
+        );
+        let aleph_err: AlephError = gen_err.into();
+        match aleph_err {
+            AlephError::RateLimitError { message, suggestion } => {
+                assert_eq!(message, "Too many requests");
+                let s = suggestion.expect("suggestion must be preserved");
+                assert!(
+                    s.contains("30 seconds"),
+                    "suggestion must include the upstream Retry-After hint, got: {s}"
+                );
+            }
+            other => panic!("expected RateLimitError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_provider_error_to_aleph_error_preserves_status_and_provider() {
+        // Provider returned 503 from openai. The From boundary must include
+        // the status code AND the provider name in the AlephError message
+        // so downstream classifiers retain the diagnostic info.
+        let gen_err =
+            GenerationError::provider("upstream error", Some(503), "openai");
+        let aleph_err: AlephError = gen_err.into();
+        match aleph_err {
+            AlephError::ProviderError { message, .. } => {
+                assert!(message.contains("openai"), "message missing provider, got: {message}");
+                assert!(message.contains("503"), "message missing status, got: {message}");
+            }
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_serialization_error_is_not_classified_as_io() {
+        // SerializationError must NOT be wrapped as IoError, because IoError
+        // classifiers treat it as transport-retryable and would loop on a
+        // payload that will never parse differently on retry.
+        let gen_err = GenerationError::serialization("bad json");
+        let aleph_err: AlephError = gen_err.into();
+        assert!(
+            !matches!(aleph_err, AlephError::IoError(_)),
+            "SerializationError must not classify as IoError (got: {aleph_err:?})"
+        );
     }
 
     #[test]

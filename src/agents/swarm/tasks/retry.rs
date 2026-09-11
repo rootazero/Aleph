@@ -165,6 +165,7 @@ pub fn recovery_abandons_since(runs: &[super::CoordTaskRun], reset_at: Option<u6
 }
 
 /// What the dispatcher should do with a task whose attempt just failed.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryDecision {
     /// Re-dispatch: reset the task to `Pending` so the next scheduling tick

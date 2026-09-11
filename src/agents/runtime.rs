@@ -37,17 +37,38 @@ pub struct LoopRunResult {
 }
 
 // =============================================================================
-// AgentRuntimeConfig
+// AgentRuntimeConfig (decomposed into role-grouped sub-configs)
 // =============================================================================
 
-/// Configuration for launching a sub-agent.
+/// Configuration for launching a sub-agent — composed of role-grouped
+/// sub-configs (identity / spawn-override / lifecycle) so each concern lives
+/// in exactly one place. Sub-struct fields stay `pub` so callers and tests
+/// build configs via plain struct literals.
+#[derive(Debug)]
 pub struct AgentRuntimeConfig {
+    /// Who is being run and what they were told.
+    pub identity: AgentIdentity,
+    /// Caller-provided per-call overrides on how the child starts.
+    pub spawn_override: SpawnOverride,
+    /// Run-level lifecycle controls (timeout).
+    pub lifecycle: Lifecycle,
+}
+
+/// Agent identity — role (`agent_def`), task string, optional parent context.
+#[derive(Debug)]
+pub struct AgentIdentity {
     /// The agent definition describing role, tools, and limits.
     pub agent_def: AgentDef,
     /// The task to execute.
     pub task: String,
     /// Optional context summary from the parent agent.
     pub context_summary: Option<String>,
+}
+
+/// Spawn overrides — caller-controlled knobs that take precedence over the
+/// agent definition's own defaults.
+#[derive(Debug)]
+pub struct SpawnOverride {
     /// Per-call override of where the child's starting context comes from.
     /// `None` defers to `agent_def.context_mode`.
     pub spawn_context: Option<crate::agents::SpawnContext>,
@@ -57,8 +78,6 @@ pub struct AgentRuntimeConfig {
     pub fork_source: Option<crate::agents::subagent_spawner::fork::ForkSource>,
     /// Explicit model override (highest priority).
     pub model: Option<String>,
-    /// Timeout in seconds for the entire run.
-    pub timeout_secs: u64,
     /// The caller's stable handle for this child, forwarded to
     /// [`crate::agents::subagent_spawner::SpawnRequest::request_id`] so the
     /// child's session key — and therefore the durable `SubagentSpawned` /
@@ -70,11 +89,20 @@ pub struct AgentRuntimeConfig {
     pub request_id: Option<String>,
 }
 
+/// Run-level lifecycle controls. Currently a single timeout; future
+/// wall-clock / deadline knobs land here.
+#[derive(Debug)]
+pub struct Lifecycle {
+    /// Timeout in seconds for the entire run.
+    pub timeout_secs: u64,
+}
+
 // =============================================================================
 // Transcript types
 // =============================================================================
 
 /// Outcome classification for a sub-agent execution.
+#[non_exhaustive]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptOutcome {
     /// The sub-agent completed successfully.
@@ -110,9 +138,83 @@ pub struct SubagentTranscript {
 // AgentRuntime
 // =============================================================================
 
+/// Role-grouped sub-config carried by [`AgentRuntime`] — provider routing
+/// (default provider + `provider_hint` override map).
+pub(crate) struct ProviderRouting {
+    pub(crate) provider: Arc<dyn AiProvider>,
+    pub(crate) provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
+}
+
+/// Role-grouped sub-config — Delegation hook emit (RawMemory + capture
+/// filter) and parent identity stamped onto each emitted row.
+pub(crate) struct MemoryCapture {
+    pub(crate) raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
+    pub(crate) capture_registry: Option<Arc<MemoryExtensionRegistry>>,
+    pub(crate) parent_agent_id: Option<String>,
+    pub(crate) parent_session_id: Option<String>,
+}
+
+/// Role-grouped sub-config — shared subagent concurrency cap and the
+/// shared plugin-registry handle threaded into SpawnerBase.
+pub(crate) struct BackgroundConfig {
+    pub(crate) subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
+    pub(crate) plugin_registry:
+        Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
+}
+
+/// Role-grouped sub-config — guardrails, resilience knobs (stall /
+/// consecutive-failure / per-turn timeout), and run-style inheritance
+/// (strategy body, session mode).
+pub(crate) struct PolicyInheritance {
+    pub(crate) guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
+    pub(crate) stall_config: Option<crate::harness::StallConfig>,
+    pub(crate) consecutive_failure_cap: Option<usize>,
+    pub(crate) turn_timeout: Option<std::time::Duration>,
+    pub(crate) strategy: Option<String>,
+    pub(crate) session_mode: Option<crate::config::types::policies::SessionMode>,
+}
+
+/// Role-grouped sub-config — iteration cap, parallel-tool cap,
+/// `[context_budget]` config + per-run refiner + cheap-tier summarizer,
+/// and verifier chain. One sub-config because the spawner reads them all
+/// together when constructing `SpawnerBase` for the child.
+pub(crate) struct BudgetInheritance {
+    pub(crate) default_max_iterations: Option<usize>,
+    pub(crate) parallel_tool_concurrency: Option<usize>,
+    pub(crate) context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
+    pub(crate) context_budget_refiner:
+        Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
+    pub(crate) primary_context_window: Option<u32>,
+    pub(crate) cheap_summary_provider: Option<Arc<dyn AiProvider>>,
+    pub(crate) verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
+}
+
+/// Role-grouped sub-config — routing-experience store threaded into
+/// every `SpawnerBase`.
+pub(crate) struct RoutingExperience {
+    pub(crate) routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
+}
+
+/// Role-grouped sub-config — trace sink threaded into `SpawnerBase`.
+pub(crate) struct TraceContext {
+    pub(crate) trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
+}
+
 /// Middle layer that manages sub-agent lifecycle: setup, execution, and transcript.
+///
+/// Decomposed into role-grouped sub-configs so each concern lives in exactly
+/// one place. The four "runtime identity" fields (`child_chain`, `cancel_token`,
+/// `session`, `parent_tools`) stay as direct fields because they ARE the
+/// runtime's identity — every spawn reads them directly. Everything else is
+/// grouped:
+///   * `provider_routing` — default provider + `provider_hint` overrides
+///   * `memory` — Delegation hook emit + parent identity
+///   * `background` — shared concurrency cap + plugin-registry handle
+///   * `policy_inheritance` — guardrails + resilience + run-style
+///   * `budget_inheritance` — iteration / parallel / context-budget / verifier
+///   * `routing_experience` — routing store
+///   * `trace` — trace sink
 pub struct AgentRuntime {
-    provider: Arc<dyn AiProvider>,
     child_chain: ChainContext,
     cancel_token: CancellationToken,
     /// Shared session actor used by the Harness spawner for the child's
@@ -121,74 +223,14 @@ pub struct AgentRuntime {
     /// Parent tool service — decorated with `AllowlistToolService` inside
     /// the spawner.
     parent_tools: Arc<dyn ToolService>,
-    /// Spec 1 G2 — when set, the spawner emits a `RawMemory(Delegation)`
-    /// row after each successful subagent run.
-    raw_memory_writer: Option<Arc<dyn RawMemoryStore>>,
-    /// Optional capture-filter registry threaded into the delegation emit.
-    capture_registry: Option<Arc<MemoryExtensionRegistry>>,
-    /// Parent agent identity stamped onto the emitted Delegation row.
-    parent_agent_id: Option<String>,
-    /// Parent session id stamped onto the emitted Delegation row.
-    parent_session_id: Option<String>,
-    /// Stage 5a (#9) — guardrail registry inherited by spawned subagents.
-    /// `None` keeps the legacy "no guardrails" path; `Some(_)` propagates
-    /// to every `SpawnerBase` built by `spawn_subagent`.
-    guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
-    /// Stage A (P1) — stall watchdog config threaded into `SpawnerBase`.
-    stall_config: Option<crate::harness::StallConfig>,
-    /// Stage A (P1) — consecutive-failure cap threaded into `SpawnerBase`.
-    consecutive_failure_cap: Option<usize>,
-    /// Stage A (P1) — per-turn timeout threaded into `SpawnerBase`.
-    turn_timeout: Option<std::time::Duration>,
-    /// Stage A (P1) — trace sink threaded into `SpawnerBase`.
-    trace_sink: Option<Arc<dyn crate::harness::TraceSink>>,
-    /// A2 — subagent concurrency cap, threaded into every `SpawnerBase`.
-    subagent_semaphore: Option<Arc<tokio::sync::Semaphore>>,
-    /// B2 — shared plugin-registry handle, threaded into `SpawnerBase` for
-    /// per-agent MCP scope provisioning.
-    plugin_registry: Option<Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>>,
-    /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
-    /// map (the `new()` default) means every spawn uses `provider`.
-    provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
-    /// Parent run's usage mode, applied to every spawn (skipped for Work by
-    /// the wiring site — identity partition, byte-identical child prompt).
-    session_mode: Option<crate::config::types::policies::SessionMode>,
-    /// Welded strategy `<strategy>` body applied to every spawn's
-    /// `AgentRuntimeConfig`. `None` (the `new()` default) keeps the legacy
-    /// no-strategy path.
-    strategy: Option<String>,
-    /// VESR v1.1 (b) — routing-experience store threaded into every
-    /// `SpawnerBase` so spawned subagents capture their run under
-    /// `agent_def.id`. `None` (the `new()` default) keeps subagents
-    /// capture-free.
-    routing_store: Option<Arc<crate::routing::RoutingExperienceStore>>,
-    /// B15 — the parent runner's boot-time `[execution] max_iterations`,
-    /// threaded into `SpawnerBase` so a child role with no declared cap
-    /// inherits one instead of running its Think→Act loop unbounded.
-    default_max_iterations: Option<usize>,
-    /// The parent runner's `[tool_service] parallel_tool_concurrency`,
-    /// threaded into `SpawnerBase` so a child's Act-phase cap matches the
-    /// operator's configured value (including 0/1 = disabled).
-    parallel_tool_concurrency: Option<usize>,
-    /// The parent runner's `[context_budget]` config, threaded into
-    /// `SpawnerBase` so each spawned child builds its own budget + compactor +
-    /// preflight pipeline instead of running context-unmanaged.
-    context_budget_config: Option<crate::context::budget::ContextBudgetConfig>,
-    /// The parent runner's per-run budget refiner + window override, threaded
-    /// into `SpawnerBase` so each child's **prompt** budget is re-keyed onto
-    /// the model the child will actually run on.
-    context_budget_refiner: Option<crate::orchestrator::deps_builder::ContextBudgetRefiner>,
-    /// See [`Self::context_budget_refiner`] — travels with it.
-    primary_context_window: Option<u32>,
-    /// The parent runner's cheap-tier summarizer, threaded into `SpawnerBase`
-    /// so each child's compactor bills its side-channel to the flash sibling
-    /// the operator already configured, not the main reasoning model.
-    cheap_summary_provider: Option<Arc<dyn AiProvider>>,
-    /// The parent runner's verifier chain (ToolLoopVerifier, StopHookVerifier,
-    /// etc.), threaded into `SpawnerBase` so a subagent's Think→Act loop is
-    /// watched by the same structural watchdog as the parent — closes the
-    /// "subagent can death-loop without ever being caught" gap.
-    verifier_chain: Option<Arc<crate::verification::VerifierChain>>,
+
+    provider_routing: ProviderRouting,
+    memory: MemoryCapture,
+    background: BackgroundConfig,
+    policy_inheritance: PolicyInheritance,
+    budget_inheritance: BudgetInheritance,
+    routing_experience: RoutingExperience,
+    trace: TraceContext,
 }
 
 impl AgentRuntime {
@@ -202,33 +244,43 @@ impl AgentRuntime {
         parent_tools: Arc<dyn ToolService>,
     ) -> Self {
         Self {
-            provider,
             child_chain,
             cancel_token,
             session,
             parent_tools,
-            raw_memory_writer: None,
-            capture_registry: None,
-            parent_agent_id: None,
-            parent_session_id: None,
-            guardrails: None,
-            stall_config: None,
-            consecutive_failure_cap: None,
-            turn_timeout: None,
-            trace_sink: None,
-            subagent_semaphore: None,
-            plugin_registry: None,
-            provider_overrides: HashMap::new(),
-            strategy: None,
-            session_mode: None,
-            routing_store: None,
-            default_max_iterations: None,
-            parallel_tool_concurrency: None,
-            context_budget_config: None,
-            context_budget_refiner: None,
-            primary_context_window: None,
-            cheap_summary_provider: None,
-            verifier_chain: None,
+            provider_routing: ProviderRouting {
+                provider,
+                provider_overrides: HashMap::new(),
+            },
+            memory: MemoryCapture {
+                raw_memory_writer: None,
+                capture_registry: None,
+                parent_agent_id: None,
+                parent_session_id: None,
+            },
+            background: BackgroundConfig {
+                subagent_semaphore: None,
+                plugin_registry: None,
+            },
+            policy_inheritance: PolicyInheritance {
+                guardrails: None,
+                stall_config: None,
+                consecutive_failure_cap: None,
+                turn_timeout: None,
+                strategy: None,
+                session_mode: None,
+            },
+            budget_inheritance: BudgetInheritance {
+                default_max_iterations: None,
+                parallel_tool_concurrency: None,
+                context_budget_config: None,
+                context_budget_refiner: None,
+                primary_context_window: None,
+                cheap_summary_provider: None,
+                verifier_chain: None,
+            },
+            routing_experience: RoutingExperience { routing_store: None },
+            trace: TraceContext { trace_sink: None },
         }
     }
 
@@ -236,7 +288,7 @@ impl AgentRuntime {
     /// compactor routes its side-channel call to the same flash sibling.
     #[must_use]
     pub fn with_cheap_summary_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
-        self.cheap_summary_provider = Some(provider);
+        self.budget_inheritance.cheap_summary_provider = Some(provider);
         self
     }
 
@@ -244,7 +296,7 @@ impl AgentRuntime {
     /// every spawned child that declares none of its own.
     #[must_use]
     pub const fn with_default_max_iterations(mut self, max_iterations: usize) -> Self {
-        self.default_max_iterations = Some(max_iterations);
+        self.budget_inheritance.default_max_iterations = Some(max_iterations);
         self
     }
 
@@ -255,7 +307,7 @@ impl AgentRuntime {
         mut self,
         cfg: crate::context::budget::ContextBudgetConfig,
     ) -> Self {
-        self.context_budget_config = Some(cfg);
+        self.budget_inheritance.context_budget_config = Some(cfg);
         self
     }
 
@@ -268,8 +320,8 @@ impl AgentRuntime {
         refiner: crate::orchestrator::deps_builder::ContextBudgetRefiner,
         primary_context_window: Option<u32>,
     ) -> Self {
-        self.context_budget_refiner = Some(refiner);
-        self.primary_context_window = primary_context_window;
+        self.budget_inheritance.context_budget_refiner = Some(refiner);
+        self.budget_inheritance.primary_context_window = primary_context_window;
         self
     }
 
@@ -277,14 +329,14 @@ impl AgentRuntime {
     /// inherited by every spawned child's Act phase.
     #[must_use]
     pub const fn with_parallel_tool_concurrency(mut self, cap: usize) -> Self {
-        self.parallel_tool_concurrency = Some(cap);
+        self.budget_inheritance.parallel_tool_concurrency = Some(cap);
         self
     }
 
     /// Wire the welded strategy `<strategy>` body inherited by every spawn.
     #[must_use]
     pub fn with_strategy(mut self, strategy: String) -> Self {
-        self.strategy = Some(strategy);
+        self.policy_inheritance.strategy = Some(strategy);
         self
     }
 
@@ -294,7 +346,7 @@ impl AgentRuntime {
         mut self,
         mode: crate::config::types::policies::SessionMode,
     ) -> Self {
-        self.session_mode = Some(mode);
+        self.policy_inheritance.session_mode = Some(mode);
         self
     }
 
@@ -305,13 +357,13 @@ impl AgentRuntime {
         mut self,
         overrides: HashMap<String, Arc<dyn AiProvider>>,
     ) -> Self {
-        self.provider_overrides = overrides;
+        self.provider_routing.provider_overrides = overrides;
         self
     }
 
     /// A2 — wire the shared subagent concurrency semaphore.
     pub fn with_subagent_semaphore(mut self, sem: Arc<tokio::sync::Semaphore>) -> Self {
-        self.subagent_semaphore = Some(sem);
+        self.background.subagent_semaphore = Some(sem);
         self
     }
 
@@ -321,13 +373,13 @@ impl AgentRuntime {
         mut self,
         registry: Arc<tokio::sync::RwLock<crate::extension::registry::PluginRegistry>>,
     ) -> Self {
-        self.plugin_registry = Some(registry);
+        self.background.plugin_registry = Some(registry);
         self
     }
 
     /// Stage 5a (#9) — wire a guardrail registry that subagents inherit.
     pub fn with_guardrails(mut self, registry: Arc<crate::guardrails::GuardrailRegistry>) -> Self {
-        self.guardrails = Some(registry);
+        self.policy_inheritance.guardrails = Some(registry);
         self
     }
 
@@ -338,27 +390,27 @@ impl AgentRuntime {
     /// Stage A (P1) — wire the stall watchdog config.
     #[must_use]
     pub const fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
-        self.stall_config = Some(config);
+        self.policy_inheritance.stall_config = Some(config);
         self
     }
 
     /// Stage A (P1) — wire the consecutive-failure cap.
     #[must_use]
     pub const fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
-        self.consecutive_failure_cap = Some(cap);
+        self.policy_inheritance.consecutive_failure_cap = Some(cap);
         self
     }
 
     /// Stage A (P1) — wire the per-turn wall-clock timeout.
     #[must_use]
     pub const fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.turn_timeout = Some(timeout);
+        self.policy_inheritance.turn_timeout = Some(timeout);
         self
     }
 
     /// Stage A (P1) — wire the trace sink. Subagents emit into the same sink.
     pub fn with_trace_sink(mut self, sink: Arc<dyn crate::harness::TraceSink>) -> Self {
-        self.trace_sink = Some(sink);
+        self.trace.trace_sink = Some(sink);
         self
     }
 
@@ -368,7 +420,7 @@ impl AgentRuntime {
         mut self,
         store: Arc<crate::routing::RoutingExperienceStore>,
     ) -> Self {
-        self.routing_store = Some(store);
+        self.routing_experience.routing_store = Some(store);
         self
     }
 
@@ -379,40 +431,40 @@ impl AgentRuntime {
     /// case the iteration cap is the last line of defence.
     #[must_use]
     pub fn with_verifier_chain(mut self, chain: Arc<crate::verification::VerifierChain>) -> Self {
-        self.verifier_chain = Some(chain);
+        self.budget_inheritance.verifier_chain = Some(chain);
         self
     }
 
     /// Wire a `RawMemoryStore` so the spawner emits the Delegation hook.
     pub fn with_raw_memory_writer(mut self, writer: Arc<dyn RawMemoryStore>) -> Self {
-        self.raw_memory_writer = Some(writer);
+        self.memory.raw_memory_writer = Some(writer);
         self
     }
 
     /// Wire an optional capture-filter registry threaded into the emit.
     pub fn with_capture_registry(mut self, registry: Arc<MemoryExtensionRegistry>) -> Self {
-        self.capture_registry = Some(registry);
+        self.memory.capture_registry = Some(registry);
         self
     }
 
     /// Set the parent agent id stamped onto the emitted Delegation row.
     pub fn with_parent_agent_id(mut self, id: impl Into<String>) -> Self {
-        self.parent_agent_id = Some(id.into());
+        self.memory.parent_agent_id = Some(id.into());
         self
     }
 
     /// Set the parent session id stamped onto the emitted Delegation row.
     pub fn with_parent_session_id(mut self, sid: impl Into<String>) -> Self {
-        self.parent_session_id = Some(sid.into());
+        self.memory.parent_session_id = Some(sid.into());
         self
     }
 
     /// Execute a sub-agent to completion with lifecycle tracing.
     pub async fn run(&self, config: AgentRuntimeConfig) -> Result<LoopRunResult, String> {
         let start = Instant::now();
-        let agent_id = format!("{}-{}", config.agent_def.id, uuid::Uuid::new_v4());
-        let agent_type = config.agent_def.id.clone();
-        let task_summary = crate::utils::text_format::truncate_text(&config.task, 120);
+        let agent_id = format!("{}-{}", config.identity.agent_def.id, uuid::Uuid::new_v4());
+        let agent_type = config.identity.agent_def.id.clone();
+        let task_summary = crate::utils::text_format::truncate_text(&config.identity.task, 120);
 
         tracing::info!(
             agent_id = %agent_id,
@@ -426,14 +478,14 @@ impl AgentRuntime {
         // no-op when no hooks are registered, so it is safe on every spawn.
         crate::extension::hooks::fire_global_observer(
             crate::extension::HookEvent::SubagentStart,
-            self.parent_session_id.as_deref().unwrap_or_default(),
+            self.memory.parent_session_id.as_deref().unwrap_or_default(),
             vec![
                 ("SUBAGENT_ID", agent_id.clone()),
                 ("SUBAGENT_TYPE", agent_type.clone()),
                 ("TASK", task_summary.clone()),
                 (
                     "PARENT_AGENT_ID",
-                    self.parent_agent_id.clone().unwrap_or_default(),
+                    self.memory.parent_agent_id.clone().unwrap_or_default(),
                 ),
                 ("CHAIN_DEPTH", self.child_chain.depth.to_string()),
             ],
@@ -515,7 +567,7 @@ impl AgentRuntime {
         // the transcript store.
         crate::extension::hooks::fire_global_observer(
             crate::extension::HookEvent::SubagentStop,
-            self.parent_session_id.as_deref().unwrap_or_default(),
+            self.memory.parent_session_id.as_deref().unwrap_or_default(),
             vec![
                 ("SUBAGENT_ID", transcript.agent_id.clone()),
                 ("SUBAGENT_TYPE", transcript.agent_type.clone()),
@@ -565,13 +617,14 @@ impl AgentRuntime {
         // spawner resolves — so a role whose frontmatter carries the qualified
         // form routes too.
         let effective_model = config
+            .spawn_override
             .model
             .as_deref()
-            .or(config.agent_def.model_hint.as_deref());
+            .or(config.identity.agent_def.model_hint.as_deref());
         let (provider, routed_model) = resolve_spawn_route(
-            &self.provider,
-            &self.provider_overrides,
-            &config.agent_def,
+            &self.provider_routing.provider,
+            &self.provider_routing.provider_overrides,
+            &config.identity.agent_def,
             effective_model,
         );
         let base = SpawnerBase {
@@ -579,55 +632,55 @@ impl AgentRuntime {
             parent_tools: self.parent_tools.clone(),
             provider,
             chain: parent_chain,
-            raw_memory_writer: self.raw_memory_writer.clone(),
-            capture_registry: self.capture_registry.clone(),
-            parent_agent_id: self.parent_agent_id.clone(),
-            parent_session_id: self.parent_session_id.clone(),
-            guardrails: self.guardrails.clone(),
+            raw_memory_writer: self.memory.raw_memory_writer.clone(),
+            capture_registry: self.memory.capture_registry.clone(),
+            parent_agent_id: self.memory.parent_agent_id.clone(),
+            parent_session_id: self.memory.parent_session_id.clone(),
+            guardrails: self.policy_inheritance.guardrails.clone(),
             // Stage A (P1):
-            stall_config: self.stall_config.clone(),
-            consecutive_failure_cap: self.consecutive_failure_cap,
-            turn_timeout: self.turn_timeout,
-            trace_sink: self.trace_sink.clone(),
+            stall_config: self.policy_inheritance.stall_config.clone(),
+            consecutive_failure_cap: self.policy_inheritance.consecutive_failure_cap,
+            turn_timeout: self.policy_inheritance.turn_timeout,
+            trace_sink: self.trace.trace_sink.clone(),
             // P3 Stage I — per-agent MCP scope; provisioned when an agent_def
             // declares `mcp_servers` and a registry is wired (B2).
-            plugin_registry: self.plugin_registry.clone(),
+            plugin_registry: self.background.plugin_registry.clone(),
             // A2 — subagent concurrency cap.
-            subagent_semaphore: self.subagent_semaphore.clone(),
+            subagent_semaphore: self.background.subagent_semaphore.clone(),
             // VESR v1.1 (b) — threaded from the gateway so subagents capture.
-            routing_store: self.routing_store.clone(),
+            routing_store: self.routing_experience.routing_store.clone(),
             // B15 — the parent's iteration cap, so a capless child role does
             // not run its loop unbounded until the spawn timeout kills it.
-            default_max_iterations: self.default_max_iterations,
+            default_max_iterations: self.budget_inheritance.default_max_iterations,
             // The parent's Act-phase parallel cap, so a child honours the
             // operator's `[tool_service] parallel_tool_concurrency` (0/1 =
             // disabled) instead of the hardcoded config default.
-            parallel_tool_concurrency: self.parallel_tool_concurrency,
+            parallel_tool_concurrency: self.budget_inheritance.parallel_tool_concurrency,
             // The parent's `[context_budget]` config, so the child is context-
             // managed on the same terms (the spawner builds its own instances).
             // rust-doctor-disable-next-line excessive-clone
-            context_budget_config: self.context_budget_config.clone(),
-            context_budget_refiner: self.context_budget_refiner.clone(),
-            primary_context_window: self.primary_context_window,
-            cheap_summary_provider: self.cheap_summary_provider.clone(),
-            verifier_chain: self.verifier_chain.clone(),
+            context_budget_config: self.budget_inheritance.context_budget_config.clone(),
+            context_budget_refiner: self.budget_inheritance.context_budget_refiner.clone(),
+            primary_context_window: self.budget_inheritance.primary_context_window,
+            cheap_summary_provider: self.budget_inheritance.cheap_summary_provider.clone(),
+            verifier_chain: self.budget_inheritance.verifier_chain.clone(),
         };
         let req = SpawnRequest {
-            agent_def: &config.agent_def,
-            task: &config.task,
-            context_summary: config.context_summary.as_deref(),
+            agent_def: &config.identity.agent_def,
+            task: &config.identity.task,
+            context_summary: config.identity.context_summary.as_deref(),
             // A rewritten (de-qualified) id wins; otherwise pass the caller's
             // model through untouched and let the spawner apply its own
             // `model_hint` fallback.
-            model: routed_model.as_deref().or(config.model.as_deref()),
-            timeout_secs: config.timeout_secs,
+            model: routed_model.as_deref().or(config.spawn_override.model.as_deref()),
+            timeout_secs: config.lifecycle.timeout_secs,
             cancel: self.cancel_token.clone(),
-            spawn_context: config.spawn_context,
-            fork_source: config.fork_source.clone(),
-            isolation: config.agent_def.isolation.clone(),
-            strategy: self.strategy.as_deref(),
-            session_mode: self.session_mode,
-            request_id: config.request_id.as_deref(),
+            spawn_context: config.spawn_override.spawn_context,
+            fork_source: config.spawn_override.fork_source.clone(),
+            isolation: config.identity.agent_def.isolation.clone(),
+            strategy: self.policy_inheritance.strategy.as_deref(),
+            session_mode: self.policy_inheritance.session_mode,
+            request_id: config.spawn_override.request_id.as_deref(),
         };
         spawn(&base, req).await
     }
@@ -917,20 +970,24 @@ mod tests {
     fn agent_runtime_config_construction() {
         #[allow(clippy::needless_update)]
         let config = AgentRuntimeConfig {
-            request_id: None,
-            agent_def: make_agent_def(),
-            task: "Do something".to_string(),
-            context_summary: Some("Parent context".to_string()),
-            spawn_context: None,
-            fork_source: None,
-            model: Some("claude-sonnet".to_string()),
-            timeout_secs: 60,
+            identity: AgentIdentity {
+                agent_def: make_agent_def(),
+                task: "Do something".to_string(),
+                context_summary: Some("Parent context".to_string()),
+            },
+            spawn_override: SpawnOverride {
+                spawn_context: None,
+                fork_source: None,
+                model: Some("claude-sonnet".to_string()),
+                request_id: None,
+            },
+            lifecycle: Lifecycle { timeout_secs: 60 },
         };
 
-        assert_eq!(config.task, "Do something");
-        assert_eq!(config.timeout_secs, 60);
-        assert!(config.context_summary.is_some());
-        assert!(config.model.is_some());
+        assert_eq!(config.identity.task, "Do something");
+        assert_eq!(config.lifecycle.timeout_secs, 60);
+        assert!(config.identity.context_summary.is_some());
+        assert!(config.spawn_override.model.is_some());
     }
 
     #[test]

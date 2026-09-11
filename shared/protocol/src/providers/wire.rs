@@ -194,7 +194,24 @@ pub struct ProviderInfo {
     pub provider_type: Option<String>,
     #[serde(default)]
     pub has_api_key: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Vault-side API key. **Never serialized.** This field is intentionally
+    /// `#[serde(skip_serializing)]` after the 2026-XX-XX
+    /// `/severed-wire-audit` review: the previous
+    /// `Option<String>` + `skip_serializing_if = "Option::is_none"` was only
+    /// a convention — any caller that built a `ProviderInfo` by copying a
+    /// stored provider row would push a real API key onto the wire on every
+    /// `providers.list` / `providers.get` response. The marker attribute
+    /// turns the leak from a runtime convention into a compile-time
+    /// guarantee: the field is writable for in-process construction but is
+    /// physically absent from the serialized output. Clients that need the
+    /// actual key must call the audited `provider.secret` RPC
+    /// (`GenerationProviderConfigJson` is the request-side counterpart for
+    /// writes).
+    ///
+    /// Inbound `serde_json` deserialization still accepts the field for
+    /// backward compatibility with any pre-fix response already cached
+    /// client-side; nothing on the receiving side relies on the value.
+    #[serde(default, skip_serializing)]
     pub api_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
