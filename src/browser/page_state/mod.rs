@@ -60,6 +60,18 @@ impl Role {
     /// and it panics — a hard compile error in a `const` initializer — if the
     /// chain [`Self::next`] describes is any other length.
     ///
+    /// "Compiler" is load-bearing and was not free: an associated const is
+    /// evaluated only where something instantiates it, and every reader of
+    /// [`Self::ALL`] in this crate is `#[cfg(test)]`. **Measured** — with a
+    /// 28th variant linked into the chain and `COUNT` left at 27,
+    /// `cargo check -p alephcore --lib` exited **0** and only
+    /// `cargo test --lib --no-run` raised `E0080`. That is this project's own
+    /// documented trap (`cargo check` 不编译 `#[cfg(test)]`) landing on a
+    /// sentence that did not carry its scope, and it made the ratchet's
+    /// lifetime the lifetime of one test — delete that test and nothing
+    /// instantiates the const again (判据 §13). The `const _` item below this
+    /// `impl` is the production instantiation that makes the claim true.
+    ///
     /// `pub(crate)`: it exists to size `ALL` and to make that check possible,
     /// and nothing outside this crate reads it. A caller wanting the count has
     /// `Role::ALL.len()`, which cannot drift from the array it describes (P5).
@@ -229,6 +241,19 @@ impl Role {
         )
     }
 }
+
+/// Instantiates [`Role::ALL`] in a **production** item, so the `COUNT` ratchet
+/// is a `cargo check` error and not a `cargo test` one.
+///
+/// `const _` rather than a named constant: an unused named const is dead code,
+/// and the point here is the evaluation, not the value. Anonymous const items
+/// are still evaluated — that is what makes `const _: () = assert!(…)` the
+/// standard compile-time assertion — so a chain that outran `Role::COUNT`
+/// cannot reach a build, whatever happens to the test module.
+///
+/// The type is written out rather than `_`, so the array's LENGTH is part of
+/// what the compiler is asked to agree to.
+const _: [Role; Role::COUNT] = Role::ALL;
 
 /// The state bits a control carries. `Option` where "not applicable" and
 /// "false" are different facts.
