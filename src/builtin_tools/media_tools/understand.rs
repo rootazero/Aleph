@@ -247,6 +247,7 @@ mod tests {
         async fn ocr(&self, _: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "OCR text".into(),
+                lines: Vec::new(),
             })
         }
 

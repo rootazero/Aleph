@@ -255,6 +255,7 @@ mod tests {
             self.ocr_calls.fetch_add(1, Ordering::SeqCst);
             Ok(OcrResult {
                 full_text: "OK Cancel".to_string(),
+                lines: Vec::new(),
             })
         }
 

@@ -444,17 +444,20 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_png_bytes_file_path_small_file_passes() {
-        // Positive path: a small PNG file is read and returned as-is.
-        // Bytes are not validated against the PNG magic (only Base64 inputs
-        // are magic-checked; FilePath inputs trust the caller's filesystem).
+        // Positive path: a small file under the size cap is read and
+        // returned as-is. The FilePath arm magic-checks the bytes exactly
+        // like the Base64 arm does, so the fixture must carry the PNG
+        // signature — the body after it is not inspected.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("small.png");
-        std::fs::write(&path, b"not-a-real-png-but-the-file-is-tiny").unwrap();
+        let mut bytes = vec![0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+        bytes.extend_from_slice(b"tiny-body-not-a-decodable-png");
+        std::fs::write(&path, &bytes).unwrap();
         let image = ImageInput::FilePath { path };
         let result = PlatformOcrProvider::resolve_png_bytes(&image)
             .await
             .unwrap();
-        assert_eq!(result, b"not-a-real-png-but-the-file-is-tiny");
+        assert_eq!(result, bytes);
     }
 
     #[tokio::test]

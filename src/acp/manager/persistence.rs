@@ -239,17 +239,33 @@ mod wire_persistence_tests {
     use super::*;
     use crate::acp::manager::AcpAdapterManager;
 
-    /// Override `acp_sessions_path()` for the duration of `f` by setting
-    /// `ALEPH_DATA_DIR`. Returns the temp dir; callers MUST keep it alive
-    /// until `f` returns.
-    fn with_temp_data_dir<F: FnOnce(&std::path::Path)>(f: F) {
+    /// Point `acp_sessions_path()` at a scratch directory for the duration
+    /// of `f` by overriding `ALEPH_HOME` — the variable
+    /// `aleph_protocol::paths::data_dir` actually reads. The first cut of
+    /// this helper set `ALEPH_DATA_DIR`, which nothing reads, so every run
+    /// of these tests wrote 200 fake sessions into the developer's real
+    /// `~/.aleph/data/acp_sessions.json`.
+    ///
+    /// Same discipline as every other `ALEPH_HOME` override in this crate:
+    /// [`AlephHomeEnvGuard`] holds the process-wide guard so parallel tests
+    /// cannot interleave their overrides, and restores the previous value
+    /// on drop.
+    ///
+    /// Known gap, left for the owner of these tests: the persistence worker
+    /// resolves the path on every write and is not awaited by `f`, so a
+    /// write still queued when `f` returns lands after the guard drops.
+    /// Closing that needs the tests to wait for the worker to drain rather
+    /// than sleep a fixed 300 ms.
+    ///
+    /// [`AlephHomeEnvGuard`]: crate::utils::paths::AlephHomeEnvGuard
+    async fn with_temp_data_dir<F, Fut>(f: F)
+    where
+        F: FnOnce(std::path::PathBuf) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         let tmp = tempfile::tempdir().expect("tempdir");
-        // SAFETY: tests in this module run sequentially under cargo's
-        // default test harness, and we set this before constructing the
-        // manager and restore on drop.
-        unsafe { std::env::set_var("ALEPH_DATA_DIR", tmp.path()) };
-        f(tmp.path());
-        unsafe { std::env::remove_var("ALEPH_DATA_DIR") };
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(tmp.path());
+        f(tmp.path().to_path_buf()).await;
     }
 
     fn mk_event_created(i: usize, suffix: &str) -> crate::acp::AcpSessionEvent {
@@ -274,7 +290,7 @@ mod wire_persistence_tests {
     /// proving no event was lost to the stale-snapshot race.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn burst_of_creates_no_event_lost() {
-        with_temp_data_dir(|_| {
+        with_temp_data_dir(|_| async {
             let manager = AcpAdapterManager::new();
             let tx = wire_persistence(&manager).await;
 
@@ -306,7 +322,8 @@ mod wire_persistence_tests {
                 let key = (entry.harness_id.clone(), entry.cwd.clone());
                 assert!(seen.insert(key.clone()), "duplicate entry {key:?}");
             }
-        });
+        })
+        .await;
     }
 
     /// Interleave Created + Removed for the same key. The final on-disk
@@ -314,7 +331,7 @@ mod wire_persistence_tests {
     /// cancelled by a later Removed.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn interleaved_create_remove_no_cancelled_create() {
-        with_temp_data_dir(|_| {
+        with_temp_data_dir(|_| async {
             let manager = AcpAdapterManager::new();
             let tx = wire_persistence(&manager).await;
 
@@ -332,14 +349,15 @@ mod wire_persistence_tests {
                  found {} entries — Removed lost to stale-snapshot race?",
                 on_disk.len()
             );
-        });
+        })
+        .await;
     }
 
     /// Sanity: the worker preserves `created_at` across repeated Created
     /// events for the same triple (idempotent re-emit after every prompt).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn repeated_created_preserves_created_at() {
-        with_temp_data_dir(|_| {
+        with_temp_data_dir(|_| async {
             let manager = AcpAdapterManager::new();
             let tx = wire_persistence(&manager).await;
 
@@ -358,7 +376,8 @@ mod wire_persistence_tests {
                 "created_at {} must lie within [{}, {}]",
                 entry.created_at, before, after,
             );
-        });
+        })
+        .await;
     }
 }
 
