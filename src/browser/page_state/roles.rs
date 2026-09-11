@@ -299,6 +299,12 @@ mod tests {
     /// or remap reddens the first assertion with a readable diff; the second
     /// proves the table is what `role_for` actually consults rather than dead
     /// data beside a surviving match (判据 §7).
+    ///
+    /// **Its scope is the table, not `role_for`** — a constant-role tag added
+    /// as a `match` arm instead of a row is invisible here, measured. That half
+    /// belongs to
+    /// `role_for_routes_no_tag_by_hand_except_the_attribute_dependent_ones`
+    /// below, and the two together are what "complete" means.
     #[test]
     fn the_structural_tag_table_is_complete() {
         let actual: Vec<String> = SIMPLE_TAGS
@@ -356,6 +362,93 @@ mod tests {
         // an absence.
         assert_eq!(role_for("span", &attrs(&[])), Role::Generic);
         assert_eq!(role_for("blink", &attrs(&[])), Role::Generic);
+    }
+
+    /// **That guard is complete over the TABLE. This one is complete over
+    /// `role_for`.**
+    ///
+    /// A tag whose role is a constant belongs in `SIMPLE_TAGS`, where a
+    /// deletion is visible because the keys are data a test can read. Nothing
+    /// stopped the next one being written as a `match` arm instead —
+    /// **measured at `3398e90e2`**: adding `"aside" => Role::Article,` to
+    /// `role_for` left the whole module suite at **44 passed / 0 failed**, and
+    /// the guard whose name says "complete" is one of those 44. It is the same
+    /// gap that guard was written to close, one size smaller (判据 §3: a guard
+    /// is worth exactly its scope, and its NAME is not its scope).
+    ///
+    /// A `match` over `&str` cannot be made exhaustive, so completeness over
+    /// `role_for` has to be asserted over its **source**: the literals its body
+    /// mentions, against a written-down list of the ones it may route by hand.
+    /// Those are the four attribute-dependent tags plus the three that also sit
+    /// in the table, and the attribute names the rules read. A new literal —
+    /// `"aside"`, or an attribute for a new rule — reddens this with a readable
+    /// diff, and the author either moves the tag into the table or re-rules
+    /// this list deliberately.
+    ///
+    /// `code_keeping_literals`, not `code_text`: the latter strips string
+    /// payloads, which is exactly what this census counts. Comment stripping
+    /// comes from the lexer so a `//` inside a literal cannot cut a line short.
+    #[test]
+    fn role_for_routes_no_tag_by_hand_except_the_attribute_dependent_ones() {
+        use crate::utils::source_scan::{code_keeping_literals, production_text};
+
+        let rel = "src/browser/page_state/roles.rs";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let src = std::fs::read_to_string(&path).expect("roles.rs is readable");
+        let code = code_keeping_literals(&production_text(std::path::Path::new(rel), &src));
+
+        let start = code
+            .find("pub fn role_for(")
+            .expect("the scan is broken, not the tree: role_for is in this file");
+        let end = start
+            + code[start..]
+                .find("\n}")
+                .expect("role_for's body closes at column 0");
+        let body = &code[start..end];
+
+        let mut found: Vec<String> = Vec::new();
+        let mut rest = body;
+        while let Some(open) = rest.find('"') {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('"') else { break };
+            found.push(after[..close].to_string());
+            rest = &after[close + 1..];
+        }
+        found.sort();
+        found.dedup();
+
+        let mut allowed: Vec<String> = [
+            // Tags whose role is NOT a constant — each has its own test above.
+            "a", "area", "input", "select",
+            // Constant-role tags that also sit in `SIMPLE_TAGS`; the table
+            // guard's `assert_eq!(role_for(tag), *role)` half pins these two
+            // spellings against each other in both directions.
+            "button", "summary", "textarea",
+            // Attribute names the attribute-dependent rules read.
+            "role", "href", "multiple", "size",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        allowed.sort();
+
+        // Non-vacuity FIRST, so a slice that lost the function reports THAT
+        // rather than a diff against an empty set (判据 §2).
+        assert!(
+            found.len() > 8 && found.contains(&"select".to_string()),
+            "the scan, not the tree: the slice yielded {} literals ({found:?}), \
+             so it is reading something other than `role_for`'s body",
+            found.len()
+        );
+        assert_eq!(
+            found, allowed,
+            "the literals `role_for` routes by hand are no longer the ones \
+             written down here. If a tag was ADDED to the match: its role is a \
+             constant, so it belongs in SIMPLE_TAGS where the completeness \
+             guard can see it — a match arm is invisible there however much \
+             that guard's name promises. If one was REMOVED: re-rule this list \
+             on purpose."
+        );
     }
 
     /// Interactivity is a HINT built from six independent signals, not a
