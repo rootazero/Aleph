@@ -123,7 +123,10 @@ const LOCK_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 /// contended acquisition failed immediately. On Unix the contention error
 /// is `EWOULDBLOCK`, whose kind already *is* `WouldBlock`, so this predicate
 /// is a superset of the old one on every platform.
-fn is_lock_contended(err: &std::io::Error) -> bool {
+///
+/// Shared with `instance_lock`, which must make the same call in the other
+/// direction: a lock failure that is *not* contention has no peer to blame.
+pub(crate) fn is_lock_contended(err: &std::io::Error) -> bool {
     err.raw_os_error() == fs2::lock_contended_error().raw_os_error()
 }
 

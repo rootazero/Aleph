@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
 
-use super::atomic_io::write_atomic;
+use super::atomic_io::{is_lock_contended, write_atomic};
 use super::process_alive::{process_matches, process_start_time};
 
 const LOCK_FILENAME: &str = "aleph.lock";
@@ -130,19 +130,51 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
                 holder_pid: pid,
             }))
         }
-        Err(_) => {
-            // Lock is held by someone else. Read the holder from the unlocked
-            // sidecar (reading the locked file itself would fail with os error
-            // 33 on Windows, where the exclusive lock blocks all other reads).
-            let (pid, expected_start) = read_holder(&holder_path);
-            if pid > 0 && process_matches(pid, expected_start) {
-                Ok(AcquireOutcome::HeldByLive { pid, lock_path })
-            } else if pid > 0 {
-                Ok(AcquireOutcome::HeldByOrphaned { pid, lock_path })
-            } else {
-                Ok(AcquireOutcome::HeldByLive { pid: 0, lock_path })
-            }
-        }
+        Err(e) => classify_lock_failure(e, &holder_path, lock_path),
+    }
+}
+
+/// `try_lock_exclusive` failed: decide whether that is a peer holding the
+/// lock (which the sidecar can explain) or something else.
+///
+/// Only fs2's contention error means "held by a peer". Anything else —
+/// `ENOLCK` on a network mount without a lock daemon, `ERROR_NOT_SUPPORTED`
+/// from a filesystem with no byte-range locks, `EBADF` — means the
+/// filesystem never granted us a lock at all, so nothing is known about
+/// exclusivity and the only honest answer is that OS error. Reading the
+/// sidecar in that case is worse than useless: the sidecar is never removed
+/// on a clean exit, so it names the *previous* holder, and the caller would
+/// print "stale lock (PID N not running) — you may safely rm aleph.lock":
+/// advice that cannot help, repeats on every restart, and with a recycled
+/// PID tells the operator to `kill` a live unrelated process instead.
+fn classify_lock_failure(
+    err: std::io::Error,
+    holder_path: &Path,
+    lock_path: PathBuf,
+) -> std::io::Result<AcquireOutcome> {
+    if !is_lock_contended(&err) {
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!(
+                "could not take the singleton lock on {}: {err}. No other Aleph \
+                 instance holds it — the filesystem refused the lock, so removing \
+                 the lock file will not help (a network or FUSE mount without \
+                 advisory-lock support is the usual cause; point ALEPH_HOME at a \
+                 local filesystem)",
+                lock_path.display(),
+            ),
+        ));
+    }
+    // Lock is held by someone else. Read the holder from the unlocked
+    // sidecar (reading the locked file itself would fail with os error
+    // 33 on Windows, where the exclusive lock blocks all other reads).
+    let (pid, expected_start) = read_holder(holder_path);
+    if pid > 0 && process_matches(pid, expected_start) {
+        Ok(AcquireOutcome::HeldByLive { pid, lock_path })
+    } else if pid > 0 {
+        Ok(AcquireOutcome::HeldByOrphaned { pid, lock_path })
+    } else {
+        Ok(AcquireOutcome::HeldByLive { pid: 0, lock_path })
     }
 }
 
@@ -333,6 +365,69 @@ mod tests {
                 "an unreadable sidecar must surface as Err, not Ok({opt:?}); \
                  folding into the absent path is the bug"
             ),
+        }
+    }
+
+    /// Our own PID with an impossible start time: `process_matches` sees a
+    /// live process whose start time does not match, i.e. exactly what a
+    /// recycled PID in a stale sidecar looks like.
+    fn write_stale_sidecar(dir: &Path) -> PathBuf {
+        let holder = dir.join(HOLDER_FILENAME);
+        std::fs::write(&holder, format!("{}\n1\n", std::process::id())).unwrap();
+        holder
+    }
+
+    /// An error `try_lock_exclusive` returns when the filesystem refuses to
+    /// lock at all (a network / FUSE mount without advisory-lock support).
+    fn lock_refused_error() -> std::io::Error {
+        #[cfg(windows)]
+        let code = 50; // ERROR_NOT_SUPPORTED
+        #[cfg(unix)]
+        let code = libc::ENOLCK;
+        std::io::Error::from_raw_os_error(code)
+    }
+
+    /// The negative half of the lock gate, twin of `atomic_io`'s: only fs2's
+    /// contention error means "a peer holds it". A filesystem that refuses the
+    /// lock outright must surface as that OS error. The old `Err(_)` arm read
+    /// the stale sidecar here and answered "orphaned — you may safely rm
+    /// aleph.lock", advice that cannot help and repeats on every restart.
+    #[test]
+    fn a_refused_lock_is_an_error_not_a_stale_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = write_stale_sidecar(dir.path());
+        let lock_path = dir.path().join(LOCK_FILENAME);
+
+        match classify_lock_failure(lock_refused_error(), &holder, lock_path.clone()) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains(&lock_path.display().to_string()),
+                    "the error must name the lock it could not take, got: {msg}"
+                );
+                assert!(
+                    msg.contains(&lock_refused_error().to_string()),
+                    "the error must carry the OS's own reason, got: {msg}"
+                );
+            }
+            Ok(outcome) => panic!("a refused lock must not be read as a peer, got {outcome:?}"),
+        }
+    }
+
+    /// The positive half through the same classifier: real contention plus a
+    /// sidecar naming a process that is not the holder is `HeldByOrphaned`
+    /// (the case the `rm` advice is actually for).
+    #[test]
+    fn a_contended_lock_with_a_stale_sidecar_is_orphaned() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = write_stale_sidecar(dir.path());
+        let lock_path = dir.path().join(LOCK_FILENAME);
+
+        match classify_lock_failure(fs2::lock_contended_error(), &holder, lock_path) {
+            Ok(AcquireOutcome::HeldByOrphaned { pid, .. }) => {
+                assert_eq!(pid as u32, std::process::id());
+            }
+            other => panic!("expected HeldByOrphaned, got {other:?}"),
         }
     }
 
