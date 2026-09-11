@@ -828,6 +828,7 @@ mod tests {
             // Every boundary, including "keep nothing" and "keep everything".
             let keep = cut % (lines.len() + 1);
 
+            let mut recovered = 0usize;
             for (i, line) in lines[..keep].iter().enumerate() {
                 let Some(parsed) = parse_render_line(line) else {
                     return Err(TestCaseError::fail(format!(
@@ -842,12 +843,33 @@ mod tests {
                     );
                 }
                 for id in parsed.refs {
+                    recovered += 1;
                     prop_assert!(
                         refs.resolve(&RefId(id.clone())).is_ok(),
                         "the prefix shows [ref={id}] but the table this render \
                          minted into does not hold it\nfull render:\n{full}"
                     );
                 }
+            }
+
+            // Non-vacuity, and it is not decoration. The loop above iterates
+            // the refs it FOUND, so a renderer that stopped printing a
+            // parseable `[ref=` at all would satisfy every assertion in it
+            // without ever executing one (判据 §2). Measured, not reasoned:
+            // with the ref token mutated to `[ref e1]` this test stayed GREEN
+            // until this assertion existed, and goes red with it. On the "keep
+            // everything" boundary an independent reader must recover exactly
+            // the refs the builder minted.
+            if keep == lines.len() {
+                prop_assert_eq!(
+                    recovered,
+                    state.ref_count(),
+                    "an independent reader recovered {} of the {} refs this \
+                     render minted\nfull render:\n{}",
+                    recovered,
+                    state.ref_count(),
+                    full
+                );
             }
         });
     }
