@@ -378,6 +378,7 @@ mod tests {
             focused: None,
             checked: None,
             selected: None,
+            value: None,
         }
     }
 
@@ -395,6 +396,7 @@ mod tests {
             focused: None,
             checked: None,
             selected: None,
+            value: None,
         }
     }
 

@@ -463,6 +463,7 @@ mod tests {
             focused: None,
             checked: None,
             selected: None,
+            value: None,
         }];
         for (i, (tag, attrs, text, parent)) in nodes.iter().enumerate() {
             raw.push(RawNode {
@@ -495,6 +496,7 @@ mod tests {
                 focused: None,
                 checked: None,
                 selected: None,
+                value: None,
             });
         }
         PageState::build(
@@ -964,6 +966,7 @@ mod tests {
                         focused: None,
                         checked: None,
                         selected: None,
+                        value: None,
                     },
                     RawNode {
                         backend_node_id: 2,
@@ -986,6 +989,7 @@ mod tests {
                         focused: None,
                         checked: None,
                         selected: None,
+                        value: None,
                     },
                     RawNode {
                         backend_node_id: 3,
@@ -1008,6 +1012,7 @@ mod tests {
                         focused: None,
                         checked: None,
                         selected: None,
+                        value: None,
                     },
                 ],
             }],
@@ -1113,6 +1118,7 @@ mod tests {
                 focused: None,
                 checked: None,
                 selected: None,
+                value: None,
             }];
             for (i, (parent_pick, kind, payload)) in specs.iter().enumerate() {
                 // The payload lands in EVERY page-controlled field the
@@ -1157,6 +1163,7 @@ mod tests {
                     focused: None,
                     checked: None,
                     selected: None,
+                    value: None,
                 });
             }
             let raw = RawDom {

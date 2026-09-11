@@ -182,6 +182,32 @@ pub struct RawNode {
     /// `false` when [`RawFrame::live_properties_observed`] is set.
     #[serde(default)]
     pub selected: Option<bool>,
+    /// What is typed in this control **now**? `None` is "the fetcher did not
+    /// say", and `build` then falls back to the page's `value` content
+    /// attribute — unless [`RawFrame::live_properties_observed`] says the
+    /// capture looked, in which case silence here means the control is empty.
+    ///
+    /// # Obligation on the fetcher: the PROPERTY, and the third member
+    ///
+    /// Fill it from `DOMSnapshot`'s `inputValue` (and `textValue` for
+    /// `<textarea>`). `value` is the third attribute in this struct with a
+    /// `default*` IDL twin — `defaultValue` — which is the mechanical form of
+    /// "does this go stale": the content attribute is what the control started
+    /// with and the property is what is in it now, and they part company the
+    /// moment anyone types, including when the typist is the agent's own
+    /// `fill`.
+    ///
+    /// It joined its twins late, and the reason is worth keeping: the rule that
+    /// predicts exactly this set was written down a round earlier and then run
+    /// over `NodeStates`' seven bits instead of over "the attributes the builder
+    /// reads". A membership rule is worth what its enumeration is worth.
+    ///
+    /// Taken verbatim, not whitespace-collapsed like the attribute path: this
+    /// is the user's text, a `<textarea>`'s newlines are part of it, and the
+    /// JSON face escapes rather than folds. `render_text` does not print it at
+    /// all today — Task 14's JSON face is where it reaches a model.
+    #[serde(default)]
+    pub value: Option<String>,
 }
 
 impl RawNode {
@@ -318,5 +344,6 @@ pub(crate) fn node_with(tag: &str, attrs: &[(&str, &str)]) -> RawNode {
         focused: None,
         checked: None,
         selected: None,
+        value: None,
     }
 }

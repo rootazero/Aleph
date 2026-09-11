@@ -173,7 +173,7 @@ fn state_node(
         role,
         name_covers_all_text: name.covers_all_text,
         name: name.text,
-        value: value_of(node),
+        value: value_of(node, fx.frame.live_properties_observed),
         states: states_of(node, role, fx.frame.live_properties_observed),
         // The one place the frame offset is applied. Position moves; size does
         // not.
@@ -213,14 +213,32 @@ fn nearest_emitted_ancestor(
 /// A control's current value. A submit button's `value` is its NAME, not its
 /// value — accname rule 4 already spent it, and printing it twice would read
 /// as two different facts.
-fn value_of(node: &RawNode) -> Option<String> {
+///
+/// **The third member of `checked` and `selected`'s class**, and it arrived a
+/// round late. The membership rule is mechanical — an attribute goes stale iff
+/// its IDL property has a `default*` twin — and `value`/`defaultValue` is that
+/// pair exactly: the attribute is what the control started with, the property
+/// is what is in it now, and the agent's own `fill` is one of the things that
+/// parts them. The rule had been written down and then run over `NodeStates`'
+/// seven bits rather than over the attributes the builder reads.
+///
+/// Same precedence as its twins: the fetcher's reading, then — only where no
+/// capture looked — the page's markup.
+fn value_of(node: &RawNode, live: bool) -> Option<String> {
     if node.tag_lower() == "input" {
         let ty = node.attr("type").unwrap_or("text").to_ascii_lowercase();
         if matches!(ty.as_str(), "button" | "submit" | "reset") {
             return None;
         }
     }
-    node.attr("value").map(normalize).filter(|v| !v.is_empty())
+    node.value
+        .clone()
+        .or_else(|| {
+            // A capture that read `inputValue` lists the controls that have
+            // one, so silence is "empty" and the markup is not consulted.
+            (!live).then(|| node.attr("value").map(normalize)).flatten()
+        })
+        .filter(|v| !v.is_empty())
 }
 
 /// The roles a `checked` answer can be about at all — a bare attribute, an
@@ -1050,6 +1068,82 @@ mod tests {
             "a live capture answered for a row's selectedness, which no engine \
              reports — on a table page that is `[unselected]` on nearly every \
              line"
+        );
+    }
+
+    /// **A control's value is the property, not the markup — the third member
+    /// of the class, and the one the membership rule named a round before
+    /// anybody ran it over this function.**
+    ///
+    /// `value_of` read `node.attr("value")`: the content attribute, which is
+    /// what the control *started* with. `value`'s IDL twin is `defaultValue`,
+    /// which is the mechanical form of "does this go stale" — and it parts from
+    /// the property the moment anyone types, including when the typist is the
+    /// agent's own `fill`. The JSON face then carries the original text of a box
+    /// the agent has already filled in.
+    ///
+    /// Censused at `446271740`: `value_of` had **no test of any kind** — not
+    /// even for the submit-button rule its own doc explains, which is why that
+    /// rule is the control here.
+    #[test]
+    fn a_controls_value_is_the_property_and_the_markup_is_only_a_fallback() {
+        let built = |live: bool, fetcher_said: Option<&str>, attrs: &[(&str, &str)]| {
+            let mut raw = fixture();
+            raw.frames[1].live_properties_observed = live;
+            raw.frames[1].nodes[3].value = fetcher_said.map(str::to_string);
+            raw.frames[1].nodes[3].attrs = attrs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            let state = PageState::build(
+                &raw,
+                &mut RefTable::new(),
+                1,
+                "https://example.test/hn",
+                "t",
+                Duration::from_secs(0),
+            );
+            state
+                .nodes
+                .iter()
+                .find(|n| n.backend_node_id == 23)
+                .expect("the text input")
+                .value
+                .clone()
+        };
+
+        // Nobody looked: the page's markup is the only evidence there is.
+        assert_eq!(
+            built(false, None, &[("type", "text"), ("value", "search me")]),
+            Some("search me".to_string()),
+            "the markup fallback stopped working"
+        );
+        // The fetcher looked: what is in the box now beats what it started with.
+        assert_eq!(
+            built(
+                false,
+                Some("typed by the agent"),
+                &[("type", "text"), ("value", "search me")]
+            ),
+            Some("typed by the agent".to_string()),
+            "the page's initial value outranked the live property — the model \
+             is reading back the text of a box the agent has already filled"
+        );
+        // A capture that read `inputValue` lists the controls that have one, so
+        // silence means empty and the stale markup is not consulted at all.
+        assert_eq!(
+            built(true, None, &[("type", "text"), ("value", "search me")]),
+            None,
+            "a capture that read the values fell back to the page's markup"
+        );
+        // Control, and the rule `value_of`'s doc has always claimed: a submit
+        // button's `value` is its NAME (accname rule 4 spent it), so it must
+        // not also arrive as a value.
+        assert_eq!(
+            built(false, Some("Go"), &[("type", "submit"), ("value", "Go")]),
+            None,
+            "a submit button's value printed twice — once as its name and once \
+             as its value — and the model has two facts where there is one"
         );
     }
 
