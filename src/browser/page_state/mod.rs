@@ -2,6 +2,7 @@
 
 pub mod accname;
 pub mod build;
+pub mod fetch_chromium;
 pub mod raw;
 pub mod refs;
 pub mod render;
@@ -12,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::browser::engine::Engine;
 
 pub use accname::{accessible_name, AccName, FrameIndex, NAME_MAX_CHARS};
+pub use fetch_chromium::{
+    fetch_chromium, parse_snapshot, stitch_snapshots, ChildCapture, COMPUTED_STYLES,
+};
 pub use raw::{attr_of, Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, Viewport};
 pub use refs::{FrameKey, RefEntry, RefId, RefKey, RefTable, StaleReason};
 pub use render::{quote, render_text, rendered_indices, to_json, TEXT_MAX_CHARS};
