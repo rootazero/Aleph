@@ -237,14 +237,23 @@ fn value_of(node: &RawNode) -> Option<String> {
 ///   authoring mistake, not a forgery, and the honest report of an authoring
 ///   mistake is the mistake.
 /// - `aria-*` is page-authored by definition — that is what ARIA is for.
-/// - `checked` and `selected` are **role-gated**, because the bare attribute is
-///   meaningful only on elements that can carry the state. They are twins and
-///   both get the treatment (判据 §16): a `<div selected>` used to render
-///   `[selected]` because only one of the two had been gated.
+/// - `checked` and `selected` read [`RawNode::checked`] / [`RawNode::selected`]
+///   **first** — the live DOM property, which only a fetcher can write — and
+///   fall back to the page's attribute behind a role gate only when the fetcher
+///   said nothing. The membership rule that separates these two from the three
+///   above is not "is this legal HTML", it is **does this attribute's value go
+///   stale**: `checked` and `selected` are the *initial* state and part company
+///   from the property the moment anyone clicks, including when the clicker is
+///   the agent. `disabled`, `required` and `readonly` do not.
+///   The role gate stays on the fallback, where it is worth what it is worth: it
+///   removes accidental mislabelling (`<div selected>` out of a framework) and
+///   is **not** a trust boundary, because `role_for` takes `role=` from the page
+///   and `<div role="option" selected>` satisfies it. The trust boundary is the
+///   field.
 /// - `focused` comes from [`RawNode::focused`], a field, and never from
-///   `attrs`. It is the one bit in this set the page must not be able to
-///   assert at all, and it lived in `attrs` as `":focus"` until a page could
-///   forge it — see `RawNode`'s doc for the mechanism.
+///   `attrs`. It is the one bit in this set with no attribute fallback at all,
+///   and it lived in `attrs` as `":focus"` until a page could forge it — see
+///   `RawNode`'s doc for the mechanism.
 fn states_of(node: &RawNode, role: Role) -> NodeStates {
     let aria_true = |name: &str| {
         node.attr(name)
@@ -260,25 +269,26 @@ fn states_of(node: &RawNode, role: Role) -> NodeStates {
     };
     NodeStates {
         disabled: node.has_attr("disabled") || aria_true("aria-disabled"),
-        // `None` for anything that is not checkable: "this is not a checkbox"
-        // and "this checkbox is off" are different facts, and the renderer
-        // prints them differently.
-        checked: match role {
+        // The fetcher's reading of the live property wins outright; the page's
+        // attribute answers only where no fetcher looked. `None` for anything
+        // that is not checkable: "this is not a checkbox" and "this checkbox is
+        // off" are different facts, and the renderer prints them differently.
+        checked: node.checked.or_else(|| match role {
             Role::Checkbox | Role::Radio | Role::MenuItem => {
                 Some(node.has_attr("checked") || aria_true("aria-checked"))
             }
             _ => aria_bool("aria-checked"),
-        },
+        }),
         expanded: aria_bool("aria-expanded"),
-        // `checked`'s twin, gated the same way: the bare `selected` attribute
-        // says something only on an element that can be selected. `<div
-        // selected>` is not a selected anything.
-        selected: match role {
+        // `checked`'s twin, and the same precedence. The gated fallback: the
+        // bare `selected` attribute says something only on an element that can
+        // be selected — `<div selected>` is not a selected anything.
+        selected: node.selected.unwrap_or_else(|| match role {
             Role::Option | Role::Tab | Role::Row | Role::Cell => {
                 node.has_attr("selected") || aria_true("aria-selected")
             }
             _ => aria_true("aria-selected"),
-        },
+        }),
         required: node.has_attr("required") || aria_true("aria-required"),
         readonly: node.has_attr("readonly") || aria_true("aria-readonly"),
         // From the FIELD, never from `attrs` — the page cannot reach a field.
@@ -477,6 +487,90 @@ mod tests {
             .find(|n| n.backend_node_id == 22)
             .expect("checkbox");
         assert_eq!(checkbox.states.checked, Some(true));
+    }
+
+    /// **A fetcher can say "no", and its reading beats the markup.**
+    ///
+    /// `checked` and `selected` used to come from the attribute alone, behind a
+    /// role gate. A gate answers a different question than the one that matters
+    /// here: the content attribute is the control's **initial** state and the
+    /// DOM property is its **current** one, and they part company the moment
+    /// anyone clicks. `DOMSnapshot` reports `inputChecked`/`optionSelected` as
+    /// rare-boolean index lists — a node appears iff the property is true — so
+    /// the only channel a fetcher had was *adding* an attribute pair, which can
+    /// push the answer to `true` and can never take it back. A box **the agent
+    /// itself had just clicked off** read `[checked]` for the rest of the
+    /// session: the tree lying about the agent's own effect.
+    ///
+    /// Both directions on both twins (判据 §16), because a field that only ever
+    /// agrees with the attribute is indistinguishable from no field at all.
+    #[test]
+    fn a_fetchers_live_reading_outranks_an_attribute_that_has_gone_stale() {
+        let built = |raw: &RawDom| {
+            PageState::build(
+                raw,
+                &mut RefTable::new(),
+                1,
+                "https://example.test/hn",
+                "t",
+                Duration::from_secs(0),
+            )
+        };
+        let states_of_node = |state: &PageState, id: u64| {
+            state
+                .nodes
+                .iter()
+                .find(|n| n.backend_node_id == id)
+                .expect("the fixture node is in the tree")
+                .states
+        };
+
+        // The fixture's checkbox is `<input type=checkbox checked>`. The agent
+        // clicks it off: the attribute does not move, the property does.
+        let mut raw = fixture();
+        raw.frames[1].nodes[2].checked = Some(false);
+        let state = built(&raw);
+        assert_eq!(
+            states_of_node(&state, 22).checked,
+            Some(false),
+            "the markup attribute outranked the fetcher's reading of the live \
+             property, so the model is told a box it just unchecked is checked"
+        );
+        let rendered = render_text(&state);
+        assert!(
+            rendered.contains("[unchecked]") && !rendered.contains("[checked]"),
+            "and the stale claim reached the text face:\n{rendered}"
+        );
+
+        // The fallback half: no fetcher looked, so the page's attribute is the
+        // only evidence there is and it still counts.
+        assert_eq!(
+            states_of_node(&built(&fixture()), 22).checked,
+            Some(true),
+            "a silent fetcher must not erase the markup — `None` is \"I did not \
+             look\", not \"it is off\""
+        );
+
+        // `selected`, the twin, on a real `<option selected>`.
+        let mut raw = fixture();
+        raw.frames[1].nodes[3].tag = Some("option".to_string());
+        raw.frames[1].nodes[3].attrs = vec![("selected".to_string(), String::new())];
+        assert!(
+            states_of_node(&built(&raw), 23).selected,
+            "fallback: the page's `selected` on an <option> is the only \
+             evidence and must still reach the state"
+        );
+        raw.frames[1].nodes[3].selected = Some(false);
+        let state = built(&raw);
+        assert!(
+            !states_of_node(&state, 23).selected,
+            "the fetcher saw the option deselected and the markup won anyway"
+        );
+        assert!(
+            !render_text(&state).contains("[selected]"),
+            "{}",
+            render_text(&state)
+        );
     }
 
     /// Two captures of the same document hand back the same numbers, and the

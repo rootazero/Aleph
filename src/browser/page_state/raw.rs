@@ -81,14 +81,18 @@ pub enum RawNodeKind {
 ///
 /// ## `attrs` is the PAGE's namespace, and the page is a hostile writer
 ///
-/// Everything in `attrs` came from the document. A fetcher may add pairs the
-/// HTML never had, when the engine reports the fact somewhere other than the
-/// attribute list — `("checked", "")` from `DOMSnapshot`'s `inputChecked` (the
-/// DOM *property*, which a user click changes and the attribute does not), or
-/// `("selected", "")` from `optionSelected`. Those are safe **only** because
-/// the names they borrow are names the page is entitled to write about itself:
-/// a page writing `checked` on its own `<input>` is asserting something it is
-/// allowed to assert.
+/// Everything in `attrs` came from the document, and **a fetcher writes
+/// nothing here**. It used to be allowed to add pairs the HTML never had, when
+/// the engine reported a fact somewhere other than the attribute list —
+/// `("checked", "")` from `DOMSnapshot`'s `inputChecked`, `("selected", "")`
+/// from `optionSelected`. That is withdrawn, and for a reason beyond forgery:
+/// **`attrs` is add-only, so a fetcher borrowing it could only ever push the
+/// answer to `true`.** A checkbox the agent has just clicked OFF still carries
+/// the markup `checked` attribute — the attribute is the *initial* state and
+/// the property is the *current* one — and there was no pair a fetcher could
+/// add to say "no". The model was told `[checked]` about a control it had
+/// itself unchecked: the observation lying about the agent's own effect, which
+/// is worse than lying about the page. See [`RawNode::checked`].
 ///
 /// **A fact the page must NOT be able to assert does not go in `attrs`.** It
 /// gets a field, because a field is a namespace the page cannot reach. This is
@@ -141,6 +145,39 @@ pub struct RawNode {
     /// fetcher that never mentions focus has not claimed the caret is elsewhere.
     #[serde(default)]
     pub focused: Option<bool>,
+    /// Is this control checked **now**? `None` is "the fetcher did not say",
+    /// and then `build` falls back to the page's `checked` / `aria-checked`
+    /// attribute behind a role gate.
+    ///
+    /// # Obligation on the fetcher: this is the PROPERTY, not the attribute
+    ///
+    /// Fill it from `DOMSnapshot`'s `inputChecked` — the live DOM property. The
+    /// two part company the moment anyone clicks: the content attribute is the
+    /// *initial* state and never changes again, so a box the user or **the
+    /// agent itself** just unchecked still carries `checked` in the markup.
+    /// Reporting the attribute here re-creates exactly the defect the field
+    /// exists to fix.
+    ///
+    /// `inputChecked` is a rare-boolean index list: a node appears in it iff
+    /// the property is true, so a fetcher must write `Some(false)` for the
+    /// checkable nodes NOT in that list, not `None`. `None` is a statement
+    /// about the fetcher ("I did not look"), and spending it as "not checked"
+    /// hands the page's stale attribute the last word (判据 §8).
+    ///
+    /// A field, so the page cannot reach it — and so an answer of "no" is
+    /// expressible at all, which `attrs` could not do. It **outranks the
+    /// attribute unconditionally**, including the role gate: gating an
+    /// observation by a `role=` the page writes would let a page suppress a
+    /// true reading of its own control.
+    #[serde(default)]
+    pub checked: Option<bool>,
+    /// Is this option selected **now**? [`Self::checked`]'s twin in every
+    /// respect (判据 §16), filled from `DOMSnapshot`'s `optionSelected` and
+    /// subject to the same obligation: the property, never the `selected`
+    /// content attribute, and `Some(false)` rather than `None` for the
+    /// selectable nodes the engine did not list.
+    #[serde(default)]
+    pub selected: Option<bool>,
 }
 
 impl RawNode {
@@ -215,5 +252,7 @@ pub(crate) fn node_with(tag: &str, attrs: &[(&str, &str)]) -> RawNode {
         computed: None,
         clickable_hint: None,
         focused: None,
+        checked: None,
+        selected: None,
     }
 }

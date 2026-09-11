@@ -454,6 +454,8 @@ mod tests {
             computed: None,
             clickable_hint: None,
             focused: None,
+            checked: None,
+            selected: None,
         }];
         for (i, (tag, attrs, text, parent)) in nodes.iter().enumerate() {
             raw.push(RawNode {
@@ -484,6 +486,8 @@ mod tests {
                 }),
                 clickable_hint: None,
                 focused: None,
+                checked: None,
+                selected: None,
             });
         }
         PageState::build(
@@ -939,6 +943,8 @@ mod tests {
                         computed: None,
                         clickable_hint: None,
                         focused: None,
+                        checked: None,
+                        selected: None,
                     },
                     RawNode {
                         backend_node_id: 2,
@@ -959,6 +965,8 @@ mod tests {
                         computed: visible,
                         clickable_hint: None,
                         focused: None,
+                        checked: None,
+                        selected: None,
                     },
                     RawNode {
                         backend_node_id: 3,
@@ -979,6 +987,8 @@ mod tests {
                         computed: visible,
                         clickable_hint: None,
                         focused: None,
+                        checked: None,
+                        selected: None,
                     },
                 ],
             }],
@@ -1082,6 +1092,8 @@ mod tests {
                 computed: None,
                 clickable_hint: None,
                 focused: None,
+                checked: None,
+                selected: None,
             }];
             for (i, (parent_pick, kind, payload)) in specs.iter().enumerate() {
                 // The payload lands in EVERY page-controlled field the
@@ -1124,6 +1136,8 @@ mod tests {
                     }),
                     clickable_hint: None,
                     focused: None,
+                    checked: None,
+                    selected: None,
                 });
             }
             let raw = RawDom {

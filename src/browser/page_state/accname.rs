@@ -376,6 +376,8 @@ mod tests {
             computed: None,
             clickable_hint: None,
             focused: None,
+            checked: None,
+            selected: None,
         }
     }
 
@@ -391,6 +393,8 @@ mod tests {
             computed: None,
             clickable_hint: None,
             focused: None,
+            checked: None,
+            selected: None,
         }
     }
 
