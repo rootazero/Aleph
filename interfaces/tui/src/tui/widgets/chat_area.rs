@@ -24,6 +24,7 @@ use crate::tui::markdown::{
 use crate::tui::regions::RegionKind;
 use crate::tui::theme::theme;
 
+use super::header::{self, header_line};
 #[cfg(test)]
 use super::tool_row::KEY_MODALITY;
 use super::tool_row::{render_tool_group, render_tool_row};
@@ -241,7 +242,16 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let modality = state.modality();
     let verbose = state.verbose;
     let scroll_offset = state.scroll_offset;
+    // Built before the cache is borrowed mutably, and owned, so nothing of
+    // `state` stays borrowed across the call.
+    let header = vec![header_line(
+        header::VERSION,
+        &state.model_name,
+        state.project_root(),
+        state.project_branch.as_deref(),
+    )];
     let (total_lines, visible, hits) = build_visible_lines(
+        &header,
         &state.messages,
         verbose,
         now_ms(),
@@ -499,6 +509,7 @@ fn build_all_lines_cached(
     cache: &mut LineCache,
 ) -> Vec<Line<'static>> {
     let (_total, lines, _) = build_visible_lines(
+        &[],
         messages,
         verbose,
         now_ms,
@@ -527,6 +538,7 @@ fn build_all_lines_cached(
 /// height so window arithmetic stays exact.
 #[allow(clippy::too_many_arguments)]
 fn build_visible_lines(
+    header: &[Line<'static>],
     messages: &[TranscriptEntry],
     verbose: bool,
     now_ms: u64,
@@ -536,6 +548,16 @@ fn build_visible_lines(
     scroll_offset: usize,
     visible_height: usize,
 ) -> (usize, Vec<Line<'static>>, Vec<VisibleToggle>) {
+    // The header is a transcript entry in every way that matters here — it
+    // occupies rows at the top, it scrolls away, and everything below it is
+    // offset by its height — but it is not IN `messages`: it is derived from
+    // the state it describes on every frame, so a `/session` switch or a model
+    // change moves it instead of leaving a stale first row (判据 §1).
+    let header_height = if header.is_empty() {
+        0
+    } else {
+        header.len() + 1
+    };
     let streaming_idx = messages.iter().position(|m| {
         matches!(
             m,
@@ -620,13 +642,27 @@ fn build_visible_lines(
     // conversation switch or `.clear()` shrinks the vec).
     cache.entries.retain(|idx, _| *idx < messages.len());
 
-    let total_lines: usize = heights.iter().sum();
+    let total_lines: usize = header_height + heights.iter().sum::<usize>();
     let (start, end) = visible_window(total_lines, visible_height, scroll_offset);
 
     // Pass 2: clone out only the intersecting rows.
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut hits: Vec<VisibleToggle> = Vec::new();
     let mut pos = 0usize;
+    // Same slice arithmetic as the message loop below, on a block that starts
+    // at row 0: body rows occupy [0, header_height-1), the blank separator
+    // sits at header_height-1.
+    if header_height > start && end > 0 {
+        let hi = end.min(header_height);
+        let body_hi = hi.min(header_height - 1);
+        if start < body_hi {
+            out.extend(header[start..body_hi].iter().cloned());
+        }
+        if hi == header_height {
+            out.push(Line::default());
+        }
+    }
+    pos += header_height;
     for (idx, message) in messages.iter().enumerate() {
         let height = heights[idx];
         let mstart = pos;
@@ -899,10 +935,13 @@ mod tests {
 
     #[test]
     fn build_lines_with_system_message() {
-        let state = AppState::new("test".into(), "claude".into());
+        let mut state = AppState::new("test".into(), "claude".into());
+        // A fresh state's transcript is empty now (the header is derived, not
+        // stored), so this supplies the notice it used to get for free.
+        state.add_system_message("a notice".into());
         let lines = build_all_lines(&state, 80);
-        // Should have at least the welcome system message + blank line
-        assert!(lines.len() >= 2);
+        // The notice plus its blank separator.
+        assert!(lines.len() >= 2, "{lines:?}");
     }
 
     #[test]
@@ -1200,6 +1239,7 @@ mod tests {
         // Bottom window (offset 0).
         let height = 7;
         let (total, visible, _) = build_visible_lines(
+            &[],
             &state.messages,
             state.verbose,
             0,
@@ -1214,6 +1254,7 @@ mod tests {
 
         // Scrolled-up window (offset from the bottom).
         let (_total, visible, _) = build_visible_lines(
+            &[],
             &state.messages,
             state.verbose,
             0,
@@ -1229,6 +1270,7 @@ mod tests {
         // A second call with unchanged state must serve the same window from
         // cache (this is the per-frame steady state).
         let (_total, visible2, _) = build_visible_lines(
+            &[],
             &state.messages,
             state.verbose,
             0,
@@ -1680,5 +1722,148 @@ mod width_tests {
         // 6 columns of CJK (3 chars) + the ellipsis = 7.
         assert_eq!(text, "宽宽宽\u{2026}");
         assert_eq!(UnicodeWidthStr::width(text.as_str()), 7);
+    }
+}
+
+/// The header entry: it is painted, it is first, and everything below it
+/// knows how many rows it took.
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use serde_json::json;
+    use shared_ui_logic::transcript::ToolRow;
+
+    const W: u16 = 60;
+    const H: u16 = 20;
+
+    fn draw(state: &mut AppState) -> Vec<String> {
+        let mut term = Terminal::new(TestBackend::new(W, H)).expect("backend");
+        term.draw(|f| render_chat_area(f, state, f.area()))
+            .expect("draw");
+        let buf = term.backend().buffer().clone();
+        (0..H)
+            .map(|y| {
+                (0..W)
+                    .map(|x| buf.cell((x, y)).map_or(" ", |c| c.symbol()).to_string())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn short_state() -> AppState {
+        let mut state = AppState::new("s".into(), "claude-opus-5".into());
+        let mut row = ToolRow::new("c1", "bash", &json!({ "command": "ls" }));
+        row.start(0);
+        row.finish(&aleph_protocol::ToolResult::success("out"), 10, 10);
+        state.messages.push(TranscriptEntry::Tool(row));
+        state
+    }
+
+    /// The transcript opens on it, and it carries the model this screen is
+    /// actually captioned with — not a string frozen at construction.
+    #[test]
+    fn the_header_is_the_first_row_of_the_transcript() {
+        let mut state = short_state();
+        let rows = draw(&mut state);
+        // Row 0 is the block's top border; row 1 is the first content row.
+        assert!(rows[1].contains("\u{2135} Aleph"), "{:?}", &rows[..3]);
+        assert!(rows[1].contains("claude-opus-5"), "{:?}", &rows[..3]);
+
+        // It follows the model, because it is derived rather than stored.
+        state.model_name = "gpt-5".into();
+        let rows = draw(&mut state);
+        assert!(rows[1].contains("gpt-5"), "{:?}", &rows[..3]);
+        assert!(!rows[1].contains("claude-opus-5"), "{:?}", &rows[..3]);
+    }
+
+    /// The folder and branch appear only when the server said there is one.
+    /// A conversation scoped to nothing must not borrow this terminal's cwd.
+    #[test]
+    fn the_folder_appears_only_when_the_conversation_has_one() {
+        let mut state = short_state();
+        assert!(state.project_root().is_none());
+        let rows = draw(&mut state);
+        assert!(!rows[1].contains('('), "no folder, no branch: {}", rows[1]);
+
+        state.apply_session_snapshot(aleph_protocol::SessionSnapshot {
+            session_key: "s".into(),
+            project_root: Some("/w/proj".into()),
+            ..Default::default()
+        });
+        let rows = draw(&mut state);
+        assert!(rows[1].contains("/w/proj"), "{}", rows[1]);
+    }
+
+    /// **The rows it takes are rows everything below it moved by.**
+    ///
+    /// The same transcript, built with and without the header at a width and
+    /// height that show all of it: the tool row lands exactly
+    /// `header + blank separator` = 2 rows lower.
+    ///
+    /// # When this goes red
+    ///
+    /// Counting the header in `total_lines` but not emitting it (the paint
+    /// loses two rows at the top and every click target below slides up), or
+    /// emitting it without counting it (the window arithmetic overruns and
+    /// the transcript's newest row falls off the bottom). Both were run.
+    #[test]
+    fn everything_below_the_header_moves_down_by_its_height() {
+        let mut state = short_state();
+        let painted = draw(&mut state);
+        let with_header = painted
+            .iter()
+            .position(|r| r.contains("Bash("))
+            .expect("the tool row is painted");
+
+        let mut cache = LineCache::default();
+        let (_total, headerless, _) = build_visible_lines(
+            &[],
+            &state.messages,
+            state.verbose,
+            0,
+            W - 2, // the block's borders
+            &mut cache,
+            KEY_MODALITY,
+            0,
+            H as usize - 2,
+        );
+        let without_header = headerless
+            .iter()
+            .position(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+                    .contains("Bash(")
+            })
+            .expect("the tool row is built");
+
+        // +1 for the block's top border, +2 for the header and its separator.
+        assert_eq!(with_header, without_header + 1 + 2);
+    }
+
+    /// It scrolls away like any other entry — it is a transcript row, not a
+    /// pinned banner.
+    #[test]
+    fn the_header_scrolls_off_the_top() {
+        let mut state = short_state();
+        for i in 0..40 {
+            state.add_system_message(format!("line {i}"));
+        }
+        let rows = draw(&mut state);
+        assert!(
+            !rows.iter().any(|r| r.contains("\u{2135} Aleph")),
+            "parked at the bottom of a long transcript, the header is above the window"
+        );
+
+        state.scroll_offset = usize::MAX / 2; // Home
+        let rows = draw(&mut state);
+        assert!(
+            rows[1].contains("\u{2135} Aleph"),
+            "scrolled to the top it is the first row again: {:?}",
+            &rows[..3]
+        );
     }
 }

@@ -5,11 +5,14 @@
 // The two projection paths live in sibling modules: `events` (StreamEvent ->
 // state) and `trace` (AgentTraceEvent -> state).
 
+mod cost;
 mod events;
 mod trace;
 
 #[cfg(test)]
 mod tests;
+
+pub use cost::{CostTally, CostView};
 
 use std::time::{Duration, Instant};
 
@@ -795,6 +798,20 @@ pub struct AppState {
     /// one fact with one producer, and six copies of it are six chances for a
     /// `switch_session` to reset five of them.
     pub session_snapshot: Option<SessionSnapshot>,
+    /// Priced spend on this conversation: the server's number at the last
+    /// attach plus the runs watched since. See [`CostTally`] for why the base
+    /// and the accumulator are one type.
+    pub cost: CostTally,
+    /// The git branch of [`Self::project_root`], as read from THIS machine's
+    /// filesystem when that path resolves here — see
+    /// `widgets::header::git_branch_of` for when it can be wrong and how it
+    /// fails when it cannot answer.
+    ///
+    /// Computed once per attach rather than per frame: the header is painted
+    /// twenty times a second and a `.git/HEAD` read per frame would be twenty
+    /// syscalls a second for a string that changes when someone runs
+    /// `git switch`.
+    pub project_branch: Option<String>,
     /// Live context-window occupancy `(used_tokens, window_tokens)` from the
     /// latest `ContextGauge` event. `None` until the session's first gauge
     /// arrives. The pair always travels together (one event), so a single
@@ -1023,24 +1040,20 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Create a new `AppState` with a welcome system message.
+    /// Create an `AppState` on an empty transcript.
+    ///
+    /// There is no welcome entry any more. It used to open every session with
+    /// `Welcome to Aleph CLI. Session: … | Model: … Type /help for commands.`,
+    /// and B6 took all three of its facts away from it: the model and the
+    /// folder are the header line (`widgets::header`, derived per frame from
+    /// this state, so a `/session` switch moves them), the session key is on
+    /// the status bar, and `/help` is on the hint line. Keeping the entry
+    /// would have made it the stale second copy of each (判据 §1) — it is a
+    /// frozen string, and the model it names is only correct until the first
+    /// snapshot arrives.
     pub fn new(session_key: String, model_name: String) -> Self {
-        // An empty key is not a key — it means "the gateway has not routed this
-        // conversation yet". Printing it verbatim renders `Session:  |`, which
-        // reads like a bug; naming the state reads like the truth.
-        let session_line = if session_key.is_empty() {
-            "Session: new (the gateway names it on your first message)".to_string()
-        } else {
-            format!("Session: {session_key}")
-        };
-        let welcome = format!(
-            "Welcome to Aleph CLI. {session_line} | Model: {model_name}. Type /help for commands."
-        );
         Self {
-            messages: vec![TranscriptEntry::SystemNotice {
-                id: "e0".into(),
-                text: welcome,
-            }],
+            messages: Vec::new(),
             entry_seq: 0,
             scroll_offset: 0,
             mouse: false,
@@ -1057,6 +1070,8 @@ impl AppState {
             model_name,
             total_tokens: 0,
             session_snapshot: None,
+            cost: CostTally::default(),
+            project_branch: None,
             context_gauge: None,
             cache_stat: None,
             cache_stat_agent: None,
@@ -1862,6 +1877,8 @@ impl AppState {
         // true; keeping them would make it confidently describe someone else's
         // conversation.
         self.session_snapshot = None;
+        self.cost.rebase(None);
+        self.project_branch = None;
     }
 
     /// Restore this conversation's durable settings from the server's snapshot.
@@ -1876,7 +1893,50 @@ impl AppState {
         self.model_name = snapshot
             .effective_model()
             .map_or_else(|| self.default_model_name.clone(), str::to_string);
+        // The snapshot already contains every run before it, including the
+        // ones this screen watched — so this is a rebase, never an add.
+        self.cost.rebase(Some(snapshot.estimated_cost_usd));
+        // One filesystem read per attach, at the only point the folder can
+        // change.
+        self.project_branch = snapshot
+            .project_root
+            .as_deref()
+            .and_then(crate::tui::widgets::header::git_branch_of);
         self.session_snapshot = Some(snapshot);
+    }
+
+    /// The folder this conversation is scoped to, as the SERVER reports it.
+    ///
+    /// `None` means the conversation is scoped to no folder — the agent runs
+    /// in its own `~/.aleph/workspaces/{agent_id}`, a path this client is not
+    /// told. It does NOT mean "use the terminal's own working directory":
+    /// with a remote gateway that is a different machine's filesystem, and
+    /// the header has no way to say which one it meant.
+    #[must_use]
+    pub fn project_root(&self) -> Option<&str> {
+        self.session_snapshot
+            .as_ref()
+            .and_then(|s| s.project_root.as_deref())
+    }
+
+    /// What this conversation has cost, and how sure this screen is.
+    #[must_use]
+    pub fn cost_view(&self) -> CostView {
+        self.cost.view()
+    }
+
+    /// The language the working verb is drawn in.
+    ///
+    /// Derived from the same environment reading `aleph_protocol::terminate`
+    /// uses for halt notices, so one terminal does not get an English verb
+    /// over a Chinese notice. The two enums naming En/Zh are a duplication in
+    /// the shared crates, not something this screen can fix from here.
+    #[must_use]
+    pub fn locale(&self) -> shared_ui_logic::transcript::Locale {
+        match aleph_protocol::terminate::UiLocale::from_env() {
+            aleph_protocol::terminate::UiLocale::Zh => shared_ui_logic::transcript::Locale::Zh,
+            aleph_protocol::terminate::UiLocale::En => shared_ui_logic::transcript::Locale::En,
+        }
     }
 
     /// The conversation's usage mode, exec tier, thinking depth and memory mode
@@ -1976,6 +2036,10 @@ impl AppState {
         // the incoming snapshot immediately after.
         self.total_tokens = 0;
         self.session_snapshot = None;
+        // Same argument, same sentence, for the money: an unrebased tally
+        // would bill the outgoing conversation's spend to the incoming one.
+        self.cost.rebase(None);
+        self.project_branch = None;
         self.model_name.clone_from(&self.default_model_name);
         self.messages.clear();
         // The cache is keyed by positional index into `messages`, which is

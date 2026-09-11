@@ -5,6 +5,8 @@ pub mod btw_panel;
 pub mod chat_area;
 pub mod command_palette;
 pub mod dialog;
+pub mod header;
+pub mod hint_line;
 pub mod input_area;
 pub mod provider_picker;
 pub mod session_picker;

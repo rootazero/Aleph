@@ -214,6 +214,43 @@ impl AppState {
         }
     }
 
+    /// Close a finished turn with what it did and how long it took.
+    ///
+    /// Two rows, and they are two rows because they are two clocks:
+    ///
+    /// * `Ran 2 commands, read 1 file · 3.2s` — the shared
+    ///   `summarize_turn`/`turn_summary_text` pair, counting only this run's
+    ///   tools and summing only their own durations.
+    /// * `✻ Worked for 12s` — the run's wall clock, which includes every
+    ///   second the model spent thinking between those tools.
+    ///
+    /// A reader who notices the two numbers differ has learned something
+    /// true. Collapsing them into one would have to pick a clock and then be
+    /// wrong about the other.
+    ///
+    /// The rows are selected by the ids the AUTHORITATIVE record names, so
+    /// the summary is about this run rather than about everything still on
+    /// screen — `messages` holds the whole conversation.
+    ///
+    /// `summarize_turn` has both gates: fewer than two tools, or none of them
+    /// terminal, yields `None` and no summary row is emitted at all. Until
+    /// this existed, `TranscriptEntry::TurnSummary` had a renderer in
+    /// `chat_area` and no producer anywhere in the crate (判据 §7).
+    pub(super) fn append_turn_trailers(
+        &mut self,
+        summaries: &[aleph_protocol::events::ToolSummaryItem],
+        total_duration_ms: u64,
+    ) {
+        let rows: Vec<ToolRow> = summaries
+            .iter()
+            .filter_map(|item| self.find_tool_mut(&item.tool_id).map(|r| r.clone()))
+            .collect();
+        if let Some(entry) = shared_ui_logic::transcript::summarize_turn(&rows) {
+            self.messages.push(TranscriptEntry::TurnSummary(entry));
+        }
+        self.add_system_message(shared_ui_logic::transcript::worked_for(total_duration_ms));
+    }
+
     pub(super) fn mark_current_assistant_complete(&mut self) {
         if let Some(TranscriptEntry::AssistantText { streaming, .. }) = self
             .messages

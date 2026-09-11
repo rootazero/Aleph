@@ -17,6 +17,7 @@ use crate::tui::widgets::{
     chat_area::render_chat_area,
     command_palette::render_command_palette,
     dialog::{render_approval, render_dialog},
+    hint_line::render_hint_line,
     input_area::{input_height, InputWidget},
     provider_picker::render_provider_picker,
     session_picker::render_session_picker,
@@ -35,7 +36,10 @@ use crate::tui::widgets::{
 /// agent panel existed (R8-9: not even a nominally zero-width chunk, which
 /// 判据 §2 calls a different bug class from an absent split).
 pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
-    let input_h = input_height(textarea, 3, 8);
+    // 2 = the flat rule plus one line of draft; 8 caps how much of the screen
+    // a long paste may take. The box that used to need two of these rows for
+    // its borders is gone — see `widgets::input_area`.
+    let input_h = input_height(textarea, 2, 8);
     let full_area = frame.area();
 
     let main_area = if state.agent_panel_visible {
@@ -64,7 +68,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
         Constraint::Length(tasks_h),  // Tasks panel (0 = hidden)
         Constraint::Length(agents_h), // Agents panel (0 = hidden)
         Constraint::Length(input_h),  // Input area
-        Constraint::Length(1),        // Status bar
+        Constraint::Length(1),        // Hint line (keys)
+        Constraint::Length(1),        // Status bar (state)
     ])
     .split(main_area);
 
@@ -72,7 +77,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     let tasks_area = chunks.get(1).copied().unwrap_or_default();
     let agents_area = chunks.get(2).copied().unwrap_or_default();
     let input_area = chunks.get(3).copied().unwrap_or_default();
-    let status_area = chunks.get(4).copied().unwrap_or_default();
+    let hint_area = chunks.get(4).copied().unwrap_or_default();
+    let status_area = chunks.get(5).copied().unwrap_or_default();
 
     // Chat area
     render_chat_area(frame, state, chat_area);
@@ -99,12 +105,24 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     };
     input_widget.render(frame, input_area);
 
+    // Hint line: which keys mean what, right now. The two conditions are the
+    // ones `keys::handle_global_key` branches on, in its order.
+    render_hint_line(
+        frame,
+        hint_area,
+        state.current_run.is_some(),
+        textarea.lines().iter().any(|l| !l.is_empty()),
+    );
+
     // Status bar
     let status = StatusBar {
         model: &state.model_name,
         session: &state.session_key,
         tokens: state.total_tokens,
         context_gauge: state.context_gauge,
+        cost: state.cost_view(),
+        locale: state.locale(),
+        run_id: state.current_run.as_deref(),
         cache_stat: state.cache_stat,
         cache_stat_agent: state.cache_stat_agent.as_deref(),
         running_agents: state.running_agent_count(),
@@ -159,14 +177,21 @@ mod tests {
         AppState::new("s".to_string(), "m".to_string())
     }
 
+    /// The composer's rule row, which spans the full width of whatever
+    /// `main_area` turned out to be. With a 40x10 backend and the default
+    /// (single-line) textarea, `input_height` is 2, the hint and status rows
+    /// take one each, so the chat area gets `Min(5)` = 6 rows and the rule
+    /// lands on y=6.
+    const RULE_Y: u16 = 6;
+
     /// R8-9: when the panel is hidden, `render()` must take the exact path
     /// it took before the agent-panel column existed — observed through the
-    /// input box's border, which `InputWidget` draws with `Borders::ALL`
-    /// (a standard `Block`, box-drawing corners at the exact edges of the
-    /// `Rect` it is given). With a 40x10 backend and the default (single
-    /// line) textarea, `input_height` is 3 and chat gets `Min(5)` = 6 rows,
-    /// so the input box's top row is y=6 — its top-LEFT corner sits at
-    /// column 0 only if `main_area` is the untouched full frame.
+    /// composer's rule, which starts at the left edge of `main_area`. Its
+    /// first cell sits at column 0 only if `main_area` is the untouched full
+    /// frame.
+    ///
+    /// (This used to read the input box's top-left corner. B6 removed the
+    /// box; the rule is what replaced it, and it makes the same measurement.)
     ///
     /// Reddens if `agent_panel_visible` is ignored so the layout keeps
     /// reserving space for the panel regardless of the flag, or if the
@@ -194,9 +219,9 @@ mod tests {
 
         let buf = term.backend().buffer();
         assert_eq!(
-            buf.cell((0, 6)).map(|c| c.symbol()),
-            Some("\u{250c}"),
-            "input box's top-left border corner must sit at column 0 when the agent panel is hidden"
+            buf.cell((0, RULE_Y)).map(|c| c.symbol()),
+            Some("\u{2500}"),
+            "the composer's rule must start at column 0 when the agent panel is hidden"
         );
     }
 
@@ -223,14 +248,14 @@ mod tests {
 
         let buf = term.backend().buffer();
         assert_ne!(
-            buf.cell((0, 6)).map(|c| c.symbol()),
-            Some("\u{250c}"),
-            "column 0 must belong to the agent panel, not the input box border, once visible"
+            buf.cell((0, RULE_Y)).map(|c| c.symbol()),
+            Some("\u{2500}"),
+            "column 0 must belong to the agent panel, not the composer's rule, once visible"
         );
         assert_eq!(
-            buf.cell((AGENT_PANEL_WIDTH, 6)).map(|c| c.symbol()),
-            Some("\u{250c}"),
-            "input box's border must shift to AGENT_PANEL_WIDTH when the panel is visible"
+            buf.cell((AGENT_PANEL_WIDTH, RULE_Y)).map(|c| c.symbol()),
+            Some("\u{2500}"),
+            "the composer's rule must shift to AGENT_PANEL_WIDTH when the panel is visible"
         );
     }
 

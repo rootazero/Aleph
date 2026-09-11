@@ -490,6 +490,12 @@ impl AppState {
                 if !self.current_run_trace_summary_applied {
                     self.update_token_usage(&summary);
                 }
+                // Unconditional, unlike the token tally above: the trace
+                // mirror carries no price at all, so this is the only carrier
+                // and there is no second application to guard against.
+                // `None` here means the pricing module had no rate — recorded
+                // as doubt, never spent as zero (判据 §8).
+                self.cost.add_run(summary.estimated_cost_usd);
                 self.current_run_uses_agent_trace = false;
                 self.current_run_trace_summary_applied = false;
                 self.turn_streamed_len = 0;
@@ -536,6 +542,9 @@ impl AppState {
                 ) {
                     self.add_system_message(halt_notice(token, UiLocale::from_env()));
                 }
+
+                // Last, so the turn closes on it.
+                self.append_turn_trailers(&summary.tool_summaries, total_duration_ms);
 
                 Action::None
             }

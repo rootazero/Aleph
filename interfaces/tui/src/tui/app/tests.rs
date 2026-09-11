@@ -130,17 +130,22 @@ fn a_clean_run_leaves_no_halt_line() {
     );
 }
 
+/// A new screen opens on an EMPTY transcript.
+///
+/// It used to open on a welcome `SystemNotice` naming the session key and the
+/// model. Both facts now have one live home each — the model on the derived
+/// header line, the key on the status bar — and a frozen string repeating them
+/// would be the copy that goes stale: the model in it is only correct until
+/// the first session snapshot arrives, which is usually within a second of
+/// launch (判据 §1).
 #[test]
-fn new_state_has_welcome_message() {
+fn a_new_screen_has_nothing_stored_in_its_transcript() {
     let state = AppState::new("test-session".into(), "claude-3".into());
-    assert_eq!(state.messages.len(), 1);
-    match &state.messages[0] {
-        TranscriptEntry::SystemNotice { text: content, .. } => {
-            assert!(content.contains("test-session"));
-            assert!(content.contains("claude-3"));
-        }
-        other => panic!("Expected System message, got: {other:?}"),
-    }
+    assert!(
+        state.messages.is_empty(),
+        "got: {:?}",
+        state.messages.first()
+    );
     assert!(state.stuck_to_bottom());
     assert_eq!(state.focus, Focus::Input);
     assert!(!state.should_quit);
@@ -282,13 +287,13 @@ fn agent_panel_starts_hidden_and_toggles() {
 #[test]
 fn ensure_assistant_message_creates_one() {
     let mut state = AppState::new("s".into(), "m".into());
-    // Only has system message
-    assert_eq!(state.messages.len(), 1);
+    // A fresh transcript is empty: the header is derived, not stored.
+    assert_eq!(state.messages.len(), 0);
 
     state.ensure_assistant_message();
-    assert_eq!(state.messages.len(), 2);
+    assert_eq!(state.messages.len(), 1);
     assert!(matches!(
-        state.messages[1],
+        state.messages[0],
         TranscriptEntry::AssistantText {
             streaming: true,
             ..
@@ -300,19 +305,19 @@ fn ensure_assistant_message_creates_one() {
 fn ensure_assistant_message_idempotent() {
     let mut state = AppState::new("s".into(), "m".into());
     state.ensure_assistant_message();
-    assert_eq!(state.messages.len(), 2);
+    assert_eq!(state.messages.len(), 1);
 
     // Calling again should not create another
     state.ensure_assistant_message();
-    assert_eq!(state.messages.len(), 2);
+    assert_eq!(state.messages.len(), 1);
 }
 
 #[test]
 fn add_user_message_appended() {
     let mut state = AppState::new("s".into(), "m".into());
     state.add_user_message("hello".into());
-    assert_eq!(state.messages.len(), 2);
-    match &state.messages[1] {
+    assert_eq!(state.messages.len(), 1);
+    match &state.messages[0] {
         TranscriptEntry::UserText { text: content, .. } => assert_eq!(content, "hello"),
         other => panic!("Expected User message, got: {other:?}"),
     }
@@ -469,7 +474,7 @@ fn a_typed_answer_is_sent_verbatim() {
 fn switch_session_clears_messages() {
     let mut state = AppState::new("s1".into(), "m".into());
     state.add_user_message("hello".into());
-    assert_eq!(state.messages.len(), 2);
+    assert_eq!(state.messages.len(), 1);
 
     state.switch_session("s2");
     assert_eq!(state.session_key, "s2");
@@ -631,9 +636,9 @@ fn handle_response_chunk_appends_content() {
     };
     state.handle_gateway_event(chunk2);
 
-    // Should have: system welcome + assistant message
-    assert_eq!(state.messages.len(), 2);
-    match &state.messages[1] {
+    // Just the assistant message — there is no welcome entry any more.
+    assert_eq!(state.messages.len(), 1);
+    match &state.messages[0] {
         TranscriptEntry::AssistantText {
             markdown: content, ..
         } => {
@@ -718,7 +723,7 @@ fn handle_agent_trace_session_completed_updates_totals_and_closes_stream() {
     assert_eq!(state.total_tokens, 321);
     assert!(state.current_run.is_none());
     assert!(!state.current_run_uses_agent_trace);
-    match &state.messages[1] {
+    match &state.messages[0] {
         TranscriptEntry::AssistantText {
             streaming: is_streaming,
             ..
@@ -968,14 +973,33 @@ fn handle_run_complete_clears_run() {
     assert_eq!(state.total_tokens, 500);
     assert_eq!(state.last_run_duration, Some(Duration::from_secs(5)));
 
-    // Assistant message should no longer be streaming
-    match &state.messages.last().unwrap() {
+    // Assistant message should no longer be streaming. Found rather than
+    // taken from `.last()`: a completed run now closes with its own trailer
+    // rows (`append_turn_trailers`), so the answer's bubble is no longer the
+    // final entry.
+    match state
+        .messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m, TranscriptEntry::AssistantText { .. }))
+        .expect("the run's answer must be on the transcript")
+    {
         TranscriptEntry::AssistantText {
             streaming: is_streaming,
             ..
         } => assert!(!is_streaming),
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
+
+    // …and it closes with the wall-clock trailer.
+    assert!(
+        matches!(
+            state.messages.last(),
+            Some(TranscriptEntry::SystemNotice { text, .. }) if text == "\u{273b} Worked for 5.0s"
+        ),
+        "got: {:?}",
+        state.messages.last()
+    );
 }
 
 #[test]
@@ -1818,8 +1842,8 @@ fn a_response_chunk_from_another_sessions_run_is_not_appended() {
         is_final: false,
         is_intermediate: false,
     });
-    // Only the welcome message — nothing was appended.
-    assert_eq!(state.messages.len(), 1);
+    // Nothing was appended.
+    assert_eq!(state.messages.len(), 0);
 }
 
 /// The same text a streaming turn produces twice on the wire (see
@@ -1843,7 +1867,7 @@ fn an_agent_trace_text_event_from_another_sessions_run_is_not_appended() {
             text: "not for you either".into(),
         },
     });
-    assert_eq!(state.messages.len(), 1);
+    assert_eq!(state.messages.len(), 0);
 }
 
 #[test]
@@ -1862,8 +1886,8 @@ fn a_response_chunk_from_this_sessions_run_is_still_appended() {
         is_final: false,
         is_intermediate: false,
     });
-    assert_eq!(state.messages.len(), 2);
-    match &state.messages[1] {
+    assert_eq!(state.messages.len(), 1);
+    match &state.messages[0] {
         TranscriptEntry::AssistantText {
             markdown: content, ..
         } => assert_eq!(content, "hello"),
@@ -1884,7 +1908,7 @@ fn a_response_chunk_from_a_run_never_announced_is_still_appended() {
         is_final: false,
         is_intermediate: false,
     });
-    assert_eq!(state.messages.len(), 2);
+    assert_eq!(state.messages.len(), 1);
 }
 
 /// `ModelResolved` and `ContextGauge` do not append visible chat text, but a
@@ -2483,7 +2507,15 @@ fn a_streamed_answer_is_not_doubled_by_its_own_summary() {
         total_duration_ms: 0,
     });
 
-    match state.messages.last().unwrap() {
+    // The run's trailer rows sit after the answer now, so this looks for the
+    // assistant bubble rather than the final entry.
+    match state
+        .messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m, TranscriptEntry::AssistantText { .. }))
+        .expect("the answer must be on the transcript")
+    {
         TranscriptEntry::AssistantText {
             markdown: content, ..
         } => assert_eq!(
@@ -3043,4 +3075,196 @@ fn a_live_scratchpad_result_in_the_wire_string_shape_updates_the_plan() {
     // absence is "this call carried none", never "clear".
     state.maybe_apply_plan_from_tool("scratchpad", &serde_json::json!("ok"));
     assert_eq!(state.plan.as_ref().map(PlanSnapshot::total), Some(2));
+}
+
+// ---------------------------------------------------------------------------
+// B6: what a turn costs, and what it leaves behind when it closes
+// ---------------------------------------------------------------------------
+
+fn tool_item(id: &str, name: &str, ms: u64) -> aleph_protocol::events::ToolSummaryItem {
+    aleph_protocol::events::ToolSummaryItem {
+        tool_id: id.into(),
+        tool_name: name.into(),
+        emoji: String::new(),
+        duration_ms: ms,
+        success: true,
+    }
+}
+
+fn finished_row(id: &str, name: &str, args: serde_json::Value) -> TranscriptEntry {
+    let mut row = ToolRow::new(id, name, &args);
+    row.start(0);
+    row.finish(&aleph_protocol::ToolResult::success("ok"), 100, 100);
+    TranscriptEntry::Tool(row)
+}
+
+/// The whole cost wire, from the two carriers to the string the status bar
+/// renders: attach sets the base, a completed run adds to it.
+#[test]
+fn a_completed_run_adds_its_price_to_what_the_snapshot_reported() {
+    let mut state = AppState::new("s".into(), "m".into());
+    assert_eq!(
+        state.cost_view(),
+        CostView::Unknown,
+        "before the server has said anything, the cost is unknown — not zero"
+    );
+
+    state.apply_session_snapshot(SessionSnapshot {
+        session_key: "s".into(),
+        estimated_cost_usd: 0.100,
+        ..Default::default()
+    });
+    assert_eq!(state.cost_view().label(), "$0.100");
+
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 1,
+        summary: RunSummary {
+            estimated_cost_usd: Some(0.020),
+            ..Default::default()
+        },
+        total_duration_ms: 1_000,
+    });
+    assert_eq!(state.cost_view().label(), "$0.120");
+
+    // And the next attach REBASES: the server's number already contains that
+    // run, so adding again would bill it twice.
+    state.apply_session_snapshot(SessionSnapshot {
+        session_key: "s".into(),
+        estimated_cost_usd: 0.120,
+        ..Default::default()
+    });
+    assert_eq!(state.cost_view().label(), "$0.120");
+}
+
+/// A provider with no price list does not make the conversation free.
+#[test]
+fn an_unpriced_run_leaves_the_total_a_floor() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.apply_session_snapshot(SessionSnapshot {
+        session_key: "s".into(),
+        estimated_cost_usd: 0.050,
+        ..Default::default()
+    });
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 1,
+        summary: RunSummary {
+            estimated_cost_usd: None,
+            ..Default::default()
+        },
+        total_duration_ms: 1_000,
+    });
+    assert_eq!(state.cost_view().label(), "$0.050+?");
+}
+
+/// Switching conversations must not carry the previous one's spend across.
+#[test]
+fn a_session_switch_drops_the_previous_conversations_cost() {
+    let mut state = AppState::new("s1".into(), "m".into());
+    state.apply_session_snapshot(SessionSnapshot {
+        session_key: "s1".into(),
+        estimated_cost_usd: 9.990,
+        ..Default::default()
+    });
+    state.switch_session("s2");
+    assert_eq!(
+        state.cost_view(),
+        CostView::Unknown,
+        "the incoming conversation's spend is not known until its own snapshot arrives"
+    );
+}
+
+/// **The turn summary gets a producer.** `TranscriptEntry::TurnSummary` had a
+/// renderer in `chat_area` since B3 and nothing anywhere in the crate built
+/// one (判据 §7 — two ends, no wire).
+///
+/// The counts come from the rows the AUTHORITATIVE record names, so they are
+/// this run's work rather than everything still on screen.
+#[test]
+fn a_multi_tool_run_closes_with_a_summary_of_what_it_did() {
+    let mut state = AppState::new("s".into(), "m".into());
+    // A tool row from an EARLIER turn, still on the transcript. It must not
+    // be counted into this run's summary.
+    state
+        .messages
+        .push(finished_row("old", "bash", json!({"command": "true"})));
+    state
+        .messages
+        .push(finished_row("c1", "bash", json!({"command": "ls"})));
+    state.messages.push(finished_row(
+        "c2",
+        "file_read",
+        json!({"file_path": "a.rs"}),
+    ));
+
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 1,
+        summary: RunSummary {
+            tool_summaries: vec![
+                tool_item("c1", "bash", 100),
+                tool_item("c2", "file_read", 100),
+            ],
+            ..Default::default()
+        },
+        total_duration_ms: 12_000,
+    });
+
+    let summary = state
+        .messages
+        .iter()
+        .find_map(|m| match m {
+            TranscriptEntry::TurnSummary(e) => Some(e),
+            _ => None,
+        })
+        .expect("a two-tool run earns a summary row");
+    assert_eq!(summary.commands, 1, "one Bash, not the earlier turn's too");
+    assert_eq!(summary.reads, 1);
+
+    // And the wall clock closes the turn, as its own row: the summary's
+    // duration is the tools', this one is the run's.
+    assert!(
+        matches!(
+            state.messages.last(),
+            Some(TranscriptEntry::SystemNotice { text, .. }) if text == "\u{273b} Worked for 12s"
+        ),
+        "got: {:?}",
+        state.messages.last()
+    );
+}
+
+/// The shared gate, honoured rather than re-implemented: one tool is not a
+/// turn worth summarising, and a run with no tools at all still gets its
+/// wall-clock trailer.
+#[test]
+fn a_single_tool_run_gets_no_summary_row_but_still_closes() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state
+        .messages
+        .push(finished_row("c1", "bash", json!({"command": "ls"})));
+    state.handle_gateway_event(StreamEvent::RunComplete {
+        run_id: "run-1".into(),
+        seq: 1,
+        summary: RunSummary {
+            tool_summaries: vec![tool_item("c1", "bash", 100)],
+            ..Default::default()
+        },
+        total_duration_ms: 800,
+    });
+    assert!(
+        !state
+            .messages
+            .iter()
+            .any(|m| matches!(m, TranscriptEntry::TurnSummary(_))),
+        "MIN_TOOLS_FOR_SUMMARY is the shared rule; this surface does not get its own"
+    );
+    assert!(
+        matches!(
+            state.messages.last(),
+            Some(TranscriptEntry::SystemNotice { text, .. }) if text == "\u{273b} Worked for 0.8s"
+        ),
+        "got: {:?}",
+        state.messages.last()
+    );
 }
