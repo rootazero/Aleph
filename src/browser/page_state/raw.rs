@@ -230,11 +230,19 @@ pub struct RawFrame {
     /// # What it licenses
     ///
     /// `true` says: for this frame, the fetcher asked the engine for the
-    /// properties. `build` then reads **only** the fields — the page's
-    /// `checked` / `selected` / `value` content attributes are not consulted at
-    /// all — and a checkable node the fetcher left `None` is one whose property
-    /// is **false**, because `DOMSnapshot` reports these as rare-boolean index
-    /// lists where a node appears iff the property is true.
+    /// properties. `build` then reads **only** the fields for the elements the
+    /// engine actually reports on — `<input type=checkbox|radio>`, `<option>`,
+    /// and inputs with a value — so the page's stale `checked` / `selected` /
+    /// `value` content attributes are not consulted there at all, and a node
+    /// the fetcher left `None` is one whose property is **false** or empty,
+    /// because `DOMSnapshot` reports these as rare index lists where a node
+    /// appears iff it has the value.
+    ///
+    /// It licenses nothing beyond those elements. A `<div role="checkbox">` has
+    /// no checkedness for any capture to have read, so this flag says nothing
+    /// about one and its `aria-checked` remains the only evidence there is —
+    /// deriving `false` from a capture's silence about a property that does not
+    /// exist would be the same invention in ARIA clothing.
     ///
     /// `false` says the opposite: nobody looked, so the page's markup is the
     /// only evidence there is, and it is evidence of the **initial** state.

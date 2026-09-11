@@ -239,6 +239,37 @@ const fn is_selectable(role: Role) -> bool {
     matches!(role, Role::Option | Role::Tab | Role::Row | Role::Cell)
 }
 
+/// The elements whose checkedness **the engine itself reports** —
+/// `DOMSnapshot`'s `inputChecked` covers `<input type=checkbox|radio>` and
+/// nothing else.
+///
+/// **Narrower than [`is_checkable`], and the gap is the whole point.** Only
+/// here can a live capture's silence be read as `false`, because only here is
+/// there a property the capture could have read. A `<div role="checkbox">` has
+/// no checkedness for `inputChecked` to report, so answering `false` for one
+/// out of a capture's silence would be this round's own invention aimed at
+/// ARIA widgets — and there the page's `aria-checked` remains the only
+/// evidence there is, live capture or not.
+///
+/// The `<input>` test is on the TAG and the type comes from `role`, which
+/// `roles::input_role` already derived: two spellings of "is this a checkbox"
+/// would be two derivations of one fact (判据 §12).
+fn has_native_checkedness(node: &RawNode, role: Role) -> bool {
+    node.tag_lower() == "input" && matches!(role, Role::Checkbox | Role::Radio)
+}
+
+/// `<option>` — `optionSelected`'s entire domain, and the same narrowing.
+///
+/// Measured as a mutation: with the live derivation gated on [`is_selectable`]
+/// instead, a capture that read the properties gave **every `<td>` and `<tr>`**
+/// `Some(false)` and appended `[unselected]` to its line — on a page built out
+/// of table cells, which is this branch's own fixture page, that is a token on
+/// nearly every line, claiming an observation of a property those elements do
+/// not have.
+fn has_native_selectedness(node: &RawNode, role: Role) -> bool {
+    node.tag_lower() == "option" && matches!(role, Role::Option)
+}
+
 /// The state bits.
 ///
 /// # Which bits a page is allowed to assert about itself, and which it is not
@@ -309,31 +340,25 @@ fn states_of(node: &RawNode, role: Role, live: bool) -> NodeStates {
         // capture that did not look leaves the markup as the only evidence.
         // `None` throughout for anything not checkable: "this is not a
         // checkbox" and "this checkbox is off" are different facts.
-        checked: node.checked.or_else(|| {
-            if live {
-                is_checkable(role).then_some(false)
-            } else {
-                match role {
-                    _ if is_checkable(role) && node.has_attr("checked") => Some(true),
-                    _ => aria_bool("aria-checked"),
-                }
-            }
-        }),
+        checked: node
+            .checked
+            .or_else(|| (live && has_native_checkedness(node, role)).then_some(false))
+            .or_else(|| match role {
+                _ if is_checkable(role) && node.has_attr("checked") => Some(true),
+                _ => aria_bool("aria-checked"),
+            }),
         expanded: aria_bool("aria-expanded"),
         // `checked`'s twin, the same precedence and the same silence (判据
         // §16). `Option<bool>` for the reason `focused` is one: a bare `bool`
         // spells "nobody looked" as `"selected": false` on the JSON face, which
         // is a denial about every node on the page.
-        selected: node.selected.or_else(|| {
-            if live {
-                is_selectable(role).then_some(false)
-            } else {
-                match role {
-                    _ if is_selectable(role) && node.has_attr("selected") => Some(true),
-                    _ => aria_bool("aria-selected"),
-                }
-            }
-        }),
+        selected: node
+            .selected
+            .or_else(|| (live && has_native_selectedness(node, role)).then_some(false))
+            .or_else(|| match role {
+                _ if is_selectable(role) && node.has_attr("selected") => Some(true),
+                _ => aria_bool("aria-selected"),
+            }),
         required: node.has_attr("required") || aria_true("aria-required"),
         readonly: node.has_attr("readonly") || aria_true("aria-readonly"),
         // From the FIELD, never from `attrs` — the page cannot reach a field.
@@ -973,6 +998,58 @@ mod tests {
             render_text(&state).contains("[unselected]"),
             "and the model is told so: an option nobody can tell apart from an \
              unobserved one is a line the model cannot act on"
+        );
+
+        // **A live capture answers only where the engine reports a property.**
+        // `inputChecked` covers `<input type=checkbox|radio>`; `optionSelected`
+        // covers `<option>`. A `<div role="checkbox">` has no checkedness for a
+        // capture to have read, so its silence says nothing about one — and the
+        // page's `aria-checked` stays the only evidence there is. Deriving
+        // `false` there would be this round's own invention aimed at ARIA
+        // widgets, and deriving it for `Row`/`Cell` — which the *attribute*
+        // gate admits — put `[unselected]` on every `<td>` of a table page.
+        let aria_widget = |attrs: &[(&str, &str)]| {
+            let mut raw = fixture();
+            raw.frames[1].live_properties_observed = true;
+            raw.frames[1].nodes[3].tag = Some("div".to_string());
+            raw.frames[1].nodes[3].attrs = attrs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            let state = PageState::build(
+                &raw,
+                &mut RefTable::new(),
+                1,
+                "https://example.test/hn",
+                "t",
+                Duration::from_secs(0),
+            );
+            state
+                .nodes
+                .iter()
+                .find(|n| n.backend_node_id == 23)
+                .expect("the widget")
+                .states
+        };
+        assert_eq!(
+            aria_widget(&[("role", "checkbox")]).checked,
+            None,
+            "a live capture answered for an ARIA widget whose checkedness no \
+             engine reports — silence about a property that does not exist is \
+             not an observation of `false`"
+        );
+        assert_eq!(
+            aria_widget(&[("role", "checkbox"), ("aria-checked", "true")]).checked,
+            Some(true),
+            "and the page's own assertion must still reach the model under a \
+             live capture: there is no property here to outrank it"
+        );
+        assert_eq!(
+            aria_widget(&[("role", "row")]).selected,
+            None,
+            "a live capture answered for a row's selectedness, which no engine \
+             reports — on a table page that is `[unselected]` on nearly every \
+             line"
         );
     }
 
