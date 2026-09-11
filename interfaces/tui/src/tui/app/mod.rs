@@ -176,7 +176,12 @@ pub enum Focus {
 ///
 /// `ToolExecution::progress` has no separate home: a progress line IS the body
 /// of a running row, and the result replaces it on `finish`.
-pub use shared_ui_logic::transcript::{RowBody, RowStatus, ToolRow, TranscriptEntry};
+///
+/// `RowStatus` is deliberately NOT re-exported here: nothing outside the tests
+/// names it through this module, and a facade that lists a type no caller
+/// reaches is the kind of always-true claim this repo pays for later. The
+/// tests import it from `shared_ui_logic` like every other consumer does.
+pub use shared_ui_logic::transcript::{RowBody, ToolRow, TranscriptEntry};
 
 /// Unix ms, for the entry timestamps the shared model carries as `Option<u64>`.
 fn as_ms(t: DateTime<Utc>) -> Option<u64> {

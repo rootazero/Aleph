@@ -6,6 +6,7 @@ use aleph_protocol::{
     SessionSnapshot, StreamEvent,
 };
 use serde_json::json;
+use shared_ui_logic::transcript::RowStatus;
 
 /// Everything the transcript holds as reasoning, joined.
 ///

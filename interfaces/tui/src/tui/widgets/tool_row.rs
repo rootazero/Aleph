@@ -64,6 +64,19 @@ fn style(role: SemanticColor) -> Style {
 
 /// Status glyph and its role.
 ///
+/// # Every glyph here must be ONE column
+///
+/// The name after the glyph is not re-aligned per state, so a status whose
+/// glyph is two columns wide moves that row's text sideways the moment the
+/// call starts running and back again when it settles — a whole transcript
+/// walking as calls complete. Padding does not buy the alignment back:
+/// `ratatui` budgets cells with the same `unicode-width` any padding would be
+/// computed from, so a wide glyph stays wide however many spaces follow it.
+/// The glyph itself has to be narrow.
+///
+/// `tests::the_status_glyphs_are_all_one_column` measures every glyph this
+/// function can return, plus the group headline's `●`.
+///
 /// `Pending` is a filled circle in the pending colour rather than a spinner:
 /// a row restored from a log without a start event settles to `Pending`
 /// (`ToolRow::settle_resumed`), and a spinner there would be the "turns
@@ -104,6 +117,9 @@ fn header_suffix(row: &ToolRow) -> Option<(String, SemanticColor)> {
 }
 
 /// `⏺ Read(src/gateway/mod.rs:1-120)  +12 -3`
+///
+/// One column of glyph plus one space, then the name — see [`status_glyph`]
+/// for why that first cell is not allowed to change width.
 fn header_line(row: &ToolRow, now_ms: u64) -> Line<'static> {
     let (glyph, glyph_role) = status_glyph(&row.status, now_ms);
     let mut spans = vec![
@@ -326,11 +342,15 @@ pub fn render_tool_row(
             file_changes_body(changes, row.expanded, modality, &mut out);
         }
     }
-    // An error with no output of its own still has to say what went wrong —
+    // An error that printed nothing still has to say what went wrong —
     // otherwise a failed call renders as a bare header and reads like a
     // success with a cross next to it.
+    //
+    // Keyed on "nothing was drawn" rather than on `RowBody::None`: a body of
+    // whitespace is skipped above and is just as empty on screen, and keying
+    // on the variant would leave exactly that case silent.
     if let RowStatus::Err { message, .. } = &row.status {
-        if matches!(&row.body, RowBody::None) && !message.is_empty() {
+        if out.len() == 1 && !message.is_empty() {
             out.push(Line::from(vec![
                 body_prefix(0),
                 Span::styled(message.clone(), style(SemanticColor::ToolErr)),
@@ -348,8 +368,10 @@ pub fn render_tool_group(
     width: u16,
     modality: Modality,
 ) -> Vec<Line<'static>> {
+    // `●` U+25CF, one column like every row glyph, so a group headline and the
+    // rows under it start their text in the same column.
     let mut out = vec![Line::from(vec![
-        Span::styled("\u{25cf} ".to_string(), style(SemanticColor::Dim)),
+        Span::styled("\u{25cf} ", style(SemanticColor::Dim)),
         Span::styled(group.headline(), style(SemanticColor::Dim)),
     ])];
     if group.expanded {
@@ -546,6 +568,53 @@ mod tests {
         let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
         assert!(out.iter().any(|l| l.contains("line 0")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("line 19")), "{out:?}");
+    }
+
+    /// Every glyph that can open a row is exactly one column, so the name
+    /// after it does not walk sideways as a call runs and settles.
+    ///
+    /// # When this goes red
+    ///
+    /// Swap any status glyph for a two-column one — an emoji, `🔴`, a boxed
+    /// mark — and this fails. That is the whole point: the alignment cannot be
+    /// bought back with padding, because `ratatui` budgets cells with the same
+    /// `unicode-width` the padding would be computed from. The glyph itself has
+    /// to be narrow.
+    ///
+    /// Measured through `unicode-width` rather than `chars().count()`, which
+    /// reports one for a wide glyph too and would agree with the bug.
+    ///
+    /// What this CANNOT see: a terminal that paints a glyph wider than
+    /// `unicode-width` claims. That disagreement is invisible to every test in
+    /// this repo and is on the real-machine list.
+    #[test]
+    fn the_status_glyphs_are_all_one_column() {
+        use unicode_width::UnicodeWidthStr;
+        let mut seen = vec![
+            status_glyph(&RowStatus::Pending, 0).0,
+            status_glyph(&RowStatus::Ok { duration_ms: 1 }, 0).0,
+            status_glyph(
+                &RowStatus::Err {
+                    duration_ms: 1,
+                    message: "boom".into(),
+                },
+                0,
+            )
+            .0,
+            // The group headline's own glyph, which shares the column.
+            "\u{25cf}".to_string(),
+        ];
+        // Every frame, not whichever one `now_ms = 0` happens to select.
+        for frame in shared_ui_logic::transcript::SPINNER_FRAMES {
+            seen.push(frame.to_string());
+        }
+        for glyph in seen {
+            assert_eq!(
+                UnicodeWidthStr::width(glyph.as_str()),
+                1,
+                "{glyph:?} is not one column wide"
+            );
+        }
     }
 
     /// The hint has to describe an affordance that exists.
