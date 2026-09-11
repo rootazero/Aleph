@@ -1933,16 +1933,21 @@ mod tests {
             .await
             .expect("a slow but answering engine still comes up");
         let elapsed = started.elapsed();
-        assert!(
-            elapsed >= step * 3,
-            "the peer was not actually slow, so this proves nothing: {elapsed:?}"
-        );
+        // The subject assertion FIRST, then the non-vacuity check. The other
+        // order puts "was the peer actually slow" in front of the thing this
+        // test exists to measure, and any mutation that shortens the bring-up
+        // trips it before `pending_len` is ever read — the ordering corollary,
+        // applied before it costs something rather than after.
         assert_eq!(
             handle.conn.pending_len(),
             0,
             "the connection a successful bring-up handed on is carrying stranded \
              entries — that is the one connection whose leak would outlive the \
              call, and it is what the Drop argument claims cannot happen"
+        );
+        assert!(
+            elapsed >= step * 3,
+            "the peer was not actually slow, so this proves nothing: {elapsed:?}"
         );
 
         registry.shutdown_all().await;
