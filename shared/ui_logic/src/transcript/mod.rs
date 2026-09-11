@@ -35,14 +35,13 @@ pub use view_model::{
 mod diff_view;
 pub use diff_view::{
     diff_rows, stats_label, word_spans, DiffRow, DiffRows, DiffView, Span, COLLAPSED_DIFF_ROWS,
-    EXPANDED_DIFF_ROWS, LCS_CELL_BUDGET_COLLAPSED, LCS_CELL_BUDGET_EXPANDED,
-    MAX_INLINE_LINE_CHARS,
+    EXPANDED_DIFF_ROWS, LCS_CELL_BUDGET_COLLAPSED, LCS_CELL_BUDGET_EXPANDED, MAX_INLINE_LINE_CHARS,
 };
 
 mod md_enhance;
 pub use md_enhance::{
-    enhance, find_path_refs, linkify_bare_urls, trim_url, AdmonitionKind, Block, Enhanced,
-    PathRef, KNOWN_EXTENSIONS, MERMAID_PLACEHOLDER_PREFIX,
+    enhance, find_path_refs, linkify_bare_urls, trim_url, AdmonitionKind, Block, Enhanced, PathRef,
+    KNOWN_EXTENSIONS, MERMAID_PLACEHOLDER_PREFIX,
 };
 
 mod affordance;

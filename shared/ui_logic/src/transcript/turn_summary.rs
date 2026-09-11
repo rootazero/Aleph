@@ -11,7 +11,15 @@ pub fn summarize_turn(rows: &[ToolRow]) -> Option<TurnSummaryEntry> {
     if rows.len() < MIN_TOOLS_FOR_SUMMARY {
         return None;
     }
-    let mut e = TurnSummaryEntry { commands: 0, reads: 0, edits: 0, writes: 0, others: 0, failed: 0, duration_ms: 0 };
+    let mut e = TurnSummaryEntry {
+        commands: 0,
+        reads: 0,
+        edits: 0,
+        writes: 0,
+        others: 0,
+        failed: 0,
+        duration_ms: 0,
+    };
     let mut read_paths = std::collections::HashSet::new();
     let mut edit_paths = std::collections::HashSet::new();
     let mut write_paths = std::collections::HashSet::new();
@@ -76,7 +84,11 @@ pub fn turn_summary_text(e: &TurnSummaryEntry) -> String {
     parts.extend(part(e.edits, "edited", "file"));
     parts.extend(part(e.writes, "wrote", "file"));
     if e.others > 0 {
-        parts.push(format!("{} other tool{}", e.others, if e.others == 1 { "" } else { "s" }));
+        parts.push(format!(
+            "{} other tool{}",
+            e.others,
+            if e.others == 1 { "" } else { "s" }
+        ));
     }
     if e.failed > 0 {
         parts.push(format!("{} failed", e.failed));
@@ -104,7 +116,16 @@ mod tests {
         let mut r = ToolRow::new("id", tool, &args);
         r.started_ms = Some(0);
         r.ended_ms = Some(14_000);
-        r.status = if ok { RowStatus::Ok { duration_ms: 14_000 } } else { RowStatus::Err { duration_ms: 14_000, message: "x".into() } };
+        r.status = if ok {
+            RowStatus::Ok {
+                duration_ms: 14_000,
+            }
+        } else {
+            RowStatus::Err {
+                duration_ms: 14_000,
+                message: "x".into(),
+            }
+        };
         r
     }
     #[test]
@@ -129,7 +150,10 @@ mod tests {
             row("file_write", json!({"file_path": "d.rs"}), true),
         ];
         let e = summarize_turn(&rows).unwrap();
-        assert_eq!(turn_summary_text(&e), "Ran 3 commands, read 2 files, edited 1 file, wrote 1 file, 1 failed · 1m 52s");
+        assert_eq!(
+            turn_summary_text(&e),
+            "Ran 3 commands, read 2 files, edited 1 file, wrote 1 file, 1 failed · 1m 52s"
+        );
     }
     #[test]
     fn one_tool_is_below_the_gate() {
@@ -151,7 +175,10 @@ mod tests {
         pending.status = RowStatus::Pending;
         let terminal = row("file_read", json!({"path": "b.rs"}), true); // 14_000ms, Ok
         let e = summarize_turn(&[pending, terminal]).unwrap();
-        assert_eq!(e.duration_ms, 14_000, "the Pending row's stale ended_ms must not be billed");
+        assert_eq!(
+            e.duration_ms, 14_000,
+            "the Pending row's stale ended_ms must not be billed"
+        );
     }
     #[test]
     fn a_pending_read_beside_a_terminal_one_is_not_counted() {
@@ -162,7 +189,10 @@ mod tests {
         let pending_read = ToolRow::new("id", "file_read", &json!({"path": "a.rs"})); // default status: Pending
         let terminal_read = row("file_read", json!({"path": "b.rs"}), true);
         let e = summarize_turn(&[pending_read, terminal_read]).unwrap();
-        assert_eq!(e.reads, 1, "the Pending read must not be counted alongside the terminal one");
+        assert_eq!(
+            e.reads, 1,
+            "the Pending read must not be counted alongside the terminal one"
+        );
     }
     #[test]
     fn a_turn_with_no_terminal_rows_is_unknown_not_a_zeroed_summary() {

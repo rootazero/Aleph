@@ -35,15 +35,68 @@ pub enum Locale {
 pub const VERB_REROLL_MS: u64 = 7_000;
 
 pub const VERBS_EN: &[&str] = &[
-    "Thinking", "Pondering", "Reading", "Searching", "Tracing", "Weaving", "Mapping", "Sifting",
-    "Assembling", "Composing", "Checking", "Untangling", "Refining", "Sketching", "Digging",
-    "Connecting", "Comparing", "Testing", "Measuring", "Planning", "Drafting", "Reviewing",
-    "Aligning", "Stitching", "Polishing", "Verifying", "Scanning", "Gathering", "Shaping", "Working",
+    "Thinking",
+    "Pondering",
+    "Reading",
+    "Searching",
+    "Tracing",
+    "Weaving",
+    "Mapping",
+    "Sifting",
+    "Assembling",
+    "Composing",
+    "Checking",
+    "Untangling",
+    "Refining",
+    "Sketching",
+    "Digging",
+    "Connecting",
+    "Comparing",
+    "Testing",
+    "Measuring",
+    "Planning",
+    "Drafting",
+    "Reviewing",
+    "Aligning",
+    "Stitching",
+    "Polishing",
+    "Verifying",
+    "Scanning",
+    "Gathering",
+    "Shaping",
+    "Working",
 ];
 pub const VERBS_ZH: &[&str] = &[
-    "思考中", "琢磨中", "阅读中", "搜索中", "追踪中", "梳理中", "拼装中", "整理中", "核对中", "推演中",
-    "勾勒中", "挖掘中", "串联中", "比对中", "测试中", "度量中", "规划中", "起草中", "复核中", "对齐中",
-    "缝合中", "打磨中", "验证中", "扫描中", "收集中", "成形中", "构思中", "校准中", "编排中", "工作中",
+    "思考中",
+    "琢磨中",
+    "阅读中",
+    "搜索中",
+    "追踪中",
+    "梳理中",
+    "拼装中",
+    "整理中",
+    "核对中",
+    "推演中",
+    "勾勒中",
+    "挖掘中",
+    "串联中",
+    "比对中",
+    "测试中",
+    "度量中",
+    "规划中",
+    "起草中",
+    "复核中",
+    "对齐中",
+    "缝合中",
+    "打磨中",
+    "验证中",
+    "扫描中",
+    "收集中",
+    "成形中",
+    "构思中",
+    "校准中",
+    "编排中",
+    "工作中",
 ];
 
 #[must_use]
@@ -83,8 +136,14 @@ mod tests {
     use super::*;
     #[test]
     fn hint_is_a_function_of_modality() {
-        assert_eq!(expand_hint(Modality::Mouse, 41), "… +41 lines · click to expand");
-        assert_eq!(expand_hint(Modality::Key("ctrl+o"), 1), "… +1 line (ctrl+o to expand)");
+        assert_eq!(
+            expand_hint(Modality::Mouse, 41),
+            "… +41 lines · click to expand"
+        );
+        assert_eq!(
+            expand_hint(Modality::Key("ctrl+o"), 1),
+            "… +1 line (ctrl+o to expand)"
+        );
     }
     #[test]
     fn spinner_is_periodic_in_time_and_verbs_are_stable_for_a_seed() {

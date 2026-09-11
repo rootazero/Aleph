@@ -215,7 +215,11 @@ mod tests {
         assert!(f.truncated, "a 6 KB single line must fold");
         assert_eq!(f.rows.len(), 2);
         assert!(f.rows.iter().all(|r| r.chars().count() == 80));
-        assert!(f.hidden_rows > 20, "hidden rows must follow wrap width, got {}", f.hidden_rows);
+        assert!(
+            f.hidden_rows > 20,
+            "hidden rows must follow wrap width, got {}",
+            f.hidden_rows
+        );
     }
 
     #[test]

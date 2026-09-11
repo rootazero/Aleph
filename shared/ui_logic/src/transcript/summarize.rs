@@ -55,8 +55,17 @@ pub const DISPLAY_NAMES: &[(&str, &str)] = &[
 
 /// Fallback argument keys, first present wins. Objects/arrays are skipped.
 pub const PREFERRED_ARG_KEYS: &[&str] = &[
-    "path", "file_path", "command", "query", "question", "pattern", "url", "name", "id",
-    "action", "message",
+    "path",
+    "file_path",
+    "command",
+    "query",
+    "question",
+    "pattern",
+    "url",
+    "name",
+    "id",
+    "action",
+    "message",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,7 +84,11 @@ pub fn humanize(name: &str) -> String {
             spaced.push(' ');
             continue;
         }
-        if c.is_ascii_uppercase() && i > 0 && chars[i - 1].is_ascii_alphanumeric() && !chars[i - 1].is_ascii_uppercase() {
+        if c.is_ascii_uppercase()
+            && i > 0
+            && chars[i - 1].is_ascii_alphanumeric()
+            && !chars[i - 1].is_ascii_uppercase()
+        {
             spaced.push(' ');
         }
         spaced.push(c);
@@ -130,7 +143,9 @@ pub fn clip_one_line(s: &str, max: usize) -> String {
 }
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty())
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
 }
 
 fn read_range(args: &Value) -> Option<String> {
@@ -150,7 +165,14 @@ fn shorten_path(p: &str) -> String {
     if p.chars().count() <= ARGS_CLIP {
         return p.to_string();
     }
-    let tail: String = p.chars().rev().take(ARGS_CLIP - 1).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = p
+        .chars()
+        .rev()
+        .take(ARGS_CLIP - 1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("…{tail}")
 }
 
@@ -169,9 +191,14 @@ pub fn summarize(tool: &str, args: &Value) -> CallSummary {
             .or_else(|| str_arg(args, "path"))
             .map(shorten_path),
         "apply_patch" => str_arg(args, "patch").map(|patch| {
-            let n = patch.lines().filter(|l| {
-                l.starts_with("*** Add File:") || l.starts_with("*** Update File:") || l.starts_with("*** Delete File:")
-            }).count();
+            let n = patch
+                .lines()
+                .filter(|l| {
+                    l.starts_with("*** Add File:")
+                        || l.starts_with("*** Update File:")
+                        || l.starts_with("*** Delete File:")
+                })
+                .count();
             format!("{n} file{}", if n == 1 { "" } else { "s" })
         }),
         "grep" | "find" => str_arg(args, "pattern").map(|pat| match str_arg(args, "path") {
@@ -180,14 +207,21 @@ pub fn summarize(tool: &str, args: &Value) -> CallSummary {
         }),
         "bash" => str_arg(args, "command").map(|c| clip_one_line(c, 80)),
         "subagent" => {
-            let who = str_arg(args, "agent").or_else(|| str_arg(args, "name")).unwrap_or("agent");
-            let task = str_arg(args, "task").or_else(|| str_arg(args, "prompt")).map(|t| clip_one_line(t, 40));
+            let who = str_arg(args, "agent")
+                .or_else(|| str_arg(args, "name"))
+                .unwrap_or("agent");
+            let task = str_arg(args, "task")
+                .or_else(|| str_arg(args, "prompt"))
+                .map(|t| clip_one_line(t, 40));
             Some(match task {
                 Some(t) => format!("{who}: {t}"),
                 None => who.to_string(),
             })
         }
-        _ => PREFERRED_ARG_KEYS.iter().find_map(|k| str_arg(args, k)).map(str::to_string),
+        _ => PREFERRED_ARG_KEYS
+            .iter()
+            .find_map(|k| str_arg(args, k))
+            .map(str::to_string),
     };
     CallSummary {
         display_name: display,
@@ -211,14 +245,20 @@ mod tests {
     fn unknown_tools_are_humanised_and_mcp_tools_show_server_and_tool() {
         assert_eq!(humanize("get_subagent_result"), "Get Subagent Result");
         assert_eq!(humanize("customTranslate"), "Custom Translate");
-        assert_eq!(display_name("mcp__github__search_issues"), "Github · Search Issues");
+        assert_eq!(
+            display_name("mcp__github__search_issues"),
+            "Github · Search Issues"
+        );
         assert_eq!(display_name("github__search"), "Github · Search");
         assert_eq!(display_name("weird_tool"), "Weird Tool");
     }
 
     #[test]
     fn read_shows_path_and_range() {
-        let s = summarize("file_read", &json!({"path": "src/a.rs", "offset": 10, "limit": 50}));
+        let s = summarize(
+            "file_read",
+            &json!({"path": "src/a.rs", "offset": 10, "limit": 50}),
+        );
         assert_eq!(s.args_text, "src/a.rs:10-59");
         let s = summarize("file_read", &json!({"path": "src/a.rs"}));
         assert_eq!(s.args_text, "src/a.rs");
@@ -235,17 +275,32 @@ mod tests {
     #[test]
     fn patch_counts_files_and_subagent_names_agent_and_task() {
         let patch = "*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** Add File: b.rs\n+z\n*** End Patch";
-        assert_eq!(summarize("apply_patch", &json!({"patch": patch})).args_text, "2 files");
-        let s = summarize("subagent", &json!({"agent": "reviewer", "task": "Review the auth module for injection risks and more"}));
-        assert_eq!(s.args_text, "reviewer: Review the auth module for injection ri…");
+        assert_eq!(
+            summarize("apply_patch", &json!({"patch": patch})).args_text,
+            "2 files"
+        );
+        let s = summarize(
+            "subagent",
+            &json!({"agent": "reviewer", "task": "Review the auth module for injection risks and more"}),
+        );
+        assert_eq!(
+            s.args_text,
+            "reviewer: Review the auth module for injection ri…"
+        );
     }
 
     #[test]
     fn fallback_walks_preferred_keys_and_skips_objects() {
-        let s = summarize("some_tool", &json!({"opts": {"path": "no"}, "url": "https://x.y/z"}));
+        let s = summarize(
+            "some_tool",
+            &json!({"opts": {"path": "no"}, "url": "https://x.y/z"}),
+        );
         assert_eq!(s.args_text, "https://x.y/z");
         let s = summarize("some_tool", &json!({"text": "hi"}));
-        assert_eq!(s.args_text, "", "a key outside the preferred list yields no argument");
+        assert_eq!(
+            s.args_text, "",
+            "a key outside the preferred list yields no argument"
+        );
     }
 
     #[test]

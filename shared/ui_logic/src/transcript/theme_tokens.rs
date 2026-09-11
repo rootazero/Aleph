@@ -129,7 +129,11 @@ mod tests {
     #[test]
     fn every_role_has_a_distinct_css_var() {
         let vars: HashSet<&str> = ALL_SEMANTIC_COLORS.iter().map(|c| c.css_var()).collect();
-        assert_eq!(vars.len(), ALL_SEMANTIC_COLORS.len(), "two roles share a CSS var");
+        assert_eq!(
+            vars.len(),
+            ALL_SEMANTIC_COLORS.len(),
+            "two roles share a CSS var"
+        );
         assert!(vars.iter().all(|v| v.starts_with("--tr-")));
     }
 

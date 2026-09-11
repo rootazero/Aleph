@@ -12,9 +12,16 @@ pub enum RowStatus {
     /// Requested, not yet started (or restored from a log with no start
     /// event and no result — NOT spinning, see `settle_resumed`).
     Pending,
-    Running { since_ms: u64 },
-    Ok { duration_ms: u64 },
-    Err { duration_ms: u64, message: String },
+    Running {
+        since_ms: u64,
+    },
+    Ok {
+        duration_ms: u64,
+    },
+    Err {
+        duration_ms: u64,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +54,9 @@ pub struct ToolRow {
 /// `delete` call here — grouping a delete as "explored" would lie, while
 /// failing to group a genuinely read-only call merely under-groups. Fail
 /// closed: leave it out.
-pub const READ_ONLY_DISPLAY_NAMES: &[&str] = &["Read", "Grep", "Find", "Fetch", "Search", "Memory", "Context", "Tools"];
+pub const READ_ONLY_DISPLAY_NAMES: &[&str] = &[
+    "Read", "Grep", "Find", "Fetch", "Search", "Memory", "Context", "Tools",
+];
 
 impl ToolRow {
     #[must_use]
@@ -128,12 +137,20 @@ impl ToolGroup {
     #[must_use]
     pub fn headline(&self) -> String {
         let n = self.rows.len();
-        let total_ms: u64 = self.rows.iter().map(|r| match &r.status {
-            RowStatus::Ok { duration_ms } | RowStatus::Err { duration_ms, .. } => *duration_ms,
-            _ => 0,
-        }).sum();
+        let total_ms: u64 = self
+            .rows
+            .iter()
+            .map(|r| match &r.status {
+                RowStatus::Ok { duration_ms } | RowStatus::Err { duration_ms, .. } => *duration_ms,
+                _ => 0,
+            })
+            .sum();
         let noun = if n == 1 { "call" } else { "calls" };
-        let dur = if total_ms > 0 { format!(" · {}", super::affordance::fmt_duration_ms(total_ms)) } else { String::new() };
+        let dur = if total_ms > 0 {
+            format!(" · {}", super::affordance::fmt_duration_ms(total_ms))
+        } else {
+            String::new()
+        };
         format!("Explored {n} {noun}{dur}")
     }
 }
@@ -151,13 +168,27 @@ pub struct TurnSummaryEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptEntry {
-    UserText { id: String, text: String },
-    AssistantText { id: String, markdown: String, streaming: bool },
-    Reasoning { id: String, text: String, collapsed: bool },
+    UserText {
+        id: String,
+        text: String,
+    },
+    AssistantText {
+        id: String,
+        markdown: String,
+        streaming: bool,
+    },
+    Reasoning {
+        id: String,
+        text: String,
+        collapsed: bool,
+    },
     Tool(ToolRow),
     ToolGroup(ToolGroup),
     TurnSummary(TurnSummaryEntry),
-    SystemNotice { id: String, text: String },
+    SystemNotice {
+        id: String,
+        text: String,
+    },
 }
 
 #[cfg(test)]
@@ -170,7 +201,13 @@ mod tests {
         let mut r = ToolRow::new("c1", "file_edit", &json!({"file_path": "a.rs"}));
         r.start(1000);
         let res = ToolResult::success("Replaced 1 occurrence").with_presentation(Some(
-            Presentation::FileChanges { changes: vec![FileChange::unavailable("a.rs", aleph_protocol::file_change::FileChangeKind::Modified, aleph_protocol::file_change::Unavailable::TooLarge)] },
+            Presentation::FileChanges {
+                changes: vec![FileChange::unavailable(
+                    "a.rs",
+                    aleph_protocol::file_change::FileChangeKind::Modified,
+                    aleph_protocol::file_change::Unavailable::TooLarge,
+                )],
+            },
         ));
         r.finish(&res, 42, 1042);
         assert!(matches!(r.body, RowBody::FileChanges(ref c) if c.len() == 1));
@@ -204,7 +241,11 @@ mod tests {
         // the rendered display name, not the args, so it cannot tell them
         // apart here. Grouping a delete as "explored" would lie — fail
         // closed by never treating file_ops as read-only.
-        let r = ToolRow::new("c1", "file_ops", &json!({"action": "delete", "path": "a.rs"}));
+        let r = ToolRow::new(
+            "c1",
+            "file_ops",
+            &json!({"action": "delete", "path": "a.rs"}),
+        );
         assert_eq!(r.summary.display_name, "Files");
         assert!(!r.is_read_only());
     }

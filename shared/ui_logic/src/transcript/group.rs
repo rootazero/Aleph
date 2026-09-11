@@ -22,9 +22,14 @@ pub fn group_entries(entries: Vec<TranscriptEntry>) -> Vec<TranscriptEntry> {
     let mut run: Vec<super::view_model::ToolRow> = Vec::new();
     let mut gap: Vec<TranscriptEntry> = Vec::new();
 
-    let flush = |run: &mut Vec<super::view_model::ToolRow>, gap: &mut Vec<TranscriptEntry>, out: &mut Vec<TranscriptEntry>| {
+    let flush = |run: &mut Vec<super::view_model::ToolRow>,
+                 gap: &mut Vec<TranscriptEntry>,
+                 out: &mut Vec<TranscriptEntry>| {
         if run.len() >= MIN_GROUP {
-            out.push(TranscriptEntry::ToolGroup(ToolGroup { rows: std::mem::take(run), expanded: false }));
+            out.push(TranscriptEntry::ToolGroup(ToolGroup {
+                rows: std::mem::take(run),
+                expanded: false,
+            }));
         } else {
             for r in run.drain(..) {
                 out.push(TranscriptEntry::Tool(r));
@@ -69,7 +74,11 @@ mod tests {
         TranscriptEntry::Tool(ToolRow::new(id, "file_edit", &json!({"file_path": "x.rs"})))
     }
     fn text(s: &str) -> TranscriptEntry {
-        TranscriptEntry::AssistantText { id: "t".into(), markdown: s.into(), streaming: false }
+        TranscriptEntry::AssistantText {
+            id: "t".into(),
+            markdown: s.into(),
+            streaming: false,
+        }
     }
 
     #[test]
@@ -84,9 +93,17 @@ mod tests {
 
     #[test]
     fn blank_texts_inside_a_run_are_tolerated_but_real_text_breaks_it() {
-        let out = group_entries(vec![read("a"), text("  "), read("b"), text("Found it."), read("c")]);
+        let out = group_entries(vec![
+            read("a"),
+            text("  "),
+            read("b"),
+            text("Found it."),
+            read("c"),
+        ]);
         assert!(matches!(&out[0], TranscriptEntry::ToolGroup(g) if g.rows.len() == 2));
-        assert!(matches!(&out[1], TranscriptEntry::AssistantText { markdown, .. } if markdown == "Found it."));
+        assert!(
+            matches!(&out[1], TranscriptEntry::AssistantText { markdown, .. } if markdown == "Found it.")
+        );
         assert!(matches!(&out[2], TranscriptEntry::Tool(_)));
     }
 
@@ -99,7 +116,9 @@ mod tests {
     #[test]
     fn group_headline_counts_calls_and_sums_duration() {
         let out = group_entries(vec![read("a"), read("b")]);
-        let TranscriptEntry::ToolGroup(g) = &out[0] else { panic!("group") };
+        let TranscriptEntry::ToolGroup(g) = &out[0] else {
+            panic!("group")
+        };
         assert_eq!(g.headline(), "Explored 2 calls · 0.2s");
     }
 }

@@ -43,7 +43,11 @@ pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
     let mut rows: Vec<ContextRow> = b
         .layers
         .iter()
-        .map(|l| ContextRow { label: l.name.clone(), tokens: l.tokens, bytes: Some(l.bytes) })
+        .map(|l| ContextRow {
+            label: l.name.clone(),
+            tokens: l.tokens,
+            bytes: Some(l.bytes),
+        })
         .collect();
     let tool_bytes = b.tool_bytes();
     if !b.tools.is_empty() {
@@ -54,7 +58,11 @@ pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
         });
     }
     if let Some(m) = b.messages_tokens {
-        rows.push(ContextRow { label: "Messages".into(), tokens: m, bytes: None });
+        rows.push(ContextRow {
+            label: "Messages".into(),
+            tokens: m,
+            bytes: None,
+        });
     }
     let ours: u64 = rows.iter().map(|r| r.tokens).sum();
     let total = match b.provider_reported {
@@ -86,9 +94,19 @@ pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
         _ => None,
     };
     if other > 0 {
-        rows.push(ContextRow { label: "Other".into(), tokens: other, bytes: None });
+        rows.push(ContextRow {
+            label: "Other".into(),
+            tokens: other,
+            bytes: None,
+        });
     }
-    ContextRows { rows, total, window: b.context_window, percent, other }
+    ContextRows {
+        rows,
+        total,
+        window: b.context_window,
+        percent,
+        other,
+    }
 }
 
 #[cfg(test)]
@@ -99,8 +117,17 @@ mod tests {
         ContextBreakdown {
             session_key: "k".into(),
             turn: 1,
-            layers: vec![LayerSizeView { name: "System".into(), bytes: 4000, tokens: 1000, zone: "stable".into() }],
-            tools: vec![ToolSchemaSize { name: "grep".into(), schema_bytes: 400, description_bytes: 0 }],
+            layers: vec![LayerSizeView {
+                name: "System".into(),
+                bytes: 4000,
+                tokens: 1000,
+                zone: "stable".into(),
+            }],
+            tools: vec![ToolSchemaSize {
+                name: "grep".into(),
+                schema_bytes: 400,
+                description_bytes: 0,
+            }],
             messages_tokens: Some(500),
             provider_reported: provider,
             context_window: Some(200_000),
@@ -109,7 +136,12 @@ mod tests {
     }
     #[test]
     fn provider_wins_when_it_disagrees_and_the_remainder_is_an_explicit_other_row() {
-        let r = reconcile(&breakdown(Some(UsageTokens { input: 2000, output: 0, cache_read: 0, cache_creation: 0 })));
+        let r = reconcile(&breakdown(Some(UsageTokens {
+            input: 2000,
+            output: 0,
+            cache_read: 0,
+            cache_creation: 0,
+        })));
         assert_eq!(r.total, Some(2000));
         assert_eq!(r.other, 400); // 2000 - (1000 + 100 + 500)
         assert_eq!(r.rows.last().unwrap().label, "Other");
@@ -125,7 +157,12 @@ mod tests {
     }
     #[test]
     fn a_provider_count_within_tolerance_keeps_our_rows_unchanged() {
-        let r = reconcile(&breakdown(Some(UsageTokens { input: 1600, output: 0, cache_read: 0, cache_creation: 0 })));
+        let r = reconcile(&breakdown(Some(UsageTokens {
+            input: 1600,
+            output: 0,
+            cache_read: 0,
+            cache_creation: 0,
+        })));
         assert_eq!(r.total, Some(1600));
         assert_eq!(r.other, 0);
     }
@@ -141,16 +178,46 @@ mod tests {
         // reports nothing at all, and no `Other` row is emitted. Every
         // itemized row is kept exactly as measured — reconciliation only
         // withholds the total/percent judgment, never the parts.
-        let b = breakdown(Some(UsageTokens { input: 100, output: 0, cache_read: 0, cache_creation: 0 }));
+        let b = breakdown(Some(UsageTokens {
+            input: 100,
+            output: 0,
+            cache_read: 0,
+            cache_creation: 0,
+        }));
         let r = reconcile(&b);
         assert_eq!(r.total, None);
         assert_eq!(r.percent, None);
         assert_eq!(r.other, 0);
         assert!(r.rows.iter().all(|x| x.label != "Other"));
-        assert_eq!(r.rows.len(), 3, "System/Tools/Messages rows survive untouched");
-        assert_eq!(r.rows[0], ContextRow { label: "System".into(), tokens: 1000, bytes: Some(4000) });
-        assert_eq!(r.rows[1], ContextRow { label: "Tools (1 schemas)".into(), tokens: 100, bytes: Some(400) });
-        assert_eq!(r.rows[2], ContextRow { label: "Messages".into(), tokens: 500, bytes: None });
+        assert_eq!(
+            r.rows.len(),
+            3,
+            "System/Tools/Messages rows survive untouched"
+        );
+        assert_eq!(
+            r.rows[0],
+            ContextRow {
+                label: "System".into(),
+                tokens: 1000,
+                bytes: Some(4000)
+            }
+        );
+        assert_eq!(
+            r.rows[1],
+            ContextRow {
+                label: "Tools (1 schemas)".into(),
+                tokens: 100,
+                bytes: Some(400)
+            }
+        );
+        assert_eq!(
+            r.rows[2],
+            ContextRow {
+                label: "Messages".into(),
+                tokens: 500,
+                bytes: None
+            }
+        );
     }
     #[test]
     fn a_downward_disagreement_exactly_at_the_tolerance_boundary_keeps_our_total() {
@@ -158,13 +225,23 @@ mod tests {
         // A diff of EXACTLY 32 must not count as disagreeing (`diff >
         // threshold` is strict) — this is still the ordinary within-
         // tolerance case, not the new unknown-total case.
-        let r = reconcile(&breakdown(Some(UsageTokens { input: 1568, output: 0, cache_read: 0, cache_creation: 0 })));
+        let r = reconcile(&breakdown(Some(UsageTokens {
+            input: 1568,
+            output: 0,
+            cache_read: 0,
+            cache_creation: 0,
+        })));
         assert_eq!(r.total, Some(1600));
         assert_eq!(r.other, 0);
     }
     #[test]
     fn no_context_window_known_means_no_percent_even_with_a_known_total() {
-        let mut b = breakdown(Some(UsageTokens { input: 1600, output: 0, cache_read: 0, cache_creation: 0 }));
+        let mut b = breakdown(Some(UsageTokens {
+            input: 1600,
+            output: 0,
+            cache_read: 0,
+            cache_creation: 0,
+        }));
         b.context_window = None;
         let r = reconcile(&b);
         assert_eq!(r.total, Some(1600));
