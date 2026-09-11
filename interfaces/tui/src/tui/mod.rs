@@ -13,6 +13,7 @@ mod command_tree;
 mod commands;
 mod event;
 mod gateway_error;
+mod highlight;
 mod keys;
 mod markdown;
 mod render;

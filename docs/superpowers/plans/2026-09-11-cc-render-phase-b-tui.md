@@ -219,17 +219,43 @@ the correct behaviour, not a regression.
 
 **Guard:** a `provider_reported: None` fixture must render `?`; asserting on `0` would pass on a broken path.
 
-### B4c — Lazy syntax highlighting
+### B4c — Lazy syntax highlighting ✅
 
 Split out of B4 because it is a concurrency question, not a parsing one.
 
 - `syntect` loaded on a background thread; until it is ready, code blocks
-  render plain and never block a frame. Results memoised per line.
+  render plain and never block a frame.
 
-**Guard:** a test that renders a code block with the highlighter deliberately
-not-yet-ready must produce the same rows as one with no highlighter at all —
-"still loading" must not be a different layout, or the transcript reflows when
-the load lands.
+**Guard:** a code block rendered with the highlighter not-yet-ready produces
+the same rows as one rendered with it — "still loading" must not be a
+different layout, or the transcript reflows when the load lands.
+Mutation-verified: making the highlighted path skip `wrap_line_spans` (the
+natural shortcut, since it already has its spans) turns it red at width 30.
+
+Four things worth recording:
+
+1. **No per-line memo cache.** The plan asked for one; `chat_area`'s
+   `LineCache` already caches a settled message's rendered rows, so a second
+   cache would be a second copy of the same idea (判据 §1). Invalidation
+   instead rides on a `highlight_generation` key in the cache entry — the load
+   landing is not visible in a message's own inputs, so without it a
+   transcript keeps whichever state each message happened to be rendered in
+   and never converges.
+2. **The `terminal` preset is never highlighted**, and neither is a terminal
+   without truecolor. `Palette::is_rgb()` already answers both, so the gate is
+   that one call rather than a second enumeration of presets.
+3. **The palette is a parameter**, not an ambient read, so the per-preset tests
+   need no global mutation — which in this test binary would race every other
+   test that reads a colour.
+4. **Two guards were green for the wrong reason first.** The ambient palette
+   in a test binary paints no RGB, so the row-equivalence test compared plain
+   against plain until it was given an explicit RGB palette and a synchronous
+   load; and the two highlighter tests re-ran `HighlightLines` themselves
+   instead of calling the function under test, which only proves the logic
+   agrees with a copy of itself.
+
+**Cost to note:** `aleph-cli` depends on `aleph-tui`, so the CLI binary now
+carries syntect's syntax definitions too.
 
 ### B8 — Entropy reduction (same phase, separate commit)
 
@@ -256,3 +282,13 @@ cargo clippy --workspace --all-targets      # after `just _stage-shell-placehold
 Plus the six-command minimum set from CLAUDE.md when a change reaches outside `interfaces/tui/`, and a real-machine pass in Windows Terminal for mouse / truecolor / `/context` / `/theme`.
 
 Host notes that apply (from memory): the `alephcore --lib` build outlives the 10-minute Bash ceiling — detach it; `--test '*'` needs `-j 1`; a green test binary can come from another worktree, so check what was actually rebuilt.
+
+Two instrument notes earned in this phase:
+
+- **Run `cargo build -p aleph-tui`, not only `cargo test`.** The theme
+  derivation test reads every `Theme` field, so a field with no production
+  reader is invisible to a test build and reported only by a plain build.
+  Three dead fields survived a green `cargo test` this way.
+- **Pass rustfmt the crate's real edition.** These crates are edition 2021;
+  `rustfmt --edition 2024` reorders import lists into a different sort and
+  produces a diff that has nothing to do with the change.

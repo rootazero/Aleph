@@ -1935,8 +1935,10 @@ impl AppState {
     /// Rendered `Line`s carry their `Style` — the colour is baked in at build
     /// time — so anything that changes what a colour MEANS has to drop the
     /// cache or the transcript keeps the old palette above the switch point
-    /// and the new one below it. `/theme` is the only such event today; a
-    /// width change already invalidates through the entry's own `width`.
+    /// and the new one below it. `/theme` is the only event that calls this;
+    /// a width change already invalidates through the entry's own `width`,
+    /// and the syntax highlighter finishing its background load through
+    /// `highlight_generation`.
     pub fn invalidate_rendered_lines(&mut self) {
         self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
     }

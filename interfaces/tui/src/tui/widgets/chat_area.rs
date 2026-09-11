@@ -59,6 +59,14 @@ struct CachedEntry {
     /// (e.g. a peer message inserted before the tail shifting indices).
     fingerprint: u64,
     width: u16,
+    /// Which syntax-highlighting generation these lines were built with.
+    ///
+    /// Not derivable from the message: `syntect` loads on a background
+    /// thread, so the same content at the same width renders plain before the
+    /// load lands and coloured after. Without this key the transcript keeps
+    /// whichever state each message happened to be rendered in, and a reader
+    /// gets a mix of highlighted and plain code blocks that never converges.
+    highlight_generation: u64,
     lines: Vec<Line<'static>>,
 }
 
@@ -339,10 +347,13 @@ fn build_visible_lines(
                 cache.entries.remove(&idx);
             }
             let (kind, fingerprint) = message_kind_and_fingerprint(message);
-            let hit = cache
-                .entries
-                .get(&idx)
-                .filter(|e| e.kind == kind && e.fingerprint == fingerprint && e.width == width);
+            let generation = crate::tui::highlight::generation();
+            let hit = cache.entries.get(&idx).filter(|e| {
+                e.kind == kind
+                    && e.fingerprint == fingerprint
+                    && e.width == width
+                    && e.highlight_generation == generation
+            });
             match hit {
                 Some(entry) => heights.push(entry.lines.len() + 1),
                 None => {
@@ -355,6 +366,7 @@ fn build_visible_lines(
                             kind,
                             fingerprint,
                             width,
+                            highlight_generation: generation,
                             lines: buf,
                         },
                     );

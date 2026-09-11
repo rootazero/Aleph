@@ -47,6 +47,10 @@ textwrap = "0.16"
 # agree. `default-features = false` drops the `html` module a terminal has no
 # use for. Same 0.12 copy already in the workspace graph.
 pulldown-cmark = { version = "0.12", default-features = false }
+# Fenced-code highlighting, loaded off the draw thread. Same spelling the
+# Panel uses (`default-fancy` = the pure-Rust regex engine, no `onig` C
+# dependency), so both surfaces highlight from the same syntax definitions.
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 
 # Logging
 tracing = "0.1"

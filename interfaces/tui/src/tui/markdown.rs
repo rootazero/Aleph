@@ -39,6 +39,7 @@ use shared_ui_logic::transcript::{
 use std::rc::Rc;
 use unicode_width::UnicodeWidthStr;
 
+use super::highlight;
 use super::theme::palette;
 
 fn style(role: SemanticColor) -> Style {
@@ -848,7 +849,29 @@ pub fn markdown_to_lines_incremental(
 }
 
 /// A fenced block as a framed, gutter-prefixed run of rows.
+///
+/// Highlighting is per BLOCK, not per line, so a multi-line string or block
+/// comment carries its scanner state.
 fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Vec<Line<'static>>) {
+    let highlighted = highlight::highlight_block(palette(), lang, lines);
+    render_code_block_with(lang, lines, highlighted.as_deref(), width, result);
+}
+
+/// The body of [`render_code_block`] with the highlighting supplied rather
+/// than looked up.
+///
+/// Split out so the un-highlighted shape — what every session renders until
+/// the background `syntect` load lands — is reachable from a test without
+/// racing that load or mutating the ambient palette.
+///
+/// `highlighted` is `None` for plain, or one entry per line of `lines`.
+fn render_code_block_with(
+    lang: &str,
+    lines: &[String],
+    highlighted: Option<&[Vec<(Style, String)>]>,
+    width: usize,
+    result: &mut Vec<Line<'static>>,
+) {
     let border_style = style(SemanticColor::CodeBorder);
     let code_style = style(SemanticColor::Fg);
     let inner_width = if width > 4 { width - 2 } else { width };
@@ -869,7 +892,7 @@ fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Ve
     // The chat scroll window is computed from the logical line count, so an
     // unbounded row here would desync the height and clip the newest content.
     let code_wrap_width = inner_width.saturating_sub(2).max(1);
-    for code_line in lines {
+    for (i, code_line) in lines.iter().enumerate() {
         if code_line.is_empty() {
             result.push(Line::from(Span::styled(
                 "\u{2502} ".to_string(),
@@ -877,11 +900,21 @@ fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Ve
             )));
             continue;
         }
-        for wrapped in textwrap::wrap(code_line, code_wrap_width) {
-            result.push(Line::from(vec![
-                Span::styled("\u{2502} ".to_string(), border_style),
-                Span::styled(wrapped.to_string(), code_style),
-            ]));
+        // `None` means plain — syntect is still loading, the language is
+        // unknown, or the palette does not paint RGB.
+        let spans: Vec<Span<'static>> = match highlighted.and_then(|rows| rows.get(i)) {
+            Some(row) => row
+                .iter()
+                .map(|(style, text)| Span::styled(text.clone(), *style))
+                .collect(),
+            None => vec![Span::styled(code_line.clone(), code_style)],
+        };
+        // Through the same width-aware wrapper the prose uses, so a wrapped
+        // code line keeps each token's colour on both halves.
+        for row in wrap_line_spans(&spans, code_wrap_width) {
+            let mut out = vec![Span::styled("\u{2502} ".to_string(), border_style)];
+            out.extend(row.spans);
+            result.push(Line::from(out));
         }
     }
 
@@ -1180,6 +1213,68 @@ mod tests {
         );
     }
 
+    /// Highlighted and unhighlighted code blocks occupy exactly the same
+    /// rows.
+    ///
+    /// # Why this is the guard
+    ///
+    /// `syntect` loads on a background thread, so the first code blocks of a
+    /// session render plain and later ones render coloured. If the two laid
+    /// out differently, the transcript would reflow under the reader the
+    /// moment the load landed — and the chat area's scroll arithmetic, which
+    /// is built on these row counts, would be measuring one thing and
+    /// slicing another.
+    ///
+    /// Rendered at two widths, including one that forces the code lines to
+    /// wrap: wrapping is where a per-token split could change the row count,
+    /// because the highlighted path goes through `wrap_line_spans` with many
+    /// spans where the plain path has one.
+    ///
+    /// Both sides are built explicitly — the highlighted one through
+    /// `highlight_block_blocking`, because the ambient palette in a test
+    /// binary paints no RGB and the production path would hand back plain
+    /// rows for BOTH sides, making this pass while comparing nothing.
+    ///
+    /// # When this goes red
+    ///
+    /// Highlighting that trims, merges or drops a line — or a wrap that
+    /// breaks differently once the line is several spans instead of one.
+    #[test]
+    fn highlighting_never_changes_the_rows_only_their_colour() {
+        let body: Vec<String> = [
+            "fn main() {",
+            "",
+            "    let x = \"a string that is quite long indeed\"; // trailing note",
+            "}",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        let hl = highlight::highlight_block_blocking(highlight::rgb_palette(), "rust", &body)
+            .expect("the default syntax set has rust");
+        for width in [30usize, 72] {
+            let mut plain = Vec::new();
+            render_code_block_with("rust", &body, None, width, &mut plain);
+            let mut coloured = Vec::new();
+            render_code_block_with("rust", &body, Some(&hl), width, &mut coloured);
+
+            assert_eq!(
+                text_of(&coloured),
+                text_of(&plain),
+                "width {width}: highlighting changed the rows"
+            );
+            // …and it really did colour something, or the assertion above is
+            // comparing plain against plain.
+            assert!(
+                coloured
+                    .iter()
+                    .flat_map(|l| l.spans.iter())
+                    .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..)))),
+                "nothing was highlighted"
+            );
+        }
+    }
+
     /// An unclosed fence still shows what has arrived. A streaming code block
     /// that stayed invisible until its closing ``` would be a blank pane for
     /// the whole time the model is writing it.
@@ -1211,7 +1306,7 @@ mod tests {
                 assert!(
                     cols <= width as usize,
                     "width {width}: {cols} cols in {:?}",
-                    text_of(&[line.clone()])
+                    text_of(std::slice::from_ref(&line))
                 );
             }
         }
