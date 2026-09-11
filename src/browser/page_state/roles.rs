@@ -338,6 +338,29 @@ mod tests {
                 "{role:?} renders and serialises differently"
             );
         }
-        assert_eq!(Role::ALL.len(), 27, "a variant was added without a word");
+
+        // `Role::ALL` is walked out of the exhaustive `Role::next` chain and
+        // its LENGTH is checked at compile time by that const walk, so there is
+        // no literal count left to assert here — the old
+        // `assert_eq!(Role::ALL.len(), 27)` asserted a hand-written array
+        // against a hand-written number and covered no new variant at all.
+        //
+        // What a runtime check still adds is the two ways the chain can be
+        // mis-linked without changing its length: a variant visited twice
+        // (which drops another), and two variants printing the same word —
+        // which would make two different nodes indistinguishable in the text
+        // tree and in the JSON alike.
+        let visited: std::collections::HashSet<Role> = Role::ALL.into_iter().collect();
+        assert_eq!(
+            visited.len(),
+            Role::ALL.len(),
+            "the Role::next chain visits a variant twice, so it misses another"
+        );
+        let words: std::collections::HashSet<&str> = Role::ALL.iter().map(|r| r.as_str()).collect();
+        assert_eq!(
+            words.len(),
+            Role::ALL.len(),
+            "two roles print the same word, so the tree cannot tell them apart"
+        );
     }
 }

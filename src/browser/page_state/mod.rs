@@ -20,7 +20,7 @@ pub use roles::{is_interactive, role_for, role_from_aria};
 /// The roles this build models. A closed set on purpose: an open one would
 /// make the renderer's vocabulary a function of whatever a page wrote in a
 /// `role=` attribute.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Link,
@@ -53,37 +53,94 @@ pub enum Role {
 }
 
 impl Role {
-    /// Every variant, so a census iterates the set instead of a typed-out copy
-    /// of it (判据 §5).
-    pub const ALL: [Role; 27] = [
-        Role::Link,
-        Role::Button,
-        Role::Textbox,
-        Role::Checkbox,
-        Role::Radio,
-        Role::Combobox,
-        Role::Listbox,
-        Role::Option,
-        Role::Menu,
-        Role::MenuItem,
-        Role::Tab,
-        Role::Heading,
-        Role::Image,
-        Role::Banner,
-        Role::Main,
-        Role::Navigation,
-        Role::Contentinfo,
-        Role::List,
-        Role::ListItem,
-        Role::Table,
-        Role::Row,
-        Role::Cell,
-        Role::Article,
-        Role::Form,
-        Role::Dialog,
-        Role::Generic,
-        Role::Text,
-    ];
+    /// How many variants there are.
+    ///
+    /// The one literal in this construction, and it is **checked by the
+    /// compiler**: [`Self::walk`] is const-evaluated to build [`Self::ALL`],
+    /// and it panics — a hard compile error in a `const` initializer — if the
+    /// chain [`Self::next`] describes is any other length.
+    pub const COUNT: usize = 27;
+
+    /// Where [`Self::ALL`] starts.
+    const FIRST: Role = Role::Link;
+
+    /// The variant after `self`, or `None` at the end of [`Self::ALL`].
+    ///
+    /// **Exhaustive, with no `_` arm**, which is the whole point and the same
+    /// idiom `spec_7_1_signal` uses in [`crate::browser::error`]: a new variant
+    /// does not compile (`E0004`) until someone says where it sits, and saying
+    /// where it sits is what puts it in `ALL`. `ALL` used to be a hand-written
+    /// array whose own doc claimed it was not one — nothing tied it to the
+    /// enum, so a 28th variant was simply never iterated and the guard that
+    /// pins [`Self::as_str`] against the serde name silently stopped covering
+    /// it (判据 §5).
+    ///
+    /// **The hole this does NOT close**, said out loud because a guard is worth
+    /// exactly its scope (判据 §3): an author who answers the forced arm with
+    /// `Role::New => None` instead of linking it in leaves a second terminator,
+    /// and the chain from [`Self::FIRST`] still ends where it did. **Measured,
+    /// not assumed** — that mutation was run and the suite stayed green.
+    /// Nothing on stable can force reachability (`variant_count` is nightly, a
+    /// derive macro is a dependency R3 would ask about). What IS forced is that
+    /// the author must write *an* answer, and the natural answer — append, then
+    /// bump `COUNT` when the compiler tells you to — is the correct one.
+    const fn next(self) -> Option<Self> {
+        match self {
+            Role::Link => Some(Role::Button),
+            Role::Button => Some(Role::Textbox),
+            Role::Textbox => Some(Role::Checkbox),
+            Role::Checkbox => Some(Role::Radio),
+            Role::Radio => Some(Role::Combobox),
+            Role::Combobox => Some(Role::Listbox),
+            Role::Listbox => Some(Role::Option),
+            Role::Option => Some(Role::Menu),
+            Role::Menu => Some(Role::MenuItem),
+            Role::MenuItem => Some(Role::Tab),
+            Role::Tab => Some(Role::Heading),
+            Role::Heading => Some(Role::Image),
+            Role::Image => Some(Role::Banner),
+            Role::Banner => Some(Role::Main),
+            Role::Main => Some(Role::Navigation),
+            Role::Navigation => Some(Role::Contentinfo),
+            Role::Contentinfo => Some(Role::List),
+            Role::List => Some(Role::ListItem),
+            Role::ListItem => Some(Role::Table),
+            Role::Table => Some(Role::Row),
+            Role::Row => Some(Role::Cell),
+            Role::Cell => Some(Role::Article),
+            Role::Article => Some(Role::Form),
+            Role::Form => Some(Role::Dialog),
+            Role::Dialog => Some(Role::Generic),
+            Role::Generic => Some(Role::Text),
+            Role::Text => None,
+        }
+    }
+
+    /// Every variant, walked out of [`Self::next`] rather than typed out.
+    pub const ALL: [Role; Self::COUNT] = Self::walk();
+
+    /// [`Self::ALL`]'s body. Const-evaluated, so both panics below are compile
+    /// errors and [`Self::COUNT`] cannot drift from the chain.
+    const fn walk() -> [Role; Self::COUNT] {
+        let mut out = [Role::Link; Self::COUNT];
+        let mut i = 0;
+        let mut cur = Self::FIRST;
+        loop {
+            out[i] = cur;
+            i += 1;
+            match cur.next() {
+                Some(n) => cur = n,
+                None => break,
+            }
+            if i == Self::COUNT {
+                panic!("Role::COUNT is smaller than the chain Role::next walks — bump it");
+            }
+        }
+        if i != Self::COUNT {
+            panic!("Role::COUNT is larger than the chain Role::next walks");
+        }
+        out
+    }
 
     /// The word the renderer prints. Pinned against the serde name by
     /// `every_role_renders_the_same_word_it_serialises_as`.
