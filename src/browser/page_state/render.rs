@@ -675,10 +675,14 @@ mod tests {
     }
 
     /// What an independent reader can recover from one rendered line.
+    ///
+    /// `depth` was here with an `#[allow(dead_code)]` and no reader — CUT
+    /// rather than kept for a future that has not asked (P6, YAGNI). The
+    /// indentation is still *parsed*, because rejecting an odd indent is part
+    /// of deciding the line is well-formed; it is only the value that nothing
+    /// consumed.
     #[derive(Debug)]
     struct ParsedLine {
-        #[allow(dead_code)]
-        depth: usize,
         refs: Vec<String>,
     }
 
@@ -697,10 +701,7 @@ mod tests {
     /// minted. An unterminated quote is itself a malformed line.
     fn parse_render_line(line: &str) -> Option<ParsedLine> {
         if line.starts_with("# engine=") {
-            return Some(ParsedLine {
-                depth: 0,
-                refs: Vec::new(),
-            });
+            return Some(ParsedLine { refs: Vec::new() });
         }
         // Indentation is ASCII spaces only, so this byte count lands on a char
         // boundary (P7).
@@ -740,10 +741,7 @@ mod tests {
             refs.push(after.get(..end)?.to_string());
             rest = after.get(end + 1..)?;
         }
-        Some(ParsedLine {
-            depth: indent / 2,
-            refs,
-        })
+        Some(ParsedLine { refs })
     }
 
     /// **Ruling R40, as one concrete case.** A page must not be able to forge
