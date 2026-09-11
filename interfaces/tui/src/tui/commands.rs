@@ -1433,7 +1433,7 @@ async fn execute_knob(
     {
         Ok(_) => {
             let stored = (value != "default").then(|| value.clone());
-            state.record_local_knob(app_knob(knob), stored);
+            state.record_local_knob(knob, stored);
             let shown = if value == "default" {
                 "the global default".to_string()
             } else {
@@ -1455,21 +1455,6 @@ fn current_knob_value(state: &AppState, knob: SlashKnob) -> Option<String> {
         SlashKnob::Memory => knobs.memory_mode,
     }
     .map(str::to_string)
-}
-
-/// Map the parser's knob onto the state's.
-///
-/// Two enums because they answer to two owners — the parser's list is "what a
-/// user may type", the state's is "what the status bar can show" — but the
-/// mapping is total in this direction, so a knob added to the parser without a
-/// state cell is a compile error here rather than a silently invisible setting.
-const fn app_knob(knob: SlashKnob) -> app::SessionKnob {
-    match knob {
-        SlashKnob::ExecTier => app::SessionKnob::ExecTier,
-        SlashKnob::Mode => app::SessionKnob::Mode,
-        SlashKnob::Think => app::SessionKnob::ThinkLevel,
-        SlashKnob::Memory => app::SessionKnob::MemoryMode,
-    }
 }
 
 /// Return a clone of the last User message's content, if any.

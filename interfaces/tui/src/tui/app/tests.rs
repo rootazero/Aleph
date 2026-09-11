@@ -7,6 +7,7 @@ use aleph_protocol::{
 };
 use serde_json::json;
 use shared_ui_logic::transcript::RowStatus;
+use std::time::Duration;
 
 /// Everything the transcript holds as reasoning, joined.
 ///
@@ -971,7 +972,10 @@ fn handle_run_complete_clears_run() {
 
     assert!(state.current_run.is_none());
     assert_eq!(state.total_tokens, 500);
-    assert_eq!(state.last_run_duration, Some(Duration::from_secs(5)));
+    // (`last_run_duration` used to be asserted here. It was a field with no
+    // reader — written at every run end and rendered nowhere, 判据 §17 — and
+    // the run's duration now reaches the user as the `✻ Worked for` trailer
+    // asserted below, which is the thing that was actually missing.)
 
     // Assistant message should no longer be streaming. Found rather than
     // taken from `.last()`: a completed run now closes with its own trailer

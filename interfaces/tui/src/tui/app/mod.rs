@@ -14,7 +14,7 @@ mod tests;
 
 pub use cost::{CostTally, CostView};
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use aleph_protocol::plan::PlanSnapshot;
 use aleph_protocol::providers::{rank_entries, CatalogEntry, RosterModel};
@@ -27,7 +27,7 @@ use shared_ui_logic::transcript::Modality;
 
 use super::btw_overlay::BtwOverlay;
 use super::command_tree::{CommandEntry, DisplayEntry};
-use super::slash::{LocalCommand, ToolProgressMode};
+use super::slash::{LocalCommand, SessionKnob, ToolProgressMode};
 
 // ---------------------------------------------------------------------------
 // Action
@@ -624,20 +624,19 @@ pub fn provider_picker_rows(
 // AppState
 // ---------------------------------------------------------------------------
 
-/// Central application state. Owned by the main loop, mutated through
-/// methods that enforce invariants (e.g. the scroll/fold decisions).
-/// Which per-session knob a local command just wrote.
-///
-/// One enum rather than five setters so the status bar and the write paths
-/// enumerate the same list — a knob added here without a renderer is a compile
-/// error in the `match`, not a silently invisible setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionKnob {
-    Mode,
-    ExecTier,
-    ThinkLevel,
-    MemoryMode,
-}
+// There used to be a second `SessionKnob` enum here, naming the same four
+// knobs the parser's `slash::SessionKnob` names, plus a four-arm identity
+// mapping in `commands.rs` to get between them. Its doc argued that the status
+// bar enumerates *this* list — it does not, and never did: it enumerates
+// `slash::SessionKnob::ALL`. So the second enum had one producer (the
+// mapping), one consumer (`record_local_knob`), and a comment that was the
+// only place the split was justified (判据 §1 — the copy in the comment is the
+// expensive one). Adding a fifth knob meant editing two closed sets, and
+// forgetting one of them is silent in exactly one direction.
+//
+// It also stole `AppState`'s doc comment: the enum was inserted under the
+// banner and the `///` lines above it came along, so the struct they describe
+// has been undocumented ever since. They are back on it below.
 
 /// The four session knobs as the status bar reads them. Borrowed from the
 /// snapshot so the renderer cannot hold a stale copy across an attach.
@@ -728,6 +727,8 @@ pub(super) fn row_timestamp(raw: Option<&str>) -> DateTime<Utc> {
         .map_or_else(Utc::now, |dt| dt.with_timezone(&Utc))
 }
 
+/// Central application state. Owned by the main loop, mutated through
+/// methods that enforce invariants (e.g. the scroll/fold decisions).
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
@@ -900,7 +901,6 @@ pub struct AppState {
     /// that turn's age and not this screen's attachment. Cleared on any
     /// run-end. Drives the status-bar working indicator's elapsed timer.
     pub run_started_at: Option<Instant>,
-    pub last_run_duration: Option<Duration>,
     pub current_run_uses_agent_trace: bool,
     pub current_run_trace_summary_applied: bool,
     /// True while [`Self::load_trace_replay`] is projecting a persisted trace
@@ -1083,7 +1083,6 @@ impl AppState {
 
             current_run: None,
             run_started_at: None,
-            last_run_duration: None,
             current_run_uses_agent_trace: false,
             replaying_trace: false,
             turn_streamed_len: 0,
@@ -1974,8 +1973,8 @@ impl AppState {
         match field {
             SessionKnob::Mode => snap.mode = value,
             SessionKnob::ExecTier => snap.exec_tier = value,
-            SessionKnob::ThinkLevel => snap.think_level = value,
-            SessionKnob::MemoryMode => snap.memory_mode = value,
+            SessionKnob::Think => snap.think_level = value,
+            SessionKnob::Memory => snap.memory_mode = value,
         }
     }
 

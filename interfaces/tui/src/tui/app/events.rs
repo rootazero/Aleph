@@ -486,7 +486,6 @@ impl AppState {
                 self.current_run = None;
                 self.run_started_at = None;
                 self.dismiss_pending_approval();
-                self.last_run_duration = Some(Duration::from_millis(total_duration_ms));
                 if !self.current_run_trace_summary_applied {
                     self.update_token_usage(&summary);
                 }
