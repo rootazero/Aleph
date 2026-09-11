@@ -585,7 +585,15 @@ mod tests {
         allowed.sort();
 
         // Non-vacuity FIRST, so a slice that lost the function reports THAT
-        // rather than a diff against an empty set (判据 §2).
+        // rather than a diff against an empty set (判据 §2). The NAME anchor
+        // leads, for the reason the ARIA half below spells out: a count can be
+        // satisfied by the wrong function, and this half gets the same
+        // instrument as its twin (判据 §16).
+        assert!(
+            tag_body.contains("input_role("),
+            "the scan, not the tree: the slice does not contain the delegation \
+             `role_for` owns, so it is reading some other function"
+        );
         assert!(
             tag_literals.len() > 8 && tag_literals.contains(&"select".to_string()),
             "the scan, not the tree: the slice yielded {} literals \
