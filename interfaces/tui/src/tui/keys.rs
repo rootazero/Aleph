@@ -6,12 +6,13 @@
 // the `event.rs::map_event` gate (KeyEventKind::Press, paste mapping) sits one
 // layer earlier and must not be duplicated here.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tui_textarea::{Input, TextArea};
 
 use super::app::{Action, AppState, Focus};
 use super::command_tree;
 use super::event;
+use super::regions::RegionKind;
 use super::slash::{self, LocalCommand, ParsedInput};
 
 /// Route a terminal event to an Action based on current focus.
@@ -33,6 +34,45 @@ pub(super) fn handle_terminal_event(
             textarea.insert_str(text);
             Action::None
         }
+        event::TermEvent::Mouse(m) => handle_mouse_event(state, *m),
+    }
+}
+
+/// How far one wheel notch scrolls.
+///
+/// Three rows is the terminal convention, and it is deliberately not the
+/// keyboard's one-row arrow: a wheel notch is a coarser gesture and matching
+/// it to a keypress makes the transcript feel stuck.
+const WHEEL_LINES: usize = 3;
+
+/// Route a mouse event.
+///
+/// Only wheel turns and left-button presses do anything. Moves, drags and
+/// releases arrive at a high rate and mean nothing to this screen; handling
+/// them "just in case" would be arms nothing can be observed to exercise.
+///
+/// Clicks are hit-tested against the region table the **last frame** built,
+/// which is the frame the user was looking at when they clicked — see
+/// `regions.rs`. While an overlay owns the screen the transcript underneath
+/// is not what the user is aiming at, so clicks are ignored rather than
+/// reaching rows the overlay is covering.
+fn handle_mouse_event(state: &mut AppState, m: MouseEvent) -> Action {
+    match m.kind {
+        MouseEventKind::ScrollUp => Action::ScrollUp(WHEEL_LINES),
+        MouseEventKind::ScrollDown => Action::ScrollDown(WHEEL_LINES),
+        MouseEventKind::Down(MouseButton::Left) => {
+            if !matches!(state.focus, Focus::Input | Focus::Chat) {
+                return Action::None;
+            }
+            match state.regions.hit(m.column, m.row) {
+                Some(region) => match region.kind {
+                    RegionKind::BackToBottom => Action::ScrollToBottom,
+                    RegionKind::ToggleRow => Action::ToggleRow(region.row_id.clone()),
+                },
+                None => Action::None,
+            }
+        }
+        _ => Action::None,
     }
 }
 
@@ -276,6 +316,23 @@ fn handle_global_key(
         if state.focus == Focus::Chat {
             return Some(Action::FocusInput);
         }
+    }
+
+    // Ctrl+O: the keyboard half of the fold affordance. Global rather than
+    // chat-focus-only because the hint that advertises it (`tool_row`'s
+    // `KEY_MODALITY`) is painted in the transcript while the composer has
+    // focus, which is where the user is nearly always standing when they read
+    // it — a binding they had to press Tab to reach would be a label for
+    // something that does not work from where it is shown (判据 §17).
+    if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(Action::ToggleExpandAll);
+    }
+
+    // Ctrl+End: back to the bottom, the key the docked button names. Global
+    // for the same reason: the button says `ctrl+end`, and it is visible from
+    // the composer.
+    if key.code == KeyCode::End && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(Action::ScrollToBottom);
     }
 
     // F1: help
@@ -1552,5 +1609,203 @@ mod btw_key_tests {
             state.btw.composer.is_empty(),
             "an arrow key must never land in the composer"
         );
+    }
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+    use crate::tui::regions::RegionKind;
+    use crossterm::event::KeyEventKind;
+    use ratatui::layout::Rect;
+
+    fn state() -> AppState {
+        AppState::new("s".into(), "m".into())
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> event::TermEvent {
+        event::TermEvent::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    }
+
+    fn route(state: &mut AppState, ev: &event::TermEvent) -> Action {
+        let mut textarea = TextArea::default();
+        handle_terminal_event(state, &mut textarea, ev)
+    }
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> event::TermEvent {
+        let mut k = KeyEvent::new(code, modifiers);
+        k.kind = KeyEventKind::Press;
+        event::TermEvent::Key(k)
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_transcript() {
+        let mut s = state();
+        assert!(matches!(
+            route(&mut s, &mouse(MouseEventKind::ScrollUp, 5, 5)),
+            Action::ScrollUp(n) if n == WHEEL_LINES
+        ));
+        assert!(matches!(
+            route(&mut s, &mouse(MouseEventKind::ScrollDown, 5, 5)),
+            Action::ScrollDown(n) if n == WHEEL_LINES
+        ));
+    }
+
+    /// A click on a registered region becomes the action that region names.
+    #[test]
+    fn a_click_on_a_fold_target_asks_to_toggle_that_row() {
+        let mut s = state();
+        s.regions.push(
+            Rect {
+                x: 0,
+                y: 7,
+                width: 40,
+                height: 1,
+            },
+            RegionKind::ToggleRow,
+            "call-9".into(),
+        );
+        match route(
+            &mut s,
+            &mouse(MouseEventKind::Down(MouseButton::Left), 3, 7),
+        ) {
+            Action::ToggleRow(id) => assert_eq!(id, "call-9"),
+            other => panic!("{other:?}"),
+        }
+        // And a click on nothing stays nothing, rather than reaching the
+        // nearest row.
+        assert!(matches!(
+            route(
+                &mut s,
+                &mouse(MouseEventKind::Down(MouseButton::Left), 3, 8)
+            ),
+            Action::None
+        ));
+    }
+
+    /// While an overlay owns the screen the transcript underneath it is not
+    /// what the user is aiming at.
+    ///
+    /// # When this goes red
+    ///
+    /// Hit-testing unconditionally. The region table describes the chat area
+    /// only, and overlays are painted over it afterwards — so without this
+    /// gate a click meant for an approval dialog silently unfolds whatever
+    /// tool row that dialog is covering.
+    #[test]
+    fn a_click_under_an_overlay_reaches_the_overlay_not_the_transcript() {
+        let mut s = state();
+        s.regions.push(
+            Rect {
+                x: 0,
+                y: 7,
+                width: 40,
+                height: 1,
+            },
+            RegionKind::ToggleRow,
+            "call-9".into(),
+        );
+        for focus in [
+            Focus::CommandPalette,
+            Focus::Dialog,
+            Focus::Approval,
+            Focus::Btw,
+            Focus::Agents,
+            Focus::SessionPicker,
+            Focus::ProviderPicker,
+        ] {
+            s.focus = focus;
+            assert!(
+                matches!(
+                    route(
+                        &mut s,
+                        &mouse(MouseEventKind::Down(MouseButton::Left), 3, 7)
+                    ),
+                    Action::None
+                ),
+                "a click reached the transcript under {focus:?}"
+            );
+        }
+    }
+
+    /// Moves and drags arrive at a high rate and mean nothing here.
+    #[test]
+    fn moves_and_releases_do_nothing() {
+        let mut s = state();
+        for kind in [
+            MouseEventKind::Moved,
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+        ] {
+            assert!(matches!(route(&mut s, &mouse(kind, 3, 7)), Action::None));
+        }
+    }
+
+    /// The key the fold hint names is actually bound, and from the composer —
+    /// which is where the reader is standing when they read the hint.
+    ///
+    /// # When this goes red
+    ///
+    /// The binding going missing, or moving behind `Focus::Chat`. Either
+    /// leaves every `… +N lines (ctrl+o to expand)` in the transcript naming
+    /// a key that does nothing from where it is shown (判据 §17) — the state
+    /// this code shipped in until now.
+    #[test]
+    fn ctrl_o_is_bound_from_the_composer() {
+        let mut s = state();
+        s.focus = Focus::Input;
+        assert!(matches!(
+            route(&mut s, &key(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            Action::ToggleExpandAll
+        ));
+    }
+
+    /// Likewise the key the docked control names.
+    #[test]
+    fn ctrl_end_is_bound_from_the_composer() {
+        let mut s = state();
+        s.focus = Focus::Input;
+        assert!(matches!(
+            route(&mut s, &key(KeyCode::End, KeyModifiers::CONTROL)),
+            Action::ScrollToBottom
+        ));
+    }
+
+    /// The two labels a reader sees and the two keys that are bound are the
+    /// same two keys.
+    ///
+    /// # When this goes red
+    ///
+    /// Renaming the button's key or the hint's key without moving the
+    /// binding. Reads the LABELS, not a remembered literal, so it cannot be
+    /// satisfied by an assertion agreeing with its own copy (判据 §10).
+    #[test]
+    fn the_labels_name_the_keys_that_are_bound() {
+        let hint = shared_ui_logic::transcript::expand_hint(
+            crate::tui::widgets::tool_row::KEY_MODALITY,
+            3,
+        );
+        assert!(hint.contains("ctrl+o"), "{hint}");
+        assert!(
+            crate::tui::widgets::chat_area::BACK_TO_BOTTOM.contains("ctrl+end"),
+            "{}",
+            crate::tui::widgets::chat_area::BACK_TO_BOTTOM
+        );
+
+        let mut s = state();
+        assert!(matches!(
+            route(&mut s, &key(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+            Action::ToggleExpandAll
+        ));
+        assert!(matches!(
+            route(&mut s, &key(KeyCode::End, KeyModifiers::CONTROL)),
+            Action::ScrollToBottom
+        ));
     }
 }

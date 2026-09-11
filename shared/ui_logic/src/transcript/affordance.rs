@@ -16,6 +16,27 @@ pub fn expand_hint(modality: Modality, hidden_rows: usize) -> String {
     }
 }
 
+/// `… (ctrl+o to collapse)` or `… click to collapse`.
+///
+/// # Why an unfolded row still carries a line about folding
+///
+/// Unfolding removes the hint the gesture was made on. If the only other
+/// target were the row's header, a body taller than the viewport would push
+/// it off the top the moment it unfolded — and the gesture that undoes the
+/// last one would be unreachable from where the last one left the reader.
+/// So the affordance moves to the far end of the body, which is exactly
+/// where a viewport following the bottom lands.
+///
+/// No row count: there is nothing hidden to count, and a number here would
+/// be inventing one to fill the shape of the other hint.
+#[must_use]
+pub fn collapse_hint(modality: Modality) -> String {
+    match modality {
+        Modality::Mouse => "… click to collapse".to_string(),
+        Modality::Key(k) => format!("… ({k} to collapse)"),
+    }
+}
+
 pub const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 pub const SPINNER_PERIOD_MS: u64 = 80;
 
@@ -144,6 +165,26 @@ mod tests {
             expand_hint(Modality::Key("ctrl+o"), 1),
             "… +1 line (ctrl+o to expand)"
         );
+    }
+
+    /// The undo of the expand hint, worded by the same modality. It must not
+    /// claim a row count: nothing is hidden.
+    #[test]
+    fn the_collapse_hint_follows_the_same_modality_and_counts_nothing() {
+        assert_eq!(collapse_hint(Modality::Mouse), "… click to collapse");
+        assert_eq!(
+            collapse_hint(Modality::Key("ctrl+o")),
+            "… (ctrl+o to collapse)"
+        );
+        // No `+N lines`: nothing is hidden, so a count here would be invented
+        // to fill the shape of the other hint. Checked as "no digits" rather
+        // than "no `+`" — the key name itself carries one (`ctrl+o`), which
+        // is what the first version of this assertion tripped over.
+        for m in [Modality::Mouse, Modality::Key("ctrl+o")] {
+            let hint = collapse_hint(m);
+            assert!(!hint.contains(char::is_numeric), "{hint}");
+            assert!(!hint.contains("line"), "{hint}");
+        }
     }
     #[test]
     fn spinner_is_periodic_in_time_and_verbs_are_stable_for_a_seed() {

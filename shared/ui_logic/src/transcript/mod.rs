@@ -51,7 +51,7 @@ mod affordance;
 mod context;
 mod turn_summary;
 pub use affordance::{
-    expand_hint, fmt_duration_ms, spinner_frame, verb, worked_for, Locale, Modality,
+    collapse_hint, expand_hint, fmt_duration_ms, spinner_frame, verb, worked_for, Locale, Modality,
     SPINNER_FRAMES, SPINNER_PERIOD_MS, VERBS_EN, VERBS_ZH, VERB_REROLL_MS,
 };
 pub use context::{reconcile, ContextRow, ContextRows, PROVIDER_TOLERANCE};

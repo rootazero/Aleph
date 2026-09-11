@@ -29,8 +29,9 @@ use ratatui::{
     text::{Line, Span},
 };
 use shared_ui_logic::transcript::{
-    diff_rows, expand_hint, fmt_duration_ms, fold, spinner_frame, stats_label, DiffView, FoldBody,
-    FoldPolicy, Modality, RowBody, RowStatus, SemanticColor, ToolGroup, ToolRow,
+    collapse_hint, diff_rows, expand_hint, fmt_duration_ms, fold, spinner_frame, stats_label,
+    DiffView, FoldBody, FoldPolicy, Modality, RowBody, RowStatus, SemanticColor, ToolGroup,
+    ToolRow,
 };
 
 use crate::tui::theme::palette;
@@ -155,6 +156,7 @@ fn hint_line(hidden: usize, modality: Modality) -> Line<'static> {
 }
 
 /// The `⎿` slot for a text body.
+#[allow(clippy::too_many_arguments)]
 fn text_body(
     text: &str,
     display_name: &str,
@@ -162,6 +164,7 @@ fn text_body(
     expanded: bool,
     modality: Modality,
     out: &mut Vec<Line<'static>>,
+    hints: &mut Vec<usize>,
 ) {
     let body_width = width.saturating_sub(BODY_INDENT);
     let lines: Vec<&str> = text.lines().collect();
@@ -208,6 +211,7 @@ fn text_body(
         ]));
     }
     if folded.hidden_rows > 0 {
+        hints.push(out.len());
         out.push(hint_line(folded.hidden_rows, modality));
     }
 }
@@ -240,6 +244,7 @@ fn file_changes_body(
     expanded: bool,
     modality: Modality,
     out: &mut Vec<Line<'static>>,
+    hints: &mut Vec<usize>,
 ) {
     let mut emitted = 0usize;
     for change in changes {
@@ -291,6 +296,7 @@ fn file_changes_body(
                     } else {
                         "hunks"
                     };
+                    hints.push(out.len());
                     out.push(Line::from(vec![
                         Span::styled(BODY_CONT.to_string(), style(SemanticColor::ToolRail)),
                         Span::styled(
@@ -307,6 +313,7 @@ fn file_changes_body(
                     ]));
                     emitted += 1;
                 } else if rows.hidden_rows > 0 {
+                    hints.push(out.len());
                     out.push(hint_line(rows.hidden_rows, modality));
                     emitted += 1;
                 }
@@ -315,20 +322,36 @@ fn file_changes_body(
     }
 }
 
+/// One tool row's rows, plus where a click on them lands.
+///
+/// The offsets are local to `lines`, and they exist because nothing outside
+/// this file can tell which of these rows is the hint: the hint is emitted
+/// three call levels down, sometimes more than once (one `apply_patch` call
+/// carries several files, each with its own `… +N hunks`). Recognising it at
+/// paint time by its text would be a second answer to "which line is the
+/// hint", and the first divergence would silently expand the wrong row
+/// (判据 §1).
+#[derive(Debug, Default)]
+pub struct RowRender {
+    pub lines: Vec<Line<'static>>,
+    /// Rows that toggle this call between folded and whole.
+    pub toggles: Vec<usize>,
+}
+
 /// Render one tool row.
 #[must_use]
-pub fn render_tool_row(
-    row: &ToolRow,
-    now_ms: u64,
-    width: u16,
-    modality: Modality,
-) -> Vec<Line<'static>> {
+pub fn render_tool_row(row: &ToolRow, now_ms: u64, width: u16, modality: Modality) -> RowRender {
     let mut out = vec![header_line(row, now_ms)];
     if width <= BODY_INDENT {
-        return out;
+        return RowRender {
+            lines: out,
+            toggles: Vec::new(),
+        };
     }
+    let mut hints: Vec<usize> = Vec::new();
+    let mut has_body = true;
     match &row.body {
-        RowBody::None => {}
+        RowBody::None => has_body = false,
         RowBody::Text(text) if !text.trim().is_empty() => text_body(
             text,
             &row.summary.display_name,
@@ -336,10 +359,11 @@ pub fn render_tool_row(
             row.expanded,
             modality,
             &mut out,
+            &mut hints,
         ),
-        RowBody::Text(_) => {}
+        RowBody::Text(_) => has_body = false,
         RowBody::FileChanges(changes) => {
-            file_changes_body(changes, row.expanded, modality, &mut out);
+            file_changes_body(changes, row.expanded, modality, &mut out, &mut hints);
         }
     }
     // An error that printed nothing still has to say what went wrong —
@@ -357,10 +381,49 @@ pub fn render_tool_row(
             ]));
         }
     }
-    out
+    // An unfolded row closes with the affordance that folds it again.
+    //
+    // Expanding deletes the hint the gesture was made on, so without this the
+    // only remaining target would be the header — and a body taller than the
+    // viewport pushes the header off the top the instant it unfolds, leaving
+    // the undo unreachable from where the reader is standing. Measured, not
+    // reasoned: `clicking_the_hint_unfolds_and_the_header_folds_again` failed
+    // on exactly that, with the header scrolled away.
+    if row.expanded && has_body {
+        hints.push(out.len());
+        out.push(Line::from(vec![
+            Span::styled(BODY_CONT.to_string(), style(SemanticColor::ToolRail)),
+            Span::styled(collapse_hint(modality), style(SemanticColor::Dim)),
+        ]));
+    }
+
+    // The header toggles too, not only the hints, so a row whose body has
+    // scrolled past can still be folded from its top.
+    //
+    // A row with nothing to show is not clickable: folding it and unfolding
+    // it produce the same rows, so a "toggle" there is a gesture that reports
+    // success and does nothing (判据 §11).
+    let toggles = if has_body {
+        let mut t = vec![0usize];
+        t.extend(hints);
+        t
+    } else {
+        Vec::new()
+    };
+    RowRender {
+        lines: out,
+        toggles,
+    }
 }
 
 /// `● Explored 4 calls · 0.8s`, with the member rows when expanded.
+///
+/// Returns rows only, no click targets: nothing in this client builds a
+/// `ToolGroup` yet (`group_entries` takes the transcript by value, so calling
+/// it per frame would reinstate the deep copy `build_visible_lines` exists to
+/// avoid — recorded as deferred in the Phase B plan). Handing back offsets
+/// into a table nothing populates would be a wire with only one end built
+/// (判据 §7); they go in when the producer does.
 #[must_use]
 pub fn render_tool_group(
     group: &ToolGroup,
@@ -376,7 +439,7 @@ pub fn render_tool_group(
     ])];
     if group.expanded {
         for row in &group.rows {
-            out.extend(render_tool_row(row, now_ms, width, modality));
+            out.extend(render_tool_row(row, now_ms, width, modality).lines);
         }
     }
     out
@@ -412,7 +475,7 @@ mod tests {
             json!({ "path": "src/lib.rs" }),
             &"line\n".repeat(120),
         );
-        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         assert_eq!(out.len(), 2, "header + one caption: {out:?}");
         assert!(out[0].starts_with("\u{23fa} Read(src/lib.rs)"), "{out:?}");
         assert!(out[1].contains("Read 120 lines"), "{out:?}");
@@ -429,7 +492,7 @@ mod tests {
     fn the_hint_counts_physical_rows_not_logical_lines() {
         let blob = "x".repeat(6_000);
         let row = finished("bash", json!({ "command": "cat big.json" }), &blob);
-        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         let hint = out.last().expect("a hint row");
         assert!(hint.contains("ctrl+o to expand"), "{hint}");
         // 6000 columns of body at 76 usable columns ≈ 79 rows, of which the
@@ -464,7 +527,7 @@ mod tests {
             presentation: None,
         };
         row.finish(&result, 1_200, 1_200);
-        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         assert!(out[0].contains("\u{2717} 1.2s"), "{out:?}");
         assert!(
             out.iter().any(|l| l.contains("error[E0433]")),
@@ -510,7 +573,7 @@ mod tests {
             10,
             10,
         );
-        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         assert!(out[0].contains("+12 -3"), "{out:?}");
         assert!(out.iter().any(|l| l.contains("30 \u{2502} -")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("30 \u{2502} +")), "{out:?}");
@@ -533,7 +596,7 @@ mod tests {
             10,
             10,
         );
-        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         assert!(
             out.iter().any(|l| l.contains("binary")),
             "the reason must be on screen: {out:?}"
@@ -550,7 +613,7 @@ mod tests {
         let mut row = ToolRow::new("c1", "grep", &json!({ "pattern": "x" }));
         row.status = RowStatus::Running { since_ms: 0 };
         row.settle_resumed();
-        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         assert!(out[0].starts_with("\u{23fa} "), "{out:?}");
         for frame in shared_ui_logic::transcript::SPINNER_FRAMES {
             assert!(!out[0].starts_with(frame), "spinning after resume: {out:?}");
@@ -565,7 +628,7 @@ mod tests {
         let body: String = (0..20).map(|i| format!("line {i}\n")).collect();
         row.finish(&ToolResult::success(&body), 10, 10);
         row.expanded = true;
-        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let out = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         assert!(out.iter().any(|l| l.contains("line 0")), "{out:?}");
         assert!(out.iter().any(|l| l.contains("line 19")), "{out:?}");
     }
@@ -621,9 +684,78 @@ mod tests {
     #[test]
     fn the_hint_follows_the_modality_it_is_given() {
         let row = finished("bash", json!({ "command": "ls" }), &"x\n".repeat(50));
-        let keyed = text(&render_tool_row(&row, 0, 80, KEY_MODALITY));
+        let keyed = text(&render_tool_row(&row, 0, 80, KEY_MODALITY).lines);
         assert!(keyed.last().unwrap().contains("ctrl+o to expand"));
-        let moused = text(&render_tool_row(&row, 0, 80, Modality::Mouse));
+        let moused = text(&render_tool_row(&row, 0, 80, Modality::Mouse).lines);
         assert!(moused.last().unwrap().contains("click to expand"));
+    }
+
+    /// The header is a click target, and so is the hint. Both, because
+    /// expanding deletes the hint: a row whose only target was the hint could
+    /// be unfolded and never folded again.
+    ///
+    /// # When this goes red
+    ///
+    /// Dropping the header from `toggles`, or recording hint offsets that do
+    /// not point at the hint (they are asserted against the rendered text, not
+    /// against a remembered number).
+    #[test]
+    fn a_foldable_row_offers_its_header_and_its_hint() {
+        let row = finished("bash", json!({ "command": "ls" }), &"x\n".repeat(50));
+        let rendered = render_tool_row(&row, 0, 80, KEY_MODALITY);
+        let lines = text(&rendered.lines);
+
+        assert_eq!(rendered.toggles.first(), Some(&0), "the header toggles");
+        assert_eq!(rendered.toggles.len(), 2, "{:?}", rendered.toggles);
+        let hint_at = rendered.toggles[1];
+        assert!(
+            lines[hint_at].contains("to expand"),
+            "toggle {hint_at} is not the hint row: {lines:?}"
+        );
+    }
+
+    /// Expanded, the row stops advertising expansion and starts advertising
+    /// the undo — on its LAST row, which is where a viewport following the
+    /// bottom is looking.
+    ///
+    /// # When this goes red
+    ///
+    /// Dropping the closing collapse hint. The header is still a target, but
+    /// a body taller than the screen has pushed it off the top by then, so
+    /// the mouse path loses its way back (measured: the first version of
+    /// `clicking_the_hint_unfolds_and_the_header_folds_again` failed exactly
+    /// there).
+    #[test]
+    fn an_expanded_row_closes_with_the_way_back() {
+        let mut row = finished("bash", json!({ "command": "ls" }), &"x\n".repeat(50));
+        row.expanded = true;
+        let rendered = render_tool_row(&row, 0, 80, KEY_MODALITY);
+        let lines = text(&rendered.lines);
+
+        assert_eq!(
+            rendered.toggles.first(),
+            Some(&0),
+            "the header still toggles"
+        );
+        let last = rendered.toggles.last().copied().expect("a closing target");
+        assert_eq!(last, lines.len() - 1, "not the final row: {lines:?}");
+        assert!(lines[last].contains("ctrl+o to collapse"), "{lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("to expand")),
+            "an expanded row still advertises expanding: {lines:?}"
+        );
+    }
+
+    /// A row with nothing to show is not a click target: folding and
+    /// unfolding it produce the same rows, so a "toggle" there would be a
+    /// gesture that reports success and changes nothing (判据 §11).
+    #[test]
+    fn a_row_with_no_body_is_not_clickable() {
+        let mut row = ToolRow::new("c9", "noop", &json!({}));
+        row.start(0);
+        row.finish(&ToolResult::success(""), 10, 10);
+        assert!(render_tool_row(&row, 0, 80, KEY_MODALITY)
+            .toggles
+            .is_empty());
     }
 }

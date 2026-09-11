@@ -141,47 +141,115 @@ fn new_state_has_welcome_message() {
         }
         other => panic!("Expected System message, got: {other:?}"),
     }
-    assert!(state.auto_scroll);
+    assert!(state.stuck_to_bottom());
     assert_eq!(state.focus, Focus::Input);
     assert!(!state.should_quit);
 }
 
 #[test]
-fn scroll_up_disables_auto_scroll() {
+fn scrolling_up_stops_following_the_bottom() {
     let mut state = AppState::new("s".into(), "m".into());
-    assert!(state.auto_scroll);
+    assert!(state.stuck_to_bottom());
 
     state.scroll_up(5);
     assert_eq!(state.scroll_offset, 5);
-    assert!(!state.auto_scroll);
+    assert!(!state.stuck_to_bottom());
 
     // Scrolling up more adds to offset
     state.scroll_up(3);
     assert_eq!(state.scroll_offset, 8);
-    assert!(!state.auto_scroll);
+    assert!(!state.stuck_to_bottom());
 }
 
 #[test]
-fn scroll_to_bottom_re_enables_auto_scroll() {
+fn scroll_to_bottom_resumes_following() {
     let mut state = AppState::new("s".into(), "m".into());
     state.scroll_up(10);
-    assert!(!state.auto_scroll);
+    assert!(!state.stuck_to_bottom());
     assert_eq!(state.scroll_offset, 10);
 
     state.scroll_to_bottom();
-    assert!(state.auto_scroll);
+    assert!(state.stuck_to_bottom());
     assert_eq!(state.scroll_offset, 0);
 }
 
 #[test]
-fn scroll_down_to_zero_re_enables_auto_scroll() {
+fn scrolling_down_to_zero_resumes_following() {
     let mut state = AppState::new("s".into(), "m".into());
     state.scroll_up(3);
-    assert!(!state.auto_scroll);
+    assert!(!state.stuck_to_bottom());
 
     state.scroll_down(3);
     assert_eq!(state.scroll_offset, 0);
-    assert!(state.auto_scroll);
+    assert!(state.stuck_to_bottom());
+}
+
+/// Returning to the bottom clears the "there is something new down there"
+/// marker — otherwise the docked control keeps shouting about rows the user
+/// is now looking at.
+#[test]
+fn arriving_at_the_bottom_clears_the_unseen_marker() {
+    let mut state = AppState::new("s".into(), "m".into());
+    // Settle once first: the very first observation is a conversation
+    // *opening*, which pins to the bottom whatever the offset says.
+    state.settle_scroll();
+    state.scroll_up(4);
+    state.add_system_message("a peer said something".into());
+    state.settle_scroll();
+    assert!(state.unseen_below, "a new row below the reader is unseen");
+
+    state.scroll_to_bottom();
+    assert!(!state.unseen_below);
+}
+
+/// The behaviour the old `auto_scroll` bool could not express: the viewer
+/// scrolls up to re-read, then sends. The answer must not stream in
+/// off-screen.
+///
+/// # When this goes red
+///
+/// Dropping the `sends` counter (or deriving it from "the number of user
+/// rows grew", which a room peer's message also satisfies — see
+/// `chat_scroll`'s module doc).
+#[test]
+fn my_own_send_pulls_the_viewport_back_down() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.settle_scroll();
+    state.scroll_up(12);
+    // A peer speaking while I read back must NOT move me.
+    state.messages.push(TranscriptEntry::UserText {
+        id: "peer-1".into(),
+        text: "a teammate".into(),
+        at_ms: None,
+    });
+    state.settle_scroll();
+    assert_eq!(state.scroll_offset, 12, "a peer's row moved my viewport");
+    assert!(state.unseen_below);
+
+    // My own send does.
+    state.add_user_message("mine".into());
+    state.settle_scroll();
+    assert_eq!(state.scroll_offset, 0);
+    assert!(!state.unseen_below);
+}
+
+/// An in-place change — a tool row settling, a bubble rewritten — raises
+/// nothing: the transcript changed but nothing landed below the reader.
+#[test]
+fn an_in_place_change_does_not_raise_the_unseen_marker() {
+    let mut state = AppState::new("s".into(), "m".into());
+    state.settle_scroll();
+    state.scroll_up(6);
+    state.settle_scroll();
+    assert!(!state.unseen_below);
+
+    // Same row count, different content.
+    if let Some(TranscriptEntry::SystemNotice { text, .. }) = state.messages.first_mut() {
+        text.push_str(" (edited)");
+    }
+    state.settle_scroll();
+    assert!(!state.unseen_below);
+    assert_eq!(state.scroll_offset, 6);
 }
 
 #[test]

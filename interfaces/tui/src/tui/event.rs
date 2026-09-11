@@ -4,7 +4,7 @@
 // forwards Key/Resize events to an async mpsc channel. The main loop
 // receives from this channel alongside gateway events.
 
-use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -19,6 +19,10 @@ pub enum TermEvent {
     /// through the Enter/send path). Unix/macOS only — crossterm's Windows
     /// console source does not synthesize `Event::Paste`.
     Paste(String),
+    /// A wheel turn, click or drag. Only arrives while mouse capture is on;
+    /// a terminal that refused capture simply never produces one, which is
+    /// why every affordance a click reaches also has a key (spec §8).
+    Mouse(MouseEvent),
 }
 
 /// Strip ANSI/OSC escape sequences and non-printing control characters from
@@ -102,6 +106,12 @@ fn map_event(ev: Event) -> Option<TermEvent> {
         Event::Key(key) if key.kind == KeyEventKind::Press => Some(TermEvent::Key(key)),
         Event::Resize(_, _) => Some(TermEvent::Resize),
         Event::Paste(text) => Some(TermEvent::Paste(sanitize_pasted_text(&text))),
+        // Forwarded whole rather than pre-classified here: which kinds mean
+        // something is a question about the screen, and the screen is
+        // `keys.rs`. Moves are the high-rate ones and they are dropped there,
+        // one layer later, so that decision sits beside the clicks it is a
+        // decision about.
+        Event::Mouse(m) => Some(TermEvent::Mouse(m)),
         _ => None,
     }
 }
@@ -109,8 +119,9 @@ fn map_event(ev: Event) -> Option<TermEvent> {
 /// Spawn a blocking task that polls crossterm events and sends them
 /// through an mpsc channel. Returns the receiving end.
 ///
-/// The task polls every 50ms. Only Key and Resize events are forwarded;
-/// mouse events and other crossterm events are silently discarded.
+/// The task polls every 50ms. Key presses, resizes, pastes and mouse events
+/// are forwarded; everything else crossterm reports (focus gained/lost, key
+/// releases) is dropped by [`map_event`].
 ///
 /// The task runs until the receiver is dropped (send returns Err).
 pub fn spawn_event_collector() -> mpsc::Receiver<TermEvent> {
@@ -172,6 +183,25 @@ mod tests {
         let mut repeat = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty());
         repeat.kind = KeyEventKind::Repeat;
         assert!(map_event(Event::Key(repeat)).is_none());
+    }
+
+    /// Mouse events reach the router. Without this arm every click and wheel
+    /// turn is dropped one layer before anything could handle it — and the
+    /// symptom is indistinguishable from a terminal that refused capture,
+    /// which is the state the whole feature is designed to survive.
+    #[test]
+    fn mouse_events_are_forwarded() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let ev = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 4,
+            row: 9,
+            modifiers: KeyModifiers::empty(),
+        };
+        assert!(matches!(
+            map_event(Event::Mouse(ev)),
+            Some(TermEvent::Mouse(m)) if m.column == 4 && m.row == 9
+        ));
     }
 
     #[test]

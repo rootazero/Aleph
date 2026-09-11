@@ -387,7 +387,7 @@ impl AppState {
 
             StreamEvent::Reasoning { content, .. } => {
                 self.append_reasoning_chunk(&content);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ToolStart {
@@ -403,7 +403,7 @@ impl AppState {
                     return Action::None;
                 }
                 self.start_tool_execution(tool_id, tool_name, &params);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ToolUpdate {
@@ -421,7 +421,7 @@ impl AppState {
                 if let Some(row) = self.find_tool_mut(&tool_id) {
                     row.body = RowBody::Text(progress);
                 }
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ToolEnd {
@@ -465,7 +465,7 @@ impl AppState {
                 // structured diff on this path — the authoritative one — while
                 // the lossy mirror carried it.
                 self.finish_tool_execution(&tool_id, &result, duration_ms);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ResponseChunk { content, .. } => {
@@ -475,7 +475,7 @@ impl AppState {
                 // other side — see `turn_streamed_len`.
                 self.turn_streamed_len += content.len();
                 self.append_assistant_content(&content);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::RunComplete {
@@ -537,7 +537,7 @@ impl AppState {
                     self.add_system_message(halt_notice(token, UiLocale::from_env()));
                 }
 
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::RunError { error, .. } => {
@@ -554,7 +554,7 @@ impl AppState {
                 self.mark_current_assistant_complete();
 
                 self.add_system_message(format!("Error: {error}"));
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::AskUser {
@@ -604,7 +604,7 @@ impl AppState {
                 // core's, printed verbatim — this client does not own that
                 // vocabulary and must not paraphrase it.
                 self.add_system_message(format!("The agent's question ended ({outcome})."));
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             // A room peer's message became a transcript row. Session-keyed and
@@ -661,7 +661,7 @@ impl AppState {
                     }
                     _ => self.messages.push(row),
                 }
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ReasoningBlock { content, .. } => {
@@ -670,7 +670,7 @@ impl AppState {
                 }
                 // Treated same as Reasoning — append to reasoning buffer
                 self.append_reasoning_entry(content);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::UncertaintySignal {
@@ -684,7 +684,7 @@ impl AppState {
                     suggested_action.description()
                 );
                 self.add_system_message(msg);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::RunRetrying {
@@ -700,7 +700,7 @@ impl AppState {
                 self.add_system_message(format!(
                     "Provider {provider} unreachable, retrying ({attempt}/{max_attempts}): {reason}"
                 ));
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
 
             StreamEvent::ModelResolved { model_info, .. } => {
@@ -722,7 +722,7 @@ impl AppState {
                         ),
                     };
                     self.add_system_message(line);
-                    return Action::ScrollToBottomIfAutoScroll;
+                    return Action::None;
                 }
                 Action::None
             }

@@ -319,14 +319,14 @@ impl AppState {
         }
 
         match event {
-            AgentTraceEvent::TextEmitted { .. } => Action::ScrollToBottomIfAutoScroll,
+            AgentTraceEvent::TextEmitted { .. } => Action::None,
             AgentTraceEvent::ToolCallStarted { call, .. } => {
                 self.start_tool_execution(
                     call.tool_id.clone(),
                     call.tool_name.clone(),
                     &call.input,
                 );
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
             AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
                 // Live plan projection (`ScratchpadOutput.snapshot` rides the
@@ -338,11 +338,11 @@ impl AppState {
                 }
                 let wire = trace_result_to_wire(result, call.presentation.as_ref());
                 self.finish_tool_execution(&call.tool_id, &wire, call.duration_ms);
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
             AgentTraceEvent::ToolSummary { summary, .. } => {
                 let _ = summary;
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
             AgentTraceEvent::SessionCompleted {
                 total_tokens,
@@ -379,7 +379,7 @@ impl AppState {
                 }
                 self.current_run_uses_agent_trace = false;
                 self.mark_current_assistant_complete();
-                Action::ScrollToBottomIfAutoScroll
+                Action::None
             }
             // Live per-call cache telemetry → status-bar cache stat. Only
             // calls that actually report cache activity update it, so

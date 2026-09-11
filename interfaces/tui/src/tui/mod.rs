@@ -16,6 +16,7 @@ mod gateway_error;
 mod highlight;
 mod keys;
 mod markdown;
+mod regions;
 mod render;
 mod slash;
 mod theme;
@@ -27,7 +28,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crossterm::{
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -198,6 +199,16 @@ pub async fn run(
     // only — crossterm's Windows console source does not emit paste events, so
     // this is inert (but harmless) there.
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    // Mouse capture is asked for SEPARATELY and its failure is not fatal.
+    // Every affordance a click reaches has a key that reaches it too, so a
+    // terminal that refuses capture loses nothing but the shortcut — and the
+    // fold hints then word themselves `ctrl+o` instead of `click`, which is
+    // the branch `state.mouse` exists to carry (spec §8).
+    //
+    // The cost, which is why this is worth stating: with capture on, the
+    // terminal stops handling drag-select itself, so copying text needs the
+    // emulator's override (Shift+drag in most).
+    let mouse = execute!(stdout, EnableMouseCapture).is_ok();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -205,7 +216,15 @@ pub async fn run(
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableBracketedPaste);
+        // Disabling capture that was never enabled is a no-op the terminal
+        // ignores; a panic is the wrong place to consult a flag, and leaving
+        // it on would make the user's shell unusable.
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableBracketedPaste,
+            DisableMouseCapture
+        );
         let _ = execute!(io::stdout(), crossterm::cursor::Show);
         original_hook(info);
     }));
@@ -233,6 +252,9 @@ pub async fn run(
     // reports back. Inventing a key here is what used to strand every keyed RPC
     // this client made.
     let mut state = AppState::new(session_key.clone().unwrap_or_default(), model_name);
+    // Before the first draw, and never again: the rendered-line cache bakes
+    // the hint wording in (see `AppState::mouse`).
+    state.mouse = mouse;
     // Honor the CLI `--verbose` flag from launch, not only the /verbose command.
     state.verbose = verbose;
     // A one-word caption cannot explain itself. When it is not a model name,
@@ -297,7 +319,8 @@ pub async fn run(
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableBracketedPaste
+        DisableBracketedPaste,
+        DisableMouseCapture
     )?;
     terminal.show_cursor()?;
 
@@ -675,11 +698,10 @@ async fn main_loop<'c>(
             Action::ScrollUp(n) => state.scroll_up(n),
             Action::ScrollDown(n) => state.scroll_down(n),
             Action::ScrollToBottom => state.scroll_to_bottom(),
-            Action::ScrollToBottomIfAutoScroll => {
-                if state.auto_scroll {
-                    state.scroll_to_bottom();
-                }
-            }
+
+            // -- Folding --
+            Action::ToggleRow(id) => state.toggle_tool_expanded(&id),
+            Action::ToggleExpandAll => state.toggle_expand_all(),
 
             // -- Focus --
             Action::FocusInput => {
@@ -863,6 +885,13 @@ async fn main_loop<'c>(
                 refresh_picker_provider(state, client).await;
             }
         }
+
+        // One scroll decision per iteration, after everything that could have
+        // changed the transcript has run — the burst-drain loops above append
+        // several rows before returning a single action, so asking per event
+        // would ask about states no frame was ever drawn from. See
+        // `AppState::settle_scroll` for why it is not eighteen call sites.
+        state.settle_scroll();
 
         // Check quit flag
         if state.should_quit {

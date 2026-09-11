@@ -19,6 +19,8 @@ use aleph_protocol::runtime::RuntimeAgentEntry;
 use aleph_protocol::subagent_tree::{self, NodeLifecycle, SubagentNode};
 use aleph_protocol::{RunSummary, SessionSnapshot};
 use chrono::{DateTime, Utc};
+use shared_ui_logic::state::{scroll_action, ListCursor, ScrollAction};
+use shared_ui_logic::transcript::Modality;
 
 use super::btw_overlay::BtwOverlay;
 use super::command_tree::{CommandEntry, DisplayEntry};
@@ -57,8 +59,12 @@ pub enum Action {
     ScrollDown(usize),
     /// Jump to the bottom of the chat
     ScrollToBottom,
-    /// Scroll to bottom only if `auto_scroll` is enabled
-    ScrollToBottomIfAutoScroll,
+
+    // -- Folding --
+    /// Fold or unfold one tool row, by tool call id.
+    ToggleRow(String),
+    /// Unfold every tool row, or fold them all if none is folded.
+    ToggleExpandAll,
 
     // -- Focus --
     /// Focus the input textarea
@@ -616,7 +622,7 @@ pub fn provider_picker_rows(
 // ---------------------------------------------------------------------------
 
 /// Central application state. Owned by the main loop, mutated through
-/// methods that enforce invariants (e.g. `auto_scroll` toggling).
+/// methods that enforce invariants (e.g. the scroll/fold decisions).
 /// Which per-session knob a local command just wrote.
 ///
 /// One enum rather than five setters so the status bar and the write paths
@@ -725,8 +731,43 @@ pub struct AppState {
     pub messages: Vec<TranscriptEntry>,
     /// Monotonic source of ids for text entries (tool rows use their call id).
     entry_seq: u64,
+    /// Rows the viewport is above the bottom of the transcript. `0` is
+    /// "parked at the bottom, following the stream".
+    ///
+    /// There is no companion `auto_scroll` flag: it used to exist and the
+    /// window arithmetic proved it redundant — its `true` branch computed
+    /// exactly what the offset branch computes at `0` (判据 §1, the weakened
+    /// second copy). "Am I following?" is `scroll_offset == 0`, and
+    /// `shared_ui_logic::state::chat_scroll` decides what may override it.
     pub scroll_offset: usize,
-    pub auto_scroll: bool,
+    /// Whether mouse capture is on, i.e. whether a click can reach this
+    /// screen at all.
+    ///
+    /// Written once in `tui::run` before the first draw and never again: the
+    /// rendered-line cache bakes the hint wording in, and a value that
+    /// changed mid-session would leave every already-cached row advertising
+    /// the affordance the terminal no longer has.
+    pub mouse: bool,
+    /// The clickable regions of the last painted frame — see
+    /// `crate::tui::regions`.
+    pub regions: crate::tui::regions::RegionTable,
+    /// Rows landed below the reader while they were scrolled up.
+    ///
+    /// Set by `chat_scroll`'s `MarkUnseen`, cleared the moment the viewport
+    /// returns to the bottom. Its only consumer is the docked back-to-bottom
+    /// control's wording — a flag nothing renders would be a fact with no
+    /// reader (判据 §17).
+    pub unseen_below: bool,
+    /// The previous observation of the transcript, for `chat_scroll`.
+    prev_cursor: ListCursor,
+    /// How many messages **this viewer** has sent in this conversation.
+    ///
+    /// Counted rather than derived from the transcript: in a shared project
+    /// room a peer's message is a user row too, and "the number of user rows
+    /// grew" would read their send as mine and yank my viewport to the bottom
+    /// while I am reading back. `chat_scroll`'s module doc is the long form of
+    /// this; the counter is the predicate it asks for, stated directly.
+    sends: u64,
 
     // -- Input history --
     pub send_history: Vec<String>,
@@ -1002,7 +1043,11 @@ impl AppState {
             }],
             entry_seq: 0,
             scroll_offset: 0,
-            auto_scroll: true,
+            mouse: false,
+            regions: crate::tui::regions::RegionTable::default(),
+            unseen_below: false,
+            prev_cursor: ListCursor::default(),
+            sends: 0,
 
             send_history: Vec::new(),
             history_index: None,
@@ -1079,7 +1124,11 @@ impl AppState {
         format!("e{}", self.entry_seq)
     }
 
-    /// Add a user message to the chat history.
+    /// Add a message **this viewer** just sent to the chat history.
+    ///
+    /// Bumps `sends`, which is the whole reason this is not the same function
+    /// as the peer path: a room peer's message is a user row too, and only
+    /// one of the two means "I am done reading back".
     pub fn add_user_message(&mut self, content: String) {
         let id = self.next_entry_id();
         self.messages.push(TranscriptEntry::UserText {
@@ -1087,9 +1136,7 @@ impl AppState {
             text: content,
             at_ms: as_ms(Utc::now()),
         });
-        if self.auto_scroll {
-            self.scroll_offset = 0;
-        }
+        self.sends = self.sends.saturating_add(1);
     }
 
     /// Add a system message to the chat history.
@@ -1097,9 +1144,6 @@ impl AppState {
         let id = self.next_entry_id();
         self.messages
             .push(TranscriptEntry::SystemNotice { id, text: content });
-        if self.auto_scroll {
-            self.scroll_offset = 0;
-        }
     }
 
     /// Ensure the **last** entry is assistant text, appending an empty one if
@@ -1155,24 +1199,120 @@ impl AppState {
 
     // -- Scrolling ------------------------------------------------------
 
-    /// Scroll up by `n` lines. Disables `auto_scroll`.
+    /// Scroll up by `n` lines, which by definition stops following the bottom.
+    ///
+    /// The offset is not clamped here: this function does not know the
+    /// transcript's height, which depends on the width it will be painted at.
+    /// `render_chat_area` clamps it against the real total every frame, so a
+    /// `Home` (`usize::MAX / 2`) becomes a reachable offset before anything
+    /// reads it again.
     pub const fn scroll_up(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(n);
-        self.auto_scroll = false;
     }
 
-    /// Scroll down by `n` lines. If offset reaches 0, re-enables `auto_scroll`.
+    /// Scroll down by `n` lines; reaching `0` resumes following the bottom.
     pub const fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
-        if self.scroll_offset == 0 {
-            self.auto_scroll = true;
+    }
+
+    /// Jump to the bottom of the chat and resume following it.
+    pub const fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = 0;
+        self.unseen_below = false;
+    }
+
+    /// Is the reader parked at the bottom, following the stream?
+    #[must_use]
+    pub const fn stuck_to_bottom(&self) -> bool {
+        self.scroll_offset == 0
+    }
+
+    /// This observation of the transcript, as `chat_scroll` reads it.
+    ///
+    /// `conv` is a hash of the session key rather than a counter bumped at
+    /// every switch site, because a counter would be one more thing to
+    /// remember at each of them and the failure would be silent (判据 §6:
+    /// the direction you miscount in is always "one fewer"). Only equality is
+    /// ever asked of it. The empty key a fresh client starts with hashes to
+    /// its own value and is replaced once the gateway names the conversation,
+    /// which reads as a switch — correct, and in any case simultaneous with
+    /// the send that caused it.
+    fn list_cursor(&self) -> ListCursor {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.session_key.hash(&mut h);
+        ListCursor {
+            conv: Some(h.finish()),
+            sends: self.sends,
+            rows: self.messages.len(),
         }
     }
 
-    /// Jump to the bottom of the chat. Re-enables `auto_scroll`.
-    pub const fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = 0;
-        self.auto_scroll = true;
+    /// Apply the shared scroll decision for whatever changed since the last
+    /// call.
+    ///
+    /// Called once per main-loop iteration rather than at each of the
+    /// eighteen places that used to return `ScrollToBottomIfAutoScroll`: the
+    /// rule is one fact about the transcript, and eighteen call sites is
+    /// eighteen chances for a new event to forget it (判据 §12). It also
+    /// buys the case the old shape could not express — the viewer sending
+    /// while scrolled up, whose answer used to stream in off-screen.
+    pub fn settle_scroll(&mut self) {
+        let next = self.list_cursor();
+        match scroll_action(self.prev_cursor, next, self.stuck_to_bottom()) {
+            ScrollAction::PinToBottom => self.scroll_to_bottom(),
+            ScrollAction::MarkUnseen => self.unseen_below = true,
+            ScrollAction::Leave => {}
+        }
+        self.prev_cursor = next;
+    }
+
+    // -- Folding --------------------------------------------------------
+
+    /// Fold or unfold one tool row.
+    ///
+    /// The cache notices on its own: `tool_fingerprint` already hashes
+    /// `expanded`, so the row's rendered lines are rebuilt on the next frame
+    /// without anything here knowing the cache exists.
+    pub fn toggle_tool_expanded(&mut self, tool_id: &str) {
+        if let Some(row) = self.find_tool_mut(tool_id) {
+            row.expanded = !row.expanded;
+        }
+    }
+
+    /// Unfold every tool row, or fold every one if none is left folded.
+    ///
+    /// A bulk edit of the per-row flags rather than a second, sticky
+    /// "expand everything" flag. Two holders of "is this row expanded" would
+    /// be two answers to one question (判据 §1), and the row's own flag is
+    /// the one the renderer and the click path already read. The visible
+    /// consequence of choosing this way: a tool row that arrives *after* the
+    /// keystroke arrives folded, wearing a hint that says `ctrl+o to expand`
+    /// — which is true of it.
+    pub fn toggle_expand_all(&mut self) {
+        let any_folded = self
+            .messages
+            .iter()
+            .any(|m| matches!(m, TranscriptEntry::Tool(row) if !row.expanded));
+        for message in &mut self.messages {
+            if let TranscriptEntry::Tool(row) = message {
+                row.expanded = any_folded;
+            }
+        }
+    }
+
+    /// How a fold hint should word itself on this terminal.
+    ///
+    /// `Mouse` only once capture is actually on: a hint that says "click" on
+    /// a terminal where nothing is listening for a click is a label for an
+    /// affordance that does not exist (spec §8, 判据 §17).
+    #[must_use]
+    pub const fn modality(&self) -> Modality {
+        if self.mouse {
+            Modality::Mouse
+        } else {
+            crate::tui::widgets::tool_row::KEY_MODALITY
+        }
     }
 
     // -- Overlays -------------------------------------------------------
@@ -1950,8 +2090,7 @@ impl AppState {
         // len, width) happens to match new content at the same index must
         // not survive.
         self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
-        self.scroll_offset = 0;
-        self.auto_scroll = true;
+        self.scroll_to_bottom();
         self.add_system_message("Screen cleared.".to_string());
     }
 
