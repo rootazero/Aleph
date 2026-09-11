@@ -585,7 +585,17 @@ mod tests {
     /// precisely that one face could not tell two of them apart.
     #[test]
     fn an_unobserved_focus_is_unknown_in_json_and_not_a_denial() {
-        let button_states = |raw: &RawDom| -> (NodeStates, String, serde_json::Value) {
+        // `.get("focused")`, deliberately, NOT `["focused"]`. serde_json's
+        // `Index` answers `Value::Null` both when a key is present with a null
+        // value and when the key is ABSENT — so case 1 below, the arm carrying
+        // this whole ruling, expected `Null` and got `Null` whether or not the
+        // field was serialised at all. Measured: adding
+        // `#[serde(skip_serializing_if = "Option::is_none")]` to the field —
+        // the one-line change that undoes the ruling — left this test green.
+        // `get` returns `Option<&Value>` and separates the two where `[]`
+        // cannot (判据 §2: the assertion that carried the ruling was the one
+        // that could not see its own reversal).
+        let button_states = |raw: &RawDom| -> (NodeStates, String, Option<serde_json::Value>) {
             let mut refs = RefTable::new();
             let state = PageState::build(
                 raw,
@@ -603,7 +613,9 @@ mod tests {
             (
                 state.nodes[at].states,
                 render_text(&state),
-                to_json(&state)["nodes"][at]["states"]["focused"].clone(),
+                to_json(&state)["nodes"][at]["states"]
+                    .get("focused")
+                    .cloned(),
             )
         };
 
@@ -614,8 +626,11 @@ mod tests {
         assert!(!text.contains("[focused]"), "text asserts nothing:\n{text}");
         assert_eq!(
             json,
-            serde_json::Value::Null,
-            "JSON said something about a caret nobody has looked for"
+            Some(serde_json::Value::Null),
+            "the JSON face must carry `focused: null` — PRESENT and unknown. \
+             `None` here means the key was dropped, which is the same silence \
+             a `bool` gave and is what this ruling exists to prevent; a bare \
+             `Value::Null` expectation cannot tell those apart"
         );
 
         // 2. A fetcher looked and the caret is elsewhere. Silent in text —
@@ -627,7 +642,7 @@ mod tests {
         assert!(!text.contains("[focused]"), "{text}");
         assert_eq!(
             json,
-            serde_json::json!(false),
+            Some(serde_json::json!(false)),
             "an observation that the caret is elsewhere reads as 'nobody looked'"
         );
 
@@ -636,7 +651,62 @@ mod tests {
         let (states, text, json) = button_states(&raw);
         assert_eq!(states.focused, Some(true));
         assert!(text.contains("[focused]"), "{text}");
-        assert_eq!(json, serde_json::json!(true));
+        assert_eq!(json, Some(serde_json::json!(true)));
+    }
+
+    /// **No state bit may vanish from the JSON face when it happens to be
+    /// unset.** The class, rather than the one member of it that had a ruling.
+    ///
+    /// `focused`'s guard above is about one field because one field had a
+    /// ruling attached. The defect underneath it is not about `focused` at
+    /// all: a `skip_serializing_if` on ANY of these seven turns "we looked and
+    /// the answer is no" into the same silence as "nobody looked", and
+    /// `checked` and `expanded` are `Option<bool>` for exactly the reason
+    /// `focused` now is — while having **no JSON assertion anywhere**
+    /// (censused at `59d6c8c04`: `to_json` has two call sites in tests, and the
+    /// other one asserts only non-null values, where `[]` cannot hide an absent
+    /// key). So they were one attribute away from losing the distinction with
+    /// nothing to notice.
+    ///
+    /// Derived from the type on both sides rather than checked against a
+    /// written-down key list (判据 §5): an all-unset `NodeStates` and an
+    /// all-set one must serialise to the **same key set**, and the struct
+    /// literal below is exhaustive, so an eighth field cannot be added without
+    /// being written into it.
+    #[test]
+    fn every_state_bit_keeps_its_key_in_json_whatever_its_value() {
+        let keys = |states: NodeStates| -> Vec<String> {
+            let value = serde_json::to_value(states).expect("NodeStates serialises");
+            let mut out: Vec<String> = value
+                .as_object()
+                .expect("NodeStates is a JSON object")
+                .keys()
+                .cloned()
+                .collect();
+            out.sort();
+            out
+        };
+
+        let unset = keys(NodeStates::default());
+        let set = keys(NodeStates {
+            disabled: true,
+            checked: Some(true),
+            expanded: Some(true),
+            selected: true,
+            required: true,
+            readonly: true,
+            focused: Some(true),
+        });
+        assert_eq!(
+            unset, set,
+            "a state bit disappears from JSON when it is unset, so \"we looked \
+             and the answer is no\" and \"nobody looked\" read identically to \
+             anything consuming the attachment"
+        );
+        assert!(
+            !unset.is_empty(),
+            "non-vacuity: the key sets are equal because both are empty"
+        );
     }
 
     /// **A page cannot write a state token into the model's observation.**
