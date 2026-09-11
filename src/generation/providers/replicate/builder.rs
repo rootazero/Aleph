@@ -5,7 +5,7 @@
 
 use super::constants::DEFAULT_ENDPOINT;
 use super::provider::ReplicateProvider;
-use crate::generation::GenerationType;
+use crate::generation::{GenerationError, GenerationType};
 use reqwest::Client;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -106,23 +106,28 @@ impl ReplicateProviderBuilder {
     /// of producing a provider with no per-request timeout.
     #[must_use]
     pub fn build(self) -> ReplicateProvider {
-        self.try_build().unwrap_or_else(|e| {
-            tracing::warn!(
-                subsystem = "generation",
-                provider = "replicate",
-                error = %e,
-                "reqwest::Client::builder() failed; substituting default client \
-                 (no timeout). Production should use ReplicateProviderBuilder::try_build \
-                 via the factory arm."
-            );
-            ReplicateProvider {
-                client: Client::new(),
-                api_key: self.api_key,
-                endpoint: self.endpoint,
-                model_mappings: self.model_mappings,
-                supported_types: self.supported_types,
-            }
-        })
+        let client = Client::builder()
+            .timeout(Duration::from_secs(self.timeout_secs.max(1)))
+            .build()
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    subsystem = "generation",
+                    provider = "replicate",
+                    error = %e,
+                    "reqwest::Client::builder() failed; substituting default client \
+                     (no timeout). Production should use ReplicateProviderBuilder::try_build \
+                     via the factory arm."
+                );
+                Client::new()
+            });
+
+        ReplicateProvider {
+            client,
+            api_key: self.api_key,
+            endpoint: self.endpoint,
+            model_mappings: self.model_mappings,
+            supported_types: self.supported_types,
+        }
     }
 
     /// Build the `ReplicateProvider`, propagating reqwest client-build errors
