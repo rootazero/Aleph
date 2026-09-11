@@ -916,6 +916,16 @@ mod tests {
 
         // The three domains really were enabled — a tab whose domains were
         // never enabled looks exactly like a quiet one.
+        //
+        // ⚠️ This block is also the guard for a DUPLICATION (R89): `attach_tab`
+        // spells these three method names itself, because
+        // `aleph_cdp::methods::{page,runtime,network}::enable` hardcode the
+        // connection's full `command_timeout` and cannot be handed a
+        // remainder. Two copies of one fact are survivable exactly when a
+        // guard fails on drift and the next reader can find it — this is that
+        // guard, it asserts all THREE names (a guard covering two of three
+        // reports green on the drift it misses), and it must not be deleted as
+        // redundant with the loop it is checking.
         let asked: Vec<String> = server
             .received()
             .iter()
@@ -1713,6 +1723,229 @@ mod tests {
             elapsed < ENGINE_SHUTDOWN_BUDGET,
             "the stops did not overlap: {elapsed:?} for three {slow:?} kills"
         );
+        server.shutdown().await;
+    }
+
+    /// E1. `ENGINE_SHUTDOWN_BUDGET` bounds **taking the lock**, not just the
+    /// kills.
+    ///
+    /// This is the guard D1 did not have. That defect — the deadline computed
+    /// after `self.handles.lock().await` instead of before it — was HIGH, was
+    /// introduced by a fix, and was found only because a reviewer built a
+    /// throwaway probe: measured 1.856 s and 2.856 s against a declared 1 s,
+    /// where the pre-range shape returned 1.0016 s. Nothing in the suite would
+    /// have gone red if it moved back, and the next person to simplify
+    /// `shutdown_all` would have had nothing telling them not to (判据 §2).
+    ///
+    /// The property is the POSITION of the deadline, not "shutdown is fast".
+    /// So: a launch is parked in flight holding the lock for several times the
+    /// budget, and `shutdown_all` must still come back inside it. The bound is
+    /// written as a multiple of `ENGINE_SHUTDOWN_BUDGET` rather than a literal,
+    /// so the test and the constant it guards derive from one place (判据 §12).
+    ///
+    /// Headroom, both directions: the fixed shape returns at ~1 x the budget
+    /// and the threshold is 2 x, while the broken shape waits out the whole
+    /// lock hold at 3 x. A loaded machine has to be off by 2 x before this
+    /// misreports in either direction.
+    #[tokio::test]
+    async fn the_shutdown_budget_bounds_taking_the_lock_not_only_the_kills() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A listener that accepts TCP and never speaks HTTP, so the launch
+        // parks inside `bring_up` — holding the `handles` guard the whole time.
+        // The same shape `a_half_open_endpoint_is_bounded_and_the_browser_is_reclaimed`
+        // uses; here the stall is the fixture rather than the subject.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let port = listener.local_addr().expect("local addr").port();
+        let accepting = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+
+        let proc = Arc::new(FakeEngineProcess::pointing_at(
+            Engine::Chromium,
+            &format!("ws://127.0.0.1:{port}/devtools/browser/wedged"),
+            dir.path(),
+        ));
+        let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
+        processes.insert(Engine::Chromium, proc.clone());
+        // How long the launch holds the lock. Three budgets: long enough that
+        // an unbounded acquisition is unmistakable, short enough to keep the
+        // test a few seconds.
+        let lock_hold = ENGINE_SHUTDOWN_BUDGET * 3;
+        let registry = Arc::new(EngineRegistry::new(
+            processes,
+            Duration::from_secs(30),
+            lock_hold,
+        ));
+
+        let req = request("wedged", dir.path());
+        let launcher = {
+            let registry = Arc::clone(&registry);
+            tokio::spawn(async move {
+                let _ = registry
+                    .handle(Engine::Chromium, &req, EngineLaunch::Allow)
+                    .await;
+            })
+        };
+
+        // Wait until the launch is genuinely in flight. `process.launch()` is
+        // called from inside the guard, so a recorded launch means the lock is
+        // held and will stay held until the bring-up deadline expires.
+        let armed = tokio::time::timeout(Duration::from_secs(5), async {
+            while proc.launches().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            armed.is_ok(),
+            "the fixture never got a launch in flight, so this test would be \
+             measuring an uncontended lock and could not fail"
+        );
+
+        let started = std::time::Instant::now();
+        let stopped = registry.shutdown_all().await;
+        let elapsed = started.elapsed();
+
+        // Non-vacuity first: an UNCONTENDED lock would satisfy the upper bound
+        // below and the count too, so without this the test could pass by the
+        // fixture having quietly finished rather than by the deadline being in
+        // the right place (判据 §2).
+        assert!(
+            elapsed >= ENGINE_SHUTDOWN_BUDGET,
+            "the shutdown did not wait out its budget on the lock, which means \
+             the lock was NOT held and this test measured nothing: {elapsed:?}"
+        );
+        assert!(
+            elapsed < ENGINE_SHUTDOWN_BUDGET * 2,
+            "the shutdown budget did not bound the LOCK acquisition: {elapsed:?} \
+             against a {ENGINE_SHUTDOWN_BUDGET:?} budget, with a launch holding \
+             the guard. The caller is the wedged-exit failsafe, where \
+             SHUTDOWN_FAILSAFE is already spent and exit(0) follows — an overrun \
+             there is the external SIGKILL landing first and the browsers never \
+             being stopped at all"
+        );
+        assert_eq!(
+            stopped, 0,
+            "nothing was drained, so nothing can have died — a lock we could not \
+             take must not be reported as engines that did not exist"
+        );
+
+        launcher.abort();
+        let _ = launcher.await;
+        accepting.abort();
+    }
+
+    /// E2. `bring_up`'s surviving connection carries nothing pending.
+    ///
+    /// `bring_up` keeps outer `timeout_at` wrappers, which DROP the CDP future
+    /// and so skip `call_with_timeout`'s own `Err(_elapsed)` cleanup arm — the
+    /// mechanism behind D2. The reason that is tolerable there rather than in
+    /// `attach_tab` is a claim about `Drop`: every error path out of `bring_up`
+    /// drops `conn`, so a leaked entry cannot outlive the call, and the only
+    /// connection that SURVIVES is the one from a successful bring-up.
+    ///
+    /// That claim was argued and its sibling in `attach_tab` was measured
+    /// (`a_slow_but_answering_attach_succeeds_and_leaves_nothing_pending`), and
+    /// one of two sibling claims measured is what makes the argued one look
+    /// checked (判据 §16). So this measures the half that can actually be
+    /// observed: the connection that lives.
+    ///
+    /// Both halves, because the first is the premise the second rests on —
+    /// an outer wrapper really does leak, which is exactly why the surviving
+    /// connection having zero is worth asserting rather than assumed.
+    #[tokio::test]
+    async fn an_outer_timeout_leaks_a_pending_entry_and_bring_ups_connection_has_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Half 1 — the premise. Wrapping a CDP call in an OUTER timeout leaves
+        // the entry behind, because the crate's cleanup lives in the arm the
+        // drop skips. This is a property of the CALLER's wrapping, not of
+        // `aleph-cdp` (whose own suite covers the inner arm), so it belongs
+        // here.
+        let slow = FakeCdpServer::start(|_: &serde_json::Value| {
+            Responder::Delay(
+                Duration::from_secs(2),
+                Box::new(Responder::Reply(serde_json::json!({}))),
+            )
+        })
+        .await;
+        let conn = aleph_cdp::CdpConnection::connect(
+            &slow.ws_url(),
+            aleph_cdp::ConnectOptions {
+                command_timeout: Duration::from_secs(30),
+            },
+        )
+        .await
+        .expect("connect");
+        assert_eq!(conn.pending_len(), 0, "precondition");
+        let outer = tokio::time::timeout(
+            Duration::from_millis(100),
+            conn.call(None, "Browser.getVersion", serde_json::json!({})),
+        )
+        .await;
+        assert!(outer.is_err(), "the peer must not have answered that fast");
+        assert_eq!(
+            conn.pending_len(),
+            1,
+            "an outer timeout was expected to strand the entry — if it no longer \
+             does, the reason attach_tab stopped using one has gone away and the \
+             comment there is now wrong"
+        );
+        drop(conn);
+        slow.shutdown().await;
+
+        // Half 2 — the connection that survives a bring-up has nothing pending,
+        // even when every step of that bring-up was slow enough to matter.
+        let server = FakeCdpServer::start(engine_peer).await;
+        let ready_budget = Duration::from_secs(5);
+        let step = ready_budget / 10;
+        for method in [
+            "Browser.getVersion",
+            "Target.createTarget",
+            "Target.attachToTarget",
+            "Page.navigate",
+            "Runtime.evaluate",
+        ] {
+            let answer = engine_peer(&serde_json::json!({ "method": method }));
+            server.on(method, Responder::Delay(step, Box::new(answer)));
+        }
+        let proc = Arc::new(FakeEngineProcess::new(
+            Engine::Chromium,
+            &server,
+            dir.path(),
+        ));
+        let mut processes: HashMap<Engine, Arc<dyn EngineProcess>> = HashMap::new();
+        processes.insert(Engine::Chromium, proc.clone());
+        let registry = EngineRegistry::new(processes, Duration::from_secs(30), ready_budget);
+
+        let started = std::time::Instant::now();
+        let handle = registry
+            .handle(
+                Engine::Chromium,
+                &request("default", dir.path()),
+                EngineLaunch::Allow,
+            )
+            .await
+            .expect("a slow but answering engine still comes up");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= step * 3,
+            "the peer was not actually slow, so this proves nothing: {elapsed:?}"
+        );
+        assert_eq!(
+            handle.conn.pending_len(),
+            0,
+            "the connection a successful bring-up handed on is carrying stranded \
+             entries — that is the one connection whose leak would outlive the \
+             call, and it is what the Drop argument claims cannot happen"
+        );
+
+        registry.shutdown_all().await;
         server.shutdown().await;
     }
 
