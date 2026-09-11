@@ -557,6 +557,72 @@ mod wire_face {
         );
         assert_eq!(keys(&frame_key()), expected(&["frame_id", "loader_id"]));
     }
+
+    /// **The third class, and the one a key list cannot own: no wire field may
+    /// skip itself when its value is uninteresting.**
+    ///
+    /// The guard above covers `rename` and `#[serde(skip)]` for all 43 fields,
+    /// because its authority is a written-down list. It covers
+    /// `skip_serializing_if` **only where a value the test constructs happens
+    /// to satisfy the predicate** — guaranteed for `NodeStates` (unset and set)
+    /// and `StateNode`'s seven `Option`s (empty and full), a coincidence
+    /// everywhere else, since `PageState`, `Viewport`, `Rect` and `FrameKey`
+    /// each get exactly one value. **Measured at `ce000f108`**:
+    /// `#[serde(skip_serializing_if = "is_zero_i32")]` on `Rect::x` left the
+    /// module at 50 passed / 0 failed, because the literal is `{x:1,y:2,w:3,h:4}`
+    /// and the predicate never fires there — while on a real page every box
+    /// flush with the left edge would silently lose its `x` and a consumer
+    /// would read `rect.x` as undefined.
+    ///
+    /// A source census rather than a second literal per struct: this face does
+    /// not want the value-dependent class **at all**, and unlike a fixture
+    /// value that is a property of the source, so one assertion covers every
+    /// field of every struct in the module — including ones added after this
+    /// was written, which is the half 判据 §5 says a list of examples never
+    /// reaches.
+    ///
+    /// `code_text` on top of `production_text`, so this file's own prose about
+    /// `skip_serializing_if` — of which there is a great deal, including this
+    /// paragraph — is not a hit. The `serde(default)` control below proves that
+    /// stripping did not also remove the attributes being searched for
+    /// (判据 §2: a census that can no longer see its subject reports the same
+    /// clean sheet as one with nothing to find).
+    #[test]
+    fn no_wire_field_skips_itself_when_its_value_is_uninteresting() {
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/browser/page_state");
+        let files = rust_sources_under(&root);
+        assert!(
+            files.len() >= 7,
+            "the walk found only {} files under page_state/ — the census \
+             scanned nothing, which is not the same as finding nothing wrong",
+            files.len()
+        );
+
+        let code_of =
+            |rel: &str, text: &str| code_text(&production_text(std::path::Path::new(rel), text));
+
+        let offenders: Vec<&str> = files
+            .iter()
+            .filter(|(rel, text)| code_of(rel, text).contains("skip_serializing_if"))
+            .map(|(rel, _)| rel.as_str())
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "a wire field skips itself on some values: {offenders:?}. \"we \
+             looked and the answer is no\" and \"nobody looked\" then read \
+             identically to every consumer of the JSON face, and the key list \
+             above cannot see it — it compares key sets, and this moves both."
+        );
+
+        assert!(
+            files.iter().any(|(rel, text)| rel.ends_with("raw.rs")
+                && code_of(rel, text).contains("serde(default)")),
+            "the instrument, not the tree: the scan can no longer see a serde \
+             attribute it is known to contain, so its clean sheet means nothing"
+        );
+    }
 }
 
 #[cfg(test)]
