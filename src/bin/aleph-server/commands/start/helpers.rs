@@ -764,9 +764,13 @@ mod tests {
              past SHUTDOWN_FAILSAFE and exit(0) follows"
         );
         assert!(
-            orderly.contains("ORDERLY_BROWSER_STOP_BUDGET"),
-            "the orderly path must spend the orderly budget — giving up there \
-             can orphan a browser permanently, not merely defer it"
+            orderly.contains("shutdown_browsers_global(ORDERLY_BROWSER_STOP_BUDGET)"),
+            "the orderly path must PASS the orderly budget — not merely import \
+             it. Asserting the bare name was satisfied by the import line \
+             alone, so the call site could converge on the wedged budget with this \
+             guard green; measured, by the mutation that was meant to redden it. \
+             Giving up early there can orphan a browser permanently, not merely \
+             defer it"
         );
         // And that budget must be DERIVED from the watchdog it races, not
         // quoted from another crate. F1 was exactly that: 35.5 s inside a 5 s
