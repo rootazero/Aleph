@@ -365,11 +365,15 @@ fn format_tokens(tokens: u64) -> String {
 
 /// Compact token count without the ` tok` suffix, for the context-gauge
 /// numerator/denominator (e.g. `12.3k`, `200.0k`, `1.0M`, `847`).
-fn compact_tokens(n: u32) -> String {
+///
+/// Shared with the `/context` overlay, which paints the same quantity from the
+/// same gauge one keystroke away: two spellings of a token count on one screen
+/// is the same fact told twice (判据 §1).
+pub(super) fn compact_tokens(n: u64) -> String {
     if n >= 1_000_000 {
-        format!("{:.1}M", f64::from(n) / 1_000_000.0)
+        format!("{:.1}M", n as f64 / 1_000_000.0)
     } else if n >= 1_000 {
-        format!("{:.1}k", f64::from(n) / 1_000.0)
+        format!("{:.1}k", n as f64 / 1_000.0)
     } else {
         n.to_string()
     }
@@ -384,8 +388,8 @@ fn format_context_gauge(used: u32, window: u32) -> String {
     let pct = (u64::from(used) * 100) / u64::from(window.max(1));
     format!(
         "{pct}% ({}/{})",
-        compact_tokens(used),
-        compact_tokens(window)
+        compact_tokens(u64::from(used)),
+        compact_tokens(u64::from(window))
     )
 }
 

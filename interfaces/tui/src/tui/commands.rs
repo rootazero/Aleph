@@ -404,6 +404,7 @@ pub(super) async fn execute_local_command(
             state.add_system_message(format!("Agent panel: {mode}"));
         }
         LocalCommand::Agents => execute_agents(state, client).await,
+        LocalCommand::Context => execute_context(state, client).await,
         LocalCommand::Todo => {
             state.tasks_panel_visible = !state.tasks_panel_visible;
             let notice = match (state.tasks_panel_visible, &state.plan) {
@@ -414,7 +415,9 @@ pub(super) async fn execute_local_command(
             state.add_system_message(notice.to_string());
         }
         LocalCommand::Theme { name } => {
-            use crate::tui::theme::{current_preset, palette, set_preset, Preset};
+            use crate::tui::theme::{
+                current_preset, palette, remember_preset, set_preset, theme_file, Preset,
+            };
             let notice = match name {
                 None => {
                     let depth = if palette().is_rgb() {
@@ -422,8 +425,11 @@ pub(super) async fn execute_local_command(
                     } else {
                         "16-colour (set COLORTERM=truecolor if your terminal supports it)"
                     };
+                    let remembered = theme_file()
+                        .map(|p| format!("Remembered in {}", p.display()))
+                        .unwrap_or_else(|| "No home directory, so this run only".to_string());
                     format!(
-                        "Theme: {} \u{00b7} {depth}\nChoices: {}\nALEPH_TUI_THEME=<name> makes it stick across runs.",
+                        "Theme: {} \u{00b7} {depth}\nChoices: {}\n{remembered} \u{00b7} ALEPH_TUI_THEME=<name> overrides it for one run.",
                         current_preset().name(),
                         Preset::choices(),
                     )
@@ -432,7 +438,21 @@ pub(super) async fn execute_local_command(
                     Some(preset) => {
                         set_preset(preset);
                         state.invalidate_rendered_lines();
-                        format!("Theme: {}", preset.name())
+                        // Report what actually happened on disk. A `/theme`
+                        // that says "remembered" when the write failed is a
+                        // label for something that did not occur (判据 §17),
+                        // and the switch itself is still real either way.
+                        match remember_preset(preset) {
+                            Ok(path) => format!(
+                                "Theme: {} \u{00b7} remembered in {}",
+                                preset.name(),
+                                path.display()
+                            ),
+                            Err(e) => format!(
+                                "Theme: {} for this run \u{2014} could not remember it: {e}",
+                                preset.name()
+                            ),
+                        }
                     }
                     // Naming what was asked for, not just the choices: the
                     // failure this guards against is a typo that silently
@@ -566,6 +586,40 @@ async fn execute_agents(state: &mut AppState, client: &AlephClient) {
         return;
     }
     state.open_agents_overlay();
+}
+
+/// `/context`: fetch the measured layout of the last prompt and open the
+/// overlay on it.
+///
+/// # Every failure here is "I don't know", never a breakdown of zeros
+///
+/// The server answers `RESOURCE_NOT_FOUND` when no turn of this session has
+/// been measured — which includes a session that has never run AND one whose
+/// measurements died with a daemon restart, because the registry is in
+/// process memory. Both are unknowns, and the message says so rather than
+/// opening an empty overlay that reads as "nothing is using your window"
+/// (判据 §8).
+async fn execute_context(state: &mut AppState, client: &AlephClient) {
+    if state.session_key.is_empty() {
+        state.add_system_message(
+            "No session attached yet, so there is no prompt to break down.".to_string(),
+        );
+        return;
+    }
+    let params = json!({ "session_key": state.session_key });
+    match client
+        .call::<_, aleph_protocol::ContextBreakdown>("context.breakdown", Some(params))
+        .await
+    {
+        Ok(breakdown) => state.open_context_overlay(&breakdown),
+        // The error text is the server's own; it already distinguishes
+        // "not measured yet" from a malformed key, and rewording it here
+        // would be a second, weaker copy of that distinction.
+        Err(e) => state.add_system_message(format!(
+            "No measured prompt for this conversation yet: {e}\nIt appears once this session \
+             takes a turn — measurements do not survive a gateway restart."
+        )),
+    }
 }
 
 /// One `subagent.tree` fetch, merged into `AppState.agents`.

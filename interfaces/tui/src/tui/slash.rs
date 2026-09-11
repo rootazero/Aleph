@@ -98,6 +98,9 @@ pub enum LocalCommand {
     Agents,
     /// Toggle the pinned tasks (execution list) panel.
     Todo,
+    /// Show the measured layout of the last prompt this session sent
+    /// (`context.breakdown`, reconciled against the live gauge).
+    Context,
     /// Switch the colour preset. `None` prints the current one plus the
     /// choices — the `/tools` convention, and the reason an unknown name is
     /// carried through as `Some` rather than silently becoming the default:
@@ -227,6 +230,10 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "Browse this session's sub-agents; Enter opens an agent's run view",
     ),
     ("/todo", "Show/hide the pinned tasks (execution list) panel"),
+    (
+        "/context",
+        "Break down what is filling the context window right now",
+    ),
     ("/theme", "Switch the colour preset: dark|light|terminal"),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
@@ -319,6 +326,9 @@ pub fn parse_input(input: &str) -> ParsedInput {
         // (`shadowed_gateway_commands`) is the guard if that ever changes.
         "/agents" => ParsedInput::Local(LocalCommand::Agents),
         "/todo" => ParsedInput::Local(LocalCommand::Todo),
+        // No `/compact` collision: that word is already an alias of
+        // `/compress` above, and this one only reports.
+        "/context" => ParsedInput::Local(LocalCommand::Context),
         "/theme" => ParsedInput::Local(LocalCommand::Theme {
             name: (!args.is_empty()).then(|| args.to_lowercase()),
         }),
@@ -637,7 +647,20 @@ mod tests {
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 22);
+        // Every advertised word must actually route to a local command. The
+        // assertion this replaces was `cmds.len() == 22` — a number that had
+        // to be hand-bumped with every entry and could only ever catch the
+        // author forgetting to bump it, never a word the parser does not
+        // know (判据 §1: the catalog and the parser are the same fact, and a
+        // count is not the wire between them).
+        for (name, description) in &cmds {
+            assert!(
+                matches!(parse_input(name), ParsedInput::Local(_)),
+                "{name} is advertised but not parsed as a local command"
+            );
+            assert!(!description.is_empty(), "{name} has no description");
+        }
+        assert!(cmds.iter().any(|(name, _)| *name == "/context"));
         assert!(cmds.iter().any(|(name, _)| *name == "/theme"));
         assert!(cmds.iter().any(|(name, _)| *name == "/providers"));
         assert!(cmds.iter().any(|(name, _)| *name == "/agents"));

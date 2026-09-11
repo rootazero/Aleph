@@ -4,6 +4,7 @@ pub mod agents_panel;
 pub mod btw_panel;
 pub mod chat_area;
 pub mod command_palette;
+pub mod context_overlay;
 pub mod dialog;
 pub mod header;
 pub mod hint_line;

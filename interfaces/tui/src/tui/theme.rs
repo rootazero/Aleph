@@ -104,26 +104,110 @@ impl Preset {
 
     /// The preset the session starts in.
     ///
-    /// # Why an env var and not a settings file
+    /// # Where it is remembered, and why that is not an R4 violation
     ///
-    /// R4: an interface does not persist. This crate has no config file of its
-    /// own and must not grow one — and a terminal's colour preference is the
-    /// same *kind* of fact as `COLORTERM` or `NO_COLOR`, which is to say a
-    /// property of the terminal the user launched, not of the conversation.
-    /// Putting it in the session would also be wrong in the other direction: it
-    /// would follow the conversation to the Panel, which does not paint with
-    /// these colours at all.
+    /// A colour preference is a property of the terminal the user launched —
+    /// the same *kind* of fact as `COLORTERM` or `NO_COLOR` — so it belongs to
+    /// this machine, not to the conversation. Storing it in the session would
+    /// be wrong in the other direction: it would follow the conversation to the
+    /// Panel, which does not paint with these colours at all.
     ///
-    /// So `/theme` switches for this run and `ALEPH_TUI_THEME` is how it
-    /// sticks. An unset or unrecognised value falls back to the default rather
-    /// than failing to start.
+    /// This file used to argue that R4 ("an interface does not persist")
+    /// forbade remembering it at all, so `/theme` switched for one run and
+    /// `ALEPH_TUI_THEME` was the only way to make it stick. That reading was
+    /// too wide, and the twin surface is the evidence (判据 §16): the Panel —
+    /// an interface under the same redline — persists its six appearance axes
+    /// to `localStorage` (`interfaces/webchat/src/appearance.rs`). R4 forbids
+    /// an interface holding *business* state: sessions, memory, plans. A
+    /// per-device display preference is what `localStorage` is for, and
+    /// [`theme_file`] is this surface's `localStorage`.
+    ///
+    /// Precedence, highest first:
+    /// 1. `ALEPH_TUI_THEME` — this invocation, and the only form a script or a
+    ///    one-off `ALEPH_TUI_THEME=light aleph` can use.
+    /// 2. The remembered preset, written by `/theme <name>`.
+    /// 3. [`Preset::default`].
+    ///
+    /// An unset or unrecognised value at either level falls through to the
+    /// next rather than failing to start.
     #[must_use]
-    pub fn from_env() -> Self {
-        std::env::var("ALEPH_TUI_THEME")
-            .ok()
-            .and_then(|v| Self::parse(&v))
+    pub fn boot() -> Self {
+        Self::resolve(
+            std::env::var("ALEPH_TUI_THEME").ok().as_deref(),
+            stored_preset().as_deref(),
+        )
+    }
+
+    /// The precedence rule itself, with both sources lifted out so it can be
+    /// tested without mutating a process-global every other test in this
+    /// binary reads through [`palette`].
+    fn resolve(env: Option<&str>, stored: Option<&str>) -> Self {
+        env.and_then(Self::parse)
+            .or_else(|| stored.and_then(Self::parse))
             .unwrap_or_default()
     }
+}
+
+/// Where the remembered preset lives: `<aleph_home>/tui-theme`, one line
+/// holding a preset name.
+///
+/// `aleph_home` comes from [`aleph_protocol::paths`] — the one derivation of
+/// that directory, which is also what makes `ALEPH_HOME` isolate a QA instance
+/// from the developer's own preference. A second hand-rolled `~/.aleph` here
+/// would agree byte for byte until someone set that variable.
+///
+/// A bare file rather than a `tui.toml`: one key does not need a format, and
+/// the crate has no TOML dependency to add for it. If a second preference ever
+/// wants remembering, that is the moment to grow a real file — not now (P6).
+#[must_use]
+pub fn theme_file() -> Option<std::path::PathBuf> {
+    aleph_protocol::paths::aleph_home().map(|h| h.join("tui-theme"))
+}
+
+/// The remembered preset name, or `None` when nothing is remembered, the file
+/// is unreadable, or the home directory cannot be located. Every one of those
+/// is "no preference", never an error worth refusing to start over.
+///
+/// Not read in this crate's own test binary: it is an ambient read of the
+/// developer's machine, and a maintainer who once ran `/theme terminal` would
+/// otherwise run every colour-sensitive test in a different palette from CI
+/// (判据 §18). [`Preset::resolve`] carries the logic and is tested with both
+/// sources as parameters.
+#[cfg(not(test))]
+fn stored_preset() -> Option<String> {
+    std::fs::read_to_string(theme_file()?).ok()
+}
+
+#[cfg(test)]
+fn stored_preset() -> Option<String> {
+    None
+}
+
+/// Remember `preset` for the next run, returning the file it was written to.
+///
+/// Creates the Aleph home directory if it does not exist yet — a TUI may be
+/// the first thing a user runs. The caller must report a failure rather than
+/// swallowing it: a `/theme` that says it stuck when the write did not is a
+/// label for something that never happened (判据 §17).
+pub fn remember_preset(preset: Preset) -> std::io::Result<std::path::PathBuf> {
+    let path = theme_file().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no home directory to remember it in",
+        )
+    })?;
+    write_preset(&path, preset)?;
+    Ok(path)
+}
+
+/// The write itself, with the destination as a parameter so a test can
+/// exercise it without setting `ALEPH_HOME` — a process-global that
+/// [`palette`] also reads, on any thread, at any time.
+fn write_preset(path: &std::path::Path, preset: Preset) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, preset.name())
 }
 
 /// Whether the terminal advertises 24-bit colour.
@@ -427,7 +511,7 @@ pub fn palette() -> Palette {
     {
         return p;
     }
-    let p = Palette::detect(Preset::from_env());
+    let p = Palette::detect(Preset::boot());
     *CURRENT
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p);
@@ -554,6 +638,75 @@ mod tests {
             None,
             "an unknown name must not silently become the default"
         );
+    }
+
+    /// The env var wins over the remembered file, which wins over the
+    /// default — and an unparseable value at either level falls through
+    /// instead of becoming one.
+    ///
+    /// Reddens if the two sources are swapped (a `ALEPH_TUI_THEME=dark` run
+    /// would then paint whatever was last remembered), or if a typo at either
+    /// level is allowed to resolve to `Dark` by way of `unwrap_or_default`
+    /// applied too early.
+    #[test]
+    fn the_environment_outranks_what_was_remembered() {
+        assert_eq!(
+            Preset::resolve(Some("light"), Some("terminal")),
+            Preset::Light
+        );
+        assert_eq!(Preset::resolve(None, Some("terminal")), Preset::Terminal);
+        assert_eq!(Preset::resolve(None, None), Preset::default());
+        // A typo in the environment must not shadow a good remembered value.
+        assert_eq!(
+            Preset::resolve(Some("solarized"), Some("light")),
+            Preset::Light
+        );
+        // …and a corrupt file must not stop the surface from starting.
+        assert_eq!(Preset::resolve(None, Some("\u{0}\u{0}")), Preset::default());
+    }
+
+    /// What `/theme` writes is what the next boot reads back, through the same
+    /// pair of functions the real path uses — including the newline-free,
+    /// whitespace-tolerant round trip and the directory being created.
+    ///
+    /// Asserts the effect (the bytes on disk resolve to the preset), not that
+    /// the write was called (判据 §4).
+    #[test]
+    fn a_remembered_preset_survives_as_the_next_boots_answer() {
+        let dir = std::env::temp_dir().join(format!(
+            "aleph-tui-theme-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let path = dir.join("nested").join("tui-theme");
+        write_preset(&path, Preset::Light).expect("write");
+        let stored = std::fs::read_to_string(&path).expect("read back");
+        assert_eq!(
+            Preset::resolve(None, Some(&stored)),
+            Preset::Light,
+            "the remembered file must parse back to what /theme wrote"
+        );
+        write_preset(&path, Preset::Terminal).expect("overwrite");
+        let stored = std::fs::read_to_string(&path).expect("read back");
+        assert_eq!(
+            Preset::resolve(None, Some(&stored)),
+            Preset::Terminal,
+            "a second /theme must replace the first, not append to it"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The remembered file hangs off the shared `aleph_home` derivation, which
+    /// is what makes `ALEPH_HOME` isolate it. A hand-rolled `~/.aleph` here
+    /// would pass every test on a machine that never sets the variable.
+    #[test]
+    fn the_theme_file_lives_under_the_shared_aleph_home() {
+        let (Some(file), Some(home)) = (theme_file(), aleph_protocol::paths::aleph_home()) else {
+            // No home directory on this machine: absence, not failure.
+            return;
+        };
+        assert_eq!(file.parent(), Some(home.as_path()));
+        assert_eq!(file.file_name().and_then(|n| n.to_str()), Some("tui-theme"));
     }
 
     /// The tick-indexed helper and the shared millisecond form walk the same

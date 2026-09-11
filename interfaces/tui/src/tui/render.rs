@@ -16,6 +16,7 @@ use crate::tui::widgets::{
     btw_panel::render_btw_panel,
     chat_area::render_chat_area,
     command_palette::render_command_palette,
+    context_overlay::render_context_overlay,
     dialog::{render_approval, render_dialog},
     hint_line::render_hint_line,
     input_area::{input_height, InputWidget},
@@ -152,6 +153,9 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &TextArea) {
     // Agents overlay (list floats above the input like the pickers; the
     // per-agent run view centers over the transcript).
     render_agents_overlay(frame, state, input_area);
+    // The `/context` report centers over the transcript for the same reason
+    // the agent detail view does: it is read, not picked from.
+    render_context_overlay(frame, state, frame.area());
     if let Some(dialog) = &state.dialog {
         render_dialog(frame, dialog, frame.area());
     }
@@ -311,5 +315,61 @@ mod tests {
             "the hidden branch must not compute any layout split at all — R8-9: \
              not even a nominally zero-width chunk. Found in: {else_body:?}"
         );
+    }
+
+    /// The `/context` overlay reaches the screen through the real `render`.
+    ///
+    /// Three rounds running (B4c, B5, B6) found a renderer with no caller or a
+    /// caller with no renderer, every one of them invisible to dead-code
+    /// analysis because both ends existed (判据 §7). A widget test that paints
+    /// through `render_context_overlay` directly proves the widget; only this
+    /// proves the wire.
+    ///
+    /// Reddens if the `render_context_overlay` call is dropped from `render`,
+    /// or if it is painted before the status bar (which would then overwrite
+    /// the overlay's bottom row).
+    #[test]
+    fn the_context_overlay_is_wired_into_the_frame() {
+        let backend = TestBackend::new(80, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        let mut state = new_state();
+        let textarea = TextArea::default();
+
+        term.draw(|f| render(f, &mut state, &textarea)).unwrap();
+        let before = buffer_text(&term);
+        assert!(
+            !before.contains("Context \u{00b7} turn"),
+            "nothing should paint the overlay while it is closed"
+        );
+
+        state.open_context_overlay(&aleph_protocol::ContextBreakdown {
+            session_key: "agent:main".into(),
+            turn: 4,
+            layers: Vec::new(),
+            tools: Vec::new(),
+            messages_tokens: None,
+            provider_reported: None,
+            context_window: None,
+            dynamic_bytes_sent: None,
+        });
+        term.draw(|f| render(f, &mut state, &textarea)).unwrap();
+        let after = buffer_text(&term);
+        assert!(
+            after.contains("Context \u{00b7} turn 4"),
+            "the overlay must reach the frame:\n{after}"
+        );
+    }
+
+    fn buffer_text(term: &Terminal<TestBackend>) -> String {
+        let buf = term.backend().buffer();
+        let width = buf.area.width as usize;
+        buf.content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<Vec<_>>()
+            .chunks(width)
+            .map(<[&str]>::concat)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }

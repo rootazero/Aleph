@@ -52,7 +52,11 @@ pub fn reconcile(b: &ContextBreakdown) -> ContextRows {
     let tool_bytes = b.tool_bytes();
     if !b.tools.is_empty() {
         rows.push(ContextRow {
-            label: format!("Tools ({} schemas)", b.tools.len()),
+            label: format!(
+                "Tools ({} schema{})",
+                b.tools.len(),
+                if b.tools.len() == 1 { "" } else { "s" }
+            ),
             tokens: tool_bytes / 4,
             bytes: Some(tool_bytes),
         });
@@ -205,7 +209,7 @@ mod tests {
         assert_eq!(
             r.rows[1],
             ContextRow {
-                label: "Tools (1 schemas)".into(),
+                label: "Tools (1 schema)".into(),
                 tokens: 100,
                 bytes: Some(400)
             }

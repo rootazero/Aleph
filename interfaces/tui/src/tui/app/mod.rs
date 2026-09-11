@@ -5,6 +5,7 @@
 // The two projection paths live in sibling modules: `events` (StreamEvent ->
 // state) and `trace` (AgentTraceEvent -> state).
 
+mod context_view;
 mod cost;
 mod events;
 mod trace;
@@ -12,6 +13,7 @@ mod trace;
 #[cfg(test)]
 mod tests;
 
+pub use context_view::ContextView;
 pub use cost::{CostTally, CostView};
 
 use std::time::Instant;
@@ -154,6 +156,8 @@ pub enum Focus {
     Btw,
     /// The `/agents` overlay (sub-agent list + per-agent run view).
     Agents,
+    /// The `/context` overlay (measured prompt layout of the last turn).
+    Context,
 }
 
 // ---------------------------------------------------------------------------
@@ -970,6 +974,10 @@ pub struct AppState {
     pub agents: Vec<SubagentNode>,
     /// The `/agents` overlay, when open.
     pub agents_overlay: Option<AgentsOverlayState>,
+    /// The `/context` overlay, when open: one `context.breakdown` snapshot
+    /// reconciled against the gauge. Not refreshed while it is up — see
+    /// [`ContextView`].
+    pub context_overlay: Option<ContextView>,
 
     // -- UI state --
     pub focus: Focus,
@@ -1097,6 +1105,7 @@ impl AppState {
             tasks_panel_visible: true,
             agents: Vec::new(),
             agents_overlay: None,
+            context_overlay: None,
 
             focus: Focus::Input,
             dialog: None,
@@ -1477,7 +1486,8 @@ impl AppState {
     }
 
     /// Close any open overlay (palette, dialog, session picker, provider
-    /// picker, agents overlay) and return focus to whatever is still on screen.
+    /// picker, agents overlay, context overlay) and return focus to whatever
+    /// is still on screen.
     pub fn close_overlay(&mut self) {
         self.palette = None;
         self.dialog = None;
@@ -1485,6 +1495,7 @@ impl AppState {
         self.provider_picker = None;
         self.approval = None;
         self.agents_overlay = None;
+        self.context_overlay = None;
         self.focus = self.focus_after_modal();
     }
 
@@ -1567,6 +1578,24 @@ impl AppState {
         if let Ok(Some(plan)) = aleph_protocol::plan::snapshot_from_tool_output(output) {
             self.plan = Some(plan);
         }
+    }
+
+    /// Open the `/context` overlay on a freshly fetched breakdown, reconciled
+    /// against this session's live gauge.
+    pub fn open_context_overlay(&mut self, breakdown: &aleph_protocol::ContextBreakdown) {
+        self.context_overlay = Some(ContextView::new(breakdown, self.context_gauge));
+        self.focus = Focus::Context;
+    }
+
+    /// Scroll the `/context` layer list. `delta` is in rows; the clamp is
+    /// against the row count rather than the screen, because the widget is the
+    /// only thing that knows how tall it got to be.
+    pub fn context_scroll(&mut self, delta: isize) {
+        let Some(view) = &mut self.context_overlay else {
+            return;
+        };
+        let max = view.rows.rows.len().saturating_sub(1);
+        view.scroll = view.scroll.saturating_add_signed(delta).min(max);
     }
 
     /// Open the `/agents` overlay in list mode.

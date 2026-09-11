@@ -94,7 +94,21 @@ fn handle_key_event(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
         Focus::Approval => handle_approval_key(state, key),
         Focus::Btw => handle_btw_key(state, key),
         Focus::Agents => handle_agents_key(state, key),
+        Focus::Context => handle_context_key(state, key),
     }
+}
+
+/// Keys for the `/context` overlay: a report, so the only verbs are scroll
+/// and close. Esc is handled globally (`Action::CloseOverlay`).
+fn handle_context_key(state: &mut AppState, key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Up => state.context_scroll(-1),
+        KeyCode::Down => state.context_scroll(1),
+        KeyCode::PageUp => state.context_scroll(-10),
+        KeyCode::PageDown => state.context_scroll(10),
+        _ => {}
+    }
+    Action::None
 }
 
 /// Handle key events when the `/agents` overlay is focused. Two modes share
@@ -297,10 +311,13 @@ fn handle_global_key(
             return Some(Action::AgentsBack);
         }
         // The session and provider pickers are local too: nothing on the server
-        // is parked on either, and neither has sent anything until Enter.
+        // is parked on any of them, and neither has sent anything until Enter.
+        // The context overlay is a finished report — closing it discards
+        // nothing that is not one `/context` away.
         if state.palette.is_some()
             || state.session_picker.is_some()
             || state.provider_picker.is_some()
+            || state.context_overlay.is_some()
         {
             return Some(Action::CloseOverlay);
         }
@@ -1806,6 +1823,54 @@ mod mouse_tests {
         assert!(matches!(
             route(&mut s, &key(KeyCode::End, KeyModifiers::CONTROL)),
             Action::ScrollToBottom
+        ));
+    }
+
+    /// The two keys the `/context` overlay's own hint line advertises do what
+    /// it says, through the real router — a scroll that moves and an Esc that
+    /// closes.
+    ///
+    /// Reddens if `Focus::Context` is not routed (the arrows would fall
+    /// through to the transcript and the overlay would be frozen), or if Esc
+    /// stops reaching `close_overlay` and leaves a report no key can dismiss.
+    #[test]
+    fn the_context_overlay_scrolls_and_closes() {
+        let mut s = state();
+        s.open_context_overlay(&aleph_protocol::ContextBreakdown {
+            session_key: "agent:main".into(),
+            turn: 1,
+            layers: (0..6)
+                .map(|i| aleph_protocol::context_breakdown::LayerSizeView {
+                    name: format!("layer{i}"),
+                    bytes: 100,
+                    tokens: 10,
+                    zone: "stable".into(),
+                })
+                .collect(),
+            tools: Vec::new(),
+            messages_tokens: None,
+            provider_reported: None,
+            context_window: None,
+            dynamic_bytes_sent: None,
+        });
+        assert_eq!(s.focus, Focus::Context);
+
+        route(&mut s, &key(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            s.context_overlay.as_ref().map(|v| v.scroll),
+            Some(1),
+            "↓ must move the layer list"
+        );
+        route(&mut s, &key(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(
+            s.context_overlay.as_ref().map(|v| v.scroll),
+            Some(0),
+            "PgUp must clamp at the top rather than wrap"
+        );
+
+        assert!(matches!(
+            route(&mut s, &key(KeyCode::Esc, KeyModifiers::NONE)),
+            Action::CloseOverlay
         ));
     }
 }
