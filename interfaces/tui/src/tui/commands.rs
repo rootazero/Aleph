@@ -413,6 +413,38 @@ pub(super) async fn execute_local_command(
             };
             state.add_system_message(notice.to_string());
         }
+        LocalCommand::Theme { name } => {
+            use crate::tui::theme::{current_preset, palette, set_preset, Preset};
+            let notice = match name {
+                None => {
+                    let depth = if palette().is_rgb() {
+                        "24-bit"
+                    } else {
+                        "16-colour (set COLORTERM=truecolor if your terminal supports it)"
+                    };
+                    format!(
+                        "Theme: {} \u{00b7} {depth}\nChoices: {}\nALEPH_TUI_THEME=<name> makes it stick across runs.",
+                        current_preset().name(),
+                        Preset::choices(),
+                    )
+                }
+                Some(requested) => match Preset::parse(&requested) {
+                    Some(preset) => {
+                        set_preset(preset);
+                        state.invalidate_rendered_lines();
+                        format!("Theme: {}", preset.name())
+                    }
+                    // Naming what was asked for, not just the choices: the
+                    // failure this guards against is a typo that silently
+                    // leaves the old theme up and reads as "it did nothing".
+                    None => format!(
+                        "No theme called {requested:?}. Choices: {}",
+                        Preset::choices()
+                    ),
+                },
+            };
+            state.add_system_message(notice);
+        }
     }
 }
 
@@ -879,7 +911,11 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mapped: Vec<app::ChatMessage> = rows.iter().filter_map(history_message_from_json).collect();
+    let mapped: Vec<app::TranscriptEntry> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, v)| history_message_from_json(idx, v))
+        .collect();
 
     // The server's copy is in hand, so it is now safe to drop what was on
     // screen. Doing this before the call — the obvious place — turns a
@@ -1044,27 +1080,40 @@ fn active_run_from_history(result: &Value) -> Option<Option<app::ActiveRunJoin>>
     Some(Some(app::ActiveRunJoin { run_id, elapsed_ms }))
 }
 
-/// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
-/// Map one `chat.history` row (`{role, content, timestamp}`) into a `ChatMessage`.
-fn history_message_from_json(v: &Value) -> Option<app::ChatMessage> {
+/// Map one `chat.history` row (`{role, content, timestamp}`) into a transcript
+/// entry.
+///
+/// `idx` only supplies the entry id, which for a history row need only be
+/// stable within the loaded batch — the ids that have to mean something across
+/// clients belong to tool rows, and those come from the call id.
+///
+/// History carries no tool calls; `trace.by_runs` is the surface that replays
+/// those, and it has no client yet (Phase A shipped it with none). A restored
+/// transcript is therefore text-only, which is what this client showed before
+/// as well.
+fn history_message_from_json(idx: usize, v: &Value) -> Option<app::TranscriptEntry> {
     let role = v.get("role").and_then(Value::as_str).unwrap_or("");
     let content = v
         .get("content")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let id = format!("h{idx}");
     match role {
-        "user" => Some(app::ChatMessage::User {
-            content,
-            timestamp: app::row_timestamp(v.get("timestamp").and_then(Value::as_str)),
+        "user" => Some(app::TranscriptEntry::UserText {
+            id,
+            text: content,
+            at_ms: u64::try_from(
+                app::row_timestamp(v.get("timestamp").and_then(Value::as_str)).timestamp_millis(),
+            )
+            .ok(),
         }),
-        "assistant" => Some(app::ChatMessage::Assistant {
-            content,
-            tools: Vec::new(),
-            reasoning: None,
-            is_streaming: false,
+        "assistant" => Some(app::TranscriptEntry::AssistantText {
+            id,
+            markdown: content,
+            streaming: false,
         }),
-        "system" => Some(app::ChatMessage::System { content }),
+        "system" => Some(app::TranscriptEntry::SystemNotice { id, text: content }),
         _ => None,
     }
 }
@@ -1426,29 +1475,43 @@ const fn app_knob(knob: SlashKnob) -> app::SessionKnob {
 /// Return a clone of the last User message's content, if any.
 fn last_user_message(state: &AppState) -> Option<String> {
     state.messages.iter().rev().find_map(|m| match m {
-        app::ChatMessage::User { content, .. } => Some(content.clone()),
+        app::TranscriptEntry::UserText { text, .. } => Some(text.clone()),
         _ => None,
     })
 }
 
-/// Locally pop the last user+assistant pair from chat history, after a successful
-/// server-side truncate. Keeps the TUI in sync without a full reload round-trip.
+/// Locally pop the last user+assistant turn from chat history, after a
+/// successful server-side truncate. Keeps the TUI in sync without a full
+/// reload round-trip.
+///
+/// # Why this counts back to a user message instead of popping two entries
+///
+/// A turn is no longer two entries. Since tool rows and reasoning became peers
+/// of the text, one assistant turn is however many entries it produced — text,
+/// a tool row, more text — so "pop the assistant, pop the user" would strip a
+/// fragment of the turn and leave the rest of it orphaned above a user message
+/// that is no longer there.
+///
+/// Everything after the last `UserText` is that user message's turn, so the
+/// boundary is found rather than counted.
 fn pop_last_turn_locally(state: &mut AppState) {
-    // Drop trailing system messages first (they may have been added after the turn).
-    while matches!(state.messages.last(), Some(app::ChatMessage::System { .. })) {
-        state.messages.pop();
-    }
-    // Drop the trailing assistant turn (if any)…
-    if matches!(
-        state.messages.last(),
-        Some(app::ChatMessage::Assistant { .. })
-    ) {
-        state.messages.pop();
-    }
-    // …and the preceding user message.
-    if matches!(state.messages.last(), Some(app::ChatMessage::User { .. })) {
-        state.messages.pop();
-    }
+    let last_user = state
+        .messages
+        .iter()
+        .rposition(|m| matches!(m, app::TranscriptEntry::UserText { .. }));
+    let Some(at) = last_user else {
+        // No user message to unwind to: only trailing notices can be dropped,
+        // and dropping the whole transcript would be a far bigger edit than
+        // the undo the user asked for.
+        while matches!(
+            state.messages.last(),
+            Some(app::TranscriptEntry::SystemNotice { .. })
+        ) {
+            state.messages.pop();
+        }
+        return;
+    };
+    state.messages.truncate(at);
 }
 
 fn format_replay_list(page: &AgentTraceListPage) -> String {
@@ -1959,7 +2022,7 @@ mod active_run_tests {
 #[cfg(test)]
 mod attach_mode_tests {
     use super::{apply_history, AttachMode};
-    use crate::tui::app::{AppState, ChatMessage};
+    use crate::tui::app::{AppState, TranscriptEntry};
     use serde_json::json;
 
     fn user_rows(state: &AppState) -> Vec<&str> {
@@ -1967,7 +2030,7 @@ mod attach_mode_tests {
             .messages
             .iter()
             .filter_map(|m| match m {
-                ChatMessage::User { content, .. } => Some(content.as_str()),
+                TranscriptEntry::UserText { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect()
@@ -1989,9 +2052,10 @@ mod attach_mode_tests {
     #[test]
     fn an_appending_attach_keeps_what_the_caller_prepared() {
         let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
-        state.messages.push(ChatMessage::User {
-            content: "prepared by the caller".into(),
-            timestamp: crate::tui::app::row_timestamp(None),
+        state.messages.push(TranscriptEntry::UserText {
+            id: "t1".into(),
+            text: "prepared by the caller".into(),
+            at_ms: None,
         });
 
         apply_history(
@@ -2012,9 +2076,10 @@ mod attach_mode_tests {
     #[test]
     fn a_replacing_attach_swaps_in_the_servers_copy() {
         let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
-        state.messages.push(ChatMessage::User {
-            content: "stale, from before the drop".into(),
-            timestamp: crate::tui::app::row_timestamp(None),
+        state.messages.push(TranscriptEntry::UserText {
+            id: "t1".into(),
+            text: "stale, from before the drop".into(),
+            at_ms: None,
         });
 
         apply_history(
@@ -2218,7 +2283,7 @@ mod side_run_verdict_tests {
 #[cfg(test)]
 mod last_run_face_tests {
     use super::{apply_history, last_run_mark, session_entry_from_json, AttachMode};
-    use crate::tui::app::{AppState, ChatMessage};
+    use crate::tui::app::{AppState, TranscriptEntry};
     use aleph_protocol::{
         DanglingCallView, LastRunState, RunProgressView, SessionListRow, SessionSnapshot,
     };
@@ -2229,7 +2294,7 @@ mod last_run_face_tests {
             .messages
             .iter()
             .filter_map(|m| match m {
-                ChatMessage::System { content } => Some(content.clone()),
+                TranscriptEntry::SystemNotice { text, .. } => Some(text.clone()),
                 _ => None,
             })
             .collect()

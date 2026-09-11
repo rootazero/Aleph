@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use crate::tui::btw_overlay::BtwOverlay;
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
 /// Spinner frames, matching the status bar's cadence.
 const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
@@ -106,7 +106,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.border_focused))
+        .border_style(Style::default().fg(theme().border_focused))
         .title(title(overlay));
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
@@ -130,7 +130,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
         Paragraph::new(Line::from(Span::styled(
             question,
             Style::default()
-                .fg(DEFAULT_THEME.user)
+                .fg(theme().user)
                 .add_modifier(Modifier::BOLD),
         )))
         .wrap(Wrap { trim: true }),
@@ -140,7 +140,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             status,
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         ))),
         chunks.get(1).copied().unwrap_or_default(),
     );
@@ -156,9 +156,9 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
     );
 
     let composer_style = if overlay.composing {
-        Style::default().fg(DEFAULT_THEME.primary)
+        Style::default().fg(theme().primary)
     } else {
-        Style::default().fg(DEFAULT_THEME.muted)
+        Style::default().fg(theme().muted)
     };
     let composer = if overlay.composing {
         format!("> {}\u{2588}", overlay.composer)
@@ -173,7 +173,7 @@ pub fn render_btw_panel(frame: &mut Frame, overlay: &BtwOverlay, spinner_frame: 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             legend(overlay),
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         ))),
         chunks.get(4).copied().unwrap_or_default(),
     );

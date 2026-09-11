@@ -6,13 +6,12 @@
 use std::time::{Duration, Instant};
 
 use aleph_protocol::terminate::{self, UiLocale};
-use aleph_protocol::{
-    peer_message_is_renderable, summarize_tool_input, AgentTracePresentationPreset,
-    AgentTraceToolResult, AskUserQuestion, StreamEvent,
-};
+use aleph_protocol::{peer_message_is_renderable, AskUserQuestion, StreamEvent};
 
 use super::super::slash::ToolProgressMode;
-use super::{row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView, ChatMessage};
+use super::{
+    row_timestamp, Action, ActiveRunJoin, AppState, AskDialogView, RowBody, TranscriptEntry,
+};
 
 /// Bound on how many `(run_id, session_key)` pairs [`AppState`] remembers,
 /// learned one per `RunAccepted`. A background/cron/subagent-heavy install
@@ -387,13 +386,7 @@ impl AppState {
             }
 
             StreamEvent::Reasoning { content, .. } => {
-                self.ensure_assistant_message();
-                if let ChatMessage::Assistant { reasoning, .. } = self.current_assistant_mut() {
-                    match reasoning {
-                        Some(existing) => existing.push_str(&content),
-                        None => *reasoning = Some(content),
-                    }
-                }
+                self.append_reasoning_chunk(&content);
                 Action::ScrollToBottomIfAutoScroll
             }
 
@@ -409,11 +402,7 @@ impl AppState {
                 if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
-                self.start_tool_execution(
-                    tool_id,
-                    tool_name,
-                    summarize_tool_input(&params, AgentTracePresentationPreset::TuiDebug.options()),
-                );
+                self.start_tool_execution(tool_id, tool_name, &params);
                 Action::ScrollToBottomIfAutoScroll
             }
 
@@ -426,8 +415,11 @@ impl AppState {
                     ToolProgressMode::Off | ToolProgressMode::New => return Action::None,
                     ToolProgressMode::All | ToolProgressMode::Verbose => {}
                 }
-                if let Some(tool) = self.find_tool_mut(&tool_id) {
-                    tool.progress = Some(progress);
+                // A progress line IS the row's body while it runs: the result
+                // replaces it on `finish`, so there is no second field holding
+                // a caption that outlives the call it described.
+                if let Some(row) = self.find_tool_mut(&tool_id) {
+                    row.body = RowBody::Text(progress);
                 }
                 Action::ScrollToBottomIfAutoScroll
             }
@@ -449,14 +441,16 @@ impl AppState {
                 // state and no-ops on an unknown id.
                 //
                 // `ToolStart` stays gated: `start_tool_execution` RESETS a row
-                // to Running and clears its duration/error, so an out-of-order
-                // arrival would un-complete a finished tool — and the trace
-                // mirror's `summarize_tool_input` params render better than the
-                // raw ones here.
+                // to Pending/Running and drops its result, so an out-of-order
+                // arrival would un-complete a finished tool.
                 // Live plan projection BEFORE the display-mode gate: `/tools
                 // off` hides tool rows, not the todo panel. The frame carries
                 // no tool name; the row learned it at ToolStart.
-                let output_value = serde_json::json!(result.output);
+                //
+                // Cloned, not moved out of `result`: the whole frame is handed
+                // to `finish_tool_execution` below because it is the carrier of
+                // `presentation`.
+                let output_value = serde_json::json!(result.output.clone());
                 if result.success {
                     if let Some(name) = self.tool_name_of(&tool_id) {
                         self.maybe_apply_plan_from_tool(&name, &output_value);
@@ -465,16 +459,11 @@ impl AppState {
                 if matches!(self.tool_progress_mode, ToolProgressMode::Off) {
                     return Action::None;
                 }
-                let result = if result.success {
-                    AgentTraceToolResult::Success {
-                        output: output_value,
-                    }
-                } else {
-                    AgentTraceToolResult::Error {
-                        error: result.error.unwrap_or_default(),
-                        retryable: false,
-                    }
-                };
+                // Passed straight through rather than re-wrapped: this frame IS
+                // the wire `ToolResult`, `presentation` and all. Converting it
+                // to the trace's own result shape here is what used to drop the
+                // structured diff on this path — the authoritative one — while
+                // the lossy mirror carried it.
                 self.finish_tool_execution(&tool_id, &result, duration_ms);
                 Action::ScrollToBottomIfAutoScroll
             }
@@ -652,9 +641,11 @@ impl AppState {
                 if !peer_message_is_renderable(&author_user_id, self.my_user_id.as_deref()) {
                     return Action::None;
                 }
-                let row = ChatMessage::User {
-                    content,
-                    timestamp: row_timestamp(Some(&timestamp)),
+                let id = self.next_entry_id();
+                let row = TranscriptEntry::UserText {
+                    id,
+                    text: content,
+                    at_ms: u64::try_from(row_timestamp(Some(&timestamp)).timestamp_millis()).ok(),
                 };
                 // Placed BEFORE a bubble that is still streaming. The peer's
                 // run may have opened its assistant message already, and a
@@ -662,8 +653,8 @@ impl AppState {
                 // it. Anything settled stays above, so this only ever moves the
                 // row past the one bubble that is still being written.
                 match self.messages.last() {
-                    Some(ChatMessage::Assistant {
-                        is_streaming: true, ..
+                    Some(TranscriptEntry::AssistantText {
+                        streaming: true, ..
                     }) => {
                         let at = self.messages.len() - 1;
                         self.messages.insert(at, row);

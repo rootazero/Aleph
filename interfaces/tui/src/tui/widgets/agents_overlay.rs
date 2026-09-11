@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use crate::tui::app::{agent_display_order, AgentsOverlayState, AppState};
-use crate::tui::theme::{DEFAULT_THEME, SPINNER_FRAMES};
+use crate::tui::theme::{spinner_at, theme};
 
 use super::agents_panel::{agent_row_text, lifecycle_glyph, lifecycle_style};
 
@@ -46,7 +46,7 @@ fn render_list(frame: &mut Frame, state: &AppState, overlay: &AgentsOverlayState
     frame.render_widget(Clear, overlay_rect);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.border_focused))
+        .border_style(Style::default().fg(theme().border_focused))
         .title(" Agents ");
     let inner = block.inner(overlay_rect);
     frame.render_widget(block, overlay_rect);
@@ -58,7 +58,7 @@ fn render_list(frame: &mut Frame, state: &AppState, overlay: &AgentsOverlayState
     if ordered.is_empty() {
         lines.push(Line::from(Span::styled(
             "  (no sub-agents in this session yet)",
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         )));
     } else {
         // Clamped centered window over the rows (codex/pi list idiom).
@@ -68,10 +68,7 @@ fn render_list(frame: &mut Frame, state: &AppState, overlay: &AgentsOverlayState
             .saturating_sub(max_visible / 2)
             .min(ordered.len().saturating_sub(max_visible.max(1)));
         let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
-        let spinner = SPINNER_FRAMES
-            .get(state.spinner_frame % SPINNER_FRAMES.len())
-            .copied()
-            .unwrap_or("\u{25cf}");
+        let spinner = spinner_at(state.spinner_frame).to_string();
         for (row, node) in ordered
             .iter()
             .enumerate()
@@ -80,7 +77,7 @@ fn render_list(frame: &mut Frame, state: &AppState, overlay: &AgentsOverlayState
         {
             let is_selected = row == selected;
             let glyph = if node.lifecycle == NodeLifecycle::Running {
-                spinner
+                spinner.as_str()
             } else {
                 lifecycle_glyph(node.lifecycle)
             };
@@ -88,19 +85,19 @@ fn render_list(frame: &mut Frame, state: &AppState, overlay: &AgentsOverlayState
             let text = format!("{indicator}{glyph} {}", agent_row_text(node, now_ms));
             let style = if is_selected {
                 Style::default()
-                    .fg(DEFAULT_THEME.primary)
+                    .fg(theme().primary)
                     .add_modifier(Modifier::BOLD)
             } else if node.lifecycle == NodeLifecycle::Running {
                 lifecycle_style(NodeLifecycle::Running)
             } else {
-                Style::default().fg(DEFAULT_THEME.muted)
+                Style::default().fg(theme().muted)
             };
             lines.push(Line::from(Span::styled(text, style)));
         }
     }
     lines.push(Line::from(Span::styled(
         " \u{2191}\u{2193} select \u{00b7} enter view \u{00b7} esc back",
-        Style::default().fg(DEFAULT_THEME.muted),
+        Style::default().fg(theme().muted),
     )));
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -121,7 +118,7 @@ fn render_detail(frame: &mut Frame, detail: &crate::tui::app::AgentDetailState, 
     let title = format!(" Agent \u{00b7} {} ", clamp_chars(&detail.title, 60));
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.border_focused))
+        .border_style(Style::default().fg(theme().border_focused))
         .title(title);
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
@@ -158,7 +155,7 @@ fn render_detail(frame: &mut Frame, detail: &crate::tui::app::AgentDetailState, 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             " \u{2191}\u{2193}/PgUp/PgDn scroll \u{00b7} esc back",
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         ))),
         hint_area,
     );
@@ -170,11 +167,11 @@ fn detail_line_span(line: &str) -> Span<'_> {
         Span::styled(
             line,
             Style::default()
-                .fg(DEFAULT_THEME.heading)
+                .fg(theme().heading)
                 .add_modifier(Modifier::BOLD),
         )
     } else if line.starts_with("  \u{00b7}") {
-        Span::styled(line, Style::default().fg(DEFAULT_THEME.muted))
+        Span::styled(line, Style::default().fg(theme().muted))
     } else {
         Span::raw(line)
     }

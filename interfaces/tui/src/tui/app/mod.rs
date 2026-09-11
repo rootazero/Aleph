@@ -148,59 +148,39 @@ pub enum Focus {
 }
 
 // ---------------------------------------------------------------------------
-// Tool execution tracking
+// Transcript
 // ---------------------------------------------------------------------------
 
-/// Current status of a tool execution.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolStatus {
-    Running,
-    Success,
-    Failed,
-    /// The run ended without a terminal result ever reaching this row.
-    ///
-    /// Live tool frames ride the deliberately-lossy `agent_trace` mirror
-    /// (bounded mpsc + `try_send`), so a busy run can drop a
-    /// `ToolCallCompleted`. `RunComplete` reconciles against the authoritative
-    /// `summary.tool_summaries`; anything still `Running` after that had no
-    /// authoritative record either. Render it as unknown rather than guessing
-    /// success — a spinner that never stops reads as "still working", which is
-    /// the one thing it definitely is not.
-    Unknown,
-}
+/// The transcript is a flat, chronological list of
+/// [`shared_ui_logic::transcript::TranscriptEntry`].
+///
+/// # What replaced what, and why the shape had to change
+///
+/// This crate used to hold `ChatMessage::{User, Assistant, System}` with the
+/// turn's tool calls nested inside `Assistant { tools: Vec<ToolExecution> }`.
+/// Nesting is what made interleaving impossible: a tool could only ever be
+/// drawn with its assistant message, so every tool call in a turn rendered
+/// above all of that turn's text no matter when it actually ran. Tool rows are
+/// peers here, appended when they happen.
+///
+/// `ToolExecution` / `ToolStatus` are gone with it, replaced by the shared
+/// `ToolRow` / `RowStatus` the Panel will paint from too. The one piece of
+/// `ToolStatus` worth restating is its `Unknown`: live tool frames ride the
+/// deliberately-lossy `agent_trace` mirror (bounded mpsc + `try_send`), so a
+/// busy run can drop a `ToolCallCompleted`; `RunComplete` reconciles against
+/// the authoritative `summary.tool_summaries`, and anything still `Running`
+/// after that had no authoritative record either. That is now
+/// `RowStatus::Pending` by way of [`ToolRow::settle_resumed`], which carries
+/// the same rule — never a spinner that turns forever, never a fabricated
+/// success.
+///
+/// `ToolExecution::progress` has no separate home: a progress line IS the body
+/// of a running row, and the result replaces it on `finish`.
+pub use shared_ui_logic::transcript::{RowBody, RowStatus, ToolRow, TranscriptEntry};
 
-/// State of a single tool execution within an assistant message.
-#[derive(Debug, Clone)]
-pub struct ToolExecution {
-    pub id: String,
-    pub name: String,
-    pub params: String,
-    pub status: ToolStatus,
-    pub duration: Option<Duration>,
-    pub progress: Option<String>,
-    pub error: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Chat messages
-// ---------------------------------------------------------------------------
-
-/// A single message in the chat history.
-#[derive(Debug, Clone)]
-pub enum ChatMessage {
-    User {
-        content: String,
-        timestamp: DateTime<Utc>,
-    },
-    Assistant {
-        content: String,
-        tools: Vec<ToolExecution>,
-        reasoning: Option<String>,
-        is_streaming: bool,
-    },
-    System {
-        content: String,
-    },
+/// Unix ms, for the entry timestamps the shared model carries as `Option<u64>`.
+fn as_ms(t: DateTime<Utc>) -> Option<u64> {
+    u64::try_from(t.timestamp_millis()).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +717,9 @@ pub(super) fn row_timestamp(raw: Option<&str>) -> DateTime<Utc> {
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
-    pub messages: Vec<ChatMessage>,
+    pub messages: Vec<TranscriptEntry>,
+    /// Monotonic source of ids for text entries (tool rows use their call id).
+    entry_seq: u64,
     pub scroll_offset: usize,
     pub auto_scroll: bool,
 
@@ -1009,7 +991,11 @@ impl AppState {
             "Welcome to Aleph CLI. {session_line} | Model: {model_name}. Type /help for commands."
         );
         Self {
-            messages: vec![ChatMessage::System { content: welcome }],
+            messages: vec![TranscriptEntry::SystemNotice {
+                id: "e0".into(),
+                text: welcome,
+            }],
+            entry_seq: 0,
             scroll_offset: 0,
             auto_scroll: true,
 
@@ -1070,11 +1056,31 @@ impl AppState {
 
     // -- Message helpers ------------------------------------------------
 
+    /// Wall clock in unix ms, the unit every shared transcript stamp uses.
+    ///
+    /// `ToolRow` timestamps are durations-in-waiting: `start` records one and
+    /// `finish` is handed the pair, so the two must come from the same clock.
+    /// A pre-1970 clock (or one far enough forward to overflow) yields 0
+    /// rather than a panic — a zero duration is wrong, a crashed TUI is worse,
+    /// and `fmt_duration_ms` renders it as `0.0s` rather than inventing one.
+    pub(super) fn now_ms(&self) -> u64 {
+        u64::try_from(Utc::now().timestamp_millis()).unwrap_or(0)
+    }
+
+    /// A fresh id for a text entry. Tool rows use their `tool_call_id`
+    /// instead, which is what [`Self::find_tool_mut`] addresses them by.
+    pub(super) fn next_entry_id(&mut self) -> String {
+        self.entry_seq += 1;
+        format!("e{}", self.entry_seq)
+    }
+
     /// Add a user message to the chat history.
     pub fn add_user_message(&mut self, content: String) {
-        self.messages.push(ChatMessage::User {
-            content,
-            timestamp: Utc::now(),
+        let id = self.next_entry_id();
+        self.messages.push(TranscriptEntry::UserText {
+            id,
+            text: content,
+            at_ms: as_ms(Utc::now()),
         });
         if self.auto_scroll {
             self.scroll_offset = 0;
@@ -1083,39 +1089,40 @@ impl AppState {
 
     /// Add a system message to the chat history.
     pub fn add_system_message(&mut self, content: String) {
-        self.messages.push(ChatMessage::System { content });
+        let id = self.next_entry_id();
+        self.messages
+            .push(TranscriptEntry::SystemNotice { id, text: content });
         if self.auto_scroll {
             self.scroll_offset = 0;
         }
     }
 
-    /// Ensure the last message is an assistant message. If the last message
-    /// is not an assistant message (or there are no messages), appends a new
-    /// empty assistant message. This is idempotent: calling it twice in a row
-    /// will not create a second empty assistant message.
+    /// Ensure the **last** entry is assistant text, appending an empty one if
+    /// it is not.
+    ///
+    /// "Last", not "last assistant entry anywhere": that distinction is the
+    /// whole interleaving change. Text, then a tool, then more text has to
+    /// become three entries in that order — resuming the pre-tool block would
+    /// put the second half of the turn above the tool that produced it.
     pub fn ensure_assistant_message(&mut self) {
-        if !matches!(self.messages.last(), Some(ChatMessage::Assistant { .. })) {
-            self.messages.push(ChatMessage::Assistant {
-                content: String::new(),
-                tools: Vec::new(),
-                reasoning: None,
-                is_streaming: true,
+        if !matches!(
+            self.messages.last(),
+            Some(TranscriptEntry::AssistantText { .. })
+        ) {
+            let id = self.next_entry_id();
+            self.messages.push(TranscriptEntry::AssistantText {
+                id,
+                markdown: String::new(),
+                streaming: true,
             });
         }
     }
 
-    /// Return a mutable reference to the last assistant message.
-    /// If none exists, defensively creates one first.
-    pub fn current_assistant_mut(&mut self) -> &mut ChatMessage {
+    /// The trailing assistant-text entry, created if the tail is something
+    /// else.
+    pub fn current_assistant_mut(&mut self) -> &mut TranscriptEntry {
         self.ensure_assistant_message();
-        // `ensure_assistant_message` guarantees an assistant message exists,
-        // so the search from the end always succeeds. Resolve the index with an
-        // immutable borrow first to avoid a double mutable borrow of `messages`.
-        let idx = self
-            .messages
-            .iter()
-            .rposition(|m| matches!(m, ChatMessage::Assistant { .. }))
-            .unwrap_or_else(|| self.messages.len().saturating_sub(1));
+        let idx = self.messages.len().saturating_sub(1);
         &mut self.messages[idx]
     }
 
@@ -1123,27 +1130,22 @@ impl AppState {
     /// Read-only sibling of [`Self::find_tool_mut`], for consumers that need
     /// to identify a tool from a frame that carries only its id (`ToolEnd`).
     pub(super) fn tool_name_of(&self, tool_id: &str) -> Option<String> {
-        for msg in self.messages.iter().rev() {
-            if let ChatMessage::Assistant { tools, .. } = msg {
-                return tools
-                    .iter()
-                    .find(|t| t.id == tool_id)
-                    .map(|t| t.name.clone());
-            }
-        }
-        None
+        self.messages.iter().rev().find_map(|m| match m {
+            TranscriptEntry::Tool(row) if row.id == tool_id => Some(row.tool.clone()),
+            _ => None,
+        })
     }
 
-    /// Find a tool execution by `tool_id` in the last assistant message.
-    /// Returns None if not found or last message is not assistant.
-    pub fn find_tool_mut(&mut self, tool_id: &str) -> Option<&mut ToolExecution> {
-        // Search from the end to find the most recent assistant message
-        for msg in self.messages.iter_mut().rev() {
-            if let ChatMessage::Assistant { tools, .. } = msg {
-                return tools.iter_mut().find(|t| t.id == tool_id);
-            }
-        }
-        None
+    /// Find a tool row by `tool_call_id`, newest first.
+    ///
+    /// Scans the whole transcript rather than one message's tool list: rows are
+    /// peers now, and a late `ToolEnd` for a call from an earlier turn still
+    /// has to land on its own row instead of silently no-opping.
+    pub fn find_tool_mut(&mut self, tool_id: &str) -> Option<&mut ToolRow> {
+        self.messages.iter_mut().rev().find_map(|m| match m {
+            TranscriptEntry::Tool(row) if row.id == tool_id => Some(row),
+            _ => None,
+        })
     }
 
     // -- Scrolling ------------------------------------------------------
@@ -1923,6 +1925,17 @@ impl AppState {
     }
 
     /// Clear the chat screen (keep session state).
+    /// Throw away every rendered line, keeping the messages.
+    ///
+    /// Rendered `Line`s carry their `Style` — the colour is baked in at build
+    /// time — so anything that changes what a colour MEANS has to drop the
+    /// cache or the transcript keeps the old palette above the switch point
+    /// and the new one below it. `/theme` is the only such event today; a
+    /// width change already invalidates through the entry's own `width`.
+    pub fn invalidate_rendered_lines(&mut self) {
+        self.chat_line_cache = crate::tui::widgets::chat_area::LineCache::default();
+    }
+
     pub fn clear_screen(&mut self) {
         self.messages.clear();
         // The cache is keyed by positional index into `messages`, which is

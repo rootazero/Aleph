@@ -5,6 +5,52 @@ use aleph_protocol::{
     AgentTraceEvent, AgentTraceReplay, AgentTraceSessionOutcome, AgentTraceTextKind,
     SessionSnapshot, StreamEvent,
 };
+use serde_json::json;
+
+/// Everything the transcript holds as reasoning, joined.
+///
+/// Reasoning is its own chronological entry now rather than a field on the
+/// assistant message, so a test that used to read `Assistant { reasoning }`
+/// asks the transcript instead. Joining is right rather than a convenience:
+/// the projection appends into the trailing reasoning entry, so a turn's
+/// reasoning is one entry unless something ran in between — and if something
+/// did, these assertions are about the text, not the split.
+fn reasoning_text(state: &AppState) -> Option<String> {
+    let parts: Vec<&str> = state
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            TranscriptEntry::Reasoning { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n"))
+}
+
+/// Every assistant text entry, joined the way a reader sees them.
+fn assistant_text(state: &AppState) -> String {
+    state
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            TranscriptEntry::AssistantText { markdown, .. } => Some(markdown.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Every tool row, in transcript order.
+fn tool_rows(state: &AppState) -> Vec<&ToolRow> {
+    state
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            TranscriptEntry::Tool(row) => Some(row),
+            _ => None,
+        })
+        .collect()
+}
 
 /// The lead-in and the label have to move together — a localised label under an
 /// English lead-in is a sentence in neither language.
@@ -43,7 +89,7 @@ fn a_capped_run_names_the_cap_under_the_umbrella_token() {
         .messages
         .iter()
         .filter_map(|m| match m {
-            ChatMessage::System { content } => Some(content.clone()),
+            TranscriptEntry::SystemNotice { text: content, .. } => Some(content.clone()),
             _ => None,
         })
         .find(|c| c.contains("stopped") || c.contains("已停止"))
@@ -76,7 +122,7 @@ fn a_clean_run_leaves_no_halt_line() {
     });
     assert!(
         !state.messages[before..].iter().any(
-            |m| matches!(m, ChatMessage::System { content } if content.contains("stopped")
+            |m| matches!(m, TranscriptEntry::SystemNotice { text: content, .. } if content.contains("stopped")
                 || content.contains("已停止"))
         ),
         "a clean finish must not be badged",
@@ -88,7 +134,7 @@ fn new_state_has_welcome_message() {
     let state = AppState::new("test-session".into(), "claude-3".into());
     assert_eq!(state.messages.len(), 1);
     match &state.messages[0] {
-        ChatMessage::System { content } => {
+        TranscriptEntry::SystemNotice { text: content, .. } => {
             assert!(content.contains("test-session"));
             assert!(content.contains("claude-3"));
         }
@@ -174,8 +220,8 @@ fn ensure_assistant_message_creates_one() {
     assert_eq!(state.messages.len(), 2);
     assert!(matches!(
         state.messages[1],
-        ChatMessage::Assistant {
-            is_streaming: true,
+        TranscriptEntry::AssistantText {
+            streaming: true,
             ..
         }
     ));
@@ -198,7 +244,7 @@ fn add_user_message_appended() {
     state.add_user_message("hello".into());
     assert_eq!(state.messages.len(), 2);
     match &state.messages[1] {
-        ChatMessage::User { content, .. } => assert_eq!(content, "hello"),
+        TranscriptEntry::UserText { text: content, .. } => assert_eq!(content, "hello"),
         other => panic!("Expected User message, got: {other:?}"),
     }
 }
@@ -207,30 +253,16 @@ fn add_user_message_appended() {
 fn find_tool_mut_returns_correct_tool() {
     let mut state = AppState::new("s".into(), "m".into());
     state.ensure_assistant_message();
-    if let ChatMessage::Assistant { tools, .. } = state.current_assistant_mut() {
-        tools.push(ToolExecution {
-            id: "tool-1".into(),
-            name: "bash".into(),
-            params: "ls".into(),
-            status: ToolStatus::Running,
-            duration: None,
-            progress: None,
-            error: None,
-        });
-        tools.push(ToolExecution {
-            id: "tool-2".into(),
-            name: "read".into(),
-            params: "file.txt".into(),
-            status: ToolStatus::Running,
-            duration: None,
-            progress: None,
-            error: None,
-        });
-    }
+    state.start_tool_execution("tool-1".into(), "shell".into(), &json!({"command": "ls"}));
+    state.start_tool_execution(
+        "tool-2".into(),
+        "file_read".into(),
+        &json!({"path": "file.txt"}),
+    );
 
     let tool = state.find_tool_mut("tool-2");
     assert!(tool.is_some());
-    assert_eq!(tool.unwrap().name, "read");
+    assert_eq!(tool.unwrap().tool, "file_read");
 
     let missing = state.find_tool_mut("tool-999");
     assert!(missing.is_none());
@@ -375,7 +407,7 @@ fn switch_session_clears_messages() {
     // Should have 1 message: the switch notification
     assert_eq!(state.messages.len(), 1);
     match &state.messages[0] {
-        ChatMessage::System { content } => assert!(content.contains("s2")),
+        TranscriptEntry::SystemNotice { text: content, .. } => assert!(content.contains("s2")),
         other => panic!("Expected System message, got: {other:?}"),
     }
 }
@@ -450,7 +482,7 @@ fn clear_screen_keeps_session() {
     assert_eq!(state.total_tokens, 500);
     assert_eq!(state.messages.len(), 1);
     match &state.messages[0] {
-        ChatMessage::System { content } => assert!(content.contains("cleared")),
+        TranscriptEntry::SystemNotice { text: content, .. } => assert!(content.contains("cleared")),
         other => panic!("Expected System message, got: {other:?}"),
     }
 }
@@ -533,7 +565,9 @@ fn handle_response_chunk_appends_content() {
     // Should have: system welcome + assistant message
     assert_eq!(state.messages.len(), 2);
     match &state.messages[1] {
-        ChatMessage::Assistant { content, .. } => {
+        TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } => {
             assert_eq!(content, "Hello World");
         }
         other => panic!("Expected Assistant message, got: {other:?}"),
@@ -569,15 +603,11 @@ fn handle_agent_trace_text_events_populate_assistant_content_and_reasoning() {
         },
     });
 
-    match &state.messages[1] {
-        ChatMessage::Assistant {
-            content, reasoning, ..
-        } => {
-            assert_eq!(content, "Replay loaded");
-            assert_eq!(reasoning.as_deref(), Some("Inspecting replay trace"));
-        }
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(assistant_text(&state), "Replay loaded");
+    assert_eq!(
+        reasoning_text(&state).as_deref(),
+        Some("Inspecting replay trace")
+    );
 }
 
 #[test]
@@ -620,7 +650,10 @@ fn handle_agent_trace_session_completed_updates_totals_and_closes_stream() {
     assert!(state.current_run.is_none());
     assert!(!state.current_run_uses_agent_trace);
     match &state.messages[1] {
-        ChatMessage::Assistant { is_streaming, .. } => assert!(!is_streaming),
+        TranscriptEntry::AssistantText {
+            streaming: is_streaming,
+            ..
+        } => assert!(!is_streaming),
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
@@ -663,17 +696,12 @@ fn handle_agent_trace_decision_events_append_shared_projection_reasoning() {
         },
     });
 
-    match &state.messages[1] {
-        ChatMessage::Assistant { reasoning, .. } => {
-            assert_eq!(
-                reasoning.as_deref(),
-                Some(
-                    "Turn started (iteration 1)\nThinking (iteration 1)\nTurn completed (continue) — tools: 1/1, tokens: 64"
-                )
-            );
-        }
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(
+        reasoning_text(&state).as_deref(),
+        Some(
+            "Turn started (iteration 1)\nThinking (iteration 1)\nTurn completed (continue) — tools: 1/1, tokens: 64"
+        )
+    );
 }
 
 #[test]
@@ -718,18 +746,11 @@ fn load_trace_replay_records_session_summary_in_reasoning() {
     };
     state.load_trace_replay(&replay);
 
-    match &state.messages[1] {
-        ChatMessage::Assistant {
-            content, reasoning, ..
-        } => {
-            assert_eq!(content, "done");
-            assert_eq!(
-                reasoning.as_deref(),
-                Some("Turn started (iteration 1)\nSession completed (completed) — iterations: 1, tools: 0, tokens: 33 — done")
-            );
-        }
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(assistant_text(&state), "done");
+    assert_eq!(
+        reasoning_text(&state).as_deref(),
+        Some("Turn started (iteration 1)\nSession completed (completed) — iterations: 1, tools: 0, tokens: 33 — done")
+    );
 }
 
 #[test]
@@ -757,8 +778,10 @@ fn handle_tool_lifecycle() {
 
     {
         let tool = state.find_tool_mut("t1").unwrap();
-        assert_eq!(tool.status, ToolStatus::Running);
-        assert_eq!(tool.progress, Some("running...".into()));
+        assert!(matches!(tool.status, RowStatus::Running { .. }));
+        // A progress line IS the row's body while it runs — there is no
+        // separate field for it to outlive the call in.
+        assert_eq!(tool.body, RowBody::Text("running...".into()));
     }
 
     // Tool end
@@ -772,9 +795,10 @@ fn handle_tool_lifecycle() {
     state.handle_gateway_event(end);
 
     let tool = state.find_tool_mut("t1").unwrap();
-    assert_eq!(tool.status, ToolStatus::Success);
-    assert_eq!(tool.duration, Some(Duration::from_millis(150)));
-    assert!(tool.progress.is_none()); // cleared on end
+    assert_eq!(tool.status, RowStatus::Ok { duration_ms: 150 });
+    // The result replaced the progress line, which is what "cleared on end"
+    // means once the two share one slot.
+    assert_eq!(tool.body, RowBody::Text("output".into()));
 }
 
 #[test]
@@ -839,18 +863,14 @@ fn handle_agent_trace_tool_lifecycle_takes_precedence() {
         },
     });
 
-    match &state.messages[1] {
-        ChatMessage::Assistant {
-            tools, reasoning, ..
-        } => {
-            assert_eq!(tools.len(), 1);
-            assert_eq!(tools[0].id, "t1");
-            assert_eq!(tools[0].status, ToolStatus::Success);
-            assert_eq!(tools[0].duration, Some(Duration::from_millis(120)));
-            assert_eq!(reasoning.as_deref(), Some("Listed the current directory"));
-        }
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    let rows = tool_rows(&state);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "t1");
+    assert_eq!(rows[0].status, RowStatus::Ok { duration_ms: 120 });
+    assert_eq!(
+        reasoning_text(&state).as_deref(),
+        Some("Listed the current directory")
+    );
 }
 
 #[test]
@@ -881,7 +901,10 @@ fn handle_run_complete_clears_run() {
 
     // Assistant message should no longer be streaming
     match &state.messages.last().unwrap() {
-        ChatMessage::Assistant { is_streaming, .. } => assert!(!is_streaming),
+        TranscriptEntry::AssistantText {
+            streaming: is_streaming,
+            ..
+        } => assert!(!is_streaming),
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
@@ -944,7 +967,7 @@ fn handle_run_error_adds_system_message() {
     assert!(state.current_run.is_none());
     // Last message should be the error system message
     match state.messages.last().unwrap() {
-        ChatMessage::System { content } => {
+        TranscriptEntry::SystemNotice { text: content, .. } => {
             assert!(content.contains("something went wrong"));
         }
         other => panic!("Expected System message, got: {other:?}"),
@@ -1131,12 +1154,10 @@ fn handle_reasoning_appends() {
     };
     state.handle_gateway_event(event2);
 
-    match &state.messages[1] {
-        ChatMessage::Assistant { reasoning, .. } => {
-            assert_eq!(reasoning.as_deref(), Some("Let me think about this..."));
-        }
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(
+        reasoning_text(&state).as_deref(),
+        Some("Let me think about this...")
+    );
 }
 
 /// A streaming turn puts the same text on the wire twice - as `ResponseChunk`
@@ -1181,10 +1202,7 @@ fn a_streamed_turn_appends_its_text_exactly_once() {
         },
     });
 
-    match &state.messages[1] {
-        ChatMessage::Assistant { content, .. } => assert_eq!(content, "Hello, 世界!"),
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(assistant_text(&state), "Hello, 世界!");
 }
 
 /// A turn whose text never streamed (mock provider, or an output guardrail
@@ -1208,10 +1226,7 @@ fn an_unstreamed_turn_still_takes_its_full_final_text() {
         },
     });
 
-    match &state.messages[1] {
-        ChatMessage::Assistant { content, .. } => assert_eq!(content, "no deltas for this one"),
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(assistant_text(&state), "no deltas for this one");
 }
 
 /// Every turn restarts the watermark, so turn 2's text is not clipped by how
@@ -1249,10 +1264,7 @@ fn a_second_turn_is_not_clipped_by_the_first_turns_watermark() {
         });
     }
 
-    match &state.messages[1] {
-        ChatMessage::Assistant { content, .. } => assert_eq!(content, "turn1 turn2 "),
-        other => panic!("Expected Assistant message, got: {other:?}"),
-    }
+    assert_eq!(assistant_text(&state), "turn1 turn2 ");
 }
 
 /// `agent_trace` is a deliberately-lossy mirror (bounded mpsc + `try_send`), so
@@ -1278,10 +1290,10 @@ fn a_dropped_completion_is_repaired_by_the_run_summary() {
         },
     });
     // ToolCallCompleted for t1 is DROPPED here - that is the whole point.
-    assert_eq!(
+    assert!(matches!(
         state.find_tool_mut("t1").unwrap().status,
-        ToolStatus::Running
-    );
+        RowStatus::Running { .. }
+    ));
 
     state.handle_gateway_event(StreamEvent::RunComplete {
         run_id: "run-1".into(),
@@ -1317,16 +1329,21 @@ fn a_dropped_completion_is_repaired_by_the_run_summary() {
     });
 
     let t1 = state.find_tool_mut("t1").unwrap();
-    assert_eq!(t1.status, ToolStatus::Success);
-    assert_eq!(t1.duration, Some(Duration::from_millis(120)));
+    assert_eq!(t1.status, RowStatus::Ok { duration_ms: 120 });
     let t2 = state.find_tool_mut("t2").unwrap();
-    assert_eq!(t2.status, ToolStatus::Failed);
-    assert_eq!(t2.error.as_deref(), Some("no such file"));
+    assert_eq!(
+        t2.status,
+        RowStatus::Err {
+            duration_ms: 8,
+            message: "no such file".into()
+        }
+    );
 }
 
 /// A row the authoritative record does not mention either must still stop
 /// spinning: the run is over, so `Running` is the one thing it cannot be.
-/// `Unknown`, never `Success` - do not guess a terminal state.
+/// `Pending` — the shared model's word for "unknown" — never `Ok`: do not
+/// guess a terminal state.
 #[test]
 fn a_row_absent_from_the_summary_settles_to_unknown() {
     let mut state = AppState::new("s".into(), "m".into());
@@ -1352,7 +1369,7 @@ fn a_row_absent_from_the_summary_settles_to_unknown() {
 
     assert_eq!(
         state.find_tool_mut("ghost").unwrap().status,
-        ToolStatus::Unknown
+        RowStatus::Pending
     );
 }
 
@@ -1515,7 +1532,7 @@ fn a_clarification_that_ends_elsewhere_retires_the_card() {
     // The user is told WHICH ending it was: vanishing silently leaves them
     // unable to tell "answered" from "timed out while I was reading".
     match state.messages.last() {
-        Some(ChatMessage::System { content }) => {
+        Some(TranscriptEntry::SystemNotice { text: content, .. }) => {
             assert!(content.contains("expired"), "{content}");
         }
         other => panic!("expected a system line naming the outcome, got {other:?}"),
@@ -1778,7 +1795,9 @@ fn a_response_chunk_from_this_sessions_run_is_still_appended() {
     });
     assert_eq!(state.messages.len(), 2);
     match &state.messages[1] {
-        ChatMessage::Assistant { content, .. } => assert_eq!(content, "hello"),
+        TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } => assert_eq!(content, "hello"),
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
@@ -1871,7 +1890,7 @@ fn a_run_left_behind_by_a_session_switch_does_not_leak_into_the_new_session() {
         state
             .messages
             .iter()
-            .all(|m| !matches!(m, ChatMessage::Assistant { .. })),
+            .all(|m| !matches!(m, TranscriptEntry::AssistantText { .. })),
         "the abandoned run's text must not land in the new session's transcript"
     );
 }
@@ -1903,7 +1922,9 @@ fn a_run_resumes_appearing_after_switching_back_to_its_own_session() {
     });
 
     match state.messages.last() {
-        Some(ChatMessage::Assistant { content, .. }) => assert_eq!(content, "still mine"),
+        Some(TranscriptEntry::AssistantText {
+            markdown: content, ..
+        }) => assert_eq!(content, "still mine"),
         other => panic!("Expected Assistant message, got: {other:?}"),
     }
 }
@@ -1991,10 +2012,21 @@ fn no_side_question_frame_reaches_the_main_transcript() {
         &state.messages[before..]
     );
     for message in &state.messages {
-        let text = match message {
-            ChatMessage::User { content, .. }
-            | ChatMessage::System { content }
-            | ChatMessage::Assistant { content, .. } => content,
+        // Every entry that carries prose. A tool row's body is a leak path
+        // too, so it is included rather than skipped — the answer this test
+        // watches for could arrive as a tool result just as easily as text.
+        let text: &str = match message {
+            TranscriptEntry::UserText { text: content, .. }
+            | TranscriptEntry::SystemNotice { text: content, .. }
+            | TranscriptEntry::Reasoning { text: content, .. }
+            | TranscriptEntry::AssistantText {
+                markdown: content, ..
+            } => content,
+            TranscriptEntry::Tool(row) => match &row.body {
+                RowBody::Text(t) => t,
+                _ => "",
+            },
+            TranscriptEntry::ToolGroup(_) | TranscriptEntry::TurnSummary(_) => "",
         };
         assert!(
             !text.contains("main.rs, lib.rs"),
@@ -2255,7 +2287,9 @@ fn a_side_question_in_flight_does_not_swallow_the_main_run() {
     });
 
     match state.messages.last().expect("a message") {
-        ChatMessage::Assistant { content, .. } => assert_eq!(content, "the main answer"),
+        TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } => assert_eq!(content, "the main answer"),
         other => panic!("expected the main run's assistant bubble, got: {other:?}"),
     }
     assert!(
@@ -2332,7 +2366,9 @@ fn a_run_that_streamed_nothing_still_renders_its_terminal_answer() {
         .messages
         .iter()
         .filter_map(|m| match m {
-            ChatMessage::Assistant { content, .. } => Some(content),
+            TranscriptEntry::AssistantText {
+                markdown: content, ..
+            } => Some(content),
             _ => None,
         })
         .collect();
@@ -2379,7 +2415,9 @@ fn a_streamed_answer_is_not_doubled_by_its_own_summary() {
     });
 
     match state.messages.last().unwrap() {
-        ChatMessage::Assistant { content, .. } => assert_eq!(
+        TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } => assert_eq!(
             content, "the answer",
             "the summary is a duplicate of what streaming already rendered"
         ),
@@ -2432,7 +2470,9 @@ fn the_streamed_flag_is_cleared_when_the_next_run_is_accepted() {
         .messages
         .iter()
         .filter_map(|m| match m {
-            ChatMessage::Assistant { content, .. } => Some(content.as_str()),
+            TranscriptEntry::AssistantText {
+                markdown: content, ..
+            } => Some(content.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -2641,7 +2681,7 @@ fn user_rows(state: &AppState) -> Vec<&str> {
         .messages
         .iter()
         .filter_map(|m| match m {
-            ChatMessage::User { content, .. } => Some(content.as_str()),
+            TranscriptEntry::UserText { text: content, .. } => Some(content.as_str()),
             _ => None,
         })
         .collect()
@@ -2710,17 +2750,15 @@ fn a_peer_message_lands_above_an_answer_already_streaming() {
     let mut state = AppState::new("agent:main:room:s1".into(), "m".into());
     state.my_user_id = Some("u-me".into());
     state.messages.clear();
-    state.messages.push(ChatMessage::Assistant {
-        content: "settled turn".into(),
-        tools: Vec::new(),
-        reasoning: None,
-        is_streaming: false,
+    state.messages.push(TranscriptEntry::AssistantText {
+        id: "a1".into(),
+        markdown: "settled turn".into(),
+        streaming: false,
     });
-    state.messages.push(ChatMessage::Assistant {
-        content: "answering".into(),
-        tools: Vec::new(),
-        reasoning: None,
-        is_streaming: true,
+    state.messages.push(TranscriptEntry::AssistantText {
+        id: "a2".into(),
+        markdown: "answering".into(),
+        streaming: true,
     });
 
     state.handle_gateway_event(peer_row("agent:main:room:s1", "u-peer", "the question"));
@@ -2729,8 +2767,11 @@ fn a_peer_message_lands_above_an_answer_already_streaming() {
         .messages
         .iter()
         .map(|m| match m {
-            ChatMessage::User { .. } => "user",
-            ChatMessage::Assistant { is_streaming, .. } => {
+            TranscriptEntry::UserText { .. } => "user",
+            TranscriptEntry::AssistantText {
+                streaming: is_streaming,
+                ..
+            } => {
                 if *is_streaming {
                     "streaming"
                 } else {
@@ -2809,9 +2850,10 @@ fn losing_the_connection_does_not_end_the_run_it_was_watching() {
 fn beginning_a_reattach_resets_the_run_but_not_the_transcript() {
     let mut state = AppState::new("agent:main:main:s1".into(), "m".into());
     state.adopt_active_run(Some(joined("run-live")));
-    state.messages.push(ChatMessage::User {
-        content: "from before the drop".into(),
-        timestamp: row_timestamp(None),
+    state.messages.push(TranscriptEntry::UserText {
+        id: "u1".into(),
+        text: "from before the drop".into(),
+        at_ms: None,
     });
     let before = state.messages.len();
 

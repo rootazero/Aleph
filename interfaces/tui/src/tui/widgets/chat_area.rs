@@ -12,13 +12,17 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::{AppState, ChatMessage, Focus};
+use shared_ui_logic::transcript::{
+    turn_summary_text, RowBody, RowStatus, ToolRow, TranscriptEntry,
+};
+
+use crate::tui::app::{AppState, Focus};
 use crate::tui::markdown::{
     markdown_to_lines, markdown_to_lines_incremental, StreamLines, StreamPrefix,
 };
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
-use super::tool_block::render_tool_block;
+use super::tool_row::{render_tool_group, render_tool_row, KEY_MODALITY};
 
 /// Per-message rendered-line cache, owned by `AppState` across frames (see
 /// `render_chat_area`'s caller in `render.rs` for where it's threaded
@@ -58,14 +62,18 @@ struct CachedEntry {
     lines: Vec<Line<'static>>,
 }
 
-/// Cheap discriminant for `ChatMessage`, used only to invalidate the cache
-/// safely across `messages.insert(at, ...)` (peer messages can be inserted
-/// before the streaming tail, shifting its index — see
+/// Cheap discriminant for a `TranscriptEntry`, used only to invalidate the
+/// cache safely across `messages.insert(at, ...)` (peer messages can be
+/// inserted before the streaming tail, shifting its index — see
 /// `app/events.rs::StreamEvent::...` peer-message handling).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MessageKind {
     User,
     Assistant,
+    Reasoning,
+    Tool,
+    ToolGroup,
+    TurnSummary,
     System,
 }
 
@@ -84,21 +92,87 @@ fn content_fingerprint(content: &str) -> u64 {
     h.finish()
 }
 
-fn message_kind_and_fingerprint(message: &ChatMessage) -> (MessageKind, u64) {
-    match message {
-        ChatMessage::User { content, .. } => (MessageKind::User, content_fingerprint(content)),
-        ChatMessage::Assistant { content, .. } => {
-            (MessageKind::Assistant, content_fingerprint(content))
+/// A tool row's rendered appearance changes without its text changing — the
+/// status settles, a duration arrives, a body is replaced by a diff — so its
+/// fingerprint has to cover those, not just a string.
+fn tool_fingerprint(row: &ToolRow) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    row.id.hash(&mut h);
+    row.summary.display_name.hash(&mut h);
+    row.summary.args_text.hash(&mut h);
+    row.expanded.hash(&mut h);
+    match &row.status {
+        RowStatus::Pending => 0u8.hash(&mut h),
+        RowStatus::Running { .. } => 1u8.hash(&mut h),
+        RowStatus::Ok { duration_ms } => {
+            2u8.hash(&mut h);
+            duration_ms.hash(&mut h);
         }
-        ChatMessage::System { content } => (MessageKind::System, content_fingerprint(content)),
+        RowStatus::Err {
+            duration_ms,
+            message,
+        } => {
+            3u8.hash(&mut h);
+            duration_ms.hash(&mut h);
+            message.hash(&mut h);
+        }
+    }
+    match &row.body {
+        RowBody::None => 0u8.hash(&mut h),
+        RowBody::Text(t) => {
+            1u8.hash(&mut h);
+            content_fingerprint(t).hash(&mut h);
+        }
+        RowBody::FileChanges(c) => {
+            2u8.hash(&mut h);
+            c.len().hash(&mut h);
+            for change in c {
+                change.path.hash(&mut h);
+                change.added.hash(&mut h);
+                change.removed.hash(&mut h);
+                change.hunks.len().hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
+
+fn message_kind_and_fingerprint(message: &TranscriptEntry) -> (MessageKind, u64) {
+    match message {
+        TranscriptEntry::UserText { text, .. } => (MessageKind::User, content_fingerprint(text)),
+        TranscriptEntry::AssistantText { markdown, .. } => {
+            (MessageKind::Assistant, content_fingerprint(markdown))
+        }
+        TranscriptEntry::Reasoning { text, .. } => {
+            (MessageKind::Reasoning, content_fingerprint(text))
+        }
+        // A RUNNING row is deliberately never cached by the caller (its
+        // spinner is a function of the clock), so this fingerprint only has to
+        // be right for settled ones.
+        TranscriptEntry::Tool(row) => (MessageKind::Tool, tool_fingerprint(row)),
+        TranscriptEntry::ToolGroup(g) => {
+            let mut acc = 0u64;
+            for r in &g.rows {
+                acc = acc.rotate_left(7) ^ tool_fingerprint(r);
+            }
+            (MessageKind::ToolGroup, acc)
+        }
+        TranscriptEntry::TurnSummary(s) => (
+            MessageKind::TurnSummary,
+            content_fingerprint(&turn_summary_text(s)),
+        ),
+        TranscriptEntry::SystemNotice { text, .. } => {
+            (MessageKind::System, content_fingerprint(text))
+        }
     }
 }
 
 /// Render the chat area with all messages, handling scrolling.
 pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let border_color = match state.focus {
-        Focus::Chat => DEFAULT_THEME.border_focused,
-        _ => DEFAULT_THEME.border,
+        Focus::Chat => theme().border_focused,
+        _ => theme().border,
     };
 
     let block = Block::default()
@@ -126,7 +200,7 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let (_total_lines, visible) = build_visible_lines(
         &state.messages,
         state.verbose,
-        state.spinner_frame,
+        now_ms(),
         content_width,
         &mut state.chat_line_cache,
         state.auto_scroll,
@@ -147,38 +221,29 @@ pub fn render_chat_area(frame: &mut Frame, state: &mut AppState, area: Rect) {
 /// dead-code warnings.
 #[cfg(test)]
 fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    build_all_lines_at(state, width, 0)
+}
 
+#[cfg(test)]
+fn build_all_lines_at(state: &AppState, width: u16, now_ms: u64) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
     for message in &state.messages {
-        match message {
-            ChatMessage::User { content, timestamp } => {
-                render_user_message(content, timestamp, width, &mut lines);
+        render_settled_message(message, state.verbose, now_ms, width, &mut lines);
+        // The streaming cursor is the one thing the settled path does not
+        // draw, because the cached path never renders a streaming entry
+        // through it.
+        if matches!(
+            message,
+            TranscriptEntry::AssistantText {
+                streaming: true,
+                ..
             }
-            ChatMessage::Assistant {
-                content,
-                tools,
-                reasoning,
-                is_streaming,
-            } => {
-                render_assistant_message(
-                    content,
-                    tools,
-                    reasoning.as_deref(),
-                    *is_streaming,
-                    state.verbose,
-                    state.spinner_frame,
-                    width,
-                    &mut lines,
-                );
-            }
-            ChatMessage::System { content } => {
-                render_system_message(content, width, &mut lines);
-            }
+        ) {
+            lines.push(streaming_cursor_line());
         }
         // Add a blank line between messages
         lines.push(Line::default());
     }
-
     lines
 }
 
@@ -187,22 +252,14 @@ fn build_all_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
 /// transcript, exercising the same cache machinery the production path uses.
 #[cfg(test)]
 fn build_all_lines_cached(
-    messages: &[ChatMessage],
+    messages: &[TranscriptEntry],
     verbose: bool,
-    spinner_frame: usize,
+    now_ms: u64,
     width: u16,
     cache: &mut LineCache,
 ) -> Vec<Line<'static>> {
-    let (_total, lines) = build_visible_lines(
-        messages,
-        verbose,
-        spinner_frame,
-        width,
-        cache,
-        true,
-        0,
-        usize::MAX,
-    );
+    let (_total, lines) =
+        build_visible_lines(messages, verbose, now_ms, width, cache, true, 0, usize::MAX);
     lines
 }
 
@@ -222,9 +279,9 @@ fn build_all_lines_cached(
 /// height so window arithmetic stays exact.
 #[allow(clippy::too_many_arguments)]
 fn build_visible_lines(
-    messages: &[ChatMessage],
+    messages: &[TranscriptEntry],
     verbose: bool,
-    spinner_frame: usize,
+    now_ms: u64,
     width: u16,
     cache: &mut LineCache,
     auto_scroll: bool,
@@ -234,8 +291,8 @@ fn build_visible_lines(
     let streaming_idx = messages.iter().position(|m| {
         matches!(
             m,
-            ChatMessage::Assistant {
-                is_streaming: true,
+            TranscriptEntry::AssistantText {
+                streaming: true,
                 ..
             }
         )
@@ -248,33 +305,18 @@ fn build_visible_lines(
     // Pass 1: ensure lines exist, record heights (rendered lines + 1 blank
     // separator per message).
     let mut heights: Vec<usize> = Vec::with_capacity(messages.len());
-    let mut streaming_head: Vec<Line<'static>> = Vec::new();
     let mut streaming_content: Option<StreamLines> = None;
     for (idx, message) in messages.iter().enumerate() {
         if Some(idx) == streaming_idx {
-            // A streaming message's spinner/tool-block content can change
-            // every tick without its text changing, so it is never cached in
-            // `entries` — it would serve stale tool-block state. Its markdown
-            // content still gets the incremental prefix cache.
+            // The streaming entry's text grows every tick, so it is never in
+            // `entries`; its markdown still gets the incremental prefix cache.
+            // It no longer carries a "head" — reasoning and tool rows are
+            // their own entries, each cached or re-rendered on its own terms.
             cache.entries.remove(&idx);
-            if let ChatMessage::Assistant {
-                content,
-                tools,
-                reasoning,
-                ..
-            } = message
-            {
-                render_assistant_head(
-                    reasoning.as_deref(),
-                    tools,
-                    verbose,
-                    spinner_frame,
-                    width,
-                    &mut streaming_head,
-                );
-                if !content.is_empty() {
+            if let TranscriptEntry::AssistantText { markdown, .. } = message {
+                if !markdown.is_empty() {
                     streaming_content = Some(markdown_to_lines_incremental(
-                        content,
+                        markdown,
                         width.saturating_sub(2),
                         &mut cache.streaming_markdown_cache,
                     ));
@@ -283,9 +325,19 @@ fn build_visible_lines(
                     .as_ref()
                     .map_or(0, StreamLines::line_count);
                 // +1 streaming cursor, +1 blank separator.
-                heights.push(streaming_head.len() + content_rows + 2);
+                heights.push(content_rows + 2);
             }
         } else {
+            // A running row's glyph is a function of the clock, so its cached
+            // lines are stale the moment they are stored — drop the entry and
+            // let the miss below re-render it. Settled rows cache normally,
+            // which is what keeps a long tool-heavy transcript cheap.
+            if matches!(
+                message,
+                TranscriptEntry::Tool(row) if matches!(row.status, RowStatus::Running { .. })
+            ) {
+                cache.entries.remove(&idx);
+            }
             let (kind, fingerprint) = message_kind_and_fingerprint(message);
             let hit = cache
                 .entries
@@ -295,7 +347,7 @@ fn build_visible_lines(
                 Some(entry) => heights.push(entry.lines.len() + 1),
                 None => {
                     let mut buf = Vec::new();
-                    render_settled_message(message, verbose, spinner_frame, width, &mut buf);
+                    render_settled_message(message, verbose, now_ms, width, &mut buf);
                     heights.push(buf.len() + 1);
                     cache.entries.insert(
                         idx,
@@ -334,13 +386,7 @@ fn build_visible_lines(
         let body_hi = hi.min(height - 1);
         if lo < body_hi {
             if Some(idx) == streaming_idx {
-                copy_streaming_slice(
-                    &streaming_head,
-                    streaming_content.as_ref(),
-                    lo,
-                    body_hi,
-                    &mut out,
-                );
+                copy_streaming_slice(streaming_content.as_ref(), lo, body_hi, &mut out);
             } else if let Some(entry) = cache.entries.get(&idx) {
                 out.extend(entry.lines[lo..body_hi].iter().cloned());
             }
@@ -374,29 +420,25 @@ fn visible_window(
     }
 }
 
-/// Copy the `[lo, hi)` slice of the streaming message's rows into `out`,
+/// Copy the `[lo, hi)` slice of the streaming entry's rows into `out`,
 /// applying the assistant prefix bar to content rows (deferred to here so
-/// off-window rows never pay for it). Row layout: head (header + reasoning
-/// + tool blocks) | content | cursor.
+/// off-window rows never pay for it). Row layout: content | cursor.
+///
+/// There is no "head" any more: reasoning and tool rows used to be rendered
+/// above the streaming message because they lived inside it, and they are
+/// separate entries now — each windowed, cached and invalidated on its own.
 fn copy_streaming_slice(
-    head: &[Line<'static>],
     content: Option<&StreamLines>,
     lo: usize,
     hi: usize,
     out: &mut Vec<Line<'static>>,
 ) {
-    let head_len = head.len();
     let content_len = content.map_or(0, StreamLines::line_count);
 
-    let head_hi = hi.min(head_len);
-    if lo < head_hi {
-        out.extend(head[lo..head_hi].iter().cloned());
-    }
-
-    let c_lo = lo.saturating_sub(head_len).min(content_len);
-    let c_hi = hi.saturating_sub(head_len).min(content_len);
+    let c_lo = lo.min(content_len);
+    let c_hi = hi.min(content_len);
     if let Some(sl) = content {
-        let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+        let prefix_style = Style::default().fg(theme().assistant);
         for i in c_lo..c_hi {
             if let Some(line) = sl.get(i) {
                 let mut spans = Vec::with_capacity(line.spans.len() + 1);
@@ -407,45 +449,58 @@ fn copy_streaming_slice(
         }
     }
 
-    let cursor_idx = head_len + content_len;
-    if lo <= cursor_idx && cursor_idx < hi {
+    if lo <= content_len && content_len < hi {
         out.push(streaming_cursor_line());
     }
 }
 
-/// Render a settled (non-streaming) message into `out`.
+/// Wall clock in unix ms — the unit the shared spinner and duration helpers
+/// take. A pre-1970 clock yields 0 rather than a panic.
+fn now_ms() -> u64 {
+    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
+}
+
+/// Render a settled (non-streaming) entry into `out`.
+///
+/// Tool rows are NOT prefixed with the assistant `┃ ` bar: they are peers of
+/// the text now, not decoration inside a message, and indenting them under a
+/// bar would put back the visual nesting the model change removed.
 fn render_settled_message(
-    message: &ChatMessage,
+    message: &TranscriptEntry,
     verbose: bool,
-    spinner_frame: usize,
+    now_ms: u64,
     width: u16,
     out: &mut Vec<Line<'static>>,
 ) {
     match message {
-        ChatMessage::User { content, timestamp } => {
-            render_user_message(content, timestamp, width, out);
+        TranscriptEntry::UserText { text, at_ms, .. } => {
+            render_user_message(text, *at_ms, width, out);
         }
-        ChatMessage::Assistant {
-            content,
-            tools,
-            reasoning,
-            ..
-        } => {
-            render_assistant_head(
-                reasoning.as_deref(),
-                tools,
-                verbose,
-                spinner_frame,
-                width,
-                out,
-            );
-            if !content.is_empty() {
-                let md_lines = markdown_to_lines(content, width.saturating_sub(2));
+        TranscriptEntry::AssistantText { markdown, .. } => {
+            if !markdown.is_empty() {
+                let md_lines = markdown_to_lines(markdown, width.saturating_sub(2));
                 push_prefixed_content(out, md_lines);
             }
         }
-        ChatMessage::System { content } => {
-            render_system_message(content, width, out);
+        TranscriptEntry::Reasoning { text, .. } => {
+            if verbose {
+                render_reasoning(text, width, out);
+            }
+        }
+        TranscriptEntry::Tool(row) => {
+            out.extend(render_tool_row(row, now_ms, width, KEY_MODALITY));
+        }
+        TranscriptEntry::ToolGroup(group) => {
+            out.extend(render_tool_group(group, now_ms, width, KEY_MODALITY));
+        }
+        TranscriptEntry::TurnSummary(summary) => {
+            out.push(Line::from(Span::styled(
+                turn_summary_text(summary),
+                Style::default().fg(theme().muted),
+            )));
+        }
+        TranscriptEntry::SystemNotice { text, .. } => {
+            render_system_message(text, width, out);
         }
     }
 }
@@ -453,12 +508,19 @@ fn render_settled_message(
 /// Render a user message with blue prefix bar.
 fn render_user_message(
     content: &str,
-    timestamp: &chrono::DateTime<chrono::Utc>,
+    at_ms: Option<u64>,
     width: u16,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.user);
-    let time_str = timestamp.format("%H:%M").to_string();
+    let prefix_style = Style::default().fg(theme().user);
+    // No clock for a message this client was never told a time for. Falling
+    // back to `now` would date a restored message to the moment it was
+    // restored, which is a fact the header would be stating and getting wrong.
+    let time_str = at_ms
+        .and_then(|ms| i64::try_from(ms).ok())
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|t| format!("  {}", t.format("%H:%M")))
+        .unwrap_or_default();
 
     // Header: ┃ You  12:34
     lines.push(Line::from(vec![
@@ -466,13 +528,10 @@ fn render_user_message(
         Span::styled(
             "You".to_string(),
             Style::default()
-                .fg(DEFAULT_THEME.user)
+                .fg(theme().user)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("  {time_str}"),
-            Style::default().fg(DEFAULT_THEME.muted),
-        ),
+        Span::styled(time_str, Style::default().fg(theme().muted)),
     ]));
 
     // Content lines with prefix
@@ -485,97 +544,30 @@ fn render_user_message(
     }
 }
 
-/// Render an assistant message with green prefix bar, reasoning, tools, and
-/// content. Test-only reference path (see `build_all_lines`): the production
-/// path renders settled messages through `render_settled_message` and the
-/// streaming message through `render_assistant_head` +
-/// `markdown_to_lines_incremental` + `copy_streaming_slice`.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn render_assistant_message(
-    content: &str,
-    tools: &[crate::tui::app::ToolExecution],
-    reasoning: Option<&str>,
-    is_streaming: bool,
-    verbose: bool,
-    spinner_frame: usize,
-    width: u16,
-    lines: &mut Vec<Line<'static>>,
-) {
-    render_assistant_head(reasoning, tools, verbose, spinner_frame, width, lines);
-    if !content.is_empty() {
-        let md_lines = markdown_to_lines(content, width.saturating_sub(2));
-        push_prefixed_content(lines, md_lines);
-    }
-    if is_streaming {
-        lines.push(streaming_cursor_line());
-    }
-}
+/// A reasoning entry, shown only under `/verbose`.
+///
+/// Its own entry now rather than a field on the assistant message, so it
+/// renders where it happened instead of always above the whole turn.
+fn render_reasoning(text: &str, width: u16, lines: &mut Vec<Line<'static>>) {
+    let prefix_style = Style::default().fg(theme().assistant);
+    let reasoning_style = Style::default().fg(theme().reasoning);
+    let reasoning_prefix = Style::default().fg(theme().muted);
+    let content_width = width.saturating_sub(4); // account for "┃ ┊ " prefix
 
-/// Everything above an assistant message's markdown content: the `┃ Aleph`
-/// header, verbose reasoning, and tool blocks. Shared by the settled path
-/// and the streaming path so both lay out identically.
-fn render_assistant_head(
-    reasoning: Option<&str>,
-    tools: &[crate::tui::app::ToolExecution],
-    verbose: bool,
-    spinner_frame: usize,
-    width: u16,
-    lines: &mut Vec<Line<'static>>,
-) {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
-
-    // Header: ┃ Aleph
-    lines.push(Line::from(vec![
-        Span::styled("\u{2503} ", prefix_style),
-        Span::styled(
-            "Aleph".to_string(),
-            Style::default()
-                .fg(DEFAULT_THEME.assistant)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-
-    // Reasoning (only if verbose mode)
-    if verbose {
-        if let Some(reasoning_text) = reasoning {
-            let reasoning_style = Style::default().fg(DEFAULT_THEME.reasoning);
-            let reasoning_prefix = Style::default().fg(DEFAULT_THEME.muted);
-            let content_width = width.saturating_sub(4); // account for "┃ ┊ " prefix
-
-            for reason_line in reasoning_text.lines() {
-                if reason_line.is_empty() {
-                    lines.push(Line::from(vec![
-                        Span::styled("\u{2503} ", prefix_style),
-                        Span::styled("\u{250a} ", reasoning_prefix),
-                    ]));
-                    continue;
-                }
-
-                // Simple wrapping for reasoning text
-                let wrapped = textwrap::wrap(reason_line, content_width as usize);
-                for wrapped_line in wrapped {
-                    lines.push(Line::from(vec![
-                        Span::styled("\u{2503} ", prefix_style),
-                        Span::styled("\u{250a} ", reasoning_prefix),
-                        Span::styled(wrapped_line.into_owned(), reasoning_style),
-                    ]));
-                }
-            }
-
-            // Blank line after reasoning
-            lines.push(Line::from(vec![Span::styled("\u{2503} ", prefix_style)]));
+    for reason_line in text.lines() {
+        if reason_line.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("\u{2503} ", prefix_style),
+                Span::styled("\u{250a} ", reasoning_prefix),
+            ]));
+            continue;
         }
-    }
-
-    // Tool blocks
-    let tool_width = width.saturating_sub(2); // account for "┃ " prefix
-    for tool in tools {
-        let tool_lines = render_tool_block(tool, spinner_frame, tool_width);
-        for tool_line in tool_lines {
-            let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
-            spans.extend(tool_line.spans);
-            lines.push(Line::from(spans));
+        for wrapped_line in textwrap::wrap(reason_line, content_width as usize) {
+            lines.push(Line::from(vec![
+                Span::styled("\u{2503} ", prefix_style),
+                Span::styled("\u{250a} ", reasoning_prefix),
+                Span::styled(wrapped_line.into_owned(), reasoning_style),
+            ]));
         }
     }
 }
@@ -583,7 +575,7 @@ fn render_assistant_head(
 /// Append markdown-rendered content lines, each prefixed with the assistant
 /// `┃ ` bar.
 fn push_prefixed_content(lines: &mut Vec<Line<'static>>, md_lines: Vec<Line<'static>>) {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+    let prefix_style = Style::default().fg(theme().assistant);
     for md_line in md_lines {
         let mut spans = vec![Span::styled("\u{2503} ", prefix_style)];
         spans.extend(md_line.spans);
@@ -593,12 +585,12 @@ fn push_prefixed_content(lines: &mut Vec<Line<'static>>, md_lines: Vec<Line<'sta
 
 /// The `┃ ▍` line shown under a still-streaming assistant message.
 fn streaming_cursor_line() -> Line<'static> {
-    let prefix_style = Style::default().fg(DEFAULT_THEME.assistant);
+    let prefix_style = Style::default().fg(theme().assistant);
     Line::from(vec![
         Span::styled("\u{2503} ", prefix_style),
         Span::styled(
             "\u{258d}".to_string(), // ▍
-            Style::default().fg(DEFAULT_THEME.assistant),
+            Style::default().fg(theme().assistant),
         ),
     ])
 }
@@ -614,7 +606,7 @@ fn streaming_cursor_line() -> Line<'static> {
 /// and wrap each physical line to the content width so every emitted `Line` is
 /// `<= width` and the logical-line window matches the rendered rows.
 fn render_system_message(content: &str, width: u16, lines: &mut Vec<Line<'static>>) {
-    let style = Style::default().fg(DEFAULT_THEME.system);
+    let style = Style::default().fg(theme().system);
     let content_width = (width.saturating_sub(2)).max(1) as usize; // account for "  " indent
     for raw_line in content.split('\n') {
         if raw_line.is_empty() {
@@ -647,16 +639,16 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_user_message("Hello".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { content, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } = state.current_assistant_mut()
+        {
             content.push_str("Hi there!");
         }
 
         let lines = build_all_lines(&state, 80);
-        // Should have lines for: system + blank + user header + user content + blank
-        // + assistant header + assistant content + blank
         assert!(lines.len() >= 6);
 
-        // Check that user header contains "You"
         let has_you = lines.iter().any(|line| {
             line.spans
                 .iter()
@@ -664,13 +656,50 @@ mod tests {
         });
         assert!(has_you, "Should contain 'You' header");
 
-        // Check that assistant header contains "Aleph"
-        let has_aleph = lines.iter().any(|line| {
+        let has_reply = lines.iter().any(|line| {
             line.spans
                 .iter()
-                .any(|s| s.content.as_ref().contains("Aleph"))
+                .any(|s| s.content.as_ref().contains("Hi there!"))
         });
-        assert!(has_aleph, "Should contain 'Aleph' header");
+        assert!(has_reply, "the assistant's text must be rendered");
+    }
+
+    /// The whole point of the model change: a tool row sits where it ran.
+    ///
+    /// # When this goes red
+    ///
+    /// It could not even be written before — tools lived inside
+    /// `ChatMessage::Assistant`, so every one of a turn's calls rendered above
+    /// all of that turn's text and this ordering was unrepresentable. Put the
+    /// rows back under the message and the second text lands above the tool.
+    #[test]
+    fn a_tool_row_renders_between_the_texts_that_surround_it() {
+        use serde_json::json;
+        let mut state = AppState::new("test".into(), "claude".into());
+        state.messages.clear();
+
+        state.append_assistant_content("before the call");
+        state.start_tool_execution("c1".into(), "file_read".into(), &json!({"path": "a.rs"}));
+        state.append_assistant_content("after the call");
+
+        let rendered: Vec<String> = build_all_lines(&state, 80)
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        let idx = |needle: &str| {
+            rendered
+                .iter()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} not rendered: {rendered:?}"))
+        };
+        assert!(
+            idx("before the call") < idx("Read(a.rs)"),
+            "text that preceded the call must render above it: {rendered:?}"
+        );
+        assert!(
+            idx("Read(a.rs)") < idx("after the call"),
+            "text that followed the call must render below it: {rendered:?}"
+        );
     }
 
     #[test]
@@ -692,7 +721,11 @@ mod tests {
     fn non_streaming_message_no_cursor() {
         let mut state = AppState::new("test".into(), "claude".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { is_streaming, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            streaming: is_streaming,
+            ..
+        } = state.current_assistant_mut()
+        {
             *is_streaming = false;
         }
 
@@ -746,10 +779,11 @@ mod tests {
     #[test]
     fn reasoning_shown_only_in_verbose() {
         let mut state = AppState::new("test".into(), "claude".into());
-        state.ensure_assistant_message();
-        if let ChatMessage::Assistant { reasoning, .. } = state.current_assistant_mut() {
-            *reasoning = Some("thinking...".to_string());
-        }
+        state.messages.push(TranscriptEntry::Reasoning {
+            id: "r1".into(),
+            text: "thinking...".into(),
+            collapsed: true,
+        });
 
         // Non-verbose: reasoning should not appear
         let lines = build_all_lines(&state, 80);
@@ -779,31 +813,19 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_user_message("Hello".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant {
-            content,
-            is_streaming,
+        if let TranscriptEntry::AssistantText {
+            markdown,
+            streaming,
             ..
         } = state.current_assistant_mut()
         {
-            content.push_str("Hi there!");
-            *is_streaming = false;
+            markdown.push_str("Hi there!");
+            *streaming = false;
         }
 
         let mut cache = LineCache::default();
-        let first = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
-        let second = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let first = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
+        let second = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         assert_eq!(first, second);
         // Cache must actually have been populated, not silently bypassed.
         assert!(!cache.entries.is_empty());
@@ -813,7 +835,11 @@ mod tests {
     fn build_all_lines_invalidates_on_content_change() {
         let mut state = AppState::new("test".into(), "claude".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { is_streaming, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            streaming: is_streaming,
+            ..
+        } = state.current_assistant_mut()
+        {
             // Must be non-streaming: `build_all_lines_cached` never caches a
             // streaming message (its spinner/tool content can change every
             // tick without `content_len` changing), so a still-streaming
@@ -823,27 +849,18 @@ mod tests {
             *is_streaming = false;
         }
         let mut cache = LineCache::default();
-        let _first = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let _first = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         assert!(
             !cache.entries.is_empty(),
             "the message must actually be cached before we test invalidation"
         );
-        if let ChatMessage::Assistant { content, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } = state.current_assistant_mut()
+        {
             content.push_str("new text");
         }
-        let updated = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let updated = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         let has_new_text = updated.iter().any(|line| {
             line.spans
                 .iter()
@@ -860,20 +877,8 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_system_message("x".repeat(60));
         let mut cache = LineCache::default();
-        let wide = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
-        let narrow = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            20,
-            &mut cache,
-        );
+        let wide = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
+        let narrow = build_all_lines_cached(&state.messages, state.verbose, 0, 20, &mut cache);
         assert_ne!(
             wide.len(),
             narrow.len(),
@@ -886,17 +891,14 @@ mod tests {
         let mut state = AppState::new("test".into(), "claude".into());
         state.add_user_message("Hello".into());
         state.ensure_assistant_message();
-        if let ChatMessage::Assistant { content, .. } = state.current_assistant_mut() {
+        if let TranscriptEntry::AssistantText {
+            markdown: content, ..
+        } = state.current_assistant_mut()
+        {
             content.push_str("Hi there!");
         }
         let mut cache = LineCache::default();
-        let cached = build_all_lines_cached(
-            &state.messages,
-            state.verbose,
-            state.spinner_frame,
-            80,
-            &mut cache,
-        );
+        let cached = build_all_lines_cached(&state.messages, state.verbose, 0, 80, &mut cache);
         let uncached = build_all_lines(&state, 80);
         assert_eq!(cached, uncached, "caching must not change what's rendered");
     }
@@ -911,14 +913,14 @@ mod tests {
         for i in 0..6 {
             state.add_user_message(format!("question {i}"));
             state.ensure_assistant_message();
-            if let ChatMessage::Assistant {
-                content,
-                is_streaming,
+            if let TranscriptEntry::AssistantText {
+                markdown,
+                streaming,
                 ..
             } = state.current_assistant_mut()
             {
-                content.push_str(&format!("answer {i}\nwith a second line"));
-                *is_streaming = i == 5; // only the last one stays streaming
+                markdown.push_str(&format!("answer {i}\nwith a second line"));
+                *streaming = i == 5; // only the last one stays streaming
             }
         }
         let full = build_all_lines(&state, 80);
@@ -929,7 +931,7 @@ mod tests {
         let (total, visible) = build_visible_lines(
             &state.messages,
             state.verbose,
-            state.spinner_frame,
+            0,
             80,
             &mut cache,
             true,
@@ -943,7 +945,7 @@ mod tests {
         let (_total, visible) = build_visible_lines(
             &state.messages,
             state.verbose,
-            state.spinner_frame,
+            0,
             80,
             &mut cache,
             false,
@@ -958,7 +960,7 @@ mod tests {
         let (_total, visible2) = build_visible_lines(
             &state.messages,
             state.verbose,
-            state.spinner_frame,
+            0,
             80,
             &mut cache,
             false,

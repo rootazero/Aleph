@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::tui::app::SessionPickerState;
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
 /// Maximum number of visible items in the picker overlay.
 const MAX_VISIBLE_ITEMS: u16 = 12;
@@ -32,7 +32,7 @@ pub fn render_session_picker(frame: &mut Frame, picker: &SessionPickerState, are
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(DEFAULT_THEME.border_focused))
+        .border_style(Style::default().fg(theme().border_focused))
         .title(" Switch session ");
 
     let inner = block.inner(overlay_rect);
@@ -47,7 +47,7 @@ pub fn render_session_picker(frame: &mut Frame, picker: &SessionPickerState, are
     let filter_display = format!("filter: {}", picker.input);
     let filter_line = Paragraph::new(Line::from(Span::styled(
         filter_display,
-        Style::default().fg(DEFAULT_THEME.primary),
+        Style::default().fg(theme().primary),
     )));
     frame.render_widget(filter_line, filter_area);
 
@@ -62,7 +62,7 @@ pub fn render_session_picker(frame: &mut Frame, picker: &SessionPickerState, are
     if picker.filtered.is_empty() {
         let empty = Paragraph::new(Line::from(Span::styled(
             "  (no matching sessions)",
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         )));
         frame.render_widget(empty, list_area);
         return;
@@ -79,10 +79,10 @@ pub fn render_session_picker(frame: &mut Frame, picker: &SessionPickerState, are
             let line_str = format!("{}{}", indicator, entry.label);
             let style = if is_selected {
                 Style::default()
-                    .fg(DEFAULT_THEME.primary)
+                    .fg(theme().primary)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(DEFAULT_THEME.muted)
+                Style::default().fg(theme().muted)
             };
             Some(ListItem::new(Line::from(Span::styled(line_str, style))))
         })

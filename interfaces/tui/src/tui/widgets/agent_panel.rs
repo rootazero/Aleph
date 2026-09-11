@@ -35,7 +35,7 @@ use shared_ui_logic::state::agent_panel::{
 };
 
 use crate::tui::app::AgentPanelData;
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
 /// Column width in cells when the panel is shown.
 ///
@@ -57,9 +57,9 @@ pub const AGENT_PANEL_WIDTH: u16 = 28;
 
 fn state_color(state: RuntimeAgentState) -> Color {
     match state {
-        RuntimeAgentState::Blocked => DEFAULT_THEME.error,
-        RuntimeAgentState::Working => DEFAULT_THEME.warning,
-        RuntimeAgentState::Idle | RuntimeAgentState::Unknown => DEFAULT_THEME.muted,
+        RuntimeAgentState::Blocked => theme().error,
+        RuntimeAgentState::Working => theme().warning,
+        RuntimeAgentState::Idle | RuntimeAgentState::Unknown => theme().muted,
     }
 }
 
@@ -109,7 +109,7 @@ fn entry_line(entry: &RuntimeAgentEntry, now: i64) -> Line<'static> {
     if let Some(age) = quiet_age(entry.quiet_since, now) {
         spans.push(Span::styled(
             format!(" {}", quiet_text(age)),
-            Style::default().fg(DEFAULT_THEME.muted),
+            Style::default().fg(theme().muted),
         ));
     }
     Line::from(spans)
@@ -130,7 +130,7 @@ pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData, now:
     let header = Line::from(Span::styled(
         "agents",
         Style::default()
-            .fg(DEFAULT_THEME.primary)
+            .fg(theme().primary)
             .add_modifier(Modifier::BOLD),
     ));
     f.render_widget(
@@ -143,7 +143,7 @@ pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData, now:
     }
     let body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
 
-    let muted = Style::default().fg(DEFAULT_THEME.muted);
+    let muted = Style::default().fg(theme().muted);
     let lines: Vec<Line<'static>> = match data {
         AgentPanelData::Loading => vec![Line::from(Span::styled("loading…", muted))],
         AgentPanelData::Ready(entries) if entries.is_empty() => {
@@ -158,11 +158,11 @@ pub fn render_agent_panel(f: &mut Frame, area: Rect, data: &AgentPanelData, now:
         }
         AgentPanelData::Refused(message) => vec![Line::from(Span::styled(
             format!("access denied: {message}"),
-            Style::default().fg(DEFAULT_THEME.warning),
+            Style::default().fg(theme().warning),
         ))],
         AgentPanelData::Unavailable(message) => vec![Line::from(Span::styled(
             format!("unavailable: {message}"),
-            Style::default().fg(DEFAULT_THEME.error),
+            Style::default().fg(theme().error),
         ))],
     };
 

@@ -13,7 +13,7 @@ use ratatui::{
 
 use crate::tui::app::SessionKnobs;
 use crate::tui::slash::{SessionKnob, ToolProgressMode};
-use crate::tui::theme::{DEFAULT_THEME, SPINNER_FRAMES};
+use crate::tui::theme::{spinner_at, theme};
 
 pub struct StatusBar<'a> {
     pub model: &'a str,
@@ -55,16 +55,14 @@ pub struct StatusBar<'a> {
 impl StatusBar<'_> {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let (dot, dot_color) = if self.is_connected {
-            ("\u{25cf}", DEFAULT_THEME.connected) // ●
+            ("\u{25cf}", theme().connected) // ●
         } else {
-            ("\u{25cb}", DEFAULT_THEME.disconnected) // ○
+            ("\u{25cb}", theme().disconnected) // ○
         };
 
-        let sep_style = Style::default().fg(DEFAULT_THEME.muted);
-        let text_style = Style::default()
-            .fg(DEFAULT_THEME.status_fg)
-            .bg(DEFAULT_THEME.status_bg);
-        let dot_style = Style::default().fg(dot_color).bg(DEFAULT_THEME.status_bg);
+        let sep_style = Style::default().fg(theme().muted);
+        let text_style = Style::default().fg(theme().status_fg).bg(theme().status_bg);
+        let dot_style = Style::default().fg(dot_color).bg(theme().status_bg);
 
         let token_str = format_tokens(self.tokens);
 
@@ -74,22 +72,21 @@ impl StatusBar<'_> {
         // cancel. Falls back to the help hint when idle.
         let trailing = match self.run_elapsed {
             Some(elapsed) => {
-                let frame = self.spinner_frame % SPINNER_FRAMES.len();
-                let spinner = SPINNER_FRAMES.get(frame).copied().unwrap_or("");
+                let spinner = spinner_at(self.spinner_frame);
                 Span::styled(
                     format!(
                         " {spinner} Working {}s \u{00b7} Ctrl+C to interrupt ",
                         elapsed.as_secs()
                     ),
                     Style::default()
-                        .fg(DEFAULT_THEME.tool_running)
-                        .bg(DEFAULT_THEME.status_bg),
+                        .fg(theme().tool_running)
+                        .bg(theme().status_bg),
                 )
             }
             None => Span::styled(" /help for commands ", text_style),
         };
 
-        let sep = || Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)); // │
+        let sep = || Span::styled("\u{2502}", sep_style.bg(theme().status_bg)); // │
         let mut spans = vec![
             Span::styled(" ", text_style),
             Span::styled(dot.to_string(), dot_style),
@@ -109,7 +106,7 @@ impl StatusBar<'_> {
                 format!(" ctx {} ", format_context_gauge(used, window)),
                 Style::default()
                     .fg(context_gauge_color(used, window))
-                    .bg(DEFAULT_THEME.status_bg),
+                    .bg(theme().status_bg),
             ));
         }
 
@@ -127,7 +124,7 @@ impl StatusBar<'_> {
                 label,
                 Style::default()
                     .fg(cache_stat_color(pct))
-                    .bg(DEFAULT_THEME.status_bg),
+                    .bg(theme().status_bg),
             ));
         }
 
@@ -142,8 +139,8 @@ impl StatusBar<'_> {
                     if self.running_agents == 1 { "" } else { "s" }
                 ),
                 Style::default()
-                    .fg(DEFAULT_THEME.tool_running)
-                    .bg(DEFAULT_THEME.status_bg),
+                    .fg(theme().tool_running)
+                    .bg(theme().status_bg),
             ));
         }
 
@@ -171,7 +168,7 @@ impl StatusBar<'_> {
         spans.push(trailing);
         let line = Line::from(spans);
 
-        let paragraph = Paragraph::new(line).style(Style::default().bg(DEFAULT_THEME.status_bg));
+        let paragraph = Paragraph::new(line).style(Style::default().bg(theme().status_bg));
         frame.render_widget(paragraph, area);
     }
 }
@@ -224,9 +221,9 @@ fn format_context_gauge(used: u32, window: u32) -> String {
 /// are expected (first call is always a write), so no red/error tier.
 fn cache_stat_color(pct: u64) -> Color {
     if pct >= 50 {
-        DEFAULT_THEME.status_fg
+        theme().status_fg
     } else {
-        DEFAULT_THEME.warning
+        theme().warning
     }
 }
 
@@ -235,11 +232,11 @@ fn cache_stat_color(pct: u64) -> Color {
 fn context_gauge_color(used: u32, window: u32) -> Color {
     let ratio = f64::from(used) / f64::from(window);
     if ratio >= 0.9 {
-        DEFAULT_THEME.error
+        theme().error
     } else if ratio >= 0.7 {
-        DEFAULT_THEME.warning
+        theme().warning
     } else {
-        DEFAULT_THEME.status_fg
+        theme().status_fg
     }
 }
 
@@ -279,17 +276,17 @@ mod tests {
     #[test]
     fn context_gauge_color_bands() {
         // < 70% normal, 70–90% warning, >= 90% error.
-        assert_eq!(context_gauge_color(10, 100), DEFAULT_THEME.status_fg);
-        assert_eq!(context_gauge_color(75, 100), DEFAULT_THEME.warning);
-        assert_eq!(context_gauge_color(95, 100), DEFAULT_THEME.error);
+        assert_eq!(context_gauge_color(10, 100), theme().status_fg);
+        assert_eq!(context_gauge_color(75, 100), theme().warning);
+        assert_eq!(context_gauge_color(95, 100), theme().error);
     }
 
     #[test]
     fn cache_stat_color_bands() {
         // >= 50% normal, below warning — no error tier (cold starts are
         // expected, not alarming).
-        assert_eq!(cache_stat_color(87), DEFAULT_THEME.status_fg);
-        assert_eq!(cache_stat_color(50), DEFAULT_THEME.status_fg);
-        assert_eq!(cache_stat_color(12), DEFAULT_THEME.warning);
+        assert_eq!(cache_stat_color(87), theme().status_fg);
+        assert_eq!(cache_stat_color(50), theme().status_fg);
+        assert_eq!(cache_stat_color(12), theme().warning);
     }
 }

@@ -5,32 +5,83 @@
 //! `impl AppState` block sibling to [`super::events`] (the `StreamEvent`
 //! projection) — the two projection paths now sit side by side.
 
-use std::time::Duration;
-
 use aleph_protocol::{
-    present_agent_trace_event_with_preset, summarize_tool_input, AgentTraceEvent,
-    AgentTracePresentation, AgentTracePresentationPreset, AgentTraceReplay, AgentTraceTextKind,
-    AgentTraceToolResult,
+    present_agent_trace_event_with_preset, AgentTraceEvent, AgentTracePresentation,
+    AgentTracePresentationPreset, AgentTraceReplay, AgentTraceTextKind, AgentTraceToolResult,
 };
 
-use super::{Action, AppState, ChatMessage, Focus, ToolExecution, ToolStatus};
+use super::{Action, AppState, Focus, RowBody, ToolRow, TranscriptEntry};
+
+/// One trace tool-end, as the wire result shape the view model consumes.
+///
+/// The trace event splits what the wire keeps together: the outcome is in
+/// `AgentTraceToolResult`, the `presentation` side-channel is on
+/// `AgentTraceToolCallEnd` beside it. Joining them here — rather than at each
+/// call site — is what stops the diff from being dropped on this path while
+/// the live `tool_end` path carries it (判据 §9: one verb, two faces, one
+/// derivation).
+fn trace_result_to_wire(
+    result: &AgentTraceToolResult,
+    presentation: Option<&aleph_protocol::file_change::Presentation>,
+) -> aleph_protocol::ToolResult {
+    let (success, output, error) = match result {
+        AgentTraceToolResult::Success { output } => (
+            true,
+            match output {
+                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::Null => None,
+                other => Some(other.to_string()),
+            },
+            None,
+        ),
+        AgentTraceToolResult::Error { error, .. } => (false, None, Some(error.clone())),
+    };
+    aleph_protocol::ToolResult {
+        success,
+        output,
+        error,
+        presentation: presentation.cloned(),
+    }
+}
 
 impl AppState {
+    /// Append to the trailing reasoning entry, or start one.
+    ///
+    /// Reasoning is its own chronological entry now rather than a field on the
+    /// assistant message. That is what lets it sit where it happened — before
+    /// the text it led to, and before any tool the model reached for while
+    /// thinking — instead of always above the whole turn.
     pub(super) fn append_reasoning_entry(&mut self, content: String) {
-        self.ensure_assistant_message();
-        if let ChatMessage::Assistant { reasoning, .. } = self.current_assistant_mut() {
-            match reasoning {
-                Some(existing) if !existing.is_empty() => {
-                    existing.push('\n');
-                    existing.push_str(&content);
-                }
-                Some(existing) => existing.push_str(&content),
-                None => *reasoning = Some(content),
-            }
-        }
+        self.push_reasoning(&content, true);
     }
 
-    pub(super) fn append_assistant_content(&mut self, content: &str) {
+    /// A streaming reasoning chunk: joined with no separator, because the
+    /// pieces are halves of one sentence.
+    ///
+    /// The block form above is the other carrier of the same text and takes a
+    /// newline, because its pieces are whole thoughts. Two callers, one place
+    /// that decides where reasoning lives.
+    pub(super) fn append_reasoning_chunk(&mut self, content: &str) {
+        self.push_reasoning(content, false);
+    }
+
+    fn push_reasoning(&mut self, content: &str, separate: bool) {
+        if let Some(TranscriptEntry::Reasoning { text, .. }) = self.messages.last_mut() {
+            if separate && !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(content);
+            return;
+        }
+        let id = self.next_entry_id();
+        self.messages.push(TranscriptEntry::Reasoning {
+            id,
+            text: content.to_string(),
+            collapsed: true,
+        });
+    }
+
+    pub(crate) fn append_assistant_content(&mut self, content: &str) {
         if content.is_empty() {
             return;
         }
@@ -40,60 +91,53 @@ impl AppState {
         // caller — see `run_rendered_assistant_text`.
         self.run_rendered_assistant_text = true;
         self.ensure_assistant_message();
-        if let ChatMessage::Assistant {
-            content: msg_content,
-            ..
-        } = self.current_assistant_mut()
-        {
-            msg_content.push_str(content);
+        if let TranscriptEntry::AssistantText { markdown, .. } = self.current_assistant_mut() {
+            markdown.push_str(content);
         }
     }
 
-    pub(super) fn start_tool_execution(
+    /// Open (or re-open) a tool row.
+    ///
+    /// `args` is the RAW call input, not a pre-rendered string: the row's
+    /// header comes from `transcript::summarize`, which needs the structure to
+    /// produce `Read(src/lib.rs:1-120)` rather than a JSON dump. The trace
+    /// debug view keeps its own `summarize_tool_input` — that one exists to
+    /// show a call verbatim, which is a different question with a different
+    /// right answer.
+    pub(crate) fn start_tool_execution(
         &mut self,
         tool_id: String,
         tool_name: String,
-        params: String,
+        args: &serde_json::Value,
     ) {
-        self.ensure_assistant_message();
-        if let Some(tool) = self.find_tool_mut(&tool_id) {
-            tool.name = tool_name;
-            tool.params = params;
-            tool.status = ToolStatus::Running;
-            tool.duration = None;
-            tool.progress = None;
-            tool.error = None;
+        let now = self.now_ms();
+        if let Some(row) = self.find_tool_mut(&tool_id) {
+            *row = ToolRow::new(tool_id, tool_name, args);
+            row.start(now);
             return;
         }
-
-        if let ChatMessage::Assistant { tools, .. } = self.current_assistant_mut() {
-            tools.push(ToolExecution {
-                id: tool_id,
-                name: tool_name,
-                params,
-                status: ToolStatus::Running,
-                duration: None,
-                progress: None,
-                error: None,
-            });
-        }
+        let mut row = ToolRow::new(tool_id, tool_name, args);
+        row.start(now);
+        self.messages.push(TranscriptEntry::Tool(row));
     }
 
+    /// Settle a tool row from the wire result.
+    ///
+    /// Takes `aleph_protocol::ToolResult` rather than the trace's own
+    /// `AgentTraceToolResult` because that is the shape carrying
+    /// `presentation` — the structured `FileChange` the server computed. The
+    /// trace path has it too, on `AgentTraceToolCallEnd` beside the result
+    /// rather than inside it, and converting there is what keeps this from
+    /// being a function that silently cannot receive a diff.
     pub(super) fn finish_tool_execution(
         &mut self,
         tool_id: &str,
-        result: &AgentTraceToolResult,
+        result: &aleph_protocol::ToolResult,
         duration_ms: u64,
     ) {
-        if let Some(tool) = self.find_tool_mut(tool_id) {
-            tool.status = if result.is_success() {
-                ToolStatus::Success
-            } else {
-                ToolStatus::Failed
-            };
-            tool.duration = Some(Duration::from_millis(duration_ms));
-            tool.error = result.error_text().map(ToOwned::to_owned);
-            tool.progress = None;
+        let now = self.now_ms();
+        if let Some(row) = self.find_tool_mut(tool_id) {
+            row.finish(result, duration_ms, now);
         }
     }
 
@@ -118,68 +162,66 @@ impl AppState {
         if summaries.is_empty() {
             return;
         }
-        self.ensure_assistant_message();
+        let now = self.now_ms();
         for item in summaries {
             let error_text = errors
                 .iter()
                 .find(|e| e.tool_id == item.tool_id)
                 .map(|e| e.error.clone());
-            let status = if item.success {
-                ToolStatus::Success
-            } else {
-                ToolStatus::Failed
+            let wire = aleph_protocol::ToolResult {
+                success: item.success,
+                // The authoritative record carries no output, so a row it
+                // RECONSTRUCTS has no body — and a row that already has one
+                // keeps it, because `finish` only overwrites from the result
+                // it is handed. Reconstruction below therefore lands on a
+                // header-only row, which is honest: this path knows the call
+                // happened and how it ended, not what it printed.
+                output: None,
+                error: error_text,
+                presentation: None,
             };
-            let duration = Some(Duration::from_millis(item.duration_ms));
-            if let Some(tool) = self.find_tool_mut(&item.tool_id) {
-                tool.status = status;
-                tool.duration = duration;
-                tool.progress = None;
-                if tool.error.is_none() {
-                    tool.error = error_text;
+            if let Some(row) = self.find_tool_mut(&item.tool_id) {
+                // Keep whatever body the live stream did deliver.
+                let body = row.body.clone();
+                row.finish(&wire, item.duration_ms, now);
+                if matches!(row.body, RowBody::None) {
+                    row.body = body;
                 }
                 continue;
             }
-            if let ChatMessage::Assistant { tools, .. } = self.current_assistant_mut() {
-                tools.push(ToolExecution {
-                    id: item.tool_id.clone(),
-                    name: item.tool_name.clone(),
-                    params: String::new(),
-                    status,
-                    duration,
-                    progress: None,
-                    error: error_text,
-                });
-            }
+            let mut row = ToolRow::new(
+                item.tool_id.clone(),
+                item.tool_name.clone(),
+                &serde_json::Value::Null,
+            );
+            row.finish(&wire, item.duration_ms, now);
+            self.messages.push(TranscriptEntry::Tool(row));
         }
     }
 
-    /// Move every row still `Running` at run end to `Unknown`.
+    /// Settle every row still `Running` at run end.
     ///
     /// Reached both after [`Self::reconcile_tools_from_summary`] (a row the
     /// authoritative record does not mention either) and on `RunError`, which
-    /// carries no summary at all. Never guesses `Success`: the run is over, so
-    /// "still running" is the one thing the row cannot be.
+    /// carries no summary at all. `ToolRow::settle_resumed` is the shared rule
+    /// and it moves `Running` to `Pending` — "unknown", never a fabricated
+    /// success, and never a spinner that keeps turning after the run is over.
     pub(super) fn settle_orphan_tools(&mut self) {
-        for msg in &mut self.messages {
-            if let ChatMessage::Assistant { tools, .. } = msg {
-                for tool in tools.iter_mut() {
-                    if tool.status == ToolStatus::Running {
-                        tool.status = ToolStatus::Unknown;
-                        tool.progress = None;
-                    }
-                }
+        for entry in &mut self.messages {
+            if let TranscriptEntry::Tool(row) = entry {
+                row.settle_resumed();
             }
         }
     }
 
     pub(super) fn mark_current_assistant_complete(&mut self) {
-        if let Some(ChatMessage::Assistant { is_streaming, .. }) = self
+        if let Some(TranscriptEntry::AssistantText { streaming, .. }) = self
             .messages
             .iter_mut()
             .rev()
-            .find(|m| matches!(m, ChatMessage::Assistant { .. }))
+            .find(|m| matches!(m, TranscriptEntry::AssistantText { .. }))
         {
-            *is_streaming = false;
+            *streaming = false;
         }
     }
 
@@ -282,10 +324,7 @@ impl AppState {
                 self.start_tool_execution(
                     call.tool_id.clone(),
                     call.tool_name.clone(),
-                    summarize_tool_input(
-                        &call.input,
-                        AgentTracePresentationPreset::TuiDebug.options(),
-                    ),
+                    &call.input,
                 );
                 Action::ScrollToBottomIfAutoScroll
             }
@@ -297,7 +336,8 @@ impl AppState {
                 if let AgentTraceToolResult::Success { output } = result {
                     self.maybe_apply_plan_from_tool(&call.tool_name, output);
                 }
-                self.finish_tool_execution(&call.tool_id, result, call.duration_ms);
+                let wire = trace_result_to_wire(result, call.presentation.as_ref());
+                self.finish_tool_execution(&call.tool_id, &wire, call.duration_ms);
                 Action::ScrollToBottomIfAutoScroll
             }
             AgentTraceEvent::ToolSummary { summary, .. } => {
@@ -312,7 +352,8 @@ impl AppState {
                 if let Some(text) = final_text {
                     let needs_final_text = !matches!(
                         self.messages.iter().rev().find_map(|msg| match msg {
-                            ChatMessage::Assistant { content, .. } => Some(!content.is_empty()),
+                            TranscriptEntry::AssistantText { markdown, .. } =>
+                                Some(!markdown.is_empty()),
                             _ => None,
                         }),
                         Some(true)

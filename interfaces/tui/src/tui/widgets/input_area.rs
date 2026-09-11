@@ -9,7 +9,7 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
-use crate::tui::theme::DEFAULT_THEME;
+use crate::tui::theme::theme;
 
 pub struct InputWidget<'a> {
     pub textarea: &'a TextArea<'a>,
@@ -19,9 +19,9 @@ pub struct InputWidget<'a> {
 impl InputWidget<'_> {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let border_color = if self.focused {
-            DEFAULT_THEME.border_focused
+            theme().border_focused
         } else {
-            DEFAULT_THEME.border
+            theme().border
         };
 
         let title = if self.focused {

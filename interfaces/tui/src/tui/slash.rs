@@ -98,6 +98,11 @@ pub enum LocalCommand {
     Agents,
     /// Toggle the pinned tasks (execution list) panel.
     Todo,
+    /// Switch the colour preset. `None` prints the current one plus the
+    /// choices — the `/tools` convention, and the reason an unknown name is
+    /// carried through as `Some` rather than silently becoming the default:
+    /// the handler has to be able to say "there is no theme called that".
+    Theme { name: Option<String> },
 }
 
 /// A per-conversation knob reachable from a slash command.
@@ -222,6 +227,7 @@ const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
         "Browse this session's sub-agents; Enter opens an agent's run view",
     ),
     ("/todo", "Show/hide the pinned tasks (execution list) panel"),
+    ("/theme", "Switch the colour preset: dark|light|terminal"),
     ("/replays", "List recent persisted trace replays"),
     ("/replay", "Load a persisted trace replay by task ID"),
     ("/help", "Show available commands"),
@@ -313,6 +319,9 @@ pub fn parse_input(input: &str) -> ParsedInput {
         // (`shadowed_gateway_commands`) is the guard if that ever changes.
         "/agents" => ParsedInput::Local(LocalCommand::Agents),
         "/todo" => ParsedInput::Local(LocalCommand::Todo),
+        "/theme" => ParsedInput::Local(LocalCommand::Theme {
+            name: (!args.is_empty()).then(|| args.to_lowercase()),
+        }),
         "/agentpanel" => ParsedInput::Local(LocalCommand::AgentPanel),
         "/replays" => ParsedInput::Local(LocalCommand::ReplayList),
         "/replay" => {
@@ -628,7 +637,8 @@ mod tests {
     #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
-        assert_eq!(cmds.len(), 21);
+        assert_eq!(cmds.len(), 22);
+        assert!(cmds.iter().any(|(name, _)| *name == "/theme"));
         assert!(cmds.iter().any(|(name, _)| *name == "/providers"));
         assert!(cmds.iter().any(|(name, _)| *name == "/agents"));
         assert!(cmds.iter().any(|(name, _)| *name == "/todo"));
@@ -647,11 +657,37 @@ mod tests {
         assert!(cmds.iter().any(|(name, _)| *name == "/agents"));
     }
 
+    /// Every advertised command is reachable.
+    ///
+    /// The catalog is what the palette and `/help` show, so an entry
+    /// `parse_input` does not claim is advertised-but-dead: the user types it,
+    /// it falls through to `ParsedInput::Gateway`, and the gateway answers
+    /// "unknown command" for something the client itself offered. That is the
+    /// expensive direction and it is fully derivable — this walks
+    /// `LOCAL_COMMAND_CATALOG` rather than restating a list, so a row added
+    /// without a parse arm goes red by name.
+    ///
+    /// The opposite direction (parses, not advertised) cannot be enumerated
+    /// from here: `parse_input` is a `match` over literals with no list to
+    /// iterate. Each command still pins that half by hand, as `/agents` does
+    /// below — which is why the previous round's note saying no generic test
+    /// existed was only half right, and is now half-closed rather than
+    /// re-stated for every new command.
+    #[test]
+    fn every_advertised_local_command_parses_as_local() {
+        for (name, _) in local_commands() {
+            let parsed = parse_input(name);
+            assert!(
+                matches!(parsed, ParsedInput::Local(_)),
+                "{name} is in the catalog but does not parse as a local command: {parsed:?}"
+            );
+        }
+    }
+
     /// `/agents` must both parse to the toggle AND appear in the palette
     /// catalog — R8-8: "a command that parses but is absent from the
-    /// palette is invisible". No crate-wide test ties `LOCAL_COMMAND_CATALOG`
-    /// to `parse_input` generically (checked before adding this), so this
-    /// pins the pair for the one command this task adds.
+    /// palette is invisible". Pins the direction
+    /// [`every_advertised_local_command_parses_as_local`] cannot derive.
     #[test]
     fn parse_agents_toggle_and_its_catalog_row_agree() {
         assert_eq!(

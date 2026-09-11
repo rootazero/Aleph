@@ -5,7 +5,7 @@ use ratatui::{
 use std::rc::Rc;
 use unicode_width::UnicodeWidthStr;
 
-use super::theme::DEFAULT_THEME;
+use super::theme::theme;
 
 /// Convert markdown text to styled ratatui Lines for terminal display.
 ///
@@ -59,9 +59,9 @@ pub fn markdown_to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
             let content = line.trim_start_matches('>').trim_start();
             let mut spans = vec![Span::styled(
                 "\u{250a} ".to_string(),
-                Style::default().fg(DEFAULT_THEME.quote),
+                Style::default().fg(theme().quote),
             )];
-            let inline = parse_inline(content, Style::default().fg(DEFAULT_THEME.quote));
+            let inline = parse_inline(content, Style::default().fg(theme().quote));
             spans.extend(inline);
             let wrapped = wrap_line_spans(&spans, width);
             result.extend(wrapped);
@@ -73,7 +73,7 @@ pub fn markdown_to_lines(text: &str, width: u16) -> Vec<Line<'static>> {
             let content = strip_list_marker(line);
             let mut spans = vec![Span::styled(
                 "  \u{2022} ".to_string(),
-                Style::default().fg(DEFAULT_THEME.primary),
+                Style::default().fg(theme().primary),
             )];
             let inline = parse_inline(&content, Style::default());
             spans.extend(inline);
@@ -255,10 +255,10 @@ fn parse_heading(line: &str) -> Option<Line<'static>> {
 
     let style = match level {
         1 => Style::default()
-            .fg(DEFAULT_THEME.heading)
+            .fg(theme().heading)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         _ => Style::default()
-            .fg(DEFAULT_THEME.heading)
+            .fg(theme().heading)
             .add_modifier(Modifier::BOLD),
     };
 
@@ -326,7 +326,7 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
                     let inner = text.get(inner_start..inner_end).unwrap_or("");
                     spans.push(Span::styled(
                         inner.to_string(),
-                        Style::default().bg(DEFAULT_THEME.code_bg),
+                        Style::default().bg(theme().code_bg),
                     ));
                     i = end + 1;
                     plain_start = chars.get(i).map_or(text.len(), |c| c.0);
@@ -341,7 +341,7 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
                     spans.push(Span::styled(
                         link_text,
                         Style::default()
-                            .fg(DEFAULT_THEME.link)
+                            .fg(theme().link)
                             .add_modifier(Modifier::UNDERLINED),
                     ));
                     i = after_link_idx;
@@ -431,8 +431,8 @@ fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(Stri
 
 /// Render a fenced code block with borders and language label.
 fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Vec<Line<'static>>) {
-    let border_style = Style::default().fg(DEFAULT_THEME.code_block_border);
-    let code_style = Style::default().bg(DEFAULT_THEME.code_bg);
+    let border_style = Style::default().fg(theme().code_block_border);
+    let code_style = Style::default().bg(theme().code_bg);
     let inner_width = if width > 4 { width - 2 } else { width };
 
     // Top border: ┌─ lang ──────
@@ -603,7 +603,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         let text = line_to_plain_text(&lines[0]);
         assert!(text.contains("cargo build"));
-        assert!(has_bg_color(&lines[0], DEFAULT_THEME.code_bg));
+        assert!(has_bg_color(&lines[0], theme().code_bg));
     }
 
     #[test]
@@ -690,7 +690,7 @@ mod tests {
         // URL should be discarded from display
         assert!(!text.contains("http://"), "URL should not appear in output");
         assert!(has_modifier(&lines[0], Modifier::UNDERLINED));
-        assert!(has_fg_color(&lines[0], DEFAULT_THEME.link));
+        assert!(has_fg_color(&lines[0], theme().link));
     }
 
     #[test]
