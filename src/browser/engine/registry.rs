@@ -284,10 +284,20 @@ impl EngineRegistry {
     ///
     /// Drained BEFORE stopping, so a caller that times this out cannot leave
     /// half-killed handles in the map for the next call to hand out.
-    /// `budget` is the CALLER's, not this function's. The wedged-exit failsafe
-    /// and the orderly path have opposite economics — see
-    /// [`super::ENGINE_ORDERLY_SHUTDOWN_BUDGET`], which is the whole argument —
-    /// and a budget derived from one of them silently makes the other wrong.
+    /// `budget` is the CALLER's, not this function's, because the wedged-exit
+    /// failsafe and the orderly path have opposite economics and a budget
+    /// derived from one of them silently makes the other wrong.
+    ///
+    /// Deliberately no link to the orderly caller's constant. It is
+    /// `ORDERLY_BROWSER_STOP_BUDGET` in `aleph-server`'s
+    /// `commands/start/helpers.rs`, next to the `SHUTDOWN_FAILSAFE` it is
+    /// derived from — a different crate, which cannot be linked from here and,
+    /// more to the point, must not be: quoting that number across the boundary
+    /// is what turned it from "can change" into "must not change" with nobody
+    /// told (判据 §1's fourth form), and the fix was to stop quoting it rather
+    /// than to keep two crates' numbers in agreement. This doc briefly linked
+    /// the constant that used to live on this side, and kept the link after the
+    /// move — the shape's last move, inside the change built to retire it.
     pub async fn shutdown_all(&self, budget: Duration) -> usize {
         // The deadline starts HERE, before the lock, not after it.
         //
