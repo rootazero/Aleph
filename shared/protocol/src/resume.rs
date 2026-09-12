@@ -38,7 +38,8 @@ pub struct RefusedEntry {
     pub session_key: String,
     /// The stable word for the refusal kind (`log_inconsistent`,
     /// `agent_missing`, `boundary_repair_failed`, `intent_stamp_failed`,
-    /// `retrigger_failed`).
+    /// `tail_read_failed`, `retrigger_failed`). A pass-through string: no
+    /// client switches on it, so a new word needs no renderer of its own.
     #[serde(default)]
     pub reason: String,
     /// What specifically was wrong, for an operator to act on.

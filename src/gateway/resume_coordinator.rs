@@ -9,6 +9,12 @@
 //! `RunStarted` events and no `RunFinished` after the last one. This module
 //! scans for that shape, repairs the crash boundary (synthetic `ToolError`
 //! for each dangling tool call), and re-triggers each surviving candidate.
+//! A seed is **unanswered** (§5.2) iff a real `UserMessage` sits after the
+//! last `RunFinished` with no `RunStarted` and no `AssistantMessage` after
+//! it — the crash landed before the run's own marker. Markers cannot show
+//! that shape, so the scan reads the message tail of every Clean candidate
+//! and of every marker-less session in the activity window, stamps the
+//! message and re-triggers it with no boundary repair (nothing dangled).
 //!
 //! R10-safe: `src/harness/` is untouched. The harness already replays the
 //! event log on every `run()`; resume only re-triggers it.
@@ -24,8 +30,12 @@ use crate::config::types::ResumeConfig;
 use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
-use crate::session::events::{now_ms, EventSeq, RunOutcome, SessionEvent, SessionEventRecord};
-use crate::session::reduction::{reduce_disposition, reduce_run, LogContradiction, RunDisposition};
+use crate::session::events::{
+    now_ms, EventSeq, RunOutcome, SessionEvent, SessionEventRecord, Timestamp,
+};
+use crate::session::reduction::{
+    is_disposition_bearing, reduce_disposition, reduce_run, LogContradiction, RunDisposition,
+};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
 
@@ -84,13 +94,17 @@ pub fn global_resume_coordinator() -> Option<Arc<ResumeCoordinator>> {
 /// and for tests.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ResumeReport {
-    /// Sessions inspected that had at least one run marker.
+    /// Sessions inspected that had at least one run marker, plus the
+    /// marker-less sessions in the activity window whose tail held a user
+    /// message no run answered (§5.2) — a marker-less session whose tail was
+    /// answered is not counted, because nothing about it was decided.
     pub scanned: usize,
     /// Interrupted runs successfully re-triggered.
     pub resumed: usize,
     /// Runs marked `Abandoned` (too old or crash-loop cap reached).
     pub abandoned: usize,
-    /// Sessions skipped (clean — newest marker is `RunFinished`).
+    /// Sessions skipped (clean — newest marker is `RunFinished`, and the
+    /// message tail after it holds no user message left unanswered).
     pub skipped: usize,
     /// Interrupted sessions handed back to the scheduler that owns them
     /// (team dispatcher / cron / heartbeat) instead of being resumed here.
@@ -176,6 +190,13 @@ pub enum ResumeRefusal {
     /// The stamp did not land, so the retrigger must not happen: a resume
     /// without its intent stamp is exactly the unbounded loop §5.1 closes.
     IntentStampFailed(String),
+    /// The message tail past the last `RunFinished` could not be read, so
+    /// whether the last user message was answered is unknown (§5.2). Not
+    /// [`Self::BoundaryRepairFailed`]: no repair was attempted, and a label
+    /// that says one was is the expensive kind of wrong. The reason word is a
+    /// pass-through string on the wire — no client switches on reason words —
+    /// so it needs no renderer of its own.
+    TailReadFailed(String),
 }
 
 impl ResumeRefusal {
@@ -189,6 +210,7 @@ impl ResumeRefusal {
             Self::BoundaryRepairFailed(_) => "boundary_repair_failed",
             Self::RetriggerFailed(_) => "retrigger_failed",
             Self::IntentStampFailed(_) => "intent_stamp_failed",
+            Self::TailReadFailed(_) => "tail_read_failed",
         }
     }
 
@@ -200,7 +222,8 @@ impl ResumeRefusal {
             Self::AgentMissing => "the session's agent is not registered".to_string(),
             Self::BoundaryRepairFailed(e)
             | Self::RetriggerFailed(e)
-            | Self::IntentStampFailed(e) => e.clone(),
+            | Self::IntentStampFailed(e)
+            | Self::TailReadFailed(e) => e.clone(),
         }
     }
 }
@@ -255,6 +278,19 @@ pub fn has_own_scheduler(key: &SessionId) -> bool {
         SessionId::Task { task_type, .. }
             if task_type == CRON_TASK_TYPE || task_type == HEARTBEAT_TASK_TYPE
     )
+}
+
+/// Sessions the Unanswered arm may retrigger: not a scheduler-owned unit
+/// (they re-run by their own rule) and not a sub-agent child or an ephemeral
+/// side session (A7: children are reported, never re-driven; an ephemeral
+/// session has no user waiting on it).
+#[must_use]
+pub(crate) fn unanswered_eligible(key: &SessionId) -> bool {
+    !has_own_scheduler(key)
+        && !matches!(
+            key,
+            SessionId::Subagent { .. } | SessionId::Ephemeral { .. }
+        )
 }
 
 /// What a resume can still do with the model the crashed run was bound to.
@@ -704,9 +740,54 @@ impl ResumeCoordinator {
             }
         };
 
+        let mut seen: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
         for (session_id, markers) in marker_groups {
             self.resume_from_markers(&session_id, &markers, &mut report)
                 .await;
+            seen.insert(session_id);
+        }
+
+        // §5.2: a session that crashed between its seed and its first
+        // `RunStarted` has NO marker, so the scan above never visits it. The
+        // activity window (the same one `ProjectionReconciler::candidates`
+        // walks) is where such a session shows up: `execute()` stamps the row's
+        // `last_active_at` before seeding. Sessions the marker scan already
+        // visited are skipped — their Clean arm asked this question itself.
+        // (T15 moves this loop into `launch_resume`; the body stays.)
+        //
+        // Round UP so a sub-minute horizon still admits something: the filter
+        // is minute-granular and `0` would mean "nothing is recent".
+        let active_minutes =
+            u32::try_from(self.config.max_age_secs.div_ceil(60).max(1)).unwrap_or(u32::MAX);
+        match self
+            .session_store
+            .list_sessions(crate::gateway::session_store::types::SessionFilter {
+                active_minutes: Some(active_minutes),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(rows) => {
+                for meta in rows {
+                    let Some(id) = SessionId::from_key_string(&meta.key) else {
+                        continue;
+                    };
+                    if seen.contains(&id) {
+                        continue;
+                    }
+                    let Some(_slot) = self.try_claim_resume(&id) else {
+                        report.busy += 1;
+                        continue;
+                    };
+                    if self.check_unanswered(&id, &[], &mut report).await {
+                        report.scanned += 1;
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                "resume: activity-window listing failed; marker-less unanswered sessions not scanned"
+            ),
         }
 
         tracing::info!(
@@ -795,8 +876,20 @@ impl ResumeCoordinator {
         };
         report.scanned += 1;
         match reduce_disposition(markers) {
-            Ok(RunDisposition::Clean) => {
-                report.skipped += 1;
+            // No run is open. The markers cannot say whether the LAST user
+            // message was ever answered — that lives in the message tail
+            // (§5.2) — so `Clean` is only half the verdict here, and the
+            // other half is asked before the session is filed as skipped.
+            //
+            // `Unanswered` is unreachable from a marker-only slice (the
+            // list face's honest ceiling). It shares the arm rather than
+            // being filed under `skipped`: if a caller ever hands a wider
+            // slice, the answer is re-derived from the tail read and acted
+            // on, so the word cannot be wrong in the confident direction.
+            Ok(RunDisposition::Clean | RunDisposition::Unanswered { .. }) => {
+                if !self.check_unanswered(session_id, markers, report).await {
+                    report.skipped += 1;
+                }
             }
             // Not ours to resume: the team dispatcher / cron / heartbeat
             // each recover their own interrupted work, and a second driver
@@ -886,10 +979,11 @@ impl ResumeCoordinator {
     /// is an operator action measured in ones per hour, and one query with one
     /// grouping rule cannot drift from itself.
     ///
-    /// A session with no run markers at all returns a zero report
-    /// (`scanned == 0`), which the caller renders as "nothing to resume" — not
-    /// an error, because "this session never ran anything" is a legitimate
-    /// answer to the question.
+    /// A session with no run markers at all is still asked the §5.2 question
+    /// — did its last user message go unanswered? — under a claimed slot.
+    /// When the answer is no, the zero report (`scanned == 0`) is what the
+    /// caller renders as "nothing to resume" — not an error, because "this
+    /// session never ran anything" is a legitimate answer to the question.
     pub async fn resume_session(
         &self,
         session_id: &SessionId,
@@ -897,6 +991,13 @@ impl ResumeCoordinator {
         let mut report = ResumeReport::default();
         let groups = self.event_store.load_run_markers().await?;
         let Some((_, markers)) = groups.into_iter().find(|(sid, _)| sid == session_id) else {
+            let Some(_slot) = self.try_claim_resume(session_id) else {
+                report.busy += 1;
+                return Ok(report);
+            };
+            if self.check_unanswered(session_id, &[], &mut report).await {
+                report.scanned += 1;
+            }
             return Ok(report);
         };
         self.resume_from_markers(session_id, &markers, &mut report)
@@ -1120,6 +1221,176 @@ impl ResumeCoordinator {
                     session = ?session_id,
                     error = %refusal,
                     "resume: re-trigger failed; skipping candidate"
+                );
+                report.refused.push((session_id.clone(), refusal));
+            }
+        }
+    }
+
+    /// The Clean arm's second question, and the whole question for a session
+    /// with no markers: is there a user message nobody answered (§5.2)?
+    ///
+    /// One bounded read past the last `RunFinished` the markers carry (the
+    /// whole log when they carry none) — past the last FINISH, not the last
+    /// marker: a previous boot's stamp is a marker too, and a read that began
+    /// after it would never see the message it stamped, so the seed would
+    /// hide behind its own stamp on every later boot. The markers before that
+    /// finish plus the tail, filtered to what `reduce_disposition` accepts,
+    /// are handed to the reducer so the derivation stays its own.
+    ///
+    /// Returns whether an unanswered tail was found (and acted on, or refused
+    /// for a reason the report names) — `false` means "answered, or nothing
+    /// there", which the caller files under `skipped` or not at all.
+    async fn check_unanswered(
+        &self,
+        session_id: &SessionId,
+        markers: &[SessionEventRecord],
+        report: &mut ResumeReport,
+    ) -> bool {
+        if !unanswered_eligible(session_id) {
+            return false;
+        }
+        let from = markers
+            .iter()
+            .rev()
+            .find(|m| matches!(m.event, SessionEvent::RunFinished { .. }))
+            .map(|m| m.seq + 1);
+        let tail = match self
+            .event_store
+            .load_events_range(session_id, from, None)
+            .await
+        {
+            Ok(tail) => tail,
+            // Not `BoundaryRepairFailed`: no repair was attempted. The answer
+            // is "I cannot tell whether the last message was answered", and
+            // the refusal says exactly that.
+            Err(e) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %e,
+                    "resume: tail read failed; cannot tell whether the last message was answered"
+                );
+                report.refused.push((
+                    session_id.clone(),
+                    ResumeRefusal::TailReadFailed(e.to_string()),
+                ));
+                return true;
+            }
+        };
+        // The markers before the re-read window, then the window itself:
+        // disjoint by seq, so no record is counted twice. With no finish in
+        // the markers the window is the whole log and the prefix is empty.
+        let mut bearing: Vec<SessionEventRecord> = markers
+            .iter()
+            .filter(|m| from.is_some_and(|f| m.seq < f))
+            .cloned()
+            .collect();
+        bearing.extend(
+            tail.into_iter()
+                .filter(|r| is_disposition_bearing(&r.event)),
+        );
+        match reduce_disposition(&bearing) {
+            Ok(RunDisposition::Unanswered { user_seq, attempts }) => {
+                // The message's own recording time dates it. A record this
+                // reducer named but the slice does not hold, or one recorded
+                // at 0, is an unknown age — not "now" and not "forever ago".
+                let user_at = bearing
+                    .iter()
+                    .find(|r| r.seq == user_seq)
+                    .map(|r| r.created_at_ms)
+                    .filter(|&at| at > 0);
+                self.handle_unanswered(session_id, user_seq, user_at, attempts, report)
+                    .await;
+                true
+            }
+            Ok(_) => false,
+            Err(c) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    contradiction = %c,
+                    "resume: message tail refused by the reducer; not resuming"
+                );
+                report
+                    .refused
+                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
+                true
+            }
+        }
+    }
+
+    /// `Interrupted` minus the boundary repair: nothing dangled, so nothing is
+    /// owed a receipt; recency is the message's own recording time; the plan
+    /// is empty because no `RunStarted` ever froze an envelope — which is NOT
+    /// `unsnapshotted` (that counter is about markers that exist). The stamp
+    /// names the message and is written BEFORE the retrigger, and the cap
+    /// reads the stamps written after the message, exactly as the interrupted
+    /// arm reads its own.
+    async fn handle_unanswered(
+        &self,
+        session_id: &SessionId,
+        user_seq: EventSeq,
+        user_at: Option<Timestamp>,
+        attempts: u32,
+        report: &mut ResumeReport,
+    ) {
+        let Some(user_at) = user_at else {
+            tracing::warn!(
+                session = ?session_id,
+                user_seq,
+                "resume: unanswered message has no usable recording time; its age is unknown, leaving it alone"
+            );
+            report.skipped_unknown_age += 1;
+            return;
+        };
+        let age_ms = now_ms().saturating_sub(user_at);
+        if age_ms > (self.config.max_age_secs as i64).saturating_mul(1000) {
+            tracing::info!(
+                session = ?session_id,
+                age_ms,
+                "resume: unanswered message too old; abandoning"
+            );
+            self.abandon(
+                session_id,
+                "the unanswered message was too old to resume safely",
+            )
+            .await;
+            report.abandoned += 1;
+            return;
+        }
+        if attempts >= self.config.max_attempts {
+            tracing::warn!(
+                session = ?session_id,
+                attempts,
+                max_attempts = self.config.max_attempts,
+                "resume: unanswered message hit the crash-loop cap; abandoning"
+            );
+            self.abandon(session_id, "it kept crashing before the run could start")
+                .await;
+            report.abandoned += 1;
+            return;
+        }
+        if let Err(e) = self
+            .stamp_resume_attempt(session_id, user_seq, attempts.saturating_add(1))
+            .await
+        {
+            tracing::warn!(
+                session = ?session_id,
+                error = %e,
+                "resume: intent stamp failed; not retriggering the unanswered message"
+            );
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::IntentStampFailed(e.to_string()),
+            ));
+            return;
+        }
+        match self.retrigger(session_id, &ResumePlan::default()).await {
+            Ok(()) => report.resumed += 1,
+            Err(refusal) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    error = %refusal,
+                    "resume: re-trigger of the unanswered message failed"
                 );
                 report.refused.push((session_id.clone(), refusal));
             }
@@ -1686,6 +1957,7 @@ mod tests {
             ResumeRefusal::BoundaryRepairFailed("append failed".into()),
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
             ResumeRefusal::IntentStampFailed("stamp append failed".into()),
+            ResumeRefusal::TailReadFailed("range read failed".into()),
         ];
         let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
         assert_eq!(words.len(), all.len(), "two refusals share one word");
@@ -2069,6 +2341,39 @@ mod tests {
             assert!(
                 !has_own_scheduler(&key),
                 "{} has no other recovery path — excluding it loses the run",
+                key.to_key_string()
+            );
+        }
+    }
+
+    /// The Unanswered arm retriggers a conversation somebody is waiting on:
+    /// not a unit that re-runs by its own rule, and not a sub-agent child or
+    /// an ephemeral side session (A7: children are reported, never re-driven;
+    /// nobody waits on an ephemeral session).
+    #[test]
+    fn unanswered_eligibility_excludes_scheduled_child_and_ephemeral_sessions() {
+        use crate::routing::session_key::DmScope;
+
+        for key in [
+            SessionId::main("alice"),
+            SessionId::dm("alice", "telegram", "u1", DmScope::PerPeer),
+            SessionId::task("main", "webhook", "hook-1"),
+        ] {
+            assert!(
+                unanswered_eligible(&key),
+                "{} is a conversation with a user waiting on it",
+                key.to_key_string()
+            );
+        }
+        for key in [
+            SessionId::task("main", CRON_TASK_TYPE, "daily-summary"),
+            SessionId::task("main", HEARTBEAT_TASK_TYPE, "hb-1"),
+            SessionId::subagent(SessionId::main("alice"), "child-1"),
+            SessionId::ephemeral("alice"),
+        ] {
+            assert!(
+                !unanswered_eligible(&key),
+                "{} must not be retriggered for an unanswered seed",
                 key.to_key_string()
             );
         }

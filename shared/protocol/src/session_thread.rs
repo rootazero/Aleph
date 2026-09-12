@@ -423,7 +423,7 @@ impl SessionSnapshot {
 /// hand back a `[]` that reads as reassurance.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LastRunState {
-    /// One of the four constants below. An unknown word is
+    /// One of the constants below. An unknown word is
     /// [`LastRunDisposition::Unrecognized`] — read as "cannot vouch", never as
     /// clean.
     #[serde(default)]
@@ -474,8 +474,14 @@ impl LastRunState {
     /// The session has no run markers at all.
     pub const NEVER_RAN: &'static str = "never_ran";
     /// The reducer refused this log; its state is unknown and must not be
-    /// rendered as any of the three above.
+    /// rendered as any of the words above.
     pub const LOG_INCONSISTENT: &'static str = "log_inconsistent";
+    /// The last user message reached the log and no run answered it: the
+    /// server stopped between the seed and the run's own `RunStarted`.
+    /// Recovery retries it; a surface says so rather than showing a
+    /// conversation that looks finished. Only the attach face can say this
+    /// word — markers alone cannot see the message.
+    pub const UNANSWERED: &'static str = "unanswered";
 
     /// The list face's answer: the word, and the two facts markers can carry.
     ///
@@ -503,6 +509,7 @@ impl LastRunState {
             Self::INTERRUPTED => LastRunDisposition::Interrupted,
             Self::NEVER_RAN => LastRunDisposition::NeverRan,
             Self::LOG_INCONSISTENT => LastRunDisposition::LogInconsistent,
+            Self::UNANSWERED => LastRunDisposition::Unanswered,
             _ => LastRunDisposition::Unrecognized,
         }
     }
@@ -530,6 +537,9 @@ pub enum LastRunDisposition {
     NeverRan,
     /// [`LastRunState::LOG_INCONSISTENT`].
     LogInconsistent,
+    /// [`LastRunState::UNANSWERED`] — the last user message reached the log
+    /// and no run answered it.
+    Unanswered,
     /// A word this build has never heard of. Read as "cannot vouch" — the same
     /// reading [`AgentRunStatusReport::phase`] gives an unknown status, and for
     /// the same reason: the alternative renders a state the server never
@@ -603,6 +613,7 @@ mod last_run_tests {
                 LastRunState::LOG_INCONSISTENT,
                 LastRunDisposition::LogInconsistent,
             ),
+            (LastRunState::UNANSWERED, LastRunDisposition::Unanswered),
         ] {
             let s = LastRunState::from_markers(word, None, 0);
             assert_eq!(s.disposition(), expected, "{word}");

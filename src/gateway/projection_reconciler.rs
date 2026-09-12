@@ -147,7 +147,13 @@ impl ProjectionReconciler {
             Ok(groups) => {
                 for (session_id, markers) in groups {
                     match reduce_disposition(&markers) {
-                        Ok(RunDisposition::Interrupted { .. }) => {}
+                        // A seed no run answered is a candidate too: its
+                        // projection may be a hole exactly like an interrupted
+                        // run's (unreachable from a marker slice today, but a
+                        // wider slice must not fall through to `continue`).
+                        Ok(
+                            RunDisposition::Interrupted { .. } | RunDisposition::Unanswered { .. },
+                        ) => {}
                         Ok(RunDisposition::Clean) => continue,
                         Err(c) => {
                             // A refused slice is "I cannot tell you whether this

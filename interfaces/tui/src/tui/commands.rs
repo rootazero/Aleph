@@ -546,6 +546,7 @@ fn last_run_mark(last_run: &LastRunState) -> Option<&'static str> {
         LastRunDisposition::Interrupted => Some("  [interrupted]"),
         LastRunDisposition::LogInconsistent => Some("  [log inconsistent]"),
         LastRunDisposition::Unrecognized => Some("  [unknown]"),
+        LastRunDisposition::Unanswered => Some("  [unanswered]"),
         LastRunDisposition::Clean | LastRunDisposition::NeverRan if dangling => {
             Some("  [interrupted]")
         }
@@ -1096,6 +1097,11 @@ fn last_run_notice(last_run: &LastRunState) -> Option<String> {
             "上一轮运行状态未知（{}）— 本客户端无法判断",
             last_run.disposition
         )),
+        // No numbers: nothing ran, so there is nothing to count. The server
+        // stopped between the seed and the run's own marker; recovery retries.
+        LastRunDisposition::Unanswered => {
+            Some("上一条消息没有得到回答 — 运行在开始前就中断了，恢复会重试".to_string())
+        }
         // A log can hold dispatched calls that never came back and still carry
         // no run marker at all, which reduces to `never_ran`. Keying the notice
         // on the word alone would leave those calls produced by the server and
@@ -2321,7 +2327,9 @@ mod side_run_verdict_tests {
 
 #[cfg(test)]
 mod last_run_face_tests {
-    use super::{apply_history, last_run_mark, session_entry_from_json, AttachMode};
+    use super::{
+        apply_history, last_run_mark, last_run_notice, session_entry_from_json, AttachMode,
+    };
     use crate::tui::app::{AppState, TranscriptEntry};
     use aleph_protocol::{
         DanglingCallView, LastRunState, RunProgressView, SessionListRow, SessionSnapshot,
@@ -2403,7 +2411,7 @@ mod last_run_face_tests {
     /// Reading either as "the run was fine" is the failure the field exists to
     /// remove.
     #[test]
-    fn an_unanswered_last_run_says_nothing() {
+    fn an_absent_last_run_says_nothing() {
         assert!(
             notices(&history_with(None)).is_empty(),
             "no `session` at all — this client was told nothing"
@@ -2521,11 +2529,27 @@ mod last_run_face_tests {
         assert!(entry.label.contains("[interrupted]"), "{}", entry.label);
     }
 
+    /// §5.2: the server's word for a user message no run ever answered marks
+    /// the row and says one sentence on attach — the list face carries the
+    /// word alone, and that is enough for both.
+    #[test]
+    fn picker_marks_unanswered_and_the_notice_names_the_fact() {
+        let listed = LastRunState::from_markers(LastRunState::UNANSWERED, None, 0);
+        assert_eq!(last_run_mark(&listed), Some("  [unanswered]"));
+        let attached = LastRunState {
+            disposition: LastRunState::UNANSWERED.into(),
+            inspected: true,
+            ..LastRunState::default()
+        };
+        let notice = last_run_notice(&attached).expect("an unanswered message is news");
+        assert!(notice.contains("没有得到回答"), "{notice}");
+    }
+
     /// A row the server said nothing about, and a row it said was clean, are
     /// both unmarked — a mark that appeared on every row would stop meaning
     /// anything.
     #[test]
-    fn a_clean_or_unanswered_row_is_unmarked() {
+    fn a_clean_or_silent_row_is_unmarked() {
         assert_eq!(
             last_run_mark(&LastRunState::from_markers(LastRunState::CLEAN, None, 0)),
             None

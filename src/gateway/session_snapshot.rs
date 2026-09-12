@@ -166,6 +166,7 @@ pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
     // finish) — see `LastRunState::trailing_starts`.
     let (disposition, attempts) = match reduction.disposition {
         RunDisposition::Interrupted { attempts } => (LastRunState::INTERRUPTED, attempts),
+        RunDisposition::Unanswered { attempts, .. } => (LastRunState::UNANSWERED, attempts),
         RunDisposition::Clean if has_marker => (LastRunState::CLEAN, 0),
         RunDisposition::Clean => (LastRunState::NEVER_RAN, 0),
     };
@@ -214,6 +215,11 @@ pub fn last_run_from_markers(markers: &[SessionEventRecord]) -> LastRunState {
     };
     let (disposition, attempts) = match reduction.disposition {
         RunDisposition::Interrupted { attempts } => (LastRunState::INTERRUPTED, attempts),
+        // Unreachable from a marker slice — the message tail is what carries
+        // the unanswered seed, and this face never reads it (`inspected:
+        // false` is its own admission). Rendered anyway rather than folded
+        // into `clean`: a wider slice must not come out as the reassuring word.
+        RunDisposition::Unanswered { attempts, .. } => (LastRunState::UNANSWERED, attempts),
         RunDisposition::Clean => (LastRunState::CLEAN, 0),
     };
     let mut state = LastRunState::from_markers(disposition, reduction.run_id.clone(), attempts);
@@ -285,6 +291,21 @@ mod last_run_tests {
             name: "bash_exec".to_string(),
             input: serde_json::json!({}),
             at: 3,
+        }
+    }
+
+    fn user(text: &str) -> SessionEvent {
+        SessionEvent::UserMessage {
+            turn_id: TurnId::new_v4(),
+            content: crate::session::events::MessageContent {
+                text: text.to_string(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: 3,
+            synthetic: false,
+            author_user_id: None,
         }
     }
 
@@ -372,6 +393,23 @@ mod last_run_tests {
             last_run_from_events(&[]).disposition(),
             LastRunDisposition::NeverRan
         );
+    }
+
+    /// §5.2: a user message the log holds and no run ever answered is its own
+    /// word on the attach face. `trailing_starts` is the unanswered ratchet
+    /// (no stamp yet), and this face looked.
+    #[test]
+    fn an_unanswered_log_is_reported_as_such() {
+        let events = vec![
+            rec(1, started("run-a")),
+            rec(2, finished("run-a")),
+            rec(3, user("still there?")),
+        ];
+        let view = last_run_from_events(&events);
+        assert_eq!(view.disposition(), LastRunDisposition::Unanswered);
+        assert_eq!(view.trailing_starts, 0);
+        assert!(view.inspected);
+        assert_ne!(view.disposition(), LastRunDisposition::Clean);
     }
 
     /// A `RunFinished` whose start is not in this log is still a marker, so the

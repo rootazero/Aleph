@@ -305,6 +305,7 @@
     "run_badge_interrupted": "中断",
     "run_badge_log_inconsistent": "日志异常",
     "run_badge_unknown": "未知",
+    "run_badge_unanswered": "未回答",
     "new_chat": "新对话",
     "new_group_chat": "新群聊",
     "confirm_delete": "确认删除？",
@@ -2703,7 +2704,8 @@
     "last_run_interrupted_plain": "上一轮运行被中断",
     "last_run_log_inconsistent": "会话日志不一致（{{ tags }}）— 恢复已拒绝，请运行 aleph doctor",
     "last_run_unknown_state": "上一轮运行状态未知（{{ word }}）— 本客户端无法判断",
-    "last_run_dangling": "上一轮留下 {{ count }} 次未回执的工具调用 — 结果未知"
+    "last_run_dangling": "上一轮留下 {{ count }} 次未回执的工具调用 — 结果未知",
+    "last_run_unanswered": "上一条消息没有得到回答 — 运行在开始前就中断了，恢复会重试"
   },
   "appearance": {
     "mode": {

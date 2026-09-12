@@ -468,6 +468,7 @@ mod tests {
             ResumeRefusal::BoundaryRepairFailed("append failed".into()),
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
             ResumeRefusal::IntentStampFailed("stamp append failed".into()),
+            ResumeRefusal::TailReadFailed("range read failed".into()),
         ] {
             assert_eq!(
                 status_of(&refused_report(refusal.clone())),

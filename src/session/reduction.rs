@@ -56,9 +56,10 @@ use crate::session::events::{
 pub enum LogContradiction {
     /// `seq` decreased between two adjacent records. REJECT.
     OutOfOrderSlice { at_seq: EventSeq },
-    /// A slice handed to [`reduce_disposition`] as run markers carries some
-    /// other event. REJECT — a raw log passed by mistake almost always ends
-    /// on the dangling `ToolCallRequested`, which would read as `Clean`.
+    /// A slice handed to [`reduce_disposition`] carries an event that bears on
+    /// no disposition (see [`is_disposition_bearing`]). REJECT — a raw log
+    /// passed by mistake almost always ends on the dangling
+    /// `ToolCallRequested`, which would read as `Clean`.
     NonMarkerInMarkerSlice { seq: EventSeq },
     /// A tool was dispatched after the last `RunFinished` with no
     /// `RunStarted` after that finish — the run whose `RunStarted` append
@@ -107,13 +108,13 @@ pub enum LogContradiction {
     /// resume on age. Reported once per log (the first offender).
     ClockAnomaly { seq: EventSeq },
     /// A `ResumeAttempted` with nothing to resume: no run is open and no
-    /// user message is unanswered at that point. Reading: the stamp still
-    /// counts as an attempt if a `RunStarted` follows it before the next
-    /// `RunFinished` — [`reduce_disposition`] sees markers only, and a stamp
-    /// that named an unanswered `UserMessage` a later run answers (T7) must
-    /// still spend an attempt. With nothing after it the tail is `Clean`
-    /// regardless. This report is what tells the operator the stamp named
-    /// nothing at the moment it was written.
+    /// real user message is unanswered at that point. Reading: the stamp
+    /// still counts as an attempt if a `RunStarted` follows it before the
+    /// next `RunFinished` — [`reduce_disposition`] counts the stamps in the
+    /// tail, and a stamp that named an unanswered `UserMessage` a later run
+    /// answers must still spend an attempt. With nothing after it the tail is
+    /// `Clean` regardless. This report is what tells the operator the stamp
+    /// named nothing at the moment it was written.
     ResumeWithoutTarget { seq: EventSeq },
 }
 
@@ -189,23 +190,32 @@ impl fmt::Display for LogContradiction {
 
 impl std::error::Error for LogContradiction {}
 
-/// How a session's run-marker tail reads.
+/// How a session's disposition-bearing tail reads.
 ///
-/// **Deliberately two variants.** A third (`NeverStarted`, for a legacy log
-/// with no run markers at all) was considered and rejected: no consumer today
+/// **Deliberately three variants.** A `NeverStarted` (for a legacy log with
+/// no run markers at all) was considered and rejected: no consumer today
 /// would treat it differently from `Clean`, and a variant with no reader is a
 /// claim the enum cannot honour — the same reason `ApprovalSource::Autoconfirm`
 /// and six `ErrorKind` variants were removed (see `events.rs`). The next
-/// variant arrives in the same commit as the consumer that reads it.
+/// variant arrives in the same commit as the consumer that reads it, as
+/// `Unanswered` did with the coordinator's `check_unanswered`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunDisposition {
-    /// No `RunStarted` after the last `RunFinished` — nothing to recover.
+    /// No `RunStarted` after the last `RunFinished`, and no real user message
+    /// left waiting there — nothing to recover.
     Clean,
     /// A `RunStarted` after the last `RunFinished`; `attempts` counts the
     /// `ResumeAttempted` stamps since that finish — the crash-loop ratchet,
     /// written by the coordinator BEFORE each retrigger, so a crash anywhere
     /// before the resumed run's own `RunStarted` still counts (§5.1).
     Interrupted { attempts: u32 },
+    /// A real `UserMessage` after the last `RunFinished` (or the log start)
+    /// with no `RunStarted` and no `AssistantMessage` after it: the crash
+    /// landed in the seed→RunStarted window (§5.2). `user_seq` is that
+    /// message's seq — the `ResumeAttempted.target` and the recency anchor;
+    /// `attempts` counts the stamps written after it (the ones written FOR
+    /// it), never a stamp that sits between the finish and the message.
+    Unanswered { user_seq: EventSeq, attempts: u32 },
 }
 
 /// Which run a dangling tool call belonged to.
@@ -316,10 +326,11 @@ pub fn validate_slice(events: &[SessionEventRecord]) -> Result<(), LogContradict
     }
 }
 
-/// The run-marker set: the events [`reduce_disposition`] reads and
-/// `SessionEventStore::load_run_markers` selects. One predicate, so the SQL
-/// `IN (...)` list (`store::MARKER_EVENT_TYPES`) is pinned equal to it by test
-/// rather than being a second spelling of the same set.
+/// The run-marker set: the events `SessionEventStore::load_run_markers`
+/// selects, and the marker half of what [`reduce_disposition`] reads (see
+/// [`is_disposition_bearing`]). One predicate, so the SQL `IN (...)` list
+/// (`store::MARKER_EVENT_TYPES`) is pinned equal to it by test rather than
+/// being a second spelling of the same set.
 pub(crate) fn is_marker(event: &SessionEvent) -> bool {
     matches!(
         event,
@@ -329,13 +340,28 @@ pub(crate) fn is_marker(event: &SessionEvent) -> bool {
     )
 }
 
-/// The one derivation of "is this interrupted".
+/// What [`reduce_disposition`] may be handed: the run markers and the two
+/// message kinds that decide "was the user answered". Anything else in a
+/// slice is the raw-log-by-mistake shape and is refused.
+pub(crate) fn is_disposition_bearing(event: &SessionEvent) -> bool {
+    is_marker(event)
+        || matches!(
+            event,
+            SessionEvent::UserMessage { .. } | SessionEvent::AssistantMessage { .. }
+        )
+}
+
+/// The one derivation of "is this interrupted, or is someone left waiting".
 ///
-/// `markers` is a run-marker sequence in `seq` order — either straight from
-/// `SessionEventStore::load_run_markers`, or the marker subsequence of a full
-/// log (which is what [`reduce_run`] hands it, so the two can never drift).
+/// `markers` is a disposition-bearing sequence in `seq` order (see
+/// [`is_disposition_bearing`]): the run markers straight from
+/// `SessionEventStore::load_run_markers` — which cannot say `Unanswered`,
+/// and is the list face's honest ceiling — or markers plus the message tail
+/// the coordinator reads past the last `RunFinished`, or the bearing
+/// subsequence of a full log (which is what [`reduce_run`] hands it, so the
+/// faces can never drift).
 ///
-/// Both REJECT kinds are checked here, over the whole slice: a non-marker
+/// Both REJECT kinds are checked here, over the whole slice: a stray event
 /// anywhere is refused, not just one that happens to sit past the trailing
 /// `RunFinished`. These used to be `debug_assert`s, which read as `Clean`
 /// in release.
@@ -345,11 +371,15 @@ pub(crate) fn is_marker(event: &SessionEvent) -> bool {
 /// same tail. Counting stamps rather than trailing `RunStarted` markers is
 /// what makes a resume that dies before its own `RunStarted` still count
 /// (§5.1): the stamp is written before the retrigger, the marker after.
+/// Otherwise the tail is unanswered iff its last real `UserMessage` has no
+/// `AssistantMessage` after it (§5.2); a harness-authored `synthetic` message
+/// is never "the user waiting", and the attempts counted for it are the
+/// stamps written after it.
 pub fn reduce_disposition(
     markers: &[SessionEventRecord],
 ) -> Result<RunDisposition, LogContradiction> {
     validate_slice(markers)?;
-    if let Some(stray) = markers.iter().find(|r| !is_marker(&r.event)) {
+    if let Some(stray) = markers.iter().find(|r| !is_disposition_bearing(&r.event)) {
         return Err(LogContradiction::NonMarkerInMarkerSlice { seq: stray.seq });
     }
     let since_finish = markers
@@ -357,19 +387,43 @@ pub fn reduce_disposition(
         .rposition(|r| matches!(r.event, SessionEvent::RunFinished { .. }))
         .map_or(0, |i| i + 1);
     let tail = &markers[since_finish..];
-    if !tail
+    let stamps_in = |slice: &[SessionEventRecord]| {
+        let n = slice
+            .iter()
+            .filter(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. }))
+            .count();
+        u32::try_from(n).unwrap_or(u32::MAX)
+    };
+    if tail
         .iter()
         .any(|r| matches!(r.event, SessionEvent::RunStarted { .. }))
     {
-        return Ok(RunDisposition::Clean);
+        return Ok(RunDisposition::Interrupted {
+            attempts: stamps_in(tail),
+        });
     }
-    let attempts = tail
-        .iter()
-        .filter(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. }))
-        .count();
-    Ok(RunDisposition::Interrupted {
-        attempts: u32::try_from(attempts).unwrap_or(u32::MAX),
-    })
+    let last_user = tail.iter().rposition(|r| {
+        matches!(
+            r.event,
+            SessionEvent::UserMessage {
+                synthetic: false,
+                ..
+            }
+        )
+    });
+    match last_user {
+        Some(i)
+            if !tail[i + 1..]
+                .iter()
+                .any(|r| matches!(r.event, SessionEvent::AssistantMessage { .. })) =>
+        {
+            Ok(RunDisposition::Unanswered {
+                user_seq: tail[i].seq,
+                attempts: stamps_in(&tail[i + 1..]),
+            })
+        }
+        _ => Ok(RunDisposition::Clean),
+    }
 }
 
 /// One dispatch, as the single ascending scan tracks it.
@@ -403,7 +457,10 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
 
     let mut contradictions: Vec<LogContradiction> = Vec::new();
     let mut dispatches: Vec<Dispatch<'_>> = Vec::new();
-    let mut markers: Vec<SessionEventRecord> = Vec::new();
+    // The disposition-bearing subsequence, handed to `reduce_disposition`
+    // untouched — the same slice the coordinator assembles from markers plus
+    // the message tail, so the two readers cannot drift.
+    let mut bearing: Vec<SessionEventRecord> = Vec::new();
     let mut run_anchor: Option<EventSeq> = None;
     let mut run_id: Option<String> = None;
     let mut open_run: Option<RunStartFacts> = None;
@@ -412,6 +469,10 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
     let mut unmarked_first: Option<EventSeq> = None;
     let mut after_finish_without_start = false;
     let mut saw_run_started = false;
+    // True while a real `UserMessage` sits after the last marker with no
+    // `AssistantMessage` after it — the seed→RunStarted window a stamp may
+    // legitimately target (§5.2). Cleared by the answer or by any marker.
+    let mut pending_unanswered = false;
     let mut prev_created: Option<Timestamp> = None;
     let mut clock_reported = false;
 
@@ -443,7 +504,8 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 saw_run_started = true;
                 after_finish_without_start = false;
                 unmarked_first = None;
-                markers.push(record.clone());
+                pending_unanswered = false;
+                bearing.push(record.clone());
             }
             SessionEvent::RunFinished { run_id: rid, .. } => {
                 if open_run.is_none() {
@@ -455,18 +517,29 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 open_run = None;
                 after_finish_without_start = true;
                 unmarked_first = None;
-                markers.push(record.clone());
+                pending_unanswered = false;
+                bearing.push(record.clone());
             }
-            // The coordinator's intent stamp (§5.1). A marker: it rides into
-            // the disposition, where it is counted as an attempt. With no run
-            // open at this point it names nothing — reported, not acted on.
-            // (T7 widens the predicate with `pending_unanswered`: a stamp may
-            // also target an unanswered `UserMessage`.)
+            // The coordinator's intent stamp (§5.1 / §5.2). A marker: it
+            // rides into the disposition, where it is counted as an attempt.
+            // It names either the open run or a real user message nobody has
+            // answered; with neither at this point it names nothing —
+            // reported, not acted on.
             SessionEvent::ResumeAttempted { .. } => {
-                if open_run.is_none() {
+                if open_run.is_none() && !pending_unanswered {
                     contradictions.push(LogContradiction::ResumeWithoutTarget { seq: record.seq });
                 }
-                markers.push(record.clone());
+                bearing.push(record.clone());
+            }
+            SessionEvent::UserMessage { synthetic, .. } => {
+                if !synthetic {
+                    pending_unanswered = true;
+                }
+                bearing.push(record.clone());
+            }
+            SessionEvent::AssistantMessage { .. } => {
+                pending_unanswered = false;
+                bearing.push(record.clone());
             }
             SessionEvent::ToolCallRequested {
                 turn_id,
@@ -535,7 +608,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
 
     // The disposition is not recomputed here — it is asked of the one function
     // that owns the question. G1 (proptest) pins that.
-    let disposition = reduce_disposition(&markers)?;
+    let disposition = reduce_disposition(&bearing)?;
 
     let open_seq = open_run.as_ref().map(|facts| facts.seq);
     let mut dangling = Vec::new();
@@ -988,7 +1061,11 @@ mod tests {
     /// ③-D2: the run's `RunStarted` append failed, the run dispatched a tool
     /// and crashed. The markers say `Clean`; the dispatch says otherwise. The
     /// corrected reading: no run is open, so the call is `EarlierRun` — never
-    /// "this restart".
+    /// "this restart". The bearing slice reads the user's message as
+    /// `Unanswered` (§5.2): no `RunStarted` and no `AssistantMessage` follow
+    /// it, and a dispatch bears on no disposition — the run that picked the
+    /// message up left no marker and no answer, so the message is still owed
+    /// one.
     #[test]
     fn unmarked_activity_reads_as_earlier_run_with_no_open_run() {
         let events = vec![
@@ -1006,7 +1083,13 @@ mod tests {
         );
         assert!(r.open_run.is_none(), "a closed run is not open");
         assert_eq!(r.run_anchor, Some(1), "the anchor is still the scope");
-        assert_eq!(r.disposition, RunDisposition::Clean);
+        assert_eq!(
+            r.disposition,
+            RunDisposition::Unanswered {
+                user_seq: 4,
+                attempts: 0
+            }
+        );
         assert_eq!(r.dangling.len(), 1);
         assert_eq!(r.dangling[0].provenance, DanglingProvenance::EarlierRun);
     }
@@ -1557,6 +1640,28 @@ mod tests {
                 ]),
                 allowed: &[FINISH_WITHOUT_START],
             },
+            LegalShape {
+                // §5.2: the seed landed and the process died before the run's
+                // own `RunStarted` — a log that ends on the user's message.
+                name: "seed then crash before RunStarted",
+                events: seq_log(vec![turn_started(), user("hi")]),
+                allowed: &[],
+            },
+            LegalShape {
+                // The same crash, stamped twice by two boots that each died
+                // again before the run started, then given up on: the
+                // coordinator's `abandoned-*` closer pairs with no
+                // `RunStarted`, which is `FinishWithoutStart` by design.
+                name: "unanswered then abandoned closer",
+                events: seq_log(vec![
+                    turn_started(),
+                    user("hi"),
+                    attempted(2, 1),
+                    attempted(2, 2),
+                    finished_as("abandoned-1", RunOutcome::Abandoned),
+                ]),
+                allowed: &[FINISH_WITHOUT_START],
+            },
         ]
     }
 
@@ -1599,9 +1704,14 @@ mod tests {
         }
         assert_eq!(
             exhibited,
-            vec!["session_split child", "fork-seeded child"],
-            "the copied-tail shapes carry a RunFinished that closes nothing; the \
-             abandoned / delegated closers pair with the open RunStarted"
+            vec![
+                "session_split child",
+                "fork-seeded child",
+                "unanswered then abandoned closer"
+            ],
+            "the copied-tail shapes carry a RunFinished that closes nothing, and so \
+             does the closer of a seed no run ever answered; the abandoned / \
+             delegated closers of an interrupted run pair with the open RunStarted"
         );
     }
 
@@ -1677,6 +1787,109 @@ mod tests {
         assert_eq!(
             reduce_disposition(&markers),
             Ok(RunDisposition::Interrupted { attempts: 0 })
+        );
+    }
+
+    /// §5.2: a real `UserMessage` after the last `RunFinished` with no
+    /// `RunStarted` and no `AssistantMessage` after it is the seed→RunStarted
+    /// crash window, and it has its own word. The slice is disposition-
+    /// bearing (markers plus the two message kinds); anything else is still
+    /// the raw-log-by-mistake shape and is refused.
+    #[test]
+    fn a_seeded_message_with_no_run_started_is_unanswered() {
+        let bearing = vec![
+            rec(1, started("a")),
+            rec(2, finished("a")),
+            rec(3, user("hi again")),
+        ];
+        assert_eq!(
+            reduce_disposition(&bearing),
+            Ok(RunDisposition::Unanswered {
+                user_seq: 3,
+                attempts: 0
+            })
+        );
+        let stamped = vec![rec(1, user("hi")), rec(2, attempted(1, 1))];
+        assert_eq!(
+            reduce_disposition(&stamped),
+            Ok(RunDisposition::Unanswered {
+                user_seq: 1,
+                attempts: 1
+            })
+        );
+        // Answered by an assistant row (simple engine / fast path) → Clean.
+        let answered = vec![rec(1, user("hi")), rec(2, assistant("yo"))];
+        assert_eq!(reduce_disposition(&answered), Ok(RunDisposition::Clean));
+        // A harness-authored message is never "the user waiting".
+        let synthetic = vec![
+            rec(1, started("a")),
+            rec(2, finished("a")),
+            rec(
+                3,
+                SessionEvent::synthetic_user(TurnId::new_v4(), "nudge".into()),
+            ),
+        ];
+        assert_eq!(reduce_disposition(&synthetic), Ok(RunDisposition::Clean));
+        // Still rejects a raw log: a tool dispatch bears on no disposition.
+        assert_eq!(
+            reduce_disposition(&[rec(1, user("hi")), rec(2, requested("c1"))]),
+            Err(LogContradiction::NonMarkerInMarkerSlice { seq: 2 })
+        );
+    }
+
+    /// The unanswered ratchet counts the stamps written FOR this message —
+    /// the ones after it. A stamp that sits between the last finish and the
+    /// message named something else (or nothing) and must not spend one of
+    /// the message's own tries.
+    #[test]
+    fn unanswered_attempts_count_only_the_stamps_after_the_message() {
+        let stamp_before = vec![
+            rec(1, finished("a")),
+            rec(2, attempted(1, 1)),
+            rec(3, user("hi")),
+        ];
+        assert_eq!(
+            reduce_disposition(&stamp_before),
+            Ok(RunDisposition::Unanswered {
+                user_seq: 3,
+                attempts: 0
+            })
+        );
+        let stamps_after = vec![
+            rec(1, finished("a")),
+            rec(2, user("hi")),
+            rec(3, attempted(2, 1)),
+            rec(4, attempted(2, 2)),
+        ];
+        assert_eq!(
+            reduce_disposition(&stamps_after),
+            Ok(RunDisposition::Unanswered {
+                user_seq: 2,
+                attempts: 2
+            })
+        );
+    }
+
+    /// `reduce_run` hands the reducer the bearing subsequence of the whole
+    /// log, so the attach face sees the same word the coordinator does.
+    #[test]
+    fn reduce_run_reads_the_unanswered_tail_from_a_full_log() {
+        let events = seq_log(vec![
+            turn_started(),
+            user("hi"),
+            started("r1"),
+            assistant("ok"),
+            finished("r1"),
+            run_meta("r1"),
+            turn_started(),
+            user("second"),
+        ]);
+        assert_eq!(
+            reduced(&events).disposition,
+            RunDisposition::Unanswered {
+                user_seq: 8,
+                attempts: 0
+            }
         );
     }
 
@@ -1806,33 +2019,35 @@ mod tests {
         use super::*;
         use proptest::prelude::*;
 
-        /// The marker subsequence, selected by the SAME predicate the store's
-        /// `load_run_markers` and `reduce_run` select by — not a second
-        /// spelling of the set.
+        /// The disposition-bearing subsequence, selected by the SAME predicate
+        /// `reduce_disposition` accepts and `reduce_run` collects by — not a
+        /// second spelling of the set.
         fn markers_of(events: &[SessionEventRecord]) -> Vec<SessionEventRecord> {
             events
                 .iter()
-                .filter(|r| is_marker(&r.event))
+                .filter(|r| is_disposition_bearing(&r.event))
                 .cloned()
                 .collect()
         }
 
         /// 0 = RunStarted, 1 = RunFinished, 2 = ToolCallRequested,
-        /// 3 = ToolResult, 4 = AssistantMessage, 5 = ResumeAttempted.
+        /// 3 = ToolResult, 4 = AssistantMessage, 5 = ResumeAttempted,
+        /// 6 = UserMessage (real, not synthetic).
         fn event_for(tag: u8, seq: EventSeq) -> SessionEvent {
-            match tag % 6 {
+            match tag % 7 {
                 0 => started(&format!("r{seq}")),
                 1 => finished(&format!("r{seq}")),
                 2 => requested(&format!("c{seq}")),
                 3 => result_for(&format!("c{seq}")),
                 4 => assistant("x"),
-                _ => attempted(seq, 1),
+                5 => attempted(seq, 1),
+                _ => user("u"),
             }
         }
 
         proptest! {
             #[test]
-            fn reduce_run_asks_reduce_disposition(tags in prop::collection::vec(0u8..6, 0..40)) {
+            fn reduce_run_asks_reduce_disposition(tags in prop::collection::vec(0u8..7, 0..40)) {
                 let events: Vec<SessionEventRecord> = tags
                     .iter()
                     .enumerate()
@@ -1848,7 +2063,7 @@ mod tests {
             /// stamps after the last `RunFinished` — whenever the tail is
             /// interrupted at all.
             #[test]
-            fn attempts_are_the_stamps_since_the_last_finish(tags in prop::collection::vec(0u8..6, 0..40)) {
+            fn attempts_are_the_stamps_since_the_last_finish(tags in prop::collection::vec(0u8..7, 0..40)) {
                 let events: Vec<SessionEventRecord> = tags
                     .iter()
                     .enumerate()
@@ -1914,6 +2129,164 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "a refused reduction is read as a value at: {offenders:#?}"
+        );
+    }
+
+    /// Every production construction of `SessionEvent::UserMessage` — a
+    /// construction supplies all five fields and therefore never contains
+    /// `..`; a pattern always does. Equality, so a sixth producer is a red
+    /// test.
+    ///
+    /// The reason: §5.2's premise is "the only writer of a `UserMessage`
+    /// outside `[RunStarted, RunFinished]` on a resumable session is
+    /// `seed_session`". `Unanswered` retriggers a run for such a message, so
+    /// every other producer must be classified — inside a run, a child, an
+    /// ephemeral side session, or the seed — before it may exist.
+    #[test]
+    fn user_message_producers_are_the_known_set() {
+        use crate::utils::source_scan::{
+            cfg_test_portion, code_text, production_text, rust_sources_under,
+        };
+
+        /// The fourth whole-file test-module shape, which
+        /// `source_scan::declared_as_a_test_module` does not resolve (its doc
+        /// names three): a directory declared from an INLINE cfg-test block
+        /// in the grandparent — `#[cfg(test)] mod tests { mod act; … }` in
+        /// `harness/mod.rs` makes every file under `harness/tests/` test
+        /// code, yet `production_text` returns each one whole because no
+        /// `harness/tests/mod.rs` exists to ask. Walks the file's ancestor
+        /// directories and asks each one's parent module, through the
+        /// instrument's own `cfg_test_portion`, whether it opens `mod <dir> {`
+        /// under `#[cfg(test)]`. Local to this census; when the instrument
+        /// learns the shape, the self-check below goes red and this goes.
+        fn under_inline_cfg_test_block(rel: &str) -> bool {
+            /// `pub` / `pub(crate)` / `pub(super)` removed, so the bare
+            /// `mod x {` can be compared either way.
+            fn strip_visibility(line: &str) -> &str {
+                let Some(rest) = line.strip_prefix("pub") else {
+                    return line;
+                };
+                let rest = match rest.strip_prefix('(') {
+                    Some(inner) => match inner.find(')') {
+                        Some(end) => inner.get(end + 1..).unwrap_or(""),
+                        None => return line,
+                    },
+                    None => rest,
+                };
+                rest.trim_start()
+            }
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            let mut dir = std::path::Path::new(rel).parent();
+            while let Some(d) = dir {
+                let Some(name) = d.file_name().map(|n| n.to_string_lossy().to_string()) else {
+                    break;
+                };
+                if name == "src" {
+                    break;
+                }
+                let Some(up) = d.parent() else { break };
+                let opens = format!("mod {name} {{");
+                let declared = [up.join("mod.rs"), up.with_extension("rs")]
+                    .iter()
+                    .filter_map(|p| std::fs::read_to_string(root.join(p)).ok())
+                    .any(|text| {
+                        cfg_test_portion(&text)
+                            .lines()
+                            .any(|l| strip_visibility(l.trim()) == opens)
+                    });
+                if declared {
+                    return true;
+                }
+                dir = Some(up);
+            }
+            false
+        }
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut skipped_inline_block = 0usize;
+        for (path, src) in rust_sources_under(&root) {
+            if under_inline_cfg_test_block(&path) {
+                skipped_inline_block += 1;
+                continue;
+            }
+            let code = code_text(&production_text(std::path::Path::new(&path), &src));
+            for body in code.split("SessionEvent::UserMessage {").skip(1) {
+                let mut depth = 1usize;
+                let mut end = 0usize;
+                for (i, ch) in body.char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let fields = body.get(..end).unwrap_or("");
+                if !fields.contains("..") {
+                    let key = path
+                        .replace('\\', "/")
+                        .rsplit("src/")
+                        .next()
+                        .unwrap_or(&path)
+                        .to_string();
+                    *found.entry(key).or_default() += 1;
+                }
+            }
+        }
+        // The map is what the scan prints at THIS commit; T8 re-derives it
+        // when it deletes the fast-path literals.
+        let expected: std::collections::BTreeMap<String, usize> = [
+            // child seed — excluded by `unanswered_eligible` (Subagent/Ephemeral keys)
+            ("agents/subagent_spawner/mod.rs", 1),
+            // L0 fast path: user then assistant, no markers (answered ⇒ Clean)
+            ("gateway/execution_engine/fast_path.rs", 2),
+            // Simulated engine: user then assistant, no markers
+            ("gateway/execution_engine/simple.rs", 1),
+            // steer: only into a RUNNING session
+            ("gateway/execution_engine/steering.rs", 1),
+            // client history replay, Ephemeral key
+            ("gateway/openai_api/completions/agent.rs", 1),
+            // legacy transcript backfill, followed by a run
+            ("orchestrator/harness_bridge/backfill.rs", 1),
+            // THE producer (prompt + multimodal + history's trailing prompt)
+            ("orchestrator/harness_bridge/session_seed.rs", 3),
+            // synthetic_user (in-run, `synthetic: true` — never "the user waiting")
+            ("session/events.rs", 1),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        assert!(
+            found
+                .get("orchestrator/harness_bridge/session_seed.rs")
+                .is_some(),
+            "the scan found no seed — blind, not clean"
+        );
+        // Self-check on the local skip: it must have removed something the
+        // shared instrument returned whole (`harness/tests/*` at least). A
+        // zero here means the instrument now resolves the inline-block shape
+        // itself — delete `under_inline_cfg_test_block`, it has no work left.
+        assert!(
+            skipped_inline_block > 0
+                && under_inline_cfg_test_block("src/harness/tests/act.rs")
+                && !production_text(
+                    std::path::Path::new("src/harness/tests/act.rs"),
+                    "fn x() {}"
+                )
+                .is_empty(),
+            "the inline cfg-test block skip did no work — either the instrument \
+             learned the shape (then remove the local helper) or the walk changed"
+        );
+        assert_eq!(
+            found, expected,
+            "a new UserMessage producer must be classified against §5.2 \
+             (inside a run / child / ephemeral / seed)"
         );
     }
 }

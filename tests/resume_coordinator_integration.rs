@@ -1613,3 +1613,227 @@ async fn a_delegated_session_the_engine_is_running_is_left_alone() {
         "not one append while somebody else is writing"
     );
 }
+
+// ---- §5.2 Unanswered: the seed→RunStarted window ---------------------------
+
+/// A `UserMessage` with no marker around it, exactly as `seed_session` writes
+/// it before the run's own `RunStarted`.
+fn seeded_user(tid: TurnId, text: &str, at: i64) -> SessionEvent {
+    SessionEvent::UserMessage {
+        turn_id: tid,
+        content: alephcore::session::events::MessageContent {
+            text: text.into(),
+            blocks: vec![],
+            thinking: None,
+            thinking_signature: None,
+        },
+        at,
+        synthetic: false,
+        author_user_id: None,
+    }
+}
+
+/// Every `ResumeAttempted` stamp in the log, in seq order, as `(target,
+/// attempt)`.
+async fn stamps(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) -> Vec<(EventSeq, u32)> {
+    store
+        .load_all_events(sid)
+        .await
+        .expect("load")
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ResumeAttempted { target, attempt } => Some((*target, *attempt)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// §5.2: a seeded message no run ever answered, in a session with no run
+/// marker at all. The marker scan cannot see it; the activity window can —
+/// the session row `execute()` creates before seeding is what puts it there.
+/// The stamp names the message, the retrigger carries `resume`, and nothing
+/// is repaired because nothing dangled.
+#[tokio::test]
+async fn an_unanswered_seed_is_stamped_and_retriggered_without_repair() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::TurnStarted {
+                turn_id: tid,
+                trigger: alephcore::session::events::TurnTrigger::UserMessage,
+                at,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    store
+        .append(&sid, 2, &seeded_user(tid, "hello?", at + 1), at + 1)
+        .await
+        .unwrap();
+    let sessions = sessions();
+    // The row `execute()` creates before seeding — what puts it in the window.
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let c = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    );
+    let r = c.resume_interrupted_runs().await;
+    assert_eq!(
+        (r.scanned, r.resumed, r.unsnapshotted),
+        (1, 1, 0),
+        "not counted as unsnapshotted: there was no RunStarted to snapshot ({r:?})"
+    );
+    let calls = calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+    let all = store.load_all_events(&sid).await.unwrap();
+    assert!(matches!(
+        all.last().map(|r| &r.event),
+        Some(SessionEvent::ResumeAttempted {
+            target: 2,
+            attempt: 1
+        })
+    ));
+    assert!(
+        !all.iter()
+            .any(|r| matches!(r.event, SessionEvent::ToolError { .. })),
+        "no boundary repair: nothing dangled"
+    );
+}
+
+/// The shape the SECOND boot sees: `[.., RunFinished, UserMessage,
+/// ResumeAttempted]`. The stamp is the newest marker, so a read that started
+/// past the last marker would never see the message again — the seed would
+/// hide behind its own stamp forever. The read starts past the last
+/// `RunFinished` instead, and the ratchet climbs: `[1, 2]`, both naming the
+/// message.
+#[tokio::test]
+async fn an_unanswered_seed_behind_its_own_stamp_is_seen_on_the_next_boot() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-stamped-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    let events: Vec<SessionEvent> = vec![
+        SessionEvent::RunStarted {
+            run_id: "run-0".into(),
+            at,
+            project_root: None,
+            envelope: None,
+        },
+        SessionEvent::RunFinished {
+            run_id: "run-0".into(),
+            outcome: RunOutcome::Completed,
+            at: at + 1,
+        },
+        SessionEvent::TurnStarted {
+            turn_id: tid,
+            trigger: alephcore::session::events::TurnTrigger::UserMessage,
+            at: at + 2,
+        },
+        seeded_user(tid, "still there?", at + 3),
+    ];
+    for (i, ev) in events.iter().enumerate() {
+        store
+            .append(&sid, i as EventSeq + 1, ev, at + i as i64)
+            .await
+            .unwrap();
+    }
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let boot = || {
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            adapter.clone() as Arc<dyn ExecutionAdapter>,
+            registry.clone(),
+            sessions.clone(),
+            test_bus(),
+        )
+    };
+
+    let first = boot().resume_interrupted_runs().await;
+    assert_eq!((first.scanned, first.resumed), (1, 1), "{first:?}");
+    assert_eq!(stamps(&store, &sid).await, vec![(4, 1)]);
+
+    let second = boot().resume_interrupted_runs().await;
+    assert_eq!(
+        (second.scanned, second.resumed, second.skipped),
+        (1, 1, 0),
+        "the stamped seed is still unanswered, not `skipped`: {second:?}"
+    );
+    assert_eq!(stamps(&store, &sid).await, vec![(4, 1), (4, 2)]);
+    assert_eq!(calls.lock().await.len(), 2);
+}
+
+/// The cap reads the unanswered ratchet the same way `Interrupted` reads its
+/// own: `max_attempts` stamps already spent ⇒ abandoned, not retriggered, and
+/// the closer pairs with no `RunStarted` (a `FinishWithoutStart` by design).
+#[tokio::test]
+async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-capped-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    store
+        .append(&sid, 1, &seeded_user(tid, "hello?", at), at)
+        .await
+        .unwrap();
+    let max_attempts = ResumeConfig::default().max_attempts;
+    for attempt in 1..=max_attempts {
+        store
+            .append(
+                &sid,
+                1 + EventSeq::from(attempt),
+                &SessionEvent::ResumeAttempted { target: 1, attempt },
+                at + i64::from(attempt),
+            )
+            .await
+            .unwrap();
+    }
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let r = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    )
+    .resume_interrupted_runs()
+    .await;
+    assert_eq!((r.scanned, r.resumed, r.abandoned), (1, 0, 1), "{r:?}");
+    assert!(
+        calls.lock().await.is_empty(),
+        "capped: nothing re-triggered"
+    );
+    let all = store.load_all_events(&sid).await.unwrap();
+    assert!(
+        matches!(
+            all.last().map(|r| &r.event),
+            Some(SessionEvent::RunFinished {
+                outcome: RunOutcome::Abandoned,
+                ..
+            })
+        ),
+        "the abandon closer lands last: {:?}",
+        all.last()
+    );
+}

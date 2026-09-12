@@ -383,6 +383,10 @@ pub(crate) fn last_run_notice(
             )
             .to_string(),
         ),
+        // No numbers: nothing ran, so there is nothing to count. The server
+        // stopped between the seed and the run's own marker, and recovery
+        // retries the message.
+        D::Unanswered => Some(td_string!(locale, narration.last_run_unanswered).to_string()),
         D::Clean | D::NeverRan => match dangling {
             Some(n) if n > 0 => {
                 Some(td_string!(locale, narration.last_run_dangling, count = n as i64).to_string())
@@ -409,6 +413,7 @@ pub(crate) fn run_badge(session: &SessionEntry) -> Option<RunBadge> {
         D::Interrupted => Some(RunBadge::Interrupted),
         D::LogInconsistent => Some(RunBadge::LogInconsistent),
         D::Unrecognized => Some(RunBadge::Unknown),
+        D::Unanswered => Some(RunBadge::Unanswered),
         D::Clean | D::NeverRan if dangling => Some(RunBadge::Interrupted),
         D::Clean | D::NeverRan => None,
     }
@@ -428,6 +433,8 @@ pub(crate) enum RunBadge {
     LogInconsistent,
     /// The server used a disposition word this build does not know.
     Unknown,
+    /// The last user message reached the server and no run answered it.
+    Unanswered,
 }
 
 impl RunBadge {
@@ -438,6 +445,7 @@ impl RunBadge {
             Self::Interrupted => t_string!(i18n, chat.run_badge_interrupted).to_string(),
             Self::LogInconsistent => t_string!(i18n, chat.run_badge_log_inconsistent).to_string(),
             Self::Unknown => t_string!(i18n, chat.run_badge_unknown).to_string(),
+            Self::Unanswered => t_string!(i18n, chat.run_badge_unanswered).to_string(),
         }
     }
 }
@@ -2281,12 +2289,12 @@ mod last_run_face_tests {
     /// The two silences a row can carry, neither of which earns a badge — and
     /// the one that must never be painted as "fine" is the first.
     #[test]
-    fn an_unanswered_or_clean_row_carries_no_badge() {
-        let unanswered = SessionEntry {
+    fn a_silent_or_clean_row_carries_no_badge() {
+        let silent = SessionEntry {
             key: "agent:main:main:s2".into(),
             ..SessionEntry::default()
         };
-        assert_eq!(run_badge(&unanswered), None);
+        assert_eq!(run_badge(&silent), None);
 
         let clean = SessionEntry {
             key: "agent:main:main:s3".into(),
@@ -2294,6 +2302,35 @@ mod last_run_face_tests {
             ..SessionEntry::default()
         };
         assert_eq!(run_badge(&clean), None);
+    }
+
+    /// §5.2: the server's word for "your message reached the log and no run
+    /// answered it". It is news on the attach face (one sentence, no numbers
+    /// — nothing ran, so there is nothing to count) and a badge on the row.
+    #[test]
+    fn an_unanswered_last_run_is_news_and_badges_the_row() {
+        let unanswered = LastRunState {
+            disposition: LastRunState::UNANSWERED.into(),
+            inspected: true,
+            ..LastRunState::default()
+        };
+        let notice =
+            last_run_notice(&unanswered, Locale::default()).expect("an unanswered message is news");
+        assert!(
+            notice.contains("not answered"),
+            "the en sentence names the fact: {notice}"
+        );
+
+        let row = SessionEntry {
+            key: "agent:main:main:s5".into(),
+            last_run: Some(LastRunState::from_markers(
+                LastRunState::UNANSWERED,
+                None,
+                0,
+            )),
+            ..SessionEntry::default()
+        };
+        assert_eq!(run_badge(&row), Some(RunBadge::Unanswered));
     }
 
     /// A word this build has never heard of is "cannot vouch", not "fine" —
