@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
+use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -25,7 +26,9 @@ pub struct BrowserClickArgs {
     pub x: Option<f64>,
     /// Y coordinate for coordinate-based clicking.
     pub y: Option<f64>,
-    /// Double-click instead of single-click (requires `ref_id` targeting).
+    /// Double-click instead of single-click. With `x`/`y` this needs a
+    /// `driver = "cdp"` profile; the other two drivers double-click only by
+    /// `ref_id`.
     #[serde(default)]
     pub double: bool,
 }
@@ -37,7 +40,8 @@ pub struct BrowserClickOutput {
     pub message: Option<String>,
 }
 
-/// Clicks an element on the page by `ref_id` or viewport coordinates.
+/// Clicks an element on the page by `ref_id` or page coordinates — the space
+/// `browser_snapshot` prints element geometry in.
 #[derive(Clone)]
 pub struct BrowserClickTool {
     manager: Arc<ProfileManager>,
@@ -68,25 +72,33 @@ impl BrowserClickTool {
 /// and previously the one place this family disagreed with itself (click and
 /// select hard-errored while type and fill_form did not, so the same mistake
 /// reached the model two different ways).
-fn resolve_target(args: &BrowserClickArgs) -> std::result::Result<ActionTarget, String> {
+///
+/// The `driver` is threaded in as a PARAMETER rather than fetched here: this is
+/// a free function with no `self` and therefore no manager, and keeping it a
+/// total function of its inputs is what makes the resolution testable and keeps
+/// it ahead of the approval gate.
+fn resolve_target(
+    args: &BrowserClickArgs,
+    driver: Option<BrowserDriver>,
+) -> std::result::Result<ActionTarget, String> {
     if let Some(ref rid) = args.ref_id {
         Ok(ActionTarget::Ref {
             ref_id: rid.clone(),
         })
     } else if let (Some(x), Some(y)) = (args.x, args.y) {
-        // `double` is a ref-only capability, and saying so here is what makes
-        // the claim true. Neither driver has a coordinate double-click —
-        // `BrowserBackend::dblclick` states the constraint and both
-        // implementations reject anything but a ref — so a coordinate
-        // `double: true` was always going to fail, but only AFTER the approval
-        // gate had spent a user approval and the tab had been resolved. The
-        // arg doc and the tool DESCRIPTION both already advertised the
-        // restriction; nothing enforced it.
-        if args.double {
+        // Driver-dependent, not universal: the CDP backend dispatches two
+        // press/release pairs at a point, so a coordinate double-click is a
+        // real call on a `driver = "cdp"` profile. The other two have only a
+        // ref-taking native primitive and refuse a coordinate outright. Still
+        // refused BEFORE the approval gate for the drivers that cannot serve it
+        // — a call rejected by construction must not spend a user approval —
+        // and an unknown profile (`None`) refuses too, which is the fail-closed
+        // direction.
+        if args.double && driver != Some(BrowserDriver::Cdp) {
             return Err(
-                "browser_click double=true requires ref_id targeting: neither browser driver \
-                 has a coordinate-based double-click. Call browser_snapshot and pass the \
-                 ref_id it reports."
+                "browser_click double=true by coordinates needs a driver=\"cdp\" profile; \
+                 this profile's driver double-clicks only by ref_id. Call browser_snapshot \
+                 and pass the ref_id it reports, or use a cdp profile."
                     .into(),
             );
         }
@@ -105,14 +117,16 @@ impl AlephTool for BrowserClickTool {
     const NAME: &'static str = "browser_click";
     const DESCRIPTION: &'static str =
         "Click an element on the page by accessibility ref_id or coordinates; \
-         set double=true for a double-click (ref_id only)";
+         set double=true for a double-click (by coordinates only on a \
+         driver=\"cdp\" profile)";
     type Args = BrowserClickArgs;
     type Output = BrowserClickOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Validate before the approval check: a malformed call is a model
         // mistake and must not consume a user approval or touch the page.
-        let target = match resolve_target(&args) {
+        let driver = self.manager.get_driver(&args.profile);
+        let target = match resolve_target(&args, driver) {
             Ok(t) => t,
             Err(message) => {
                 return Ok(BrowserClickOutput {
@@ -288,10 +302,15 @@ mod tests {
         assert!(result.message.is_some());
     }
 
-    /// `double: true` with coordinates is a call neither driver can serve
-    /// (`BrowserBackend::dblclick` takes a ref only), so it must be refused
-    /// with the contract — and refused before the approval gate, since a
-    /// rejected-by-construction call must not spend a user approval.
+    /// `double: true` with coordinates is a call **this profile's driver**
+    /// cannot serve — `ProfileConfig::default()` is `driver = "managed"`, whose
+    /// `dblclick` takes a ref only — so it must be refused with the contract,
+    /// and refused before the approval gate, since a rejected-by-construction
+    /// call must not spend a user approval.
+    ///
+    /// The condition narrowed when the CDP backend gained a real coordinate
+    /// double-click: the refusal is no longer universal, so the fixture's
+    /// driver is now load-bearing and is named in the assertion below.
     #[tokio::test]
     async fn double_click_by_coordinates_is_refused_before_the_approval_gate() {
         use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
@@ -309,6 +328,14 @@ mod tests {
         }
 
         let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        // The premise the refusal now rests on, asserted rather than assumed:
+        // with a `cdp` profile this call is legal, so a fixture that had
+        // drifted to one would make this test pass for the opposite reason.
+        assert_eq!(
+            manager.get_driver("default"),
+            Some(BrowserDriver::Managed),
+            "precondition: the refusal below holds only for a non-cdp driver"
+        );
         let asked = Arc::new(AtomicUsize::new(0));
         let tool = BrowserClickTool::new(manager)
             .with_approval_policy(
@@ -331,7 +358,7 @@ mod tests {
             result
                 .message
                 .as_deref()
-                .is_some_and(|m| m.contains("double=true requires ref_id")),
+                .is_some_and(|m| m.contains("needs a driver=\"cdp\" profile")),
             "got: {:?}",
             result.message
         );
@@ -340,6 +367,67 @@ mod tests {
             0,
             "a call the backend cannot serve must not consume an approval"
         );
+    }
+
+    /// The `DESCRIPTION` and the guard state the same fact, so they have to be
+    /// pinned to each other: the sentence names the driver that CAN do it, and
+    /// the guard lets exactly that driver through. A `DESCRIPTION` edit that
+    /// dropped the driver name would leave the model told "coordinates only" on
+    /// a profile where coordinates work (判据 §1, and 判据 §17 — the wrong
+    /// label costs more than the vague one).
+    #[test]
+    fn the_description_names_the_driver_that_supports_a_coordinate_double_click() {
+        let d = BrowserClickTool::DESCRIPTION;
+        assert!(d.contains("double=true"), "still documents the flag: {d}");
+        assert!(
+            d.contains("cdp"),
+            "must name the driver a coordinate double-click needs: {d}"
+        );
+        assert!(
+            !d.contains("ref_id only"),
+            "the old universal restriction must be gone, not merely added to: {d}"
+        );
+    }
+
+    /// The permissive half of the narrowed predicate, at the only layer that
+    /// can be reached without a manager wired to a live engine: a `cdp` profile
+    /// lowers a coordinate `double: true` to a real `Coordinates` target
+    /// instead of refusing it.
+    ///
+    /// Written against `resolve_target` rather than through `call` because the
+    /// end-to-end version needs Task 14's manager wiring (a `driver = "cdp"`
+    /// profile plus a registry seeded through `insert_for_test`). Without
+    /// something here, reverting the predicate to the unconditional
+    /// `if args.double` would leave every test in this file green — the guard
+    /// would be 恒红 for the cdp case and nothing would say so (判据 §2).
+    #[test]
+    fn a_cdp_profile_lowers_a_coordinate_double_click_instead_of_refusing_it() {
+        let args = BrowserClickArgs {
+            profile: "default".into(),
+            ref_id: None,
+            x: Some(10.0),
+            y: Some(20.0),
+            double: true,
+        };
+        match resolve_target(&args, Some(BrowserDriver::Cdp)) {
+            Ok(ActionTarget::Coordinates { x, y }) => {
+                assert!((x - 10.0).abs() < f64::EPSILON && (y - 20.0).abs() < f64::EPSILON);
+            }
+            other => panic!("a cdp profile must serve this call, got {other:?}"),
+        }
+        // Both non-cdp drivers and the unknown profile refuse — the fail-closed
+        // direction, enumerated so a new driver variant cannot quietly inherit
+        // a permission it has no primitive for.
+        for driver in [
+            Some(BrowserDriver::Managed),
+            Some(BrowserDriver::ExistingSession),
+            None,
+        ] {
+            assert!(
+                resolve_target(&args, driver).is_err(),
+                "a coordinate double-click must be refused for {driver:?}"
+            );
+        }
     }
 
     #[tokio::test]

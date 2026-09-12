@@ -104,7 +104,9 @@ pub enum ExecAction {
         /// The URL to navigate to.
         url: String,
     },
-    /// Click an element by snapshot ref_id or viewport coordinates.
+    /// Click an element by snapshot ref_id or page coordinates (the space
+    /// `browser_snapshot` prints geometry in; converted to the viewport before
+    /// dispatch).
     Click {
         /// Accessibility `ref_id` from a previous snapshot.
         #[serde(default)]

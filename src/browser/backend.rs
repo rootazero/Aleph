@@ -76,10 +76,16 @@ pub trait BrowserBackend: Send + Sync {
     /// primitive so the command waits for the resulting navigation to complete.
     async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError>;
 
-    /// Double-click an element. The target must be a snapshot ref — neither
-    /// driver exposes a coordinate-based double-click primitive.
+    /// Double-click an element.
     ///
-    /// Required method — both backends have a native double-click.
+    /// Coordinate double-click is a **per-backend capability**, not a property
+    /// of the verb: the CDP backend dispatches two press/release pairs at the
+    /// point, while the playwright-cli and Chrome `DevTools` MCP backends have
+    /// only a ref-taking native primitive and refuse a coordinate with
+    /// [`BrowserError::ActionFailed`] naming the ref requirement. A caller that
+    /// needs it on an unnamed element uses a `driver = "cdp"` profile.
+    ///
+    /// Required method — all three backends have a native double-click.
     async fn dblclick(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError>;
 
     /// Wait until `condition` holds on the tab, within `timeout_ms`.

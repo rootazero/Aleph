@@ -15,7 +15,17 @@ pub use super::tab_registry::TabLine;
 pub enum ActionTarget {
     /// Target an element by its snapshot ref ID (e.g. "e42").
     Ref { ref_id: String },
-    /// Target a viewport coordinate.
+    /// Target a **page** coordinate — origin at the top-left of the document,
+    /// which is the space `browser_snapshot`'s geometry is printed in, so a
+    /// number the model read off a snapshot line means here what it meant
+    /// there.
+    ///
+    /// The CDP backend converts to the viewport with `Page.getLayoutMetrics`
+    /// before dispatching. The two text backends have no page-coordinate
+    /// primitive and hand the number to a viewport-based mouse API, which
+    /// agrees only at `scroll = 0`; they also print no geometry at all, so no
+    /// model can derive a coordinate from one of their snapshots in the first
+    /// place. Stated rather than papered over.
     Coordinates { x: f64, y: f64 },
 }
 
