@@ -53,12 +53,24 @@ pub(super) async fn close_tab(be: &CdpBackend, tab_id: &str) -> Result<(), Brows
     let closed = target::close_target(&handle.conn, &TargetId(tab_id.to_string()))
         .await
         .map_err(|e| map_cdp_err(be.engine(), "Target.closeTarget", e))?;
-    // The verdict comes BEFORE the state change. Dropping the entry first and
-    // then reporting `TabNotFound` would leave a tab that may well still exist
-    // unaddressable — the table and the answer disagreeing about the same fact,
-    // with the model told the tab was never there.
+    // The verdict comes BEFORE the state change: dropping the entry first would
+    // leave a tab that may well still exist unaddressable.
+    //
+    // And the refusal is reported AS a refusal. It used to answer
+    // `TabNotFound`, which is the engine's most likely meaning for
+    // `success: false` — and is exactly wrong in the case the entry is kept:
+    // the very next `list_tabs` still lists the tab, so the model was handed
+    // two faces of one fact that contradict each other (判据 §9), and the
+    // wrong label costs more than a vague one (判据 §17). It names the state
+    // the tab is actually in and the verb that reaches it.
     if !closed {
-        return Err(BrowserError::TabNotFound(tab_id.to_string()));
+        return Err(BrowserError::ActionFailed(format!(
+            "the engine refused to close tab {tab_id} (Target.closeTarget \
+             answered success:false). It is still in this profile's tab list \
+             and still addressable — most often that means the id no longer \
+             names a page in the browser, so re-run browser_tabs to see what \
+             is actually open before acting on it again."
+        )));
     }
     {
         let mut tabs = handle.tabs.lock().await;
@@ -303,15 +315,30 @@ mod tests {
             .close_tab("T1")
             .await
             .expect_err("the engine refused the close");
-        assert!(
-            matches!(err, crate::browser::error::BrowserError::TabNotFound(ref id) if id == "T1"),
-            "got {err:?}"
-        );
+        let text = err.to_string();
         let tabs = backend.list_tabs().await.expect("list ok");
         assert_eq!(
             tabs.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
             vec!["T1"],
             "a tab the engine would not close must stay addressable: {tabs:?}"
+        );
+
+        // **The error and the listing are two faces of one fact and they must
+        // agree.** This used to answer `TabNotFound`, while the assertion above
+        // proves the tab is still listed — so the model was handed "there is no
+        // such tab" and a listing containing it, one call apart (判据 §9). A
+        // wrong label costs more than a vague one (判据 §17).
+        assert!(
+            !matches!(err, crate::browser::error::BrowserError::TabNotFound(_)),
+            "a tab this listing still contains must not be reported as absent: {text}"
+        );
+        assert!(
+            text.contains("refused") && text.contains("T1"),
+            "the refusal names itself and the tab: {text}"
+        );
+        assert!(
+            text.contains("browser_tabs"),
+            "a closed gate names a door that opens (判据 §14): {text}"
         );
     }
 }

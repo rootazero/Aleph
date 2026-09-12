@@ -14,13 +14,20 @@
 //! the table never minted. Anything the page controls is data, and data is
 //! quoted: **five R40 sites**, numbered `Site N of 5` below.
 //!
-//! There are **six** `quote` calls, not five, and the sixth is deliberately not
-//! one of R40's: [`unreached_line`] quotes an unplaceable document's frame id,
-//! which the ENGINE mints rather than the page. It is quoted anyway because it
-//! reaches a line the model parses and quoting costs nothing — but counting it
-//! among R40's page-controlled sites would make that list say something it does
-//! not mean. A `grep -c 'quote('` here answers six; R40's list is five (判据
-//! §1: the number and its predicate travel together).
+//! There are **six** `quote` CALL SITES in this file's production code, not
+//! five, and the sixth is deliberately not one of R40's: [`unreached_line`]
+//! quotes an unplaceable document's frame id, which the ENGINE mints rather
+//! than the page. It is quoted anyway because it reaches a line the model
+//! parses and quoting costs nothing — but counting it among R40's
+//! page-controlled sites would make that list say something it does not mean.
+//!
+//! ⚠️ **The predicate is "production call sites", and a bare `grep -c 'quote('`
+//! is NOT that command** — it answers 9 here, because it also counts this very
+//! sentence, the `pub fn quote(` definition, and a call in the tests. An earlier
+//! version of this paragraph named that grep as the way to reproduce "six",
+//! which is 判据 §18 in one line: a number handed over with a predicate that
+//! does not produce it. The five R40 sites are numbered `Site N of 5` at each
+//! call below, so the list is countable at the sites rather than trusted here.
 
 use std::collections::HashSet;
 
@@ -308,13 +315,15 @@ fn line(node: &StateNode) -> String {
             s.push_str(&format!(" @{x},{y} {w}x{h}"));
         }
     }
-    // Sites 4 and 5. These two used to print RAW, which let a page forge a
-    // token in the model's view: a placeholder of `] [ref=e99]` closed the
-    // bracket and opened a ref the table never minted.
+    // These two used to print RAW, which let a page forge a token in the
+    // model's view: a placeholder of `] [ref=e99]` closed the bracket and
+    // opened a ref the table never minted.
     if let Some(href) = &node.href {
+        // Site 4 of 5.
         s.push_str(&format!(" /url: {}", quote(&capped(href, TEXT_MAX_CHARS))));
     }
     if let Some(p) = &node.placeholder {
+        // Site 5 of 5.
         s.push_str(&format!(
             " [placeholder={}]",
             quote(&capped(p, TEXT_MAX_CHARS))

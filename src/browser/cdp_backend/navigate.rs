@@ -43,6 +43,25 @@ struct LoadOutcome {
 /// `events` is passed in, not opened here: the subscription has to exist BEFORE
 /// the caller issues its command, or a cached page's load event arrives while
 /// nobody is listening and the barrier waits out the whole budget.
+/// How many events this subscriber never saw, phrased for a model.
+///
+/// The broadcast buffers [`aleph_cdp::EVENT_CHANNEL_CAPACITY`] events per
+/// subscriber and `EventStream::next` counts a lag and steps over it. If
+/// `Page.loadEventFired` was among the ones skipped, the barrier below times
+/// out on a page that loaded — and "did not report load" would then be a
+/// confident wrong answer rather than an unknown. The count is cheap and it is
+/// the only thing that separates the two, so it goes in the sentence the model
+/// reads (判据 §17: the wrong label costs more than the vague one).
+fn lag_note(events: &aleph_cdp::EventStream) -> String {
+    match events.lagged() {
+        0 => String::new(),
+        n => format!(
+            " ({n} engine event(s) were dropped while this call was waiting, so \
+             the load may in fact have completed unseen)"
+        ),
+    }
+}
+
 async fn wait_for_load(
     events: &mut aleph_cdp::EventStream,
     session: &SessionId,
@@ -181,9 +200,16 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
         Ok(())
     } else {
         Err(BrowserError::NavigationFailed(format!(
-            "{url} did not report load within {}s — the page may still be \
+            // Quoted for the same reason the `errorText` branch above is, even
+            // though this URL is the caller's rather than the page's: one
+            // function that quotes a string in one arm and not the next reads
+            // as if the difference were meaningful. It is not — it is the same
+            // line, going to the same reader.
+            "{} did not report load within {}s{} — the page may still be \
              loading; re-run browser_snapshot to see what is there",
-            budget.as_secs_f64()
+            crate::browser::page_state::quote(url),
+            budget.as_secs_f64(),
+            lag_note(&events)
         )))
     }
 }
@@ -259,8 +285,9 @@ pub(super) async fn history(
         Ok(())
     } else {
         Err(BrowserError::NavigationFailed(format!(
-            "the history navigation did not report load within {}s",
-            be.command_timeout().as_secs_f64()
+            "the history navigation did not report load within {}s{}",
+            be.command_timeout().as_secs_f64(),
+            lag_note(&events)
         )))
     }
 }

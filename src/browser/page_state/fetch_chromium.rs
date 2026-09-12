@@ -210,6 +210,18 @@ const IFRAME_TARGET_TYPE: &str = "iframe";
 /// always Chromium and an empty answer degrades to a fact the model is told, not to "this browser
 /// has no tabs".
 ///
+/// # What this costs, so nobody has to rediscover it
+///
+/// `Target.getTargets` is browser-wide and takes no filter here, and each row with
+/// `type == "iframe"` costs one `DOM.getFrameOwner` round trip. A browser holding N tabs with M
+/// out-of-process frames each therefore pays up to N×M round trips per snapshot of **any** page
+/// that has at least one OOPIF — including frames belonging to other tabs, which is the price of
+/// the membership test being the join. A single-renderer page pays **none** of it: the accounting
+/// bound above returns before any of this runs, which
+/// `a_single_renderer_page_costs_no_child_enumeration` asserts. If it ever bites, the fix is a
+/// narrower enumeration — but see the loop body first: narrowing it by trusting
+/// `type == "iframe"` alone splits one membership fact into two derivations (判据 §12).
+///
 /// # What it does when it cannot reach them all
 ///
 /// It supplies the children it did capture and lets [`stitch_snapshots`] judge: with any child
@@ -289,8 +301,14 @@ async fn frame_owner(
     target: &aleph_cdp::TargetId,
 ) -> Option<u64> {
     match aleph_cdp::methods::dom::get_frame_owner(conn, Some(parent), target.as_str()).await {
-        // `0` is CDP's own "no node", so it is not an id any caller may act on.
-        Ok(id) => u64::try_from(id).ok().filter(|id| *id != 0),
+        // No `!= 0` filter here. `0` is CDP's own "no node" and must never
+        // become an id a caller acts on — but that rule has ONE owner, the
+        // wrapper, which refuses a zero as `CdpError::Decode`
+        // (`a_zero_backend_node_id_is_refused_rather_than_returned_as_an_id`).
+        // A second copy here was unreachable, and unreachable copies of a rule
+        // are how the two part company the day one is "simplified" (判据 §1).
+        // `try_from` stays: it is the i64→u64 conversion, not a second gate.
+        Ok(id) => u64::try_from(id).ok(),
         Err(e) => {
             tracing::debug!(
                 target = %target,
@@ -512,14 +530,29 @@ pub fn parse_snapshot(
 /// * A document no element owns: same reason, and it means the capture has a
 ///   shape this parser does not model.
 /// * When ANY child is supplied — i.e. the caller is claiming it enumerated the
-///   page's frames — an `<iframe>`/`<frame>` with neither a content document in
-///   the capture nor a supplied child. A `RawDom` in which missing cross-origin
-///   content is indistinguishable from a genuinely empty iframe is an absence
-///   read as a fact, and nothing downstream can recover it: Task 14 renders from
-///   `RawDom` and cannot know a frame was never captured.
+///   page's frames — an `<iframe>`/`<frame>` **in the parent's own documents**
+///   with neither a content document in the capture nor a supplied child. A
+///   `RawDom` in which missing cross-origin content is indistinguishable from a
+///   genuinely empty iframe is an absence read as a fact, and nothing downstream
+///   can recover it.
 ///
 /// With NO children the last gate is off, because `parse_snapshot` documents
 /// itself as one session's view rather than claiming to be the page.
+///
+/// # What it CARRIES rather than refuses: a grandchild
+///
+/// An unaccounted frame element inside a **child's** documents is a nested
+/// cross-origin frame (`a.com` → `b.com` → `c.com`). Its owner element lives in
+/// the child's renderer, so no caller working from the page session can resolve
+/// it — refusing would be a demand nobody can satisfy, and it cost the model the
+/// whole page on a shape ad and consent stacks are built out of. It becomes
+/// [`UnreachedFrame::NotCaptured`], which is what that carrier is for.
+///
+/// **Recursing is not done here**, and the signature is why: `ChildCapture` is
+/// flat and its `owner_backend_node_id` lives in the PARENT session's node
+/// space, while a grandchild's owner lives in its own parent's node space. Any
+/// depth past one needs the owner expressed as `(owning capture, backendNodeId)`,
+/// or a parent pointer per child. Do not discover that by trying.
 pub fn stitch_snapshots(
     parent: &serde_json::Value,
     children: &[ChildCapture<'_>],
@@ -539,36 +572,71 @@ pub fn stitch_snapshots(
         child_snapshots.push(snapshot);
     }
 
-    // Every frame element with no content document in any of these captures.
-    // Computed the same way in both modes — it is one accounting, read twice,
-    // not two rules (判据 §16).
+    // Every frame element with no content document, split by WHOSE document it
+    // sits in. One accounting, read twice, not two rules (判据 §16) — but the
+    // two halves answer different questions, and conflating them refused whole
+    // pages.
+    //
+    // # The gate's domain is the set the enumeration can reach, and nothing
+    // # wider
+    //
+    // A caller supplying children is claiming to have enumerated them, and that
+    // claim can only ever be about the frames it was *able* to enumerate. There
+    // is exactly one source for what that set is, and it is not a second rule
+    // written here: `DOM.getFrameOwner` is session-scoped, so a caller working
+    // from the page session can resolve the owner element of a frame whose
+    // owner lives in the PAGE's renderer — and of no other (measured, U4b
+    // finding 7: an unknown frame is refused with "Frame with the given id was
+    // not found"). So:
+    //
+    // * unaccounted in the PARENT's own documents  ⇒ the caller did not do what
+    //   it claimed, and this is the refusal that rule was written for, unchanged;
+    // * unaccounted inside a CHILD's documents ⇒ a grandchild, whose owner
+    //   element lives in that child's renderer. No caller of this function can
+    //   place it, so refusing is not a demand anyone can satisfy — it is
+    //   `unreached_frames`, which is the machinery that already exists for
+    //   exactly "content the model is not being shown".
+    //
+    // The case this does NOT relax: `a.com` → `a.com/sub` (same process, so its
+    // content document IS in the parent capture) → `b.com`. That `<iframe>`'s
+    // owner is in the parent's own document set and `getTargets` lists `b`, so a
+    // caller that missed it still refuses.
+    //
+    // Before this split, `a.com → b.com → c.com` — an ad, consent or embed stack,
+    // i.e. an ordinary page — returned `Err` and the model got **no page at all**
+    // rather than the parent's content plus a confession.
     let accounted: HashSet<u64> = children.iter().map(|c| c.owner_backend_node_id).collect();
-    let mut missing: Vec<u64> = Vec::new();
-    for snapshot in std::iter::once(&parent_snapshot).chain(child_snapshots.iter()) {
-        missing.extend(unaccounted_frame_elements(snapshot, &accounted)?);
+    let unenumerable = unaccounted_frame_elements(&parent_snapshot, &accounted)?;
+    let mut nested: Vec<u64> = Vec::new();
+    for snapshot in &child_snapshots {
+        nested.extend(unaccounted_frame_elements(snapshot, &accounted)?);
     }
 
-    if children.is_empty() {
-        // A single-session capture does not claim to be the page, so an
-        // unreached frame is a fact to carry rather than a failure. This is the
-        // list that keeps a missing cross-origin subtree distinguishable from a
-        // genuinely empty iframe.
-        unreached.extend(missing.into_iter().map(UnreachedFrame::NotCaptured));
-    } else if !missing.is_empty() {
-        // Supplying any child IS a claim to have enumerated them, so here the
-        // same accounting is a gate rather than a fact to carry. When the claim
-        // holds, no `NotCaptured` entry can be produced at all — which is why
-        // nothing has to be cleared. `Unplaceable` is unaffected: it describes
-        // a different failure and can still land with children supplied.
+    if !children.is_empty() && !unenumerable.is_empty() {
+        // Supplying any child IS a claim to have enumerated the frames this
+        // session can reach. `Unplaceable` is unaffected: it describes a
+        // different failure and can still land with children supplied.
         return Err(BrowserError::ActionFailed(format!(
-            "this capture claims to span the page, but {} frame element(s) \
-             have no content document and no child capture: backendNodeId \
-             {missing:?}. Their content would be missing from the page \
-             state with nothing saying so. Attach each frame's target and \
-             capture it, or re-run browser_snapshot.",
-            missing.len()
+            "this capture claims to span the page, but {} frame element(s) in \
+             the page's own document have no content document and no child \
+             capture: backendNodeId {unenumerable:?}. Their content would be \
+             missing from the page state with nothing saying so. Attach each \
+             frame's target and capture it, or re-run browser_snapshot.",
+            unenumerable.len()
         )));
     }
+    // With no children supplied this carries the parent's own unreached frames —
+    // a single-session capture does not claim to be the page. With children
+    // supplied `unenumerable` is empty (the gate above) and this carries the
+    // grandchildren. One expression, because it is one list: the frames whose
+    // content is not in this `RawDom` and which the reader must not mistake for
+    // empty iframes.
+    unreached.extend(
+        unenumerable
+            .into_iter()
+            .chain(nested)
+            .map(UnreachedFrame::NotCaptured),
+    );
 
     Ok(RawDom {
         engine: crate::browser::engine::Engine::Chromium,
@@ -2883,6 +2951,101 @@ mod tests {
             &l,
         )
         .expect("a fully accounted page stitches");
+    }
+
+    /// **`a.com` → `b.com` → `c.com`: the grandchild is confessed, not refused.**
+    ///
+    /// The shape ad, consent and embed stacks are built out of, and before the
+    /// gate's domain was narrowed it returned `Err` for all of them — the model
+    /// got no page at all rather than the parent's content plus a confession.
+    ///
+    /// `c` is unreachable by construction, not by omission: `DOM.getFrameOwner`
+    /// is session-scoped and `c`'s owner element lives in `b`'s renderer, so no
+    /// caller working from the page session can place it (U4b finding 7). A
+    /// refusal would be a demand nobody can satisfy.
+    ///
+    /// The child capture here is the parent fixture again with its
+    /// `backendNodeId`s shifted: it is the one Task 0 capture that contains an
+    /// `<iframe>` element with no content document, which is exactly what a
+    /// middle frame holding a further cross-origin frame looks like. The shift
+    /// keeps the grandchild's id distinct from the owner id, so the assertion
+    /// cannot pass by the two colliding.
+    #[test]
+    fn a_grandchild_cross_origin_frame_is_carried_rather_than_refusing_the_page() {
+        const SHIFT: u64 = 100_000;
+        let parent = json(OOPIF_PARENT);
+        let mut middle = json(OOPIF_PARENT);
+        for b in middle["documents"][0]["nodes"]["backendNodeId"]
+            .as_array_mut()
+            .expect("backendNodeId[]")
+        {
+            let id = b.as_u64().expect("a backend id");
+            *b = serde_json::json!(id + SHIFT);
+        }
+        // The middle frame must be a DIFFERENT document than the parent, or the
+        // loader map below collapses the two and this proves nothing.
+        let middle_frame = "F-MIDDLE";
+        let idx = middle["strings"].as_array().expect("strings[]").len();
+        middle["strings"]
+            .as_array_mut()
+            .expect("strings[]")
+            .push(serde_json::json!(middle_frame));
+        middle["documents"][0]["frameId"] = serde_json::json!(idx);
+
+        let mut l = loaders_of(&parent);
+        l.extend(loaders_of(&middle));
+
+        let dom = stitch_snapshots(
+            &parent,
+            &[ChildCapture {
+                owner_backend_node_id: 65,
+                raw: &middle,
+            }],
+            viewport(),
+            &l,
+        )
+        .expect(
+            "a nested cross-origin frame must not cost the model the whole \
+             page: the parent and the middle frame were both captured",
+        );
+
+        // The grandchild is named, once, as the id it has in the capture that
+        // holds it.
+        assert_eq!(
+            dom.unreached_frames,
+            vec![UnreachedFrame::NotCaptured(65 + SHIFT)],
+            "the grandchild must be confessed by the id its own capture uses"
+        );
+        // …and both renderers' content survived.
+        assert_eq!(dom.frames.len(), 2, "parent and middle: {:?}", dom.frames);
+        assert!(
+            dom.frames.iter().any(|f| f.frame_id == middle_frame),
+            "the middle frame's document is in the tree: {:?}",
+            dom.frames
+        );
+
+        // The boundary this must NOT relax: an unaccounted frame in the
+        // PARENT's own document is still a refusal, because the caller could
+        // have resolved its owner on the session it already holds. Same call,
+        // same fixtures, only the owner id changed to one that leaves the
+        // parent's own <iframe> unaccounted.
+        let html_backend = parent["documents"][0]["nodes"]["backendNodeId"][0]
+            .as_u64()
+            .expect("the root node's backend id");
+        let err = stitch_snapshots(
+            &parent,
+            &[ChildCapture {
+                owner_backend_node_id: html_backend,
+                raw: &middle,
+            }],
+            viewport(),
+            &l,
+        )
+        .expect_err("the parent's own iframe was never accounted for");
+        assert!(
+            err.to_string().contains("65"),
+            "and the refusal still names it: {err}"
+        );
     }
 
     /// A frame element whose `backendNodeId` cannot be read is REFUSED, never

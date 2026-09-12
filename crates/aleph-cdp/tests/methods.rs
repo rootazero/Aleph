@@ -761,6 +761,82 @@ async fn dom_get_box_model_propagates_every_other_protocol_error() {
     );
 }
 
+/// `DOM.getFrameOwner` — the join a Chromium page capture needs, and the one
+/// refusal in this file that nothing could reach.
+///
+/// The wrapper turns a `backendNodeId` of `0` into `Decode` rather than handing
+/// it back as an id. `0` is CDP's own "no node", so a caller acting on it would
+/// place a whole child document at whatever node `0` resolves to (判据 §8) —
+/// and that branch had no test anywhere: it was reasoned about in a doc comment
+/// and never falsifiable (判据 §2, the 没装上 face). Every other `pub async fn`
+/// in `methods/dom.rs` is exercised here; this one arrived with the OOPIF work
+/// and did not.
+#[tokio::test]
+async fn dom_get_frame_owner_joins_a_frame_to_its_element_and_refuses_a_zero_id() {
+    let (server, conn) = replying("DOM.getFrameOwner", json!({ "backendNodeId": 65 })).await;
+    let owner = dom::get_frame_owner(&conn, Some(&session()), "F-CHILD")
+        .await
+        .expect("the owner element resolves");
+    assert_eq!(owner, 65);
+    assert_eq!(
+        server.last_params("DOM.getFrameOwner").expect("params"),
+        json!({ "frameId": "F-CHILD" }),
+        "the frame id is what identifies the owner, and it goes on the wire \
+         verbatim"
+    );
+
+    // `0` is CDP's own "no node". Handing it back as an id is the defect the
+    // wrapper exists to prevent, so this is the assertion that makes that
+    // sentence checkable.
+    let (_server, conn) = replying("DOM.getFrameOwner", json!({ "backendNodeId": 0 })).await;
+    let err = dom::get_frame_owner(&conn, Some(&session()), "F-CHILD")
+        .await
+        .expect_err("zero is not an id");
+    match err {
+        CdpError::Decode(ref text) => {
+            assert!(
+                text.contains("F-CHILD"),
+                "the refusal names the frame: {text}"
+            );
+            assert!(
+                text.contains('0'),
+                "…and the value it refused, or a reader cannot tell this apart \
+                 from a parse failure: {text}"
+            );
+        }
+        other => panic!("expected Decode, got {other:?}"),
+    }
+
+    // A reply with no `backendNodeId` at all is also "we do not know", never a
+    // default id.
+    let (_server, conn) = replying("DOM.getFrameOwner", json!({})).await;
+    let err = dom::get_frame_owner(&conn, Some(&session()), "F-CHILD")
+        .await
+        .expect_err("an absent field is not a zero and not an id");
+    assert!(matches!(err, CdpError::Decode(_)), "{err:?}");
+
+    // And a frame this session does not own is the PEER's refusal, which must
+    // reach the caller as a protocol error rather than as "no owner" — the
+    // CDP backend spends exactly this distinction to decide whether an iframe
+    // target belongs to the page it is capturing.
+    let server = FakeCdpServer::start(scripted(vec![(
+        "DOM.getFrameOwner",
+        Responder::Error {
+            code: -32000,
+            message: "Frame with the given id was not found.".to_string(),
+        },
+    )]))
+    .await;
+    let conn = connect(&server).await;
+    let err = dom::get_frame_owner(&conn, Some(&session()), "F-STRANGER")
+        .await
+        .expect_err("a frame this session does not own is refused by the peer");
+    assert!(
+        matches!(err, CdpError::Protocol { code: -32000, .. }),
+        "{err:?}"
+    );
+}
+
 #[tokio::test]
 async fn dom_resolve_and_describe_and_the_void_dom_verbs_send_their_arguments() {
     let resolved = parse(fixture!("chrome-DOM.resolveNode.json"));

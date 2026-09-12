@@ -98,6 +98,19 @@ impl CdpBackend {
         // claim to be on (判据 §1). The argument is the authority and the
         // request is corrected to match, rather than the two being carried side
         // by side for a later reader to pick between.
+        //
+        // ⚠️ `req.session_key` is NOT normalised, and that is a decision for
+        // whoever writes the first production constructor rather than one to
+        // make blind here. It is a second profile-shaped string — it names the
+        // engine's on-disk sidecar (`engine::chromium`) — so a caller passing a
+        // `profile` argument that disagrees with `req.session_key` gets a
+        // backend whose registry key and whose sidecar name are different
+        // strings, silently. Overwriting it here would be worse: the session
+        // key is deliberately separable from the profile (that is what lets one
+        // profile hold more than one launched session), so this constructor
+        // does not get to decide they are the same thing. **Task 14 owns
+        // this**: build the `LaunchRequest` and the profile name from one
+        // source, or say in its own words why they differ.
         let mut req = req;
         req.profile = profile.into();
         Self {
@@ -522,9 +535,22 @@ mod tests {
             .any(|l| l.starts_with("#![allow(") && l.contains("dead_code"))
     }
 
-    /// Whether `code` constructs a `CdpBackend`.
+    /// Whether `code` brings a `CdpBackend` into existence.
+    ///
+    /// Three spellings, because one was not enough and the miss was in the
+    /// expensive direction: a recogniser that fails to see a construction
+    /// leaves the permit standing forever, silently. A factory
+    /// `fn build(..) -> CdpBackend` called as `cdp_backend::build(..)` says
+    /// `CdpBackend::new(` at neither end — the call site does not name the type
+    /// at all — so the shape has to be recognised where the backend is produced.
+    ///
+    /// Like every name list this covers the day it was written (判据 §5), and
+    /// its failure direction is the bad one, which is why the controls below
+    /// carry a case per spelling rather than one case for today's code.
     fn constructs_the_backend(code: &str) -> bool {
         code.contains("CdpBackend::new(")
+            || code.contains("-> CdpBackend")
+            || code.contains("<CdpBackend")
     }
 
     /// The recogniser controls, and they are not optional here.
@@ -560,9 +586,27 @@ mod tests {
             );
         }
 
-        assert!(constructs_the_backend(
-            "Ok(Arc::new(CdpBackend::new(reg, engine)))"
-        ));
+        for construction in [
+            "Ok(Arc::new(CdpBackend::new(reg, engine)))",
+            // The F-2 scenario, named: a factory INSIDE this module, called
+            // from elsewhere by a name that never mentions the type. Neither
+            // end says `CdpBackend::new(`, and the guard used to skip this
+            // whole directory, so nothing saw it at either end.
+            "pub(crate) fn build(m: &Manager) -> CdpBackend { todo!() }",
+            "fn build(m: &Manager) -> Result<CdpBackend, BrowserError> { todo!() }",
+            "fn parked() -> Option<Arc<CdpBackend>> { None }",
+        ] {
+            assert!(
+                constructs_the_backend(construction),
+                "a construction this shape is not recognised, so the permit \
+                 would never expire for it: {construction:?}"
+            );
+        }
+        assert!(
+            !constructs_the_backend("pub struct CdpBackend {"),
+            "the DECLARATION is not a construction, or the permit is red on \
+             its own first run"
+        );
         assert!(
             !constructs_the_backend(&crate::utils::source_scan::code_text(
                 "// Task 14 replaces this arm with CdpBackend::new(...)"
@@ -615,13 +659,17 @@ mod tests {
         );
         let permit = module_dead_code_permit(&me);
 
+        // **No directory is skipped**, and the earlier version's skip of
+        // `src/browser/cdp_backend/` is why this comment exists. It was
+        // justified as "this module's own tests construct one on purpose" — but
+        // `production_text` already removes every `#[cfg(test)]` item wherever
+        // it sits in a file, which is what handles `mod test_support`. So the
+        // skip bought nothing and cost the one scenario that most needs
+        // catching: a factory living in this very directory, whose call site
+        // never names the type (判据 §3 — the guard's green covered only the
+        // shapes it recognised, and that was not one of them).
         let mut sites: Vec<String> = Vec::new();
         for (rel, text) in sources {
-            // This module's own tests construct one on purpose; the permit is
-            // about PRODUCTION reachability.
-            if rel.starts_with("src/browser/cdp_backend/") {
-                continue;
-            }
             if constructs_the_backend(&code_text(&production_text(
                 std::path::Path::new(&rel),
                 &text,
