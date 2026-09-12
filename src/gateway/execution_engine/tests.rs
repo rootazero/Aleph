@@ -1876,8 +1876,9 @@ impl crate::executor::ToolRegistry for WitnessToolRegistry {
 
 /// A `SessionService` that refuses every batch. Only `emit_batch` is reached
 /// by the fast path; the rest answer the same refusal so a stray call cannot
-/// pass as a success.
-struct RefusingSessionService;
+/// pass as a success. `pub(super)` so `run_loop::hook_stop_tests` can hand it
+/// to `journal_hook_stop_with` — the second best-effort writer in this tree.
+pub(super) struct RefusingSessionService;
 
 #[async_trait]
 impl crate::session::SessionService for RefusingSessionService {

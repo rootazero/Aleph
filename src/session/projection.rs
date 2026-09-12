@@ -94,9 +94,11 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
         SessionEvent::Error { kind, message, .. } => {
             let label = match kind {
                 ErrorKind::Guardrail => "Input blocked",
-                // §5.4: a pre-seed hook (`BeforeAgentStart` / `UserPromptSubmit`)
-                // stopped the run before it started; the message is the hook's
-                // own stop/deny text.
+                // §5.4: a pre-seed hook seam stopped the run before it started
+                // (the set of seams is derived by `run_loop::hook_stop_tests::
+                // every_pre_seed_hook_exit_journals_the_stop`); the message is
+                // the hook's own stop/deny text. On the prevent_continuation
+                // arm this row is the only thing the user ever sees of it.
                 ErrorKind::HookStop => "Stopped by hook",
             };
             Some(plain("system", format!("{label}: {message}")))

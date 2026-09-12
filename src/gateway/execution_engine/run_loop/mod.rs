@@ -446,15 +446,18 @@ pub(super) async fn ensure_session_under_request_scope(
 /// §5.4: what a pre-seed hook stop leaves on the log — a **closed** run with
 /// a receipt, so a reload shows "this turn was stopped by a hook" and the
 /// reducer reads `Clean` rather than `Unanswered` (which would retrigger a
-/// run the hook already refused). Two seams write it, and they are twins:
-/// `BeforeAgentStart` (this module) and `UserPromptSubmit` (`inner.rs`), both
-/// of which return before the harness is handed the request. The census
-/// `hook_stop_tests::every_pre_seed_hook_exit_journals_the_stop` derives that
-/// set from the code rather than naming it.
+/// run the hook already refused). Its writers are the pre-seed hook seams —
+/// the ones that return before the harness is handed the request; the set is
+/// derived by `hook_stop_tests::every_pre_seed_hook_exit_journals_the_stop`,
+/// not listed here.
 ///
 /// The seed pair is written here because the bridge's `seed_history`
-/// (`runner_impl.rs`) never runs on this path; a resume (`is_resume`) already
-/// holds its user message in the log and gets only the run bracket. With no
+/// (`runner_impl.rs`) never runs on this path — **text only**: the receipt
+/// writes `blocks: Vec::new()`, so a stopped attachment turn reloads without
+/// its images (both seams fire before media is resolved, and the seed the
+/// bridge would have written is the one carrying `media_blocks`). A resume
+/// (`is_resume`) already holds its user message in the log and gets only the
+/// run bracket. With no
 /// turn opened on that arm the receipt names `turn_id: None` — a turn id that
 /// points at no `TurnStarted` would be a specific lie. `RunStarted.envelope`
 /// is `None` for the same reason: this writer resolved no knobs, and the run
@@ -516,10 +519,38 @@ pub(super) fn hook_stop_receipt(
 }
 
 /// One batch, best-effort: a stop that could not be journaled still stops
-/// the run (the user already saw the text); the warn is the trace. Mirrors
+/// the run; the warn is the trace. Mirrors
 /// `harness_bridge::callback::record_input_block`, the guardrail twin.
+///
+/// What "best-effort" costs is NOT the same on the two arms that call this:
+/// - **deny** (`return Err`): the user sees a `RunError` from the `Err`
+///   regardless (`execute.rs`'s failure arm); a lost receipt loses the
+///   reload, not the report.
+/// - **prevent_continuation** (`return Ok(stop_msg)`): `execute.rs` binds
+///   the loop's `Ok` string as `_response` and drops it — no
+///   `ResponseChunk`, no `RunComplete` — so the receipt's projected row
+///   ("Stopped by hook: …") IS the report. A refused or absent journal there
+///   is a silent stop: no error, no text, the turn gone (the pre-receipt
+///   behaviour). Logged, not escalated — escalating would change the arm's
+///   contract, which is not this writer's call.
+///
+/// Resolves the process-global service and delegates to
+/// [`journal_hook_stop_with`], which is the testable half.
 pub(super) async fn journal_hook_stop(request: &RunRequest, outcome: RunOutcome, text: &str) {
-    let Some(svc) = crate::session::service::global_session_service() else {
+    let svc = crate::session::service::global_session_service();
+    journal_hook_stop_with(svc.as_deref(), request, outcome, text).await;
+}
+
+/// [`journal_hook_stop`] with the service handed in. Returns `()` whatever
+/// the store says, so no caller can make its own `return` depend on the
+/// receipt — that is the "best-effort" contract, as a type.
+pub(super) async fn journal_hook_stop_with(
+    svc: Option<&dyn crate::session::service::SessionService>,
+    request: &RunRequest,
+    outcome: RunOutcome,
+    text: &str,
+) {
+    let Some(svc) = svc else {
         warn!(
             session_key = %request.session_key.to_key_string(),
             "session/service capability absent; hook stop not journaled — see `aleph doctor`"
@@ -598,12 +629,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         reason = %reason,
                         "BeforeAgentStart hook aborted the run"
                     );
-                    // §5.4: the receipt goes down BEFORE the stop is reported,
-                    // so a reload cannot show a turn that never happened. A
-                    // deny surfaces as `Err` to the caller, so the closer says
-                    // `Errored` — the plan's word (the spec said `Cancelled`;
-                    // both reduce `Clean`, and `Errored` is what the caller's
-                    // `RunState::Failed` already says about this exit).
+                    // §5.4: the receipt goes down BEFORE the stop is reported
+                    // — and on this arm it IS reported: the `Err` becomes a
+                    // `RunError` in `execute.rs`, so the user sees the reason
+                    // whether or not the batch landed; the receipt only adds
+                    // the reload. The closer says `Errored` — the plan's word
+                    // (the spec said `Cancelled`; both reduce `Clean`, and
+                    // `Errored` is what the caller's `RunState::Failed`
+                    // already says about this exit).
                     journal_hook_stop(request, RunOutcome::Errored, &reason).await;
                     return Err(ExecutionError::Failed(format!(
                         "BeforeAgentStart hook aborted the run: {reason}"
@@ -627,6 +660,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     );
                     // §5.4: same receipt as the deny arm; `Cancelled` because
                     // the run did what the hook asked — this is not an error.
+                    // Unlike the deny arm, the receipt is the ONLY report
+                    // here: `execute.rs` drops this `Ok` string
+                    // (`Ok(_response)`), so a refused batch is a silent stop
+                    // — see `journal_hook_stop`'s doc.
                     journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
                     return Ok(stop_msg);
                 }
@@ -1001,6 +1038,96 @@ mod hook_stop_tests {
         assert_eq!(r.disposition, RunDisposition::Clean);
     }
 
+    /// The best-effort contract as behaviour: a refused batch and an absent
+    /// service both come back normally, so the arm's `return` that follows
+    /// the call runs unconditionally (`journal_hook_stop_with` returns `()`;
+    /// there is nothing an arm could branch on). What each arm LOSES when
+    /// this happens differs and is stated in `journal_hook_stop`'s doc. This
+    /// goes red the day someone `expect`s the batch result inside.
+    #[tokio::test]
+    async fn a_refused_or_absent_journal_returns_normally() {
+        let refusing = super::super::tests::RefusingSessionService;
+        let req = request("hi", false);
+        journal_hook_stop_with(Some(&refusing), &req, RunOutcome::Cancelled, "halted").await;
+        journal_hook_stop_with(None, &req, RunOutcome::Errored, "denied").await;
+    }
+
+    /// §5.2 "a hook-stopped resume does not retrigger", on the two REAL resume
+    /// shapes rather than the receipt in isolation. The coordinator stamps
+    /// `ResumeAttempted{target}` naming the open `RunStarted` (interrupted)
+    /// or the unanswered `UserMessage`, writes no `RunFinished` before
+    /// retriggering, and the retriggered run is then stopped by a hook,
+    /// leaving the resume-arm receipt. Without the receipt each log reads
+    /// `Interrupted{1}` / `Unanswered{1}` — the shape the coordinator would
+    /// stamp and retrigger again; with it, `Clean` and no contradiction.
+    #[test]
+    fn a_hook_stopped_resume_reduces_clean_in_both_real_shapes() {
+        let turn = TurnId::new_v4();
+        let seed = SessionEvent::user_turn(
+            turn,
+            MessageContent {
+                text: "hi".into(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            None,
+            1,
+        );
+        let receipt = || hook_stop_receipt(&request("", true), RunOutcome::Cancelled, "halted");
+
+        // Interrupted: the crash landed after `RunStarted` (seq 3).
+        let mut interrupted: Vec<SessionEvent> = seed.to_vec();
+        interrupted.push(SessionEvent::RunStarted {
+            run_id: "crashed".into(),
+            at: 1,
+            project_root: None,
+            envelope: None,
+        });
+        interrupted.push(SessionEvent::ResumeAttempted {
+            target: 3,
+            attempt: 1,
+        });
+        let before = reduce_run(&seq_log(interrupted.clone())).expect("legal");
+        assert_eq!(
+            before.disposition,
+            RunDisposition::Interrupted { attempts: 1 },
+            "control: without the receipt this is what the coordinator would retrigger"
+        );
+        interrupted.extend(receipt());
+        let after = reduce_run(&seq_log(interrupted)).expect("legal");
+        assert_eq!(after.disposition, RunDisposition::Clean);
+        assert!(
+            after.contradictions.is_empty(),
+            "{:?}",
+            after.contradictions
+        );
+
+        // Unanswered: the crash landed before `RunStarted` (the message is seq 2).
+        let mut unanswered: Vec<SessionEvent> = seed.to_vec();
+        unanswered.push(SessionEvent::ResumeAttempted {
+            target: 2,
+            attempt: 1,
+        });
+        let before = reduce_run(&seq_log(unanswered.clone())).expect("legal");
+        assert_eq!(
+            before.disposition,
+            RunDisposition::Unanswered {
+                user_seq: 2,
+                attempts: 1
+            },
+            "control: without the receipt this is what the coordinator would retrigger"
+        );
+        unanswered.extend(receipt());
+        let after = reduce_run(&seq_log(unanswered)).expect("legal");
+        assert_eq!(after.disposition, RunDisposition::Clean);
+        assert!(
+            after.contradictions.is_empty(),
+            "{:?}",
+            after.contradictions
+        );
+    }
+
     /// The corpus the two censuses below walk: each file of the loop that
     /// dispatches lifecycle hooks, as comment- and literal-stripped production
     /// code, with the **hand-off** after which a hook stop is no longer
@@ -1049,8 +1176,17 @@ mod hook_stop_tests {
 
     /// The block a hook dispatch is matched on: from the first `{` after the
     /// anchor to its matching `}`. Brace-balanced on stripped code, so a
-    /// brace inside a literal cannot desynchronise it, and independent of
+    /// brace inside a literal cannot desynchronise it, and indifferent to
     /// how the arms are spelled (`Ok(_) => {}`, `Err(e) =>`, an `if let`).
+    ///
+    /// **It recognises exactly ONE shape of stop exit**: a `return ` (with
+    /// the trailing space) lexically inside that first brace block. It
+    /// cannot see a hoisted result (`let hr = match … { … }; if hr.denied {
+    /// return … }` — the `return` is in the NEXT statement), a `?`, or a
+    /// bare `return;`. Both live seams are the recognised shape, and
+    /// `the_twin_hook_seams_fire_before_anything_seeds_the_turn` pins them
+    /// by name; a seam written in one of the unseen shapes would be counted
+    /// as zero exits and pass — write it in this shape, or extend this.
     fn dispatch_body(after_anchor: &str) -> &str {
         let open = after_anchor
             .find('{')

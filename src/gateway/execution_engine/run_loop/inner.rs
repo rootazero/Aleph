@@ -381,7 +381,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // turn is in the log yet when a hook stops it here. Both stop exits
         // therefore journal the same receipt `BeforeAgentStart` writes
         // (`journal_hook_stop`: seed pair + closed run + `Error{HookStop}`;
-        // a resume gets only the run bracket), BEFORE they report the stop.
+        // a resume gets only the run bracket) before they return. Only the
+        // deny arm's `Err` reaches the user on its own (`RunError`); the
+        // prevent_continuation `Ok` string is dropped by `execute.rs`, so
+        // there the receipt's projected row is the report itself — see
+        // `journal_hook_stop`'s doc for what best-effort costs on each arm.
         // The user's message is persisted verbatim as the session's user turn;
         // the per-turn `<system-reminder>` augmentations below are collected
         // separately into `transient_blocks` and delivered to the model as the
@@ -434,7 +438,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             run_id = run_id,
                             "UserPromptSubmit hook requested prevent_continuation; stopping run"
                         );
-                        // `Cancelled`: the run did what the hook asked.
+                        // `Cancelled`: the run did what the hook asked. The
+                        // receipt is the only report on this arm (the `Ok`
+                        // string below is dropped by `execute.rs`).
                         journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
                         return Ok(stop_msg);
                     }
