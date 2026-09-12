@@ -232,10 +232,11 @@ pub(super) fn insert_frame_ops(
 // Message templates — model-facing English, exact tool names.
 // ---------------------------------------------------------------------------
 
-/// The structured chat message Generate sends. Names the `canvas` and
-/// `image_generate` tools by their exact registry spellings, and spells the
-/// three steps: read the frame, generate, place (which replaces the frame —
-/// `insert_image` with a `frame_id` lands in the frame's box and deletes it,
+/// The structured chat message Generate sends. Names the whiteboard tool
+/// (through [`super::CANVAS_TOOL`], the one spelling) and `image_generate` by
+/// their exact registry spellings, and spells the three steps: read the
+/// frame, generate, place (which replaces the frame — `insert_image` with a
+/// `frame_id` lands in the frame's box and deletes it,
 /// `src/builtin_tools/canvas.rs::placement_of`).
 #[must_use]
 pub(super) fn generation_message(
@@ -249,14 +250,15 @@ pub(super) fn generation_message(
         1 => "1 reference image is attached.\n".to_string(),
         n => format!("{n} reference images are attached.\n"),
     };
+    let tool = super::CANVAS_TOOL;
     format!(
         "[canvas] Generate an image for frame {frame_id} on canvas {canvas_id}.\n\
          Prompt: {prompt}\n\
          {refs_line}\
          Steps: \
-         1) call `canvas` (action=\"get\", canvas_id=\"{canvas_id}\", detail=\"summary\") to read the frame. \
+         1) call `{tool}` (action=\"get\", canvas_id=\"{canvas_id}\", detail=\"summary\") to read the frame. \
          2) generate the image with `image_generate`. \
-         3) call `canvas` (action=\"insert_image\", canvas_id=\"{canvas_id}\", frame_id=\"{frame_id}\", \
+         3) call `{tool}` (action=\"insert_image\", canvas_id=\"{canvas_id}\", frame_id=\"{frame_id}\", \
          location=<the generated image file path or data: URL>) — this places the image in the \
          frame's box and replaces the frame."
     )
@@ -275,6 +277,7 @@ pub(super) fn annotation_message(
 ) -> String {
     let Bbox { x, y, w, h } = image_bbox;
     let target_x = x + w + ANNOTATION_GAP;
+    let tool = super::CANVAS_TOOL;
     format!(
         "[canvas] Regenerate the image {image_id} on canvas {canvas_id} following the user's \
          annotations.\n\
@@ -283,10 +286,10 @@ pub(super) fn annotation_message(
          applies what the annotations ask for — the marks themselves must not appear in the \
          result.\n\
          Steps: \
-         1) call `canvas` (action=\"get\", canvas_id=\"{canvas_id}\", detail=\"summary\") if you need \
+         1) call `{tool}` (action=\"get\", canvas_id=\"{canvas_id}\", detail=\"summary\") if you need \
          more context. \
          2) generate the new image with `image_generate`, using the attachments as reference. \
-         3) call `canvas` (action=\"insert_image\", canvas_id=\"{canvas_id}\", x={target_x:.0}, \
+         3) call `{tool}` (action=\"insert_image\", canvas_id=\"{canvas_id}\", x={target_x:.0}, \
          y={y:.0}, w={w:.0}, h={h:.0}, location=<the generated image>) to place it beside the \
          original."
     )

@@ -104,9 +104,10 @@ use std::path::PathBuf;
 ///
 /// This is the floor. What is left is [`ALIAS_TABLE`]'s bilingual `keywords:`,
 /// which the module doc above already argues is data rather than copy;
-/// lowering this number past 11 means changing what shape those aliases have,
-/// not translating them.
-const HARDCODED_CHINESE_LINE_CEILING: usize = 11;
+/// lowering this number further means changing what shape those aliases have,
+/// not translating them. (It came down from 11 when the whiteboard stopped
+/// being a route and its palette entry — aliases and all — went with it.)
+const HARDCODED_CHINESE_LINE_CEILING: usize = 10;
 
 /// The one file whose Chinese literals are match-only data, not copy.
 ///
@@ -434,7 +435,7 @@ pub(crate) fn offending_lines(src: &str) -> Vec<usize> {
 /// all. The zero-tolerance phone guard beside this one only looks for *Chinese*,
 /// so it has nothing to say about that; this ratchet is the only instrument
 /// that counts it.
-const HARDCODED_ENGLISH_LINE_CEILING: usize = 182;
+const HARDCODED_ENGLISH_LINE_CEILING: usize = 175;
 
 /// Human-facing names the derivation cannot see, because the crate has never
 /// localised one.

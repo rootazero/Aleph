@@ -5,6 +5,7 @@
 
 use crate::i18n::{t_string, use_i18n};
 use crate::state::layout::{LayoutMode, WorkspaceState};
+use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 
 #[component]
@@ -16,6 +17,22 @@ pub fn LayoutToggle() -> impl IntoView {
     // provided (e.g. in storybook-style component tests).
     let Some(workspace) = use_context::<WorkspaceState>() else {
         return ().into_any();
+    };
+    // Used only to name the run a manual collapse belongs to. `use_context`
+    // (not `expect_context`) for the same reason as above: a storybook mount
+    // without a chat simply mutes nothing.
+    let chat = use_context::<ChatState>();
+
+    // Closing the pane BY HAND is an answer about this turn: it mutes the
+    // canvas auto-reveal for the run that is speaking. Opening it is not — a
+    // stale mute would silence the next run's first canvas.
+    let on_click = move |_| {
+        if workspace.mode.get_untracked() == LayoutMode::Split {
+            let run = chat.and_then(|c| c.active_run_id.get_untracked());
+            workspace.collapse_by_user(run);
+        } else {
+            workspace.set_layout(LayoutMode::Split);
+        }
     };
 
     let label = move || match workspace.mode.get() {
@@ -37,7 +54,7 @@ pub fn LayoutToggle() -> impl IntoView {
             data-tauri-drag-region="false"
             title=label
             aria-label=label
-            on:click=move |_| workspace.toggle_layout()
+            on:click=on_click
         >
             <svg xmlns="http://www.w3.org/2000/svg"
                  width="16" height="16"

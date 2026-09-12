@@ -1,30 +1,34 @@
-//! The canvas library — the left-column gallery and every action over it.
+//! The canvas library — the gallery and every action over it.
 //!
-//! # Why the gallery is a sidebar
+//! # Why the gallery is a picker
 //!
-//! It used to be a full-page list in the main area, mutually exclusive with
+//! It started as a full-page list in the main area, mutually exclusive with
 //! the editor: opening a canvas replaced the library, and reaching a second
 //! canvas cost three steps (back → scan → open) and threw away the editor's
-//! camera and undo stack on the way. A left-column list makes navigation and
-//! work coexist — one click switches, and the list is the answer to "what
-//! else is there" without leaving what you are doing.
+//! camera and undo stack on the way. It then spent a round as the left
+//! column's secondary menu. Now that the canvas is a **body of the workspace
+//! pane** rather than a section of its own, there is no left column to live
+//! in: the same list is a popover hanging off the canvas header strip
+//! ([`CanvasPicker`]), and it is inlined directly into the welcome pane when
+//! no canvas is open. Navigation and work still coexist — one click switches
+//! — and none of the rules below changed with the host.
 //!
 //! # Who loads the rows
 //!
 //! **Not this module.** [`super::CanvasView`] owns the three liveness wires
 //! (load/reconnect Effect, topic subscription, frame consumption) because it
 //! is a keep-alive container mounted once for the life of the app;
-//! [`CanvasSidebar`] mounts and unmounts every time the user switches
-//! sections. A loader here would refetch the library on every visit and
-//! churn the topic subscription — and, worse, be a second answer to "what is
-//! in the library". The sidebar is a pure consumer of
+//! [`CanvasList`] mounts and unmounts every time the popover opens. A loader
+//! here would refetch the library on every open and churn the topic
+//! subscription — and, worse, be a second answer to "what is in the library".
+//! The list is a pure consumer of
 //! [`CanvasState::rows`](crate::state::canvas::CanvasState::rows) plus a
 //! writer of `open_canvas`; the write actions below refetch because they
 //! changed something, which is a different reason.
 //!
 //! # One function per verb, however many surfaces
 //!
-//! [`rename_canvas`] is called from the sidebar row and from the editor's
+//! [`rename_canvas`] is called from the list row and from the header strip's
 //! title — one function, because the parts a copy would drop are the base
 //! revision resolution and the conflict retry, and a rename that silently
 //! did nothing on the second surface is exactly the failure this codebase
@@ -158,7 +162,18 @@ pub(super) fn fetch_open_doc(
 /// `doc` is cleared *before* the fetch so the editor unmounts instead of
 /// rendering the previous canvas's shapes under the new one's title for a
 /// round trip.
-pub(super) fn open_canvas(state: DashboardState, canvas: CanvasState, i18n: I18nCtx, id: String) {
+///
+/// `pub(crate)` because the chat side reaches it too — the auto-reveal on a
+/// `canvas` tool result and the transcript card's "open in canvas" both go
+/// through this one function (re-exported by [`super`]), so a canvas opened
+/// from chat is fetched exactly like one opened from the picker. A second
+/// "set `open_canvas` and hope" call site would render an empty editor.
+pub(crate) fn open_canvas(
+    state: DashboardState,
+    canvas: CanvasState,
+    i18n: I18nCtx,
+    id: String,
+) {
     canvas.open_canvas.set(Some(id.clone()));
     canvas.doc.set(None);
     fetch_open_doc(state, canvas, i18n, id);
@@ -378,21 +393,76 @@ pub(super) fn rename_canvas(
     });
 }
 
-/// The left-column gallery: create, filter, and the title list.
+/// The library picker: a trigger in the canvas header strip and the popover
+/// that drops out of it.
 ///
-/// Rendered by `ModeSidebar` for `PanelMode::Canvas`, alongside
-/// `MemorySidebar` / `TeamsSidebar` / `ProjectsSidebar` — a wide view module
-/// exporting its own secondary menu is the established shape here, so this
-/// introduces no new one.
+/// Replaces the left-column sidebar the gallery used to be, for the reason in
+/// the module doc — the canvas has no column of its own now. The list itself
+/// is [`CanvasList`], unchanged and shared with the welcome pane, so "what is
+/// in the library" has exactly one rendering.
+#[component]
+#[must_use]
+pub(super) fn CanvasPicker() -> impl IntoView {
+    let canvas = expect_context::<CanvasState>();
+    let i18n = use_i18n();
+    let open = RwSignal::new(false);
+
+    // The open canvas's title, or the section name when nothing is open — the
+    // trigger says where you are, not just what it opens.
+    let label = move || {
+        canvas
+            .doc
+            .with(|d| d.as_ref().map(|d| d.title.clone()))
+            .unwrap_or_else(|| t_string!(i18n, canvas.library).to_string())
+    };
+
+    view! {
+        <div class="relative shrink-0">
+            <button
+                class="flex items-center gap-1.5 px-2 py-1 rounded-md text-sm text-text-secondary
+                       hover:text-text-primary hover:bg-surface-sunken transition-colors max-w-[12rem]"
+                title=move || t_string!(i18n, canvas.library).to_string()
+                on:click=move |_| open.update(|o| *o = !*o)
+            >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="3" y1="6" x2="21" y2="6" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
+                <span class="truncate">{label}</span>
+            </button>
+            <Show when=move || open.get()>
+                // Click-catcher behind the popover — the established dismiss
+                // idiom here (`theme_toggle.rs`, `team_participants.rs`).
+                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
+                <div class="absolute left-0 top-full mt-1 z-50 w-[19rem] max-h-[70vh] flex flex-col
+                            rounded-lg border border-border bg-surface-overlay shadow-xl overflow-hidden">
+                    <CanvasList on_pick=Callback::new(move |()| open.set(false)) />
+                </div>
+            </Show>
+        </div>
+    }
+}
+
+/// The gallery itself: create, filter, and the title list.
+///
+/// Two hosts — the [`CanvasPicker`] popover and the welcome pane's inline
+/// list — because a canvas-less pane should not make the user open a menu to
+/// find out there is nothing in it. One component, so both hosts get the same
+/// three-state empty copy, the same keying and the same write actions.
 ///
 /// Every piece of state below is component-local on purpose: a filter query,
 /// an armed delete and an open rename are all *this visit's* interaction
-/// state, and resetting them when the user navigates away is the safe
-/// direction (an armed delete that outlived a section switch would fire on a
-/// click the user made in a different context).
+/// state, and dropping them when the popover closes is the safe direction (an
+/// armed delete that outlived the visit would fire on a click the user made
+/// in a different context).
+///
+/// `on_pick` fires after a row opens a canvas — the popover host closes
+/// itself with it; the inline host ignores it.
 #[component]
 #[must_use]
-pub fn CanvasSidebar() -> impl IntoView {
+pub(super) fn CanvasList(on_pick: Callback<()>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
@@ -532,6 +602,7 @@ pub fn CanvasSidebar() -> impl IntoView {
                                     rename_error=rename_error
                                     input_ref=input_ref
                                     commit_rename=commit_rename
+                                    on_pick=on_pick
                                 />
                             }
                         }
@@ -575,6 +646,7 @@ fn LibraryRow(
     rename_error: RwSignal<Option<TitleRejection>>,
     input_ref: NodeRef<leptos::html::Input>,
     commit_rename: Callback<bool>,
+    on_pick: Callback<()>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let canvas = expect_context::<CanvasState>();
@@ -631,6 +703,7 @@ fn LibraryRow(
                 // (or is the click that dismisses it) and must not navigate.
                 if renaming.get_untracked().is_none() {
                     open_canvas(state, canvas, i18n, row_id.get_value());
+                    on_pick.run(());
                 }
             }
         >

@@ -1,14 +1,13 @@
-//! Whiteboard canvas — `/canvas`: the editor surface and the three liveness
-//! wires that feed it.
+//! Whiteboard canvas — the **canvas body of the workspace pane**: a header
+//! strip, the editor surface, and the three liveness wires that feed it.
 //!
-//! The **library** is no longer here: it moved to the left column as
-//! [`library::CanvasSidebar`], so navigating between canvases no longer
-//! means leaving the one you are in. What stays in the main area is the
-//! open document — or, when none is open, a welcome pane pointing at the
-//! list. The wires below stay here rather than moving with the list
-//! because this view is mounted once for the life of the app while the
-//! sidebar remounts on every section switch; see `library.rs`'s module
-//! doc for the full argument.
+//! It used to be a section of its own — its own route, its own panel mode,
+//! the library as the left column. It is now one of the bodies
+//! `components/workspace_panel.rs` can show beside the chat, because a
+//! whiteboard the model draws on while you talk to it is worth more next to
+//! the conversation than in a section you have to leave the conversation to
+//! reach. The library came along as [`library::CanvasPicker`], a popover on
+//! the header strip below; the welcome pane inlines the same list.
 //!
 //! Not the memory galaxy: that renderer moved to `views/memory/galaxy/` when
 //! the whiteboard claimed the `canvas` name. This module is the Panel half of
@@ -18,7 +17,8 @@
 //! # Liveness
 //!
 //! Three wires, all mounted here because this view is a keep-alive container
-//! (`MainContent` hides it with CSS instead of unmounting):
+//! — `WorkspacePanel` hides the canvas body with `style:display` instead of
+//! unmounting it, exactly as `MainContent` used to:
 //!
 //! 1. **Load / reconnect** — the `WorkspacesView` idiom: an `Effect` gated on
 //!    `is_connected`, so the first load waits for the socket instead of
@@ -50,7 +50,7 @@ mod text_edit;
 mod toolbar;
 mod viewport;
 
-pub use library::CanvasSidebar;
+pub(crate) use library::open_canvas;
 
 use aleph_protocol::canvas as canvas_proto;
 use leptos::prelude::*;
@@ -63,6 +63,47 @@ use crate::i18n::{t, t_string, use_i18n};
 use crate::state::canvas::CanvasState;
 
 use library::{create_canvas, fetch_open_doc, refresh_rows};
+
+/// The registry name of the model's whiteboard tool.
+///
+/// One spelling for every Panel-side consumer of it: `ai.rs`'s message
+/// templates (prose that instructs the model to call it), the chat stream's
+/// auto-reveal, and the transcript card's "open in canvas". Prose naming a
+/// tool is a second copy of that tool's name (CANVAS.md §6 / §4.11 round-12);
+/// this constant is the one copy, and `tests/canvas_wire.rs` resolves it
+/// against the real tool table server-side.
+pub(crate) const CANVAS_TOOL: &str = "canvas";
+
+/// The canvas a `canvas` tool result touched, if any.
+///
+/// Every action that reads or writes a document reports `canvas_id` at the
+/// top level of its output; `list`, a refusal and an error do not, and those
+/// must reveal nothing. Two wire shapes are accepted because the harness
+/// serializes a tool's structured output as a **JSON-encoded string** inside
+/// `Success.output` (the same text the model sees) while the in-process and
+/// replayed forms carry the object itself — a reader that knew only one of
+/// them would be silently dead for the production one, which is exactly how
+/// the plan-snapshot projection in `views/chat/events.rs` was broken once
+/// (`aleph_protocol::plan::snapshot_value_from_tool_output`).
+pub(crate) fn canvas_id_from_tool_result(result: &serde_json::Value) -> Option<String> {
+    let output = result
+        .get("Success")
+        .and_then(|s| s.get("output"))
+        .unwrap_or(result);
+    let decoded;
+    let object = match output {
+        serde_json::Value::String(text) => {
+            decoded = serde_json::from_str::<serde_json::Value>(text).ok()?;
+            &decoded
+        }
+        other => other,
+    };
+    object
+        .get("canvas_id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.is_empty())
+        .map(std::string::ToString::to_string)
+}
 
 #[component]
 #[must_use]
@@ -164,80 +205,79 @@ pub fn CanvasView() -> impl IntoView {
     on_cleanup(move || state.unsubscribe_events(sub_id));
 
     view! {
-        {move || match canvas.open_canvas.get() {
-            Some(_) => view! { <OpenCanvasPane /> }.into_any(),
-            None => view! { <WelcomePane /> }.into_any(),
-        }}
+        <div class="flex flex-col h-full min-h-0">
+            <CanvasHeader />
+            {move || match canvas.open_canvas.get() {
+                Some(_) => view! { <OpenCanvasPane /> }.into_any(),
+                None => view! { <WelcomePane /> }.into_any(),
+            }}
+        </div>
     }
 }
 
-/// Shown while no canvas is open: what this section is, and the one action
-/// that gets you started.
+/// Shown while no canvas is open: what this body is, and the list.
 ///
-/// The list that used to fill this space is now the left column, so this pane
-/// deliberately does **not** repeat it — two lists of the same rows in one
-/// viewport would be two answers to "which canvases are there", and the
-/// second one would be the stale one.
+/// The list is [`library::CanvasList`] — the same component the picker
+/// popover hosts, not a second rendering of it. Inlining it here rather than
+/// pointing at the picker is the difference between "there is nothing here"
+/// and "open a menu to find out there is nothing here"; and because both
+/// hosts are one component, there is still exactly one answer to "which
+/// canvases are there".
 #[component]
 fn WelcomePane() -> impl IntoView {
-    let state = expect_context::<DashboardState>();
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
-    let creating = RwSignal::new(false);
 
     view! {
-        <div class="flex flex-col h-full">
+        <div class="flex-1 min-h-0 flex flex-col">
             {move || {
                 canvas.load_error.get().map(|msg| view! {
-                    <div class="mx-6 mt-4 px-4 py-3 rounded-lg bg-warning-subtle border border-warning text-sm text-text-primary">
+                    <div class="mx-3 mt-3 px-3 py-2 rounded-lg bg-warning-subtle border border-warning text-xs text-text-primary">
                         {msg}
                     </div>
                 })
             }}
-            <div class="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
-                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            <div class="flex flex-col items-center gap-1.5 px-6 pt-6 pb-3 text-center shrink-0">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
                      class="text-text-tertiary">
                     <rect x="3" y="3" width="18" height="18" rx="2" />
                     <path d="M7 14c1.5-4 3-4 4.5-1s3 3 5.5-3" />
                 </svg>
-                <h1 class="text-lg font-semibold text-text-primary">
+                <h1 class="text-base font-semibold text-text-primary">
                     {t!(i18n, canvas.title)}
                 </h1>
-                <p class="max-w-sm text-sm text-text-secondary">
+                <p class="max-w-sm text-xs text-text-secondary">
                     {t!(i18n, canvas.subtitle)}
                 </p>
-                <p class="text-xs text-text-tertiary">
-                    {t!(i18n, canvas.select_hint)}
-                </p>
-                <button
-                    class="mt-2 px-3.5 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm font-medium transition-colors disabled:opacity-50"
-                    prop:disabled=move || creating.get()
-                    on:click=move |_| create_canvas(state, canvas, i18n, creating)
-                >
-                    {t!(i18n, canvas.new_canvas)}
-                </button>
+            </div>
+            <div class="flex-1 min-h-0 border-t border-border">
+                // Nothing to dismiss: this host IS the pane.
+                <library::CanvasList on_pick=Callback::new(|()| {}) />
             </div>
         </div>
     }
 }
 
-/// The open document: header (way back, editable title, shape count) over the
-/// editor surface. The editor mounts only once the fetch has landed — its
-/// camera gestures and key listeners have no business existing for a spinner.
+/// The canvas body's header strip: library picker, the open document's title
+/// (rename in place), its shape count, and the close affordance.
+///
+/// Above BOTH panes, not inside the open one, so the picker is reachable from
+/// the empty state too — that is the whole point of a picker.
 ///
 /// The title here is the **second** rename surface, and it goes through
-/// `library::submit_title` exactly like the sidebar row does: same gate, same
+/// `library::submit_title` exactly like the list row does: same gate, same
 /// no-op skip, same base-revision precedence, same one-retry conflict
 /// handling. Two surfaces, one function — a hand-written second copy is how
 /// one of them quietly stops working.
 #[component]
-fn OpenCanvasPane() -> impl IntoView {
+fn CanvasHeader() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
+    let creating = RwSignal::new(false);
 
-    // Title editing, local to this pane: an edit in progress is this visit's
+    // Title editing, local to this strip: an edit in progress is this visit's
     // interaction state and must not survive closing the canvas.
     let editing_title = RwSignal::new(false);
     let title_draft = RwSignal::new(String::new());
@@ -248,6 +288,7 @@ fn OpenCanvasPane() -> impl IntoView {
     let title_error = RwSignal::new(Option::<aleph_protocol::canvas::TitleRejection>::None);
     let title_input = NodeRef::<leptos::html::Input>::new();
 
+    let is_open = Memo::new(move |_| canvas.open_canvas.with(Option::is_some));
     let title_now = move || {
         canvas
             .doc
@@ -255,7 +296,7 @@ fn OpenCanvasPane() -> impl IntoView {
             .unwrap_or_default()
     };
 
-    // Deferred a tick for the same reason as the sidebar's twin: the input is
+    // Deferred a tick for the same reason as the list row's twin: the input is
     // created inside a nested reactive closure, so the `NodeRef` is not bound
     // when this effect first runs.
     Effect::new(move |_| {
@@ -272,8 +313,8 @@ fn OpenCanvasPane() -> impl IntoView {
         });
     });
 
-    // Same two endings as the sidebar row: Enter keeps a refusal visible,
-    // blur drops it rather than trapping the user in a red input.
+    // Same two endings as the list row: Enter keeps a refusal visible, blur
+    // drops it rather than trapping the user in a red input.
     let commit_title = move |keep_open_on_refusal: bool| {
         let Some(id) = canvas.open_canvas.get_untracked() else {
             editing_title.set(false);
@@ -290,26 +331,10 @@ fn OpenCanvasPane() -> impl IntoView {
         title_error.set(None);
     };
 
-    // Memoized on purpose: the raw `doc.with(|d| d.is_none())` closure would
-    // re-run — and rebuild the editor, discarding its drag/undo/queue state —
-    // on EVERY doc mutation, including each optimistic preview frame of a
-    // drag. The memo's `PartialEq` dedupe means the editor mounts once per
-    // open and unmounts once per close, nothing in between.
-    let doc_missing = Memo::new(move |_| canvas.doc.with(|d| d.is_none()));
-
     view! {
-        <div class="flex flex-col h-full">
-            <div class="px-6 py-4 border-b border-border aleph-content-top flex items-center gap-3">
-                <button
-                    class="flex items-center gap-1.5 text-sm text-text-secondary hover:text-text-primary transition-colors"
-                    on:click=move |_| canvas.close_canvas()
-                >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="15 18 9 12 15 6" />
-                    </svg>
-                    {t!(i18n, canvas.back_to_library)}
-                </button>
+        <div class="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+            <library::CanvasPicker />
+            <Show when=move || is_open.get()>
                 {move || if editing_title.get() {
                     view! {
                         <input
@@ -331,14 +356,14 @@ fn OpenCanvasPane() -> impl IntoView {
                                     _ => {}
                                 }
                             }
-                            class="min-w-0 flex-1 max-w-md px-2 py-1 bg-surface-sunken border border-primary/60 rounded text-base font-semibold text-text-primary focus:outline-none"
+                            class="min-w-0 flex-1 px-2 py-0.5 bg-surface-sunken border border-primary/60 rounded text-sm font-semibold text-text-primary focus:outline-none"
                         />
                     }
                     .into_any()
                 } else {
                     view! {
                         <h2
-                            class="text-base font-semibold text-text-primary truncate cursor-text hover:text-primary transition-colors"
+                            class="min-w-0 flex-1 text-sm font-semibold text-text-primary truncate cursor-text hover:text-primary transition-colors"
                             title=move || t_string!(i18n, canvas.rename).to_string()
                             on:click=move |_| {
                                 title_draft.set(title_now());
@@ -352,16 +377,58 @@ fn OpenCanvasPane() -> impl IntoView {
                     .into_any()
                 }}
                 {move || title_error.get().map(|why| view! {
-                    <span class="text-xs text-danger">{library::rejection_label(i18n, why)}</span>
+                    <span class="text-[11px] text-danger shrink-0">{library::rejection_label(i18n, why)}</span>
                 })}
-                <span class="text-xs text-text-tertiary">
+                <span class="text-[11px] text-text-tertiary shrink-0">
                     {move || canvas.doc.with(|d| d.as_ref().map(|d| d.shapes.len().to_string())).unwrap_or_default()}
                     " " {t!(i18n, canvas.shapes)}
                 </span>
-            </div>
+                <button
+                    class="shrink-0 p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-surface-sunken"
+                    title=move || t_string!(i18n, canvas.close_canvas).to_string()
+                    on:click=move |_| canvas.close_canvas()
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </Show>
+            <Show when=move || !is_open.get()>
+                <span class="flex-1" />
+                <button
+                    class="shrink-0 px-2.5 py-1 rounded-md bg-primary hover:bg-primary-hover text-white text-xs font-medium transition-colors disabled:opacity-50"
+                    prop:disabled=move || creating.get()
+                    on:click=move |_| create_canvas(state, canvas, i18n, creating)
+                >
+                    {t!(i18n, canvas.new_canvas)}
+                </button>
+            </Show>
+        </div>
+    }
+}
+
+/// The open document: the editor surface, under the shared header strip.
+/// The editor mounts only once the fetch has landed — its camera gestures and
+/// key listeners have no business existing for a spinner.
+#[component]
+fn OpenCanvasPane() -> impl IntoView {
+    let canvas = expect_context::<CanvasState>();
+    let i18n = use_i18n();
+
+    // Memoized on purpose: the raw `doc.with(|d| d.is_none())` closure would
+    // re-run — and rebuild the editor, discarding its drag/undo/queue state —
+    // on EVERY doc mutation, including each optimistic preview frame of a
+    // drag. The memo's `PartialEq` dedupe means the editor mounts once per
+    // open and unmounts once per close, nothing in between.
+    let doc_missing = Memo::new(move |_| canvas.doc.with(|d| d.is_none()));
+
+    view! {
+        <div class="flex-1 min-h-0 flex flex-col">
             {move || {
                 canvas.load_error.get().map(|msg| view! {
-                    <div class="mx-6 mt-4 px-4 py-3 rounded-lg bg-warning-subtle border border-warning text-sm text-text-primary">
+                    <div class="mx-3 mt-3 px-3 py-2 rounded-lg bg-warning-subtle border border-warning text-xs text-text-primary">
                         {msg}
                     </div>
                 })
@@ -377,5 +444,70 @@ fn OpenCanvasPane() -> impl IntoView {
                 view! { <editor::CanvasEditor /> }.into_any()
             }}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The production wire shape: the harness JSON-encodes the tool's output
+    /// into a **string** inside `Success.output`. A reader that only knew the
+    /// object form would be permanently dead here and nothing would say so.
+    #[test]
+    fn the_canvas_id_is_read_out_of_the_json_encoded_string_the_harness_emits() {
+        let result = json!({
+            "Success": {
+                "output": json!({"canvas_id": "cv-9", "revision": 4}).to_string()
+            }
+        });
+        assert_eq!(
+            canvas_id_from_tool_result(&result).as_deref(),
+            Some("cv-9")
+        );
+    }
+
+    /// …and the object form, which the in-process and replayed paths carry.
+    #[test]
+    fn the_object_form_of_the_same_output_reads_the_same() {
+        let result = json!({"Success": {"output": {"canvas_id": "cv-9"}}});
+        assert_eq!(
+            canvas_id_from_tool_result(&result).as_deref(),
+            Some("cv-9")
+        );
+        // A bare payload (no envelope) is accepted too — the envelope is the
+        // harness's, not the tool's.
+        assert_eq!(
+            canvas_id_from_tool_result(&json!({"canvas_id": "cv-1"})).as_deref(),
+            Some("cv-1")
+        );
+    }
+
+    /// Nothing to reveal is `None`, never a placeholder: a refusal, an error,
+    /// a `list` and an empty id all mean "there is no canvas to show", and
+    /// turning any of them into an id would open a canvas that does not exist.
+    #[test]
+    fn a_result_that_names_no_canvas_reveals_nothing() {
+        assert_eq!(
+            canvas_id_from_tool_result(&json!({"Error": {"error": "denied"}})),
+            None
+        );
+        assert_eq!(
+            canvas_id_from_tool_result(&json!({"Success": {"output": {"canvases": []}}})),
+            None
+        );
+        assert_eq!(
+            canvas_id_from_tool_result(&json!({"Success": {"output": "not json"}})),
+            None
+        );
+        assert_eq!(
+            canvas_id_from_tool_result(&json!({"Success": {"output": {"canvas_id": ""}}})),
+            None
+        );
+        assert_eq!(
+            canvas_id_from_tool_result(&json!({"Success": {"output": {"canvas_id": 7}}})),
+            None
+        );
     }
 }

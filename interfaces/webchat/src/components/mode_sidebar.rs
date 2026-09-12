@@ -25,10 +25,6 @@ pub enum PanelMode {
     Chat,
     Dashboard,
     Memory,
-    /// Whiteboard canvas library + editor (`views/canvas/`). Not the memory
-    /// galaxy — that renderer lives under `views/memory/galaxy/` since the
-    /// whiteboard took the `canvas` name.
-    Canvas,
     Agents,
     Teams,
     Projects,
@@ -50,8 +46,6 @@ impl PanelMode {
     pub fn from_path(path: &str) -> Self {
         if path.starts_with("/memory") {
             Self::Memory
-        } else if path.starts_with("/canvas") {
-            Self::Canvas
         } else if path.starts_with("/agents") {
             Self::Agents
         } else if path.starts_with("/teams") {
@@ -83,7 +77,6 @@ impl PanelMode {
             Self::Chat,
             Self::Dashboard,
             Self::Memory,
-            Self::Canvas,
             Self::Agents,
             Self::Teams,
             Self::Projects,
@@ -104,7 +97,6 @@ impl PanelMode {
             Self::Chat => "/chat",
             Self::Dashboard => "/dashboard",
             Self::Memory => "/memory",
-            Self::Canvas => "/canvas",
             Self::Agents => "/agents",
             Self::Teams => "/teams",
             Self::Projects => "/projects",
@@ -127,7 +119,7 @@ impl PanelMode {
     pub const fn under_more(self) -> bool {
         matches!(
             self,
-            Self::More | Self::Dashboard | Self::Teams | Self::Extensions | Self::Canvas
+            Self::More | Self::Dashboard | Self::Teams | Self::Extensions
         )
     }
 }
@@ -150,12 +142,6 @@ pub fn ModeSidebar() -> impl IntoView {
                     PanelMode::Dashboard => view! { <DashboardSidebar /> }.into_any(),
                     PanelMode::Agents => view! { <AgentsSidebar /> }.into_any(),
                     PanelMode::Memory => view! { <MemorySidebar /> }.into_any(),
-                    // The canvas library IS this section's secondary menu:
-                    // titles on the left, the open board on the right, so
-                    // switching canvases no longer means leaving the one you
-                    // are drawing on. The main area keeps the editor (and a
-                    // welcome pane when nothing is open).
-                    PanelMode::Canvas => view! { <crate::views::canvas::CanvasSidebar /> }.into_any(),
                     PanelMode::Teams => view! { <crate::views::teams::TeamsSidebar /> }.into_any(),
                     PanelMode::Projects => view! { <crate::components::sidebar::projects::ProjectsSidebar /> }.into_any(),
                     // TerminalView is a single full-bleed surface with no
@@ -257,13 +243,16 @@ mod tests {
         assert_eq!(PanelMode::from_path("/"), PanelMode::Chat);
     }
 
-    /// `/canvas` is the whiteboard, and it neither shadows nor is shadowed by
-    /// `/memory` — the old galaxy lived at `views/canvas/` but never at this
-    /// route, so nothing legacy competes for the prefix.
+    /// `/canvas` was the whiteboard's own route until the canvas became a
+    /// body of the chat's workspace pane. Nothing routes there any more, so
+    /// the string must land on the default (`Chat`) — not on some neighbour
+    /// that happens to share a prefix, and not on a stale `Canvas` arm.
+    /// Bookmarks and old links still open something sensible, and the canvas
+    /// is one tab away in the pane.
     #[test]
-    fn from_path_classifies_canvas() {
-        assert_eq!(PanelMode::from_path("/canvas"), PanelMode::Canvas);
-        assert_eq!(PanelMode::from_path("/canvas/"), PanelMode::Canvas);
+    fn the_retired_canvas_route_falls_back_to_chat() {
+        assert_eq!(PanelMode::from_path("/canvas"), PanelMode::Chat);
+        assert_eq!(PanelMode::from_path("/canvas/"), PanelMode::Chat);
         assert_eq!(PanelMode::from_path("/memory"), PanelMode::Memory);
         assert_eq!(PanelMode::from_path("/"), PanelMode::Chat);
     }
@@ -275,9 +264,6 @@ mod tests {
             PanelMode::Dashboard,
             PanelMode::Teams,
             PanelMode::Extensions,
-            // Canvas is reached through the phone ••• menu (its row lives in
-            // more.rs), so the ••• tab keeps its highlight while inside.
-            PanelMode::Canvas,
         ] {
             assert!(m.under_more(), "{m:?} should be under More");
         }

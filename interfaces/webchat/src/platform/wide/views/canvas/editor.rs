@@ -49,13 +49,15 @@
 //!
 //! # Space-bar pan and the keep-alive container
 //!
-//! `MainContent` hides this view with CSS instead of unmounting it, so the
-//! window key listeners outlive the *visible* editor. Three gates keep the
-//! chords from leaking: the editor only mounts while a document is open
-//! (structural), the route must actually be `/canvas`
-//! (`PanelMode::from_path` — the same single source the sidebar uses), and
-//! `focus_is_editable` keeps every editing key working inside inputs. Keyup
-//! clears unconditionally: a gated keyup would leave the pan mode latched on.
+//! `WorkspacePanel` hides the canvas body with CSS instead of unmounting it,
+//! so the window key listeners outlive the *visible* editor. Three gates keep
+//! the chords from leaking: the editor only mounts while a document is open
+//! (structural), the canvas body must actually be on screen
+//! ([`canvas_body_visible`] — the chat route AND a Split pane AND the canvas
+//! body selected, each of which alone would let Delete reach the board from a
+//! settings page or a collapsed pane), and `focus_is_editable` keeps every
+//! editing key working inside inputs. Keyup clears unconditionally: a gated
+//! keyup would leave the pan mode latched on.
 
 use std::collections::HashMap;
 
@@ -83,6 +85,23 @@ use crate::components::mode_sidebar::PanelMode;
 use crate::context::DashboardState;
 use crate::state::canvas::{Camera, CanvasState, CanvasTool, InflightBatch};
 use crate::state::hotkey::focus_is_editable;
+use crate::state::layout::{WorkspaceBody, WorkspaceState};
+
+/// Is the canvas body actually on screen right now?
+///
+/// The gate the window-level key handlers below ask before acting. Three
+/// conditions, because the canvas is a body of the workspace pane inside the
+/// chat route: the route has to be the chat one (every other section leaves
+/// `ChatView` mounted-but-hidden), the pane has to be open, and the canvas has
+/// to be the selected body. Dropping any one of them hands Delete / Space /
+/// paste to a board nobody can see.
+///
+/// `None` for `WorkspaceState` (a mount without the context) reads as **not
+/// visible**: an unanswerable "is it showing?" is not a licence to edit.
+fn canvas_body_visible(pathname: &str, workspace: Option<WorkspaceState>) -> bool {
+    PanelMode::from_path(pathname) == PanelMode::Chat
+        && workspace.is_some_and(|ws| ws.showing_now(WorkspaceBody::Canvas))
+}
 
 /// Click tolerance in *screen* pixels: a press that stays inside this box is
 /// a click (select), not a move. Divided by zoom before it reaches the
@@ -426,6 +445,10 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let camera = canvas.camera;
     let doc = canvas.doc;
     let pathname = use_location().pathname;
+    // Captured here, not read inside the handlers: those run in `'static`
+    // window listeners, outside any reactive owner, where `use_context` has
+    // nothing to read from. `WorkspaceState` is `Copy`.
+    let workspace = use_context::<WorkspaceState>();
 
     let sorted_ids = Memo::new(move |_| {
         doc.with(|d| {
@@ -585,7 +608,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
 
     // ---- keyboard ---------------------------------------------------------
     let down_handle = window_event_listener(keydown, move |ev: web_sys::KeyboardEvent| {
-        if PanelMode::from_path(&pathname.get_untracked()) != PanelMode::Canvas {
+        if !canvas_body_visible(&pathname.get_untracked(), workspace) {
             return;
         }
         if presenting.get_untracked().is_some() {
@@ -724,7 +747,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     // gates — and `focus_is_editable` keeps a paste aimed at a text input
     // (the composer, the text-edit overlay) out of the canvas entirely.
     let paste_handle = window_event_listener(paste, move |ev: web_sys::ClipboardEvent| {
-        if PanelMode::from_path(&pathname.get_untracked()) != PanelMode::Canvas {
+        if !canvas_body_visible(&pathname.get_untracked(), workspace) {
             return;
         }
         if presenting.get_untracked().is_some() {

@@ -9,7 +9,8 @@ use super::state::{
 };
 use crate::context::{DashboardState, GatewayEvent};
 use crate::i18n::{td_string, I18nCtx, Locale};
-use crate::state::layout::WorkspaceState;
+use crate::state::canvas::CanvasState;
+use crate::state::layout::{auto_reveal_decision, WorkspaceBody, WorkspaceState};
 use crate::state::notifications::{AskOptionView, AskQuestionView, PendingAskView};
 use crate::state::sessions::SessionMap;
 use crate::state::user_directory::UserDirectoryState;
@@ -64,6 +65,101 @@ fn parse_ask_question(value: &serde_json::Value) -> Option<AskQuestionView> {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+/// Open `canvas_id` in the workspace pane's canvas body and show it.
+///
+/// The one path every "show me this canvas" affordance takes — the auto-reveal
+/// below and the transcript tool card's button. It goes through
+/// `views::canvas::open_canvas` (not a bare `open_canvas.set`) because that is
+/// where the fetch lives: setting the id alone renders an editor with no
+/// document.
+pub(crate) fn reveal_canvas(
+    dashboard: DashboardState,
+    canvas: CanvasState,
+    workspace: WorkspaceState,
+    i18n: I18nCtx,
+    canvas_id: String,
+    switch_to_split: bool,
+) {
+    // Already open: show it, do not re-open it. `open_canvas` clears `doc`
+    // before fetching, which unmounts the editor — so re-opening the canvas
+    // the model is drawing on would tear down the camera, the undo stack and
+    // any drag in progress once per tool call, and a model drawing a diagram
+    // makes a lot of tool calls. The open document is kept current by the
+    // `canvas.updated` reconciler instead; that is what those wires are for.
+    let already_open = canvas
+        .open_canvas
+        .try_get_untracked()
+        .flatten()
+        .as_deref()
+        == Some(canvas_id.as_str());
+    if !already_open {
+        crate::views::canvas::open_canvas(dashboard, canvas, i18n, canvas_id);
+    }
+    if switch_to_split {
+        workspace.reveal(WorkspaceBody::Canvas);
+    } else {
+        // Already open: select the body without re-running `set_layout`,
+        // which would rewrite `localStorage` and clear a badge for a pane the
+        // user is already looking at.
+        workspace.body.set(WorkspaceBody::Canvas);
+    }
+}
+
+/// A `canvas` tool call just finished in the foreground run: reveal what it
+/// touched, if the decision table says so.
+///
+/// Thin on purpose — the rule is `auto_reveal_decision` (pure, in
+/// `state/layout.rs`) and the id extraction is
+/// `views::canvas::canvas_id_from_tool_result` (pure, tested against both
+/// wire shapes). This function only reads the event and calls them.
+fn canvas_auto_reveal(
+    dashboard: DashboardState,
+    canvas: CanvasState,
+    workspace: WorkspaceState,
+    i18n: I18nCtx,
+    run_id: &str,
+    trace_event: &serde_json::Value,
+) {
+    let kind = trace_event
+        .get("type")
+        .or_else(|| trace_event.get("kind"))
+        .and_then(|k| k.as_str())
+        .unwrap_or("");
+    if kind != "tool_call_completed" {
+        return;
+    }
+    let tool_name = trace_event
+        .get("call")
+        .and_then(|c| c.get("tool_name"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    if tool_name != crate::views::canvas::CANVAS_TOOL {
+        return;
+    }
+    let result = trace_event
+        .get("result")
+        .unwrap_or(&serde_json::Value::Null);
+    let canvas_id = crate::views::canvas::canvas_id_from_tool_result(result);
+    let decision = auto_reveal_decision(
+        workspace.mode.get_untracked(),
+        workspace
+            .auto_reveal_muted_run
+            .get_untracked()
+            .as_deref(),
+        run_id,
+        canvas_id.as_deref(),
+    );
+    let Some(action) = decision else { return };
+    reveal_canvas(
+        dashboard,
+        canvas,
+        workspace,
+        i18n,
+        action.open_canvas,
+        action.switch_to_split,
+    );
 }
 
 /// Project one persisted/live `AgentTraceEvent` (tagged `kind` or `type`)
@@ -808,6 +904,7 @@ pub fn subscribe_run_events(
     sessions: SessionMap,
     singleton: ChatState,
     workspace: WorkspaceState,
+    canvas: CanvasState,
     i18n: I18nCtx,
 ) -> usize {
     let trace_runs = Arc::new(Mutex::new(HashSet::<String>::new()));
@@ -962,11 +1059,12 @@ pub fn subscribe_run_events(
 
         // Resolve the target conversation's ChatState (active = singleton
         // projection / background = live[conv]). `resolve_target` also reports
-        // whether that conversation is the foreground one; the workspace pane
-        // has no per-conversation surface to protect right now, so nothing
-        // consumes it — any future write to the single global pane must.
+        // whether that conversation is the foreground one — the workspace pane
+        // is a single global surface, so every write to it below is gated on
+        // that flag: a background run must never pop the pane open over the
+        // conversation the user is reading.
         let session_key = data.get("session_key").and_then(|s| s.as_str());
-        let Some((chat, _is_foreground)) =
+        let Some((chat, is_foreground)) =
             resolve_target(&sessions, singleton, event_type, run_id, session_key)
         else {
             return;
@@ -1035,6 +1133,14 @@ pub fn subscribe_run_events(
                     trace_event,
                     i18n.get_locale_untracked(),
                 );
+                // Auto-reveal lives HERE, not inside `apply_trace_event`:
+                // that projection is shared with `replay_run`, and replaying
+                // a conversation's history would pop the pane open on a
+                // canvas from a run that finished days ago. Foreground only,
+                // for the reason `resolve_target` is asked.
+                if is_foreground {
+                    canvas_auto_reveal(dash, canvas, workspace, i18n, run_id, trace_event);
+                }
             }
             "tool_start" => {
                 if trace_enabled {

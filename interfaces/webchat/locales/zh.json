@@ -7,7 +7,6 @@
     "teams": "团队",
     "extensions": "Aleph Hub",
     "settings": "设置",
-    "canvas": "画布",
     "projects": "项目",
     "terminal": "终端"
   },
@@ -446,12 +445,9 @@
     "title_empty": "画布标题不能为空",
     "title_too_long": "标题太长了（最多 200 字节）",
     "title_control": "标题不能包含换行或控制字符",
-    "select_hint": "在左侧选择一张画布，或新建一张",
     "rename_busy": "重命名没能落地——此刻有人正在写这张画布，请再试一次。",
     "empty": "还没有画布——新建一个开始",
     "shapes": "个形状",
-    "back_to_library": "画布库",
-    "phone_read_only": "手机端仅可查看——请在桌面端编辑",
     "html_frame": "HTML 框",
     "ai_status_draft": "草稿",
     "ai_status_pending": "生成中…",
@@ -483,7 +479,10 @@
     "deck_frames": "帧",
     "deck_play": "播放",
     "deck_missing_frame": "框架已删除",
-    "present_exit": "退出 (Esc)"
+    "present_exit": "退出 (Esc)",
+    "library": "画布库",
+    "close_canvas": "关闭画布",
+    "open_in_canvas": "在画布中打开"
   },
   "memory": {
     "batch_clear": "清除",
@@ -2666,7 +2665,8 @@
   },
   "layout_toggle": {
     "open_pane": "打开工作区面板",
-    "close_pane": "关闭工作区面板"
+    "close_pane": "关闭工作区面板",
+    "resize_pane": "拖动调整宽度 · 双击恢复默认"
   },
   "dashboard_cron": {
     "gateway_disconnected": "网关已断开",

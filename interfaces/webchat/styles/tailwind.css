@@ -2003,6 +2003,31 @@ html[data-shell="aleph-tauri"][data-platform="macos"] .aleph-sidebar-head { padd
     pointer-events: none;
 }
 
+/* Left-edge resize handle. Absolutely positioned so it costs the pane's flex
+   column no space; 6px of hit zone with a 1px visible rule, because a grab
+   target the width of a border is a border you keep missing. `touch-action:
+   none` is what lets pointer capture own the gesture on touch devices instead
+   of the browser turning it into a scroll. */
+.aleph-workspace-resizer {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 6px;
+    z-index: 30;
+    cursor: col-resize;
+    touch-action: none;
+    background: transparent;
+    transition: background 120ms ease-out;
+}
+.aleph-workspace-resizer:hover,
+.aleph-workspace-resizer.is-dragging {
+    background: linear-gradient(
+        to right,
+        var(--color-primary) 0 2px,
+        transparent 2px 100%
+    );
+}
+
 /* The LayoutToggle glides in lockstep with the pane — same 200ms ease-out — so
    its right edge slides with the chat/workspace boundary instead of snapping.
    The band's "WORKSPACE" label that used to animate alongside it is gone: both
