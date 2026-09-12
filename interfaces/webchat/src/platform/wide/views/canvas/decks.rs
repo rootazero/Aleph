@@ -581,6 +581,7 @@ mod tests {
             h,
             z: FracIndex::first(),
             parent_id: None,
+            reveal: None,
         }
     }
 
@@ -611,6 +612,7 @@ mod tests {
             decks,
             created_at_ms: 0,
             updated_at_ms: 0,
+            timeline: None,
         }
     }
 

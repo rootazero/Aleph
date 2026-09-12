@@ -218,6 +218,7 @@ pub(super) fn insert_frame_ops(
             h,
             z: FracIndex::between(top.as_ref(), None),
             parent_id: None,
+            reveal: None,
         },
         prompt: String::new(),
         reference_asset_ids: Vec::new(),
@@ -766,6 +767,7 @@ mod tests {
             h,
             z: FracIndex::first(),
             parent_id: None,
+            reveal: None,
         }
     }
 
@@ -917,6 +919,7 @@ mod tests {
             decks: Vec::new(),
             created_at_ms: 0,
             updated_at_ms: 0,
+            timeline: None,
         };
         let (redo, undo, id) = insert_frame_ops(&doc, (500.0, 300.0), "fid".to_string());
         assert_eq!(id, "fid");

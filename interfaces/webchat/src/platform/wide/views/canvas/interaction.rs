@@ -57,9 +57,10 @@
 //! `editor.rs::z_sorted_ids` paints with (later-painted wins the hit).
 
 use aleph_protocol::canvas::{
-    ArrowEnd, CanvasOp, FracIndex, GeoForm, Shape, ShapeCommon, ShapeStyle,
+    ArrowEnd, ArrowHead, CanvasOp, FracIndex, GeoForm, Shape, ShapeCommon, ShapeStyle,
 };
 
+use super::geo_path;
 use crate::state::canvas::CanvasTool;
 
 /// A resize can never collapse a bbox below this many world units.
@@ -97,11 +98,24 @@ impl Bbox {
     }
 
     /// A shape's bounds — `common` x/y/w/h, normalized in case a producer
-    /// ever writes a negative extent.
+    /// ever writes a negative extent. A `Path` additionally covers the extent
+    /// of its (shape-local) command coordinates, translated to the origin:
+    /// the model writes `w`/`h` and `d` separately, and a hit test that
+    /// trusted only the box would miss a curve that overshoots it. Control
+    /// points count, so the box is a conservative superset.
     #[must_use]
     pub(super) fn of_shape(shape: &Shape) -> Self {
         let c = shape.common();
-        Self::from_corners((c.x, c.y), (c.x + c.w, c.y + c.h))
+        let boxed = Self::from_corners((c.x, c.y), (c.x + c.w, c.y + c.h));
+        match shape {
+            Shape::Path { d, .. } => match geo_path::path_extent(d) {
+                Some((x0, y0, x1, y1)) => {
+                    boxed.union(Self::from_corners((c.x + x0, c.y + y0), (c.x + x1, c.y + y1)))
+                }
+                None => boxed,
+            },
+            _ => boxed,
+        }
     }
 
     #[must_use]
@@ -307,6 +321,7 @@ fn shape_for_create(kind: CreateKind, id: &str, z: &FracIndex, b: Bbox) -> Shape
         h: b.h,
         z: z.clone(),
         parent_id: None,
+        reveal: None,
     };
     match kind {
         CreateKind::Geo(form) => Shape::Geo {
@@ -369,6 +384,7 @@ fn ink_shape(id: &str, z: &FracIndex, world_points: &[[f32; 3]]) -> Shape {
             h: b.h,
             z: z.clone(),
             parent_id: None,
+            reveal: None,
         },
         style: ShapeStyle::default(),
         points,
@@ -396,6 +412,7 @@ fn arrow_shape(
             h: b.h,
             z: z.clone(),
             parent_id: None,
+            reveal: None,
         },
         start: ArrowEnd {
             x: start.0,
@@ -409,6 +426,9 @@ fn arrow_shape(
         },
         style: ShapeStyle::default(),
         label: String::new(),
+        bend: 0.0,
+        head_start: ArrowHead::None,
+        head_end: ArrowHead::Arrow,
     }
 }
 
@@ -451,6 +471,7 @@ fn common_mut(shape: &mut Shape) -> &mut ShapeCommon {
         | Shape::Frame { common, .. }
         | Shape::Html { common, .. }
         | Shape::Arrow { common, .. }
+        | Shape::Path { common, .. }
         | Shape::AiImageFrame { common, .. } => common,
     }
 }
@@ -481,8 +502,9 @@ pub(super) fn translate_shapes(shapes: &[Shape], dx: f64, dy: f64) -> Vec<Shape>
 }
 
 /// Map the originals through the affine that carries `from` onto `to`.
-/// Positions map through the box transform; extents scale; ink points
-/// (origin-relative) and arrow endpoints (absolute) scale on both axes.
+/// Positions map through the box transform; extents scale; ink points and
+/// path data (both origin-relative) and arrow endpoints (absolute) scale on
+/// both axes.
 #[must_use]
 pub(super) fn scale_shapes(originals: &[Shape], from: Bbox, to: Bbox) -> Vec<Shape> {
     // A zero-extent axis cannot define a scale; treat it as 1:1 so the
@@ -514,6 +536,9 @@ pub(super) fn scale_shapes(originals: &[Shape], from: Bbox, to: Bbox) -> Vec<Sha
                     start.y = fy(start.y);
                     end.x = fx(end.x);
                     end.y = fy(end.y);
+                }
+                Shape::Path { d, .. } => {
+                    *d = geo_path::scale_path_d(d, sx, sy);
                 }
                 _ => {}
             }
@@ -1183,6 +1208,7 @@ mod tests {
                 h,
                 z: frac(z),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: String::new(),
@@ -1393,6 +1419,52 @@ mod tests {
         assert!(m.pointer_up((21.0, 19.0), &shapes).is_empty());
     }
 
+    /// A `Path`'s hit box is its declared box widened by its command extent
+    /// (control points included), and a resize scales the shape-local `d`
+    /// like ink points.
+    #[test]
+    fn a_path_is_bounded_by_its_commands_and_scales_its_data() {
+        let path = Shape::Path {
+            common: ShapeCommon {
+                id: "p".to_string(),
+                x: 100.0,
+                y: 100.0,
+                w: 10.0,
+                h: 10.0,
+                z: frac("U"),
+                parent_id: None,
+                reveal: None,
+            },
+            style: ShapeStyle::default(),
+            d: "M0 0 Q40 -20 20 20".to_string(),
+            closed: false,
+        };
+        let b = Bbox::of_shape(&path);
+        assert_eq!((b.x, b.y, b.w, b.h), (100.0, 80.0, 40.0, 40.0));
+        assert!(b.contains((130.0, 90.0)), "a point only the curve reaches");
+
+        let scaled = scale_shapes(
+            std::slice::from_ref(&path),
+            Bbox {
+                x: 100.0,
+                y: 100.0,
+                w: 10.0,
+                h: 10.0,
+            },
+            Bbox {
+                x: 100.0,
+                y: 100.0,
+                w: 20.0,
+                h: 5.0,
+            },
+        );
+        let Shape::Path { d, common, .. } = &scaled[0] else {
+            panic!("still a path");
+        };
+        assert_eq!((common.w, common.h), (20.0, 5.0));
+        assert_eq!(d, "M0 0 Q80 -10 40 10");
+    }
+
     #[test]
     fn moving_an_arrow_carries_its_absolute_endpoints() {
         let arrow = Shape::Arrow {
@@ -1404,6 +1476,7 @@ mod tests {
                 h: 50.0,
                 z: frac("U"),
                 parent_id: None,
+                reveal: None,
             },
             start: ArrowEnd {
                 x: 0.0,
@@ -1417,6 +1490,9 @@ mod tests {
             },
             style: ShapeStyle::default(),
             label: String::new(),
+            bend: 0.0,
+            head_start: ArrowHead::None,
+            head_end: ArrowHead::Arrow,
         };
         let moved = translate_shape(&arrow, 7.0, -3.0);
         let Shape::Arrow {
@@ -1567,6 +1643,7 @@ mod tests {
                 h: 100.0,
                 z: frac("U"),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             points: vec![[0.0, 0.0, 0.5], [100.0, 100.0, 0.5]],

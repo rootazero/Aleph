@@ -2649,7 +2649,23 @@ mod tests {
     /// on macOS after the merge at 114_393 B (94_797 catalog + 16_613
     /// registry-only + 1_039 injected + 1_944 bridge), not derived by
     /// arithmetic over the two sides' ledgers.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_393;
+    ///
+    /// 2026-09-12 (canvas drawing infrastructure, task 2): 114_393 ->
+    /// 115_174 B, measured on Linux (95_578 catalog + 16_613 registry-only +
+    /// 1_039 injected + 1_944 bridge); the only red test was this one and
+    /// the delta (+781 B) is `canvas`'s new runtime-facts paragraph, whole.
+    /// Three questions: (1) the `path` variant's command subset, its 64 KiB
+    /// cap and its shape-local coordinate frame, "reveal is playback, not
+    /// live animation", and "sketch jitter is seeded from the shape id" are
+    /// facts of this repository's contract and Panel, not of SVG; (2) the
+    /// canvas schema is registered conditionally (`canvas_store`), so this
+    /// catalog line is the whole of what a model reads before deciding to
+    /// fetch it — the shape/field inventory is what lets it decide; (3)
+    /// `canvas` is the sole owner of every sentence (the contract's field
+    /// docs say what a field IS; this says what the deployment DOES with
+    /// it). The style-panel gallery of hand-drawn looks was deliberately
+    /// kept out (spec D10): prompt knowledge, not a runtime fact.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 115_174;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

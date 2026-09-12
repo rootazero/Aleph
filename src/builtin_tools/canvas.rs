@@ -45,7 +45,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use aleph_protocol::canvas::{
-    AiFrameStatus, CanvasDoc, CanvasOp, FracIndex, Shape, ShapeCommon, MAX_ASSET_BYTES,
+    AiFrameStatus, CanvasDoc, CanvasOp, FracIndex, Shape, ShapeCommon, StrokeKind,
+    MAX_ASSET_BYTES,
 };
 
 use crate::canvas::{selection, CanvasError, CanvasStore};
@@ -310,6 +311,7 @@ impl CanvasTool {
                     h: place.h,
                     z: place.z.clone(),
                     parent_id: place.parent_id.clone(),
+                    reveal: None,
                 },
                 asset_id: asset_id.clone(),
                 natural_w: 0.0,
@@ -386,6 +388,7 @@ impl CanvasTool {
                         h: place.h,
                         z: place.z.clone(),
                         parent_id: None,
+                        reveal: None,
                     },
                     title: args.title.clone().unwrap_or_default(),
                     aspect_locked: true,
@@ -404,6 +407,7 @@ impl CanvasTool {
                     h: place.h,
                     z: FracIndex::between(Some(&place.z), None),
                     parent_id: Some(frame_id.clone()),
+                    reveal: None,
                 },
                 asset_id: asset_id.clone(),
             },
@@ -515,6 +519,7 @@ fn type_tag(shape: &Shape) -> &'static str {
         Shape::Frame { .. } => "frame",
         Shape::Html { .. } => "html",
         Shape::Arrow { .. } => "arrow",
+        Shape::Path { .. } => "path",
         Shape::AiImageFrame { .. } => "ai_image_frame",
     }
 }
@@ -526,7 +531,7 @@ fn shape_text(shape: &Shape) -> &str {
         Shape::Arrow { label, .. } => label,
         Shape::Frame { title, .. } => title,
         Shape::AiImageFrame { prompt, .. } => prompt,
-        Shape::Ink { .. } | Shape::Image { .. } | Shape::Html { .. } => "",
+        Shape::Ink { .. } | Shape::Image { .. } | Shape::Html { .. } | Shape::Path { .. } => "",
     }
 }
 
@@ -534,8 +539,28 @@ fn excerpt(text: &str) -> String {
     text.chars().take(EXCERPT_CHARS).collect()
 }
 
+/// Compact non-default markers for a summary row: `~<stroke>` when the
+/// outline is not solid, `@<start>+<duration>ms` when the shape has a reveal.
+/// Empty for the plain case, so the common row grows by nothing.
+fn summary_marks(shape: &Shape) -> String {
+    let mut marks: Vec<String> = Vec::new();
+    if let Some(style) = shape.style() {
+        if style.stroke != StrokeKind::Solid {
+            let stroke = serde_json::to_value(style.stroke)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            marks.push(format!("~{stroke}"));
+        }
+    }
+    if let Some(reveal) = &shape.common().reveal {
+        marks.push(format!("@{}+{}ms", reveal.start_ms, reveal.duration_ms));
+    }
+    marks.join(" ")
+}
+
 /// Token-lean projection for `get(detail="summary")`: ids, boxes, excerpts —
-/// no ink points, no styles.
+/// no ink points, no styles beyond the `marks` field ([`summary_marks`]).
 fn summary_of(doc: &CanvasDoc, selection: Vec<String>) -> Value {
     let shapes: Vec<Value> = doc
         .shapes
@@ -557,6 +582,10 @@ fn summary_of(doc: &CanvasDoc, selection: Vec<String>) -> Value {
             }
             if let Shape::AiImageFrame { status, .. } = s {
                 obj.insert("status".into(), json!(ai_status_tag(*status)));
+            }
+            let marks = summary_marks(s);
+            if !marks.is_empty() {
+                obj.insert("marks".into(), json!(marks));
             }
             row
         })
@@ -765,10 +794,15 @@ impl AlephTool for CanvasTool {
     /// Runtime facts only — the schema already carries the argument shapes.
     /// What is here is what no field doc can hold: the live Panel link, the
     /// frame-replacement semantics, the summary/full trade, the location
-    /// roots, and that revisions are handled internally.
+    /// roots, that revisions are handled internally — and, since the canvas
+    /// schema is registered conditionally (not in the default core set), the
+    /// one-line inventory of shapes and drawing fields a model reads before
+    /// deciding whether to fetch that schema at all.
     const DESCRIPTION: &'static str = r#"Shared whiteboard canvases. The user sees every change live in the Panel's Canvas view, and their edits arrive the same way — treat a canvas as a shared surface, not a private buffer.
 
 get returns a summary (boxes + 80-char text excerpts, no ink points or styles); ask detail="full" only when you need exact geometry. apply takes ops (upsert_shape / delete_shape / set_doc_meta / upsert_deck / delete_deck); revisions are read and conflict-retried internally — never guess one.
+
+Shapes: geo (form rect/ellipse/diamond/triangle/hexagon/pill), ink, text, note, image, frame, html, arrow, ai_image_frame, and path {d, closed} — d is SVG path data limited to M L H V Q C Z (absolute or relative), 64 KiB max, coordinates relative to the shape's x,y like ink. style.color takes a named slot or #rrggbb; style.stroke is solid/sketch/dashed/dotted — sketch jitter is seeded by the Panel from the shape id, so it renders identically everywhere. Arrows take bend (0 = straight) and head_start/head_end (none/arrow/triangle/dot/bar). Any shape may carry reveal {start_ms, duration_ms, ease, mode: draw/fade/wipe} and set_doc_meta may set timeline {total_ms, hold_ms}: reveal is playback draw-on when the user presses Play, not live animation on the shared surface.
 
 insert_image accepts location as a data: URL, a local file path (only under the Aleph data dir or the OS temp dir — where generation tools write), or an https URL (10s, 10MB, must serve image/*). insert_html wraps the body in a 16:9 frame. For both, frame_id targets an existing frame: the image replaces the frame in place, the html replaces the frame's html child — that is how an AiImageFrame becomes its finished image. read_asset returns html as text; an image is attached as media for the user, not inlined.
 
@@ -869,7 +903,7 @@ Whole-canvas delete is Panel-only, deliberately."#;
 mod tests {
     use super::*;
     use crate::scope::{with_scope, ScopeAttribution};
-    use aleph_protocol::canvas::ShapeStyle;
+    use aleph_protocol::canvas::{ArrowHead, ShapeStyle};
 
     fn tool() -> (CanvasTool, tempfile::TempDir) {
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -905,6 +939,7 @@ mod tests {
                 h: 200.0,
                 z: FracIndex::first(),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: text.to_string(),
@@ -1079,6 +1114,7 @@ mod tests {
             h: 1.0,
             z: FracIndex::first(),
             parent_id: None,
+            reveal: None,
         };
         let shapes = vec![
             Shape::Geo {
@@ -1131,6 +1167,15 @@ mod tests {
                 },
                 style: ShapeStyle::default(),
                 label: String::new(),
+                bend: 0.0,
+                head_start: ArrowHead::None,
+                head_end: ArrowHead::Arrow,
+            },
+            Shape::Path {
+                common: common.clone(),
+                style: ShapeStyle::default(),
+                d: "M0 0 L1 1".into(),
+                closed: false,
             },
             Shape::AiImageFrame {
                 common,
@@ -1147,6 +1192,51 @@ mod tests {
                 "summary tag must be the wire tag"
             );
         }
+    }
+
+    /// The summary's `marks` field: absent for the plain case, `~<stroke>`
+    /// for a non-solid outline, `@start+durationms` for a reveal, both when
+    /// both — and the stroke word is the wire spelling, not a second one.
+    #[test]
+    fn summary_marks_name_non_default_stroke_and_reveal_compactly() {
+        use aleph_protocol::canvas::{Ease, Reveal, RevealMode};
+        let plain = note("n1", "x");
+        assert_eq!(summary_marks(&plain), "");
+
+        let mut sketched = plain.clone();
+        if let Shape::Note { style, .. } = &mut sketched {
+            style.stroke = StrokeKind::Sketch;
+        }
+        assert_eq!(summary_marks(&sketched), "~sketch");
+
+        let mut revealed = sketched.clone();
+        if let Shape::Note { common, .. } = &mut revealed {
+            common.reveal = Some(Reveal {
+                start_ms: 1200,
+                duration_ms: 800,
+                ease: Ease::default(),
+                mode: RevealMode::default(),
+            });
+        }
+        assert_eq!(summary_marks(&revealed), "~sketch @1200+800ms");
+
+        let row = summary_of(
+            &CanvasDoc {
+                id: "cv-1".into(),
+                title: "t".into(),
+                owner_user_id: None,
+                project_id: None,
+                revision: 1,
+                shapes: vec![plain, revealed],
+                decks: vec![],
+                created_at_ms: 0,
+                updated_at_ms: 0,
+                timeline: None,
+            },
+            vec![],
+        );
+        assert!(row["shapes"][0].get("marks").is_none(), "{row}");
+        assert_eq!(row["shapes"][1]["marks"], "~sketch @1200+800ms");
     }
 
     #[tokio::test]
@@ -1297,6 +1387,7 @@ mod tests {
                 h: 200.0,
                 z: FracIndex::first(),
                 parent_id: None,
+                reveal: None,
             },
             prompt: "a cat".into(),
             reference_asset_ids: vec![],

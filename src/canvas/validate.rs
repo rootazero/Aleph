@@ -7,7 +7,8 @@
 //! committing, so a rejected batch never half-lands on disk.
 
 use aleph_protocol::canvas::{
-    check_title, CanvasDoc, CanvasOp, Shape, MAX_DOCUMENT_BYTES, MAX_OPS_PER_APPLY, MAX_SHAPES,
+    check_color, check_title, parse_path_d, CanvasDoc, CanvasOp, Shape, MAX_DOCUMENT_BYTES,
+    MAX_OPS_PER_APPLY, MAX_SHAPES,
 };
 
 use super::store::CanvasError;
@@ -54,8 +55,11 @@ pub(super) fn ops_shape(ops: &[CanvasOp]) -> Result<(), CanvasError> {
             // used to be the one with no cap at all. `check_title` is the
             // shared gate — the same function `canvas.create` and the Panel's
             // rename input call, so all three refuse the same strings.
-            CanvasOp::SetDocMeta { title } => {
+            CanvasOp::SetDocMeta { title, timeline } => {
                 check_title(title).map_err(|why| CanvasError::Invalid(why.to_string()))?;
+                if let Some(timeline) = timeline {
+                    timeline.check().map_err(CanvasError::Invalid)?;
+                }
             }
             CanvasOp::UpsertDeck { deck } => {
                 require_id(&deck.id)?;
@@ -159,7 +163,12 @@ fn apply_mutations(doc: &mut CanvasDoc, ops: &[CanvasOp]) {
                 }
             }
             CanvasOp::DeleteShape { id } => doc.shapes.retain(|s| s.id() != id),
-            CanvasOp::SetDocMeta { title } => doc.title.clone_from(title),
+            CanvasOp::SetDocMeta { title, timeline } => {
+                doc.title.clone_from(title);
+                if let Some(t) = timeline {
+                    doc.timeline = Some(*t).filter(|t| !t.is_empty());
+                }
+            }
             CanvasOp::UpsertDeck { deck } => match doc.decks.iter_mut().find(|d| d.id == deck.id) {
                 Some(slot) => *slot = deck.clone(),
                 None => doc.decks.push(deck.clone()),
@@ -169,11 +178,21 @@ fn apply_mutations(doc: &mut CanvasDoc, ops: &[CanvasOp]) {
     }
 }
 
+/// Every per-shape gate. The drawing-infrastructure gates (`check_color`,
+/// `parse_path_d`, `Reveal::check`) live in the contract and are only CALLED
+/// here, so the Panel refuses the same values for the same reasons; like
+/// `check_title`, they reject and never rewrite.
 fn shape_is_well_formed(shape: &Shape) -> Result<(), CanvasError> {
     let common = shape.common();
     require_id(&common.id)?;
     if let Some(parent) = &common.parent_id {
         require_id(parent)?;
+    }
+    if let Some(reveal) = &common.reveal {
+        reveal.check().map_err(CanvasError::Invalid)?;
+    }
+    if let Some(style) = shape.style() {
+        check_color(&style.color).map_err(CanvasError::Invalid)?;
     }
     match shape {
         Shape::Ink { points, .. } if points.len() > MAX_INK_POINTS => {
@@ -182,10 +201,22 @@ fn shape_is_well_formed(shape: &Shape) -> Result<(), CanvasError> {
                 points.len()
             )));
         }
-        Shape::Arrow { start, end, .. } => {
+        Shape::Arrow {
+            start, end, bend, ..
+        } => {
             for bind in [&start.bind, &end.bind].into_iter().flatten() {
                 require_id(bind)?;
             }
+            // JSON cannot carry NaN/inf, so this arm is unreachable from the
+            // wire; it guards the in-process constructors (tool face, tests).
+            if !bend.is_finite() {
+                return Err(CanvasError::Invalid(
+                    "arrow bend must be a finite number".to_string(),
+                ));
+            }
+        }
+        Shape::Path { d, .. } => {
+            parse_path_d(d).map_err(CanvasError::Invalid)?;
         }
         _ => {}
     }

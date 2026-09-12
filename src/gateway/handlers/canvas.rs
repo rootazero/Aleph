@@ -216,8 +216,9 @@ pub async fn handle_get(request: JsonRpcRequest, store: Arc<CanvasStore>) -> Jso
 /// not-found, never `REVISION_CONFLICT`), then delegate; the store re-checks
 /// the revision under the per-canvas lock, so the gate read racing another
 /// writer costs nothing but a conflict the caller replays. Ops cannot change
-/// the project link (`SetDocMeta` carries only `title`), so visibility
-/// cannot be widened mid-flight by the very batch being admitted.
+/// the project link (`SetDocMeta` carries `title` and `timeline`, never
+/// `project_id`), so visibility cannot be widened mid-flight by the very
+/// batch being admitted.
 pub async fn handle_apply(request: JsonRpcRequest, store: Arc<CanvasStore>) -> JsonRpcResponse {
     const CONTEXT: &str = "Failed to apply canvas ops";
     let params: CanvasApplyParams = match parse_params(&request) {
@@ -383,6 +384,7 @@ mod tests {
                     h: 200.0,
                     z: FracIndex::first(),
                     parent_id: None,
+                    reveal: None,
                 },
                 style: ShapeStyle::default(),
                 text: "hi".to_string(),

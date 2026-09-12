@@ -10,11 +10,25 @@
 //!
 //! # Colors are theme tokens, resolved in `style=`
 //!
-//! `ShapeStyle.color` is a named palette slot on the wire; [`palette_var`]
-//! resolves it to a `var(--color-*)` reference. Resolution must land in the
-//! `style` attribute, not in `fill=`/`stroke=` presentation attributes —
-//! CSS custom properties do not resolve inside bare SVG attributes, and a
-//! literal `var(…)` there paints black in every browser.
+//! `ShapeStyle.color` is a named palette slot or a `#rrggbb` literal on the
+//! wire; [`palette_var`] resolves a slot to a `var(--color-*)` reference and
+//! passes a literal through. Resolution must land in the `style` attribute,
+//! not in `fill=`/`stroke=` presentation attributes — CSS custom properties
+//! do not resolve inside bare SVG attributes, and a literal `var(…)` there
+//! paints black in every browser.
+//!
+//! # Drawing infrastructure (2026-09-12) — what this build renders
+//!
+//! - `Geo` forms beyond rect/ellipse are polygons from `geo_path.rs` (pill is
+//!   a rect with `rx = h/2`); `Path` is the contract-parsed `d` re-emitted.
+//! - `StrokeKind::Dashed` / `Dotted` are `stroke-dasharray`;
+//!   **`Sketch` renders as `Solid` here** — the seeded hand-drawn synthesis is
+//!   the next round's `sketch.rs`.
+//! - Arrow heads follow `head_start` / `head_end` ([`arrow_head_mark`]);
+//!   **`bend` is not yet rendered** — a bent arrow draws as its chord until
+//!   the arc geometry lands.
+//! - `reveal` / `timeline` are not consulted: playback is a later round, and
+//!   a shape with a reveal is simply visible.
 //!
 //! # Ink and arrows (Task 15)
 //!
@@ -49,14 +63,15 @@
 //!   limitation. The text-editing overlay (Task 14) owns real layout.
 
 use aleph_protocol::canvas::{
-    AiFrameStatus, ArrowEnd, GeoForm, Shape, ShapeCommon, ShapeStyle, SizeKind,
+    AiFrameStatus, ArrowEnd, ArrowHead, GeoForm, Shape, ShapeCommon, ShapeStyle, SizeKind,
+    StrokeKind,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use super::asset_ingest::SrcdocCache;
-use super::freehand;
 use super::interaction::Bbox;
+use super::{freehand, geo_path};
 use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
 use crate::context::DashboardState;
@@ -67,6 +82,8 @@ use crate::state::canvas::CanvasState;
 const ARROW_HEAD_LEN: f64 = 12.0;
 /// Arrowhead half-width across the shaft, world units.
 const ARROW_HEAD_HALF: f64 = 5.0;
+/// Radius of an [`ArrowHead::Dot`] cap, world units.
+const ARROW_DOT_RADIUS: f64 = 4.0;
 
 /// One shape, looked up by id from the editor's shape map.
 #[component]
@@ -87,12 +104,14 @@ fn asset_href(asset_base: &str, asset_id: &str) -> String {
     format!("{asset_base}/{asset_id}")
 }
 
-/// Resolve a wire palette slot to a theme token reference.
+/// Resolve a wire color to CSS: a palette slot becomes a theme token
+/// reference, a `#rrggbb` literal (the contract's `check_color` shape) is
+/// used as-is.
 ///
 /// Unknown slots (including the empty default) resolve to the neutral ink —
 /// an unrecognized color must degrade to *visible*, never to an error.
 #[must_use]
-fn palette_var(slot: &str) -> &'static str {
+fn palette_var(slot: &str) -> String {
     match slot {
         "red" => "var(--color-danger)",
         "orange" => "var(--color-warning)",
@@ -100,7 +119,31 @@ fn palette_var(slot: &str) -> &'static str {
         "green" => "var(--color-success)",
         "blue" => "var(--color-info)",
         "violet" => "var(--color-primary)",
+        hex if is_hex_color(hex) => hex,
         _ => "var(--color-text-secondary)",
+    }
+    .to_string()
+}
+
+/// A `#rrggbb` literal — the only non-slot spelling `check_color` admits.
+/// `pub(super)`: the export serializer passes the same literals through.
+#[must_use]
+pub(super) fn is_hex_color(color: &str) -> bool {
+    color
+        .strip_prefix('#')
+        .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// `stroke-dasharray` for a stroke kind; `None` draws a continuous line.
+/// `Sketch` is `None` here on purpose (module doc: it renders solid until
+/// the sketch synthesizer exists). `pub(super)`: the export serializer
+/// dashes the same way.
+#[must_use]
+pub(super) fn stroke_dasharray(stroke: StrokeKind) -> Option<&'static str> {
+    match stroke {
+        StrokeKind::Solid | StrokeKind::Sketch => None,
+        StrokeKind::Dashed => Some("8 6"),
+        StrokeKind::Dotted => Some("2 5"),
     }
 }
 
@@ -122,10 +165,11 @@ fn fill_css(style: &ShapeStyle) -> String {
 /// `pub(super)`: the text-editing overlay writes in the same ink so the
 /// textarea and the committed SVG text cannot disagree.
 #[must_use]
-pub(super) fn text_fill(style: &ShapeStyle) -> &'static str {
+pub(super) fn text_fill(style: &ShapeStyle) -> String {
     match style.color.as_str() {
         "red" | "orange" | "yellow" | "green" | "blue" | "violet" => palette_var(&style.color),
-        _ => "var(--color-text-primary)",
+        hex if is_hex_color(hex) => hex.to_string(),
+        _ => "var(--color-text-primary)".to_string(),
     }
 }
 
@@ -255,7 +299,7 @@ pub(super) fn arrow_head_points(start: (f64, f64), end: (f64, f64)) -> String {
 }
 
 /// `\n`-split text as a stack of `<text>` lines, first baseline at `y`.
-fn text_block(x: f64, y: f64, text: &str, fs: f64, fill: &'static str) -> AnyView {
+fn text_block(x: f64, y: f64, text: &str, fs: f64, fill: &str) -> AnyView {
     let line_height = fs * 1.4;
     text.split('\n')
         .enumerate()
@@ -296,7 +340,7 @@ fn shape_svg(shape: &Shape, canvas: CanvasState, i18n: I18nCtx) -> AnyView {
         } => {
             let fs = font_size_for(style.size);
             view! {
-                <g>{text_block(common.x, common.y + fs, text, fs, text_fill(style))}</g>
+                <g>{text_block(common.x, common.y + fs, text, fs, &text_fill(style))}</g>
             }
             .into_any()
         }
@@ -316,7 +360,16 @@ fn shape_svg(shape: &Shape, canvas: CanvasState, i18n: I18nCtx) -> AnyView {
             end,
             style,
             label,
-        } => arrow_svg(start, end, style, label, canvas),
+            bend: _,
+            head_start,
+            head_end,
+        } => arrow_svg(start, end, style, label, (*head_start, *head_end), canvas),
+        Shape::Path {
+            common,
+            style,
+            d,
+            closed,
+        } => path_svg(common, style, d, *closed),
         Shape::AiImageFrame {
             common,
             prompt,
@@ -329,20 +382,29 @@ fn shape_svg(shape: &Shape, canvas: CanvasState, i18n: I18nCtx) -> AnyView {
 fn geo_svg(common: &ShapeCommon, form: GeoForm, style: &ShapeStyle, text: &str) -> AnyView {
     let stroke = palette_var(&style.color);
     let paint = format!("stroke: {stroke}; fill: {};", fill_css(style));
+    let dash = stroke_dasharray(style.stroke);
     let fs = font_size_for(style.size);
     let outline = match form {
-        GeoForm::Rect => view! {
-            <rect
-                x=common.x
-                y=common.y
-                width=common.w
-                height=common.h
-                rx=4
-                style=paint
-                stroke-width=2
-            />
+        GeoForm::Rect | GeoForm::Pill => {
+            let rx = if form == GeoForm::Pill {
+                common.h / 2.0
+            } else {
+                4.0
+            };
+            view! {
+                <rect
+                    x=common.x
+                    y=common.y
+                    width=common.w
+                    height=common.h
+                    rx=rx
+                    style=paint
+                    stroke-width=2
+                    stroke-dasharray=dash
+                />
+            }
+            .into_any()
         }
-        .into_any(),
         GeoForm::Ellipse => view! {
             <ellipse
                 cx=common.x + common.w / 2.0
@@ -351,9 +413,25 @@ fn geo_svg(common: &ShapeCommon, form: GeoForm, style: &ShapeStyle, text: &str) 
                 ry=common.h / 2.0
                 style=paint
                 stroke-width=2
+                stroke-dasharray=dash
             />
         }
         .into_any(),
+        GeoForm::Diamond | GeoForm::Triangle | GeoForm::Hexagon => {
+            let points =
+                geo_path::polygon_points(form, common.x, common.y, common.w, common.h)
+                    .unwrap_or_default();
+            view! {
+                <polygon
+                    points=points
+                    style=paint
+                    stroke-width=2
+                    stroke-linejoin="round"
+                    stroke-dasharray=dash
+                />
+            }
+            .into_any()
+        }
     };
     let label = (!text.is_empty()).then(|| {
         text_block(
@@ -361,7 +439,7 @@ fn geo_svg(common: &ShapeCommon, form: GeoForm, style: &ShapeStyle, text: &str) 
             common.y + fs + 8.0,
             text,
             fs,
-            text_fill(style),
+            &text_fill(style),
         )
     });
     view! { <g>{outline}{label}</g> }.into_any()
@@ -382,11 +460,39 @@ fn ink_svg(common: &ShapeCommon, style: &ShapeStyle, points: &[[f32; 3]]) -> Any
     .into_any()
 }
 
+/// A `Shape::Path`: the contract-parsed `d`, translated to the shape origin
+/// (shape-local coordinates, the `Ink` convention). A `d` this build cannot
+/// parse renders nothing — never a guess.
+fn path_svg(common: &ShapeCommon, style: &ShapeStyle, d: &str, closed: bool) -> AnyView {
+    let Some(d) = geo_path::path_d(d, closed) else {
+        return ().into_any();
+    };
+    let fill = if closed {
+        fill_css(style)
+    } else {
+        "none".to_string()
+    };
+    let paint = format!("stroke: {}; fill: {fill};", palette_var(&style.color));
+    view! {
+        <g transform=format!("translate({} {})", common.x, common.y)>
+            <path
+                d=d
+                style=paint
+                stroke-width=2
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-dasharray=stroke_dasharray(style.stroke)
+            />
+        </g>
+    }
+    .into_any()
+}
+
 fn note_svg(common: &ShapeCommon, style: &ShapeStyle, text: &str) -> AnyView {
     // A note is always a filled card. The default slot reads as the classic
     // sticky yellow; named slots wash the card in their own color.
     let base = match style.color.as_str() {
-        "" | "default" => "var(--color-warning)",
+        "" | "default" => "var(--color-warning)".to_string(),
         _ => palette_var(&style.color),
     };
     let fs = font_size_for(style.size);
@@ -511,14 +617,93 @@ fn html_placeholder_svg(common: &ShapeCommon, i18n: I18nCtx) -> AnyView {
     .into_any()
 }
 
+/// One rendered arrow cap — the same value the export serializer draws, so
+/// the live view and the PNG agree on every head kind.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum HeadMark {
+    /// `points=`; `filled` paints it in the stroke color, else outlined.
+    Polygon { points: String, filled: bool },
+    Circle { cx: f64, cy: f64, r: f64 },
+    Line { x1: f64, y1: f64, x2: f64, y2: f64 },
+}
+
+/// The cap at `end` of an arrow coming from `start`, for `kind`. `None` for
+/// [`ArrowHead::None`] and for a degenerate (zero-length) arrow — the same
+/// NaN rule as [`arrow_head_points`]. For the start cap, call with the ends
+/// swapped. `pub(super)`: shared with the export serializer.
+#[must_use]
+pub(super) fn arrow_head_mark(
+    kind: ArrowHead,
+    start: (f64, f64),
+    end: (f64, f64),
+) -> Option<HeadMark> {
+    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-6 {
+        return None;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let (px, py) = (-uy, ux);
+    Some(match kind {
+        ArrowHead::None => return None,
+        ArrowHead::Arrow => HeadMark::Polygon {
+            points: arrow_head_points(start, end),
+            filled: true,
+        },
+        ArrowHead::Triangle => HeadMark::Polygon {
+            points: arrow_head_points(start, end),
+            filled: false,
+        },
+        ArrowHead::Dot => HeadMark::Circle {
+            cx: end.0,
+            cy: end.1,
+            r: ARROW_DOT_RADIUS,
+        },
+        ArrowHead::Bar => HeadMark::Line {
+            x1: end.0 + px * ARROW_HEAD_HALF,
+            y1: end.1 + py * ARROW_HEAD_HALF,
+            x2: end.0 - px * ARROW_HEAD_HALF,
+            y2: end.1 - py * ARROW_HEAD_HALF,
+        },
+    })
+}
+
+fn head_mark_svg(mark: Option<HeadMark>, stroke: &str) -> AnyView {
+    match mark {
+        None => ().into_any(),
+        Some(HeadMark::Polygon { points, filled }) => {
+            let fill = if filled { stroke } else { "none" };
+            view! {
+                <polygon
+                    points=points
+                    style=format!("fill: {fill}; stroke: {stroke};")
+                    stroke-width=2
+                    stroke-linejoin="round"
+                />
+            }
+            .into_any()
+        }
+        Some(HeadMark::Circle { cx, cy, r }) => view! {
+            <circle cx=cx cy=cy r=r style=format!("fill: {stroke};") />
+        }
+        .into_any(),
+        Some(HeadMark::Line { x1, y1, x2, y2 }) => view! {
+            <line x1=x1 y1=y1 x2=x2 y2=y2 style=format!("stroke: {stroke};") stroke-width=2 />
+        }
+        .into_any(),
+    }
+}
+
 fn arrow_svg(
     start: &ArrowEnd,
     end: &ArrowEnd,
     style: &ShapeStyle,
     label: &str,
+    heads: (ArrowHead, ArrowHead),
     canvas: CanvasState,
 ) -> AnyView {
     let stroke = palette_var(&style.color);
+    let dash = stroke_dasharray(style.stroke);
     // Bound endpoints re-resolve whenever the document changes (the bound
     // shape may have moved), so the resolution reads the doc signal — but
     // only when a binding exists: an unbound arrow must not re-render on
@@ -537,6 +722,9 @@ fn arrow_svg(
         })
     });
     let label = label.to_string();
+    let (head_start, head_end) = heads;
+    let stroke_for_heads = stroke.clone();
+    let stroke_for_label = stroke.clone();
     view! {
         <g>
             <line
@@ -546,12 +734,15 @@ fn arrow_svg(
                 y2=move || ends.get().1.1
                 style=format!("stroke: {stroke};")
                 stroke-width=2
+                stroke-dasharray=dash
             />
             {move || {
                 let (s, e) = ends.get();
-                let head = arrow_head_points(s, e);
-                (!head.is_empty())
-                    .then(|| view! { <polygon points=head style=format!("fill: {stroke};") /> })
+                let stroke = stroke_for_heads.clone();
+                view! {
+                    {head_mark_svg(arrow_head_mark(head_end, s, e), &stroke)}
+                    {head_mark_svg(arrow_head_mark(head_start, e, s), &stroke)}
+                }
             }}
             {(!label.is_empty()).then(|| {
                 view! {
@@ -560,7 +751,7 @@ fn arrow_svg(
                         y=move || (ends.get().0.1 + ends.get().1.1) / 2.0 - 6.0
                         text-anchor="middle"
                         font-size=12
-                        style=format!("fill: {stroke}; user-select: none;")
+                        style=format!("fill: {stroke_for_label}; user-select: none;")
                     >
                         {label}
                     </text>
@@ -868,6 +1059,7 @@ mod tests {
                 h: 60.0,
                 z: aleph_protocol::canvas::FracIndex::first(),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: String::new(),
@@ -919,6 +1111,91 @@ mod tests {
         assert_eq!(palette_var("violet"), "var(--color-primary)");
         assert_eq!(palette_var(""), "var(--color-text-secondary)");
         assert_eq!(palette_var("hologram"), "var(--color-text-secondary)");
+    }
+
+    /// A `#rrggbb` literal (the contract's other admissible spelling) passes
+    /// through both resolvers verbatim; anything hex-shaped but not six
+    /// digits is an unknown slot and degrades like one.
+    #[test]
+    fn hex_colors_pass_through_and_near_misses_degrade() {
+        assert!(is_hex_color("#A1b2C3"));
+        assert!(!is_hex_color("#abc") && !is_hex_color("a1b2c3") && !is_hex_color("#gggggg"));
+        assert_eq!(palette_var("#A1b2C3"), "#A1b2C3");
+        assert_eq!(palette_var("#abc"), "var(--color-text-secondary)");
+        let hex = ShapeStyle {
+            color: "#123456".to_string(),
+            ..ShapeStyle::default()
+        };
+        assert_eq!(text_fill(&hex), "#123456");
+        assert_eq!(
+            fill_css(&ShapeStyle { fill: true, ..hex }),
+            "color-mix(in oklch, #123456 18%, transparent)"
+        );
+    }
+
+    /// Dashed and dotted are dash arrays; solid AND sketch draw continuous
+    /// (sketch is solid until the synthesizer lands — module doc).
+    #[test]
+    fn stroke_kinds_map_to_dash_arrays_and_sketch_is_solid_for_now() {
+        assert_eq!(stroke_dasharray(StrokeKind::Solid), None);
+        assert_eq!(stroke_dasharray(StrokeKind::Sketch), None);
+        assert_eq!(stroke_dasharray(StrokeKind::Dashed), Some("8 6"));
+        assert_eq!(stroke_dasharray(StrokeKind::Dotted), Some("2 5"));
+    }
+
+    /// Every head kind yields its own mark (or none), and a degenerate arrow
+    /// yields none for every kind — the NaN rule of `arrow_head_points`.
+    #[test]
+    fn arrow_head_marks_cover_every_kind_and_vanish_when_degenerate() {
+        let (s, e) = ((0.0, 0.0), (100.0, 0.0));
+        assert_eq!(arrow_head_mark(ArrowHead::None, s, e), None);
+        assert_eq!(
+            arrow_head_mark(ArrowHead::Arrow, s, e),
+            Some(HeadMark::Polygon {
+                points: "100,0 88,5 88,-5".to_string(),
+                filled: true
+            })
+        );
+        assert_eq!(
+            arrow_head_mark(ArrowHead::Triangle, s, e),
+            Some(HeadMark::Polygon {
+                points: "100,0 88,5 88,-5".to_string(),
+                filled: false
+            })
+        );
+        assert_eq!(
+            arrow_head_mark(ArrowHead::Dot, s, e),
+            Some(HeadMark::Circle {
+                cx: 100.0,
+                cy: 0.0,
+                r: ARROW_DOT_RADIUS
+            })
+        );
+        assert_eq!(
+            arrow_head_mark(ArrowHead::Bar, s, e),
+            Some(HeadMark::Line {
+                x1: 100.0,
+                y1: 5.0,
+                x2: 100.0,
+                y2: -5.0
+            })
+        );
+        // The start cap is the same function with the ends swapped.
+        assert_eq!(
+            arrow_head_mark(ArrowHead::Arrow, e, s),
+            Some(HeadMark::Polygon {
+                points: "0,0 12,-5 12,5".to_string(),
+                filled: true
+            })
+        );
+        for kind in [
+            ArrowHead::Arrow,
+            ArrowHead::Triangle,
+            ArrowHead::Dot,
+            ArrowHead::Bar,
+        ] {
+            assert_eq!(arrow_head_mark(kind, s, s), None, "{kind:?}");
+        }
     }
 
     #[test]

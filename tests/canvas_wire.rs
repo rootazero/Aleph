@@ -36,8 +36,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use aleph_protocol::canvas::{
-    CanvasApplyParams, CanvasApplyResult, CanvasEnvelope, CanvasList, CanvasOp, CanvasUpdated,
-    FracIndex, Shape, ShapeCommon, ShapeStyle, TOPIC,
+    ArrowEnd, ArrowHead, CanvasApplyParams, CanvasApplyResult, CanvasEnvelope, CanvasList,
+    CanvasOp, CanvasUpdated, Ease, FracIndex, Reveal, RevealMode, Shape, ShapeCommon, ShapeStyle,
+    StrokeKind, Timeline, TOPIC,
 };
 use alephcore::canvas::CanvasStore;
 use alephcore::executor::BUILTIN_TOOL_DEFINITIONS;
@@ -84,6 +85,7 @@ fn note_op(id: &str) -> CanvasOp {
                 h: 200.0,
                 z: FracIndex::first(),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: "wire".to_string(),
@@ -209,6 +211,91 @@ async fn the_wire_chain_round_trips_every_canvas_response_through_the_contract()
     assert_eq!(emitted_keys(&got_asset), keys_of(&got_asset_parsed));
     assert_eq!(got_asset_parsed.data, data, "asset bytes round-trip");
 
+    // --- apply again: the drawing-infrastructure shapes and fields ------
+    // A path, an arrow with both caps and a bend, a shape carrying a reveal,
+    // and a doc-meta op setting the timeline — every new wire field rides
+    // one real apply, so the get below proves the server stores and emits
+    // them through the contract, not that the contract can spell them.
+    let drawn = serde_json::to_value(CanvasApplyParams {
+        canvas_id: id.clone(),
+        base_revision: applied_parsed.revision,
+        ops: vec![
+            CanvasOp::UpsertShape {
+                shape: Shape::Path {
+                    common: ShapeCommon {
+                        id: "p1".to_string(),
+                        x: 0.0,
+                        y: 0.0,
+                        w: 10.0,
+                        h: 10.0,
+                        z: FracIndex::first(),
+                        parent_id: None,
+                        reveal: Some(Reveal {
+                            start_ms: 100,
+                            duration_ms: 400,
+                            ease: Ease::EaseInOut,
+                            mode: RevealMode::Wipe,
+                        }),
+                    },
+                    style: ShapeStyle {
+                        color: "#336699".to_string(),
+                        stroke: StrokeKind::Sketch,
+                        ..ShapeStyle::default()
+                    },
+                    d: "M0 0 L10 10".to_string(),
+                    closed: false,
+                },
+            },
+            CanvasOp::UpsertShape {
+                shape: Shape::Arrow {
+                    common: ShapeCommon {
+                        id: "a1".to_string(),
+                        x: 0.0,
+                        y: 0.0,
+                        w: 10.0,
+                        h: 10.0,
+                        z: FracIndex::first(),
+                        parent_id: None,
+                        reveal: None,
+                    },
+                    start: ArrowEnd {
+                        x: 0.0,
+                        y: 0.0,
+                        bind: None,
+                    },
+                    end: ArrowEnd {
+                        x: 10.0,
+                        y: 10.0,
+                        bind: Some("n1".to_string()),
+                    },
+                    style: ShapeStyle::default(),
+                    label: String::new(),
+                    bend: 12.5,
+                    head_start: ArrowHead::Dot,
+                    head_end: ArrowHead::Bar,
+                },
+            },
+            CanvasOp::SetDocMeta {
+                title: "wire".to_string(),
+                timeline: Some(Timeline {
+                    total_ms: Some(2_000),
+                    hold_ms: 250,
+                }),
+            },
+        ],
+    })
+    .expect("params serialize");
+    let drawn_applied = as_user(
+        "u-wire",
+        canvas_rpc::handle_apply(rpc("canvas.apply", drawn), store.clone()),
+    )
+    .await
+    .result
+    .expect("the drawing-infrastructure batch is admitted");
+    let drawn_parsed: CanvasApplyResult =
+        serde_json::from_value(drawn_applied).expect("apply parses as CanvasApplyResult");
+    assert_eq!(drawn_parsed.revision, applied_parsed.revision + 1);
+
     // --- get: the envelope again, now with the capability asset base ----
     let got = as_user(
         "u-wire",
@@ -221,6 +308,49 @@ async fn the_wire_chain_round_trips_every_canvas_response_through_the_contract()
         serde_json::from_value(got.clone()).expect("get parses as CanvasEnvelope");
     assert_eq!(emitted_keys(&got), keys_of(&got_env));
     assert_eq!(emitted_keys(&got["canvas"]), keys_of(&got_env.canvas));
+    // Each stored shape emits exactly its contract key set — the expectation
+    // is the parsed shape's own serialization, so `reveal` (present on p1,
+    // absent on the others), `stroke`, `bend` and both heads are asserted by
+    // the type, not by a literal list.
+    let emitted_shapes = got["canvas"]["shapes"]
+        .as_array()
+        .expect("shapes is an array");
+    assert_eq!(emitted_shapes.len(), 3, "n1, p1, a1");
+    for (emitted, parsed) in emitted_shapes.iter().zip(&got_env.canvas.shapes) {
+        assert_eq!(
+            emitted_keys(emitted),
+            keys_of(parsed),
+            "shape {} must emit its contract key set and nothing else",
+            parsed.id()
+        );
+    }
+    assert!(
+        emitted_keys(&got["canvas"]).contains("timeline"),
+        "the timeline set by set_doc_meta must reach the wire"
+    );
+    assert_eq!(
+        got_env.canvas.timeline,
+        Some(Timeline {
+            total_ms: Some(2_000),
+            hold_ms: 250
+        })
+    );
+    let path = got_env
+        .canvas
+        .shapes
+        .iter()
+        .find(|s| s.id() == "p1")
+        .expect("the path landed");
+    assert!(path.common().reveal.is_some(), "reveal stored and emitted");
+    assert!(
+        got["canvas"]["shapes"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter(|s| s["id"] != "p1")
+            .all(|s| s.get("reveal").is_none()),
+        "shapes without a reveal must not emit the key: {got}"
+    );
     // The Panel resolves `<image href>` against `{asset_base}/{asset_id}`,
     // so the base's shape is wire contract, not decoration.
     let base = got_env.asset_base.expect("canvas.get mints an asset base");
@@ -388,9 +518,30 @@ fn every_tool_the_panel_canvas_templates_name_resolves_in_the_real_tool_table() 
         );
     }
 
-    let named = backticked_tool_names(&production);
+    let mut named = backticked_tool_names(&production);
+    // The canvas tool's name reaches the templates through ONE constant —
+    // `views/canvas/mod.rs::CANVAS_TOOL` (the auto-reveal and the transcript
+    // card read the same one), so the prose no longer spells it in
+    // backticks. The constant's literal is read here from the same
+    // production source, so a rename of the real tool still fails by name.
+    let mod_src =
+        read_source_without_comments("interfaces/webchat/src/platform/wide/views/canvas/mod.rs");
+    let canvas_tool = alephcore::utils::source_scan::production_prefix(&mod_src)
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("pub(crate) const CANVAS_TOOL: &str = \"")
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_string)
+        })
+        .expect("views/canvas/mod.rs declares `pub(crate) const CANVAS_TOOL: &str = \"…\"`");
     assert!(
-        named.contains("canvas") && named.contains("image_generate"),
+        production.contains("super::CANVAS_TOOL"),
+        "the templates must name the canvas tool through the one constant"
+    );
+    named.insert(canvas_tool.clone());
+    assert!(
+        canvas_tool == "canvas" && named.contains("image_generate"),
         "the templates are contracted (ai.rs module doc) to name `canvas` \
          and `image_generate`; the scan extracted {named:?} — either the \
          templates changed or the scanner went blind"

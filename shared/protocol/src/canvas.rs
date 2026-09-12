@@ -8,6 +8,13 @@
 //! collection fields carry NO default (a missing key is a protocol error, not
 //! an empty list); `CanvasDoc.decks` / `owner_user_id` / `project_id` DO carry
 //! defaults so pre-deck documents on disk keep parsing.
+//!
+//! The drawing-infrastructure fields (2026-09-12) follow the same two-tier
+//! rule: `Option` fields (`reveal`, `timeline`) are skipped when absent, so an
+//! old document re-serialises byte-identically; plain defaulted fields
+//! (`stroke`, `bend`, `head_start`, `head_end`) are always written, so a shape
+//! written by this build carries them explicitly. Both are pinned by
+//! `an_old_document_parses_and_new_option_fields_stay_off_the_wire`.
 
 use serde::{Deserialize, Serialize};
 
@@ -218,6 +225,374 @@ pub struct ShapeCommon {
     /// Containing [`Shape::Frame`] id, when the shape lives inside a frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    /// When and how the shape appears during playback (`None` = always
+    /// visible). Absent from the wire unless set, so documents without
+    /// animation serialise exactly as they did before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<Reveal>,
+}
+
+/// Upper bound on any playback instant, in milliseconds (10 minutes): a
+/// reveal must finish by it and a timeline must not run past it.
+pub const MAX_REVEAL_MS: u32 = 600_000;
+
+/// How a revealed shape comes in.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealMode {
+    /// The outline draws on along its path, then the fill/text fades in.
+    #[default]
+    Draw,
+    Fade,
+    Wipe,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Ease {
+    Linear,
+    #[default]
+    EaseOut,
+    EaseInOut,
+}
+
+/// One shape's entrance during playback. Playback is the Panel's Play
+/// button (and the animated export) replaying the document from t=0 — it is
+/// draw-on for a recording, not a live animation running on the canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Reveal {
+    /// Playback instant the entrance starts at.
+    pub start_ms: u32,
+    /// Length of the entrance; at least 1.
+    pub duration_ms: u32,
+    #[serde(default)]
+    pub ease: Ease,
+    #[serde(default)]
+    pub mode: RevealMode,
+}
+
+impl Reveal {
+    /// Bounds gate: a positive duration, and an end no later than
+    /// [`MAX_REVEAL_MS`] (checked arithmetic — `u32::MAX + 1` must refuse,
+    /// not wrap into an early instant).
+    pub fn check(&self) -> Result<(), String> {
+        if self.duration_ms == 0 {
+            return Err("reveal duration_ms must be at least 1".to_string());
+        }
+        match self.start_ms.checked_add(self.duration_ms) {
+            Some(end) if end <= MAX_REVEAL_MS => Ok(()),
+            _ => Err(format!(
+                "reveal must end by {MAX_REVEAL_MS} ms (start_ms + duration_ms)"
+            )),
+        }
+    }
+}
+
+/// Document-level playback settings.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub struct Timeline {
+    /// Playback length; `None` = the latest reveal end.
+    #[serde(default)]
+    pub total_ms: Option<u32>,
+    /// Pause on the finished frame before playback stops or loops.
+    #[serde(default)]
+    pub hold_ms: u32,
+}
+
+impl Timeline {
+    /// Both instants within [`MAX_REVEAL_MS`].
+    pub fn check(&self) -> Result<(), String> {
+        if self.total_ms.is_some_and(|t| t > MAX_REVEAL_MS) {
+            return Err(format!("timeline total_ms must not exceed {MAX_REVEAL_MS}"));
+        }
+        if self.hold_ms > MAX_REVEAL_MS {
+            return Err(format!("timeline hold_ms must not exceed {MAX_REVEAL_MS}"));
+        }
+        Ok(())
+    }
+
+    /// The default timeline says nothing — a document never stores it
+    /// (`SetDocMeta` with `Some(Timeline::default())` clears the field).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Upper bound on `Shape::Path.d`, in bytes.
+pub const MAX_PATH_D_BYTES: usize = 64 * 1024;
+
+/// One parsed path command, in absolute shape-local coordinates. Relative
+/// commands and `H`/`V` are resolved during parsing, so no consumer ever
+/// tracks a current point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathCmd {
+    MoveTo { x: f64, y: f64 },
+    LineTo { x: f64, y: f64 },
+    Quad { x1: f64, y1: f64, x: f64, y: f64 },
+    Cubic { x1: f64, y1: f64, x2: f64, y2: f64, x: f64, y: f64 },
+    Close,
+}
+
+impl PathCmd {
+    /// Every coordinate the command carries (control points included) —
+    /// what a bounds computation or a finiteness check walks. `Close`
+    /// carries none.
+    #[must_use]
+    pub fn coords(&self) -> Vec<f64> {
+        match *self {
+            Self::MoveTo { x, y } | Self::LineTo { x, y } => vec![x, y],
+            Self::Quad { x1, y1, x, y } => vec![x1, y1, x, y],
+            Self::Cubic {
+                x1,
+                y1,
+                x2,
+                y2,
+                x,
+                y,
+            } => vec![x1, y1, x2, y2, x, y],
+            Self::Close => Vec::new(),
+        }
+    }
+
+    /// Where the pen is after this command; `None` for `Close` (the pen
+    /// returns to the subpath start, which only the parser tracks).
+    #[must_use]
+    pub fn end_point(&self) -> Option<(f64, f64)> {
+        match *self {
+            Self::MoveTo { x, y }
+            | Self::LineTo { x, y }
+            | Self::Quad { x, y, .. }
+            | Self::Cubic { x, y, .. } => Some((x, y)),
+            Self::Close => None,
+        }
+    }
+}
+
+/// THE parser for `Shape::Path.d` — the server gate, the Panel renderer, the
+/// export serialiser and the sketch synthesiser all read `d` through this
+/// function, so there is exactly one answer to "what does this string mean".
+///
+/// Accepts the SVG path subset `M L H V Q C Z` (and their relative lower-case
+/// forms) with SVG's implicit command repetition (`M 0 0 10 10` is a move
+/// then a line; `L 1 2 3 4` is two lines). Rejects: empty input, a first
+/// command other than `M`/`m`, any other command letter (`A` arcs, `S`/`T`
+/// shorthands are deliberately outside the subset), a wrong argument count,
+/// a non-finite number, and input over [`MAX_PATH_D_BYTES`].
+pub fn parse_path_d(d: &str) -> Result<Vec<PathCmd>, String> {
+    if d.len() > MAX_PATH_D_BYTES {
+        return Err(format!(
+            "path d is {} bytes, over the {MAX_PATH_D_BYTES}-byte cap",
+            d.len()
+        ));
+    }
+    let tokens = tokenize_path(d)?;
+    if tokens.is_empty() {
+        return Err("path d must not be empty".to_string());
+    }
+    let mut cmds = Vec::new();
+    let (mut cx, mut cy) = (0.0f64, 0.0f64);
+    let (mut sx, mut sy) = (0.0f64, 0.0f64);
+    let mut i = 0;
+    let mut cmd: Option<char> = None;
+    while i < tokens.len() {
+        match tokens[i] {
+            PathToken::Cmd(c) => {
+                cmd = Some(c);
+                i += 1;
+                if c == 'Z' || c == 'z' {
+                    cmds.push(PathCmd::Close);
+                    (cx, cy) = (sx, sy);
+                    continue;
+                }
+            }
+            PathToken::Num(_) => {}
+        }
+        let Some(c) = cmd else {
+            return Err("path d must start with a command letter (M or m)".to_string());
+        };
+        if c == 'Z' || c == 'z' {
+            return Err("path d: numbers after Z (a command letter must follow)".to_string());
+        }
+        if cmds.is_empty() && c != 'M' && c != 'm' {
+            return Err(format!("path d must start with M or m, not {c}"));
+        }
+        let arity = match c {
+            'H' | 'h' | 'V' | 'v' => 1,
+            'M' | 'm' | 'L' | 'l' => 2,
+            'Q' | 'q' => 4,
+            'C' | 'c' => 6,
+            other => return Err(format!("path d: unsupported command {other:?}")),
+        };
+        let mut args = [0.0f64; 6];
+        for (k, slot) in args.iter_mut().take(arity).enumerate() {
+            match tokens.get(i + k) {
+                Some(PathToken::Num(n)) => *slot = *n,
+                _ => return Err(format!("path d: command {c} needs {arity} numbers")),
+            }
+        }
+        i += arity;
+        // A relative command is relative to the current point — except a
+        // leading `m`, which SVG defines as absolute.
+        let relative = c.is_ascii_lowercase() && !cmds.is_empty();
+        let (ox, oy) = if relative { (cx, cy) } else { (0.0, 0.0) };
+        let parsed = match c.to_ascii_uppercase() {
+            'M' => PathCmd::MoveTo {
+                x: ox + args[0],
+                y: oy + args[1],
+            },
+            'L' => PathCmd::LineTo {
+                x: ox + args[0],
+                y: oy + args[1],
+            },
+            'H' => PathCmd::LineTo {
+                x: ox + args[0],
+                y: cy,
+            },
+            'V' => PathCmd::LineTo {
+                x: cx,
+                y: oy + args[0],
+            },
+            'Q' => PathCmd::Quad {
+                x1: ox + args[0],
+                y1: oy + args[1],
+                x: ox + args[2],
+                y: oy + args[3],
+            },
+            _ => PathCmd::Cubic {
+                x1: ox + args[0],
+                y1: oy + args[1],
+                x2: ox + args[2],
+                y2: oy + args[3],
+                x: ox + args[4],
+                y: oy + args[5],
+            },
+        };
+        if !parsed.coords().iter().all(|v| v.is_finite()) {
+            // Every token was finite, but a relative offset can still
+            // overflow the current point.
+            return Err("path d: coordinates must be finite".to_string());
+        }
+        if let Some((x, y)) = parsed.end_point() {
+            if matches!(parsed, PathCmd::MoveTo { .. }) {
+                (sx, sy) = (x, y);
+            }
+            (cx, cy) = (x, y);
+        }
+        cmds.push(parsed);
+        // Implicit repetition: after a move, further pairs are lines.
+        if c == 'M' {
+            cmd = Some('L');
+        } else if c == 'm' {
+            cmd = Some('l');
+        }
+    }
+    Ok(cmds)
+}
+
+/// The inverse of [`parse_path_d`]: absolute commands, space-separated, so a
+/// parsed path re-emits as a string the parser reads back identically.
+#[must_use]
+pub fn cmds_to_d(cmds: &[PathCmd]) -> String {
+    let mut out = String::new();
+    for (i, cmd) in cmds.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        match cmd {
+            PathCmd::MoveTo { x, y } => out.push_str(&format!("M{x} {y}")),
+            PathCmd::LineTo { x, y } => out.push_str(&format!("L{x} {y}")),
+            PathCmd::Quad { x1, y1, x, y } => out.push_str(&format!("Q{x1} {y1} {x} {y}")),
+            PathCmd::Cubic {
+                x1,
+                y1,
+                x2,
+                y2,
+                x,
+                y,
+            } => out.push_str(&format!("C{x1} {y1} {x2} {y2} {x} {y}")),
+            PathCmd::Close => out.push('Z'),
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PathToken {
+    Cmd(char),
+    Num(f64),
+}
+
+/// SVG path tokeniser: command letters and numbers, with commas and
+/// whitespace as separators and the grammar's run-together forms
+/// (`10-5`, `.5.5`, `1e-3`) split where SVG splits them. Every number must
+/// parse finite — `1e999` is infinity and is refused here, before any
+/// coordinate arithmetic.
+fn tokenize_path(d: &str) -> Result<Vec<PathToken>, String> {
+    let mut tokens = Vec::new();
+    let mut num = String::new();
+    let mut seen_dot = false;
+    let mut seen_exp = false;
+    let flush = |num: &mut String, tokens: &mut Vec<PathToken>| -> Result<(), String> {
+        if num.is_empty() {
+            return Ok(());
+        }
+        let value: f64 = num
+            .parse()
+            .map_err(|_| format!("path d: {num:?} is not a number"))?;
+        if !value.is_finite() {
+            return Err(format!("path d: {num:?} is not a finite number"));
+        }
+        tokens.push(PathToken::Num(value));
+        num.clear();
+        Ok(())
+    };
+    for ch in d.chars() {
+        match ch {
+            '0'..='9' => num.push(ch),
+            '.' => {
+                if seen_dot || seen_exp {
+                    flush(&mut num, &mut tokens)?;
+                    seen_exp = false;
+                }
+                seen_dot = true;
+                num.push(ch);
+            }
+            '-' | '+' => {
+                let after_exp = num.ends_with(['e', 'E']);
+                if !after_exp {
+                    flush(&mut num, &mut tokens)?;
+                    seen_dot = false;
+                    seen_exp = false;
+                }
+                num.push(ch);
+            }
+            'e' | 'E' if !num.is_empty() && !seen_exp => {
+                seen_exp = true;
+                num.push(ch);
+            }
+            ' ' | '\t' | '\n' | '\r' | ',' => {
+                flush(&mut num, &mut tokens)?;
+                seen_dot = false;
+                seen_exp = false;
+            }
+            c if c.is_ascii_alphabetic() => {
+                flush(&mut num, &mut tokens)?;
+                seen_dot = false;
+                seen_exp = false;
+                tokens.push(PathToken::Cmd(c));
+            }
+            other => return Err(format!("path d: unexpected character {other:?}")),
+        }
+    }
+    flush(&mut num, &mut tokens)?;
+    Ok(tokens)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -225,6 +600,80 @@ pub struct ShapeCommon {
 pub enum GeoForm {
     Rect,
     Ellipse,
+    Diamond,
+    Triangle,
+    Hexagon,
+    /// A stadium: a rect whose corner radius is half its height.
+    Pill,
+}
+
+/// How a shape's outline is drawn. `Sketch` is a hand-drawn look the Panel
+/// synthesises from the shape id (seeded jitter — the same document renders
+/// the same everywhere); the dash patterns are plain SVG `stroke-dasharray`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeKind {
+    #[default]
+    Solid,
+    Sketch,
+    Dashed,
+    Dotted,
+}
+
+/// What an arrow end is capped with.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowHead {
+    #[default]
+    None,
+    Arrow,
+    Triangle,
+    Dot,
+    Bar,
+}
+
+impl ArrowHead {
+    /// The serde default of `Shape::Arrow.head_end` — an arrow with no heads
+    /// asked for is still an arrow, so the end it points at gets one.
+    #[must_use]
+    pub const fn arrow() -> Self {
+        Self::Arrow
+    }
+}
+
+/// The seven named palette slots a `ShapeStyle.color` may name. The empty
+/// string is also admitted (see [`check_color`]).
+pub const PALETTE_SLOTS: [&str; 7] = [
+    "default", "red", "orange", "yellow", "green", "blue", "violet",
+];
+
+/// The single gate over `ShapeStyle.color`, shared by every writer.
+///
+/// Admits the seven [`PALETTE_SLOTS`], a `#rrggbb` literal (exactly six hex
+/// digits, either case), and the empty string. The empty string is not a
+/// loophole: it is what `ShapeStyle::default()` mints and what every shape
+/// written before this gate existed stores on disk — refusing it would make
+/// those shapes immovable (a Panel drag re-upserts the shape verbatim). It
+/// reads as the default slot on every renderer, exactly like `"default"`.
+///
+/// Rejects, never rewrites (the `check_title` rule): `"Red"` and `"red "` are
+/// refused rather than normalised, so the value on disk is the value sent.
+pub fn check_color(color: &str) -> Result<(), String> {
+    if color.is_empty() || PALETTE_SLOTS.contains(&color) {
+        return Ok(());
+    }
+    let hex = color.strip_prefix('#').unwrap_or("");
+    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(format!(
+        "invalid color {color:?}: expected one of {} or #rrggbb",
+        PALETTE_SLOTS.join("/")
+    ))
 }
 
 #[derive(
@@ -241,13 +690,18 @@ pub enum SizeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ShapeStyle {
     /// Named palette slot ("default","red","orange","yellow","green","blue","violet")
-    /// — resolved to theme tokens Panel-side; never a hex literal on the wire.
+    /// — resolved to theme tokens Panel-side — or a `#rrggbb` literal, used
+    /// as-is. Gated by [`check_color`].
     #[serde(default)]
     pub color: String,
     #[serde(default)]
     pub fill: bool,
     #[serde(default)]
     pub size: SizeKind,
+    /// Outline treatment; serialised even at its default, so a shape written
+    /// by this build always carries the key.
+    #[serde(default)]
+    pub stroke: StrokeKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -337,6 +791,28 @@ pub enum Shape {
         style: ShapeStyle,
         #[serde(default)]
         label: String,
+        /// Curvature: signed perpendicular offset of the arc's midpoint from
+        /// the straight chord, world units; `0` is a straight arrow.
+        #[serde(default)]
+        bend: f64,
+        #[serde(default)]
+        head_start: ArrowHead,
+        #[serde(default = "ArrowHead::arrow")]
+        head_end: ArrowHead,
+    },
+    /// Arbitrary vector outline. `d` is SVG path data restricted to
+    /// `M L H V Q C Z` (absolute or relative), at most [`MAX_PATH_D_BYTES`],
+    /// in coordinates relative to the shape's `x`/`y` (the `Ink` convention);
+    /// [`parse_path_d`] is its one reader. `closed` fills the outline when
+    /// the style asks for a fill.
+    Path {
+        #[serde(flatten)]
+        common: ShapeCommon,
+        #[serde(default)]
+        style: ShapeStyle,
+        d: String,
+        #[serde(default)]
+        closed: bool,
     },
     AiImageFrame {
         #[serde(flatten)]
@@ -360,6 +836,7 @@ impl Shape {
             | Self::Frame { common, .. }
             | Self::Html { common, .. }
             | Self::Arrow { common, .. }
+            | Self::Path { common, .. }
             | Self::AiImageFrame { common, .. } => common,
         }
     }
@@ -367,6 +844,23 @@ impl Shape {
     #[must_use]
     pub fn id(&self) -> &str {
         &self.common().id
+    }
+
+    /// The style of the variants that carry one (`Image`, `Frame`, `Html`
+    /// and `AiImageFrame` have no user-set style).
+    #[must_use]
+    pub fn style(&self) -> Option<&ShapeStyle> {
+        match self {
+            Self::Geo { style, .. }
+            | Self::Ink { style, .. }
+            | Self::Text { style, .. }
+            | Self::Note { style, .. }
+            | Self::Arrow { style, .. }
+            | Self::Path { style, .. } => Some(style),
+            Self::Image { .. } | Self::Frame { .. } | Self::Html { .. } | Self::AiImageFrame { .. } => {
+                None
+            }
+        }
     }
 
     /// Asset ids this shape references (orphan-GC walks this).
@@ -418,6 +912,9 @@ pub struct CanvasDoc {
     pub decks: Vec<Deck>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Playback settings; absent from the wire (and from disk) until set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
 }
 
 /// One mutation inside `canvas.apply`. Internally tagged (`"op"`).
@@ -431,8 +928,14 @@ pub enum CanvasOp {
     DeleteShape {
         id: String,
     },
+    /// `title` is always written. `timeline` is optional on the wire: `None`
+    /// leaves the document's timeline untouched, `Some(t)` replaces it — and
+    /// `Some(Timeline::default())` clears it, because the applier never
+    /// stores the empty timeline (`Timeline::is_empty`).
     SetDocMeta {
         title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeline: Option<Timeline>,
     },
     /// Insert or replace-in-place by `deck.id`.
     UpsertDeck {
@@ -608,6 +1111,7 @@ mod tests {
                 h: 200.0,
                 z: FracIndex::first(),
                 parent_id: None,
+                reveal: None,
             },
             style: ShapeStyle::default(),
             text: "hi".into(),
@@ -770,5 +1274,320 @@ mod tests {
     #[test]
     fn an_admissible_title_with_edge_whitespace_is_accepted_verbatim() {
         assert!(check_title(" spaced ").is_ok());
+    }
+
+    // ---- drawing infrastructure (2026-09-12) --------------------------------
+
+    /// Forward compatibility, both directions of the two-tier rule (module
+    /// doc): a document written before any of the new fields existed parses,
+    /// and re-serialises with the `Option` fields (`reveal`, `timeline`)
+    /// still absent. The plain defaulted fields DO appear on re-serialise —
+    /// `stroke`, `bend`, `head_start`, `head_end` — and this test pins that
+    /// choice too, so nobody reads their presence as drift.
+    #[test]
+    fn an_old_document_parses_and_new_option_fields_stay_off_the_wire() {
+        let old = serde_json::json!({
+            "id":"cv-1","title":"t","revision":3,
+            "shapes":[
+                {"type":"geo","id":"g1","x":0,"y":0,"w":10,"h":10,"z":"U",
+                 "form":"rect","style":{"color":"red","fill":true,"size":"medium"},"text":""},
+                {"type":"arrow","id":"a1","x":0,"y":0,"w":10,"h":10,"z":"V",
+                 "start":{"x":0,"y":0},"end":{"x":10,"y":10},"label":""}
+            ],
+            "decks":[],"created_at_ms":0,"updated_at_ms":0
+        });
+        let doc: CanvasDoc = serde_json::from_value(old).unwrap();
+        assert!(doc.timeline.is_none());
+        assert!(doc.shapes.iter().all(|s| s.common().reveal.is_none()));
+        let Shape::Arrow {
+            bend,
+            head_start,
+            head_end,
+            ..
+        } = &doc.shapes[1]
+        else {
+            panic!("second shape is the arrow");
+        };
+        assert_eq!((*bend, *head_start, *head_end), (0.0, ArrowHead::None, ArrowHead::Arrow));
+
+        let back = serde_json::to_value(&doc).unwrap();
+        assert!(back.get("timeline").is_none(), "{back}");
+        for shape in back["shapes"].as_array().unwrap() {
+            assert!(shape.get("reveal").is_none(), "{shape}");
+        }
+        assert_eq!(back["shapes"][0]["style"]["stroke"], "solid");
+        assert_eq!(back["shapes"][1]["bend"], 0.0);
+        assert_eq!(back["shapes"][1]["head_start"], "none");
+        assert_eq!(back["shapes"][1]["head_end"], "arrow");
+        // Everything the old document said is still said, verbatim.
+        assert_eq!(back["id"], "cv-1");
+        assert_eq!(back["revision"], 3);
+        assert_eq!(back["shapes"][0]["style"]["color"], "red");
+    }
+
+    /// The wire spelling of every new enum variant, asserted explicitly —
+    /// the snake_case convention is what the Panel and the model both write.
+    #[test]
+    fn new_enum_variants_spell_snake_case_on_the_wire() {
+        fn wire<T: Serialize>(v: T) -> String {
+            serde_json::to_value(v).unwrap().as_str().unwrap().to_string()
+        }
+        for (v, s) in [
+            (GeoForm::Rect, "rect"),
+            (GeoForm::Ellipse, "ellipse"),
+            (GeoForm::Diamond, "diamond"),
+            (GeoForm::Triangle, "triangle"),
+            (GeoForm::Hexagon, "hexagon"),
+            (GeoForm::Pill, "pill"),
+        ] {
+            assert_eq!(wire(v), s);
+        }
+        for (v, s) in [
+            (StrokeKind::Solid, "solid"),
+            (StrokeKind::Sketch, "sketch"),
+            (StrokeKind::Dashed, "dashed"),
+            (StrokeKind::Dotted, "dotted"),
+        ] {
+            assert_eq!(wire(v), s);
+        }
+        for (v, s) in [
+            (ArrowHead::None, "none"),
+            (ArrowHead::Arrow, "arrow"),
+            (ArrowHead::Triangle, "triangle"),
+            (ArrowHead::Dot, "dot"),
+            (ArrowHead::Bar, "bar"),
+        ] {
+            assert_eq!(wire(v), s);
+        }
+        for (v, s) in [
+            (RevealMode::Draw, "draw"),
+            (RevealMode::Fade, "fade"),
+            (RevealMode::Wipe, "wipe"),
+        ] {
+            assert_eq!(wire(v), s);
+        }
+        for (v, s) in [
+            (Ease::Linear, "linear"),
+            (Ease::EaseOut, "ease_out"),
+            (Ease::EaseInOut, "ease_in_out"),
+        ] {
+            assert_eq!(wire(v), s);
+        }
+        // The Path variant's tag and its own fields.
+        let v = serde_json::to_value(Shape::Path {
+            common: ShapeCommon {
+                id: "p1".into(),
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                z: FracIndex::first(),
+                parent_id: None,
+                reveal: Some(Reveal {
+                    start_ms: 10,
+                    duration_ms: 20,
+                    ease: Ease::default(),
+                    mode: RevealMode::default(),
+                }),
+            },
+            style: ShapeStyle::default(),
+            d: "M0 0 L1 1".into(),
+            closed: false,
+        })
+        .unwrap();
+        assert_eq!(v["type"], "path");
+        assert_eq!(v["d"], "M0 0 L1 1");
+        assert_eq!(v["closed"], false);
+        assert_eq!(v["reveal"]["ease"], "ease_out");
+        assert_eq!(v["reveal"]["mode"], "draw");
+    }
+
+    #[test]
+    fn parse_path_d_accepts_every_command_and_resolves_relative_forms() {
+        let cmds = parse_path_d("M10 10 L20 10 H30 V20 Q35 25 40 20 C41 21 42 22 43 23 Z").unwrap();
+        assert_eq!(
+            cmds,
+            vec![
+                PathCmd::MoveTo { x: 10.0, y: 10.0 },
+                PathCmd::LineTo { x: 20.0, y: 10.0 },
+                PathCmd::LineTo { x: 30.0, y: 10.0 },
+                PathCmd::LineTo { x: 30.0, y: 20.0 },
+                PathCmd::Quad {
+                    x1: 35.0,
+                    y1: 25.0,
+                    x: 40.0,
+                    y: 20.0
+                },
+                PathCmd::Cubic {
+                    x1: 41.0,
+                    y1: 21.0,
+                    x2: 42.0,
+                    y2: 22.0,
+                    x: 43.0,
+                    y: 23.0
+                },
+                PathCmd::Close,
+            ]
+        );
+        // Relative forms resolve against the current point; a leading `m`
+        // is absolute (SVG), and `z` returns the pen to the subpath start.
+        let rel = parse_path_d("m10 10 l5 0 h5 v5 q1 1 2 2 c1 1 2 2 3 3 z l1 1").unwrap();
+        assert_eq!(
+            rel,
+            vec![
+                PathCmd::MoveTo { x: 10.0, y: 10.0 },
+                PathCmd::LineTo { x: 15.0, y: 10.0 },
+                PathCmd::LineTo { x: 20.0, y: 10.0 },
+                PathCmd::LineTo { x: 20.0, y: 15.0 },
+                PathCmd::Quad {
+                    x1: 21.0,
+                    y1: 16.0,
+                    x: 22.0,
+                    y: 17.0
+                },
+                PathCmd::Cubic {
+                    x1: 23.0,
+                    y1: 18.0,
+                    x2: 24.0,
+                    y2: 19.0,
+                    x: 25.0,
+                    y: 20.0
+                },
+                PathCmd::Close,
+                PathCmd::LineTo { x: 11.0, y: 11.0 },
+            ]
+        );
+        // Implicit repetition and the grammar's run-together number forms.
+        assert_eq!(
+            parse_path_d("M0,0 10,10-5-5.5.5.25").unwrap(),
+            vec![
+                PathCmd::MoveTo { x: 0.0, y: 0.0 },
+                PathCmd::LineTo { x: 10.0, y: 10.0 },
+                PathCmd::LineTo { x: -5.0, y: -5.5 },
+                PathCmd::LineTo { x: 0.5, y: 0.25 },
+            ]
+        );
+        assert_eq!(
+            parse_path_d("M0 0 L1e1 2E-1").unwrap()[1],
+            PathCmd::LineTo { x: 10.0, y: 0.2 },
+            "exponent forms are numbers, not commands"
+        );
+    }
+
+    #[test]
+    fn parse_path_d_refuses_what_is_outside_the_subset() {
+        for (bad, why) in [
+            ("", "empty"),
+            ("   ", "blank"),
+            ("L0 0", "must start with M"),
+            ("M0 0 A5 5 0 0 1 10 10", "arcs are outside the subset"),
+            ("M0 0 S1 1 2 2", "smooth curves are outside the subset"),
+            ("M0 0 L1", "wrong argument count"),
+            ("M0,0 10,10-5-5.5.5", "a lone trailing number"),
+            ("M0 0 L1e999 0", "infinity"),
+            ("M0 0 LNaN 0", "NaN"),
+            ("M0 0 Z 1 1", "numbers after Z"),
+            ("M0 0 L1 1; L2 2", "a stray character"),
+        ] {
+            assert!(parse_path_d(bad).is_err(), "{why}: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_path_cap_is_flush_and_measured_in_bytes() {
+        // A path exactly at the cap parses; one byte over does not — and the
+        // over-cap refusal happens before the tokenizer reads anything.
+        let unit = "L1 1 ";
+        let body_len = MAX_PATH_D_BYTES - "M0 0 ".len();
+        let mut d = String::from("M0 0 ");
+        d.push_str(&unit.repeat(body_len / unit.len()));
+        while d.len() < MAX_PATH_D_BYTES {
+            d.push(' ');
+        }
+        assert_eq!(d.len(), MAX_PATH_D_BYTES);
+        assert!(parse_path_d(&d).is_ok());
+        d.push(' ');
+        let err = parse_path_d(&d).unwrap_err();
+        assert!(err.contains("byte"), "{err}");
+    }
+
+    #[test]
+    fn cmds_to_d_round_trips_through_the_parser() {
+        let src = "m1.5 2 l3 4 h-2 v0.25 q1 1 2 2 c0 0 1 1 2 2 z";
+        let cmds = parse_path_d(src).unwrap();
+        let d = cmds_to_d(&cmds);
+        assert_eq!(parse_path_d(&d).unwrap(), cmds, "{d}");
+        assert!(d.starts_with("M1.5 2 L4.5 6"), "absolute, space-separated: {d}");
+        assert!(d.ends_with('Z'), "{d}");
+    }
+
+    #[test]
+    fn check_color_admits_the_slots_and_six_digit_hex_only() {
+        for slot in PALETTE_SLOTS {
+            assert!(check_color(slot).is_ok(), "{slot}");
+        }
+        assert!(check_color("#a1B2c3").is_ok());
+        assert!(check_color("#000000").is_ok());
+        // The wire default — what `ShapeStyle::default()` mints and what every
+        // pre-gate document stores. See the gate's doc for why refusing it
+        // would break existing canvases.
+        assert!(check_color("").is_ok());
+        assert_eq!(ShapeStyle::default().color, "");
+        for bad in ["#abc", "#gggggg", "red ", " red", "Red", "#a1b2c3d", "a1b2c3", "#"] {
+            assert!(check_color(bad).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn reveal_and_timeline_bounds_are_gated() {
+        let ok = Reveal {
+            start_ms: MAX_REVEAL_MS - 1,
+            duration_ms: 1,
+            ease: Ease::Linear,
+            mode: RevealMode::Fade,
+        };
+        assert!(ok.check().is_ok());
+        assert!(Reveal { duration_ms: 0, ..ok }.check().is_err(), "zero duration");
+        assert!(
+            Reveal {
+                start_ms: MAX_REVEAL_MS,
+                duration_ms: 1,
+                ..ok
+            }
+            .check()
+            .is_err(),
+            "one past the ceiling"
+        );
+        assert!(
+            Reveal {
+                start_ms: u32::MAX,
+                duration_ms: 2,
+                ..ok
+            }
+            .check()
+            .is_err(),
+            "the sum must not wrap into an early instant"
+        );
+
+        assert!(Timeline::default().check().is_ok());
+        assert!(Timeline::default().is_empty());
+        assert!(Timeline {
+            total_ms: Some(MAX_REVEAL_MS),
+            hold_ms: MAX_REVEAL_MS
+        }
+        .check()
+        .is_ok());
+        assert!(Timeline {
+            total_ms: Some(MAX_REVEAL_MS + 1),
+            hold_ms: 0
+        }
+        .check()
+        .is_err());
+        assert!(Timeline {
+            total_ms: None,
+            hold_ms: MAX_REVEAL_MS + 1
+        }
+        .check()
+        .is_err());
     }
 }

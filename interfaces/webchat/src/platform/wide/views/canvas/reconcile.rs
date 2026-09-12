@@ -88,6 +88,7 @@ mod tests {
                     h: 100.0,
                     z: FracIndex::first(),
                     parent_id: None,
+                    reveal: None,
                 },
                 style: ShapeStyle::default(),
                 text: String::new(),

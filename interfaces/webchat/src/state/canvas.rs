@@ -191,6 +191,7 @@ mod tests {
             decks: Vec::new(),
             created_at_ms: 0,
             updated_at_ms: 0,
+            timeline: None,
         }
     }
 

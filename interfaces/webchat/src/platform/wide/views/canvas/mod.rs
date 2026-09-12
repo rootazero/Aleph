@@ -39,6 +39,7 @@ mod decks;
 mod editor;
 mod export;
 mod freehand;
+mod geo_path;
 mod id_mint;
 mod interaction;
 mod library;

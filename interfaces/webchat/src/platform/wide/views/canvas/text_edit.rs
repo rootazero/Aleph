@@ -196,7 +196,7 @@ fn session_view(
     // color); Geo/Text follow the shape's palette slot — the same rule the
     // SVG renderer applies, via the same function.
     let color = match edit.shape {
-        Shape::Note { .. } => "var(--color-text-primary)",
+        Shape::Note { .. } => "var(--color-text-primary)".to_string(),
         _ => shape_view::text_fill(&style),
     };
     let initial = text_of(&edit.shape).unwrap_or_default().to_string();
@@ -296,6 +296,7 @@ mod tests {
             h: 100.0,
             z: FracIndex::first(),
             parent_id: None,
+            reveal: None,
         }
     }
 
@@ -318,6 +319,7 @@ mod tests {
             decks: Vec::new(),
             created_at_ms: 0,
             updated_at_ms: 0,
+            timeline: None,
         }
     }
 

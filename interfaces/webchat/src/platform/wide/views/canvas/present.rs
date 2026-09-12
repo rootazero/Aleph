@@ -432,6 +432,7 @@ mod tests {
             h: 90.0,
             z: FracIndex::first(),
             parent_id: None,
+            reveal: None,
         };
         let shapes = vec![
             Shape::Frame {

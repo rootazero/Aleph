@@ -30,13 +30,14 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use aleph_protocol::canvas::{GeoForm, Shape, ShapeStyle};
+use aleph_protocol::canvas::{ArrowHead, GeoForm, Shape, ShapeStyle};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
 
 use super::interaction::{self, Bbox};
-use super::{asset_ingest, freehand, shape_view};
+use super::shape_view::HeadMark;
+use super::{asset_ingest, freehand, geo_path, shape_view};
 use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
 use crate::context::DashboardState;
@@ -58,7 +59,9 @@ const EXPORT_BORDER: &str = "#8c959f";
 const EXPORT_SURFACE: &str = "#f6f8fa";
 const EXPORT_AI_ACCENT: &str = "#6e56cf";
 
-fn export_stroke(slot: &str) -> &'static str {
+/// Hex for a wire color: a slot's light-theme reading, or a `#rrggbb`
+/// literal passed through (the same rule as `shape_view::palette_var`).
+fn export_stroke(slot: &str) -> String {
     match slot {
         "red" => "#e5484d",
         "orange" => "#f5a623",
@@ -66,14 +69,50 @@ fn export_stroke(slot: &str) -> &'static str {
         "green" => "#30a46c",
         "blue" => "#0091ff",
         "violet" => "#6e56cf",
+        hex if shape_view::is_hex_color(hex) => hex,
         _ => "#6e7781",
+    }
+    .to_string()
+}
+
+fn export_text_fill(style: &ShapeStyle) -> String {
+    match style.color.as_str() {
+        "red" | "orange" | "yellow" | "green" | "blue" | "violet" => export_stroke(&style.color),
+        hex if shape_view::is_hex_color(hex) => hex.to_string(),
+        _ => EXPORT_TEXT.to_string(),
     }
 }
 
-fn export_text_fill(style: &ShapeStyle) -> &'static str {
-    match style.color.as_str() {
-        "red" | "orange" | "yellow" | "green" | "blue" | "violet" => export_stroke(&style.color),
-        _ => EXPORT_TEXT,
+/// ` stroke-dasharray="…"` (leading space) for a dashed/dotted stroke, empty
+/// otherwise — the attribute twin of `shape_view::stroke_dasharray`.
+fn dash_attr(style: &ShapeStyle) -> String {
+    shape_view::stroke_dasharray(style.stroke)
+        .map(|d| format!(" stroke-dasharray=\"{d}\""))
+        .unwrap_or_default()
+}
+
+/// One arrow cap's markup, from the same [`HeadMark`] the live view draws.
+fn push_head_mark(out: &mut String, mark: Option<HeadMark>, stroke: &str) {
+    match mark {
+        None => {}
+        Some(HeadMark::Polygon { points, filled }) => {
+            let fill = if filled { stroke } else { "none" };
+            let _ = write!(
+                out,
+                "<polygon points=\"{points}\" fill=\"{fill}\" stroke=\"{stroke}\" \
+                 stroke-width=\"2\" stroke-linejoin=\"round\"/>"
+            );
+        }
+        Some(HeadMark::Circle { cx, cy, r }) => {
+            let _ = write!(out, "<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"{stroke}\"/>");
+        }
+        Some(HeadMark::Line { x1, y1, x2, y2 }) => {
+            let _ = write!(
+                out,
+                "<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" stroke=\"{stroke}\" \
+                 stroke-width=\"2\"/>"
+            );
+        }
     }
 }
 
@@ -178,12 +217,18 @@ fn push_shape(
         } => {
             let stroke = export_stroke(&style.color);
             let fill = export_fill(style);
+            let dash = dash_attr(style);
             match form {
-                GeoForm::Rect => {
+                GeoForm::Rect | GeoForm::Pill => {
+                    let rx = if *form == GeoForm::Pill {
+                        common.h / 2.0
+                    } else {
+                        4.0
+                    };
                     let _ = write!(
                         out,
-                        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"4\" \
-                         fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"2\"/>",
+                        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{rx}\" \
+                         fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"2\"{dash}/>",
                         common.x, common.y, common.w, common.h
                     );
                 }
@@ -191,11 +236,21 @@ fn push_shape(
                     let _ = write!(
                         out,
                         "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" \
-                         fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"2\"/>",
+                         fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"2\"{dash}/>",
                         common.x + common.w / 2.0,
                         common.y + common.h / 2.0,
                         common.w / 2.0,
                         common.h / 2.0
+                    );
+                }
+                GeoForm::Diamond | GeoForm::Triangle | GeoForm::Hexagon => {
+                    let points =
+                        geo_path::polygon_points(*form, common.x, common.y, common.w, common.h)
+                            .unwrap_or_default();
+                    let _ = write!(
+                        out,
+                        "<polygon points=\"{points}\" fill=\"{fill}\" stroke=\"{stroke}\" \
+                         stroke-width=\"2\" stroke-linejoin=\"round\"{dash}/>"
                     );
                 }
             }
@@ -207,7 +262,7 @@ fn push_shape(
                     common.y + fs + 8.0,
                     text,
                     fs,
-                    export_text_fill(style),
+                    &export_text_fill(style),
                 );
             }
         }
@@ -239,7 +294,7 @@ fn push_shape(
                 common.y + fs,
                 text,
                 fs,
-                export_text_fill(style),
+                &export_text_fill(style),
             );
         }
         Shape::Note {
@@ -248,7 +303,7 @@ fn push_shape(
             text,
         } => {
             let base = match style.color.as_str() {
-                "" | "default" => "#f5a623",
+                "" | "default" => "#f5a623".to_string(),
                 _ => export_stroke(&style.color),
             };
             let _ = write!(
@@ -326,20 +381,26 @@ fn push_shape(
             end,
             style,
             label,
+            head_start,
+            head_end,
             ..
         } => {
+            // `bend` is not consulted: the live view draws the chord too
+            // (shape_view.rs module doc) — the two stay in step.
             let (s, e) = shape_view::resolve_arrow_ends(all_shapes, start, end);
             let stroke = export_stroke(&style.color);
             let _ = write!(
                 out,
                 "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{stroke}\" \
-                 stroke-width=\"2\"/>",
-                s.0, s.1, e.0, e.1
+                 stroke-width=\"2\"{}/>",
+                s.0,
+                s.1,
+                e.0,
+                e.1,
+                dash_attr(style)
             );
-            let head = shape_view::arrow_head_points(s, e);
-            if !head.is_empty() {
-                let _ = write!(out, "<polygon points=\"{head}\" fill=\"{stroke}\"/>");
-            }
+            push_head_mark(out, shape_view::arrow_head_mark(*head_end, s, e), &stroke);
+            push_head_mark(out, shape_view::arrow_head_mark(*head_start, e, s), &stroke);
             if !label.is_empty() {
                 let _ = write!(
                     out,
@@ -348,6 +409,32 @@ fn push_shape(
                     (s.0 + e.0) / 2.0,
                     (s.1 + e.1) / 2.0 - 6.0,
                     xml_escape(label)
+                );
+            }
+        }
+        Shape::Path {
+            common,
+            style,
+            d,
+            closed,
+        } => {
+            // The same parse → re-emit the live view does; an unparsable `d`
+            // exports nothing, exactly as it renders nothing.
+            if let Some(d) = geo_path::path_d(d, *closed) {
+                let fill = if *closed {
+                    export_fill(style)
+                } else {
+                    "none".to_string()
+                };
+                let _ = write!(
+                    out,
+                    "<g transform=\"translate({} {})\"><path d=\"{d}\" fill=\"{fill}\" \
+                     stroke=\"{}\" stroke-width=\"2\" stroke-linecap=\"round\" \
+                     stroke-linejoin=\"round\"{}/></g>",
+                    common.x,
+                    common.y,
+                    export_stroke(&style.color),
+                    dash_attr(style)
                 );
             }
         }
@@ -585,6 +672,7 @@ mod tests {
             h,
             z: FracIndex::first(),
             parent_id: None,
+            reveal: None,
         }
     }
 
@@ -691,6 +779,9 @@ mod tests {
             },
             style: ShapeStyle::default(),
             label: String::new(),
+            bend: 0.0,
+            head_start: ArrowHead::None,
+            head_end: ArrowHead::Arrow,
         };
         let all = vec![arrow.clone(), target];
         let svg = export_svg(&[arrow], &all, &HashMap::new(), VIEW, 0.0);
@@ -710,6 +801,70 @@ mod tests {
         assert_eq!(w, 4096);
         assert_eq!(h, 2048);
         assert_eq!(raster_dimensions(0.0, 0.0), (1, 1));
+    }
+
+    /// The drawing-infrastructure arms: a polygon geo form, a `Path`
+    /// (translated, closed, filled), a hex color passed through, a dashed
+    /// stroke, and both arrow caps — each identified by the markup only that
+    /// arm emits, so a silently skipped arm cannot pass.
+    #[test]
+    fn new_forms_paths_heads_and_strokes_export_through_the_shared_geometry() {
+        use aleph_protocol::canvas::StrokeKind;
+        let hex_dashed = ShapeStyle {
+            color: "#123abc".to_string(),
+            fill: true,
+            stroke: StrokeKind::Dashed,
+            ..ShapeStyle::default()
+        };
+        let shapes = vec![
+            Shape::Geo {
+                common: common("g1", 0.0, 0.0, 100.0, 50.0),
+                form: GeoForm::Diamond,
+                style: hex_dashed.clone(),
+                text: String::new(),
+            },
+            Shape::Path {
+                common: common("p1", 10.0, 20.0, 30.0, 30.0),
+                style: hex_dashed.clone(),
+                d: "m0 0 l30 0 l0 30".to_string(),
+                closed: true,
+            },
+            Shape::Arrow {
+                common: common("a1", 0.0, 0.0, 100.0, 1.0),
+                start: aleph_protocol::canvas::ArrowEnd {
+                    x: 0.0,
+                    y: 0.0,
+                    bind: None,
+                },
+                end: aleph_protocol::canvas::ArrowEnd {
+                    x: 100.0,
+                    y: 0.0,
+                    bind: None,
+                },
+                style: ShapeStyle::default(),
+                label: String::new(),
+                bend: 0.0,
+                head_start: ArrowHead::Dot,
+                head_end: ArrowHead::Bar,
+            },
+        ];
+        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0);
+        assert!(
+            svg.contains("<polygon points=\"50,0 100,25 50,50 0,25\""),
+            "the diamond's corners come from geo_path: {svg}"
+        );
+        assert!(svg.contains("stroke=\"#123abc\""), "hex passes through: {svg}");
+        assert!(svg.contains("fill=\"#123abc2e\""), "hex fill wash: {svg}");
+        assert!(svg.contains("stroke-dasharray=\"8 6\""), "dashed: {svg}");
+        assert!(
+            svg.contains("<g transform=\"translate(10 20)\"><path d=\"M0 0 L30 0 L30 30 Z\""),
+            "the path is translated, absolute and closed: {svg}"
+        );
+        assert!(svg.contains("<circle cx=\"0\" cy=\"0\""), "dot at the start: {svg}");
+        assert!(
+            svg.contains("<line x1=\"100\" y1=\"5\" x2=\"100\" y2=\"-5\""),
+            "bar at the end: {svg}"
+        );
     }
 
     /// Ink strokes export as the same filled freehand outline the live
