@@ -131,9 +131,11 @@ impl SessionActor {
         let pairs: Vec<(SessionEvent, i64)> = events.into_iter().map(|e| (e, at)).collect();
         match self.write_batch(&pairs, retire).await {
             Ok(first) => {
+                // Derive each row's seq ONCE; the reply and the per-row
+                // finish read the same list (criterion #12).
                 let seqs: Vec<EventSeq> = (0..pairs.len() as u64).map(|i| first + i).collect();
-                for (i, (event, at)) in pairs.into_iter().enumerate() {
-                    self.finish_emitted(first + i as u64, event, at);
+                for (seq, (event, at)) in seqs.iter().copied().zip(pairs) {
+                    self.finish_emitted(seq, event, at);
                 }
                 let _ = reply.send(Ok(seqs));
                 true
@@ -322,8 +324,10 @@ impl SessionActor {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
     use super::*;
-    use crate::session::events::{Durability, MessageContent, Retire, TurnTrigger};
+    use crate::session::events::{Durability, MessageContent, TurnTrigger};
     use crate::session::store::{migrate_add_session_events, SqliteEventStore};
 
     async fn test_store() -> Arc<dyn SessionEventStore> {
@@ -463,119 +467,156 @@ mod tests {
         assert_eq!(seqs, vec![4]);
     }
 
+    /// A store double for the actor's write path. `append_batch` records every
+    /// call as `(first_seq, rows)`, fails the first `fail_first` calls with a
+    /// numbered `Storage` error — each failure also advances `head` by one,
+    /// the way a direct-store writer landing the contested seq would — and
+    /// succeeds after that, advancing `head` by the batch's row count. Every
+    /// read returns empty. Tests assert on the recording, not inside the
+    /// double, so a wrong call shape fails the test instead of panicking the
+    /// actor task.
+    struct ScriptedStore {
+        calls: std::sync::Mutex<Vec<(EventSeq, usize)>>,
+        head: AtomicU64,
+        fail_first: usize,
+    }
+
+    impl ScriptedStore {
+        fn new(fail_first: usize) -> Arc<Self> {
+            Arc::new(Self {
+                calls: std::sync::Mutex::new(vec![]),
+                head: AtomicU64::new(0),
+                fail_first,
+            })
+        }
+
+        /// `(first_seq, rows)` per `append_batch` call, in call order.
+        fn calls(&self) -> Vec<(EventSeq, usize)> {
+            self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SessionEventStore for ScriptedStore {
+        async fn append_batch(
+            &self,
+            _id: &SessionId,
+            first_seq: EventSeq,
+            events: &[(SessionEvent, i64)],
+            _retire: Option<Retire>,
+            _durability: Durability,
+        ) -> Result<(), SessionError> {
+            let n = {
+                let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+                calls.push((first_seq, events.len()));
+                calls.len()
+            };
+            if n <= self.fail_first {
+                self.head.fetch_add(1, Ordering::SeqCst);
+                return Err(SessionError::Storage(format!("scripted failure #{n}")));
+            }
+            self.head.fetch_add(events.len() as u64, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn load_all_events(
+            &self,
+            _id: &SessionId,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            Ok(vec![])
+        }
+
+        async fn load_events_range(
+            &self,
+            _id: &SessionId,
+            _from: Option<EventSeq>,
+            _to: Option<EventSeq>,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            Ok(vec![])
+        }
+
+        async fn load_head_seq(&self, _id: &SessionId) -> Result<EventSeq, SessionError> {
+            Ok(self.head.load(Ordering::SeqCst))
+        }
+
+        async fn load_run_markers(
+            &self,
+        ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+            Ok(vec![])
+        }
+
+        async fn retire_from(
+            &self,
+            _id: &SessionId,
+            _from: EventSeq,
+        ) -> Result<usize, SessionError> {
+            Ok(0)
+        }
+    }
+
+    /// Spawn an actor over `store` with an observer that counts `on_appended`
+    /// calls and one broadcast subscriber, so a test can assert that a failed
+    /// write fired NEITHER.
+    fn spawn_scripted(
+        store: &Arc<ScriptedStore>,
+    ) -> (
+        mpsc::Sender<ActorCommand>,
+        Arc<AtomicUsize>,
+        broadcast::Receiver<SessionEventRecord>,
+    ) {
+        struct Counter(Arc<AtomicUsize>);
+        impl SessionEventObserver for Counter {
+            fn on_appended(&self, _id: &SessionId, _rec: &SessionEventRecord) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let observed = Arc::new(AtomicUsize::new(0));
+        let dyn_store: Arc<dyn SessionEventStore> = store.clone();
+        let (tx, rx) = mpsc::channel(8);
+        let (bcast, sub) = broadcast::channel(16);
+        let actor = SessionActor::new(
+            sample_id(),
+            dyn_store,
+            rx,
+            bcast,
+            Some(Arc::new(Counter(observed.clone()))),
+            DEFAULT_IDLE_TIMEOUT,
+        );
+        tokio::spawn(actor.run());
+        (tx, observed, sub)
+    }
+
+    fn two_turn_starts() -> Vec<SessionEvent> {
+        let turn_id = uuid::Uuid::new_v4();
+        (0..2)
+            .map(|_| SessionEvent::TurnStarted {
+                turn_id,
+                trigger: TurnTrigger::UserMessage,
+                at: now_ms(),
+            })
+            .collect()
+    }
+
     /// Regression test for audit 4.1: a direct-store writer racing the actor
     /// can take the seq the actor was about to use, causing a `(session_id,
     /// seq)` UNIQUE collision on the store write. Before the fix, the `Err`
     /// arm just replied `Err` without resyncing `head_seq`, so the actor would
     /// recompute the same colliding seq on every subsequent emit — permanently
     /// wedging that session's writes. The fix resyncs `head_seq` from the
-    /// store and retries once. This controlled store makes the first
-    /// `append_batch` (first_seq=1) collide, then reports the direct writer's
-    /// seq via `load_head_seq`, so the retried write (first_seq=2) should
-    /// succeed.
+    /// store and retries once: the first `append_batch` (first_seq=1) fails
+    /// and the store's head reads 1, so the retry goes out at first_seq=2.
     ///
-    /// Sent as an `EmitBatch` of TWO events so the test also pins that the
-    /// retry re-sends the WHOLE batch (the failed transaction wrote nothing):
-    /// both store calls must see two rows, and the reply is `[2, 3]`.
+    /// Sent as an `EmitBatch` of TWO events so the recording also pins that
+    /// the retry re-sends the WHOLE batch (the failed transaction wrote
+    /// nothing): both calls carry two rows, and the reply is `[2, 3]`.
     #[tokio::test]
     async fn actor_self_heals_seq_after_append_collision() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        let store = ScriptedStore::new(1);
+        let (tx, observed, _sub) = spawn_scripted(&store);
 
-        struct CollideOnceStore {
-            appends: AtomicUsize,
-            head: AtomicUsize,
-        }
-
-        #[async_trait::async_trait]
-        impl SessionEventStore for CollideOnceStore {
-            async fn append_batch(
-                &self,
-                _id: &SessionId,
-                first_seq: EventSeq,
-                events: &[(SessionEvent, i64)],
-                _retire: Option<Retire>,
-                _durability: Durability,
-            ) -> Result<(), SessionError> {
-                let n = self.appends.fetch_add(1, Ordering::SeqCst);
-                assert_eq!(
-                    events.len(),
-                    2,
-                    "call {n}: the actor must send the whole batch on every attempt"
-                );
-                if n == 0 {
-                    // First attempt: seq=1 collides with a direct-store writer
-                    // that already landed seq=1.
-                    assert_eq!(first_seq, 1);
-                    self.head.store(1, Ordering::SeqCst);
-                    Err(SessionError::Storage("UNIQUE constraint failed".into()))
-                } else {
-                    // Retry after resync: head_seq is now 1, so this should be seq=2.
-                    assert_eq!(first_seq, 2);
-                    self.head.store(3, Ordering::SeqCst);
-                    Ok(())
-                }
-            }
-
-            async fn load_all_events(
-                &self,
-                _id: &SessionId,
-            ) -> Result<Vec<SessionEventRecord>, SessionError> {
-                Ok(vec![])
-            }
-
-            async fn load_events_range(
-                &self,
-                _id: &SessionId,
-                _from: Option<EventSeq>,
-                _to: Option<EventSeq>,
-            ) -> Result<Vec<SessionEventRecord>, SessionError> {
-                Ok(vec![])
-            }
-
-            async fn load_head_seq(&self, _id: &SessionId) -> Result<EventSeq, SessionError> {
-                Ok(self.head.load(Ordering::SeqCst) as EventSeq)
-            }
-
-            async fn load_run_markers(
-                &self,
-            ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
-                Ok(vec![])
-            }
-
-            async fn retire_from(
-                &self,
-                _id: &SessionId,
-                _from: EventSeq,
-            ) -> Result<usize, SessionError> {
-                Ok(0)
-            }
-        }
-
-        let store: Arc<dyn SessionEventStore> = Arc::new(CollideOnceStore {
-            appends: AtomicUsize::new(0),
-            head: AtomicUsize::new(0),
-        });
-        let id = sample_id();
-        let (tx, rx) = mpsc::channel(8);
-        let (bcast, _) = broadcast::channel(16);
-        let actor = SessionActor::new(id.clone(), store, rx, bcast, None, DEFAULT_IDLE_TIMEOUT);
-        tokio::spawn(actor.run());
-
-        let turn_id = uuid::Uuid::new_v4();
         let (rtx, rrx) = oneshot::channel();
         tx.send(ActorCommand::EmitBatch {
-            events: vec![
-                SessionEvent::TurnStarted {
-                    turn_id,
-                    trigger: TurnTrigger::UserMessage,
-                    at: now_ms(),
-                },
-                SessionEvent::TurnStarted {
-                    turn_id,
-                    trigger: TurnTrigger::UserMessage,
-                    at: now_ms(),
-                },
-            ],
+            events: two_turn_starts(),
             retire: None,
             reply: rtx,
         })
@@ -588,5 +629,72 @@ mod tests {
             vec![2, 3],
             "actor should self-heal past the seq=1 collision and land the whole batch at [2, 3]"
         );
+        assert_eq!(
+            store.calls(),
+            vec![(1, 2), (2, 2)],
+            "one collision, one retry, the whole batch both times"
+        );
+        assert_eq!(
+            observed.load(Ordering::SeqCst),
+            2,
+            "the observer fires once per landed row, never for the failed attempt"
+        );
+    }
+
+    /// The self-heal is bounded: when the retry ALSO fails, the caller gets
+    /// that second attempt's error verbatim (not the first's, not a generic
+    /// one), the store saw exactly two attempts, and — because nothing
+    /// landed — neither the observer nor the broadcast fired.
+    #[tokio::test]
+    async fn a_second_failure_is_the_callers_error_and_nothing_fires() {
+        let store = ScriptedStore::new(2);
+        let (tx, observed, mut sub) = spawn_scripted(&store);
+
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(ActorCommand::EmitBatch {
+            events: two_turn_starts(),
+            retire: None,
+            reply: rtx,
+        })
+        .await
+        .unwrap();
+
+        match rrx.await.unwrap() {
+            Err(SessionError::Storage(msg)) => assert_eq!(msg, "scripted failure #2"),
+            other => panic!("expected the second attempt's Storage error, got {other:?}"),
+        }
+        assert_eq!(
+            store.calls(),
+            vec![(1, 2), (2, 2)],
+            "exactly two attempts, no loop"
+        );
+        assert_eq!(observed.load(Ordering::SeqCst), 0);
+        assert!(
+            matches!(sub.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "a failed write must not be broadcast"
+        );
+    }
+
+    /// The actor refuses an empty batch with nothing to retire BEFORE the
+    /// store: the store's recording stays empty. (The real store refuses the
+    /// same predicate with the same variant, so a test over `SqliteEventStore`
+    /// could not tell the two apart — this double can.)
+    #[tokio::test]
+    async fn an_empty_batch_is_refused_before_the_store() {
+        let store = ScriptedStore::new(0);
+        let (tx, observed, _sub) = spawn_scripted(&store);
+
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(ActorCommand::EmitBatch {
+            events: vec![],
+            retire: None,
+            reply: rtx,
+        })
+        .await
+        .unwrap();
+
+        assert!(matches!(rrx.await.unwrap(), Err(SessionError::Other(_))));
+        assert!(store.calls().is_empty(), "the store must not be reached");
+        assert_eq!(observed.load(Ordering::SeqCst), 0);
     }
 }

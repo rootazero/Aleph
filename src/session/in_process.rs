@@ -647,6 +647,37 @@ mod tests {
         assert_eq!(live, vec![1, 4]);
     }
 
+    /// A retire-only batch (no events) is legitimate: it appends nothing,
+    /// replies with no seqs, shrinks the live log, and leaves seq allocation
+    /// untouched — the next append still lands past the retired rows.
+    #[tokio::test]
+    async fn a_retire_only_batch_appends_nothing_and_shrinks_the_live_log() {
+        let svc = fresh_service().await;
+        let id = sample_id("retire-only");
+        let t = uuid::Uuid::new_v4();
+        for _ in 0..3 {
+            svc.emit_event(&id, turn_started(t)).await.unwrap();
+        }
+        let seqs = svc
+            .emit_batch(&id, vec![], Some(Retire::From(2)))
+            .await
+            .unwrap();
+        assert_eq!(seqs, Vec::<EventSeq>::new());
+        let live: Vec<_> = svc
+            .get_events(&id, None, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(live, vec![1]);
+        assert_eq!(
+            svc.emit_event(&id, turn_started(t)).await.unwrap(),
+            4,
+            "retiring allocates nothing; the next append lands past the retired rows"
+        );
+    }
+
     /// The helper's whole contract is "the SAME instance every time, and that
     /// instance is what the global slot hands out" — a caller handed a fresh
     /// service would write through one the slot never exposed. `addr_eq`
@@ -662,8 +693,14 @@ mod tests {
         assert!(std::ptr::addr_eq(Arc::as_ptr(&global), Arc::as_ptr(&first)));
     }
 
+    /// The service face surfaces the actor's refusal as the caller's `Err`
+    /// (not swallowed into `ActorShutdown`). That the refusal happens BEFORE
+    /// the store is pinned one layer down, in
+    /// `actor::tests::an_empty_batch_is_refused_before_the_store`, over a
+    /// store that records whether it was reached — the real store here would
+    /// refuse the same predicate with the same variant.
     #[tokio::test]
-    async fn an_empty_batch_is_refused_before_the_store() {
+    async fn an_empty_batch_error_reaches_the_service_caller() {
         let svc = fresh_service().await;
         assert!(matches!(
             svc.emit_batch(&sample_id("empty"), vec![], None).await,
