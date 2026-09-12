@@ -384,6 +384,12 @@ fn frames_of(
     is_page_root: bool,
 ) -> Result<Vec<RawFrame>, BrowserError> {
     let strings = &snapshot.strings;
+    // Before anything reads by index. `frame_offsets` indexes `bounds` by a
+    // layout slot, so a check that ran only inside `parse_nodes` would let a
+    // truncated `bounds` place a child frame first and be refused afterwards.
+    for doc in &snapshot.documents {
+        check_array_lengths(doc)?;
+    }
     // Built once and shared, so "which layout entry is this node's box" has
     // exactly one derivation (判据 §12).
     let slots: Vec<HashMap<usize, usize>> = snapshot.documents.iter().map(layout_slots).collect();
@@ -625,18 +631,32 @@ fn unaccounted_frame_elements(snapshot: &Snapshot, accounted: &HashSet<u64>) -> 
     out
 }
 
-fn parse_nodes(
-    doc: &DocumentSnapshot,
-    slots: &HashMap<usize, usize>,
-    strings: &[String],
-) -> Result<Vec<RawNode>, BrowserError> {
+/// Every parallel array of one document must agree about how many entries
+/// there are. Zipping to the shortest drops real data and reports success.
+///
+/// **Ten arrays, and this covered three of them** — the node side's `nodeType`,
+/// `nodeName` and `backendNodeId`, and none of the layout side (判据 §6: 先数一
+/// 遍, and the direction the count is wrong in is always one more than you
+/// thought). The two that were silently unchecked are the expensive ones: a
+/// short `attributes` drops every `href`, `id` and `src` past its end, and a
+/// short `bounds` answers "no box" for every node past its end — a fail-closed
+/// answer being spent as a value (判据 §8).
+///
+/// **Two named exemptions, and what makes them exempt is that an ABSENT array
+/// is uniform and a SHORT one is a truncation.** `styles` may be entirely
+/// missing (a capture taken with `computedStyles: []` has none), and then every
+/// node gets `computed: None`, which is the honest unknown this module already
+/// models. `text` may be entirely missing, and [`layout_slots`] documents the
+/// fallback for that case. `bounds` is deliberately NOT exempt: an absent
+/// `bounds` is indistinguishable from a page where nothing has a box.
+fn check_array_lengths(doc: &DocumentSnapshot) -> Result<(), BrowserError> {
     let n = doc.nodes.parent_index.len();
-    // Every parallel array must agree about how many nodes there are. Zipping
-    // to the shortest would drop real nodes and report success.
     for (label, len) in [
         ("nodeType", doc.nodes.node_type.len()),
         ("nodeName", doc.nodes.node_name.len()),
+        ("nodeValue", doc.nodes.node_value.len()),
         ("backendNodeId", doc.nodes.backend_node_id.len()),
+        ("attributes", doc.nodes.attributes.len()),
     ] {
         if len != n {
             return Err(BrowserError::ActionFailed(format!(
@@ -646,6 +666,29 @@ fn parse_nodes(
         }
     }
 
+    let boxes = doc.layout.node_index.len();
+    for (label, len, may_be_absent) in [
+        ("bounds", doc.layout.bounds.len(), false),
+        ("styles", doc.layout.styles.len(), true),
+        ("text", doc.layout.text.len(), true),
+    ] {
+        if len == boxes || (may_be_absent && len == 0) {
+            continue;
+        }
+        return Err(BrowserError::ActionFailed(format!(
+            "DOMSnapshot layout arrays disagree: nodeIndex has {boxes} entries, \
+             {label} has {len}. Re-run browser_snapshot."
+        )));
+    }
+    Ok(())
+}
+
+fn parse_nodes(
+    doc: &DocumentSnapshot,
+    slots: &HashMap<usize, usize>,
+    strings: &[String],
+) -> Result<Vec<RawNode>, BrowserError> {
+    let n = doc.nodes.parent_index.len();
     // Sparse sets, resolved once.
     let clickable = index_set(&doc.nodes.is_clickable.index);
     let checked = index_set(&doc.nodes.input_checked.index);
@@ -1787,21 +1830,56 @@ mod tests {
         assert!(text.contains("browser_snapshot"), "{text}");
     }
 
-    /// Arrays that disagree about how many nodes there are mean the response
+    /// Arrays that disagree about how many entries there are mean the response
     /// is not the shape this parser was written for. Refuse, naming the two
-    /// lengths — a parser that zipped to the shorter one would drop real nodes
+    /// lengths — a parser that zipped to the shorter one would drop real data
     /// and report success.
+    ///
+    /// **All ten arrays, one at a time.** This covered three of six node arrays
+    /// and none of the four layout arrays, and the two that went unchecked were
+    /// the expensive ones: a short `attributes` silently drops every `href`,
+    /// `id` and `src` past its end, and a short `bounds` silently answers "no
+    /// box" — a fail-closed answer spent as a value.
     #[test]
     fn parallel_arrays_of_different_lengths_are_refused_not_zipped() {
-        let mut value = json(TWO_DOCS);
-        value["documents"][0]["nodes"]["nodeType"]
-            .as_array_mut()
-            .expect("array")
-            .pop();
-        let err = parse_snapshot(&value, viewport(), &loaders())
-            .expect_err("mismatched arrays must not parse");
-        let text = err.to_string();
-        assert!(text.contains('8') && text.contains('7'), "{text}");
+        for (path, label, shorter) in [
+            (["nodes", "nodeType"], "nodeType", "7"),
+            (["nodes", "nodeName"], "nodeName", "7"),
+            (["nodes", "nodeValue"], "nodeValue", "7"),
+            (["nodes", "backendNodeId"], "backendNodeId", "7"),
+            (["nodes", "attributes"], "attributes", "7"),
+            (["layout", "bounds"], "bounds", "7"),
+            (["layout", "styles"], "styles", "7"),
+            (["layout", "text"], "text", "7"),
+        ] {
+            let mut value = json(TWO_DOCS);
+            value["documents"][0][path[0]][path[1]]
+                .as_array_mut()
+                .unwrap_or_else(|| panic!("{label} is an array"))
+                .pop();
+            let err = parse_snapshot(&value, viewport(), &loaders())
+                .err()
+                .unwrap_or_else(|| panic!("a short {label} must not parse"));
+            let text = err.to_string();
+            assert!(text.contains(label), "must name the array: {text}");
+            assert!(text.contains(shorter), "must name the short length: {text}");
+            assert!(text.contains("browser_snapshot"), "{text}");
+        }
+
+        // The two named exemptions: an ABSENT array is uniform and survivable,
+        // a SHORT one is a truncation. `bounds` is not exempt, which the loop
+        // above covers.
+        for (label, empty_is_fine) in [("styles", true), ("text", true), ("bounds", false)] {
+            let mut value = json(TWO_DOCS);
+            value["documents"][0]["layout"][label] = serde_json::json!([]);
+            let parsed = parse_snapshot(&value, viewport(), &loaders());
+            assert_eq!(
+                parsed.is_ok(),
+                empty_is_fine,
+                "an entirely absent `{label}` should {} — see check_array_lengths",
+                if empty_is_fine { "parse" } else { "be refused" }
+            );
+        }
     }
 
     /// A bound that is not a usable coordinate is an ABSENT box, not a number.
