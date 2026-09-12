@@ -212,6 +212,25 @@ pub struct EngineHandle {
     /// compare-exchange, so two verbs resolving the same handle concurrently
     /// start one pump rather than two.
     pub pump_started: std::sync::atomic::AtomicBool,
+    /// How many engine events the pump never saw, cumulative for this
+    /// connection.
+    ///
+    /// The same 判据 §8 collapse as [`Self::pump_started`], one level down.
+    /// That flag separates *"nobody was listening"* from *"nothing was
+    /// logged"*; without this counter there is still no third answer for
+    /// *"the pump ran and missed n"*, and a console or network ring with a
+    /// silent hole in it reads as a complete observation.
+    ///
+    /// `aleph_cdp::EventStream::next` steps over a lag and counts it — `None`
+    /// means only that the connection closed — so the count is the only
+    /// evidence a gap exists. The pump publishes it here because the readers
+    /// (`console_messages`, `network_log`) hold the handle and not the stream.
+    ///
+    /// Connection-wide, not per tab: the broadcast drops events for the
+    /// subscriber, not for a tab, so which tab's lines went missing is not
+    /// knowable. Reporting the gap on every tab of the engine over-reports,
+    /// which is the safe direction for an "I may be incomplete" note.
+    pub pump_lagged: std::sync::atomic::AtomicU64,
     process: Arc<dyn EngineProcess>,
 }
 
@@ -291,6 +310,7 @@ impl EngineHandle {
                 active: Some(tab_id),
             }),
             pump_started: std::sync::atomic::AtomicBool::new(false),
+            pump_lagged: std::sync::atomic::AtomicU64::new(0),
             process,
         }
     }
@@ -329,6 +349,7 @@ impl EngineHandle {
             conn,
             tabs: tokio::sync::Mutex::new(TabTable::default()),
             pump_started: std::sync::atomic::AtomicBool::new(false),
+            pump_lagged: std::sync::atomic::AtomicU64::new(0),
             // `detached`, not `new`: `FakeEngineProcess::new(engine,
             // &FakeCdpServer, &Path)` exists to hand a launcher a server to
             // point a `Launched` at and a directory to write a sidecar into.

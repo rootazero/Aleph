@@ -50,17 +50,26 @@ pub(super) async fn handle_dialog(
         }
     }
 
-    page::handle_javascript_dialog(&handle.conn, Some(&session), accept, prompt_text)
-        .await
-        .map_err(|e| map_cdp_err(be.engine(), "Page.handleJavaScriptDialog", e))?;
+    let outcome =
+        page::handle_javascript_dialog(&handle.conn, Some(&session), accept, prompt_text).await;
 
-    // Clear the latch here rather than waiting for `javascriptDialogClosed`: the
-    // command has succeeded, and leaving the latch set would make the next
-    // `handle_dialog` believe a dialog is still open.
-    let mut tabs = handle.tabs.lock().await;
-    if let Some(entry) = tabs.entries.get_mut(tab_id) {
-        entry.pending_dialog = None;
+    // Clear the latch here rather than waiting for `javascriptDialogClosed`,
+    // and clear it **on the error path too**.
+    //
+    // The latch is a local echo of the engine's state, not the state itself. If
+    // the engine answers "there is no dialog", our echo was stale — most likely
+    // a `javascriptDialogClosed` the pump dropped to a lag — and keeping it set
+    // would make `actions::tab_ready` refuse every other verb on this tab
+    // forever. A gate has to name a door that opens (判据 §14), and this call
+    // IS that door; leaving the latch set on the failure path would be a
+    // fail-dead, not a fail-closed.
+    {
+        let mut tabs = handle.tabs.lock().await;
+        if let Some(entry) = tabs.entries.get_mut(tab_id) {
+            entry.pending_dialog = None;
+        }
     }
+    outcome.map_err(|e| map_cdp_err(be.engine(), "Page.handleJavaScriptDialog", e))?;
     Ok(())
 }
 

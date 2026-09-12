@@ -27,6 +27,14 @@ struct LoadOutcome {
     completed: bool,
 }
 
+/// What a dropped event means on the navigation barrier. Named because
+/// `wait_for_load` says it twice.
+pub(super) const LOAD_MAY_HAVE_COMPLETED: &str = "the load may in fact have completed unseen";
+
+/// What a dropped event means to a console or network ring.
+pub(super) const LOG_HAS_A_HOLE: &str =
+    "this log has a gap in it and is not a complete record of what the page did";
+
 /// How many events this subscriber never saw, phrased for a model.
 ///
 /// The broadcast buffers [`aleph_cdp::EVENT_CHANNEL_CAPACITY`] events per
@@ -42,13 +50,17 @@ struct LoadOutcome {
 /// `EventStream::new` is `pub(crate)` to `aleph-cdp`, so no test in this crate
 /// can build a lagged one — which made the reader added to close 判据 §2's
 /// 没装上 face carry that same face itself.
-fn lag_note(lagged: u64) -> String {
+///
+/// `consequence` is the caller's half, and splitting it out is what let the
+/// event pump become a second **consumer** rather than a second **derivation**:
+/// "the load may have completed unseen" and "this log has a hole in it" are
+/// genuinely different facts, but *how a dropped-event count is counted and
+/// phrased* is one fact and now has one home (判据 §1). The two spellings are
+/// the named consts above, so neither caller writes the sentence inline.
+pub(super) fn lag_note(lagged: u64, consequence: &str) -> String {
     match lagged {
         0 => String::new(),
-        n => format!(
-            " ({n} engine event(s) were dropped while this call was waiting, so \
-             the load may in fact have completed unseen)"
-        ),
+        n => format!(" ({n} engine event(s) were dropped, so {consequence})"),
     }
 }
 
@@ -215,7 +227,7 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
              loading; re-run browser_snapshot to see what is there",
             crate::browser::page_state::quote(url),
             budget.as_secs_f64(),
-            lag_note(events.lagged())
+            lag_note(events.lagged(), LOAD_MAY_HAVE_COMPLETED)
         )))
     }
 }
@@ -293,7 +305,7 @@ pub(super) async fn history(
         Err(BrowserError::NavigationFailed(format!(
             "the history navigation did not report load within {}s{}",
             be.command_timeout().as_secs_f64(),
-            lag_note(events.lagged())
+            lag_note(events.lagged(), LOAD_MAY_HAVE_COMPLETED)
         )))
     }
 }
@@ -320,14 +332,34 @@ mod tests {
     /// face one level in.
     #[test]
     fn a_dropped_event_is_named_in_the_timeout_and_silence_costs_nothing() {
-        assert_eq!(super::lag_note(0), "", "a clean wait adds no words");
+        use super::{LOAD_MAY_HAVE_COMPLETED, LOG_HAS_A_HOLE};
 
-        let note = super::lag_note(7);
+        assert_eq!(
+            super::lag_note(0, LOAD_MAY_HAVE_COMPLETED),
+            "",
+            "a clean wait adds no words"
+        );
+
+        let note = super::lag_note(7, LOAD_MAY_HAVE_COMPLETED);
         assert!(note.contains('7'), "the count is the fact: {note}");
         assert!(
             note.contains("may in fact have completed"),
             "the point is that 'did not report load' might be WRONG, not that \
              some events went missing: {note}"
+        );
+        // The second consumer's half, asserted here so the shared function
+        // cannot be narrowed back to the navigation wording: the two
+        // consequences must be different sentences over the same count.
+        let ring = super::lag_note(7, LOG_HAS_A_HOLE);
+        assert!(ring.contains('7'), "the same count: {ring}");
+        assert!(
+            ring.contains("gap") && !ring.contains("load"),
+            "a ring's gap is not a navigation's load: {ring}"
+        );
+        assert_eq!(
+            super::lag_note(0, LOG_HAS_A_HOLE),
+            "",
+            "silence costs nothing on either consumer"
         );
         // It is appended to a sentence, so it has to read as a continuation
         // rather than start one.

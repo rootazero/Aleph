@@ -17,6 +17,14 @@
 //! what makes the difference, so [`render_ring`] takes the pump's flag and
 //! picks a different sentence for each. `EngineHandle::pump_started` exists for
 //! that reader; the double-spawn gate is the smaller half of its job.
+//!
+//! **The same collapse has a third level, and `EngineHandle::pump_lagged`
+//! closes it.** `aleph_cdp::EventStream::next` steps over a dropped event and
+//! counts it, so a ring can be *incomplete* while the pump was running the
+//! whole time — and "here are the lines" would then be a confident wrong
+//! answer. [`render_ring`] therefore has four answers, not two, and the fourth
+//! borrows `navigate::lag_note`: the count and its framing have one home, and
+//! only the consequence clause differs between a navigation barrier and a log.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -188,6 +196,14 @@ pub(super) fn ensure_pump(handle: &Arc<EngineHandle>) {
         }
         while let Some(ev) = events.next().await {
             let Some(handle) = weak.upgrade() else { break };
+            // Published every iteration, before the event is folded in.
+            // `EventStream::next` STEPS OVER a lag and counts it — `None` means
+            // only that the connection closed — so without this read the rings
+            // would carry a silent hole and `render_ring` would report them as
+            // a complete observation. That is `pump_started`'s own 判据 §8
+            // collapse one level down, and the corrections file named this
+            // stream's second consumer as the place it would appear.
+            handle.pump_lagged.store(events.lagged(), Ordering::Relaxed);
             // Popup adoption needs an attach, which is async, so it cannot live
             // inside `apply_event`'s `&mut TabTable`.
             if ev.method == "Target.targetCreated" {
@@ -265,16 +281,26 @@ impl Ring {
 /// (`navigate.rs:41-45`): a branch whose input is a parameter can be driven to
 /// both outcomes by a test, and one that reads the flag inside cannot.
 ///
-/// Three answers, not two:
+/// **Four** answers, not two, and `lagged` is the fourth:
 /// * **not watching** — there is no pump, so an empty ring is not evidence of
 ///   anything. Saying "no console messages" here would be a fail-closed answer
 ///   consumed as a fact (判据 §8), and a model that read it would conclude the
 ///   page is quiet and stop looking.
-/// * **watching, nothing recorded** — a real observation, said in words because
-///   an empty string reads to the model as a call that failed to produce
-///   output.
+/// * **watching, nothing recorded, nothing dropped** — a real observation, said
+///   in words because an empty string reads to the model as a call that failed
+///   to produce output.
 /// * **watching, lines recorded** — the lines.
-pub(super) fn render_ring(watching: bool, ring: &VecDeque<String>, kind: Ring) -> String {
+/// * **anything dropped** — the same answer as above with [`lag_note`]
+///   appended, because a ring with a hole in it is not a complete record and
+///   "empty" / "these lines" would both be a confident wrong answer. The
+///   surrounding design already taught the model that elision announces itself:
+///   `redact_and_wrap_log` appends its own note when IT drops lines.
+pub(super) fn render_ring(
+    watching: bool,
+    lagged: u64,
+    ring: &VecDeque<String>,
+    kind: Ring,
+) -> String {
     let what = kind.what();
     if !watching {
         return format!(
@@ -284,10 +310,18 @@ pub(super) fn render_ring(watching: bool, ring: &VecDeque<String>, kind: Ring) -
              wanted the log for."
         );
     }
+    // ONE derivation of how a dropped-event count is phrased, shared with the
+    // navigation barrier (`navigate::lag_note`); only the consequence clause
+    // differs. Connecting to the existing reader rather than writing a second
+    // one is the whole point — the count and its framing have one home.
+    let note = super::navigate::lag_note(lagged, super::navigate::LOG_HAS_A_HOLE);
     if ring.is_empty() {
-        return format!("no {what} recorded for this tab");
+        return format!("no {what} recorded for this tab{note}");
     }
-    ring.iter().cloned().collect::<Vec<_>>().join("\n")
+    format!(
+        "{}{note}",
+        ring.iter().cloned().collect::<Vec<_>>().join("\n")
+    )
 }
 
 /// One tab's ring, rendered. Both verbs are the same three steps, so they share
@@ -301,12 +335,13 @@ async fn read_ring(
     let handle = be.handle().await?;
     handle.ensure_tab(tab_id).await?;
     let watching = handle.pump_started.load(Ordering::SeqCst);
+    let lagged = handle.pump_lagged.load(Ordering::Relaxed);
     let tabs = handle.tabs.lock().await;
     let entry = tabs
         .entries
         .get(tab_id)
         .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))?;
-    Ok(render_ring(watching, pick(entry), kind))
+    Ok(render_ring(watching, lagged, pick(entry), kind))
 }
 
 pub(super) async fn console_messages(
@@ -488,7 +523,7 @@ mod tests {
     fn an_empty_ring_says_whether_anyone_was_listening() {
         let empty = VecDeque::new();
 
-        let unwatched = render_ring(false, &empty, Ring::Console);
+        let unwatched = render_ring(false, 0, &empty, Ring::Console);
         assert!(
             unwatched.contains("NOT evidence"),
             "with no pump the answer must refuse to be read as an observation: \
@@ -500,7 +535,7 @@ mod tests {
              {unwatched}"
         );
 
-        let watched = render_ring(true, &empty, Ring::Console);
+        let watched = render_ring(true, 0, &empty, Ring::Console);
         assert!(
             watched.contains("no console messages recorded"),
             "with a pump, an empty ring IS an observation: {watched}"
@@ -512,15 +547,70 @@ mod tests {
 
         // The network ring says network things, so a reader cannot be told the
         // console was quiet when it was the network that was not watched.
-        assert!(render_ring(false, &empty, Ring::Network).contains("network activity"));
-        assert!(render_ring(true, &empty, Ring::Network).contains("no network activity recorded"));
+        assert!(render_ring(false, 0, &empty, Ring::Network).contains("network activity"));
+        assert!(
+            render_ring(true, 0, &empty, Ring::Network).contains("no network activity recorded")
+        );
 
-        // And a non-empty ring is the lines themselves, on both flags — the
-        // recorded lines are facts whoever was listening.
+        // And a non-empty ring is the lines themselves — the recorded lines are
+        // facts whoever was listening.
         let mut two = VecDeque::new();
         two.push_back("[log] a".to_string());
         two.push_back("[log] b".to_string());
-        assert_eq!(render_ring(true, &two, Ring::Console), "[log] a\n[log] b");
+        assert_eq!(
+            render_ring(true, 0, &two, Ring::Console),
+            "[log] a\n[log] b"
+        );
+    }
+
+    /// The fourth answer: a ring the pump dropped events into is not a complete
+    /// record, and saying "here are the lines" (or "nothing was logged") is the
+    /// same 判据 §8 collapse `pump_started` closed, one level down.
+    ///
+    /// Driven by the ARGUMENT, like `watching` and for the same reason: a lag
+    /// needs more than 64 queued events and a consumer holding the table lock
+    /// to produce, which is a runtime race, not something a unit test should be
+    /// asked to win.
+    #[test]
+    fn a_ring_the_pump_dropped_events_into_says_so() {
+        let mut two = VecDeque::new();
+        two.push_back("[log] a".to_string());
+        two.push_back("[log] b".to_string());
+
+        let clean = render_ring(true, 0, &two, Ring::Console);
+        let holed = render_ring(true, 9, &two, Ring::Console);
+        assert_eq!(clean, "[log] a\n[log] b", "no lag, no words");
+        assert!(
+            holed.starts_with(&clean),
+            "the lines themselves must survive: {holed}"
+        );
+        assert!(
+            holed.contains('9') && holed.contains("gap"),
+            "the count and what it means are the fact: {holed}"
+        );
+
+        // An EMPTY ring with a lag is the worst of the four: it reads as "the
+        // page did nothing" while the pump was losing events.
+        let empty = VecDeque::new();
+        let empty_holed = render_ring(true, 4, &empty, Ring::Network);
+        assert!(
+            empty_holed.contains("no network activity recorded"),
+            "{empty_holed}"
+        );
+        assert!(
+            empty_holed.contains('4') && empty_holed.contains("gap"),
+            "an empty ring with dropped events must not read as an observation: \
+             {empty_holed}"
+        );
+
+        // No pump at all still wins: "nobody was listening" is the stronger
+        // statement, and appending a drop count to it would suggest someone was.
+        let none = render_ring(false, 9, &empty, Ring::Console);
+        assert!(none.contains("NOT evidence"), "{none}");
+        assert!(
+            !none.contains("gap"),
+            "with no pump there is no partial record to qualify: {none}"
+        );
     }
 
     /// The production half of the claim above: going through the public verb,

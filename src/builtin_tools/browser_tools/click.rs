@@ -415,14 +415,27 @@ mod tests {
             }
             other => panic!("a cdp profile must serve this call, got {other:?}"),
         }
-        // Both non-cdp drivers and the unknown profile refuse — the fail-closed
-        // direction, enumerated so a new driver variant cannot quietly inherit
-        // a permission it has no primitive for.
-        for driver in [
-            Some(BrowserDriver::Managed),
-            Some(BrowserDriver::ExistingSession),
-            None,
-        ] {
+        // Every non-cdp driver, plus the unknown profile, refuses — the
+        // fail-closed direction. Derived from `BrowserDriver::ALL`, which
+        // exists for exactly this ("an enumerator reaches a new one by adding a
+        // variant here rather than by being remembered elsewhere"). The list
+        // used to be hand-written under a comment claiming it enumerated, so a
+        // fourth variant would have inherited the permission with this test
+        // green and still saying it covered the case (判据 §5 + §1, and the
+        // comment was the lying half).
+        let others: Vec<Option<BrowserDriver>> = BrowserDriver::ALL
+            .into_iter()
+            .filter(|d| *d != BrowserDriver::Cdp)
+            .map(Some)
+            .chain(std::iter::once(None))
+            .collect();
+        assert_eq!(
+            others.len(),
+            BrowserDriver::ALL.len(),
+            "precondition: exactly one variant is cdp, so this list is every \
+             other driver plus the unknown profile"
+        );
+        for driver in others {
             assert!(
                 resolve_target(&args, driver).is_err(),
                 "a coordinate double-click must be refused for {driver:?}"

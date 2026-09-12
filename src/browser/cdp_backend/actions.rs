@@ -447,6 +447,47 @@ async fn press_and_release(
     }
 }
 
+/// [`EngineHandle::ensure_tab`], plus the one thing a verb must know before it
+/// touches a tab: whether a native dialog is blocking it.
+///
+/// Chromium does not answer commands on a tab with an open `alert()` /
+/// `confirm()`. A verb that went ahead would spend the whole command budget and
+/// report a timeout — and so would the next one, and the one after that, so a
+/// single common page pattern wedges the profile until something calls
+/// `browser_dialog`, which the model has no reason to do because it was told
+/// its click timed out.
+///
+/// **This is also the only reader of `TabEntry::pending_dialog`'s VALUE.** The
+/// latch alone can say "blocked"; what a model needs in order to choose accept
+/// over dismiss — and to compose a `prompt_text` — is the dialog's kind and its
+/// text, which was being formatted and thrown away. A field with a writer and
+/// no reader is the shape this task was sent to close.
+///
+/// Deliberately NOT applied to `handle_dialog` (it is the way out) or to the
+/// two log readers (reading what a page did while it waits on a dialog is both
+/// harmless and useful).
+async fn tab_ready(handle: &EngineHandle, tab_id: &str) -> Result<SessionId, BrowserError> {
+    let session = handle.ensure_tab(tab_id).await?;
+    let pending = {
+        let tabs = handle.tabs.lock().await;
+        tabs.entries
+            .get(tab_id)
+            .and_then(|e| e.pending_dialog.clone())
+    };
+    if let Some(text) = pending {
+        return Err(BrowserError::ActionFailed(format!(
+            // QUOTED (R40): the message is the page's own, and it reaches the
+            // model outside the untrusted-content fence.
+            "this tab has an open dialog ({}) and the engine will not answer any \
+             other command until it is closed. Answer it with \
+             browser_dialog{{action:\"accept\"}} or \
+             browser_dialog{{action:\"dismiss\"}}, then retry.",
+            quote(&text)
+        )));
+    }
+    Ok(session)
+}
+
 /// `handle` + `session` + the resolved target: the preamble every verb shares.
 async fn prepare(
     be: &CdpBackend,
@@ -454,7 +495,7 @@ async fn prepare(
     target: &ActionTarget,
 ) -> Result<(std::sync::Arc<EngineHandle>, SessionId, Resolved), BrowserError> {
     let handle = be.handle().await?;
-    let session = handle.ensure_tab(tab_id).await?;
+    let session = tab_ready(&handle, tab_id).await?;
     let resolved = resolve_target(be, &handle, &session, tab_id, target).await?;
     Ok((handle, session, resolved))
 }
@@ -505,7 +546,7 @@ pub(super) async fn scroll(
     direction: ScrollDirection,
 ) -> Result<(), BrowserError> {
     let handle = be.handle().await?;
-    let session = handle.ensure_tab(tab_id).await?;
+    let session = tab_ready(&handle, tab_id).await?;
     // A wheel event needs a position, and the viewport centre is the honest
     // default: scrolling "the page" means the scroller under the middle of the
     // screen, which is what a user's wheel does. A ref that no longer resolves
@@ -513,7 +554,14 @@ pub(super) async fn scroll(
     // model recovers from a stale view.
     let (x, y) = match resolve_target(be, &handle, &session, tab_id, &target).await {
         Ok(resolved) => point_for(be, &handle, &session, &resolved, false).await?,
-        Err(BrowserError::StaleRef { .. } | BrowserError::ActionFailed(_)) => {
+        // `StaleRef` ONLY. `resolve_target`'s other exits are `TabNotFound` and
+        // `map_cdp_err`, which yields `EngineBusy` / `Cdp` / `EngineFailure` —
+        // so the `ActionFailed(_)` this or-pattern used to carry named a value
+        // that cannot arrive here (判据 §2's 不可失败 face). It was not
+        // harmless in the direction it would have failed: a real `ActionFailed`
+        // swallowed into a viewport-centre scroll is a refusal reported as
+        // success.
+        Err(BrowserError::StaleRef { .. }) => {
             let m = page::get_layout_metrics(&handle.conn, Some(&session))
                 .await
                 .map_err(|e| map_cdp_err(be.engine(), "Page.getLayoutMetrics", e))?;
@@ -546,7 +594,7 @@ pub(super) async fn type_text(
     text: &str,
 ) -> Result<(), BrowserError> {
     let handle = be.handle().await?;
-    let session = handle.ensure_tab(tab_id).await?;
+    let session = tab_ready(&handle, tab_id).await?;
     // Only a `Ref` needs resolving. Running the full `resolve_target` for a
     // coordinate would spend a `Page.getLayoutMetrics` round trip converting a
     // point this verb then throws away — it types into whatever holds focus.
@@ -625,7 +673,7 @@ pub(super) async fn press_key(
     key: &str,
 ) -> Result<(), BrowserError> {
     let handle = be.handle().await?;
-    let session = handle.ensure_tab(tab_id).await?;
+    let session = tab_ready(&handle, tab_id).await?;
     let Some((down, up)) = press_key_event(key) else {
         let names: Vec<&str> = KEY_TABLE.iter().map(|r| r.0).collect();
         return Err(BrowserError::ActionFailed(format!(
@@ -1177,6 +1225,111 @@ mod tests {
     /// model inside a `BrowserError::ActionFailed`, i.e. **outside** the
     /// untrusted-content fence, exactly like the blocker and the option list.
     ///
+    /// **The dialog race, driven for the first time.** Every other fixture in
+    /// this file answers `Input.dispatchMouseEvent` immediately, so `released`
+    /// always wins the `select!` and the dialog arm, the `continue` arm and the
+    /// stream-ended arm had never executed once — the highest defect density
+    /// per untested line in the task.
+    ///
+    /// What the arm is for: Chromium does not answer the release that triggers
+    /// an `alert()`/`confirm()` until the dialog is handled. A plain `.await`
+    /// would spend the whole command budget and then report a timeout for a
+    /// click that LANDED — and, worse, leave the dialog open, so the next verb
+    /// on the tab hangs too. One ordinary page pattern wedges the profile.
+    ///
+    /// The fake is the constructor closure rather than `on`, because
+    /// `Responder` is a value and cannot vary per call: the move and the press
+    /// are answered, and the third mouse event — the release — is answered with
+    /// the dialog EVENT instead of a reply, which is exactly what Chromium
+    /// does.
+    #[tokio::test]
+    async fn a_click_that_opens_a_dialog_answers_on_the_event_not_the_budget() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let seen = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&seen);
+        let server = FakeCdpServer::start(move |frame: &serde_json::Value| {
+            if frame["method"].as_str() == Some("Input.dispatchMouseEvent")
+                // 0 = move, 1 = press, 2 = release.
+                && counter.fetch_add(1, Ordering::SeqCst) == 2
+            {
+                return Responder::Event(json!({
+                    "method": "Page.javascriptDialogOpening",
+                    "sessionId": "S1",
+                    "params": { "type": "confirm", "message": "delete everything?" }
+                }));
+            }
+            Responder::Reply(json!({}))
+        })
+        .await;
+        wire_session(&server, "S1");
+        server.on(
+            "DOM.resolveNode",
+            Responder::Reply(json!({ "object": { "objectId": "OBJ1" } })),
+        );
+        server.on("DOM.scrollIntoViewIfNeeded", Responder::Reply(json!({})));
+        server.on(
+            "DOM.getBoxModel",
+            Responder::Reply(json!({ "model": {
+                "content": [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "padding": [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "border":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "margin":  [10.0, 20.0, 110.0, 20.0, 110.0, 60.0, 10.0, 60.0],
+                "width": 100, "height": 40
+            }})),
+        );
+        server.on(
+            "Runtime.callFunctionOn",
+            Responder::Reply(json!({ "result": { "type": "object", "value": { "ok": true } } })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let ref_id = seed_ref(&handle, "T1").await;
+
+        let started = std::time::Instant::now();
+        backend
+            .click("T1", ActionTarget::Ref { ref_id })
+            .await
+            // The deterministic half: with the dialog arm gone, the release is
+            // never answered and this is `Err(EngineBusy)`.
+            .expect("the dialog event IS the evidence the click landed");
+        assert!(
+            started.elapsed() < TEST_TIMEOUT,
+            "the click must answer on the event, not on the command budget: {:?}",
+            started.elapsed()
+        );
+
+        // Recorded through the pump's own `apply_event`, so the racer and the
+        // pump cannot disagree about what a dialog event means.
+        assert_eq!(
+            handle.tabs.lock().await.entries["T1"]
+                .pending_dialog
+                .as_deref(),
+            Some("confirm: delete everything?"),
+            "the latch the next verb reads"
+        );
+
+        // And the wedge is closed at the other end: the next verb refuses BY
+        // NAME instead of spending its own budget on a tab the engine will not
+        // answer. This is `pending_dialog`'s value finding a reader.
+        let err = backend
+            .click("T1", ActionTarget::Coordinates { x: 1.0, y: 1.0 })
+            .await
+            .expect_err("a tab with an open dialog cannot take another click");
+        let text = err.to_string();
+        assert!(text.contains("open dialog"), "{text}");
+        assert!(
+            text.contains("delete everything?"),
+            "the refusal must carry the dialog's own words, or the model cannot \
+             choose accept over dismiss: {text}"
+        );
+        assert!(
+            text.contains("browser_dialog"),
+            "a closed gate names the door that opens it (判据 §14): {text}"
+        );
+    }
+
     /// The two paths get a test EACH rather than two halves of one, so a
     /// mutation that removes one `quote` names the site it removed. One test
     /// covering both would go red for either and say which only in its message

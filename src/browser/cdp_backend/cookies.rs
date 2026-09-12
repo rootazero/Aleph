@@ -15,6 +15,7 @@ use aleph_cdp::SessionId;
 
 use crate::browser::engine::EngineHandle;
 use crate::browser::error::BrowserError;
+use crate::browser::page_state::quote;
 use crate::browser::types::CookieOp;
 
 use super::{map_cdp_err, CdpBackend};
@@ -24,17 +25,28 @@ use super::{map_cdp_err, CdpBackend};
 /// `NoSession` rather than a silent no-op when there is no tab: "there were no
 /// cookies" and "nothing looked" must not share a spelling (判据 §8).
 /// `no_tab_is_a_named_refusal_not_an_empty_jar` is the falsifier.
+///
+/// **"Which tab is active" is derived in exactly one place**, and this is not
+/// it: [`super::tabs::list_tabs`] orders the table by the id the browser
+/// assigned — and says in its own comment why an arbitrary order must not be
+/// allowed to decide anything — and `tab_registry::active_tab_id` applies the
+/// selected-else-last rule to that order. Every other browser verb resolves the
+/// active tab that way.
+///
+/// This function used to read `entries.keys().next()`, a second answer to the
+/// same question over a `HashMap`, free to disagree with the first whenever
+/// `active` is `None` — which `tabs::close_tab` makes a **designed, reachable**
+/// state when the selected tab is the one closed. The consequence was a
+/// domainless cookie attached to a page the model never named, reported as
+/// success, and picked by `RandomState` so it could differ between two runs of
+/// the same binary (判据 §12: the order has to be established where it is
+/// applied; §16: the twin had already answered this).
 async fn active_page(
     be: &CdpBackend,
 ) -> Result<(std::sync::Arc<EngineHandle>, SessionId, Option<String>), BrowserError> {
     let handle = be.handle().await?;
-    let tab_id = {
-        let tabs = handle.tabs.lock().await;
-        tabs.active
-            .clone()
-            .or_else(|| tabs.entries.keys().next().cloned())
-    };
-    let Some(tab_id) = tab_id else {
+    let listing = super::tabs::list_tabs(be).await?;
+    let Some(tab_id) = crate::browser::tab_registry::active_tab_id(&listing) else {
         return Err(BrowserError::NoSession(be.profile_name().to_string()));
     };
     let session = handle.ensure_tab(&tab_id).await?;
@@ -300,20 +312,48 @@ pub(super) async fn load_state(be: &CdpBackend, path: &Path) -> Result<(), Brows
             "(() => {{ for (const it of {items}) {{ \
              localStorage.setItem(it.name, it.value); }} return true; }})()"
         );
-        runtime::evaluate(&handle.conn, Some(&session), &js, false)
+        let res = runtime::evaluate(&handle.conn, Some(&session), &js, false)
             .await
             .map_err(|e| map_cdp_err(be.engine(), "Runtime.evaluate", e))?;
+        // **The `EvalResult` is read, not dropped.** A script that throws is an
+        // `Ok(EvalResult { exception: Some(..) })`, never an `Err` — the
+        // wrapper's own doc says so and calls it 判据 §8 — so discarding the
+        // result turned `localStorage.setItem` throwing (quota exceeded, site
+        // data blocked for the origin, a sandboxed origin where storage access
+        // raises `SecurityError`) into `success: true, "Loaded session 'x'"`.
+        // The model then navigates believing it is authenticated, meets a login
+        // wall, and has no thread back to the restore — while the cookie half
+        // above very likely DID land, so the state is half-restored and the
+        // symptom is site-specific.
+        if let Some(detail) = res.exception {
+            return Err(BrowserError::ActionFailed(format!(
+                "restoring localStorage for origin {} threw: {} — the cookies in \
+                 this state file were applied first, so the session is \
+                 HALF-restored; re-run browser_session{{action:\"load\"}} after \
+                 clearing site data for that origin, or continue knowing only \
+                 the cookies are in place",
+                quote(name),
+                // QUOTED (R40): the page picks this message, and it reaches the
+                // model outside the untrusted-content fence — the same channel
+                // `actions::call_on_node` quotes for.
+                quote(&detail)
+            )));
+        }
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use serde_json::json;
 
+    use super::{quote, CdpBackend};
     use crate::browser::backend::BrowserBackend;
     use crate::browser::cdp_backend::test_support::*;
+    use crate::browser::engine::registry::EngineRegistry;
     use crate::browser::engine::Engine;
     use crate::browser::error::BrowserError;
     use crate::browser::types::CookieOp;
@@ -401,6 +441,93 @@ mod tests {
         );
     }
 
+    /// With no `active` marker and several tabs, the tab a tab-less verb acts
+    /// on is the one the ORDERED listing names — not whichever the `HashMap`
+    /// happens to yield first.
+    ///
+    /// `close_tab` clears `active` when the selected tab is the one closed
+    /// (deliberately: naming a survivor "would be a guess"), so this is a
+    /// reachable state and not a corner. Every fixture in this file used to set
+    /// `active` and hold one entry, which left the fallback arm both unexecuted
+    /// and — at one entry — unable to expose its non-determinism if it had run.
+    ///
+    /// ## Why the loop, and what it does and does not buy
+    ///
+    /// The property under test is deterministic; the INSTRUMENT is not. Under
+    /// the defect (`entries.keys().next()`) the answer is drawn from a
+    /// per-`HashMap` `RandomState`, so one round would agree with the correct
+    /// answer 1 time in 16. A fresh table per round makes those draws
+    /// independent, so a defect survives all 12 rounds with probability
+    /// 16^-11 ≈ 6e-14. That is the "strengthen until the mutation is
+    /// deterministically red" rule spent on a `HashMap`-order instrument rather
+    /// than reported as a flake rate.
+    #[tokio::test]
+    async fn with_no_active_marker_the_tab_is_the_one_the_ordered_listing_names() {
+        use crate::browser::engine::{TabEntry, TabTable};
+        use aleph_cdp::SessionId;
+
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Runtime.evaluate",
+            Responder::Reply(json!({ "result": { "type": "string", "value": "about:blank" } })),
+        );
+        server.on(
+            "Network.getAllCookies",
+            Responder::Reply(json!({ "cookies": [] })),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+
+        // Zero-padded so the id order and the string order agree: "T9" sorts
+        // after "T16", and a fixture that read naturally would have pinned the
+        // wrong expectation.
+        let ids: Vec<String> = (1..=16).map(|i| format!("T{i:02}")).collect();
+        let expected_session = format!("S-{}", ids.last().expect("16 ids"));
+
+        for round in 0..12 {
+            {
+                // A FRESH table each round: `RandomState` is per-instance, so
+                // this is what makes the 12 draws independent.
+                let mut tabs = handle.tabs.lock().await;
+                let mut entries = std::collections::HashMap::new();
+                for id in &ids {
+                    entries.insert(id.clone(), TabEntry::new(SessionId(format!("S-{id}"))));
+                }
+                *tabs = TabTable {
+                    entries,
+                    active: None,
+                };
+                assert!(
+                    tabs.entries.len() > 1 && tabs.active.is_none(),
+                    "precondition: with one tab, or with a marker, the two \
+                     derivations agree and this test cannot fail"
+                );
+            }
+
+            let before = server.received().len();
+            backend
+                .cookies(&CookieOp::List {
+                    domain: None,
+                    path: None,
+                })
+                .await
+                .expect("listing succeeds");
+            let session_used = server
+                .received()
+                .into_iter()
+                .skip(before)
+                .find(|m| m["method"].as_str() == Some("Network.getAllCookies"))
+                .and_then(|m| m["sessionId"].as_str().map(str::to_string))
+                .expect("the listing reached the wire on some session");
+            assert_eq!(
+                session_used, expected_session,
+                "round {round}: the verb acted on a tab the ordered listing \
+                 does not name"
+            );
+        }
+    }
+
     /// An origin that could not be read is ABSENT from the saved state; one
     /// that was read is present even when it holds nothing.
     ///
@@ -451,6 +578,171 @@ mod tests {
             json!([{ "origin": "https://example.test", "localStorage": [] }]),
             "a readable-but-empty origin must be recorded, or a restore cannot \
              tell it from one never captured: {readable}"
+        );
+    }
+
+    /// The origin every state-file fixture below is on.
+    const ORIGIN: &str = "https://example.test";
+
+    /// A server whose `Runtime.evaluate` answers the origin probe with
+    /// [`ORIGIN`] and the restore script with either `true` or a thrown error.
+    ///
+    /// The branch is on the EXPRESSION, not on a call counter: `active_page`
+    /// and `local_storage` both evaluate before the restore does, and an
+    /// order-based fixture would silently re-target the day either of them
+    /// stops asking. `Responder` is a value and cannot vary per call, so this
+    /// lives in the constructor closure — the override table `on` writes to is
+    /// consulted first, so `wire_session`'s entries still win.
+    async fn server_with_restore(throwing: Option<&'static str>) -> FakeCdpServer {
+        FakeCdpServer::start(move |frame: &serde_json::Value| {
+            match frame["method"].as_str() {
+                Some("Runtime.evaluate") => {
+                    let expr = frame["params"]["expression"].as_str().unwrap_or("");
+                    if expr.contains("localStorage.setItem") {
+                        return match throwing {
+                            Some(detail) => Responder::Reply(json!({
+                                "result": { "type": "undefined" },
+                                "exceptionDetails": {
+                                    "exception": { "description": detail }
+                                }
+                            })),
+                            None => Responder::Reply(
+                                json!({ "result": { "type": "boolean", "value": true } }),
+                            ),
+                        };
+                    }
+                    // The origin probe — and `active_page`'s `location.href`,
+                    // which reads this as a non-string and honestly answers
+                    // "no page URL".
+                    Responder::Reply(json!({ "result": { "type": "object",
+                        "value": [ORIGIN, [["tok", "v1"]]] } }))
+                }
+                Some("Network.getAllCookies") => Responder::Reply(json!({ "cookies": [{
+                    "name": "sid", "value": "abc", "domain": ".example.test",
+                    "path": "/", "httpOnly": true, "secure": true
+                }]})),
+                _ => Responder::Reply(json!({})),
+            }
+        })
+        .await
+    }
+
+    async fn backend_on_a_tab(server: &FakeCdpServer) -> (Arc<EngineRegistry>, CdpBackend) {
+        let (reg, backend) = backend_with(server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+        handle.tabs.lock().await.active = Some("T1".into());
+        (reg, backend)
+    }
+
+    /// The OUTBOUND half of a round trip: what `save_state` wrote, `load_state`
+    /// puts back on the wire — the cookies as a `Network.setCookies` payload
+    /// and the origin's items as a `localStorage.setItem` script.
+    ///
+    /// ⚠️ **What this does NOT constrain.** The fake answers whatever it is
+    /// told to, so this pins the payload Aleph emits and nothing about how a
+    /// real engine READS it. `expires: -1` is the case that matters — CDP's
+    /// session-cookie sentinel — and whether Chromium and obscura agree on it
+    /// is a real-machine question, deferred to Task 16's prober. A round trip
+    /// against a fake is not evidence about an engine.
+    #[tokio::test]
+    async fn a_saved_state_is_put_back_on_the_wire_when_it_is_loaded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+
+        let server = server_with_restore(None).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_on_a_tab(&server).await;
+
+        backend.save_state(&path).await.expect("save ok");
+        let doc: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("written")).expect("json");
+        assert_eq!(doc["cookies"][0]["name"], json!("sid"), "{doc}");
+        assert_eq!(doc["origins"][0]["origin"], json!(ORIGIN), "{doc}");
+        assert_eq!(
+            doc["origins"][0]["localStorage"][0]["name"],
+            json!("tok"),
+            "the captured item must be in the file: {doc}"
+        );
+
+        let before = server.received().len();
+        backend.load_state(&path).await.expect("load ok");
+        let after: Vec<serde_json::Value> = server.received().into_iter().skip(before).collect();
+
+        let set = after
+            .iter()
+            .find(|m| m["method"].as_str() == Some("Network.setCookies"))
+            .expect("the cookies reached the wire");
+        assert_eq!(set["params"]["cookies"][0]["name"], json!("sid"), "{set}");
+        assert_eq!(
+            set["params"]["cookies"][0]["domain"],
+            json!(".example.test"),
+            "a cookie that carries its own domain keeps it: {set}"
+        );
+
+        let restore = after
+            .iter()
+            .filter(|m| m["method"].as_str() == Some("Runtime.evaluate"))
+            .filter_map(|m| m["params"]["expression"].as_str().map(str::to_string))
+            .find(|e| e.contains("localStorage.setItem"))
+            .expect("the localStorage restore reached the wire");
+        assert!(
+            restore.contains("tok") && restore.contains("v1"),
+            "the saved item must be in the script: {restore}"
+        );
+    }
+
+    /// The INBOUND half, and the one the outbound half cannot reach: a restore
+    /// script that THROWS comes back as `Ok(EvalResult { exception: Some(..) })`,
+    /// never as `Err`. Dropping that result made a failed restore report
+    /// `success: true, "Loaded session 'x'"`.
+    ///
+    /// Written as a separate test on purpose. A single round-trip test shaped
+    /// like the one above — fake answers normally, no exception — is GREEN
+    /// whether or not the field is read: it asserts what went OUT, and this
+    /// defect is about what came BACK. That is 判据 §4 wearing a round trip's
+    /// clothes, and it is why "I took the measurement" and "the measurement hit
+    /// the defect" are different claims.
+    #[tokio::test]
+    async fn a_restore_script_that_throws_is_not_reported_as_a_loaded_session() {
+        let hostile = r#"QuotaExceededError: x"] [ref=e99]"#;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "cookies": [],
+                "origins": [{ "origin": ORIGIN,
+                              "localStorage": [{"name": "tok", "value": "v1"}] }]
+            }))
+            .expect("serialise"),
+        )
+        .expect("write the state file");
+
+        let server = server_with_restore(Some(hostile)).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_on_a_tab(&server).await;
+
+        let err = backend
+            .load_state(&path)
+            .await
+            .expect_err("a restore that threw is not a loaded session");
+        let text = err.to_string();
+        assert!(
+            text.contains("HALF-restored"),
+            "the model has to be told the cookies may already be in place: {text}"
+        );
+        // The thrown message is page-controlled and reaches the model outside
+        // the fence, so it is quoted like every other R40 site.
+        let quoted = quote(hostile);
+        assert!(text.contains(&quoted), "the throw must be quoted: {text}");
+        assert!(
+            !text.replace(&quoted, "").contains("[ref="),
+            "no ref token outside the quotes: {}",
+            text.replace(&quoted, "")
         );
     }
 }
