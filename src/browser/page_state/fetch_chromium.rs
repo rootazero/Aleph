@@ -290,8 +290,10 @@ pub async fn fetch_chromium(
 /// capture and has to be fetched — that is what this call is.
 ///
 /// `None` covers two different facts on purpose, and the caller spends it correctly either way: a
-/// frame belonging to another page (measured to refuse with "Frame with the given id was not
-/// found") and a frame of ours we could not ask about. Both mean "no capture for this element",
+/// frame this session does not own (measured: Chrome refuses an unknown frame with `"Frame with
+/// the given id was not found."` and a frame owned by another target with `"Frame with the given
+/// id does not belong to the target."` — two sentences, one meaning here) and a frame of ours we
+/// could not ask about. Both mean "no capture for this element",
 /// and the accounting in [`stitch_snapshots`] then reports it — as a refusal if other children were
 /// supplied, as [`UnreachedFrame::NotCaptured`] if none were. An `Err` is spent as "I do not know",
 /// never as "there is nothing there" (判据 §8).
@@ -548,11 +550,25 @@ pub fn parse_snapshot(
 /// whole page on a shape ad and consent stacks are built out of. It becomes
 /// [`UnreachedFrame::NotCaptured`], which is what that carrier is for.
 ///
-/// **Recursing is not done here**, and the signature is why: `ChildCapture` is
-/// flat and its `owner_backend_node_id` lives in the PARENT session's node
-/// space, while a grandchild's owner lives in its own parent's node space. Any
-/// depth past one needs the owner expressed as `(owning capture, backendNodeId)`,
-/// or a parent pointer per child. Do not discover that by trying.
+/// **Recursing is not done here, and it is possible** — measured, so the next reader does not have
+/// to find out the hard way which of those two it is
+/// (`…-evidence/probes/t0-u4c-nested.mjs`, Chrome 152, `--site-per-process`, three sites
+/// `127.0.0.1` / `localhost` / `[::1]`):
+///
+/// * `DOM.getFrameOwner` on the MIDDLE frame's own session **does** resolve the grandchild, so the
+///   recursion has a wire to run on;
+/// * the page session refuses the grandchild with `"Frame with the given id does not belong to the
+///   target."` — a DIFFERENT refusal from the unknown-frame one, and the middle session refuses
+///   ITSELF the same way, so the membership test is genuinely per-session at every depth.
+///
+/// What stops it is this function's own signature. [`ChildCapture`] is flat and
+/// `owner_backend_node_id` is an id in the PARENT session's node space; a grandchild's owner is an
+/// id in the MIDDLE frame's node space. Those are different spaces and the type cannot say which
+/// one it means — **measured in the same run: the middle frame's owner is `backendNodeId` 6 in the
+/// page's space, and the grandchild's owner is `backendNodeId` 6 in the middle's space.** The same
+/// integer, two different elements. Depth past one therefore needs the owner expressed as
+/// `(owning capture, backendNodeId)`, or a parent pointer per child — it is a type change, not a
+/// loop.
 pub fn stitch_snapshots(
     parent: &serde_json::Value,
     children: &[ChildCapture<'_>],

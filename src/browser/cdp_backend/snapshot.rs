@@ -427,11 +427,17 @@ mod tests {
                 "DOM.getFrameOwner" if frame["params"]["frameId"] == OOPIF_CHILD_FRAME => {
                     Responder::Reply(json!({ "backendNodeId": OOPIF_OWNER_BACKEND_NODE_ID }))
                 }
-                // Chrome's own refusal text for a frame this session does not
-                // own, measured in `t0-u4b-enumeration.mjs`.
+                // Chrome's own refusal text for exactly this case — a frame
+                // that exists but belongs to ANOTHER target — measured in
+                // `t0-u4c-nested.mjs`. It is a different sentence from the
+                // unknown-frame refusal (`"Frame with the given id was not
+                // found."`, measured in `t0-u4b-enumeration.mjs`), and the
+                // fixture carries the one the scenario would really produce.
+                // Nothing in production matches on either text: a refusal is
+                // spent as "not ours" whichever words it arrives in.
                 "DOM.getFrameOwner" => Responder::Error {
                     code: -32000,
-                    message: "Frame with the given id was not found.".to_string(),
+                    message: "Frame with the given id does not belong to the target.".to_string(),
                 },
                 "Page.getLayoutMetrics" => Responder::Reply(layout_metrics()),
                 "Page.getFrameTree" if is_child => Responder::Reply(json!({ "frameTree": {
