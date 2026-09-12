@@ -115,6 +115,10 @@ impl ChromeMcpBackend {
 
 #[async_trait]
 impl BrowserBackend for ChromeMcpBackend {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         self.ssrf_guard
             .check_navigation(url)

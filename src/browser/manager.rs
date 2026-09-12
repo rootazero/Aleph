@@ -425,7 +425,13 @@ impl ProfileManager {
     ///
     /// - `BrowserDriver::Managed`         → `PlaywrightCliBackend`
     /// - `BrowserDriver::ExistingSession` → `ChromeMcpBackend`
-    /// - `BrowserDriver::Cdp`             → nothing yet (Task 14); refused by name.
+    /// - `BrowserDriver::Cdp`             → `CdpBackend` (either engine)
+    ///
+    /// The backend is constructed per call and never stored, which is why it
+    /// can hold an `Arc` back to the engine registry without a cycle — and why
+    /// a `Cdp` profile's engine is resolved lazily, inside the backend, rather
+    /// than here: this function is synchronous, and it is also what
+    /// [`Self::reap_idle_tabs`] calls, which must never launch a browser.
     pub fn get_backend(&self, profile_name: &str) -> Result<Arc<dyn BrowserBackend>, BrowserError> {
         let cfg = self
             .get_config(profile_name)
@@ -445,16 +451,27 @@ impl ProfileManager {
                 profile_name.to_string(),
                 self.ssrf_guard.load_full(),
             ))),
-            // The CDP backend is not built yet. Refusing BY NAME is the
-            // point: routing this to the managed backend would run a
-            // DIFFERENT engine than the profile asks for and report success
-            // (判据 §11), which is how "this setting never worked" starts.
-            // Task 14 replaces this arm with the real construction.
-            BrowserDriver::Cdp => Err(BrowserError::ActionFailed(format!(
-                "browser profile '{profile_name}' is configured with driver = \"cdp\", which \
-                 this build has no backend for yet. Set driver = \"managed\" to use the \
-                 Chromium-launching driver."
-            ))),
+            BrowserDriver::Cdp => {
+                // ONE source for both halves of the backend's identity, which
+                // is the question `CdpBackend::new`'s doc hands to this task.
+                // `launch_request_for` writes `req.profile` AND
+                // `req.session_key` from the same `profile_name` this call
+                // receives, so the registry key, the sidecar name and the
+                // argument agree by construction rather than by coincidence —
+                // there is no second string here free to drift (判据 §1).
+                let (engine, req) = self.launch_request_for(profile_name)?;
+                Ok(Arc::new(super::cdp_backend::CdpBackend::new(
+                    self.engines.clone(),
+                    engine,
+                    req,
+                    profile_name,
+                    // The LIVE guard, loaded per call: backends are built per
+                    // call precisely so a `browser.update` reaches the next
+                    // action without a restart.
+                    self.ssrf_guard.load_full(),
+                    self.cdp_command_timeout(),
+                )))
+            }
         }
     }
 
@@ -716,11 +733,28 @@ impl ProfileManager {
             .collect()
     }
 
-    /// Record activity on a specific tab so its idle timer resets. No-op for
-    /// non-`Managed` profiles — the user's `ExistingSession` tabs are never
-    /// tracked or reaped (R5: don't disturb the user).
+    /// Record activity on a specific tab so its idle timer resets.
+    ///
+    /// Tracked for the two drivers whose browsers Aleph launched and fully
+    /// owns — `Managed` and `Cdp`. Never for `ExistingSession`: those are the
+    /// user's own tabs and are neither tracked nor reaped (R5: don't disturb
+    /// the user).
+    ///
+    /// ⚠️ **A `Cdp` entry recorded here has no sweeper yet.**
+    /// [`Self::reap_idle_tabs`] and [`Self::idle_managed_profiles`] both filter
+    /// on `driver == Managed`, and widening THEM is not this task's to do: they
+    /// judge liveness through `playwright_cli_driver.chromium_alive`, which
+    /// knows nothing about engines, so a `Cdp` profile would be selected and
+    /// then judged by a predicate that cannot answer for it. So a CDP tab is
+    /// recorded and retained rather than swept. Said here rather than left to
+    /// be discovered: this is a writer whose reader is one task away, not a
+    /// reader that was forgotten. The QA's `reap` scenario refuses
+    /// `ALEPH_QA_DRIVER=cdp` for the same reason.
     pub fn touch_tab(&self, profile_name: &str, tab_id: &str) {
-        if let Some(BrowserDriver::Managed) = self.get_driver(profile_name) {
+        if matches!(
+            self.get_driver(profile_name),
+            Some(BrowserDriver::Managed | BrowserDriver::Cdp)
+        ) {
             self.tab_registry.touch(profile_name, tab_id);
         }
     }
@@ -1379,6 +1413,98 @@ mod tests {
         assert!(backend.is_ok());
     }
 
+    /// The third driver has to route somewhere, and to the RIGHT somewhere.
+    /// Before this task it hit an arm that refused by name, which reads to an
+    /// operator exactly like a config typo.
+    ///
+    /// The concrete type is the claim. `Arc<dyn BrowserBackend>` is satisfied by
+    /// any of the four, and the arm this replaces produced "some answer" too —
+    /// so an assertion on `is_ok()` alone would have been green against a
+    /// `Cdp` profile silently driven by the managed backend, which is a
+    /// DIFFERENT engine reporting success (判据 §11).
+    #[test]
+    fn test_get_backend_routes_cdp_profile_to_cdp_backend() {
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "cdp".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                engine: Some(Engine::Chromium),
+                // Explicit, so `launch_request_for` never has to derive one
+                // from `ALEPH_HOME` — a routing test must not depend on, or
+                // touch, the developer's own browser storage.
+                user_data_dir: Some("/nonexistent/aleph-routing-test".into()),
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+
+        let backend = manager
+            .get_backend("cdp")
+            .expect("a driver=cdp profile must route to a backend");
+        assert!(
+            backend
+                .as_ref()
+                .as_any()
+                .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
+                .is_some(),
+            "driver=cdp must produce a CdpBackend, not whichever backend the \
+             fallback arm names"
+        );
+
+        // And the other two arms must not have moved onto it. Asserted in both
+        // directions because "everything is a CdpBackend now" would satisfy the
+        // claim above on its own.
+        let managed = manager.get_backend("default").expect("default routes");
+        assert!(
+            managed
+                .as_ref()
+                .as_any()
+                .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
+                .is_none(),
+            "the Managed arm must still produce a PlaywrightCliBackend"
+        );
+        let existing = manager.get_backend("user").expect("user routes");
+        assert!(
+            existing
+                .as_ref()
+                .as_any()
+                .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
+                .is_none(),
+            "the ExistingSession arm must still produce a ChromeMcpBackend"
+        );
+    }
+
+    /// A `Cdp` profile must resolve a backend WITHOUT launching anything.
+    ///
+    /// `get_backend` is what the idle reaper calls, so a construction that
+    /// resolved the engine eagerly would make an observer create the browser it
+    /// is measuring. The claim is asserted by EFFECT on the registry: after
+    /// routing, it is still holding no engine for this profile.
+    #[test]
+    fn routing_a_cdp_profile_does_not_launch_its_engine() {
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "cdp".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                engine: Some(Engine::Chromium),
+                user_data_dir: Some("/nonexistent/aleph-routing-test".into()),
+                ..Default::default()
+            },
+        );
+        let manager = ProfileManager::new(config);
+        assert!(
+            !manager.engines().is_live("cdp"),
+            "precondition: nothing is running before the route"
+        );
+        let _backend = manager.get_backend("cdp").expect("routes");
+        assert!(
+            !manager.engines().is_live("cdp"),
+            "resolving a backend must not have started a browser"
+        );
+    }
+
     #[test]
     fn test_get_backend_routes_user_to_chrome_mcp() {
         let config = BrowserSystemConfig::default();
@@ -1387,16 +1513,34 @@ mod tests {
         assert!(backend.is_ok());
     }
 
+    /// Tracked for the drivers whose browser Aleph launched, never for the
+    /// user's own. Renamed from `..._managed_only` when the `Cdp` arm joined:
+    /// a test name is a claim, and that one had become false while staying
+    /// green (判据 §1).
     #[test]
-    fn test_touch_tab_tracks_managed_only() {
-        let config = BrowserSystemConfig::default();
+    fn test_touch_tab_tracks_the_drivers_aleph_launched() {
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "cdp".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                ..Default::default()
+            },
+        );
         let manager = ProfileManager::new(config);
 
-        // "default" is Managed → tracked.
+        // "default" is Managed -> tracked.
         manager.touch_tab("default", "1");
         assert!(manager.has_tracked_tabs("default"));
 
-        // "user" is ExistingSession (user's real Chrome) → never tracked.
+        // A Cdp profile is one Aleph launched too -> tracked.
+        manager.touch_tab("cdp", "T1");
+        assert!(
+            manager.has_tracked_tabs("cdp"),
+            "a cdp profile's tabs are Aleph's own and must be tracked"
+        );
+
+        // "user" is ExistingSession (user's real Chrome) -> never tracked.
         manager.touch_tab("user", "1");
         assert!(!manager.has_tracked_tabs("user"));
     }

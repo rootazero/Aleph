@@ -16,6 +16,22 @@ pub trait BrowserBackend: Send + Sync {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError>;
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError>;
     async fn list_tabs(&self) -> Result<Vec<TabLine>, BrowserError>;
+
+    /// The concrete backend behind this trait object.
+    ///
+    /// It exists for the routing tests. [`super::manager::ProfileManager::get_backend`]
+    /// returns `Arc<dyn BrowserBackend>`, so without a downcast "the right
+    /// driver was chosen" and "**some** driver was chosen" are the same
+    /// assertion — and a mis-routed arm produces exactly the second one, which
+    /// is what the `driver = "cdp"` arm did before it was wired.
+    ///
+    /// A **required** method rather than a defaulted one: a defaulted
+    /// `as_any` would hand back the default impl's own type and every downcast
+    /// against a forgetful backend would answer `None`, i.e. the routing test
+    /// would go red for a reason that has nothing to do with routing. Required,
+    /// a fifth backend cannot forget it.
+    fn as_any(&self) -> &dyn std::any::Any;
+
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError>;
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError>;
     async fn type_text(
