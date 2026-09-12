@@ -9,8 +9,9 @@
 //!    and the app never sees them), wheel + pointer handlers.
 //! 2. One `<svg>` with a single `<g transform=…>` — every vector shape,
 //!    rendered by [`super::shape_view::ShapeView`], keyed by shape id and
-//!    z-ordered by [`FracIndex`], plus the marquee rectangle and the
-//!    selection outline with its eight resize handles.
+//!    z-ordered by [`FracIndex`], plus the marquee rectangle, the
+//!    selection outline with its eight resize handles, and the Move snap
+//!    guides (`snap.rs`).
 //! 3. An HTML overlay `<div>` carrying the *same* transform
 //!    (`transform-origin: 0 0`) — hosts the text-editing overlay
 //!    (`text_edit.rs`, world-positioned because the layer already is);
@@ -75,6 +76,7 @@ use super::id_mint;
 use super::interaction::{self, Bbox, Handle, InteractionState};
 use super::ops::{self, SendQueue, UndoStack};
 use super::shape_view::{HtmlFrameOverlay, ShapeView};
+use super::snap::{Axis, Guide};
 use super::text_edit::{self, TextEditOverlay, TextEditState};
 use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
@@ -113,6 +115,9 @@ const HANDLE_PX: f64 = 8.0;
 /// Draw tool's decimation floor. Divided by zoom before it reaches the
 /// machine, like [`CLICK_SLOP_PX`].
 const DRAW_MIN_DIST_PX: f64 = 2.0;
+/// Move snap radius in *screen* pixels (tldraw's constant), divided by zoom
+/// like [`CLICK_SLOP_PX`]. Alt/Option held bypasses snapping.
+const SNAP_PX: f64 = 8.0;
 /// How long the selection may settle before it is pushed to the server.
 const SELECTION_DEBOUNCE_MS: u32 = 300;
 /// Arrow-key nudge distances, world units (shift = the larger one).
@@ -140,6 +145,12 @@ pub(super) fn shapes_by_id(shapes: &[Shape]) -> HashMap<String, Shape> {
         .iter()
         .map(|s| (s.id().to_string(), s.clone()))
         .collect()
+}
+
+/// The Move snap threshold for a pointer event, world units — `None` while
+/// Alt/Option is held (the bypass), else [`SNAP_PX`] ÷ zoom.
+fn snap_threshold(ev: &web_sys::MouseEvent, camera: Camera) -> Option<f64> {
+    (!ev.alt_key()).then(|| SNAP_PX / camera.zoom)
 }
 
 /// Element-local pointer position → world, via the event's current target
@@ -485,6 +496,8 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     let marquee_sig: RwSignal<Option<Bbox>> = RwSignal::new(None);
     // The shape an in-flight arrow endpoint would bind to (hover highlight).
     let arrow_hover_sig: RwSignal<Option<String>> = RwSignal::new(None);
+    // Alignment guides of the in-flight Move preview (`snap.rs`).
+    let guides_sig: RwSignal<Vec<Guide>> = RwSignal::new(Vec::new());
     let surface_ref: NodeRef<leptos::html::Div> = NodeRef::new();
     // The open text-edit session, if any (`text_edit.rs` owns its rules).
     // Scoped to the editor like the machine: it must not outlive the canvas.
@@ -566,8 +579,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
         }
     };
     // Mirror the machine's render-relevant gesture state into signals after
-    // every transition — one syncer for both, so a call site cannot refresh
-    // the marquee and leave a stale arrow highlight behind.
+    // every transition — one syncer for all three, so a call site cannot
+    // refresh the marquee and leave a stale arrow highlight or a stale
+    // guide behind.
     let sync_gesture = move || {
         marquee_sig.set(
             machine
@@ -578,6 +592,11 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             machine
                 .try_with_value(InteractionState::arrow_hover)
                 .flatten(),
+        );
+        guides_sig.set(
+            machine
+                .try_with_value(InteractionState::snap_guides)
+                .unwrap_or_default(),
         );
     };
 
@@ -977,6 +996,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             return;
         };
         let slop = CLICK_SLOP_PX / cam.zoom;
+        let snap = snap_threshold(&ev, cam);
         let pressure = interaction::effective_pressure(ev.pressure());
         let effects = canvas.doc.with_untracked(|d| {
             let Some(d) = d.as_ref() else {
@@ -987,7 +1007,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     // An active ink stroke consumes the move (with pressure);
                     // every other drag goes through the pressureless machine.
                     m.draw_move(world, pressure)
-                        .unwrap_or_else(|| m.pointer_move(world, &d.shapes, slop))
+                        .unwrap_or_else(|| m.pointer_move(world, &d.shapes, slop, snap))
                 })
                 .unwrap_or_default()
         });
@@ -1014,15 +1034,17 @@ pub(super) fn CanvasEditor() -> impl IntoView {
         {
             return;
         }
-        let Some(world) = world_of(&ev, camera.get_untracked()) else {
+        let cam = camera.get_untracked();
+        let Some(world) = world_of(&ev, cam) else {
             return;
         };
+        let snap = snap_threshold(&ev, cam);
         let effects = canvas.doc.with_untracked(|d| {
             let Some(d) = d.as_ref() else {
                 return Vec::new();
             };
             machine
-                .try_update_value(|m| m.pointer_up(world, &d.shapes))
+                .try_update_value(|m| m.pointer_up(world, &d.shapes, snap))
                 .unwrap_or_default()
         });
         run_effects(effects);
@@ -1222,6 +1244,23 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                             </g>
                         }
                     })}
+                    // Move snap guides — world coords, 1 px at any zoom
+                    // (non-scaling stroke), never a pointer target.
+                    {move || guides_sig.get().into_iter().map(|g| {
+                        let (x1, y1, x2, y2) = match g.axis {
+                            Axis::X => (g.at, g.from, g.at, g.to),
+                            Axis::Y => (g.from, g.at, g.to, g.at),
+                        };
+                        view! {
+                            <line
+                                x1=x1 y1=y1 x2=x2 y2=y2
+                                style="stroke: var(--color-primary);"
+                                stroke-width="1"
+                                vector-effect="non-scaling-stroke"
+                                pointer-events="none"
+                            />
+                        }
+                    }).collect_view()}
                     // Arrow-bind hover highlight: the shape the endpoint
                     // would bind to if released here.
                     {move || arrow_hover_sig.get().and_then(|id| {

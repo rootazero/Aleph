@@ -17,6 +17,18 @@
 //!   geometry — inverting against it would "restore" the moved position
 //!   (the reason this is not `ops::invert`'s job on drag commits).
 //!
+//! # Move snapping
+//!
+//! A Move drag snaps the selection's union bbox to the other shapes' corners
+//! and centers through `snap.rs` (8 screen px ÷ zoom, passed in by the
+//! editor as `snap: Some(threshold)`; `None` — Alt held — bypasses). The
+//! preview and the commit run the same derivation
+//! ([`snapped_translation`]), so what was shown is what lands on the wire;
+//! the live guides are exposed for the overlay by
+//! [`InteractionState::snap_guides`] and vanish with the drag. Creation
+//! drags, resizes, ink and arrows do not snap (spec §5 keeps v1 to
+//! translation).
+//!
 //! # Creation tools (Geo / Note / Text / Frame)
 //!
 //! A creation drag is its own entry point ([`InteractionState::begin_create`],
@@ -61,6 +73,7 @@ use aleph_protocol::canvas::{
 };
 
 use super::geo_path;
+use super::snap::{self, Guide};
 use crate::state::canvas::CanvasTool;
 
 /// A resize can never collapse a bbox below this many world units.
@@ -644,6 +657,10 @@ pub(super) enum Drag {
         /// Set once the pointer leaves the click slop; a click that never
         /// moves commits nothing.
         moved: bool,
+        /// The alignment guides of the latest preview — what the overlay
+        /// draws. Empty until the first snapping move and after a
+        /// non-snapping one.
+        guides: Vec<Guide>,
     },
     Resize {
         handle: Handle,
@@ -722,6 +739,7 @@ impl InteractionState {
                         start: world,
                         originals: shapes_for(shapes, selection),
                         moved: false,
+                        guides: Vec::new(),
                     };
                     Vec::new()
                 } else {
@@ -729,6 +747,7 @@ impl InteractionState {
                         start: world,
                         originals: vec![shape.clone()],
                         moved: false,
+                        guides: Vec::new(),
                     };
                     vec![Effect::SetSelection(vec![shape.id().to_string()])]
                 }
@@ -892,15 +911,28 @@ impl InteractionState {
         }
     }
 
+    /// The alignment guides of the current Move preview — for the editor's
+    /// overlay. Empty outside a Move drag or when nothing snapped.
+    #[must_use]
+    pub(super) fn snap_guides(&self) -> Vec<Guide> {
+        if let Drag::Move { guides, .. } = &self.drag {
+            guides.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Pointer moved. `slop` is the click tolerance in world units (the
     /// editor passes screen-pixels ÷ zoom): a Move drag stays a click until
-    /// the pointer leaves it.
+    /// the pointer leaves it. `snap` is the Move snap threshold in world
+    /// units, `None` to bypass snapping (Alt held); it only concerns Move.
     #[must_use]
     pub(super) fn pointer_move(
         &mut self,
         world: (f64, f64),
         shapes: &[Shape],
         slop: f64,
+        snap: Option<f64>,
     ) -> Vec<Effect> {
         match &mut self.drag {
             Drag::None => Vec::new(),
@@ -954,12 +986,15 @@ impl InteractionState {
                 start,
                 originals,
                 moved,
+                guides,
             } => {
-                let (dx, dy) = (world.0 - start.0, world.1 - start.1);
-                if !*moved && dx.abs() <= slop && dy.abs() <= slop {
+                let raw = (world.0 - start.0, world.1 - start.1);
+                if !*moved && raw.0.abs() <= slop && raw.1.abs() <= slop {
                     return Vec::new();
                 }
                 *moved = true;
+                let ((dx, dy), new_guides) = snapped_translation(originals, shapes, raw, snap);
+                *guides = new_guides;
                 vec![Effect::Preview(translate_shapes(originals, dx, dy))]
             }
             Drag::Marquee {
@@ -984,9 +1019,16 @@ impl InteractionState {
         }
     }
 
-    /// Pointer released: commit the drag (or finalize the marquee).
+    /// Pointer released: commit the drag (or finalize the marquee). `snap`
+    /// as in [`Self::pointer_move`] — the commit snaps by the same rule as
+    /// the preview, read from the release event's own modifier state.
     #[must_use]
-    pub(super) fn pointer_up(&mut self, world: (f64, f64), shapes: &[Shape]) -> Vec<Effect> {
+    pub(super) fn pointer_up(
+        &mut self,
+        world: (f64, f64),
+        shapes: &[Shape],
+        snap: Option<f64>,
+    ) -> Vec<Effect> {
         match std::mem::take(&mut self.drag) {
             Drag::None => Vec::new(),
             Drag::Drawing {
@@ -1069,11 +1111,13 @@ impl InteractionState {
                 start,
                 originals,
                 moved,
+                ..
             } => {
                 if !moved {
                     return Vec::new();
                 }
-                let (dx, dy) = (world.0 - start.0, world.1 - start.1);
+                let raw = (world.0 - start.0, world.1 - start.1);
+                let ((dx, dy), _) = snapped_translation(&originals, shapes, raw, snap);
                 commit_replacing(translate_shapes(&originals, dx, dy), originals)
             }
             Drag::Marquee { origin, base, .. } => {
@@ -1154,6 +1198,39 @@ fn commit_replacing(finals: Vec<Shape>, originals: Vec<Shape>) -> Vec<Effect> {
             .map(|shape| CanvasOp::UpsertShape { shape })
             .collect(),
     }]
+}
+
+/// The Move delta after snapping: the selection's union bbox at the raw
+/// delta, snapped against every shape *not* in the selection (matched by
+/// id, so the selection's own — already previewed — doc entries never
+/// count as neighbours; `snap.rs` documents why that matters). `None`
+/// bypasses: the raw delta, no guides. Frames are ordinary neighbours here,
+/// as they are for the move itself (no parent/child carry exists yet).
+#[must_use]
+fn snapped_translation(
+    originals: &[Shape],
+    shapes: &[Shape],
+    raw: (f64, f64),
+    snap: Option<f64>,
+) -> ((f64, f64), Vec<Guide>) {
+    let Some(threshold) = snap else {
+        return (raw, Vec::new());
+    };
+    let Some(moving) = originals.iter().map(Bbox::of_shape).reduce(Bbox::union) else {
+        return (raw, Vec::new());
+    };
+    let moving = Bbox {
+        x: moving.x + raw.0,
+        y: moving.y + raw.1,
+        ..moving
+    };
+    let others: Vec<Bbox> = shapes
+        .iter()
+        .filter(|s| !originals.iter().any(|o| o.id() == s.id()))
+        .map(Bbox::of_shape)
+        .collect();
+    let snapped = snap::snap_translate(moving, &others, threshold);
+    ((raw.0 + snapped.dx, raw.1 + snapped.dy), snapped.guides)
 }
 
 /// Marquee result: the shift base plus every shape whose bbox intersects the
@@ -1299,7 +1376,7 @@ mod tests {
         assert_eq!(ids(&effects), sel(&["a"]));
         assert!(m.is_dragging());
         // Released without moving: nothing commits.
-        assert!(m.pointer_up((10.0, 10.0), &shapes).is_empty());
+        assert!(m.pointer_up((10.0, 10.0), &shapes, None).is_empty());
         assert!(!m.is_dragging());
     }
 
@@ -1374,12 +1451,12 @@ mod tests {
         let _ = m.pointer_down((90.0, -10.0), None, &[], &shapes, CanvasTool::Select, false);
         // A sliver over "a" only (intersection, not containment: overlapping
         // a's right edge is enough).
-        let effects = m.pointer_move((95.0, 50.0), &shapes, 0.0);
+        let effects = m.pointer_move((95.0, 50.0), &shapes, 0.0, None);
         assert_eq!(ids(&effects), sel(&["a"]));
         // Extend right across "b" — both now intersect.
-        let effects = m.pointer_move((350.0, 50.0), &shapes, 0.0);
+        let effects = m.pointer_move((350.0, 50.0), &shapes, 0.0, None);
         assert_eq!(ids(&effects), sel(&["a", "b"]));
-        let effects = m.pointer_up((350.0, 50.0), &shapes);
+        let effects = m.pointer_up((350.0, 50.0), &shapes, None);
         assert_eq!(ids(&effects), sel(&["a", "b"]));
         assert!(m.marquee_rect().is_none(), "release clears the marquee");
     }
@@ -1400,7 +1477,7 @@ mod tests {
             true,
         );
         assert!(effects.is_empty(), "shift-marquee must not clear first");
-        let effects = m.pointer_move((350.0, 350.0), &shapes, 0.0);
+        let effects = m.pointer_move((350.0, 350.0), &shapes, 0.0, None);
         assert_eq!(ids(&effects), sel(&["kept", "swept"]));
     }
 
@@ -1418,14 +1495,14 @@ mod tests {
             CanvasTool::Select,
             false,
         );
-        let effects = m.pointer_move((50.0, 25.0), &shapes, 2.0);
+        let effects = m.pointer_move((50.0, 25.0), &shapes, 2.0, None);
         let Some(Effect::Preview(previewed)) = effects.first() else {
             panic!("expected a Preview, got {effects:?}");
         };
         assert_eq!(previewed[0].common().x, 40.0);
         assert_eq!(previewed[0].common().y, 15.0);
 
-        let effects = m.pointer_up((120.0, 220.0), &shapes);
+        let effects = m.pointer_up((120.0, 220.0), &shapes, None);
         let Some(Effect::Commit { redo, undo }) = effects.first() else {
             panic!("expected a Commit, got {effects:?}");
         };
@@ -1451,8 +1528,130 @@ mod tests {
             CanvasTool::Select,
             false,
         );
-        assert!(m.pointer_move((21.0, 19.0), &shapes, 3.0).is_empty());
-        assert!(m.pointer_up((21.0, 19.0), &shapes).is_empty());
+        assert!(m.pointer_move((21.0, 19.0), &shapes, 3.0, None).is_empty());
+        assert!(m.pointer_up((21.0, 19.0), &shapes, None).is_empty());
+    }
+
+    // ---- move snapping -----------------------------------------------------
+
+    /// Drag "a" (100×100 at the origin) so its left edge lands 3 short of
+    /// "anchor"'s left edge at x=300 and its top 3 short of y=300: both axes
+    /// snap in the preview *and* in the commit, and the guides live exactly
+    /// as long as the drag.
+    #[test]
+    fn a_move_snaps_its_preview_and_its_commit_and_clears_the_guides_on_release() {
+        let shapes = vec![
+            note_at("a", 0.0, 0.0, 100.0, 100.0, "U"),
+            note_at("anchor", 300.0, 300.0, 60.0, 60.0, "V"),
+        ];
+        let mut m = InteractionState::new();
+        let _ = m.pointer_down(
+            (10.0, 10.0),
+            Some(&shapes[0]),
+            &sel(&["a"]),
+            &shapes,
+            CanvasTool::Select,
+            false,
+        );
+        assert!(
+            m.snap_guides().is_empty(),
+            "no guides before the first move"
+        );
+        // Raw delta (297, 297) → box at (297, 297); left/top edges are 3
+        // from anchor's, inside the 8-unit threshold.
+        let effects = m.pointer_move((307.0, 307.0), &shapes, 0.0, Some(8.0));
+        let Some(Effect::Preview(previewed)) = effects.first() else {
+            panic!("expected a Preview, got {effects:?}");
+        };
+        assert_eq!(
+            (previewed[0].common().x, previewed[0].common().y),
+            (300.0, 300.0)
+        );
+        let guides = m.snap_guides();
+        assert_eq!(guides.len(), 2, "one guide per snapped axis");
+        assert_eq!((guides[0].axis, guides[0].at), (snap::Axis::X, 300.0));
+        assert_eq!((guides[1].axis, guides[1].at), (snap::Axis::Y, 300.0));
+
+        // The doc the editor hands to the release already holds the preview
+        // (the moved shape at 300,300): it must not count as its own
+        // neighbour, and the commit must carry the snapped position.
+        let mut previewed_doc = shapes.clone();
+        previewed_doc[0] = previewed[0].clone();
+        let effects = m.pointer_up((307.0, 307.0), &previewed_doc, Some(8.0));
+        let Some(Effect::Commit { redo, .. }) = effects.first() else {
+            panic!("expected a Commit, got {effects:?}");
+        };
+        let CanvasOp::UpsertShape { shape } = &redo[0] else {
+            panic!("move must commit upserts");
+        };
+        assert_eq!((shape.common().x, shape.common().y), (300.0, 300.0));
+        assert!(m.snap_guides().is_empty(), "release clears the guides");
+    }
+
+    #[test]
+    fn a_move_without_a_snap_threshold_lands_on_the_raw_delta_with_no_guides() {
+        let shapes = vec![
+            note_at("a", 0.0, 0.0, 100.0, 100.0, "U"),
+            note_at("anchor", 300.0, 300.0, 60.0, 60.0, "V"),
+        ];
+        let mut m = InteractionState::new();
+        let _ = m.pointer_down(
+            (10.0, 10.0),
+            Some(&shapes[0]),
+            &sel(&["a"]),
+            &shapes,
+            CanvasTool::Select,
+            false,
+        );
+        let effects = m.pointer_move((307.0, 307.0), &shapes, 0.0, None);
+        let Some(Effect::Preview(previewed)) = effects.first() else {
+            panic!("expected a Preview, got {effects:?}");
+        };
+        assert_eq!(
+            (previewed[0].common().x, previewed[0].common().y),
+            (297.0, 297.0)
+        );
+        assert!(m.snap_guides().is_empty());
+        let effects = m.pointer_up((307.0, 307.0), &shapes, None);
+        let Some(Effect::Commit { redo, .. }) = effects.first() else {
+            panic!("expected a Commit, got {effects:?}");
+        };
+        let CanvasOp::UpsertShape { shape } = &redo[0] else {
+            panic!("move must commit upserts");
+        };
+        assert_eq!((shape.common().x, shape.common().y), (297.0, 297.0));
+    }
+
+    /// A multi-shape selection snaps as one box: the union's edges are the
+    /// candidates, and every member moves by the same snapped delta.
+    #[test]
+    fn a_multi_selection_snaps_its_union_bbox_as_one() {
+        let shapes = vec![
+            note_at("a", 0.0, 0.0, 50.0, 50.0, "U"),
+            note_at("b", 100.0, 0.0, 50.0, 50.0, "V"), // union right edge = 150
+            note_at("anchor", 400.0, 300.0, 50.0, 50.0, "W"), // left edge = 400
+        ];
+        let mut m = InteractionState::new();
+        let _ = m.pointer_down(
+            (10.0, 10.0),
+            Some(&shapes[0]),
+            &sel(&["a", "b"]),
+            &shapes,
+            CanvasTool::Select,
+            false,
+        );
+        // Raw dx = 246 → union right at 396, 4 short of anchor's left; y far.
+        let effects = m.pointer_move((256.0, 10.0), &shapes, 0.0, Some(8.0));
+        let Some(Effect::Preview(previewed)) = effects.first() else {
+            panic!("expected a Preview, got {effects:?}");
+        };
+        assert_eq!(previewed[0].common().x, 250.0);
+        assert_eq!(previewed[1].common().x, 350.0);
+        let guides = m.snap_guides();
+        assert_eq!(guides.len(), 1);
+        assert_eq!((guides[0].axis, guides[0].at), (snap::Axis::X, 400.0));
+        // Neither selected shape snapped to the other: "a" at 250 is 100
+        // from "b" at 350, untouched by the union's own edges.
     }
 
     /// A `Path`'s hit box is its declared box widened by its command extent
@@ -1712,9 +1911,9 @@ mod tests {
         let shapes = vec![note_at("a", 0.0, 0.0, 100.0, 100.0, "U")];
         let mut m = InteractionState::new();
         let _ = m.begin_resize(Handle::Se, shapes.clone());
-        let effects = m.pointer_move((200.0, 50.0), &shapes, 0.0);
+        let effects = m.pointer_move((200.0, 50.0), &shapes, 0.0, None);
         assert!(matches!(effects.first(), Some(Effect::Preview(_))));
-        let effects = m.pointer_up((200.0, 50.0), &shapes);
+        let effects = m.pointer_up((200.0, 50.0), &shapes, None);
         let Some(Effect::Commit { redo, undo }) = effects.first() else {
             panic!("expected a Commit, got {effects:?}");
         };
@@ -1727,7 +1926,7 @@ mod tests {
         // A handle grabbed and released without any move event: no commit.
         let mut m = InteractionState::new();
         let _ = m.begin_resize(Handle::Se, shapes.clone());
-        assert!(m.pointer_up((100.0, 100.0), &shapes).is_empty());
+        assert!(m.pointer_up((100.0, 100.0), &shapes, None).is_empty());
     }
 
     // ---- cancel ------------------------------------------------------------
@@ -1744,7 +1943,7 @@ mod tests {
             CanvasTool::Select,
             false,
         );
-        let _ = m.pointer_move((500.0, 500.0), &shapes, 0.0);
+        let _ = m.pointer_move((500.0, 500.0), &shapes, 0.0, None);
         let effects = m.cancel();
         let Some(Effect::Preview(restored)) = effects.first() else {
             panic!("cancel must roll back via Preview, got {effects:?}");
@@ -1752,7 +1951,7 @@ mod tests {
         assert_eq!(restored[0].common().x, 10.0, "back to the snapshot");
         assert!(!m.is_dragging());
         // A canceled drag must not commit on a later (stray) pointer up.
-        assert!(m.pointer_up((500.0, 500.0), &shapes).is_empty());
+        assert!(m.pointer_up((500.0, 500.0), &shapes, None).is_empty());
 
         // Canceling a shift-marquee restores the pre-marquee selection.
         let _ = m.pointer_down(
@@ -1877,7 +2076,7 @@ mod tests {
         assert!(m.is_dragging());
 
         // Drag up-left: origin becomes the bottom-right corner.
-        let effects = m.pointer_move((20.0, 40.0), &shapes, 2.0);
+        let effects = m.pointer_move((20.0, 40.0), &shapes, 2.0, None);
         let Some(Effect::Preview(previewed)) = effects.first() else {
             panic!("expected a Preview, got {effects:?}");
         };
@@ -1892,7 +2091,7 @@ mod tests {
             "the created shape must stack above the document top"
         );
 
-        let effects = m.pointer_up((20.0, 40.0), &shapes);
+        let effects = m.pointer_up((20.0, 40.0), &shapes, None);
         assert_eq!(ids(&effects), sel(&["fresh"]), "the new shape is selected");
         let Some(Effect::Commit { redo, undo }) =
             effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
@@ -1961,19 +2160,19 @@ mod tests {
             &[],
             style.clone(),
         );
-        let preview = m.pointer_move((50.0, 50.0), &[], 2.0);
-        let commit = m.pointer_up((50.0, 50.0), &[]);
+        let preview = m.pointer_move((50.0, 50.0), &[], 2.0, None);
+        let commit = m.pointer_up((50.0, 50.0), &[], None);
         assert_eq!(style_of(&preview), vec![style.clone()], "geo preview");
         assert_eq!(style_of(&commit), vec![style.clone()], "geo commit");
 
         let preview = m.begin_draw((0.0, 0.0), 0.5, "k".to_string(), &[], 1.0, style.clone());
-        let commit = m.pointer_up((30.0, 30.0), &[]);
+        let commit = m.pointer_up((30.0, 30.0), &[], None);
         assert_eq!(style_of(&preview), vec![style.clone()], "ink press preview");
         assert_eq!(style_of(&commit), vec![style.clone()], "ink commit");
 
         let _ = m.begin_arrow((0.0, 0.0), None, "a".to_string(), &[], style.clone());
-        let preview = m.pointer_move((40.0, 0.0), &[], 2.0);
-        let commit = m.pointer_up((40.0, 0.0), &[]);
+        let preview = m.pointer_move((40.0, 0.0), &[], 2.0, None);
+        let commit = m.pointer_up((40.0, 0.0), &[], None);
         assert_eq!(style_of(&preview), vec![style.clone()], "arrow preview");
         assert_eq!(style_of(&commit), vec![style], "arrow commit");
     }
@@ -1989,8 +2188,8 @@ mod tests {
             ShapeStyle::default(),
         );
         // Jitter inside the slop, then release: still a click.
-        assert!(m.pointer_move((51.0, 59.0), &[], 3.0).is_empty());
-        let effects = m.pointer_up((51.0, 59.0), &[]);
+        assert!(m.pointer_move((51.0, 59.0), &[], 3.0, None).is_empty());
+        let effects = m.pointer_up((51.0, 59.0), &[], None);
         let Some(Effect::Commit { redo, .. }) =
             effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
         else {
@@ -2017,7 +2216,7 @@ mod tests {
             &[],
             ShapeStyle::default(),
         );
-        let effects = m.pointer_up((10.0, 10.0), &[]);
+        let effects = m.pointer_up((10.0, 10.0), &[], None);
         assert!(
             !effects.iter().any(|e| matches!(e, Effect::Commit { .. })),
             "a fresh text shape must not commit before its text exists"
@@ -2047,7 +2246,7 @@ mod tests {
             &[],
             ShapeStyle::default(),
         );
-        let _ = m.pointer_move((300.0, 200.0), &[], 0.0);
+        let _ = m.pointer_move((300.0, 200.0), &[], 0.0, None);
         let effects = m.cancel();
         assert_eq!(
             effects,
@@ -2056,7 +2255,7 @@ mod tests {
         );
         assert!(!m.is_dragging());
         // A canceled creation must not commit on a stray pointer up…
-        assert!(m.pointer_up((300.0, 200.0), &[]).is_empty());
+        assert!(m.pointer_up((300.0, 200.0), &[], None).is_empty());
 
         // …and canceling before any movement has nothing to discard.
         let mut m = InteractionState::new();
@@ -2123,7 +2322,7 @@ mod tests {
 
         // Release commits with delete as undo, and no selection change —
         // the tool stays armed for the next stroke.
-        let effects = m.pointer_up((50.0, 60.0), &[]);
+        let effects = m.pointer_up((50.0, 60.0), &[], None);
         assert!(
             !effects.iter().any(|e| matches!(e, Effect::SetSelection(_))),
             "a finished stroke must not grab the selection"
@@ -2190,7 +2389,7 @@ mod tests {
         assert_eq!(ids(&effects), Vec::<String>::new());
 
         // Over empty canvas: preview, no hover target.
-        let effects = m.pointer_move((200.0, 50.0), &shapes, 2.0);
+        let effects = m.pointer_move((200.0, 50.0), &shapes, 2.0, None);
         let Some(Effect::Preview(previewed)) = effects.first() else {
             panic!("expected a Preview, got {effects:?}");
         };
@@ -2210,10 +2409,10 @@ mod tests {
         // its own bind target.
         let mut with_draft = shapes.clone();
         with_draft.push(previewed[0].clone());
-        let _ = m.pointer_move((350.0, 50.0), &with_draft, 2.0);
+        let _ = m.pointer_move((350.0, 50.0), &with_draft, 2.0, None);
         assert_eq!(m.arrow_hover(), Some("b".to_string()));
 
-        let effects = m.pointer_up((350.0, 50.0), &with_draft);
+        let effects = m.pointer_up((350.0, 50.0), &with_draft, None);
         assert_eq!(ids(&effects), sel(&["ar1"]), "the new arrow is selected");
         let Some(Effect::Commit { redo, undo }) =
             effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
@@ -2253,7 +2452,7 @@ mod tests {
             ShapeStyle::default(),
         );
         assert!(
-            m.pointer_up((10.0, 10.0), &[]).is_empty(),
+            m.pointer_up((10.0, 10.0), &[], None).is_empty(),
             "an arrow needs a drag — a click creates nothing"
         );
 
@@ -2264,7 +2463,7 @@ mod tests {
             &[],
             ShapeStyle::default(),
         );
-        let _ = m.pointer_move((200.0, 200.0), &[], 2.0);
+        let _ = m.pointer_move((200.0, 200.0), &[], 2.0, None);
         assert_eq!(
             m.cancel(),
             vec![Effect::DiscardPreview(vec!["ar2".to_string()])]
@@ -2292,8 +2491,8 @@ mod tests {
             ShapeStyle::default(),
         );
         // A perfectly horizontal drag: height would be zero.
-        let _ = m.pointer_move((50.0, 0.0), &[], 2.0);
-        let effects = m.pointer_up((50.0, 0.0), &[]);
+        let _ = m.pointer_move((50.0, 0.0), &[], 2.0, None);
+        let effects = m.pointer_up((50.0, 0.0), &[], None);
         let Some(Effect::Commit { redo, .. }) =
             effects.iter().find(|e| matches!(e, Effect::Commit { .. }))
         else {

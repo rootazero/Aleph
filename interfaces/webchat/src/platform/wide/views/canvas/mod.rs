@@ -50,6 +50,7 @@ mod reconcile;
 mod reveal;
 mod shape_view;
 mod sketch;
+mod snap;
 mod text_edit;
 mod toolbar;
 mod viewport;
