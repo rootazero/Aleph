@@ -296,9 +296,26 @@ async def second_open(tab_id):
     ok, res = await invoke(None, "browser_open", {"url": args.page_url, "profile": "default"})
     second = (res or {}).get("tab_id")
     check("a second browser_open succeeds", ok and res.get("success"), json.dumps(res)[:200])
+    # Split per driver, NOT weakened to a shared `!= "last"`.
+    #
+    # Adding the cdp arm by loosening this to "anything but the sentinel" was a
+    # coverage REGRESSION on the managed driver, and the comment 130 lines above
+    # — written for the FIRST tab-id claim, in this same file — argues against
+    # exactly that: "A shared `!= \"last\"` would pass for a driver returning any
+    # garbage at all, which is why each side names its shape." The label still
+    # said "parsed", so the claim had quietly stopped checking the thing it was
+    # named after. A new case must not cost an old one its assertion.
+    if CLI_DRIVER:
+        ok_second = second is not None and str(second).isdigit()
+        shape = "a parsed integer id"
+    else:
+        ok_second = (
+            second is not None and re.fullmatch(r"[0-9A-Fa-f]{8,}", str(second)) is not None
+        )
+        shape = "a CDP target id"
     check(
-        "the second tab gets a distinct parsed id",
-        second is not None and str(second) != "last" and second != tab_id,
+        f"the second tab gets a distinct {shape}",
+        ok_second and second != tab_id,
         f"first={tab_id!r} second={second!r}",
     )
     # A second open must NOT have relaunched the browser: `playwright-cli open`
