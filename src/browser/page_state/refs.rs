@@ -75,6 +75,15 @@ pub struct RefEntry {
 pub struct RefTable {
     /// The main frame's loader id — which document these refs belong to.
     document: Option<String>,
+    /// The main frame's **id**, recorded so a ref can be told apart from a ref
+    /// in some OTHER frame of the same page.
+    ///
+    /// Separate from [`Self::document`] because the two change on different
+    /// events: a navigation gives the main frame a new LOADER and keeps its
+    /// frame id, which is why `reset_for_document` does not take this and
+    /// `PageState::build` sets it instead — build has `frames[0]` in hand,
+    /// which is the main frame by definition.
+    main_frame_id: Option<String>,
     /// Next number to hand out. **Monotonic for the life of the tab**, across
     /// navigations: that is what makes "never reissued" true.
     next: u64,
@@ -90,6 +99,7 @@ impl RefTable {
     pub fn new() -> Self {
         Self {
             document: None,
+            main_frame_id: None,
             next: 1,
             retired_below: 1,
             by_key: HashMap::new(),
@@ -156,6 +166,27 @@ impl RefTable {
     #[must_use]
     pub fn document(&self) -> Option<&str> {
         self.document.as_deref()
+    }
+
+    /// Record which frame is the main one. Called by `PageState::build` on
+    /// every capture, from `raw.frames[0]`.
+    pub fn set_main_frame(&mut self, frame_id: &str) {
+        if self.main_frame_id.as_deref() != Some(frame_id) {
+            self.main_frame_id = Some(frame_id.to_string());
+        }
+    }
+
+    /// The main frame's id, or `None` before any capture has happened.
+    ///
+    /// A ref whose [`RefKey::frame_id`] differs from this is a ref in another
+    /// document of the same page — an `<iframe>`. For a same-renderer page that
+    /// is only bookkeeping; for an out-of-process frame the id lives in a
+    /// DIFFERENT node space, where resolving it against this page's session is
+    /// meaningless (判据: an id outside its space carries an implicit namespace,
+    /// which is no namespace at all).
+    #[must_use]
+    pub fn main_frame_id(&self) -> Option<&str> {
+        self.main_frame_id.as_deref()
     }
 
     #[must_use]

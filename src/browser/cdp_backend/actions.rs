@@ -222,18 +222,63 @@ async fn resolve_target(
                      and use the ref printed beside the element you want."
                 )));
             }
-            let resolved = {
+            let (resolved, main_frame) = {
                 let tabs = handle.tabs.lock().await;
                 let tab = tabs
                     .entries
                     .get(tab_id)
                     .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))?;
-                tab.refs.resolve(&RefId(ref_id.clone()))
+                (
+                    tab.refs.resolve(&RefId(ref_id.clone())),
+                    tab.refs.main_frame_id().map(str::to_string),
+                )
             };
             let entry = resolved.map_err(|reason| BrowserError::StaleRef {
                 ref_id: ref_id.clone(),
                 reason,
             })?;
+
+            // **A ref in another frame is refused, and this is the whole of the
+            // fix for it.**
+            //
+            // `backendNodeId` is scoped to ONE capture of ONE renderer. For an
+            // out-of-process frame the child's ids live in the child's space,
+            // and `DOM.resolveNode` against THIS page's session does not fail —
+            // measured on Chrome 152, it answers with a **different node** and
+            // `DOM.getBoxModel` then succeeds on it and produces a plausible
+            // box. The only reason a click did not land somewhere else and
+            // report success is that the colliding node happened to be a `Text`
+            // and the occlusion probe calls `getBoundingClientRect`, which
+            // `Text` does not have. That is not a node-space check; it cannot
+            // tell "the right element" from "some other element".
+            //
+            // So this refuses instead. It gives up nothing that works: acting on
+            // such a ref is exactly the operation that silently mis-resolves
+            // today. READING is untouched — the snapshot still stitches the
+            // frame's content in, and the model can still see it.
+            //
+            // Acting in the frame's own session is a real capability and a real
+            // cost (four consumers need the session; `Target.attachToTarget` is
+            // NOT idempotent, so it needs a per-frame session lifetime; and a
+            // grandchild can only be placed by its immediate parent, so it is a
+            // chain walk). It is its own task. Until then the model is told
+            // where the capability does live, which is the point of having two
+            // drivers at all.
+            if main_frame
+                .as_deref()
+                .is_some_and(|m| m != entry.key.frame_id)
+            {
+                return Err(BrowserError::ActionFailed(format!(
+                    "ref {ref_id} is inside an <iframe> from a different site, \
+                     which this browser runs in a separate process. The cdp \
+                     driver can READ that frame — the snapshot you just saw \
+                     includes it — but cannot act inside it, so this action is \
+                     refused rather than risk acting on the wrong element. A \
+                     profile with driver = \"managed\" does act inside such \
+                     frames; use one for this element, or act on something in \
+                     the main document."
+                )));
+            }
             let object_id = dom::resolve_node(
                 &handle.conn,
                 Some(session),
@@ -1092,6 +1137,123 @@ mod tests {
                 .iter()
                 .any(|m| m.starts_with("DOM.") || m.starts_with("Input.")),
             "a stale ref must not reach the page: {sent:?}"
+        );
+    }
+
+    /// Seed a tab holding TWO refs: one in the main frame, one in another
+    /// frame of the same page. Hands back `(main_ref, frame_ref)`.
+    ///
+    /// Both minted against the same document, so the difference between them is
+    /// the FRAME and nothing else — otherwise a refusal could be explained by
+    /// staleness and this would be testing the wrong predicate.
+    async fn seed_main_and_frame_refs(
+        handle: &crate::browser::engine::EngineHandle,
+        tab: &str,
+    ) -> (String, String) {
+        handle
+            .attach_tab(&aleph_cdp::TargetId(tab.to_string()))
+            .await
+            .expect("attach ok");
+        let mut tabs = handle.tabs.lock().await;
+        let entry = tabs.entries.get_mut(tab).expect("tab entry");
+        entry.refs.reset_for_document("L1");
+        entry.refs.set_main_frame("F-main");
+        let main = entry
+            .refs
+            .mint(
+                &RefKey {
+                    frame_id: "F-main".into(),
+                    loader_id: "L1".into(),
+                    backend_node_id: 42,
+                },
+                1,
+            )
+            .0;
+        let child = entry
+            .refs
+            .mint(
+                &RefKey {
+                    frame_id: "F-child".into(),
+                    loader_id: "L1".into(),
+                    // The SAME backend node id as the main-frame ref above —
+                    // which is the whole defect in one line: two spaces, one
+                    // integer, and nothing downstream can tell them apart.
+                    backend_node_id: 42,
+                },
+                1,
+            )
+            .0;
+        (main, child)
+    }
+
+    /// A ref inside another frame is REFUSED, and the refusal names a door that
+    /// opens.
+    ///
+    /// `backendNodeId` is scoped to one capture of one renderer. Measured on
+    /// Chrome 152: resolving a child's id against the page session does not
+    /// fail — it answers a DIFFERENT node and `getBoxModel` succeeds on it. The
+    /// only thing that stopped a click was the occlusion probe calling an
+    /// `Element` method on a `Text`, which is luck, not a check.
+    ///
+    /// Asserted at the VERB and on the SENTENCE, for the reason the selector
+    /// case taught: a test on the predicate stays green when the call site goes,
+    /// and a test on "it failed" stays green when the message is downgraded to
+    /// "not supported yet" — which is the label that tells the model nothing
+    /// (判据 §14: a gate must name a door; §17: a wrong label is worse than none).
+    #[tokio::test]
+    async fn a_ref_in_another_frame_is_refused_and_names_the_driver_that_can() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let (main_ref, frame_ref) = seed_main_and_frame_refs(&handle, "T1").await;
+
+        let err = backend
+            .click(
+                "T1",
+                ActionTarget::Ref {
+                    ref_id: frame_ref.clone(),
+                },
+            )
+            .await
+            .expect_err("a ref in another frame cannot be acted on by this driver");
+        let text = err.to_string();
+        assert!(
+            text.contains("different site") && text.contains("separate process"),
+            "the refusal must name the CAUSE: {text}"
+        );
+        assert!(
+            text.contains("can READ that frame"),
+            "…and say that reading still works, or the model will stop looking \
+             at the frame at all: {text}"
+        );
+        assert!(
+            text.contains("driver = \"managed\""),
+            "…and name the door that OPENS. A refusal with no exit is fail-dead, \
+             and `playwright_cli` really does act inside these frames (11/11 on \
+             the same real fixture): {text}"
+        );
+        assert!(
+            !text.contains("not supported"),
+            "must not degrade into a label that tells the model nothing: {text}"
+        );
+        // Nothing was spent on the page discovering it.
+        assert!(
+            !methods(&server).iter().any(|m| m.starts_with("Input.")),
+            "the refusal is ahead of the wire: {:?}",
+            methods(&server)
+        );
+
+        // THE OTHER DIRECTION — this must not be "refuse every ref". The
+        // main-frame ref carries the SAME backendNodeId and is served: it gets
+        // past the frame gate and fails later, on the fake's own wire.
+        let main_err = backend
+            .click("T1", ActionTarget::Ref { ref_id: main_ref })
+            .await
+            .expect_err("the fake server resolves no real node");
+        assert!(
+            !main_err.to_string().contains("different site"),
+            "a ref in the MAIN frame must not hit the frame gate: {main_err}"
         );
     }
 

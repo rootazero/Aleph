@@ -27,6 +27,11 @@ impl PageState {
     ) -> PageState {
         if let Some(main) = raw.frames.first() {
             refs.reset_for_document(&main.loader_id);
+            // `frames[0]` IS the main frame (`RawDom::frames`' own doc), so the
+            // two halves of "which document are these refs against" are set
+            // from one place. The driver needs the frame id to tell a ref in
+            // this document from a ref in an `<iframe>`.
+            refs.set_main_frame(&main.frame_id);
         }
 
         let mut nodes: Vec<StateNode> = Vec::new();
@@ -400,6 +405,25 @@ fn states_of(node: &RawNode, role: Role, live: bool) -> NodeStates {
 
 #[cfg(test)]
 mod tests {
+    /// The refusal in `cdp_backend::actions::resolve_target` compares a ref's
+    /// frame against `RefTable::main_frame_id`, and reads `None` as "no capture
+    /// has happened, so there is nothing to compare". That is only safe if the
+    /// production path always records it — so this pins that `build` does,
+    /// rather than leaving the guard resting on an unstated invariant.
+    #[test]
+    fn build_always_records_which_frame_is_the_main_one() {
+        let raw = fixture();
+        let mut refs = RefTable::new();
+        assert_eq!(refs.main_frame_id(), None, "precondition: not set yet");
+        let _ = build_once(&mut refs);
+        assert_eq!(
+            refs.main_frame_id(),
+            Some(raw.frames[0].frame_id.as_str()),
+            "build must record frames[0] — the main frame by definition — or \
+             every cross-frame ref silently passes the gate that reads this"
+        );
+    }
+
     use super::super::{render_text, to_json, RefTable, StaleReason};
     use super::*;
     use std::time::Duration;

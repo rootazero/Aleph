@@ -614,19 +614,51 @@ async def scenario_frames(rpc, led, args):
                      f"ref={cref!r}"):
         return
     ok, res = await p.call("browser_click", ref_id=cref)
-    led.check("clicking a ref inside the frame returns success", ok and res.get("success"),
-              json.dumps(res)[:200])
-    # "returned success" is not the claim; "the child's handler ran" is. The
-    # parent cannot read into the frame (that is the control above), and
-    # `browser_evaluate` runs in the parent — so the only oracle for the child's
-    # state is the snapshot itself, which is the capability under test reading
-    # back its own effect.
-    ok, snap2, _ = await p.snapshot()
-    led.check(
-        "…and the child frame's own click handler really ran",
-        ok and "child:yes" in snap2,
-        f"child state line: {[l for l in snap2.splitlines() if 'child:' in l][:2]}",
-    )
+    blob = json.dumps(res)
+    if args.driver == "playwright_cli":
+        led.check("clicking a ref inside the frame returns success", ok and res.get("success"),
+                  blob[:200])
+        # "returned success" is not the claim; "the child's handler ran" is. The
+        # parent cannot read into the frame (that is the control above), and
+        # `browser_evaluate` runs in the parent — so the only oracle for the
+        # child's state is the snapshot itself, which is the capability under
+        # test reading back its own effect.
+        ok, snap2, _ = await p.snapshot()
+        led.check(
+            "…and the child frame's own click handler really ran",
+            ok and "child:yes" in snap2,
+            f"child state line: {[l for l in snap2.splitlines() if 'child:' in l][:2]}",
+        )
+    else:
+        # The CDP driver READS this frame (every claim above passed) and does not
+        # ACT in it: a child's `backendNodeId` belongs to the child renderer's
+        # node space, and resolving it against the page session does not fail —
+        # measured on Chrome 152, it answers a DIFFERENT node and the geometry
+        # call then succeeds on that one. So the driver refuses rather than risk
+        # clicking somewhere else and reporting success.
+        #
+        # This asserts the REFUSAL, not a red claim. A permanently failing claim
+        # gets learned and ignored, which blunts the by-name discipline the whole
+        # fixture runs on; and asserting merely "it failed" would stay green if
+        # the sentence were downgraded to "not supported yet" — the label that
+        # tells the model nothing (判据 §14, §17).
+        led.check(
+            "acting inside the frame is refused, not attempted",
+            not (ok and res.get("success")),
+            blob[:200],
+        )
+        led.check(
+            "…and the refusal names the cause (a separate process), says reading still works, "
+            "and names the driver that CAN act there",
+            "separate process" in blob
+            and "can READ that frame" in blob
+            and 'driver = \\"managed\\"' in blob,
+            blob[:400],
+        )
+        # The capability gap is real and priced, so it is named as a gap rather
+        # than left implicit: `playwright_cli` passes the two claims above's
+        # managed twin on this identical fixture.
+        led.log("  (gap: acting inside an out-of-process frame — cdp refuses, managed does it)")
 
 
 # --------------------------------------------------------------------------
