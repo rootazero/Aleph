@@ -3174,6 +3174,75 @@ mod tests {
         );
     }
 
+    /// **A second child's owner is looked for in the PARENT's frames only.**
+    ///
+    /// By the time the second child is placed, the frame list also holds the
+    /// FIRST child's nodes — a different renderer, a different `backendNodeId`
+    /// space. Searching all of it meant an owner id that is absent from the
+    /// parent could still "match" a node belonging to child one, and the
+    /// second document would be placed at that node's coordinates: a refusal
+    /// turned into a silent wrong placement, with every coordinate in the
+    /// subtree plausible and wrong.
+    ///
+    /// The id is chosen by measurement, not by hope: `6` is in the Task 0
+    /// child capture and **not** in the parent capture (the two share 15 ids;
+    /// `1` and `6` are the child's alone). So a correct lookup refuses it and
+    /// only a cross-space one finds it.
+    #[test]
+    fn a_second_childs_owner_is_never_matched_against_the_first_childs_nodes() {
+        // Measured, and asserted here so the premise cannot rot silently.
+        let parent = json(OOPIF_PARENT);
+        const ABSENT_FROM_PARENT: u64 = 6;
+        assert!(
+            wire_node_with_backend_id(&parent, 0, ABSENT_FROM_PARENT).is_none(),
+            "precondition: the parent must NOT contain this id, or the lookup              would succeed for the right reason and this test would prove nothing"
+        );
+        let first = json(OOPIF_CHILD);
+        assert!(
+            wire_node_with_backend_id(&first, 0, ABSENT_FROM_PARENT).is_some(),
+            "precondition: the FIRST child must contain it, or there is no              cross-space match for a broken lookup to find"
+        );
+
+        // A second child, distinguishable only by its frame id.
+        let mut second = json(OOPIF_CHILD);
+        let idx = second["strings"].as_array().expect("strings[]").len();
+        second["strings"]
+            .as_array_mut()
+            .expect("strings[]")
+            .push(serde_json::json!("F-SECOND"));
+        second["documents"][0]["frameId"] = serde_json::json!(idx);
+
+        let mut l = loaders_of(&parent);
+        l.extend(loaders_of(&first));
+        l.extend(loaders_of(&second));
+
+        let err = stitch_snapshots(
+            &parent,
+            &[
+                // The parent's real iframe, so the completeness gate is satisfied.
+                ChildCapture {
+                    owner_backend_node_id: 65,
+                    raw: &first,
+                },
+                // An owner the parent does not have. Correct behaviour is to
+                // refuse; the cross-space bug placed it at a node of `first`.
+                ChildCapture {
+                    owner_backend_node_id: ABSENT_FROM_PARENT,
+                    raw: &second,
+                },
+            ],
+            viewport(),
+            &l,
+        )
+        .expect_err(
+            "an owner id that is in no PARENT element must be refused, not              resolved against another child's node space",
+        );
+        assert!(
+            err.to_string().contains(&ABSENT_FROM_PARENT.to_string()),
+            "the refusal names the id it could not place: {err}"
+        );
+    }
+
     /// A frame element whose `backendNodeId` cannot be read is REFUSED, never
     /// carried as `NotCaptured(0)`.
     ///
