@@ -433,9 +433,10 @@ pub struct LastRunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
 
-    /// Consecutive `RunStarted` events after the last `RunFinished` — the
-    /// crash-loop attempt counter. `> 1` means the run has already been
-    /// resumed and crashed again.
+    /// Resume attempts stamped since the last `RunFinished` — the crash-loop
+    /// counter (the server's `ResumeAttempted` stamps, written before each
+    /// retrigger). The key keeps its historical spelling; no client renders
+    /// it (only fixtures construct it).
     #[serde(default)]
     pub trailing_starts: u32,
 

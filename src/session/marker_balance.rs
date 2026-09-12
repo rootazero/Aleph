@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(closed, None, "a live run's marker must not be closed");
         assert_eq!(
             disposition(&store, &sid).await,
-            RunDisposition::Interrupted { trailing_starts: 1 },
+            RunDisposition::Interrupted { attempts: 0 },
             "and nothing was appended"
         );
     }
@@ -177,7 +177,7 @@ mod tests {
         store.retire_from(&sid, 2).await.expect("retire");
         assert_eq!(
             disposition(&store, &sid).await,
-            RunDisposition::Interrupted { trailing_starts: 1 },
+            RunDisposition::Interrupted { attempts: 0 },
             "precondition: the retire alone leaves the run reading as open"
         );
 

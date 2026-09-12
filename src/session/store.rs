@@ -160,7 +160,8 @@ pub trait SessionEventStore: Send + Sync + 'static {
     }
 
     /// Cross-session scan for resume detection. Returns, per session, that
-    /// session's `RunStarted` / `RunFinished` events in `seq` order.
+    /// session's run-marker events — the `MARKER_EVENT_TYPES` set, which is
+    /// pinned equal to the reducer's `is_marker` — in `seq` order.
     /// Sessions with no run markers are omitted. Served by the existing
     /// `(session_id, event_type)` index.
     async fn load_run_markers(
@@ -682,14 +683,24 @@ impl SessionEventStore for SqliteEventStore {
         &self,
     ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
         let conn = self.conn.lock().await;
+        // The IN-list is rendered from `MARKER_EVENT_TYPES`, never spelled
+        // inline: the tags are `event_type_tag` literals this module owns (no
+        // user input reaches this string), and the constant is what the
+        // equality census against `reduction::is_marker` reads.
+        let in_list = MARKER_EVENT_TYPES
+            .iter()
+            .map(|t| format!("'{t}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT session_id, seq, payload_json, created_at
+             FROM session_events
+             WHERE event_type IN ({in_list})
+               AND retired_at IS NULL
+             ORDER BY session_id, seq ASC"
+        );
         let mut stmt = conn
-            .prepare(
-                "SELECT session_id, seq, payload_json, created_at
-                 FROM session_events
-                 WHERE event_type IN ('run_started', 'run_finished')
-                   AND retired_at IS NULL
-                 ORDER BY session_id, seq ASC",
-            )
+            .prepare(&sql)
             .map_err(|e| SessionError::Storage(e.to_string()))?;
 
         let rows = stmt
@@ -819,6 +830,12 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::CompactionPerformed { .. } => None,
     }
 }
+
+/// The `event_type_tag` of every variant `reduction::is_marker` accepts —
+/// the one list `load_run_markers` selects by. Pinned equal by test
+/// (`tests::marker_event_types_are_exactly_the_reducers_marker_set`).
+pub(crate) const MARKER_EVENT_TYPES: [&str; 3] =
+    ["run_started", "run_finished", "resume_attempted"];
 
 /// Static discriminant string for the `event_type` column.
 ///
@@ -1319,6 +1336,75 @@ mod tests {
             .unwrap();
         let markers = store.load_run_markers().await.unwrap();
         assert_eq!(markers.len(), 2);
+    }
+
+    /// §5.1: the intent stamp is a marker — the resume ratchet is counted off
+    /// the same query the boot scan classifies from, so a stamp the query did
+    /// not return would be a stamp that never capped anything.
+    #[tokio::test]
+    async fn load_run_markers_returns_resume_attempted_as_a_marker() {
+        let store = make_store();
+        let sid = SessionKey::main("m");
+        let at = 1_700_000_000_000;
+        store
+            .append(&sid, 1, &run_started("r1", at), at)
+            .await
+            .unwrap();
+        store
+            .append(
+                &sid,
+                2,
+                &SessionEvent::ResumeAttempted {
+                    target: 1,
+                    attempt: 1,
+                },
+                at + 1,
+            )
+            .await
+            .unwrap();
+        store
+            .append(
+                &sid,
+                3,
+                &SessionEvent::SystemMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: "x".into(),
+                    at,
+                },
+                at + 2,
+            )
+            .await
+            .unwrap();
+        let groups = store.load_run_markers().await.unwrap();
+        let seqs: Vec<u64> = groups[0].1.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![1, 2]);
+        assert!(matches!(
+            groups[0].1[1].event,
+            SessionEvent::ResumeAttempted {
+                target: 1,
+                attempt: 1
+            }
+        ));
+    }
+
+    /// The SQL IN-list and the reducer's `is_marker` are two spellings of one set.
+    #[test]
+    fn marker_event_types_are_exactly_the_reducers_marker_set() {
+        // ONE sampler for the whole enum: T1's `events::fixtures::sample_of_every_kind()`,
+        // whose completeness is pinned against the enum source there. A second
+        // sampler here would be the same list twice (criterion #1).
+        let all: Vec<SessionEvent> = crate::session::events::fixtures::sample_of_every_kind()
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let derived: std::collections::BTreeSet<&str> = all
+            .iter()
+            .filter(|e| crate::session::reduction::is_marker(e))
+            .map(|e| event_type_tag(e))
+            .collect();
+        let declared: std::collections::BTreeSet<&str> =
+            MARKER_EVENT_TYPES.iter().copied().collect();
+        assert_eq!(derived, declared);
     }
 
     // -----------------------------------------------------------------------

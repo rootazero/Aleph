@@ -694,42 +694,48 @@ async fn disabled_config_never_triggers_execute() {
     );
 }
 
+/// Seed the state the coordinator itself produces after `n` resumes that each
+/// crashed before the resumed run's `RunStarted`: one open run, then `n`
+/// `ResumeAttempted` stamps naming it. This is the shape production writes;
+/// three bare `RunStarted` (the old fixture) is one it never does, and under
+/// the intent-side ratchet that shape reads `attempts: 0` and would retrigger.
+async fn seed_crash_looped_run(store: &Arc<dyn SessionEventStore>, sid: &SessionKey, n: u32) {
+    let at = now_ms();
+    store
+        .append(
+            sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r1".into(),
+                at,
+                project_root: None,
+                envelope: None,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    for attempt in 1..=n {
+        store
+            .append(
+                sid,
+                1 + u64::from(attempt),
+                &SessionEvent::ResumeAttempted { target: 1, attempt },
+                at + i64::from(attempt),
+            )
+            .await
+            .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn crash_loop_cap_abandons_instead_of_retriggering() {
     let store = store();
     // Unique agent/session key: the goal store is process-global in this
     // test binary, so each abandon-path test owns its own session.
     let sid = SessionKey::main("cap-agent");
-    let at = now_ms();
-    // 3 consecutive RunStarted with no RunFinished == default max_attempts.
-    for (i, ev) in [
-        SessionEvent::RunStarted {
-            run_id: "r1".into(),
-            at,
-            project_root: None,
-            envelope: None,
-        },
-        SessionEvent::RunStarted {
-            run_id: "r2".into(),
-            at: at + 1,
-            project_root: None,
-            envelope: None,
-        },
-        SessionEvent::RunStarted {
-            run_id: "r3".into(),
-            at: at + 2,
-            project_root: None,
-            envelope: None,
-        },
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        store
-            .append(&sid, (i as u64) + 1, &ev, now_ms())
-            .await
-            .unwrap();
-    }
+    // One RunStarted + 3 intent stamps == default max_attempts.
+    seed_crash_looped_run(&store, &sid, 3).await;
 
     // Active goal in the session — its crash recovery hangs entirely on the
     // coordinator's retrigger→post_run chain, so abandoning must block it
@@ -808,36 +814,7 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         migrate_add_session_events(&conn).unwrap();
         Arc::new(SqliteEventStore::new(conn))
     };
-    passive_store
-        .append(
-            &passive_sid,
-            1,
-            &SessionEvent::RunStarted {
-                run_id: "r-p1".into(),
-                at,
-                project_root: None,
-                envelope: None,
-            },
-            at,
-        )
-        .await
-        .unwrap();
-    for (i, run) in ["r-p2", "r-p3"].iter().enumerate() {
-        passive_store
-            .append(
-                &passive_sid,
-                (i as u64) + 2,
-                &SessionEvent::RunStarted {
-                    run_id: (*run).into(),
-                    at: at + 1 + i as i64,
-                    project_root: None,
-                    envelope: None,
-                },
-                at,
-            )
-            .await
-            .unwrap();
-    }
+    seed_crash_looped_run(&passive_store, &passive_sid, 3).await;
     let coordinator2 = ResumeCoordinator::new(
         passive_store.clone(),
         ResumeConfig::default(),
@@ -855,6 +832,150 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
             .status,
         alephcore::goal::GoalStatus::Active,
         "a passive goal must survive an unrelated abandon untouched"
+    );
+}
+
+/// §5.1 / §5.6: three boots whose retrigger never reaches `RunStarted` — the
+/// adapter records the call and writes nothing, i.e. a crash in admit / hook /
+/// seed. Under the old counter `trailing_starts` never moved and this looped
+/// forever; the intent stamp counts the ATTEMPT, not the run's own marker.
+#[tokio::test]
+async fn a_retrigger_that_never_starts_is_capped_by_the_intent_stamp() {
+    let store = store();
+    let sid = SessionKey::main("ratchet-agent");
+    seed_interrupted_run(&store, &sid).await;
+    let cfg = ResumeConfig {
+        max_attempts: 2,
+        ..ResumeConfig::default()
+    };
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    // Each boot is a fresh coordinator over the SAME log. The coordinator is
+    // built outside the future so the future owns it outright.
+    let boot = || {
+        let c = ResumeCoordinator::new(
+            store.clone(),
+            cfg.clone(),
+            adapter.clone() as Arc<dyn ExecutionAdapter>,
+            registry.clone(),
+            sessions(),
+            test_bus(),
+        );
+        async move { c.resume_interrupted_runs().await }
+    };
+    let r1 = boot().await;
+    assert_eq!((r1.resumed, r1.abandoned), (1, 0));
+    let r2 = boot().await;
+    assert_eq!((r2.resumed, r2.abandoned), (1, 0));
+    let r3 = boot().await;
+    assert_eq!(
+        (r3.resumed, r3.abandoned),
+        (0, 1),
+        "attempts == max_attempts: abandon, no retrigger"
+    );
+    let r4 = boot().await;
+    assert_eq!((r4.resumed, r4.abandoned, r4.skipped), (0, 0, 1));
+    assert_eq!(
+        calls.lock().await.len(),
+        2,
+        "exactly two retriggers were ever dispatched"
+    );
+    let stamps: Vec<(u64, u32)> = store
+        .load_all_events(&sid)
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|r| match &r.event {
+            SessionEvent::ResumeAttempted { target, attempt } => Some((*target, *attempt)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stamps,
+        vec![(3, 1), (3, 2)],
+        "each stamp names the RunStarted (seq 3) and its ordinal"
+    );
+}
+
+/// An adapter that, at the moment `execute` is invoked, reads the session's
+/// log and records how many `ResumeAttempted` stamps are ALREADY durable.
+///
+/// The ratchet test above counts boots and stamps after the fact, which a
+/// stamp written AFTER the retrigger passes just as well (the mock adapter
+/// returns at once, so the stamp lands either way — measured: moving the stamp
+/// below `retrigger` left that test green). Only an observer inside `execute`
+/// can tell "written before" from "written after".
+struct StampWitnessAdapter {
+    store: Arc<dyn SessionEventStore>,
+    /// Stamp count visible in the log at each `execute` call, in call order.
+    seen: Arc<Mutex<Vec<usize>>>,
+}
+
+#[async_trait]
+impl ExecutionAdapter for StampWitnessAdapter {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        _agent: Arc<AgentInstance>,
+        _emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        let stamps = self
+            .store
+            .load_all_events(&request.session_key)
+            .await
+            .map_err(|e| ExecutionError::Failed(e.to_string()))?
+            .iter()
+            .filter(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. }))
+            .count();
+        self.seen.lock().await.push(stamps);
+        Ok(())
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        Err(ExecutionError::RunNotFound(run_id.to_string()))
+    }
+
+    async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
+        None
+    }
+
+    async fn active_run_count(&self) -> usize {
+        0
+    }
+}
+
+/// §5.1's ORDER, asserted where it is observable: when the engine is handed
+/// the resumed run, this boot's stamp is already in the log. A crash inside
+/// `execute` (admit / hook / seed — before the run's own `RunStarted`) then
+/// still counts on the next boot.
+#[tokio::test]
+async fn the_intent_stamp_is_durable_before_the_engine_is_handed_the_run() {
+    let store = store();
+    let sid = SessionKey::main("stamp-order-agent");
+    seed_interrupted_run(&store, &sid).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let adapter = Arc::new(StampWitnessAdapter {
+        store: store.clone(),
+        seen: seen.clone(),
+    });
+    let registry = registry_with_agent(sid.agent_id()).await;
+    for _ in 0..2 {
+        let c = ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            adapter.clone() as Arc<dyn ExecutionAdapter>,
+            registry.clone(),
+            sessions(),
+            test_bus(),
+        );
+        let r = c.resume_interrupted_runs().await;
+        assert_eq!(r.resumed, 1);
+    }
+    assert_eq!(
+        *seen.lock().await,
+        vec![1, 2],
+        "at each execute, this boot's own stamp was already durable"
     );
 }
 

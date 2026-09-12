@@ -467,6 +467,7 @@ mod tests {
             ResumeRefusal::AgentMissing,
             ResumeRefusal::BoundaryRepairFailed("append failed".into()),
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
+            ResumeRefusal::IntentStampFailed("stamp append failed".into()),
         ] {
             assert_eq!(
                 status_of(&refused_report(refusal.clone())),

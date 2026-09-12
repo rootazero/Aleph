@@ -24,7 +24,7 @@ use crate::config::types::ResumeConfig;
 use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{RunRequest, UNATTENDED_KEY};
-use crate::session::events::{now_ms, RunOutcome, SessionEvent, SessionEventRecord};
+use crate::session::events::{now_ms, EventSeq, RunOutcome, SessionEvent, SessionEventRecord};
 use crate::session::reduction::{reduce_disposition, reduce_run, LogContradiction, RunDisposition};
 use crate::session::service::SessionId;
 use crate::session::store::SessionEventStore;
@@ -173,6 +173,9 @@ pub enum ResumeRefusal {
     BoundaryRepairFailed(String),
     /// The repair landed but the run could not be dispatched.
     RetriggerFailed(String),
+    /// The stamp did not land, so the retrigger must not happen: a resume
+    /// without its intent stamp is exactly the unbounded loop §5.1 closes.
+    IntentStampFailed(String),
 }
 
 impl ResumeRefusal {
@@ -185,6 +188,7 @@ impl ResumeRefusal {
             Self::AgentMissing => "agent_missing",
             Self::BoundaryRepairFailed(_) => "boundary_repair_failed",
             Self::RetriggerFailed(_) => "retrigger_failed",
+            Self::IntentStampFailed(_) => "intent_stamp_failed",
         }
     }
 
@@ -194,7 +198,9 @@ impl ResumeRefusal {
         match self {
             Self::LogInconsistent(c) => c.to_string(),
             Self::AgentMissing => "the session's agent is not registered".to_string(),
-            Self::BoundaryRepairFailed(e) | Self::RetriggerFailed(e) => e.clone(),
+            Self::BoundaryRepairFailed(e)
+            | Self::RetriggerFailed(e)
+            | Self::IntentStampFailed(e) => e.clone(),
         }
     }
 }
@@ -828,8 +834,8 @@ impl ResumeCoordinator {
                 }
                 report.delegated += 1;
             }
-            Ok(RunDisposition::Interrupted { trailing_starts }) => {
-                self.handle_interrupted(session_id, markers, trailing_starts, report)
+            Ok(RunDisposition::Interrupted { attempts }) => {
+                self.handle_interrupted(session_id, markers, attempts, report)
                     .await;
             }
             // A refused slice is "I do not know", not "clean": it is
@@ -900,18 +906,25 @@ impl ResumeCoordinator {
     }
 
     /// Handle one interrupted candidate: **one** reduction over the log, then
-    /// the recency filter, the cap check, the crash-boundary repair and the
-    /// re-trigger — every one of them reading that same reduction.
+    /// the recency filter, the cap check, the crash-boundary repair, the
+    /// intent stamp and the re-trigger — every one of them reading that same
+    /// reduction.
     ///
     /// The repair used to re-read and re-reduce the log itself, so "what state
     /// is this candidate in" was answered twice per candidate, at two moments,
     /// with an append in between. Two derivations of one fact is the shape
     /// this round exists to remove.
+    ///
+    /// `attempts` is the number of `ResumeAttempted` stamps this coordinator
+    /// (or a previous boot's) already wrote for the open run — the §5.1
+    /// ratchet. It is compared against `max_attempts` BEFORE this boot writes
+    /// its own stamp, so the cap is "this many tries have been made", not
+    /// "this many tries plus the one about to happen".
     async fn handle_interrupted(
         &self,
         session_id: &SessionId,
         markers: &[SessionEventRecord],
-        trailing_starts: usize,
+        attempts: u32,
         report: &mut ResumeReport,
     ) {
         // The dangling RunStarted is the last marker (reduce_disposition
@@ -985,11 +998,13 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Cap check — abandon crash-looped runs.
-        if trailing_starts as u32 >= self.config.max_attempts {
+        // Cap check — abandon crash-looped runs. Counted off the intent
+        // stamps, so a resume that died before its run's own `RunStarted`
+        // still spent one of these.
+        if attempts >= self.config.max_attempts {
             tracing::warn!(
                 session = ?session_id,
-                trailing_starts,
+                attempts,
                 max_attempts = self.config.max_attempts,
                 "resume: crash-loop cap reached; abandoning"
             );
@@ -1049,6 +1064,37 @@ impl ResumeCoordinator {
                 ));
                 return;
             }
+        }
+
+        // §5.1: stamp the intent BEFORE the retrigger. The stamp is what the
+        // next boot counts, so a crash anywhere between here and the resumed
+        // run's own `RunStarted` (admit / hook / seed) still moves the
+        // ratchet. A stamp that did not land is a refusal, not a warning: a
+        // retrigger without its stamp is the unbounded loop this closes.
+        // `run_anchor` is the last `RunStarted`, which the disposition
+        // guarantees exists after the last finish — but the reduction is what
+        // says so, and its absence is refused rather than defaulted.
+        let Some(target) = reduction.run_anchor else {
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::IntentStampFailed("interrupted run has no RunStarted anchor".into()),
+            ));
+            return;
+        };
+        if let Err(e) = self
+            .stamp_resume_attempt(session_id, target, attempts + 1)
+            .await
+        {
+            tracing::warn!(
+                session = ?session_id,
+                error = %e,
+                "resume: intent stamp failed; not retriggering"
+            );
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::IntentStampFailed(e.to_string()),
+            ));
+            return;
         }
 
         // Re-trigger, carrying the plan. `RunRequest.model_override` is the
@@ -1154,6 +1200,30 @@ impl ResumeCoordinator {
         session_id: &SessionId,
     ) -> Result<u64, crate::session::service::SessionError> {
         Ok(self.event_store.load_head_seq(session_id).await? + 1)
+    }
+
+    /// §5.1: write the intent BEFORE the action. `append` (A1) makes this a
+    /// Barrier commit, so a crash one instruction later still counts.
+    ///
+    /// `target` is the seq of the `RunStarted` being resumed; `attempt` is
+    /// this stamp's ordinal since the last `RunFinished` (the reducer counts
+    /// the stamps, not this number — the number is for the operator reading
+    /// the log).
+    async fn stamp_resume_attempt(
+        &self,
+        session_id: &SessionId,
+        target: EventSeq,
+        attempt: u32,
+    ) -> Result<(), crate::session::service::SessionError> {
+        let seq = self.next_seq(session_id).await?;
+        self.event_store
+            .append(
+                session_id,
+                seq,
+                &SessionEvent::ResumeAttempted { target, attempt },
+                now_ms(),
+            )
+            .await
     }
 
     /// Tell the model what this resume gave up, when there was no dangling
@@ -1452,13 +1522,30 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
+            Ok(RunDisposition::Interrupted { attempts: 0 })
         );
     }
 
+    /// §5.1: the cap counts the coordinator's own `ResumeAttempted` stamps
+    /// since the last finish — what was TRIED — not the `RunStarted` markers
+    /// those tries happened to leave behind. A stamp with no `RunStarted`
+    /// after it is a resume that died before its run opened, and it counts.
     #[test]
-    fn classify_counts_consecutive_trailing_starts() {
-        // Three crash-loops after the last finish.
+    fn classify_counts_stamps_since_last_finish() {
+        let stamp = |target: u64, attempt: u32| SessionEvent::ResumeAttempted { target, attempt };
+        // Three boots that each stamped intent and crashed before RunStarted.
+        let markers = vec![
+            rec(1, run_finished(10), 10),
+            rec(2, run_started(20), 20),
+            rec(3, stamp(2, 1), 30),
+            rec(4, stamp(2, 2), 40),
+            rec(5, stamp(2, 3), 50),
+        ];
+        assert_eq!(
+            reduce_disposition(&markers),
+            Ok(RunDisposition::Interrupted { attempts: 3 })
+        );
+        // Three bare RunStarted: three crashes, zero resumes tried.
         let markers = vec![
             rec(1, run_finished(10), 10),
             rec(2, run_started(20), 20),
@@ -1467,7 +1554,18 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            Ok(RunDisposition::Interrupted { trailing_starts: 3 })
+            Ok(RunDisposition::Interrupted { attempts: 0 })
+        );
+        // A finish resets the ratchet.
+        let markers = vec![
+            rec(1, run_started(10), 10),
+            rec(2, stamp(1, 1), 20),
+            rec(3, run_finished(30), 30),
+            rec(4, run_started(40), 40),
+        ];
+        assert_eq!(
+            reduce_disposition(&markers),
+            Ok(RunDisposition::Interrupted { attempts: 0 })
         );
     }
 
@@ -1476,7 +1574,7 @@ mod tests {
         let markers = vec![rec(1, run_started(10), 10)];
         assert_eq!(
             reduce_disposition(&markers),
-            Ok(RunDisposition::Interrupted { trailing_starts: 1 })
+            Ok(RunDisposition::Interrupted { attempts: 0 })
         );
     }
 
@@ -1535,6 +1633,7 @@ mod tests {
             ResumeRefusal::AgentMissing,
             ResumeRefusal::BoundaryRepairFailed("append failed".into()),
             ResumeRefusal::RetriggerFailed("adapter said no".into()),
+            ResumeRefusal::IntentStampFailed("stamp append failed".into()),
         ];
         let words: std::collections::HashSet<&str> = all.iter().map(|r| r.reason()).collect();
         assert_eq!(words.len(), all.len(), "two refusals share one word");

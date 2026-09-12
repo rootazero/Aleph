@@ -22,10 +22,12 @@
 //! reducer can enforce without refusing Aleph's own designed shapes. The
 //! closed set [`LogContradiction`] therefore splits in two: two **REJECT**
 //! kinds, where the slice cannot be reduced at all and the caller gets `Err`
-//! (which may only ever mean "I do not know" — never `Clean`), and seven
+//! (which may only ever mean "I do not know" — never `Clean`), and the
 //! **REPORT** kinds, each reduced under a *corrected reading* the tests pin
 //! per kind. A report that changed no reading would be a no-op that reports
-//! success, so every REPORT variant names what it changes.
+//! success, so every REPORT variant names what it changes. (The count of
+//! REPORT kinds is deliberately not written here — `tests::kind_index` is
+//! the census, and a number in prose is a list that rots.)
 //!
 //! Deliberately NOT in `src/harness/`: this is a read face over durable facts,
 //! not Think→Act turn scheduling. R10's 12-file lock and `budget.rs::CEILING`
@@ -42,7 +44,7 @@ use crate::session::events::{
 /// One thing a session log says that it must not say.
 ///
 /// Closed set. Serialised under `kind` so a doctor finding, a resume receipt
-/// and a sub-agent status all name the same nine words; [`tag`](Self::tag) is
+/// and a sub-agent status all name the same words; [`tag`](Self::tag) is
 /// the same word with the `session-log-` finding prefix, pinned to the serde
 /// name by test.
 ///
@@ -104,6 +106,10 @@ pub enum LogContradiction {
     /// this log's recency is unknown — a consumer must neither abandon nor
     /// resume on age. Reported once per log (the first offender).
     ClockAnomaly { seq: EventSeq },
+    /// A `ResumeAttempted` with nothing to resume: no run is open and no
+    /// user message is unanswered at that point. Reading: ignored — the
+    /// disposition is what it would be without the stamp.
+    ResumeWithoutTarget { seq: EventSeq },
 }
 
 impl LogContradiction {
@@ -130,6 +136,7 @@ impl LogContradiction {
             Self::DuplicateReceipt { .. } => "session-log-duplicate-receipt",
             Self::DanglingDeniedCall { .. } => "session-log-dangling-denied-call",
             Self::ClockAnomaly { .. } => "session-log-clock-anomaly",
+            Self::ResumeWithoutTarget { .. } => "session-log-resume-without-target",
         }
     }
 }
@@ -167,6 +174,10 @@ impl fmt::Display for LogContradiction {
                 f,
                 "created_at_ms at seq {seq} is zero or earlier than the previous record's"
             ),
+            Self::ResumeWithoutTarget { seq } => write!(
+                f,
+                "ResumeAttempted at seq {seq} names no open run and no unanswered message"
+            ),
         }
     }
 }
@@ -183,11 +194,13 @@ impl std::error::Error for LogContradiction {}
 /// variant arrives in the same commit as the consumer that reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunDisposition {
-    /// Newest marker is `RunFinished` — nothing to recover.
+    /// No `RunStarted` after the last `RunFinished` — nothing to recover.
     Clean,
-    /// Interrupted; `trailing_starts` counts the consecutive `RunStarted`
-    /// events after the last `RunFinished` (the crash-loop attempt counter).
-    Interrupted { trailing_starts: usize },
+    /// A `RunStarted` after the last `RunFinished`; `attempts` counts the
+    /// `ResumeAttempted` stamps since that finish — the crash-loop ratchet,
+    /// written by the coordinator BEFORE each retrigger, so a crash anywhere
+    /// before the resumed run's own `RunStarted` still counts (§5.1).
+    Interrupted { attempts: u32 },
 }
 
 /// Which run a dangling tool call belonged to.
@@ -296,10 +309,16 @@ pub fn validate_slice(events: &[SessionEventRecord]) -> Result<(), LogContradict
     }
 }
 
-fn is_marker(event: &SessionEvent) -> bool {
+/// The run-marker set: the events [`reduce_disposition`] reads and
+/// `SessionEventStore::load_run_markers` selects. One predicate, so the SQL
+/// `IN (...)` list (`store::MARKER_EVENT_TYPES`) is pinned equal to it by test
+/// rather than being a second spelling of the same set.
+pub(crate) fn is_marker(event: &SessionEvent) -> bool {
     matches!(
         event,
-        SessionEvent::RunStarted { .. } | SessionEvent::RunFinished { .. }
+        SessionEvent::RunStarted { .. }
+            | SessionEvent::RunFinished { .. }
+            | SessionEvent::ResumeAttempted { .. }
     )
 }
 
@@ -313,6 +332,12 @@ fn is_marker(event: &SessionEvent) -> bool {
 /// anywhere is refused, not just one that happens to sit past the trailing
 /// `RunFinished`. These used to be `debug_assert`s, which read as `Clean`
 /// in release.
+///
+/// The tail after the last `RunFinished` is interrupted iff it holds a
+/// `RunStarted`; `attempts` is the number of `ResumeAttempted` stamps in that
+/// same tail. Counting stamps rather than trailing `RunStarted` markers is
+/// what makes a resume that dies before its own `RunStarted` still count
+/// (§5.1): the stamp is written before the retrigger, the marker after.
 pub fn reduce_disposition(
     markers: &[SessionEventRecord],
 ) -> Result<RunDisposition, LogContradiction> {
@@ -320,16 +345,24 @@ pub fn reduce_disposition(
     if let Some(stray) = markers.iter().find(|r| !is_marker(&r.event)) {
         return Err(LogContradiction::NonMarkerInMarkerSlice { seq: stray.seq });
     }
-    let trailing_starts = markers
+    let since_finish = markers
         .iter()
-        .rev()
-        .take_while(|r| matches!(r.event, SessionEvent::RunStarted { .. }))
-        .count();
-    if trailing_starts == 0 {
-        Ok(RunDisposition::Clean)
-    } else {
-        Ok(RunDisposition::Interrupted { trailing_starts })
+        .rposition(|r| matches!(r.event, SessionEvent::RunFinished { .. }))
+        .map_or(0, |i| i + 1);
+    let tail = &markers[since_finish..];
+    if !tail
+        .iter()
+        .any(|r| matches!(r.event, SessionEvent::RunStarted { .. }))
+    {
+        return Ok(RunDisposition::Clean);
     }
+    let attempts = tail
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. }))
+        .count();
+    Ok(RunDisposition::Interrupted {
+        attempts: u32::try_from(attempts).unwrap_or(u32::MAX),
+    })
 }
 
 /// One dispatch, as the single ascending scan tracks it.
@@ -415,6 +448,17 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                 open_run = None;
                 after_finish_without_start = true;
                 unmarked_first = None;
+                markers.push(record.clone());
+            }
+            // The coordinator's intent stamp (§5.1). A marker: it rides into
+            // the disposition, where it is counted as an attempt. With no run
+            // open at this point it names nothing — reported, not acted on.
+            // (T7 widens the predicate with `pending_unanswered`: a stamp may
+            // also target an unanswered `UserMessage`.)
+            SessionEvent::ResumeAttempted { .. } => {
+                if open_run.is_none() {
+                    contradictions.push(LogContradiction::ResumeWithoutTarget { seq: record.seq });
+                }
                 markers.push(record.clone());
             }
             SessionEvent::ToolCallRequested {
@@ -676,6 +720,10 @@ mod tests {
         }
     }
 
+    fn attempted(target: EventSeq, attempt: u32) -> SessionEvent {
+        SessionEvent::ResumeAttempted { target, attempt }
+    }
+
     fn requested(call: &str) -> SessionEvent {
         SessionEvent::ToolCallRequested {
             turn_id: TurnId::new_v4(),
@@ -798,7 +846,7 @@ mod tests {
 
     // ---- the closed set -------------------------------------------------
 
-    /// One sample per variant. `kind_index` is an exhaustive match, so a tenth
+    /// One sample per variant. `kind_index` is an exhaustive match, so a new
     /// variant does not compile until it is added here too — that is the
     /// "remember to update the other list" that cannot be forgotten.
     fn kind_index(c: &LogContradiction) -> usize {
@@ -812,9 +860,10 @@ mod tests {
             LogContradiction::DuplicateReceipt { .. } => 6,
             LogContradiction::DanglingDeniedCall { .. } => 7,
             LogContradiction::ClockAnomaly { .. } => 8,
+            LogContradiction::ResumeWithoutTarget { .. } => 9,
         }
     }
-    const KIND_COUNT: usize = 9;
+    const KIND_COUNT: usize = 10;
 
     fn one_of_each() -> Vec<LogContradiction> {
         let all = vec![
@@ -842,6 +891,7 @@ mod tests {
                 seq: 1,
             },
             LogContradiction::ClockAnomaly { seq: 1 },
+            LogContradiction::ResumeWithoutTarget { seq: 1 },
         ];
         let mut seen = vec![false; KIND_COUNT];
         for c in &all {
@@ -1146,6 +1196,24 @@ mod tests {
         );
     }
 
+    /// §5.6: a `ResumeAttempted` with nothing to resume — no run open at that
+    /// point. Reported, and the disposition is what it would be without it.
+    #[test]
+    fn a_stamp_with_nothing_to_resume_is_reported_and_ignored() {
+        let events = vec![
+            rec(1, started("a")),
+            rec(2, finished("a")),
+            rec(3, attempted(1, 1)),
+        ];
+        let r = reduced(&events);
+        assert_eq!(r.disposition, RunDisposition::Clean);
+        assert_eq!(tags(&r), vec!["session-log-resume-without-target"]);
+        assert_eq!(
+            r.contradictions[0],
+            LogContradiction::ResumeWithoutTarget { seq: 3 }
+        );
+    }
+
     // ---- open_run ---------------------------------------------------------
 
     #[test]
@@ -1278,6 +1346,27 @@ mod tests {
                     assistant("again"),
                     requested("c2"),
                     result_for("c2"),
+                    assistant("done"),
+                    finished("r2"),
+                    run_meta("r2"),
+                ]),
+                allowed: &[],
+            },
+            LegalShape {
+                // The same crash-loop as the resume coordinator writes it
+                // since §5.1: the intent stamp (`target` = the crashed run's
+                // `RunStarted`, seq 3 here) lands AFTER the boundary repair
+                // and BEFORE the re-trigger's own marker.
+                name: "crash-loop with an intent stamp",
+                events: seq_log(vec![
+                    turn_started(),
+                    user("hi"),
+                    started("r1"),
+                    assistant("thinking"),
+                    requested("c1"),
+                    error_for("c1"),
+                    attempted(3, 1),
+                    started("r2"),
                     assistant("done"),
                     finished("r2"),
                     run_meta("r2"),
@@ -1476,8 +1565,11 @@ mod tests {
         assert_eq!(reduce_disposition(&markers), Ok(RunDisposition::Clean));
     }
 
+    /// Two bare `RunStarted` after the last finish used to count as two
+    /// attempts. They are two crashes, not two resumes: nobody has stamped an
+    /// intent to resume this run, so the ratchet reads 0.
     #[test]
-    fn disposition_counts_the_trailing_starts() {
+    fn bare_run_starts_after_a_finish_are_interrupted_with_no_attempts() {
         let markers = vec![
             rec(1, started("a")),
             rec(2, finished("a")),
@@ -1486,7 +1578,44 @@ mod tests {
         ];
         assert_eq!(
             reduce_disposition(&markers),
-            Ok(RunDisposition::Interrupted { trailing_starts: 2 })
+            Ok(RunDisposition::Interrupted { attempts: 0 })
+        );
+    }
+
+    /// §5.1 / §5.6: the ratchet counts `ResumeAttempted` stamps since the last
+    /// `RunFinished`, not the `RunStarted` markers a resume happened to leave
+    /// behind. A resume that dies before its run's own `RunStarted` still
+    /// wrote its stamp, so it still counts.
+    #[test]
+    fn attempts_count_intent_stamps_not_trailing_starts() {
+        // Three boots that each stamped intent and crashed before RunStarted.
+        let markers = vec![
+            rec(1, started("a")),
+            rec(2, attempted(1, 1)),
+            rec(3, attempted(1, 2)),
+            rec(4, attempted(1, 3)),
+        ];
+        assert_eq!(
+            reduce_disposition(&markers),
+            Ok(RunDisposition::Interrupted { attempts: 3 })
+        );
+        // Two RunStarted with no stamp between them: the old counter said 2,
+        // the ratchet says 0 — nobody has *tried* to resume this yet.
+        let markers = vec![rec(1, started("a")), rec(2, started("b"))];
+        assert_eq!(
+            reduce_disposition(&markers),
+            Ok(RunDisposition::Interrupted { attempts: 0 })
+        );
+        // A RunFinished resets the count.
+        let markers = vec![
+            rec(1, started("a")),
+            rec(2, attempted(1, 1)),
+            rec(3, finished("a")),
+            rec(4, started("b")),
+        ];
+        assert_eq!(
+            reduce_disposition(&markers),
+            Ok(RunDisposition::Interrupted { attempts: 0 })
         );
     }
 
@@ -1531,10 +1660,7 @@ mod tests {
             rec(4, started("b")),
         ];
         let r = reduced(&events);
-        assert_eq!(
-            r.disposition,
-            RunDisposition::Interrupted { trailing_starts: 1 }
-        );
+        assert_eq!(r.disposition, RunDisposition::Interrupted { attempts: 0 });
         assert_eq!(r.dangling.len(), 1, "the fact must not be swallowed");
         assert_eq!(r.dangling[0].provenance, DanglingProvenance::EarlierRun);
     }
@@ -1619,34 +1745,33 @@ mod tests {
         use super::*;
         use proptest::prelude::*;
 
+        /// The marker subsequence, selected by the SAME predicate the store's
+        /// `load_run_markers` and `reduce_run` select by — not a second
+        /// spelling of the set.
         fn markers_of(events: &[SessionEventRecord]) -> Vec<SessionEventRecord> {
             events
                 .iter()
-                .filter(|r| {
-                    matches!(
-                        r.event,
-                        SessionEvent::RunStarted { .. } | SessionEvent::RunFinished { .. }
-                    )
-                })
+                .filter(|r| is_marker(&r.event))
                 .cloned()
                 .collect()
         }
 
         /// 0 = RunStarted, 1 = RunFinished, 2 = ToolCallRequested,
-        /// 3 = ToolResult, 4 = AssistantMessage.
+        /// 3 = ToolResult, 4 = AssistantMessage, 5 = ResumeAttempted.
         fn event_for(tag: u8, seq: EventSeq) -> SessionEvent {
-            match tag % 5 {
+            match tag % 6 {
                 0 => started(&format!("r{seq}")),
                 1 => finished(&format!("r{seq}")),
                 2 => requested(&format!("c{seq}")),
                 3 => result_for(&format!("c{seq}")),
-                _ => assistant("x"),
+                4 => assistant("x"),
+                _ => attempted(seq, 1),
             }
         }
 
         proptest! {
             #[test]
-            fn reduce_run_asks_reduce_disposition(tags in prop::collection::vec(0u8..5, 0..40)) {
+            fn reduce_run_asks_reduce_disposition(tags in prop::collection::vec(0u8..6, 0..40)) {
                 let events: Vec<SessionEventRecord> = tags
                     .iter()
                     .enumerate()
@@ -1656,6 +1781,31 @@ mod tests {
                     reduce_run(&events).map(|r| r.disposition),
                     reduce_disposition(&markers_of(&events))
                 );
+            }
+
+            /// §5.6: `attempts` is exactly the number of `ResumeAttempted`
+            /// stamps after the last `RunFinished` — whenever the tail is
+            /// interrupted at all.
+            #[test]
+            fn attempts_are_the_stamps_since_the_last_finish(tags in prop::collection::vec(0u8..6, 0..40)) {
+                let events: Vec<SessionEventRecord> = tags
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| rec(i as EventSeq + 1, event_for(*t, i as EventSeq + 1)))
+                    .collect();
+                let since_finish = events
+                    .iter()
+                    .rposition(|r| matches!(r.event, SessionEvent::RunFinished { .. }))
+                    .map_or(0, |i| i + 1);
+                let expected = events[since_finish..]
+                    .iter()
+                    .filter(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. }))
+                    .count() as u32;
+                if let Ok(RunDisposition::Interrupted { attempts }) =
+                    reduce_disposition(&markers_of(&events))
+                {
+                    prop_assert_eq!(attempts, expected);
+                }
             }
         }
     }

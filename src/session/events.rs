@@ -766,6 +766,29 @@ mod tests {
         }
     }
 
+    /// The intent stamp's two numbers survive the wire byte-for-byte: `target`
+    /// is what the reducer matches against a `RunStarted` seq, `attempt` is
+    /// the ordinal the operator reads in a boot log.
+    #[test]
+    fn resume_attempted_event_round_trips_through_json() {
+        let event = SessionEvent::ResumeAttempted {
+            target: 41,
+            attempt: 3,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: SessionEvent = serde_json::from_str(&json).unwrap();
+        match parsed {
+            SessionEvent::ResumeAttempted { target, attempt } => {
+                assert_eq!((target, attempt), (41, 3));
+            }
+            other => panic!("expected ResumeAttempted, got {other:?}"),
+        }
+        assert_eq!(
+            serde_json::to_string(&serde_json::from_str::<SessionEvent>(&json).unwrap()).unwrap(),
+            json
+        );
+    }
+
     #[test]
     fn run_started_serde_round_trips() {
         let ev = SessionEvent::RunStarted {

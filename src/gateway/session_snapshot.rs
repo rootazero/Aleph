@@ -161,11 +161,11 @@ pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
             .iter()
             .any(|c| matches!(c, LogContradiction::FinishWithoutStart { .. }));
 
-    let (disposition, trailing_starts) = match reduction.disposition {
-        RunDisposition::Interrupted { trailing_starts } => (
-            LastRunState::INTERRUPTED,
-            u32::try_from(trailing_starts).unwrap_or(u32::MAX),
-        ),
+    // `trailing_starts` is the wire key's historical spelling; its value is
+    // the reducer's `attempts` (the `ResumeAttempted` count since the last
+    // finish) — see `LastRunState::trailing_starts`.
+    let (disposition, attempts) = match reduction.disposition {
+        RunDisposition::Interrupted { attempts } => (LastRunState::INTERRUPTED, attempts),
         RunDisposition::Clean if has_marker => (LastRunState::CLEAN, 0),
         RunDisposition::Clean => (LastRunState::NEVER_RAN, 0),
     };
@@ -173,7 +173,7 @@ pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
     LastRunState {
         disposition: disposition.to_string(),
         run_id: reduction.run_id.clone(),
-        trailing_starts,
+        trailing_starts: attempts,
         dangling: reduction.dangling.iter().map(dangling_view).collect(),
         // A run that recorded nothing says so with `None`; `inspected` is what
         // separates that from "this face does not carry progress".
@@ -212,15 +212,11 @@ pub fn last_run_from_markers(markers: &[SessionEventRecord]) -> LastRunState {
             return state;
         }
     };
-    let (disposition, trailing_starts) = match reduction.disposition {
-        RunDisposition::Interrupted { trailing_starts } => (
-            LastRunState::INTERRUPTED,
-            u32::try_from(trailing_starts).unwrap_or(u32::MAX),
-        ),
+    let (disposition, attempts) = match reduction.disposition {
+        RunDisposition::Interrupted { attempts } => (LastRunState::INTERRUPTED, attempts),
         RunDisposition::Clean => (LastRunState::CLEAN, 0),
     };
-    let mut state =
-        LastRunState::from_markers(disposition, reduction.run_id.clone(), trailing_starts);
+    let mut state = LastRunState::from_markers(disposition, reduction.run_id.clone(), attempts);
     state.contradictions = reduction
         .contradictions
         .iter()
@@ -320,7 +316,9 @@ mod last_run_tests {
 
         assert_eq!(view.disposition(), LastRunDisposition::Interrupted);
         assert_eq!(view.run_id.as_deref(), Some("run-a"));
-        assert_eq!(view.trailing_starts, 1);
+        // The wire key keeps its historical spelling; its value is the resume
+        // attempt count, and nobody has stamped an attempt on this run.
+        assert_eq!(view.trailing_starts, 0);
         assert!(view.inspected);
 
         let dangling = view.dangling().expect("this face looked");
@@ -424,7 +422,7 @@ mod last_run_tests {
         let listed = last_run_from_markers(&markers);
         assert_eq!(listed.disposition(), LastRunDisposition::Interrupted);
         assert_eq!(listed.run_id.as_deref(), Some("run-b"));
-        assert_eq!(listed.trailing_starts, 1);
+        assert_eq!(listed.trailing_starts, 0, "no ResumeAttempted stamp yet");
         assert!(!listed.inspected);
         assert_eq!(listed.dangling(), None);
         assert_eq!(listed.progress, None);
