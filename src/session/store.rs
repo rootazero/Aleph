@@ -342,8 +342,13 @@ fn encode_payload(event: &SessionEvent) -> Result<String, SessionError> {
     Ok(serde_json::to_string(event)?)
 }
 
-/// Retire a range inside an already-open transaction (`conn` is the
-/// `Transaction`, deref'd). Returns how many rows this newly retired.
+/// Retire a range inside an already-open transaction. Returns how many rows
+/// this newly retired.
+///
+/// Takes the `Transaction` itself, not a `Connection`: "inside the
+/// transaction" is then a type invariant — a caller that wants to retire in
+/// autocommit mode (and so let a failed batch keep its retirement) has no
+/// value of this type to hand over.
 ///
 /// `retired_at IS NULL` makes both arms idempotent: a second retire of the
 /// same range matches nothing and reports 0. An out-of-range seq saturates to
@@ -359,7 +364,7 @@ fn encode_payload(event: &SessionEvent) -> Result<String, SessionError> {
 /// the mirror: compaction evicts turns from the prompt but they must stay
 /// recallable — see [`SessionEventStore::retire_through`].
 fn retire_in_txn(
-    conn: &Connection,
+    tx: &rusqlite::Transaction<'_>,
     session_key: &str,
     retire: Retire,
     at: i64,
@@ -367,12 +372,12 @@ fn retire_in_txn(
     match retire {
         Retire::From(from_seq) => {
             let from_val = i64::try_from(from_seq).unwrap_or(i64::MAX);
-            let n = conn.execute(
+            let n = tx.execute(
                 "UPDATE session_events SET retired_at = ?3
                  WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
                 params![session_key, from_val, at],
             )?;
-            conn.execute(
+            tx.execute(
                 "DELETE FROM session_events_fts WHERE session_id = ?1 AND seq >= ?2",
                 params![session_key, from_val],
             )?;
@@ -380,13 +385,37 @@ fn retire_in_txn(
         }
         Retire::Through(through_seq) => {
             let through_val = i64::try_from(through_seq).unwrap_or(i64::MAX);
-            conn.execute(
+            tx.execute(
                 "UPDATE session_events SET retired_at = ?3
                  WHERE session_id = ?1 AND seq <= ?2 AND retired_at IS NULL",
                 params![session_key, through_val, at],
             )
         }
     }
+}
+
+/// Run `f` with `PRAGMA synchronous=FULL` in force, then put the connection
+/// back at NORMAL — on every exit path. `f` returns a plain value, so no `?`
+/// inside it can skip the restore; the only early return here is a raise that
+/// never took effect. A failed restore is logged, not propagated: stuck at
+/// FULL is slower, never less durable.
+///
+/// This is what [`Durability::Barrier`] means at the SQLite level: the
+/// commit inside `f` fsyncs the WAL, the commits after it ride NORMAL again.
+fn with_synchronous_full<T>(
+    conn: &mut Connection,
+    f: impl FnOnce(&mut Connection) -> T,
+) -> Result<T, SessionError> {
+    conn.execute_batch("PRAGMA synchronous=FULL")
+        .map_err(|e| SessionError::Storage(format!("PRAGMA synchronous=FULL: {e}")))?;
+    let out = f(conn);
+    if let Err(e) = conn.execute_batch("PRAGMA synchronous=NORMAL") {
+        tracing::warn!(
+            error = %e,
+            "append_batch: could not restore PRAGMA synchronous=NORMAL"
+        );
+    }
+    Ok(out)
 }
 
 /// The transaction itself: `BEGIN IMMEDIATE`, retire, insert every row,
@@ -463,24 +492,15 @@ impl SessionEventStore for SqliteEventStore {
         let at = crate::session::events::now_ms();
 
         let mut conn = self.conn.lock().await;
-        // A Barrier fsyncs the WAL at THIS commit only: raise to FULL for the
-        // transaction, then drop back to the resting NORMAL whether it
-        // committed or rolled back. Stuck at FULL is slower, never less
-        // durable, so a failed restore is logged rather than propagated.
-        if durability == Durability::Barrier {
-            conn.execute_batch("PRAGMA synchronous=FULL")
-                .map_err(|e| SessionError::Storage(format!("PRAGMA synchronous=FULL: {e}")))?;
+        // A Barrier fsyncs the WAL at THIS commit only; a Normal batch never
+        // touches the pragma, so whatever level the connection was opened at
+        // is exactly what it commits under.
+        match durability {
+            Durability::Barrier => with_synchronous_full(&mut conn, |c| {
+                write_batch(c, &session_key, &rows, retire, at)
+            })??,
+            Durability::Normal => write_batch(&mut conn, &session_key, &rows, retire, at)?,
         }
-        let written = write_batch(&mut conn, &session_key, &rows, retire, at);
-        if durability == Durability::Barrier {
-            if let Err(e) = conn.execute_batch("PRAGMA synchronous=NORMAL") {
-                tracing::warn!(
-                    error = %e,
-                    "append_batch: could not restore PRAGMA synchronous=NORMAL"
-                );
-            }
-        }
-        written?;
 
         // Mirror content-bearing events into the FTS index so prior turns stay
         // BM25-searchable after compaction evicts them from context. Strictly
@@ -1862,16 +1882,26 @@ mod tests {
         );
     }
 
+    /// The connection's CURRENT `PRAGMA synchronous` (OFF = 0, NORMAL = 1,
+    /// FULL = 2), read off the same connection the batch wrote through.
+    fn pragma_synchronous(conn: &Connection) -> i64 {
+        conn.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    }
+
+    /// Put the connection at production's resting level (`open_sqlite_safe`
+    /// sets NORMAL; a bare in-memory connection defaults to FULL, which would
+    /// make "raised to FULL" indistinguishable from "never raised").
+    fn rest_at_normal(conn: &Connection) {
+        conn.execute_batch("PRAGMA synchronous=NORMAL").unwrap();
+        assert_eq!(pragma_synchronous(conn), 1);
+    }
+
     #[tokio::test]
     async fn barrier_restores_normal_after_success_and_after_failure() {
-        /// The connection's CURRENT `PRAGMA synchronous` (NORMAL = 1, FULL = 2),
-        /// read off the same connection the batch wrote through.
         async fn sync(s: &SqliteEventStore) -> i64 {
-            s.conn
-                .lock()
-                .await
-                .query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))
-                .unwrap()
+            let conn = s.conn.lock().await;
+            pragma_synchronous(&conn)
         }
         let store = make_store();
         let sid = sample_session_id();
@@ -1905,6 +1935,95 @@ mod tests {
             sync(&store).await,
             1,
             "NORMAL restored after a Barrier rollback"
+        );
+    }
+
+    /// The raise itself, observed from INSIDE the window: while the closure
+    /// runs — and it runs a real `write_batch` — `PRAGMA synchronous` reads
+    /// FULL, and after it returns the connection is back at NORMAL. Starting
+    /// from NORMAL is what makes this a guard: on a fresh in-memory connection
+    /// (default FULL) a deleted raise would still read 2.
+    #[tokio::test]
+    async fn barrier_raises_full_for_the_transaction_and_only_for_it() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let session_key = session_id_to_string(&sid).unwrap();
+        let at = now_ms();
+        let rows = vec![EncodedRow {
+            seq: 1,
+            turn_id: None,
+            event_type: event_type_tag(&run_started("r", at)),
+            payload: encode_payload(&run_started("r", at)).unwrap(),
+            created_at: at,
+            fts_body: None,
+        }];
+        let mut conn = store.conn.lock().await;
+        rest_at_normal(&conn);
+        let (inside, written) = with_synchronous_full(&mut conn, |c| {
+            let inside = pragma_synchronous(c);
+            (inside, write_batch(c, &session_key, &rows, None, at))
+        })
+        .unwrap();
+        written.unwrap();
+        assert_eq!(inside, 2, "the transaction ran under FULL");
+        assert_eq!(pragma_synchronous(&conn), 1, "back to NORMAL after it");
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_events WHERE session_id = ?1",
+                params![session_key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(live, 1, "the row written inside the window is committed");
+    }
+
+    /// A `Normal` batch does not touch the pragma at all — whatever level the
+    /// connection was opened at survives it — while a `Barrier` batch lands
+    /// on NORMAL (the store's resting level), not on "whatever it was before".
+    #[tokio::test]
+    async fn a_normal_batch_leaves_the_pragma_alone() {
+        async fn sync(s: &SqliteEventStore) -> i64 {
+            let conn = s.conn.lock().await;
+            pragma_synchronous(&conn)
+        }
+        let store = make_store();
+        let sid = sample_session_id();
+        let at = now_ms();
+        store
+            .conn
+            .lock()
+            .await
+            .execute_batch("PRAGMA synchronous=OFF")
+            .unwrap();
+        store
+            .append_batch(
+                &sid,
+                1,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Normal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sync(&store).await,
+            0,
+            "a Normal batch must not raise or restore anything"
+        );
+        store
+            .append_batch(
+                &sid,
+                2,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Barrier,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sync(&store).await,
+            1,
+            "a Barrier batch restores NORMAL, not the previous OFF"
         );
     }
 

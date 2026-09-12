@@ -462,9 +462,20 @@ pub struct SessionEventRecord {
 }
 
 /// What a batch retires in the same transaction as its inserts.
+///
+/// Both bounds are **inclusive**. Retiring is a soft delete (`retired_at` is
+/// stamped, the row stays, seq allocation is unaffected) and idempotent: an
+/// already-retired row keeps its original stamp and is not counted again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Retire {
+    /// Retire every live event with `seq <= n` — the head side, what
+    /// `/compact` uses. The BM25 mirror is **kept**: compacted turns leave
+    /// the prompt but must stay recallable.
     Through(EventSeq),
+    /// Retire every live event with `seq >= n` — the tail side, what
+    /// `chat.clear` / `chat.rewind` / `/undo` use. The BM25 mirror rows for
+    /// the same range are **deleted** in the same transaction, so erased
+    /// turns cannot be searched back into the prompt.
     From(EventSeq),
 }
 
