@@ -259,6 +259,13 @@ pub enum SessionEvent {
         outcome: RunOutcome,
         at: Timestamp,
     },
+    /// Intent stamp written by `ResumeCoordinator` BEFORE it re-triggers a run
+    /// (§5.1). `target` = seq of the `RunStarted` being resumed, or of the
+    /// unanswered `UserMessage`. Marker-class: no turn, not prompt-bearing.
+    ResumeAttempted {
+        target: EventSeq,
+        attempt: u32,
+    },
 
     /// A turn opened. There is deliberately no closing `TurnEnded` marker: a
     /// turn ends when the next one opens or when the run does, and the crash
@@ -454,6 +461,65 @@ pub struct SessionEventRecord {
     pub created_at_ms: Timestamp,
 }
 
+/// What a batch retires in the same transaction as its inserts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retire {
+    Through(EventSeq),
+    From(EventSeq),
+}
+
+/// Commit durability. `Barrier` fsyncs the WAL at commit (`PRAGMA synchronous=FULL`
+/// for that one transaction); `Normal` is the store's resting level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Durability {
+    Normal,
+    Barrier,
+}
+
+/// THE durability policy table (U3). One function; no wildcard arm on purpose —
+/// a new variant must state its column here or the crate does not compile.
+pub const fn durability_of(event: &SessionEvent) -> Durability {
+    match event {
+        SessionEvent::ToolCallRequested { .. }
+        | SessionEvent::RunStarted { .. }
+        | SessionEvent::ResumeAttempted { .. }
+        | SessionEvent::UserMessage { .. } => Durability::Barrier,
+        SessionEvent::SessionWoken { .. }
+        | SessionEvent::RunFinished { .. }
+        | SessionEvent::TurnStarted { .. }
+        | SessionEvent::AssistantMessage { .. }
+        | SessionEvent::AssistantRunMeta { .. }
+        | SessionEvent::SystemMessage { .. }
+        | SessionEvent::ToolCallApproved { .. }
+        | SessionEvent::ToolCallDenied { .. }
+        | SessionEvent::ToolResult { .. }
+        | SessionEvent::ToolError { .. }
+        | SessionEvent::SubagentSpawned { .. }
+        | SessionEvent::SubagentReturned { .. }
+        | SessionEvent::CompactionPerformed { .. }
+        | SessionEvent::SessionForked { .. }
+        | SessionEvent::Error { .. } => Durability::Normal,
+        // T11 adds `| SessionEvent::ToolCallParked { .. }` to THIS group (U3: Normal) and its
+        // sample to `fixtures::sample_of_every_kind` — the census refuses to compile until it does.
+    }
+}
+
+/// A batch is as durable as its most durable member.
+pub fn batch_durability<'a>(events: impl Iterator<Item = &'a SessionEvent>) -> Durability {
+    events
+        .map(durability_of)
+        .max()
+        .unwrap_or(Durability::Normal)
+}
+
+/// Second column of the same table (§7.3): may an old binary skip this row
+/// unread? Nothing declares it this round; the column exists so the envelope
+/// writer (group C) has one place to ask.
+pub const fn ignorable(event: &SessionEvent) -> bool {
+    let _ = event;
+    false
+}
+
 /// Current wall-clock in unix ms.
 #[must_use]
 pub fn now_ms() -> Timestamp {
@@ -465,6 +531,206 @@ pub fn now_ms() -> Timestamp {
         },
         |d| d.as_millis() as i64,
     )
+}
+
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::*;
+
+    /// One constructed event per variant — moved here from `fork/tests.rs` so
+    /// the fork guard and the durability census share ONE list. Completeness is
+    /// pinned against the enum source in
+    /// `tests::durability_barrier_set_is_exactly_the_four_ruled_events`.
+    ///
+    /// Kept as `(name, event)` pairs so the guards compare names, not shapes.
+    pub(crate) fn sample_of_every_kind() -> Vec<(&'static str, SessionEvent)> {
+        let t = uuid::Uuid::new_v4();
+        let content = |text: &str| MessageContent {
+            text: text.to_string(),
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        };
+        vec![
+            (
+                "SessionWoken",
+                SessionEvent::SessionWoken {
+                    at: 0,
+                    prior_head: 0,
+                },
+            ),
+            (
+                "RunStarted",
+                SessionEvent::RunStarted {
+                    run_id: "r".into(),
+                    at: 0,
+                    project_root: None,
+                    envelope: None,
+                },
+            ),
+            (
+                "RunFinished",
+                SessionEvent::RunFinished {
+                    run_id: "r".into(),
+                    outcome: RunOutcome::Cancelled,
+                    at: 0,
+                },
+            ),
+            (
+                "ResumeAttempted",
+                SessionEvent::ResumeAttempted {
+                    target: 1,
+                    attempt: 1,
+                },
+            ),
+            (
+                "TurnStarted",
+                SessionEvent::TurnStarted {
+                    turn_id: t,
+                    trigger: TurnTrigger::SubagentRequest,
+                    at: 0,
+                },
+            ),
+            (
+                "UserMessage",
+                SessionEvent::UserMessage {
+                    turn_id: t,
+                    content: content("u"),
+                    at: 0,
+                    synthetic: false,
+                    author_user_id: None,
+                },
+            ),
+            (
+                "AssistantMessage",
+                SessionEvent::AssistantMessage {
+                    turn_id: t,
+                    content: content("a"),
+                    usage: None,
+                    at: 0,
+                },
+            ),
+            (
+                "SystemMessage",
+                SessionEvent::SystemMessage {
+                    turn_id: t,
+                    content: "s".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "ToolCallRequested",
+                SessionEvent::ToolCallRequested {
+                    turn_id: t,
+                    call_id: "c".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({}),
+                    at: 0,
+                },
+            ),
+            (
+                "ToolCallApproved",
+                SessionEvent::ToolCallApproved {
+                    turn_id: t,
+                    call_id: "c".into(),
+                    by: ApprovalSource::Trusted,
+                    at: 0,
+                },
+            ),
+            (
+                "ToolCallDenied",
+                SessionEvent::ToolCallDenied {
+                    turn_id: t,
+                    call_id: "c".into(),
+                    reason: "no".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "ToolResult",
+                SessionEvent::ToolResult {
+                    turn_id: t,
+                    call_id: "c".into(),
+                    output: ToolOutput {
+                        value: serde_json::Value::String("o".into()),
+                        metadata: ToolOutputMetadata::default(),
+                    },
+                    at: 0,
+                },
+            ),
+            (
+                "ToolError",
+                SessionEvent::ToolError {
+                    turn_id: t,
+                    call_id: "c".into(),
+                    error: "e".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "AssistantRunMeta",
+                SessionEvent::AssistantRunMeta {
+                    turn_id: t,
+                    run_id: "r".into(),
+                    context_tokens: 0,
+                    context_window: 0,
+                    total_tokens: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cost_usd: None,
+                    model: None,
+                    model_provider: None,
+                    at: 0,
+                },
+            ),
+            (
+                "SubagentSpawned",
+                SessionEvent::SubagentSpawned {
+                    turn_id: t,
+                    child_id: crate::routing::session_key::SessionKey::parse("agent:main:peer:x")
+                        .expect("fixture key parses"),
+                    flow: "f".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "SubagentReturned",
+                SessionEvent::SubagentReturned {
+                    turn_id: t,
+                    child_id: crate::routing::session_key::SessionKey::parse("agent:main:peer:x")
+                        .expect("fixture key parses"),
+                    summary: "s".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "CompactionPerformed",
+                SessionEvent::CompactionPerformed {
+                    from_seq: 0,
+                    to_seq: 1,
+                    summary_ref: "s".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "SessionForked",
+                SessionEvent::SessionForked {
+                    parent_session_id: "p".into(),
+                    at: 0,
+                },
+            ),
+            (
+                "Error",
+                SessionEvent::Error {
+                    turn_id: None,
+                    kind: ErrorKind::Guardrail,
+                    message: "m".into(),
+                    recoverable: false,
+                    at: 0,
+                },
+            ),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -756,6 +1022,104 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RunOutcome::Abandoned).unwrap(),
             "\"abandoned\""
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Durability policy census (U3)
+    // -----------------------------------------------------------------------
+
+    /// Every variant name declared in `pub enum SessionEvent`, read off this
+    /// file's production text — the owning type, not a remembered list.
+    fn variant_names_from_source() -> Vec<String> {
+        let src = crate::utils::source_scan::production_text(
+            std::path::Path::new(file!()),
+            include_str!("events.rs"),
+        );
+        let src = crate::utils::source_scan::strip_comment_lines(&src);
+        let body = src
+            .split("pub enum SessionEvent {")
+            .nth(1)
+            .expect("enum present");
+        let body = body.split("\n}").next().expect("enum closes");
+        body.lines()
+            .filter(|l| {
+                l.starts_with("    ") && !l.starts_with("     ") && !l.trim_start().starts_with('#')
+            })
+            .filter_map(|l| l.trim().split([' ', '{', '(']).next().map(str::to_string))
+            .filter(|n| n.chars().next().is_some_and(char::is_uppercase))
+            .collect()
+    }
+
+    /// The Barrier column of the durability table is exactly the four events
+    /// U3 ruled on, the sample list constructs every declared variant, nothing
+    /// is ignorable yet, and `durability_of` has no wildcard arm to hide a
+    /// new variant behind.
+    #[test]
+    fn durability_barrier_set_is_exactly_the_four_ruled_events() {
+        let sample = fixtures::sample_of_every_kind();
+        let mut sampled: Vec<&str> = sample.iter().map(|(n, _)| *n).collect();
+        sampled.sort_unstable();
+        let mut declared = variant_names_from_source();
+        declared.sort_unstable();
+        assert_eq!(
+            sampled, declared,
+            "sample_of_every_kind() must construct every variant"
+        );
+        let mut barrier: Vec<&str> = sample
+            .iter()
+            .filter(|(_, e)| durability_of(e) == Durability::Barrier)
+            .map(|(n, _)| *n)
+            .collect();
+        barrier.sort_unstable();
+        assert_eq!(
+            barrier,
+            [
+                "ResumeAttempted",
+                "RunStarted",
+                "ToolCallRequested",
+                "UserMessage"
+            ]
+        ); // U3
+        assert!(
+            sample.iter().all(|(_, e)| !ignorable(e)),
+            "no event is ignorable this round"
+        );
+        let src = crate::utils::source_scan::production_text(
+            std::path::Path::new(file!()),
+            include_str!("events.rs"),
+        );
+        let fn_body = src
+            .split("fn durability_of")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        assert!(
+            !fn_body.contains("_ =>"),
+            "durability_of must force a decision on every new variant"
+        );
+        assert_eq!(
+            batch_durability(
+                [
+                    &sample[0].1,
+                    &SessionEvent::UserMessage {
+                        turn_id: uuid::Uuid::new_v4(),
+                        content: MessageContent {
+                            text: "u".into(),
+                            blocks: vec![],
+                            thinking: None,
+                            thinking_signature: None,
+                        },
+                        at: 0,
+                        synthetic: false,
+                        author_user_id: None,
+                    },
+                ]
+                .into_iter()
+            ),
+            Durability::Barrier
         );
     }
 }

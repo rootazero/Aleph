@@ -232,6 +232,7 @@ pub(crate) fn is_prompt_bearing(event: &SessionEvent) -> bool {
         // with the parent's *plumbing* rather than the parent's conversation.
         SessionEvent::SessionWoken { .. }
         | SessionEvent::RunStarted { .. }
+        | SessionEvent::ResumeAttempted { .. }
         | SessionEvent::TurnStarted { .. }
         | SessionEvent::AssistantRunMeta { .. }
         | SessionEvent::ToolCallApproved { .. }

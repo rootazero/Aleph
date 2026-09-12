@@ -32,19 +32,48 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use crate::error::AlephError;
-use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
+use crate::session::events::{
+    durability_of, Durability, EventSeq, Retire, SessionEvent, SessionEventRecord,
+};
 use crate::session::service::{SessionError, SessionId};
 
 #[async_trait]
 pub trait SessionEventStore: Send + Sync + 'static {
-    /// Append a single event at the given seq. Fails if (`session_id`, seq) already exists.
+    /// Append `events` at consecutive seqs starting from `first_seq`, in ONE
+    /// transaction, optionally retiring a range in that same transaction.
+    ///
+    /// This is the only write path: a multi-step durable operation (`/compact`,
+    /// session split, `/undo`) either lands whole or not at all. Fails — with
+    /// nothing written and nothing retired — if any `(session_id, seq)` already
+    /// exists. `retire` runs BEFORE the inserts so the batch's own rows stay
+    /// live. `durability` decides whether the commit fsyncs the WAL
+    /// ([`Durability::Barrier`]) or rides the store's resting level.
+    ///
+    /// An empty `events` with no `retire` is refused: a "batch" that could do
+    /// nothing would report success for nothing.
+    async fn append_batch(
+        &self,
+        session_id: &SessionId,
+        first_seq: EventSeq,
+        events: &[(SessionEvent, i64)],
+        retire: Option<Retire>,
+        durability: Durability,
+    ) -> Result<(), SessionError>;
+
+    /// Single append = a batch of one. Kept for direct-store writers and tests.
+    ///
+    /// Fails if (`session_id`, seq) already exists.
     async fn append(
         &self,
         session_id: &SessionId,
         seq: EventSeq,
         event: &SessionEvent,
         created_at_ms: i64,
-    ) -> Result<(), SessionError>;
+    ) -> Result<(), SessionError> {
+        let one = [(event.clone(), created_at_ms)];
+        self.append_batch(session_id, seq, &one, None, durability_of(event))
+            .await
+    }
 
     /// Load all events for a session, ordered by seq ascending.
     async fn load_all_events(
@@ -245,7 +274,7 @@ fn add_retired_at_column(conn: &Connection) -> Result<(), rusqlite::Error> {
 ///
 /// This is the BM25-searchable companion to `session_events`: every
 /// content-bearing event is mirrored here on append (see
-/// [`SqliteEventStore::append`]) so that, after compaction evicts old turns
+/// [`SessionEventStore::append_batch`]) so that, after compaction evicts old turns
 /// from the context window, the model can retrieve the relevant slices via the
 /// `session_search` tool instead of re-importing the whole history.
 ///
@@ -296,48 +325,180 @@ impl SqliteEventStore {
     }
 }
 
-#[async_trait]
-impl SessionEventStore for SqliteEventStore {
-    async fn append(
-        &self,
-        session_id: &SessionId,
-        seq: EventSeq,
-        event: &SessionEvent,
-        created_at_ms: i64,
-    ) -> Result<(), SessionError> {
-        let payload = serde_json::to_string(event)?;
-        let session_key = session_id_to_string(session_id)?;
-        let turn_id = extract_turn_id(event).map(|u| u.to_string());
-        let event_type = event_type_tag(event);
-        let seq_i64 = i64::try_from(seq)
-            .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+/// One `session_events` row, shaped and encoded before the connection lock is
+/// taken so the transaction holds the lock only for the SQL itself.
+struct EncodedRow {
+    seq: i64,
+    turn_id: Option<String>,
+    event_type: &'static str,
+    payload: String,
+    created_at: i64,
+    fts_body: Option<String>,
+}
 
-        let conn = self.conn.lock().await;
-        conn.execute(
+/// The ONE payload encoder for `payload_json`. Private seam: the envelope
+/// writer replaces it with a `pub encode_row` and deletes this.
+fn encode_payload(event: &SessionEvent) -> Result<String, SessionError> {
+    Ok(serde_json::to_string(event)?)
+}
+
+/// Retire a range inside an already-open transaction (`conn` is the
+/// `Transaction`, deref'd). Returns how many rows this newly retired.
+///
+/// `retired_at IS NULL` makes both arms idempotent: a second retire of the
+/// same range matches nothing and reports 0. An out-of-range seq saturates to
+/// `i64::MAX`, which is exact in both arms: `From` then matches no row (it
+/// must not widen downward and retire events the caller never named), and
+/// `Through` matches every row, which IS "everything at or below a bound no
+/// stored seq can exceed".
+///
+/// `From` also drops the retired rows from the BM25 mirror, or `recall_events`
+/// would hand the model the very content `chat.clear` / `chat.rewind` just
+/// erased. The FTS table is a derived index, not the log, so a physical
+/// delete there does not break the append-only guarantee. `Through` keeps
+/// the mirror: compaction evicts turns from the prompt but they must stay
+/// recallable — see [`SessionEventStore::retire_through`].
+fn retire_in_txn(
+    conn: &Connection,
+    session_key: &str,
+    retire: Retire,
+    at: i64,
+) -> rusqlite::Result<usize> {
+    match retire {
+        Retire::From(from_seq) => {
+            let from_val = i64::try_from(from_seq).unwrap_or(i64::MAX);
+            let n = conn.execute(
+                "UPDATE session_events SET retired_at = ?3
+                 WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
+                params![session_key, from_val, at],
+            )?;
+            conn.execute(
+                "DELETE FROM session_events_fts WHERE session_id = ?1 AND seq >= ?2",
+                params![session_key, from_val],
+            )?;
+            Ok(n)
+        }
+        Retire::Through(through_seq) => {
+            let through_val = i64::try_from(through_seq).unwrap_or(i64::MAX);
+            conn.execute(
+                "UPDATE session_events SET retired_at = ?3
+                 WHERE session_id = ?1 AND seq <= ?2 AND retired_at IS NULL",
+                params![session_key, through_val, at],
+            )
+        }
+    }
+}
+
+/// The transaction itself: `BEGIN IMMEDIATE`, retire, insert every row,
+/// `COMMIT`. Any error returns before `commit`, and dropping the
+/// `Transaction` uncommitted rolls it back (rusqlite's default
+/// `DropBehavior::Rollback`) — so a batch whose third row collides leaves rows
+/// one and two behind with it, and leaves the retired range live.
+fn write_batch(
+    conn: &mut Connection,
+    session_key: &str,
+    rows: &[EncodedRow],
+    retire: Option<Retire>,
+    at: i64,
+) -> Result<(), SessionError> {
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| SessionError::Storage(format!("append_batch BEGIN IMMEDIATE failed: {e}")))?;
+    // Retire FIRST so the batch's own rows, appended after, stay live.
+    if let Some(r) = retire {
+        retire_in_txn(&tx, session_key, r, at).map_err(|e| SessionError::Storage(e.to_string()))?;
+    }
+    for row in rows {
+        tx.execute(
             "INSERT INTO session_events
              (session_id, seq, turn_id, event_type, payload_json, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_key,
-                seq_i64,
-                turn_id,
-                event_type,
-                payload,
-                created_at_ms,
+                row.seq,
+                row.turn_id,
+                row.event_type,
+                row.payload,
+                row.created_at,
             ],
         )
         .map_err(|e| SessionError::Storage(e.to_string()))?;
+    }
+    tx.commit()
+        .map_err(|e| SessionError::Storage(format!("append_batch COMMIT failed: {e}")))
+}
+
+#[async_trait]
+impl SessionEventStore for SqliteEventStore {
+    async fn append_batch(
+        &self,
+        session_id: &SessionId,
+        first_seq: EventSeq,
+        events: &[(SessionEvent, i64)],
+        retire: Option<Retire>,
+        durability: Durability,
+    ) -> Result<(), SessionError> {
+        if events.is_empty() && retire.is_none() {
+            return Err(SessionError::Other(
+                "append_batch: empty batch with nothing to retire".into(),
+            ));
+        }
+        let session_key = session_id_to_string(session_id)?;
+        let mut rows = Vec::with_capacity(events.len());
+        for (i, (event, at)) in events.iter().enumerate() {
+            let seq = first_seq
+                .checked_add(i as u64)
+                .ok_or_else(|| SessionError::Storage("seq overflow".into()))?;
+            let seq = i64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+            rows.push(EncodedRow {
+                seq,
+                turn_id: extract_turn_id(event).map(|u| u.to_string()),
+                event_type: event_type_tag(event),
+                payload: encode_payload(event)?,
+                created_at: *at,
+                fts_body: render_event_text(event),
+            });
+        }
+        let at = crate::session::events::now_ms();
+
+        let mut conn = self.conn.lock().await;
+        // A Barrier fsyncs the WAL at THIS commit only: raise to FULL for the
+        // transaction, then drop back to the resting NORMAL whether it
+        // committed or rolled back. Stuck at FULL is slower, never less
+        // durable, so a failed restore is logged rather than propagated.
+        if durability == Durability::Barrier {
+            conn.execute_batch("PRAGMA synchronous=FULL")
+                .map_err(|e| SessionError::Storage(format!("PRAGMA synchronous=FULL: {e}")))?;
+        }
+        let written = write_batch(&mut conn, &session_key, &rows, retire, at);
+        if durability == Durability::Barrier {
+            if let Err(e) = conn.execute_batch("PRAGMA synchronous=NORMAL") {
+                tracing::warn!(
+                    error = %e,
+                    "append_batch: could not restore PRAGMA synchronous=NORMAL"
+                );
+            }
+        }
+        written?;
 
         // Mirror content-bearing events into the FTS index so prior turns stay
         // BM25-searchable after compaction evicts them from context. Strictly
-        // best-effort: an indexing failure must never block the authoritative
-        // append above (continuity of the log outranks searchability).
-        if let Some(body) = render_event_text(event) {
+        // best-effort and outside the transaction: an indexing failure must
+        // never block the authoritative append above (continuity of the log
+        // outranks searchability).
+        for row in rows.iter().filter(|r| r.fts_body.is_some()) {
             if let Err(e) = conn.execute(
                 "INSERT INTO session_events_fts
                  (body, session_id, seq, event_type, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![body, session_key, seq_i64, event_type, created_at_ms],
+                params![
+                    row.fts_body,
+                    session_key,
+                    row.seq,
+                    row.event_type,
+                    row.created_at
+                ],
             ) {
                 tracing::debug!(
                     error = %e,
@@ -433,51 +594,22 @@ impl SessionEventStore for SqliteEventStore {
         from_seq: EventSeq,
     ) -> Result<usize, SessionError> {
         let session_key = session_id_to_string(session_id)?;
-        // An out-of-range `from_seq` must not widen the range and retire events
-        // the caller never asked for — saturate high so it matches no rows.
-        let from_val = i64::try_from(from_seq).unwrap_or(i64::MAX);
         let at = crate::session::events::now_ms();
 
-        let conn = self.conn.lock().await;
-        // `retired_at IS NULL` makes this idempotent: a second retire of the
-        // same range matches nothing and reports 0 newly-retired events.
-        //
-        // Both the UPDATE and the FTS DELETE must run in the same transaction
-        // or a partial failure (e.g. disk-full mid-statement) leaves the rows
-        // marked retired while their content stays in the BM25 mirror — exactly
-        // the leak this method exists to prevent.
-        conn.execute_batch("BEGIN IMMEDIATE")
+        let mut conn = self.conn.lock().await;
+        // The UPDATE and the FTS DELETE in `retire_in_txn` must share one
+        // transaction or a partial failure (e.g. disk-full mid-statement)
+        // leaves rows marked retired while their content stays in the BM25
+        // mirror — exactly the leak this method exists to prevent. Dropping
+        // the `Transaction` on the error path rolls back.
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| SessionError::Storage(format!("retire_from BEGIN failed: {e}")))?;
-
-        let retired = match conn.execute(
-            "UPDATE session_events SET retired_at = ?3
-                 WHERE session_id = ?1 AND seq >= ?2 AND retired_at IS NULL",
-            params![session_key, from_val, at],
-        ) {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(SessionError::Storage(e.to_string()));
-            }
-        };
-
-        // Drop the retired events from the BM25 mirror as well, or `recall_events`
-        // would hand the model the very content the user just cleared. The FTS
-        // table is a derived index, not the log, so a physical delete here does
-        // not violate the append-only guarantee. Unlike the best-effort insert in
-        // `append`, this failure is propagated: a half-retire that leaves cleared
-        // content searchable is exactly the leak this method exists to prevent.
-        if let Err(e) = conn.execute(
-            "DELETE FROM session_events_fts WHERE session_id = ?1 AND seq >= ?2",
-            params![session_key, from_val],
-        ) {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(SessionError::Storage(e.to_string()));
-        }
-
-        conn.execute_batch("COMMIT")
+        let n = retire_in_txn(&tx, &session_key, Retire::From(from_seq), at)
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        tx.commit()
             .map_err(|e| SessionError::Storage(format!("retire_from COMMIT failed: {e}")))?;
-        Ok(retired)
+        Ok(n)
     }
 
     async fn retire_through(
@@ -486,27 +618,19 @@ impl SessionEventStore for SqliteEventStore {
         through_seq: EventSeq,
     ) -> Result<usize, SessionError> {
         let session_key = session_id_to_string(session_id)?;
-        // An out-of-range `through_seq` must not widen the range past what the
-        // caller asked for. Unlike `retire_from`'s lower bound, saturating an
-        // upper bound HIGH is the widening direction, so clamp to i64::MAX only
-        // because no stored seq can exceed it — the range is still exactly
-        // "everything at or below the requested boundary".
-        let through_val = i64::try_from(through_seq).unwrap_or(i64::MAX);
         let at = crate::session::events::now_ms();
 
-        let conn = self.conn.lock().await;
-        // Single statement, so no explicit transaction: unlike `retire_from`
-        // there is no paired FTS delete to keep atomic — the BM25 mirror is
-        // deliberately preserved (see the trait doc).
-        //
-        // `retired_at IS NULL` makes this idempotent: re-compacting the same
-        // prefix matches nothing and reports 0 newly-retired events.
-        conn.execute(
-            "UPDATE session_events SET retired_at = ?3
-                 WHERE session_id = ?1 AND seq <= ?2 AND retired_at IS NULL",
-            params![session_key, through_val, at],
-        )
-        .map_err(|e| SessionError::Storage(e.to_string()))
+        let mut conn = self.conn.lock().await;
+        // Same shape as `retire_from`; the arm differs in keeping the BM25
+        // mirror (see the trait doc for why compaction must stay recallable).
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| SessionError::Storage(format!("retire_through BEGIN failed: {e}")))?;
+        let n = retire_in_txn(&tx, &session_key, Retire::Through(through_seq), at)
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        tx.commit()
+            .map_err(|e| SessionError::Storage(format!("retire_through COMMIT failed: {e}")))?;
+        Ok(n)
     }
 
     async fn is_retired(
@@ -671,6 +795,7 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::SessionForked { .. }
         | SessionEvent::RunStarted { .. }
         | SessionEvent::RunFinished { .. }
+        | SessionEvent::ResumeAttempted { .. }
         | SessionEvent::CompactionPerformed { .. } => None,
     }
 }
@@ -685,6 +810,7 @@ const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::SessionWoken { .. } => "session_woken",
         SessionEvent::RunStarted { .. } => "run_started",
         SessionEvent::RunFinished { .. } => "run_finished",
+        SessionEvent::ResumeAttempted { .. } => "resume_attempted",
         SessionEvent::TurnStarted { .. } => "turn_started",
         SessionEvent::UserMessage { .. } => "user_message",
         SessionEvent::AssistantMessage { .. } => "assistant_message",
@@ -1626,5 +1752,169 @@ mod tests {
             .unwrap();
         let hits = store.search_events(&sid, "()[]{}!!!", 5).await.unwrap();
         assert!(hits.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // append_batch — one transaction per batch, retire inside it, Barrier
+    // durability restored either way
+    // -----------------------------------------------------------------------
+
+    /// Atomicity without an injected failure: pre-seed seq 3, then batch
+    /// [1, 2, 3]. Row 3 collides on the primary key, and rows 1 and 2 —
+    /// already INSERTed inside the same transaction — must roll back with it.
+    #[tokio::test]
+    async fn a_batch_whose_third_row_collides_leaves_nothing_behind() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        store
+            .append(&sid, 3, &turn_started(tid, at), at)
+            .await
+            .unwrap();
+        let batch = vec![
+            (turn_started(tid, at), at),
+            (user_message(tid, "x", at), at),
+            (turn_started(tid, at), at),
+        ];
+        let err = store
+            .append_batch(&sid, 1, &batch, None, Durability::Normal)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Storage(_)), "{err:?}");
+        let live: Vec<_> = store
+            .load_all_events(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(
+            live,
+            vec![3],
+            "rows 1 and 2 must have rolled back with row 3"
+        );
+    }
+
+    #[tokio::test]
+    async fn retire_and_insert_are_one_transaction() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        for seq in 1..=3 {
+            store
+                .append(&sid, seq, &user_message(tid, "old", at), at)
+                .await
+                .unwrap();
+        }
+        // Makes seq 5 collide below.
+        store
+            .append(&sid, 5, &turn_started(tid, at), at)
+            .await
+            .unwrap();
+        let batch = vec![(run_finished("r", at), at), (turn_started(tid, at), at)];
+        store
+            .append_batch(&sid, 4, &batch, Some(Retire::From(2)), Durability::Normal)
+            .await
+            .unwrap_err();
+        let live: Vec<_> = store
+            .load_all_events(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(
+            live,
+            vec![1, 2, 3, 5],
+            "a failed batch must not have retired anything either"
+        );
+        // And the successful shape: the batch's own rows are live, the retired
+        // range is not.
+        let batch = vec![(run_finished("r", at), at)];
+        store
+            .append_batch(&sid, 6, &batch, Some(Retire::From(2)), Durability::Normal)
+            .await
+            .unwrap();
+        let live: Vec<_> = store
+            .load_all_events(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(live, vec![1, 6]);
+        // Seq 1 is live and still says "old", so it MUST still hit; seqs 2 and
+        // 3 were retired and must be gone from the mirror as well.
+        let mut hits: Vec<_> = store
+            .search_events(&sid, "old", 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| h.seq)
+            .collect();
+        hits.sort_unstable();
+        assert_eq!(
+            hits,
+            vec![1],
+            "From deletes the BM25 mirror for the retired range like retire_from"
+        );
+    }
+
+    #[tokio::test]
+    async fn barrier_restores_normal_after_success_and_after_failure() {
+        /// The connection's CURRENT `PRAGMA synchronous` (NORMAL = 1, FULL = 2),
+        /// read off the same connection the batch wrote through.
+        async fn sync(s: &SqliteEventStore) -> i64 {
+            s.conn
+                .lock()
+                .await
+                .query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+        }
+        let store = make_store();
+        let sid = sample_session_id();
+        let at = now_ms();
+        store
+            .append_batch(
+                &sid,
+                1,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Barrier,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            sync(&store).await,
+            1,
+            "NORMAL restored after a Barrier commit"
+        );
+        store
+            .append_batch(
+                &sid,
+                1,
+                &[(run_started("r", at), at)],
+                None,
+                Durability::Barrier,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            sync(&store).await,
+            1,
+            "NORMAL restored after a Barrier rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_batch_with_nothing_to_retire_is_refused() {
+        let store = make_store();
+        let err = store
+            .append_batch(&sample_session_id(), 1, &[], None, Durability::Normal)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SessionError::Other(_)));
     }
 }

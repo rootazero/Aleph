@@ -961,7 +961,7 @@ mod tests {
     use super::*;
     use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
     use crate::orchestrator::dispatch::TokenBreakdown;
-    use crate::session::events::{MessageContent, ToolOutput, TurnId};
+    use crate::session::events::{Durability, MessageContent, Retire, ToolOutput, TurnId};
     use crate::session::service::SessionError;
     use tempfile::tempdir;
 
@@ -1229,12 +1229,13 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionEventStore for UnreadableRetirement {
-        async fn append(
+        async fn append_batch(
             &self,
             _id: &SessionId,
-            _seq: EventSeq,
-            _event: &SessionEvent,
-            _created_at_ms: i64,
+            _first_seq: EventSeq,
+            _events: &[(SessionEvent, i64)],
+            _retire: Option<Retire>,
+            _durability: Durability,
         ) -> Result<(), SessionError> {
             Ok(())
         }

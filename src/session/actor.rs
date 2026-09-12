@@ -306,7 +306,7 @@ impl SessionActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{MessageContent, TurnTrigger};
+    use crate::session::events::{Durability, MessageContent, Retire, TurnTrigger};
     use crate::session::store::{migrate_add_session_events, SqliteEventStore};
 
     async fn test_store() -> Arc<dyn SessionEventStore> {
@@ -462,23 +462,24 @@ mod tests {
 
         #[async_trait::async_trait]
         impl SessionEventStore for CollideOnceStore {
-            async fn append(
+            async fn append_batch(
                 &self,
                 _id: &SessionId,
-                seq: EventSeq,
-                _e: &SessionEvent,
-                _at: i64,
+                first_seq: EventSeq,
+                _events: &[(SessionEvent, i64)],
+                _retire: Option<Retire>,
+                _durability: Durability,
             ) -> Result<(), SessionError> {
                 let n = self.appends.fetch_add(1, Ordering::SeqCst);
                 if n == 0 {
                     // First attempt: seq=1 collides with a direct-store writer
                     // that already landed seq=1.
-                    assert_eq!(seq, 1);
+                    assert_eq!(first_seq, 1);
                     self.head.store(1, Ordering::SeqCst);
                     Err(SessionError::Storage("UNIQUE constraint failed".into()))
                 } else {
                     // Retry after resync: head_seq is now 1, so this should be seq=2.
-                    assert_eq!(seq, 2);
+                    assert_eq!(first_seq, 2);
                     self.head.store(2, Ordering::SeqCst);
                     Ok(())
                 }
