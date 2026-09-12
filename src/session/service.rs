@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 
 use crate::capability::{CapabilitySlot, MissingSemantics, SlotStatus};
-use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
+use crate::session::events::{EventSeq, Retire, SessionEvent, SessionEventRecord};
 
 pub type SessionId = crate::routing::session_key::SessionKey;
 
@@ -51,6 +51,25 @@ pub trait SessionService: Send + Sync + 'static {
         id: &SessionId,
         event: SessionEvent,
     ) -> Result<EventSeq, SessionError>;
+
+    /// Append `events` and apply `retire` in ONE store transaction (§4.1).
+    /// Returns every seq allocated, in batch order.
+    ///
+    /// Default is a refusal, not a loop of `emit_event`: a service that cannot
+    /// commit atomically must say so rather than report a batch that can
+    /// tear. Only `InProcessActorSessionService` overrides it.
+    async fn emit_batch(
+        &self,
+        id: &SessionId,
+        events: Vec<SessionEvent>,
+        retire: Option<Retire>,
+    ) -> Result<Vec<EventSeq>, SessionError> {
+        let _ = (id, events, retire);
+        Err(SessionError::Other(
+            "this SessionService cannot append atomically (only InProcessActorSessionService can)"
+                .into(),
+        ))
+    }
 
     async fn subscribe(
         &self,
