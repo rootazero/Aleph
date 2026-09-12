@@ -2649,7 +2649,65 @@ mod tests {
     /// on macOS after the merge at 114_393 B (94_797 catalog + 16_613
     /// registry-only + 1_039 injected + 1_944 bridge), not derived by
     /// arithmetic over the two sides' ledgers.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_393;
+    ///
+    /// 2026-09-12 (browser dual-engine, task 13): 114_393 -> 114_427 B, +34,
+    /// all `browser_click`. **Both endpoints are readings**, per the 2026-09-04
+    /// correction above: without this round's DESCRIPTION edit the guard prints
+    /// 114_393 B (94_797 catalog + 16_613 registry-only + 1_039 injected +
+    /// 1_944 bridge), with it 114_427 B (94_831 + the same three), each read off
+    /// this test's own panic with the ceiling temporarily floored. Only the
+    /// catalog component moved, and a text-level count of the literal agrees
+    /// independently (117 -> 151 B). Nothing here was derived by adding 34 to a
+    /// prior figure.
+    ///
+    /// **Measured on macOS (aarch64-apple-darwin), and the stamp is
+    /// load-bearing.** This round does not touch `bash`, so the
+    /// platform-conditional term is unchanged — but the number above is the
+    /// Unix assembly, which the guard's own "Largest" line confirms by printing
+    /// `bash` at 4_740. Re-counted at text level by the method this doc
+    /// prescribes (extract the macro bodies, sum per platform): Unix 4_740 B,
+    /// Windows 4_770 B, reproducing the +30 gap recorded above from an
+    /// independent instrument. So the **Windows total is 114_457 B, 30 B over
+    /// this ceiling — exactly as it was over the previous one.** That gap
+    /// predates this round, which neither widens nor closes it. It is recorded
+    /// rather than absorbed: setting 114_457 here would issue 30 B of macOS
+    /// headroom nobody spent, and the next round to add 30 B on this machine
+    /// would then pass a guard that should have stopped it (判据 §13 — the
+    /// slack above a measured value is credit already handed out).
+    ///
+    /// What the bytes buy: `browser_click`'s `double=true` was documented AND
+    /// enforced as "ref_id only", on the ground that no driver has a
+    /// coordinate double-click. The CDP backend's `dblclick` does — two
+    /// press/release pairs at a point — so the sentence and the tool-layer
+    /// guard both narrowed to name the driver that can serve it. Fixing only
+    /// the guard would have left the model told the opposite of what the code
+    /// does (判据 §17).
+    ///
+    /// Against the three questions:
+    /// (1) A runtime fact no schema field can carry. `browser_click` is **not**
+    /// in `default_core_tools()`, so under progressive disclosure its schema —
+    /// including the `double` field's own description — is not resident: this
+    /// catalog line is the whole of what a model reads when deciding whether to
+    /// fetch the schema at all. Which of three drivers a profile runs is a
+    /// deployment fact, and here it is the difference between a call that works
+    /// and one refused before the approval gate.
+    /// (2) A stronger model cannot infer it, and the wrong guess is the
+    /// expensive direction: told "ref_id only", it spends a `browser_snapshot`
+    /// hunting a ref for an element whose coordinates it already has, on a
+    /// profile where the coordinate call would have worked.
+    /// (3) The near-repeat was looked for rather than assumed.
+    /// `BrowserClickArgs::double`'s doc states the same fact and is **not**
+    /// prunable: it ships inside the derived JSON schema, which a non-core
+    /// tool's reader sees only after `get_tool_schema`, while this line is read
+    /// before that decision — two readers, two sentences, the shape the
+    /// 2026-09-04 `project_manage` entry records. `no_sentence_is_stated_twice`
+    /// passes. The coordinate-SPACE sentences from the same round went to
+    /// `browser::types::ActionTarget` and `browser_exec`'s `Click` variant doc,
+    /// which are schema and comments rather than catalog bytes, so none of them
+    /// are in this 34.
+    /// 34 B is the whole of the round's spend, well under the 400 B pruning
+    /// threshold this plan sets before a raise is accepted.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_427;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
