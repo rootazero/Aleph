@@ -62,6 +62,7 @@ use super::types::{
     ScrollDirection, SnapshotOutput, TabId,
 };
 
+mod actions;
 mod evaluate;
 mod events;
 mod navigate;
@@ -298,56 +299,65 @@ impl BrowserBackend for CdpBackend {
         screenshot::emulate(self, tab_id, opts).await
     }
 
-    // --- filled in by Task 13 --------------------------------------------
-    async fn click(&self, _t: &str, _target: ActionTarget) -> Result<(), BrowserError> {
-        Err(not_yet_wired("click"))
+    async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
+        actions::click(self, tab_id, target).await
     }
-    async fn dblclick(&self, _t: &str, _target: ActionTarget) -> Result<(), BrowserError> {
-        Err(not_yet_wired("dblclick"))
+    async fn dblclick(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
+        actions::dblclick(self, tab_id, target).await
     }
-    async fn hover(&self, _t: &str, _target: ActionTarget) -> Result<(), BrowserError> {
-        Err(not_yet_wired("hover"))
+    async fn hover(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
+        actions::hover(self, tab_id, target).await
     }
     async fn type_text(
         &self,
-        _t: &str,
-        _target: ActionTarget,
-        _text: &str,
+        tab_id: &str,
+        target: ActionTarget,
+        text: &str,
     ) -> Result<(), BrowserError> {
-        Err(not_yet_wired("type_text"))
+        actions::type_text(self, capabilities(self.engine), tab_id, target, text).await
     }
-    async fn fill(&self, _t: &str, _target: ActionTarget, _v: &str) -> Result<(), BrowserError> {
-        Err(not_yet_wired("fill"))
+    async fn fill(
+        &self,
+        tab_id: &str,
+        target: ActionTarget,
+        value: &str,
+    ) -> Result<(), BrowserError> {
+        actions::fill(self, tab_id, target, value).await
     }
-    async fn select(&self, _t: &str, _target: ActionTarget, _v: &str) -> Result<(), BrowserError> {
-        Err(not_yet_wired("select"))
+    async fn select(
+        &self,
+        tab_id: &str,
+        target: ActionTarget,
+        value: &str,
+    ) -> Result<(), BrowserError> {
+        actions::select(self, tab_id, target, value).await
     }
-    async fn press_key(&self, _t: &str, _key: &str) -> Result<(), BrowserError> {
-        Err(not_yet_wired("press_key"))
+    async fn press_key(&self, tab_id: &str, key: &str) -> Result<(), BrowserError> {
+        actions::press_key(self, tab_id, key).await
     }
     async fn scroll(
         &self,
-        _t: &str,
-        _target: ActionTarget,
-        _d: ScrollDirection,
+        tab_id: &str,
+        target: ActionTarget,
+        direction: ScrollDirection,
     ) -> Result<(), BrowserError> {
-        Err(not_yet_wired("scroll"))
+        actions::scroll(self, tab_id, target, direction).await
     }
     async fn drag(
         &self,
-        _t: &str,
-        _from: ActionTarget,
-        _to: ActionTarget,
+        tab_id: &str,
+        from: ActionTarget,
+        to: ActionTarget,
     ) -> Result<(), BrowserError> {
-        Err(not_yet_wired("drag"))
+        actions::drag(self, capabilities(self.engine), tab_id, from, to).await
     }
     async fn upload(
         &self,
-        _t: &str,
-        _target: Option<ActionTarget>,
-        _paths: &[String],
+        tab_id: &str,
+        target: Option<ActionTarget>,
+        paths: &[String],
     ) -> Result<(), BrowserError> {
-        Err(not_yet_wired("upload"))
+        actions::upload(self, capabilities(self.engine), tab_id, target, paths).await
     }
     async fn handle_dialog(
         &self,
