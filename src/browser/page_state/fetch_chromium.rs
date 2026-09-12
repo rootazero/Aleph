@@ -288,6 +288,17 @@ pub fn parse_snapshot(
 /// reached through the same [`frames_of`] call, because two spellings of one
 /// arithmetic part company (判据 §16).
 ///
+/// # `loaders` is a UNION over every session, not the parent's
+///
+/// A frame id from a child capture is looked up in the same map as the
+/// parent's, so the caller must merge `Page.getFrameTree` from **each** session
+/// it captured. Pass only the parent's and every child frame silently gets an
+/// empty loader id: tolerated by design (the main frame's reset still clears
+/// its refs), which means the mistake produces no error and no red — it just
+/// makes `RefTable` unable to tell that an iframe navigated on its own. This is
+/// the second of the three ways Task 12 can undo this task quietly; the first
+/// is calling [`parse_snapshot`] instead of this function.
+///
 /// # What it refuses, and why refusing is the cheap direction
 ///
 /// * A child whose `owner_backend_node_id` is in no capture: placing it at
@@ -752,8 +763,12 @@ fn index_set(indices: &[i64]) -> HashSet<usize> {
 /// A value of `-1` is CDP's "absent string", and on a VALUE list that is a
 /// reading rather than a silence: the control's current value is empty. It
 /// becomes `Some("")`, so "the engine looked and there is nothing in it" stays
-/// distinguishable from "the engine did not mention this node" — three of the
-/// four entries across the real fixtures are exactly this.
+/// distinguishable from "the engine did not mention this node" — **7 of the 9**
+/// entries across the real fixtures are exactly this. (Predicate: entries in
+/// `inputValue.index` plus `textValue.index` over all four captures in
+/// `fixtures/`, counted at `f3e8e9b28`: `hn` 1, `local-sameorigin-iframe` 4,
+/// `local-oopif-parent` 4, `local-oopif-child` 0; of those, 7 carry `-1`. This
+/// doc said "three of the four" and neither number was measured.)
 ///
 /// Verbatim, not whitespace-collapsed like the attribute path: this is the
 /// user's text and a `<textarea>`'s newlines are part of it.
@@ -982,6 +997,61 @@ mod tests {
         out
     }
 
+    /// The element-level rect a node's layout entries agree on, or why there
+    /// is none.
+    ///
+    /// The census test's whole authority is that `offsetRects` is
+    /// **element-level** — one answer per element, whichever layout object you
+    /// read it from — while `bounds` is per layout object. Measured 4 of 4 on
+    /// this directory's multi-entry nodes. But an invariant asserted only
+    /// inside a loop over frozen fixtures can never go red, and a guard nobody
+    /// has reddened is not a guard (判据 §3), so the check lives here where
+    /// synthetic input can falsify it.
+    ///
+    /// If it ever failed, the authority would silently become "whichever slot
+    /// comes first" — read off the very ordering the rule under test decides,
+    /// which is this branch's authority-confirms-itself class one level up from
+    /// the guard.
+    fn agreed_offset_rect(rects: &[Vec<i64>]) -> Result<Vec<i64>, String> {
+        let Some(first) = rects.first() else {
+            return Err("the node has no layout entries to read an offsetRect from".to_string());
+        };
+        if let Some(other) = rects.iter().find(|r| *r != first) {
+            return Err(format!(
+                "offsetRects differ across this node's entries ({first:?} vs \
+                 {other:?}), so there is no one element-level answer and \
+                 picking one would mean picking by position"
+            ));
+        }
+        if first.len() != 4 {
+            return Err(format!("no offsetRect to judge by, got {first:?}"));
+        }
+        Ok(first.clone())
+    }
+
+    /// [`agreed_offset_rect`] refuses the two shapes that would quietly turn
+    /// the census test's authority into a restatement of the rule it tests.
+    #[test]
+    fn the_offset_authority_refuses_disagreeing_or_absent_entries() {
+        let rect = vec![23, 265, 7, 22];
+        assert_eq!(
+            agreed_offset_rect(&[rect.clone(), rect.clone()]),
+            Ok(rect.clone()),
+            "two entries that agree are the element's rect"
+        );
+
+        let other = vec![23, 267, 7, 18];
+        let err = agreed_offset_rect(&[rect.clone(), other]).expect_err("disagreeing entries");
+        assert!(err.contains("differ"), "{err}");
+        assert!(err.contains("by position"), "{err}");
+
+        assert!(agreed_offset_rect(&[]).is_err(), "no entries at all");
+        assert!(
+            agreed_offset_rect(&[vec![1, 2, 3]]).is_err(),
+            "three numbers are not a rect"
+        );
+    }
+
     /// The position of one style name in the capture-time list.
     fn capture_style_index(styles: &[String], name: &str) -> usize {
         styles
@@ -1192,7 +1262,21 @@ mod tests {
                     );
                 }
             }
-            assert!(arrays > 0, "{name}: no styles arrays to check");
+            // Exact per fixture, for the reason the four counts at the end of
+            // `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`
+            // give: frozen input, so a threshold is a weaker statement with no
+            // compensating benefit. Predicate: non-empty `styles` rows summed
+            // over that capture's documents, at `f3e8e9b28`. They total 1413,
+            // which is 1418 layout entries less the one empty `#document` row
+            // per document.
+            let want = match name {
+                "hacker-news" => 1291,
+                "same-origin" => 61,
+                "oopif-parent" => 54,
+                "oopif-child" => 7,
+                other => panic!("unlisted fixture {other}"),
+            };
+            assert_eq!(arrays, want, "{name}: non-empty styles rows");
         }
     }
 
@@ -1234,14 +1318,18 @@ mod tests {
                 .iter()
                 .enumerate()
             {
-                let indices: Vec<u64> = doc["layout"]["nodeIndex"]
+                // RAW positions (see the census test): a `slot` here must be a
+                // position in `nodeIndex` itself, because that is what
+                // production indexes into `styles` (判据 §12).
+                let indices: Vec<Option<u64>> = doc["layout"]["nodeIndex"]
                     .as_array()
                     .expect("nodeIndex[]")
                     .iter()
-                    .filter_map(serde_json::Value::as_u64)
+                    .map(serde_json::Value::as_u64)
                     .collect();
                 for (slot, node) in indices.iter().enumerate() {
-                    if indices.iter().filter(|n| *n == node).count() != 1 {
+                    let Some(node) = node else { continue };
+                    if indices.iter().flatten().filter(|n| *n == node).count() != 1 {
                         continue;
                     }
                     let arr = doc["layout"]["styles"][slot]
@@ -1283,10 +1371,23 @@ mod tests {
             }
         }
 
-        assert!(checked > 1000, "only {checked} nodes cross-checked");
-        assert!(pointers > 0, "no `cursor: pointer` node in any capture");
-        assert!(hidden > 0, "no `visibility: hidden` node in any capture");
-        assert!(zero > 0, "no `opacity: 0` node in any capture");
+        // EXACT, not thresholds. The input is a frozen `include_str!`, so these
+        // counts are facts about files that cannot change without someone
+        // editing them — and a `> 0` on a count of 508 survives a census that
+        // found one node out of fourteen hundred, which is 判据 §2's vacuous
+        // pass wearing a non-vacuity assertion's clothes. It is also what let
+        // "1352" stand in this task's report beside the true 1405: both clear
+        // `> 1000`, so nothing here could tell a count taken from a count
+        // assumed (判据 §18). Global Constraints asks for exact counts; this is
+        // that rule applied to its own non-vacuity assertions.
+        //
+        // Predicate for all four: slots whose node index occurs exactly once in
+        // that document's `nodeIndex` and whose `styles` row is non-empty, over
+        // the four real captures. Measured at `f3e8e9b28`.
+        assert_eq!(checked, 1405, "nodes cross-checked");
+        assert_eq!(pointers, 508, "`cursor: pointer` nodes");
+        assert_eq!(hidden, 4, "`visibility: hidden` nodes");
+        assert_eq!(zero, 4, "`opacity: 0` nodes");
         // NOT a non-vacuity gap: `display: none` is the flag a Chrome capture
         // cannot show, because such a node gets no layout entry and therefore
         // no styles array. Measured here rather than asserted from the design
@@ -1628,10 +1729,16 @@ mod tests {
                     .unwrap_or(0)
             })
             .sum();
-        assert!(
-            expected_nodes > 200,
-            "the Hacker News capture should have hundreds of nodes, got \
-             {expected_nodes} — the fixture is not the page it claims to be"
+        // Exact: the fixture is frozen, so "hundreds" is a weaker claim than
+        // the number, and the weaker one cannot tell a fixture that was
+        // recaptured at half the page from one that was not. Predicate: Σ
+        // `nodes.parentIndex.len()` over this capture's documents, at
+        // `f3e8e9b28`. The cross-checks below still derive their expectation
+        // from the wire rather than from this literal — this one line pins the
+        // fixture's identity, and they pin the parser against it.
+        assert_eq!(
+            expected_nodes, 1303,
+            "the Hacker News capture is not the page it claims to be"
         );
 
         let dom = parse_snapshot(&value, viewport(), &loaders_of(&value))
@@ -1688,7 +1795,26 @@ mod tests {
     /// multi-entry node this reads `offsetRects` — Chrome's own answer for
     /// "where is this element's box" — and requires the parsed rect to be that
     /// box, rounded. Asserting "the first entry" instead would test the
-    /// implementation against a restatement of itself (判据 §10).
+    /// implementation against a restatement of itself (判据 §10). `bounds` is
+    /// per layout object and `offsetRects` is element-level, which is *why* a
+    /// `::marker`'s two entries differ in one and agree in the other.
+    ///
+    /// # What this test does NOT prove, measured rather than reasoned
+    ///
+    /// **It cannot falsify first-entry-wins.** In all four real instances the
+    /// `text == -1` entry is reported first, so the position rule and the
+    /// reading rule select the same slot and this census stays green under
+    /// either. Measured by the reviewer at `f3e8e9b28`: reverting `layout_slots`
+    /// to first-entry-wins leaves this test green and reddens exactly one test —
+    /// the hand-written `a_box_reported_after_its_text_run_is_still_the_box_that_wins`,
+    /// **which is therefore the entire discriminator between the two rules.**
+    /// Delete that case and the reading rule has no falsifier left.
+    ///
+    /// So the honest scope: this is a strong guard against picking the text run
+    /// *given an ordering no capture in this directory exhibits*, and it is not
+    /// a guard on the choice of rule. Written here because a green a later
+    /// reader could quote as coverage it does not have must say so where the
+    /// reader is standing — the same discipline as the pin test's.
     #[test]
     fn a_node_with_several_layout_entries_keeps_the_box_chrome_calls_its_own() {
         let mut multi_entry_nodes = 0usize;
@@ -1702,39 +1828,54 @@ mod tests {
                 .enumerate()
             {
                 let layout = &doc["layout"];
-                let indices: Vec<u64> = layout["nodeIndex"]
+                // RAW positions, kept as `Option`: a slot is a position in
+                // `nodeIndex` itself, which is what production indexes. A
+                // `filter_map` here would renumber every slot after the first
+                // unreadable entry, so the test's `slot` and production's
+                // `slot` would be two derivations of one thing agreeing only
+                // because no fixture has a negative `nodeIndex` (判据 §12).
+                let indices: Vec<Option<u64>> = layout["nodeIndex"]
                     .as_array()
                     .expect("nodeIndex[]")
                     .iter()
-                    .filter_map(serde_json::Value::as_u64)
+                    .map(serde_json::Value::as_u64)
                     .collect();
                 let doubled: std::collections::BTreeSet<u64> = indices
                     .iter()
+                    .flatten()
                     .copied()
-                    .filter(|n| indices.iter().filter(|m| *m == n).count() > 1)
+                    .filter(|n| indices.iter().flatten().filter(|m| *m == n).count() > 1)
                     .collect();
                 for node in doubled {
                     multi_entry_nodes += 1;
                     let slots: Vec<usize> = indices
                         .iter()
                         .enumerate()
-                        .filter(|(_, n)| **n == node)
+                        .filter(|(_, n)| **n == Some(node))
                         .map(|(s, _)| s)
                         .collect();
                     // Chrome's own border box for this element, from an array
                     // this parser does not deserialise at all.
-                    let offset: Vec<i64> = slots
+                    //
+                    // The independence rests on an invariant this test must not
+                    // assume: `offsetRects` is element-level, so every entry of
+                    // one node should carry the SAME rect. Assert it before
+                    // using one, because otherwise the authority is read off
+                    // whichever slot comes first — the very ordering the rule
+                    // under test decides — and the guard would quietly begin
+                    // confirming itself.
+                    let offsets: Vec<Vec<i64>> = slots
                         .iter()
-                        .filter_map(|s| layout["offsetRects"][*s].as_array())
-                        .find(|r| r.len() == 4)
-                        .map(|r| r.iter().filter_map(serde_json::Value::as_i64).collect())
-                        .unwrap_or_default();
-                    assert_eq!(
-                        offset.len(),
-                        4,
-                        "{name} doc[{d}] node {node}: no offsetRect to judge by, \
-                         so this test has no authority of its own"
-                    );
+                        .map(|s| {
+                            layout["offsetRects"][*s]
+                                .as_array()
+                                .map(|r| r.iter().filter_map(serde_json::Value::as_i64).collect())
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    let offset = agreed_offset_rect(&offsets).unwrap_or_else(|why| {
+                        panic!("{name} doc[{d}] node {node}: {why} — so this test has no authority of its own")
+                    });
 
                     let node = usize::try_from(node).expect("a node index");
                     let got = dom.frames[d].nodes[node]
@@ -1749,6 +1890,13 @@ mod tests {
                             ]
                         })
                         .expect("a multi-entry node has a box");
+                    // Exact integer equality across two rounding pipelines —
+                    // Chrome's into `offsetRects` and this parser's `f64::round`
+                    // over `bounds`. All four agree today only because
+                    // 287.625 → 288 rounds the same way on both sides; a
+                    // fixture whose bounds land on a .5 boundary Chrome breaks
+                    // the other way would redden this for a reason that is
+                    // about rounding and not about the rule.
                     assert_eq!(
                         got.as_slice(),
                         offset.as_slice(),
@@ -1896,7 +2044,16 @@ mod tests {
     /// was aimed at this and could not report it: against this fixture it
     /// iterates an empty set of child documents and passes (判据 §2's 恒绿
     /// face). The fact is stated positively here instead, with the element
-    /// that IS present named, so a Chrome that changed its mind would go red.
+    /// that IS present named.
+    ///
+    /// **This reads a frozen `include_str!`, so a Chrome that changed its mind
+    /// cannot redden it** — only a recapture can, and then it reddens on the
+    /// new bytes rather than on the browser. An earlier version of this
+    /// sentence claimed the opposite, one screen from the honest pin-not-a-
+    /// tripwire paragraph on
+    /// `a_single_session_capture_leaves_a_cross_origin_iframes_content_unmentioned`:
+    /// two dispositions of the same fixture in the same file, and the false one
+    /// was the one that read like coverage (判据 §1).
     #[test]
     fn a_cross_origin_iframe_contributes_no_document_to_its_parents_capture() {
         let value = json(OOPIF_PARENT);
