@@ -486,10 +486,21 @@ pub(super) async fn tab_ready(
         return Err(BrowserError::ActionFailed(format!(
             // QUOTED (R40): the message is the page's own, and it reaches the
             // model outside the untrusted-content fence.
+            // TWO doors, not one. `browser_dialog` is the right one almost
+            // always — but if this latch is STALE (the engine has no dialog and
+            // says so in wording `dialog::says_no_dialog` does not recognise),
+            // `browser_dialog` is reachable and cannot clear it, and this
+            // refusal would be the only thing the model ever sees again on this
+            // tab. A gate must name a door that opens (判据 §14), and in that
+            // scenario the door is closing the tab. One line, no measurement,
+            // and it is the difference between a recoverable wedge and a
+            // permanent one.
             "this tab has an open dialog ({}) and the engine will not answer any \
              other command until it is closed. Answer it with \
              browser_dialog{{action:\"accept\"}} or \
-             browser_dialog{{action:\"dismiss\"}}, then retry.",
+             browser_dialog{{action:\"dismiss\"}}, then retry. If that reports \
+             no dialog is open, Aleph's record of it is stale and the tab is \
+             recovered with browser_tabs{{action:\"close\"}}.",
             quote(&text)
         )));
     }
@@ -1438,7 +1449,25 @@ mod tests {
         // STOP at the end of the impl block. Reading to end-of-file swept in
         // `mod tests`'s `async fn` names and demanded a disposition for a test
         // — a scan whose boundary is wrong reports on a set that is not the one
-        // it names (判据 §3), and here it failed loudly only by luck.
+        // it names (判据 §3).
+        //
+        // **What pins this boundary is the PAIR of `for` loops below**, which
+        // together assert set equality in both directions: an overrun fails the
+        // first (a swept-in name is placed in neither half) and an under-run
+        // fails the second (a recorded name is not among the verbs). That holds
+        // whatever the stray names happen to look like.
+        //
+        // The `_test` / `a_` check underneath is a DIAGNOSTIC, not the guard.
+        // It is labelled so because this round's first report credited it as
+        // the fix, and a reader who believed that could "simplify away" the
+        // reverse loop and put the boundary back on luck (判据 §1 — the comment
+        // is the lying half, and mis-crediting a guard is worse than not
+        // crediting one). Measured from the review seat: a real overrun sweeps
+        // in four names and this check recognises **two** of them; the other
+        // two (`evaluate_returns_the_value_and_never_the_script`,
+        // `an_arrow_function_script_is_called_not_merely_evaluated`) look
+        // exactly like verbs. It earns its place only by turning "this name is
+        // placed nowhere" into "your scan ran off the end".
         let verbs: Vec<&str> = body
             .lines()
             .take_while(|l| *l != "}")
@@ -1455,10 +1484,12 @@ mod tests {
             !verbs
                 .iter()
                 .any(|v| v.contains("_test") || v.starts_with("a_")),
-            "the scan ran past the impl block and picked up test functions: \
-             {verbs:?}"
+            "DIAGNOSTIC (the two set-equality loops below are the guard): the \
+             scan appears to have run past the impl block into the test \
+             module: {verbs:?}"
         );
 
+        // GUARD, half one: every verb is placed. An overrun fails here.
         for verb in &verbs {
             assert!(
                 gated.contains(verb) || ungated.contains(verb),
@@ -1468,6 +1499,11 @@ mod tests {
                  ungated with the reason)?"
             );
         }
+        // GUARD, half two: every recorded name is still a verb. An under-run —
+        // a boundary that stops too early, or a scan reading the wrong block —
+        // fails here. Together with half one this is set equality in both
+        // directions, and it is the pair that makes the boundary safe rather
+        // than lucky.
         for verb in gated.iter().chain(ungated.iter()) {
             assert!(
                 verbs.contains(verb),

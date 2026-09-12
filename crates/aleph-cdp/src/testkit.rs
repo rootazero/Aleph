@@ -86,9 +86,29 @@ pub enum Responder {
     /// facts a caller needs to tell apart: none of the other five variants can represent an
     /// unresponsive peer — `Drop` closes the socket (a `Disconnected`, not a `Timeout`, from a
     /// real client's point of view), and `Delay` always eventually answers, however long the
-    /// delay. A real CDP peer that has wedged looks exactly like `Hang`, and `CdpConnection`'s own
-    /// per-command timeout (spec §3.4.2, `CdpError::Timeout`) has no other way to be exercised
-    /// against this fake — expect Tasks 2/3 to use this for that.
+    /// delay. `CdpConnection`'s own per-command timeout (spec §3.4.2, `CdpError::Timeout`) has no
+    /// other way to be exercised against this fake — expect Tasks 2/3 to use this for that.
+    ///
+    /// ⚠️ **`Hang` models the WHOLE PEER going silent, not one wedged command.** This doc used to
+    /// say "a real CDP peer that has wedged looks exactly like `Hang`", and that is false in the
+    /// case a caller is most likely to reach for it: a real peer blocked on a modal JS dialog
+    /// **keeps reading and answering other frames** — that is the whole reason the CDP backend
+    /// races the dialog event against the mouse-release reply. `Hang` cannot express that, because
+    /// it awaits `std::future::pending` **inside the connection's read loop** (see its arm in
+    /// `dispatch` and the comment there): the connection stops serving every later frame on that
+    /// socket, not just this one.
+    ///
+    /// So: `Hang` for "this peer is gone"; `Delay` for "this command will not answer but the peer
+    /// is alive", which is what a modal dialog, a stalled navigation or a busy renderer actually
+    /// look like. A test whose later frames must still be served needs `Delay` — derive its
+    /// duration from the command budget rather than picking one, so it cannot be tidied down into
+    /// a slow reply.
+    ///
+    /// The cost of the old wording is documented rather than assumed: a Task 13 fix round took the
+    /// sentence at face value, used `Hang` for a wedged-dialog fixture, and measured **1 frame
+    /// recorded where 2 were expected** before finding the mechanism in this file.
+    /// `fake_server_delay_does_not_block_a_later_request` in `tests/smoke.rs` is the standing proof
+    /// of the `Delay` half.
     ///
     /// This is a recorded, deliberate amendment to the union this crate's testkit exposes (added
     /// in the fix round that added `shutdown`'s falsifier test, C1), not a drift: an equivalent

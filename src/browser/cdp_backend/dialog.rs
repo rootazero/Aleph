@@ -100,11 +100,27 @@ async fn clear_latch(handle: &EngineHandle, tab_id: &str) {
 /// message with and without trailing punctuation before (`NO_BOX_MESSAGE` in
 /// `aleph-cdp` is a prefix match for that reason).
 ///
-/// **A guess is acceptable here only because its failure direction is the safe
-/// one**: guess wrong and the latch stays set, so the gate keeps refusing by
-/// name while this call stays reachable to try again. The cost is an extra
-/// refusal, never a wedge. Task 16's real-machine prober is where the spelling
-/// stops being a guess.
+/// ⚠️⚠️ **The failure direction is NOT uniformly safe, and an earlier version of
+/// this doc said it was.** That sentence was false in the one scenario this
+/// function exists for, which is the most expensive place for a doc to be wrong
+/// (判据 §17 — and a comment is the half that lies, 判据 §1). Both cases,
+/// stated:
+///
+/// * **A dialog really is open** and the call fails for some other reason: a
+///   wrong guess leaves the latch set, the gate keeps refusing by name, this
+///   call stays reachable. Correct, and the cost is one extra refusal.
+/// * **The latch is STALE** — no dialog, and the engine says so in wording this
+///   function does not match. A wrong guess then leaves the latch set
+///   **forever**: `handle_dialog` is reachable but can never clear it, every
+///   action verb and `snapshot` refuse on that tab permanently, and the only
+///   real exit is closing the tab. That is a wedge, not an extra refusal — and
+///   it is precisely the scenario this function was written for.
+///
+/// So the guess is mitigated rather than safe: `actions::tab_ready`'s refusal
+/// names `browser_tabs{action:"close"}` alongside `browser_dialog`, so the
+/// model reading it can get out of the second case. Task 16's real-machine
+/// prober is where the spelling stops being a guess and the mitigation stops
+/// being needed.
 fn says_no_dialog(err: &CdpError) -> bool {
     match err {
         CdpError::Protocol { message, .. } => message.to_ascii_lowercase().contains("no dialog"),
@@ -162,6 +178,61 @@ mod tests {
                 .pending_dialog
                 .is_none(),
             "a handled dialog clears the latch, so the gate comes down"
+        );
+    }
+
+    /// **The claim the removal of the pre-check actually makes**, and until now
+    /// nothing falsified it: `handle_dialog` must reach the engine **even when
+    /// the local latch says there is no dialog**.
+    ///
+    /// That state is not hypothetical — it is what a dropped
+    /// `Page.javascriptDialogOpening` leaves behind (the pump lags, the latch
+    /// was never set, the dialog is up), and it is the only state in which a
+    /// local pre-check can do damage. Every other test in this file sets the
+    /// latch first, so a restored pre-check — which refuses only on
+    /// `is_none()` — never fired in any of them and could be put back with the
+    /// whole file green. Measured from the other seat: mutation #35 alone,
+    /// `ok. 67 passed`.
+    ///
+    /// Fourth time a tidy fixture has hidden something on this task, and this
+    /// one was tidier than the rest: the shared state was pinned by a SIBLING
+    /// test's assertion, so the premise looked deliberate rather than
+    /// incidental.
+    #[tokio::test]
+    async fn a_dialog_call_reaches_the_engine_even_when_the_latch_says_there_is_none() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on("Page.handleJavaScriptDialog", Responder::Reply(json!({})));
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+
+        // The precondition that makes this test the one it claims to be: NO
+        // latch. Asserted rather than assumed, because it is exactly the thing
+        // every other fixture here sets and the thing a pre-check keys on.
+        assert!(
+            handle.tabs.lock().await.entries["T1"]
+                .pending_dialog
+                .is_none(),
+            "precondition: with a latch set, a restored pre-check never fires \
+             and this test cannot fail"
+        );
+
+        backend
+            .handle_dialog("T1", "accept", None)
+            .await
+            .expect("a dialog Aleph never saw open is still the engine's to answer");
+        assert!(
+            methods(&server)
+                .iter()
+                .any(|m| m == "Page.handleJavaScriptDialog"),
+            "the call must reach the engine — a local 'there is no dialog' in \
+             front of the wire is the second derivation this removal exists to \
+             delete: {:?}",
+            methods(&server)
         );
     }
 
