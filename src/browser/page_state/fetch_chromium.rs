@@ -36,12 +36,17 @@ use crate::browser::error::BrowserError;
 /// carries `overflow_clip` and nothing read it. Asking an engine for a value
 /// nobody reads costs a string in the request and a lie in the doc.
 ///
-/// ⚠️ The fixtures in `fixtures/` were captured by Task 0 with **five** styles
-/// (these four plus `overflow`), so their `styles` arrays have five entries.
-/// The first four positions are the same, which is why they parse correctly
-/// here — but a test asserting `styles[i].len() == COMPUTED_STYLES.len()` would
-/// be red against every real capture in this directory, and a reader must not
-/// take a recorded capture for a recording of what this build sends.
+/// ⚠️ **A recorded capture is not a recording of what this build sends.** The
+/// fixtures in `fixtures/` were captured by Task 0 with **five** styles (these
+/// four plus `overflow`, cut from `Computed` in Task 10), so their `styles`
+/// arrays have five entries and a test asserting
+/// `styles[i].len() == COMPUTED_STYLES.len()` is red against every one of them.
+/// They parse correctly because the first four positions coincide — and
+/// `captureSnapshot`'s reply does not echo its request, so nothing in a fixture
+/// can defend that coincidence. The list the fixtures were captured with lives
+/// at `docs/…/probes/t0-lib.mjs`, and
+/// `the_request_this_build_sends_is_a_prefix_of_the_list_the_fixtures_were_captured_with`
+/// reads it from there and pins the two against each other (判据 §1).
 pub const COMPUTED_STYLES: [&str; 4] = ["display", "visibility", "opacity", "cursor"];
 
 pub(crate) const STYLE_DISPLAY: usize = 0;
@@ -220,6 +225,12 @@ struct LayoutTreeSnapshot {
     styles: Vec<Vec<i64>>,
     #[serde(default)]
     bounds: Vec<Vec<serde_json::Value>>,
+    /// The string this layout entry DRAWS, or `-1` for an entry that is a box
+    /// rather than a text run. Read by [`layout_slots`] and nowhere else: it is
+    /// how an element's own box is told apart from the text painted inside it,
+    /// not a source of text (that comes from `nodes.nodeValue`).
+    #[serde(default)]
+    text: Vec<i64>,
 }
 
 /// CDP's sparse encodings. `index` lists the node indices that carry the fact;
@@ -488,19 +499,49 @@ fn frame_offsets(
         .collect()
 }
 
-/// Which layout entry is each node's box: **the FIRST**, because a node can own
-/// more than one.
+/// Which layout entry is each node's box: **the one that is not a text run**,
+/// because a node can own more than one.
 ///
-/// Measured, not assumed: in `local-sameorigin-iframe`, each `::marker`
-/// pseudo-element owns two entries — its own box (`layout.text == -1`) and the
-/// text run drawn inside it. `collect()` into a map keeps the LAST, which is
-/// the text run, so the obvious implementation reports the wrong box for every
-/// list marker and nothing anywhere says so.
+/// `layout.nodeIndex` is not unique, which nobody expected. Censused over all
+/// four captures in `fixtures/` at `8721e2e74` — 1418 layout entries, 1414
+/// distinct nodes — **4 nodes own two entries each, every one of them a
+/// `::marker`**, and every one with the same profile: one entry with
+/// `layout.text == -1` and one with a string index. Hacker News, at 1292
+/// entries, has none at all, so a rule written against that capture alone would
+/// have been written against a page that cannot show the problem.
+///
+/// The selection is a READING, not a position. `layout.text` says which entries
+/// are text runs, and **a text run is never an element's border box**. The
+/// independent authority is `layout.offsetRects`, an array this parser does not
+/// touch: for node 73 of `local-sameorigin-iframe`, `offsetRects` is
+/// `[23, 265, 7, 22]` on both of its entries, which agrees with the
+/// `text == -1` entry's bounds `[23, 265.234, 7, 22.390]` and disagrees with
+/// the text run's `[23, 267.234, 7, 18]` by 2px of `y` and 4px of height.
+/// Chrome is naming the border box, and it names the one this rule picks.
+///
+/// Position is the FALLBACK, not the rule: a node all of whose entries are text
+/// runs — every `#text` node is one — keeps its first, and so does a node whose
+/// entries this file cannot tell apart because `layout.text` was absent from
+/// the reply. A wrong box is a wrong click coordinate, so the difference
+/// between "first" and "not a text run" is worth the field read.
 fn layout_slots(doc: &DocumentSnapshot) -> HashMap<usize, usize> {
+    let is_text_run = |slot: usize| doc.layout.text.get(slot).is_some_and(|&t| t >= 0);
     let mut out: HashMap<usize, usize> = HashMap::new();
     for (slot, &node) in doc.layout.node_index.iter().enumerate() {
-        if let Ok(node) = usize::try_from(node) {
-            out.entry(node).or_insert(slot);
+        let Ok(node) = usize::try_from(node) else {
+            continue;
+        };
+        match out.entry(node) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(slot);
+            }
+            std::collections::hash_map::Entry::Occupied(mut held) => {
+                // A later entry only wins off a text run, and only by not
+                // being one. Two boxes for one node keep the first.
+                if is_text_run(*held.get()) && !is_text_run(slot) {
+                    held.insert(slot);
+                }
+            }
         }
     }
     out
@@ -884,6 +925,71 @@ mod tests {
         parse_snapshot(&json(text), viewport(), l)
     }
 
+    /// The captures Chrome produced, as opposed to the one I typed.
+    fn real_captures() -> [(&'static str, &'static str); 4] {
+        [
+            ("hacker-news", HN),
+            ("same-origin", SAMEORIGIN),
+            ("oopif-parent", OOPIF_PARENT),
+            ("oopif-child", OOPIF_CHILD),
+        ]
+    }
+
+    /// The computed-style list the FIXTURES were captured with, **derived from
+    /// the probe that captured them** rather than transcribed here.
+    ///
+    /// `COMPUTED_STYLES` (what this build requests) and the probe's list (what
+    /// the recordings contain) are two copies of one fact, and they have
+    /// already drifted once: Task 10 cut `overflow` from `Computed` and the
+    /// fixtures still carry it. `captureSnapshot`'s result does not echo the
+    /// request, so a recording cannot defend itself — the only way to keep the
+    /// copies mutually falsifying is to read the other one (判据 §1).
+    ///
+    /// Every probe that wrote a fixture in this directory imports this single
+    /// `COMPUTED_STYLES` from `t0-lib.mjs`, so there is one list to read, not
+    /// one per capture.
+    fn capture_time_styles() -> Vec<String> {
+        const PROBE: &str =
+            "docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/probes/t0-lib.mjs";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(PROBE);
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "{PROBE} is what says which styles the fixtures were captured \
+                 with, and it cannot be read ({e}). If the probes moved, this \
+                 test must follow them — transcribing the list here would \
+                 recreate the drift it exists to catch."
+            )
+        });
+        let line = src
+            .lines()
+            .find(|l| l.contains("COMPUTED_STYLES") && l.contains('['))
+            .unwrap_or_else(|| panic!("{PROBE} no longer declares COMPUTED_STYLES"));
+        let inner = line
+            .split_once('[')
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(inner, _)| inner)
+            .unwrap_or_else(|| panic!("{PROBE}'s COMPUTED_STYLES is not a one-line array"));
+        let out: Vec<String> = inner
+            .split(',')
+            .map(|s| s.trim().trim_matches(['"', '\''].as_slice()).to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(
+            out.len() >= COMPUTED_STYLES.len(),
+            "parsed {out:?} out of {PROBE} — fewer entries than this build even \
+             requests, so the parse is what is broken, not the list"
+        );
+        out
+    }
+
+    /// The position of one style name in the capture-time list.
+    fn capture_style_index(styles: &[String], name: &str) -> usize {
+        styles
+            .iter()
+            .position(|s| s == name)
+            .unwrap_or_else(|| panic!("the fixtures were not captured with `{name}`: {styles:?}"))
+    }
+
     /// One document's layout box for one node index, read straight off the
     /// wire arrays — the test's own derivation, never the parser's.
     fn wire_bounds(value: &Value, doc: usize, node: usize) -> Option<(i32, i32, i32, i32)> {
@@ -1022,6 +1128,177 @@ mod tests {
         assert_eq!(COMPUTED_STYLES[STYLE_OPACITY], "opacity");
         assert_eq!(COMPUTED_STYLES[STYLE_CURSOR], "cursor");
         assert_eq!(COMPUTED_STYLES.len(), 4);
+    }
+
+    /// **The request this build sends is a PREFIX of the one the fixtures were
+    /// captured with**, and every real capture's style arrays are exactly as
+    /// long as that capture-time list.
+    ///
+    /// Two copies of one fact that have already drifted once — Task 10 cut
+    /// `overflow` from `Computed`, so production asks for four values and every
+    /// recording here carries five. Today the first four positions coincide, and
+    /// **that coincidence is load-bearing**: `captureSnapshot`'s reply does not
+    /// echo the request, so nothing in a fixture says which styles its `styles`
+    /// arrays are. Without this test, inserting a style anywhere but the end of
+    /// either list would leave every real-capture assertion quietly reading the
+    /// wrong value, with no red anywhere.
+    ///
+    /// It goes red on: a reorder of `COMPUTED_STYLES`, an insert into either
+    /// list, a recapture with a different list, and a recapture with the same
+    /// list against a probe that changed.
+    #[test]
+    fn the_request_this_build_sends_is_a_prefix_of_the_list_the_fixtures_were_captured_with() {
+        let captured = capture_time_styles();
+        for (i, requested) in COMPUTED_STYLES.iter().enumerate() {
+            assert_eq!(
+                &captured[i], requested,
+                "position {i}: this build requests `{requested}` and the \
+                 fixtures were captured with `{}`. The recordings' styles \
+                 arrays are positional and say nothing about what they \
+                 contain, so the two lists must agree position by position \
+                 or every real-capture test reads the wrong style. \
+                 Requested: {COMPUTED_STYLES:?}; captured: {captured:?}",
+                captured[i]
+            );
+        }
+
+        for (name, text) in real_captures() {
+            let value = json(text);
+            let mut arrays = 0usize;
+            for (d, doc) in value["documents"]
+                .as_array()
+                .expect("documents[]")
+                .iter()
+                .enumerate()
+            {
+                for (slot, arr) in doc["layout"]["styles"]
+                    .as_array()
+                    .expect("styles[]")
+                    .iter()
+                    .enumerate()
+                {
+                    let len = arr.as_array().expect("a styles row").len();
+                    if len == 0 {
+                        continue; // the #document node — see the short-array test
+                    }
+                    arrays += 1;
+                    assert_eq!(
+                        len,
+                        captured.len(),
+                        "{name} doc[{d}] slot {slot} carries {len} values and \
+                         the probe asks for {}. This fixture was not captured \
+                         by the list this test reads.",
+                        captured.len()
+                    );
+                }
+            }
+            assert!(arrays > 0, "{name}: no styles arrays to check");
+        }
+    }
+
+    /// The four flags, cross-checked against every real capture by indexing the
+    /// styles arrays **through the capture-time list** rather than through this
+    /// module's own `STYLE_*` constants.
+    ///
+    /// The constants are what the parse uses, so a test that read them would be
+    /// asking the mechanism to confirm itself (判据 §10). Reading the probe's
+    /// list instead makes the two lists mutually falsifying: swap a `STYLE_*`
+    /// index and this goes red on real data, not only on the fixture I typed.
+    ///
+    /// Restricted to nodes with exactly ONE layout entry, so this is about the
+    /// style mapping and not about which entry is the box —
+    /// `a_node_with_several_layout_entries_keeps_the_box_chrome_calls_its_own`
+    /// owns that question.
+    ///
+    /// Per-flag non-vacuity is asserted at the end, because three of these four
+    /// comparisons are `false == false` on most nodes and a mis-index between
+    /// two flags that are both false everywhere would pass unnoticed.
+    #[test]
+    fn the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list() {
+        let captured = capture_time_styles();
+        let (display, visibility, opacity, cursor) = (
+            capture_style_index(&captured, "display"),
+            capture_style_index(&captured, "visibility"),
+            capture_style_index(&captured, "opacity"),
+            capture_style_index(&captured, "cursor"),
+        );
+        let (mut pointers, mut hidden, mut zero, mut none, mut checked) = (0, 0, 0, 0, 0);
+
+        for (name, text) in real_captures() {
+            let value = json(text);
+            let strings = value["strings"].as_array().expect("strings[]");
+            let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+            for (d, doc) in value["documents"]
+                .as_array()
+                .expect("documents[]")
+                .iter()
+                .enumerate()
+            {
+                let indices: Vec<u64> = doc["layout"]["nodeIndex"]
+                    .as_array()
+                    .expect("nodeIndex[]")
+                    .iter()
+                    .filter_map(serde_json::Value::as_u64)
+                    .collect();
+                for (slot, node) in indices.iter().enumerate() {
+                    if indices.iter().filter(|n| *n == node).count() != 1 {
+                        continue;
+                    }
+                    let arr = doc["layout"]["styles"][slot]
+                        .as_array()
+                        .expect("a styles row");
+                    if arr.is_empty() {
+                        continue;
+                    }
+                    let at = |i: usize| -> String {
+                        arr.get(i)
+                            .and_then(serde_json::Value::as_i64)
+                            .and_then(|s| usize::try_from(s).ok())
+                            .and_then(|s| strings.get(s))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_ascii_lowercase()
+                    };
+                    let node = usize::try_from(*node).expect("a node index");
+                    let got = dom.frames[d].nodes[node]
+                        .computed
+                        .unwrap_or_else(|| panic!("{name} doc[{d}] node {node} lost its styles"));
+                    let want = Computed {
+                        display_none: at(display) == "none",
+                        visibility_hidden: matches!(at(visibility).as_str(), "hidden" | "collapse"),
+                        opacity_zero: at(opacity).trim().parse::<f64>().is_ok_and(|o| o <= 0.0),
+                        cursor_pointer: at(cursor) == "pointer",
+                    };
+                    assert_eq!(
+                        got, want,
+                        "{name} doc[{d}] node {node}: the flags disagree with the \
+                         capture read through {captured:?}"
+                    );
+                    checked += 1;
+                    pointers += usize::from(want.cursor_pointer);
+                    hidden += usize::from(want.visibility_hidden);
+                    zero += usize::from(want.opacity_zero);
+                    none += usize::from(want.display_none);
+                }
+            }
+        }
+
+        assert!(checked > 1000, "only {checked} nodes cross-checked");
+        assert!(pointers > 0, "no `cursor: pointer` node in any capture");
+        assert!(hidden > 0, "no `visibility: hidden` node in any capture");
+        assert!(zero > 0, "no `opacity: 0` node in any capture");
+        // NOT a non-vacuity gap: `display: none` is the flag a Chrome capture
+        // cannot show, because such a node gets no layout entry and therefore
+        // no styles array. Measured here rather than asserted from the design
+        // note — zero out of every laid-out node in four captures. The mapping
+        // is exercised by the hand-written fixture in
+        // `the_four_computed_styles_map_to_their_four_flags`, which is the only
+        // place that shape can exist.
+        assert_eq!(
+            none, 0,
+            "a real capture gave a `display: none` node a layout entry — design \
+             decision 5 says that cannot happen, so one of them is wrong"
+        );
     }
 
     /// A styles array shorter than the request is an UNKNOWN, not four
@@ -1376,7 +1653,12 @@ mod tests {
         );
 
         // One known rect, read out of the fixture rather than typed in: the
-        // first layout entry of the main document.
+        // first layout entry of the main document. Sound here and nowhere else:
+        // every node index in THIS capture is unique (1292 entries, 1292
+        // distinct), so slot 0 is unambiguously that node's box. The brief's
+        // "every layout entry is one box, and nothing else has one" is false in
+        // general — see
+        // `a_node_with_several_layout_entries_keeps_the_box_chrome_calls_its_own`.
         let first_layout_node = documents[0]["layout"]["nodeIndex"][0]
             .as_u64()
             .expect("the main document has at least one layout entry")
@@ -1392,62 +1674,102 @@ mod tests {
         );
     }
 
-    /// A node with TWO layout entries keeps its OWN box, not the text run
-    /// inside it.
+    /// A node with several layout entries keeps its own BORDER BOX, and
+    /// `layout.offsetRects` — an array production code never reads — is what
+    /// says which one that is.
     ///
-    /// Nobody predicted this: `layout.nodeIndex` is not unique. In the
-    /// same-origin capture, each `::marker` pseudo-element owns two entries —
-    /// the element's own box (`layout.text == -1`) and the text run drawn in
-    /// it. A `HashMap` built by `collect()` keeps the LAST, which is the text
-    /// run, so the obvious implementation reports the wrong box for every list
-    /// marker and nothing says so.
+    /// Nobody predicted `layout.nodeIndex` being non-unique, so the census is
+    /// here rather than a single example: it walks **every document of every
+    /// capture in this directory**, and its non-vacuity assertion is a count of
+    /// the multi-entry nodes it found. Hacker News has none at 1292 entries, so
+    /// a test that looked only there would have been green about nothing.
+    ///
+    /// The authority is deliberately not the rule under test. For each
+    /// multi-entry node this reads `offsetRects` — Chrome's own answer for
+    /// "where is this element's box" — and requires the parsed rect to be that
+    /// box, rounded. Asserting "the first entry" instead would test the
+    /// implementation against a restatement of itself (判据 §10).
     #[test]
-    fn a_node_with_two_layout_entries_keeps_its_own_box() {
-        let value = json(SAMEORIGIN);
-        let indices: Vec<u64> = value["documents"][0]["layout"]["nodeIndex"]
-            .as_array()
-            .expect("nodeIndex[]")
-            .iter()
-            .filter_map(serde_json::Value::as_u64)
-            .collect();
-        let doubled: Vec<u64> = indices
-            .iter()
-            .copied()
-            .filter(|n| indices.iter().filter(|m| *m == n).count() > 1)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        assert!(
-            !doubled.is_empty(),
-            "the real capture stopped containing a node with two layout \
-             entries, so this test is about nothing"
-        );
-
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
-        for node in doubled {
-            let node = usize::try_from(node).expect("a node index");
-            let first_slot = indices
-                .iter()
-                .position(|n| usize::try_from(*n) == Ok(node))
-                .expect("the index is in the list");
-            let b = value["documents"][0]["layout"]["bounds"][first_slot]
+    fn a_node_with_several_layout_entries_keeps_the_box_chrome_calls_its_own() {
+        let mut multi_entry_nodes = 0usize;
+        for (name, text) in real_captures() {
+            let value = json(text);
+            let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+            for (d, doc) in value["documents"]
                 .as_array()
-                .expect("bounds");
-            let expected = (
-                b[0].as_f64().expect("x").round() as i32,
-                b[1].as_f64().expect("y").round() as i32,
-                b[2].as_f64().expect("w").round() as i32,
-                b[3].as_f64().expect("h").round() as i32,
-            );
-            assert_eq!(
-                dom.frames[0].nodes[node]
-                    .rect
-                    .as_ref()
-                    .map(|r| (r.x, r.y, r.w, r.h)),
-                Some(expected),
-                "node {node} took a later layout entry's box"
-            );
+                .expect("documents[]")
+                .iter()
+                .enumerate()
+            {
+                let layout = &doc["layout"];
+                let indices: Vec<u64> = layout["nodeIndex"]
+                    .as_array()
+                    .expect("nodeIndex[]")
+                    .iter()
+                    .filter_map(serde_json::Value::as_u64)
+                    .collect();
+                let doubled: std::collections::BTreeSet<u64> = indices
+                    .iter()
+                    .copied()
+                    .filter(|n| indices.iter().filter(|m| *m == n).count() > 1)
+                    .collect();
+                for node in doubled {
+                    multi_entry_nodes += 1;
+                    let slots: Vec<usize> = indices
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, n)| **n == node)
+                        .map(|(s, _)| s)
+                        .collect();
+                    // Chrome's own border box for this element, from an array
+                    // this parser does not deserialise at all.
+                    let offset: Vec<i64> = slots
+                        .iter()
+                        .filter_map(|s| layout["offsetRects"][*s].as_array())
+                        .find(|r| r.len() == 4)
+                        .map(|r| r.iter().filter_map(serde_json::Value::as_i64).collect())
+                        .unwrap_or_default();
+                    assert_eq!(
+                        offset.len(),
+                        4,
+                        "{name} doc[{d}] node {node}: no offsetRect to judge by, \
+                         so this test has no authority of its own"
+                    );
+
+                    let node = usize::try_from(node).expect("a node index");
+                    let got = dom.frames[d].nodes[node]
+                        .rect
+                        .as_ref()
+                        .map(|r| {
+                            [
+                                i64::from(r.x),
+                                i64::from(r.y),
+                                i64::from(r.w),
+                                i64::from(r.h),
+                            ]
+                        })
+                        .expect("a multi-entry node has a box");
+                    assert_eq!(
+                        got.as_slice(),
+                        offset.as_slice(),
+                        "{name} doc[{d}] node {node} ({} entries): the parser took \
+                         a box Chrome does not call this element's own. \
+                         offsetRects says {offset:?}; the entries' bounds are {:?}",
+                        slots.len(),
+                        slots
+                            .iter()
+                            .map(|s| layout["bounds"][*s].clone())
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
         }
+        assert_eq!(
+            multi_entry_nodes, 4,
+            "the captures stopped containing exactly the four multi-entry nodes \
+             this rule was written from — re-census before trusting the rule \
+             (判据 §6: the direction a count is wrong in is always 'one more')"
+        );
     }
 
     /// The live-property fields against a REAL capture, where the four lists
@@ -1608,6 +1930,110 @@ mod tests {
              what it is supposed to show"
         );
         assert!(owner.attr("src").is_some_and(|s| s.contains("://")));
+    }
+
+    /// **The separating case, which no real capture in this directory
+    /// contains**: a node whose TEXT RUN is reported before its own box.
+    ///
+    /// In all four `::marker` instances Chrome put the box first, so
+    /// first-entry-wins and "the entry that is not a text run" agree there and
+    /// nothing in a recording can tell the two rules apart. A rule that is
+    /// right by luck and a rule that is right for a reason look identical until
+    /// the luck runs out, so the order is inverted here by hand — which is what
+    /// a hand-written fixture is for.
+    ///
+    /// This says nothing about whether Chrome ever emits that order; it says
+    /// that if it does, the parser reports the element's box and not the text
+    /// drawn inside it, and a wrong box is a wrong click coordinate.
+    #[test]
+    fn a_box_reported_after_its_text_run_is_still_the_box_that_wins() {
+        let value = json(TWO_DOCS);
+        let layout = &value["documents"][0]["layout"];
+        let slots: Vec<usize> = layout["nodeIndex"]
+            .as_array()
+            .expect("nodeIndex[]")
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.as_u64() == Some(6))
+            .map(|(s, _)| s)
+            .collect();
+        assert_eq!(slots.len(), 2, "the fixture stopped carrying the pair");
+        assert!(
+            layout["text"][slots[0]].as_i64().is_some_and(|t| t >= 0)
+                && layout["text"][slots[1]].as_i64() == Some(-1),
+            "non-vacuity: the TEXT RUN must come first, or this test is about \
+             the same thing the real captures already show"
+        );
+
+        let dom = parse_snapshot(&value, viewport(), &loaders()).expect("parses");
+        assert_eq!(
+            dom.frames[0].nodes[6]
+                .rect
+                .as_ref()
+                .map(|r| (r.x, r.y, r.w, r.h)),
+            Some((10, 500, 90, 30)),
+            "the parser took the text run's box because it came first"
+        );
+    }
+
+    /// **A PIN ON A KNOWN LIMITATION, NOT A TRIPWIRE. Read this before quoting
+    /// its green.**
+    ///
+    /// A single-session capture of a page with a cross-origin iframe yields a
+    /// `RawDom` in which the `<iframe>` element stands there with its box, its
+    /// `src` and its title, and **nothing anywhere says its subtree was never
+    /// read**. That is the current behaviour, it is the documented limit of
+    /// [`parse_snapshot`], and this test writes it down so that a change to it
+    /// is deliberate rather than incidental.
+    ///
+    /// **It will NOT go red when Task 12 lands.** Task 12 attaches the child
+    /// target and hands the capture to [`stitch_snapshots`]; this fixture stays
+    /// a single-session capture for ever, so this test keeps asserting exactly
+    /// what it asserts now. **Its green is therefore not evidence that
+    /// cross-origin content reaches the model** — that claim belongs to
+    /// `qa/browser_managed`'s `frames` scenario, which serves the child from a
+    /// second port and checks the child's text and a clickable ref inside the
+    /// frame on a real browser. A pin whose green gets read as coverage is
+    /// worse than no pin (判据 §17), which is why this paragraph is longer than
+    /// the test.
+    #[test]
+    fn a_single_session_capture_leaves_a_cross_origin_iframes_content_unmentioned() {
+        let value = json(OOPIF_PARENT);
+        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+
+        assert_eq!(dom.frames.len(), 1, "one session, one renderer, one frame");
+        let (i, owner) = dom.frames[0]
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(_, n)| n.tag_lower() == "iframe")
+            .expect("the iframe element itself is present");
+        assert_eq!(owner.backend_node_id, 65);
+        assert!(owner.rect.is_some(), "with its box");
+        assert!(owner.attr("src").is_some(), "and its src");
+
+        // The pinned fact: nothing under it, and nothing that says so. A child
+        // of the iframe would be a node whose parent chain reaches `i`.
+        let descendants = dom.frames[0]
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| {
+                let mut cursor = n.parent;
+                while let Some(p) = cursor {
+                    if p == i {
+                        return true;
+                    }
+                    cursor = dom.frames[0].nodes.get(p).and_then(|n| n.parent);
+                }
+                false
+            })
+            .count();
+        assert_eq!(
+            descendants, 0,
+            "the iframe gained a subtree — if that came from a stitch, this pin \
+             is describing the wrong thing now and should be re-aimed"
+        );
     }
 
     /// **The stitcher.** A cross-origin child's own capture is placed by the
