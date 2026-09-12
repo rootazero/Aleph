@@ -463,10 +463,18 @@ async fn press_and_release(
 /// text, which was being formatted and thrown away. A field with a writer and
 /// no reader is the shape this task was sent to close.
 ///
-/// Deliberately NOT applied to `handle_dialog` (it is the way out) or to the
-/// two log readers (reading what a page did while it waits on a dialog is both
-/// harmless and useful).
-async fn tab_ready(handle: &EngineHandle, tab_id: &str) -> Result<SessionId, BrowserError> {
+/// **Which verbs this gate covers is recorded by
+/// `the_dialog_gate_records_every_verb_as_gated_or_not`, not by this sentence.**
+/// The first version of this doc listed the exclusions in prose, which read as
+/// exhaustive and was not: eleven verbs were outside the gate and three were
+/// named. A hand-written coverage claim only covers the world as it was written
+/// (判据 §5), and the next person to add a verb will not come back to update it
+/// — so the census derives the verb list from the trait impl and reds when a
+/// verb appears in neither partition. The reasons live there, beside the names.
+pub(super) async fn tab_ready(
+    handle: &EngineHandle,
+    tab_id: &str,
+) -> Result<SessionId, BrowserError> {
     let session = handle.ensure_tab(tab_id).await?;
     let pending = {
         let tabs = handle.tabs.lock().await;
@@ -1213,18 +1221,6 @@ mod tests {
         );
     }
 
-    /// The third and fourth R40 sites in this file, and they were found by
-    /// SWEEPING for the hazard the two tests above name rather than by reading
-    /// the code that obviously had it — a criterion written into a doc comment
-    /// audits nothing.
-    ///
-    /// The declarations are Aleph's, but a thrown message is not: `FILL_JS` and
-    /// `SELECT_JS` dispatch `input`/`change`, and `OCCLUSION_JS` reads
-    /// properties, so any listener or getter the page installed can
-    /// `throw new Error("…")` with text of its choosing. That text reaches the
-    /// model inside a `BrowserError::ActionFailed`, i.e. **outside** the
-    /// untrusted-content fence, exactly like the blocker and the option list.
-    ///
     /// **The dialog race, driven for the first time.** Every other fixture in
     /// this file answers `Input.dispatchMouseEvent` immediately, so `released`
     /// always wins the `select!` and the dialog arm, the `continue` arm and the
@@ -1363,54 +1359,153 @@ mod tests {
         );
     }
 
-    /// The escape hatch, because a latch that cannot be cleared is a fail-DEAD
-    /// gate rather than a fail-closed one: if the engine says there is no
-    /// dialog — a `javascriptDialogClosed` the pump dropped to a lag would do
-    /// it — `handle_dialog` must still clear the local echo, or every other
-    /// verb on the tab is refused forever by the guard above.
-    #[tokio::test]
-    async fn a_dialog_call_the_engine_rejects_still_clears_the_stale_latch() {
-        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
-        wire_session(&server, "S1");
-        server.on(
-            "Page.handleJavaScriptDialog",
-            Responder::Error {
-                code: -32000,
-                message: "No dialog is showing".into(),
-            },
-        );
-        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
-        let handle = backend.handle().await.expect("handle");
-        handle
-            .attach_tab(&aleph_cdp::TargetId("T1".into()))
-            .await
-            .expect("attach");
-        {
-            let mut tabs = handle.tabs.lock().await;
-            tabs.entries
-                .get_mut("T1")
-                .expect("tab entry")
-                .pending_dialog = Some("alert: stale".into());
-        }
+    /// Every `BrowserBackend` verb is recorded as gated on a pending dialog or
+    /// deliberately not, and the verb list is **derived** from the trait impl.
+    ///
+    /// The doc on [`super::tab_ready`] used to carry this as prose, and the
+    /// prose read as exhaustive while eleven verbs sat outside it. A
+    /// hand-written coverage claim is a list that rots (判据 §5) and the person
+    /// who adds verb 29 will not come back to it. Here, a verb that appears in
+    /// neither partition makes this red by name, which forces a decision rather
+    /// than an omission.
+    ///
+    /// ⚠️ What this does and does not derive. The **verb list** comes from
+    /// `mod.rs`'s `impl BrowserBackend for CdpBackend` block — that is where a
+    /// new verb appears, so that is the side that must not be hand-written. The
+    /// **partition** is recorded, because "should this verb refuse while a
+    /// dialog is up" is a judgement and not a property of the source. Deriving
+    /// the gated half by call-graph would mean chasing `prepare` to its seven
+    /// callers, and a transitive-reachability scan that got it wrong would be a
+    /// guard reporting coverage it does not have — the exact shape this census
+    /// replaces.
+    #[test]
+    fn the_dialog_gate_records_every_verb_as_gated_or_not() {
+        // Gated: the verb refuses by name when `pending_dialog` is set, because
+        // the engine will not answer it anyway.
+        let gated = [
+            "click",
+            "dblclick",
+            "hover",
+            "fill",
+            "select",
+            "drag",
+            "upload",
+            "scroll",
+            "type_text",
+            "press_key",
+            "snapshot",
+        ];
+        // Ungated, each for a stated reason.
+        let ungated = [
+            // The way out. Gating it would be a gate with no door (判据 §14).
+            "handle_dialog",
+            // Reading what the page already did is harmless while it waits, and
+            // useful: this is how a model finds out what opened the dialog.
+            "console_messages",
+            "network_log",
+            // Tab lifecycle: these do not act on the blocked page's content.
+            // `open_tab` and `switch_tab` are how a model gets AWAY from a
+            // wedged tab, so gating them would take away the escape.
+            "open_tab",
+            "close_tab",
+            "list_tabs",
+            "switch_tab",
+            // KNOWN GAP, priced and deferred to Task 14 rather than claimed:
+            // these do reach the wire on a tab whose engine will not answer, so
+            // they still spend their budget and report their own verb as having
+            // failed. They are one `tab_ready` call each; what is missing is a
+            // real-machine check that the engine really does stall each one,
+            // which nothing here can do until a `driver = "cdp"` profile is
+            // constructible.
+            "navigate",
+            "history",
+            "evaluate",
+            "screenshot",
+            "pdf",
+            "resize",
+            "emulate",
+            "cookies",
+            "save_state",
+            "load_state",
+        ];
 
-        backend
-            .handle_dialog("T1", "accept", None)
-            .await
-            .expect_err("the engine rejected it");
+        let src = include_str!("mod.rs");
+        let marker = "impl BrowserBackend for CdpBackend {";
+        let body = src
+            .split_once(marker)
+            .unwrap_or_else(|| panic!("the trait impl is not in mod.rs under {marker:?}"))
+            .1;
+        // STOP at the end of the impl block. Reading to end-of-file swept in
+        // `mod tests`'s `async fn` names and demanded a disposition for a test
+        // — a scan whose boundary is wrong reports on a set that is not the one
+        // it names (判据 §3), and here it failed loudly only by luck.
+        let verbs: Vec<&str> = body
+            .lines()
+            .take_while(|l| *l != "}")
+            .filter_map(|l| l.trim().strip_prefix("async fn "))
+            .filter_map(|l| l.split(['(', '<']).next())
+            .collect();
         assert!(
-            handle.tabs.lock().await.entries["T1"]
-                .pending_dialog
-                .is_none(),
-            "a stale latch must not survive the call that exists to clear it"
+            verbs.len() > 20,
+            "the verb scan found only {} — it is reading the wrong block, and a \
+             census over nothing certifies everything: {verbs:?}",
+            verbs.len()
         );
+        assert!(
+            !verbs
+                .iter()
+                .any(|v| v.contains("_test") || v.starts_with("a_")),
+            "the scan ran past the impl block and picked up test functions: \
+             {verbs:?}"
+        );
+
+        for verb in &verbs {
+            assert!(
+                gated.contains(verb) || ungated.contains(verb),
+                "`{verb}` is a BrowserBackend verb this census does not place. \
+                 Decide: does it have to refuse while a dialog is open (add a \
+                 `tab_ready` call and list it as gated), or not (list it as \
+                 ungated with the reason)?"
+            );
+        }
+        for verb in gated.iter().chain(ungated.iter()) {
+            assert!(
+                verbs.contains(verb),
+                "`{verb}` is recorded here but is not a verb on the trait impl \
+                 any more — a name list outliving its subject"
+            );
+        }
+        // The two halves are disjoint, or a verb could be "covered" by being in
+        // both and the count above would still add up.
+        for verb in gated {
+            assert!(!ungated.contains(&verb), "`{verb}` is in both halves");
+        }
     }
 
+    /// The third and fourth R40 sites in this file, and they were found by
+    /// SWEEPING for the hazard the two tests above name rather than by reading
+    /// the code that obviously had it — a criterion written into a doc comment
+    /// audits nothing.
+    ///
+    /// The declarations are Aleph's, but a thrown message is not: `FILL_JS` and
+    /// `SELECT_JS` dispatch `input`/`change`, and `OCCLUSION_JS` reads
+    /// properties, so any listener or getter the page installed can
+    /// `throw new Error("…")` with text of its choosing. That text reaches the
+    /// model inside a `BrowserError::ActionFailed`, i.e. **outside** the
+    /// untrusted-content fence, exactly like the blocker and the option list.
+    ///
     /// The two paths get a test EACH rather than two halves of one, so a
     /// mutation that removes one `quote` names the site it removed. One test
     /// covering both would go red for either and say which only in its message
     /// — and the failing-test NAME is the part a mutation run can match on.
     ///
     /// This first one is `call_on_node`, reached through `fill`.
+    ///
+    /// ⚠️ These first two paragraphs were **stolen from this test in fix round
+    /// 1** and spent a round opening the dialog-race test's doc instead, where
+    /// they described nothing. Found by the recogniser N-3 asked for, run over
+    /// the whole task diff — the third occurrence of that shape on this branch,
+    /// and the first one caught by a tool rather than by a reviewer's eye.
     #[tokio::test]
     async fn a_page_thrown_error_in_a_value_setter_cannot_forge_a_ref_token() {
         let hostile = HOSTILE_THROW;

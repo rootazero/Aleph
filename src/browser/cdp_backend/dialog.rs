@@ -2,8 +2,9 @@
 //! and is written by exactly one function (`events::apply_event`).
 
 use aleph_cdp::methods::page;
+use aleph_cdp::CdpError;
 
-use crate::browser::engine::EngineCapabilities;
+use crate::browser::engine::{EngineCapabilities, EngineHandle};
 use crate::browser::error::BrowserError;
 
 use super::{map_cdp_err, CdpBackend};
@@ -31,46 +32,84 @@ pub(super) async fn handle_dialog(
     let handle = be.handle().await?;
     let session = handle.ensure_tab(tab_id).await?;
 
-    // Refuse when nothing is open. `Page.handleJavaScriptDialog` on a tab with
-    // no dialog is a protocol error whose text says nothing about the page, and
-    // the model's next move (click the thing that opens one) depends on being
-    // told which of the two it is.
-    {
-        let tabs = handle.tabs.lock().await;
-        let entry = tabs
-            .entries
-            .get(tab_id)
-            .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))?;
-        if entry.pending_dialog.is_none() {
-            return Err(BrowserError::ActionFailed(
-                "no dialog is open on this tab — a dialog is only pending after \
-                 the page opens one (e.g. a click that calls alert/confirm)"
-                    .into(),
-            ));
-        }
-    }
-
+    // **No local pre-check.** `TabEntry::pending_dialog` is a hint; the ENGINE
+    // owns whether a dialog is open. A second derivation that can REFUSE the
+    // call is the one that ends up disagreeing with the authority (判据 §1,
+    // §12), and it disagreed in the expensive direction: after any failed
+    // `browser_dialog` the latch was cleared and the retry was then refused
+    // with "no dialog is open" while one was still up — and since this function
+    // is `page::handle_javascript_dialog`'s only caller, nothing could reach
+    // the engine to find out. That is worse than the fail-dead it replaced,
+    // which at least kept this door open.
+    //
+    // The old sentence is not lost. It is produced below from the engine's own
+    // answer: the same words, derived from the authority instead of guessed
+    // ahead of it.
     let outcome =
         page::handle_javascript_dialog(&handle.conn, Some(&session), accept, prompt_text).await;
 
-    // Clear the latch here rather than waiting for `javascriptDialogClosed`,
-    // and clear it **on the error path too**.
-    //
-    // The latch is a local echo of the engine's state, not the state itself. If
-    // the engine answers "there is no dialog", our echo was stale — most likely
-    // a `javascriptDialogClosed` the pump dropped to a lag — and keeping it set
-    // would make `actions::tab_ready` refuse every other verb on this tab
-    // forever. A gate has to name a door that opens (判据 §14), and this call
-    // IS that door; leaving the latch set on the failure path would be a
-    // fail-dead, not a fail-closed.
-    {
-        let mut tabs = handle.tabs.lock().await;
-        if let Some(entry) = tabs.entries.get_mut(tab_id) {
-            entry.pending_dialog = None;
+    match outcome {
+        // Handled — the dialog is gone because this call closed it.
+        Ok(()) => {
+            clear_latch(&handle, tab_id).await;
+            Ok(())
         }
+        // The engine says there is no dialog, which ESTABLISHES the fact: the
+        // stale echo goes (most likely a `javascriptDialogClosed` the pump
+        // dropped to a lag), and the model gets the sentence it needs.
+        Err(e) if says_no_dialog(&e) => {
+            clear_latch(&handle, tab_id).await;
+            Err(BrowserError::ActionFailed(
+                "no dialog is open on this tab — the engine confirms it. A \
+                 dialog is only pending after the page opens one (e.g. a click \
+                 that calls alert/confirm)."
+                    .into(),
+            ))
+        }
+        // Everything else — a timeout, a transport failure, a protocol error
+        // about something else — establishes NOTHING, and 判据 §8 says an error
+        // is only ever entitled to say "I do not know". Reading one as "the
+        // dialog is gone" drops `actions::tab_ready`'s gate while the danger is
+        // still there. So the latch stays (every other verb keeps refusing by
+        // name) and this call stays reachable (the model can try again): the
+        // gate up AND the door open, which is what the unconditional clear got
+        // wrong in both directions at once.
+        Err(e) => Err(map_cdp_err(be.engine(), "Page.handleJavaScriptDialog", e)),
     }
-    outcome.map_err(|e| map_cdp_err(be.engine(), "Page.handleJavaScriptDialog", e))?;
-    Ok(())
+}
+
+async fn clear_latch(handle: &EngineHandle, tab_id: &str) {
+    let mut tabs = handle.tabs.lock().await;
+    if let Some(entry) = tabs.entries.get_mut(tab_id) {
+        entry.pending_dialog = None;
+    }
+}
+
+/// Does this engine error ESTABLISH that the tab has no dialog?
+///
+/// Only a protocol error saying so does. `Timeout`, `Transport`, `Disconnected`
+/// and `Decode` establish nothing, and a protocol error about something else
+/// establishes something else — the same distinction `actions::resolve_target`
+/// draws when it turns "No node with given id" into a stale ref rather than a
+/// protocol failure.
+///
+/// ⚠️ **The spelling is a guess, not a measurement.** obscura never reaches
+/// here (`js_dialogs: Unsupported` refuses first), so only Chromium's wording
+/// matters, and it is matched case-insensitively on the two words that carry
+/// the meaning rather than on a full sentence — engines have shipped the same
+/// message with and without trailing punctuation before (`NO_BOX_MESSAGE` in
+/// `aleph-cdp` is a prefix match for that reason).
+///
+/// **A guess is acceptable here only because its failure direction is the safe
+/// one**: guess wrong and the latch stays set, so the gate keeps refusing by
+/// name while this call stays reachable to try again. The cost is an extra
+/// refusal, never a wedge. Task 16's real-machine prober is where the spelling
+/// stops being a guess.
+fn says_no_dialog(err: &CdpError) -> bool {
+    match err {
+        CdpError::Protocol { message, .. } => message.to_ascii_lowercase().contains("no dialog"),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -115,14 +154,146 @@ mod tests {
             .expect("the accept reached the wire");
         assert_eq!(call["params"]["accept"], json!(true));
 
+        assert!(
+            handle.tabs.lock().await.entries["T1"]
+                .pending_dialog
+                .is_none(),
+            "a handled dialog clears the latch, so the gate comes down"
+        );
+    }
+
+    /// "There is no dialog" is the ENGINE's answer, not a local guess. The
+    /// sentence the model reads is the same one the removed pre-check produced;
+    /// what changed is that it is now derived from the authority rather than
+    /// from a second copy of the fact that could disagree with it.
+    #[tokio::test]
+    async fn the_engines_own_answer_is_what_says_there_is_no_dialog() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Page.handleJavaScriptDialog",
+            Responder::Error {
+                code: -32000,
+                message: "No dialog is showing".into(),
+            },
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+        {
+            let mut tabs = handle.tabs.lock().await;
+            tabs.entries
+                .get_mut("T1")
+                .expect("tab entry")
+                .pending_dialog = Some("alert: stale".into());
+        }
+
         let err = backend
             .handle_dialog("T1", "accept", None)
             .await
-            .expect_err("the latch must be clear");
+            .expect_err("the engine says there is nothing to accept");
         assert!(
             err.to_string().contains("no dialog is open"),
-            "the second accept must say the tab is clear, not fail on the \
-             engine: {err}"
+            "the model gets the sentence that tells it what to do next: {err}"
+        );
+        assert!(
+            handle.tabs.lock().await.entries["T1"]
+                .pending_dialog
+                .is_none(),
+            "an answer that ESTABLISHES there is no dialog clears the stale echo"
+        );
+        // The call reached the wire, which is the half a local pre-check used
+        // to prevent: the sentence above is the engine's, not ours.
+        assert!(
+            methods(&server)
+                .iter()
+                .any(|m| m == "Page.handleJavaScriptDialog"),
+            "the authority has to be asked: {:?}",
+            methods(&server)
+        );
+    }
+
+    /// **The gate stays up AND the door stays open.** An engine that does not
+    /// answer establishes nothing (判据 §8), so a timeout must not be read as
+    /// "the dialog is gone".
+    ///
+    /// Two assertions, not one, because the unconditional clear got both
+    /// directions wrong at once: it dropped the gate while the dialog was still
+    /// up, and the pre-check it left behind then refused the retry — a state
+    /// with no verb that could recover it, which is worse than the fail-dead it
+    /// was meant to avoid.
+    #[tokio::test]
+    async fn an_engine_timeout_keeps_the_gate_up_and_leaves_the_door_open() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        // `Delay`, NOT `Hang`, and the reason is a property of the instrument
+        // rather than a preference: `Hang` parks the connection's own read loop
+        // (its doc says so — "the read loop cannot observe `ctl_rx` again"), so
+        // the retry below would never even be READ by the fake, and the "door
+        // is open" assertion would fail for a reason that has nothing to do
+        // with this code. Measured before it was believed: with `Hang` the
+        // second call recorded 1 frame where 2 were expected. `Delay` spawns,
+        // so the connection keeps serving.
+        //
+        // The duration is DERIVED from the command budget rather than picked,
+        // so it cannot be "tidied" down into a slow reply: this is a peer that
+        // does not answer within any budget this test could set.
+        server.on(
+            "Page.handleJavaScriptDialog",
+            Responder::Delay(TEST_TIMEOUT * 100, Box::new(Responder::Reply(json!({})))),
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+        {
+            let mut tabs = handle.tabs.lock().await;
+            tabs.entries
+                .get_mut("T1")
+                .expect("tab entry")
+                .pending_dialog = Some("confirm: really?".into());
+        }
+
+        let err = backend
+            .handle_dialog("T1", "accept", None)
+            .await
+            .expect_err("the engine never answered");
+        assert!(
+            matches!(err, crate::browser::error::BrowserError::EngineBusy { .. }),
+            "a peer that does not answer is a timeout, not a verdict: {err:?}"
+        );
+
+        // (1) The gate is still up: the dialog was never established to be
+        // gone, so every other verb keeps refusing by name.
+        assert_eq!(
+            handle.tabs.lock().await.entries["T1"]
+                .pending_dialog
+                .as_deref(),
+            Some("confirm: really?"),
+            "a timeout must not be read as 'the dialog is gone'"
+        );
+
+        // (2) The door is still open: a retry REACHES the engine rather than
+        // being refused by a local copy of the fact.
+        let before = methods(&server)
+            .iter()
+            .filter(|m| *m == "Page.handleJavaScriptDialog")
+            .count();
+        let _ = backend.handle_dialog("T1", "accept", None).await;
+        let after = methods(&server)
+            .iter()
+            .filter(|m| *m == "Page.handleJavaScriptDialog")
+            .count();
+        assert_eq!(
+            after,
+            before + 1,
+            "the retry must reach the engine — this call is the only caller of \
+             Page.handleJavaScriptDialog, so a local refusal here is a wedge"
         );
     }
 

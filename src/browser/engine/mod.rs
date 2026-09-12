@@ -230,6 +230,14 @@ pub struct EngineHandle {
     /// subscriber, not for a tab, so which tab's lines went missing is not
     /// knowable. Reporting the gap on every tab of the engine over-reports,
     /// which is the safe direction for an "I may be incomplete" note.
+    ///
+    /// **Cumulative and monotonic, so it is not what a reader reports.**
+    /// Reported raw it would be a 判据 §2 恒真 on the presentation layer — the
+    /// most expensive place for one, because the model reads it: after a single
+    /// busy page dropped events, every log read on every tab for the life of
+    /// the connection would carry the gap note, including logs that really are
+    /// complete. [`TabEntry::lag_at_attach`] is the subtrahend that turns this
+    /// into a per-tab delta, so a tab attached after the drop reads clean.
     pub pump_lagged: std::sync::atomic::AtomicU64,
     process: Arc<dyn EngineProcess>,
 }
@@ -259,6 +267,18 @@ pub struct TabEntry {
     pub console: VecDeque<String>,
     pub network: VecDeque<String>,
     pub pending_dialog: Option<String>,
+    /// [`EngineHandle::pump_lagged`] at the moment this tab joined the table.
+    ///
+    /// The reader subtracts it, so the gap note describes **this tab's own
+    /// window** rather than the connection's whole life. Without it the note is
+    /// monotonic: one busy page load makes every later read on every tab say
+    /// "there is a gap", including reads of rings that are genuinely complete,
+    /// and a hint that is always on has stopped distinguishing anything.
+    ///
+    /// It does NOT decay for a tab that lived through a drop, and that is
+    /// deliberate: that ring may really have a hole and nothing heals it. What
+    /// the subtraction restores is the ability of a *fresh* tab to read clean.
+    pub lag_at_attach: u64,
 }
 
 impl TabEntry {
@@ -272,6 +292,10 @@ impl TabEntry {
             console: VecDeque::new(),
             network: VecDeque::new(),
             pending_dialog: None,
+            // Stamped by [`EngineHandle::attach_tab`], which is where the
+            // connection's count is in scope. `0` here is right for the first
+            // tab, which exists before any pump does.
+            lag_at_attach: 0,
         }
     }
 }
@@ -503,8 +527,12 @@ impl EngineHandle {
                     )),
                 })?;
         }
-        tabs.entries
-            .insert(target.0.clone(), TabEntry::new(session.clone()));
+        let mut entry = TabEntry::new(session.clone());
+        // The connection's dropped-event count as this tab starts. Everything
+        // before it happened to other tabs' rings, not this one's, so the
+        // reader subtracts it rather than reporting a gap this tab never had.
+        entry.lag_at_attach = self.pump_lagged.load(std::sync::atomic::Ordering::Relaxed);
+        tabs.entries.insert(target.0.clone(), entry);
         if tabs.active.is_none() {
             tabs.active = Some(target.0.clone());
         }

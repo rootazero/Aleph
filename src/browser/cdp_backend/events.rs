@@ -335,12 +335,18 @@ async fn read_ring(
     let handle = be.handle().await?;
     handle.ensure_tab(tab_id).await?;
     let watching = handle.pump_started.load(Ordering::SeqCst);
-    let lagged = handle.pump_lagged.load(Ordering::Relaxed);
+    let connection_total = handle.pump_lagged.load(Ordering::Relaxed);
     let tabs = handle.tabs.lock().await;
     let entry = tabs
         .entries
         .get(tab_id)
         .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))?;
+    // A DELTA over this tab's own window, never the connection's running total.
+    // The total only grows, so reporting it raw would make the gap note true
+    // forever after the first busy page — a 判据 §2 恒真 sitting on the
+    // presentation layer, where the model reads it. `saturating_sub` because the
+    // two loads are not atomic together and the stamp could momentarily lead.
+    let lagged = connection_total.saturating_sub(entry.lag_at_attach);
     Ok(render_ring(watching, lagged, pick(entry), kind))
 }
 
@@ -649,6 +655,51 @@ mod tests {
                 "an empty-but-watched ring is an observation: {out}"
             );
         }
+    }
+
+    /// A hint that is always on has stopped distinguishing anything. The gap
+    /// note is reported over **this tab's own window**, so a tab attached after
+    /// the drop reads clean while the tab that lived through it does not.
+    ///
+    /// Driven through the public verb, because the subtraction lives in
+    /// `read_ring` and the whole claim is that the two tabs get DIFFERENT
+    /// answers from the same connection counter — which a `render_ring` test
+    /// cannot see at all.
+    #[tokio::test]
+    async fn the_gap_note_is_this_tabs_window_not_the_connections_whole_life() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+
+        handle
+            .attach_tab(&aleph_cdp::TargetId("OLD".into()))
+            .await
+            .expect("attach");
+        // A busy page drops events. This is the pump's own store, reproduced.
+        handle.pump_lagged.store(7, Ordering::Relaxed);
+        handle
+            .attach_tab(&aleph_cdp::TargetId("NEW".into()))
+            .await
+            .expect("attach");
+
+        let old = backend.console_messages("OLD").await.expect("read OLD");
+        let new = backend.console_messages("NEW").await.expect("read NEW");
+        assert!(
+            old.contains('7') && old.contains("gap"),
+            "the tab that lived through the drop keeps the note — its ring may \
+             really have a hole and nothing heals it: {old}"
+        );
+        assert!(
+            !new.contains("gap"),
+            "a tab attached AFTER the drop has a complete ring and must read \
+             clean, or the note is on forever and distinguishes nothing: {new}"
+        );
+        assert_ne!(
+            old, new,
+            "two tabs on one connection must be able to differ, which is the \
+             whole of what the subtraction buys"
+        );
     }
 
     /// The discovery stream is browser-wide. Adopting a target whose opener is

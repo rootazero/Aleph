@@ -53,7 +53,14 @@ pub(super) async fn snapshot(
     tab_id: &str,
 ) -> Result<SnapshotOutput, BrowserError> {
     let handle = be.handle().await?;
-    let session = handle.ensure_tab(tab_id).await?;
+    // GATED on a pending dialog, unlike the other read verbs, because this is
+    // the one a model reaches for next after a click that opened one: "what
+    // does the page look like now?". Chromium answers nothing on a tab with a
+    // dialog up, so ungated it would spend the whole command budget and then
+    // report that the SNAPSHOT failed — 判据 §17, the wrong label costing more
+    // than the vague one, on the most likely next verb. The gate turns a 30 s
+    // hang into a refusal that names the dialog and the way out.
+    let session = super::actions::tab_ready(&handle, tab_id).await?;
 
     let started = Instant::now();
     // The ONLY engine branch in the read path. Both arms produce the same
