@@ -21,13 +21,11 @@ use crate::session::store::SessionEventStore;
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 pub enum ActorCommand {
-    EmitEvent {
-        event: SessionEvent,
-        reply: oneshot::Sender<Result<EventSeq, SessionError>>,
-    },
-    /// Append `events` at consecutive seqs and apply `retire` in ONE store
-    /// transaction. The reply carries every seq allocated, in batch order
-    /// (empty when the batch only retires).
+    /// The only write command. Append `events` at consecutive seqs and apply
+    /// `retire` in ONE store transaction. The reply carries every seq
+    /// allocated, in batch order (empty when the batch only retires). A
+    /// single event is a batch of one — there is no separate single-event
+    /// arm, so one writer cannot drift from another.
     EmitBatch {
         events: Vec<SessionEvent>,
         retire: Option<Retire>,
@@ -147,33 +145,9 @@ impl SessionActor {
         }
     }
 
-    /// `EmitEvent` handler: a batch of one through the same writer, so the
-    /// single arm cannot drift from the batch arm's self-heal or durability.
-    async fn handle_emit_one(
-        &mut self,
-        event: SessionEvent,
-        reply: oneshot::Sender<Result<EventSeq, SessionError>>,
-    ) -> bool {
-        let at = now_ms();
-        let pair = [(event, at)];
-        match self.write_batch(&pair, None).await {
-            Ok(first) => {
-                let [(event, at)] = pair;
-                self.finish_emitted(first, event, at);
-                let _ = reply.send(Ok(first));
-                true
-            }
-            Err(e) => {
-                let _ = reply.send(Err(e));
-                false
-            }
-        }
-    }
-
-    /// Common post-append success path, once per appended row, in seq order.
-    /// Used by both emit handlers so neither can forget `head_seq`, the
-    /// observer, or the broadcast. The reply is the handler's job: a batch
-    /// replies once for all its rows.
+    /// Common post-append success path, once per appended row, in seq order:
+    /// `head_seq`, the observer, the broadcast. The reply is the handler's
+    /// job: a batch replies once for all its rows.
     ///
     /// The hot arm was the only site that wrapped `obs.on_appended` in
     /// `catch_unwind`; the drain arm silently skipped observer + broadcast,
@@ -265,11 +239,6 @@ impl SessionActor {
                     // started, regardless of how many emits happened in
                     // between — see severed-wire-2026-09-05-modules2
                     // session I-1.
-                    Some(ActorCommand::EmitEvent { event, reply }) => {
-                        if self.handle_emit_one(event, reply).await {
-                            idle_deadline = Instant::now() + self.idle_timeout;
-                        }
-                    }
                     Some(ActorCommand::EmitBatch { events, retire, reply }) => {
                         if self.handle_emit_batch(events, retire, reply).await {
                             idle_deadline = Instant::now() + self.idle_timeout;
@@ -306,14 +275,11 @@ impl SessionActor {
                     let mut drained = 0u32;
                     while let Ok(cmd) = self.inbox.try_recv() {
                         match cmd {
-                            // Same handlers as the hot arm: the drain arm
+                            // Same handler as the hot arm: the drain arm
                             // races the hot arm and any direct-store writer
                             // just like the hot arm does, so it needs the
                             // same self-heal — and sharing the handler is
                             // what keeps it from being forgotten here.
-                            ActorCommand::EmitEvent { event, reply } => {
-                                self.handle_emit_one(event, reply).await;
-                            }
                             ActorCommand::EmitBatch { events, retire, reply } => {
                                 self.handle_emit_batch(events, retire, reply).await;
                             }
@@ -380,18 +346,19 @@ mod tests {
         let handle = tokio::spawn(actor.run());
 
         let (rtx, rrx) = oneshot::channel();
-        tx.send(ActorCommand::EmitEvent {
-            event: SessionEvent::TurnStarted {
+        tx.send(ActorCommand::EmitBatch {
+            events: vec![SessionEvent::TurnStarted {
                 turn_id: uuid::Uuid::new_v4(),
                 trigger: TurnTrigger::UserMessage,
                 at: now_ms(),
-            },
+            }],
+            retire: None,
             reply: rtx,
         })
         .await
         .unwrap();
-        let seq = rrx.await.unwrap().unwrap();
-        assert_eq!(seq, 1);
+        let seqs = rrx.await.unwrap().unwrap();
+        assert_eq!(seqs, vec![1]);
 
         let (gtx, grx) = oneshot::channel();
         tx.send(ActorCommand::GetEvents {
@@ -427,9 +394,9 @@ mod tests {
             .unwrap();
         let mut sub = srx.await.unwrap();
 
-        let (rtx, _rrx) = oneshot::channel();
-        tx.send(ActorCommand::EmitEvent {
-            event: SessionEvent::UserMessage {
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(ActorCommand::EmitBatch {
+            events: vec![SessionEvent::UserMessage {
                 turn_id: uuid::Uuid::new_v4(),
                 content: MessageContent {
                     text: "hi".into(),
@@ -440,11 +407,13 @@ mod tests {
                 at: now_ms(),
                 synthetic: false,
                 author_user_id: None,
-            },
+            }],
+            retire: None,
             reply: rtx,
         })
         .await
         .unwrap();
+        assert_eq!(rrx.await.unwrap().unwrap().len(), 1);
 
         let record = sub.recv().await.unwrap();
         assert!(matches!(record.event, SessionEvent::UserMessage { .. }));
@@ -479,18 +448,19 @@ mod tests {
 
         // Emit one more event; it should land at seq=4
         let (rtx, rrx) = oneshot::channel();
-        tx.send(ActorCommand::EmitEvent {
-            event: SessionEvent::TurnStarted {
+        tx.send(ActorCommand::EmitBatch {
+            events: vec![SessionEvent::TurnStarted {
                 turn_id: uuid::Uuid::new_v4(),
                 trigger: TurnTrigger::UserMessage,
                 at,
-            },
+            }],
+            retire: None,
             reply: rtx,
         })
         .await
         .unwrap();
-        let seq = rrx.await.unwrap().unwrap();
-        assert_eq!(seq, 4);
+        let seqs = rrx.await.unwrap().unwrap();
+        assert_eq!(seqs, vec![4]);
     }
 
     /// Regression test for audit 4.1: a direct-store writer racing the actor

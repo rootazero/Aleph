@@ -992,9 +992,9 @@ mod tests {
     /// Fix #2 regression: `wake()` and `emit_event` racing for the same
     /// session must never let a foreign event land before the
     /// `SessionWoken` marker for that wake. Pre-fix, the window between
-    /// `wake()`'s shutdown and its own `SpawnActor(...) → send(EmitEvent
-    /// { SessionWoken })` allowed a concurrent `emit_event` to insert
-    /// itself into the freshly-spawned actor's inbox first. We assert
+    /// `wake()`'s shutdown and its own "spawn actor, then send the
+    /// `SessionWoken` emit command" allowed a concurrent `emit_event` to
+    /// insert itself into the freshly-spawned actor's inbox first. We assert
     /// the post-fix invariant: every `SessionWoken` in the log has
     /// `seq == prior_head + 1` and no foreign event interleaves between
     /// `prior_head` and the marker.
