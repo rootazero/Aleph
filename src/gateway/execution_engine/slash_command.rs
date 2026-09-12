@@ -236,7 +236,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         reason: "moa one-shot".to_string(),
                     });
                 }
-                self.execute_direct_tool(run_id, &mode, request, &agent, emitter)
+                // The log the dispatch is journaled into: the process-wide
+                // slot's handle. Resolved HERE, in the dispatcher, so the one
+                // arm that executes anything takes the service as a parameter
+                // — which is what lets a test hand it a refusing one and prove
+                // the tool does not run over an unrecorded dispatch.
+                let session = crate::session::service::global_session_service();
+                self.execute_direct_tool(run_id, &mode, request, &agent, emitter, session)
                     .await
             }
 
@@ -311,13 +317,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// The fast path dispatches through the raw [`ToolRegistry`], which holds
     /// none of the loop's gates. Anything the loop would gate must therefore
     /// NOT run here — see [`Self::slash_gate_reason`].
-    async fn execute_direct_tool<E: EventEmitter + Send + Sync + 'static>(
+    ///
+    /// `session` is the log the dispatch is journaled into (§5.3): the
+    /// process-wide slot's handle in production, resolved by the dispatch
+    /// table above; a double in tests. `None` = no log to be durable into,
+    /// the pre-existing degraded shape (tests, the simple engine).
+    /// `pub(super)` for exactly that second caller: `execution_engine::tests`
+    /// hands in a refusing service and asserts the registry saw nothing.
+    pub(super) async fn execute_direct_tool<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,
         mode: &serde_json::Value,
         request: &RunRequest,
         agent: &AgentInstance,
         emitter: Arc<E>,
+        session: Option<Arc<dyn crate::session::service::SessionService>>,
     ) -> Result<String, ExecutionError> {
         let tool_id = mode["tool_id"]
             .as_str()
@@ -339,11 +353,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Err(reason) => return Err(ExecutionError::Fallthrough { reason }),
         };
 
-        // §5.3: the fact lands before the effect. No handle (tests, the
-        // simple engine) = no log to be durable into, the pre-existing
-        // degraded shape; a handle whose write FAILS is a refusal — running
-        // the tool over an unrecorded dispatch is the defect this closes.
-        let journal = crate::session::service::global_session_service().map(|svc| {
+        // §5.3: the fact lands before the effect. No handle = no log to be
+        // durable into, the pre-existing degraded shape; a handle whose write
+        // FAILS is a refusal — running the tool over an unrecorded dispatch is
+        // the defect this closes. Both are pinned behaviourally in
+        // `execution_engine::tests` (a witness registry that reads the log
+        // from inside the tool body; a refusing service that must see zero
+        // dispatches), not only by the source census below.
+        let journal = session.map(|svc| {
             super::fast_path::FastPathJournal::new(svc, request.session_key.clone(), tool_id)
         });
         if let Some(journal) = journal.as_ref() {

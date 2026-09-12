@@ -93,16 +93,18 @@ impl SessionEvent {
         }
     }
 
-    /// The seed pair every user-driven run opens with: `TurnStarted` then the
-    /// `UserMessage`, sharing one `turn_id`. Two writers (the bridge's
-    /// `seed_history` and the L0 fast path) used to spell it by hand.
+    /// The 1+1 seed pair a single-text user turn opens with: `TurnStarted`
+    /// then the `UserMessage`, sharing one `turn_id` and one `at`. Two
+    /// writers (the bridge's `seed_history` and the L0 fast path) used to
+    /// spell it by hand. `at` is the caller's so a batch that carries the
+    /// pair alongside other rows stamps one instant on all of them.
     #[must_use]
     pub fn user_turn(
         turn_id: TurnId,
         content: MessageContent,
         author_user_id: Option<String>,
+        at: Timestamp,
     ) -> [SessionEvent; 2] {
-        let at = now_ms();
         [
             SessionEvent::TurnStarted {
                 turn_id,

@@ -3,8 +3,8 @@ use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
 use crate::resilience::TaskStatus;
 use crate::session::events::{
-    now_ms, EventSeq, MessageContent, RunEnvelopeSnapshot, RunOutcome, SessionEvent, ToolOutput,
-    TurnId,
+    now_ms, EventSeq, MessageContent, RunEnvelopeSnapshot, RunOutcome, SessionEvent, Timestamp,
+    ToolOutput, TurnId,
 };
 use crate::session::service::{SessionError, SessionId, SessionService};
 use crate::sync_primitives::Arc;
@@ -51,6 +51,9 @@ impl FastPathJournal {
         envelope: RunEnvelopeSnapshot,
         input: serde_json::Value,
     ) -> Result<Vec<EventSeq>, SessionError> {
+        // One instant for the whole batch: it is one moment, and four
+        // `now_ms()` calls can straddle a millisecond.
+        let at = now_ms();
         let [turn, user] = SessionEvent::user_turn(
             self.turn_id,
             MessageContent {
@@ -60,13 +63,14 @@ impl FastPathJournal {
                 thinking_signature: None,
             },
             author_user_id,
+            at,
         );
         let events = vec![
             turn,
             user,
             SessionEvent::RunStarted {
                 run_id: self.run_id.clone(),
-                at: now_ms(),
+                at,
                 project_root: None,
                 envelope: Some(envelope),
             },
@@ -75,7 +79,7 @@ impl FastPathJournal {
                 call_id: self.call_id.clone(),
                 name: self.tool.clone(),
                 input,
-                at: now_ms(),
+                at,
             },
         ];
         self.svc.emit_batch(&self.session, events, None).await
@@ -88,14 +92,14 @@ impl FastPathJournal {
         result: serde_json::Value,
         reply: String,
     ) -> Result<Vec<EventSeq>, SessionError> {
-        let receipt = SessionEvent::ToolResult {
+        let receipt = |at| SessionEvent::ToolResult {
             turn_id: self.turn_id,
             call_id: self.call_id.clone(),
             output: ToolOutput {
                 value: result,
                 metadata: Default::default(),
             },
-            at: now_ms(),
+            at,
         };
         self.close(receipt, reply, RunOutcome::Completed).await
     }
@@ -109,23 +113,26 @@ impl FastPathJournal {
         error: String,
         reply: String,
     ) -> Result<Vec<EventSeq>, SessionError> {
-        let receipt = SessionEvent::ToolError {
+        let receipt = |at| SessionEvent::ToolError {
             turn_id: self.turn_id,
             call_id: self.call_id.clone(),
             error,
-            at: now_ms(),
+            at,
         };
         self.close(receipt, reply, RunOutcome::Errored).await
     }
 
+    /// `receipt` is built here rather than by the caller so the receipt, the
+    /// reply and the marker carry the batch's one instant.
     async fn close(
         &self,
-        receipt: SessionEvent,
+        receipt: impl FnOnce(Timestamp) -> SessionEvent,
         reply: String,
         outcome: RunOutcome,
     ) -> Result<Vec<EventSeq>, SessionError> {
+        let at = now_ms();
         let events = vec![
-            receipt,
+            receipt(at),
             SessionEvent::AssistantMessage {
                 turn_id: self.turn_id,
                 content: MessageContent {
@@ -136,12 +143,12 @@ impl FastPathJournal {
                 },
                 // Slash-command reply — no LLM call, nothing billed.
                 usage: None,
-                at: now_ms(),
+                at,
             },
             SessionEvent::RunFinished {
                 run_id: self.run_id.clone(),
                 outcome,
-                at: now_ms(),
+                at,
             },
         ];
         self.svc.emit_batch(&self.session, events, None).await
@@ -329,7 +336,7 @@ where
 mod tests {
     use super::FastPathJournal;
     use crate::routing::session_key::SessionKey;
-    use crate::session::events::{RunEnvelopeSnapshot, RunOutcome, SessionEvent};
+    use crate::session::events::{RunEnvelopeSnapshot, RunOutcome, SessionEvent, Timestamp};
     use crate::session::store::{event_type_tag, migrate_add_session_events, SqliteEventStore};
     use crate::session::{
         reduce_run, DanglingProvenance, InProcessActorSessionService, RunDisposition,
@@ -351,6 +358,31 @@ mod tests {
 
     fn kinds(log: &[SessionEventRecord]) -> Vec<&'static str> {
         log.iter().map(|r| event_type_tag(&r.event)).collect()
+    }
+
+    /// The payload `at` of every kind the journal writes.
+    fn at_of(event: &SessionEvent) -> Timestamp {
+        match event {
+            SessionEvent::TurnStarted { at, .. }
+            | SessionEvent::UserMessage { at, .. }
+            | SessionEvent::RunStarted { at, .. }
+            | SessionEvent::ToolCallRequested { at, .. }
+            | SessionEvent::ToolResult { at, .. }
+            | SessionEvent::ToolError { at, .. }
+            | SessionEvent::AssistantMessage { at, .. }
+            | SessionEvent::RunFinished { at, .. } => *at,
+            other => panic!("the journal never writes {other:?}"),
+        }
+    }
+
+    /// One batch, one instant (the T3/T4 ruling): every row of a batch
+    /// carries the same payload `at`.
+    fn assert_one_instant(rows: &[SessionEventRecord]) {
+        let stamps: Vec<Timestamp> = rows.iter().map(|r| at_of(&r.event)).collect();
+        assert!(
+            stamps.windows(2).all(|w| w[0] == w[1]),
+            "a batch is one moment; got {stamps:?}"
+        );
     }
 
     /// §5.3: the fact lands before the effect. The open batch is ONE batch
@@ -415,6 +447,7 @@ mod tests {
         .await
         .unwrap();
         let log = store.load_all_events(&sid).await.unwrap();
+        assert_one_instant(&log[..4]);
         match &log[0].event {
             SessionEvent::TurnStarted { turn_id, .. } => assert_eq!(*turn_id, j.turn_id),
             other => panic!("expected TurnStarted, got {other:?}"),
@@ -485,6 +518,7 @@ mod tests {
             &kinds(&log)[4..],
             ["tool_result", "assistant_message", "run_finished"]
         );
+        assert_one_instant(&log[4..]);
         match &log[6].event {
             SessionEvent::RunFinished {
                 run_id, outcome, ..
@@ -522,6 +556,7 @@ mod tests {
             &kinds(&log)[4..],
             ["tool_error", "assistant_message", "run_finished"]
         );
+        assert_one_instant(&log[4..]);
         match &log[4].event {
             SessionEvent::ToolError { call_id, error, .. } => {
                 assert_eq!(*call_id, j.call_id);

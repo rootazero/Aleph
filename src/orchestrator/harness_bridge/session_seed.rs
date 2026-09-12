@@ -123,6 +123,7 @@ async fn seed_history(
             thinking_signature: None,
         },
         crate::scope::ambient_room_author(),
+        now_ms(),
     ) {
         service
             .emit_event(session_id, event)
