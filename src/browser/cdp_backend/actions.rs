@@ -1309,10 +1309,36 @@ mod tests {
             Some("confirm: delete everything?"),
             "the latch the next verb reads"
         );
+    }
 
-        // And the wedge is closed at the other end: the next verb refuses BY
-        // NAME instead of spending its own budget on a tab the engine will not
-        // answer. This is `pending_dialog`'s value finding a reader.
+    /// The other end of the wedge, and `pending_dialog`'s value finding its
+    /// first reader: a verb on a tab the engine will not answer refuses BY NAME
+    /// instead of spending its own budget discovering that.
+    ///
+    /// A test of its own rather than a second half of the race above, so a
+    /// mutation to `tab_ready` and a mutation to the `select!` arm redden
+    /// different NAMES — the part a mutation run can match on. It seeds the
+    /// latch directly for the same reason: the claim is about the guard, not
+    /// about how the latch came to be set.
+    #[tokio::test]
+    async fn a_verb_on_a_tab_with_an_open_dialog_refuses_by_name() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+        {
+            let mut tabs = handle.tabs.lock().await;
+            tabs.entries
+                .get_mut("T1")
+                .expect("tab entry")
+                .pending_dialog = Some("confirm: delete everything?".into());
+        }
+
+        let before = methods(&server).len();
         let err = backend
             .click("T1", ActionTarget::Coordinates { x: 1.0, y: 1.0 })
             .await
@@ -1327,6 +1353,55 @@ mod tests {
         assert!(
             text.contains("browser_dialog"),
             "a closed gate names the door that opens it (判据 §14): {text}"
+        );
+        assert_eq!(
+            methods(&server).len(),
+            before,
+            "the refusal must precede the wire — spending the budget is the \
+             thing it exists to avoid: {:?}",
+            methods(&server)
+        );
+    }
+
+    /// The escape hatch, because a latch that cannot be cleared is a fail-DEAD
+    /// gate rather than a fail-closed one: if the engine says there is no
+    /// dialog — a `javascriptDialogClosed` the pump dropped to a lag would do
+    /// it — `handle_dialog` must still clear the local echo, or every other
+    /// verb on the tab is refused forever by the guard above.
+    #[tokio::test]
+    async fn a_dialog_call_the_engine_rejects_still_clears_the_stale_latch() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Page.handleJavaScriptDialog",
+            Responder::Error {
+                code: -32000,
+                message: "No dialog is showing".into(),
+            },
+        );
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+        {
+            let mut tabs = handle.tabs.lock().await;
+            tabs.entries
+                .get_mut("T1")
+                .expect("tab entry")
+                .pending_dialog = Some("alert: stale".into());
+        }
+
+        backend
+            .handle_dialog("T1", "accept", None)
+            .await
+            .expect_err("the engine rejected it");
+        assert!(
+            handle.tabs.lock().await.entries["T1"]
+                .pending_dialog
+                .is_none(),
+            "a stale latch must not survive the call that exists to clear it"
         );
     }
 
