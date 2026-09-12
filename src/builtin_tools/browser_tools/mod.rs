@@ -1052,6 +1052,65 @@ mod tests {
 /// own source, so a 27th browser tool reds by name here rather than silently
 /// escaping the census (`no_catalog_entry_inlines_its_description` in
 /// `builtin_registry::definitions` is the precedent for this shape).
+/// The three verbs whose `DESCRIPTION` names which drivers serve them.
+///
+/// `browser_cookies`, `browser_session` and `browser_pdf` each said "managed
+/// profiles only" — catalog bytes the model reads *before* it decides whether a
+/// call is worth making. Task 12 gave `pdf` to the CDP backend and Task 13 gave
+/// it `cookies`, `save_state` and `load_state`, so all three sentences became
+/// false in the expensive direction: a refusal is believed rather than tested
+/// (判据 §17).
+///
+/// **Nothing would have gone red**, which is why this is a census and not three
+/// edits. It is the same class the `browser_click` `DESCRIPTION` guard closes
+/// one door over, and the rule drawn from that round — *when your own change
+/// makes a model-facing sentence false, sweep for the others it falsified* —
+/// needs something that can fail.
+#[cfg(test)]
+mod driver_claim_census {
+    use crate::tools::AlephTool;
+
+    #[test]
+    fn no_browser_description_claims_a_verb_is_managed_only() {
+        let banned = "managed profiles only";
+        let faces: [(&str, &str); 3] = [
+            (
+                super::cookies::BrowserCookiesTool::NAME,
+                super::cookies::BrowserCookiesTool::DESCRIPTION,
+            ),
+            (
+                super::session::BrowserSessionTool::NAME,
+                super::session::BrowserSessionTool::DESCRIPTION,
+            ),
+            (
+                super::pdf::BrowserPdfTool::NAME,
+                super::pdf::BrowserPdfTool::DESCRIPTION,
+            ),
+        ];
+
+        // The control, and it is not optional: this asserts a NEGATIVE over a
+        // corpus that no longer holds a positive case, so a recogniser that
+        // stopped matching would look exactly like success (判据 §3).
+        assert!(
+            format!("— {banned} (e.g. profile='default')").contains(banned),
+            "the recogniser cannot see the sentence it exists to find"
+        );
+
+        for (name, desc) in faces {
+            assert!(
+                !desc.contains(banned),
+                "{name}'s DESCRIPTION still tells the model this verb is \
+                 managed-only, and the CDP backend implements it: {desc}"
+            );
+            assert!(
+                desc.contains("cdp"),
+                "{name}'s DESCRIPTION names which profiles serve it, so it has \
+                 to name the cdp one: {desc}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod approval_wiring_census {
     /// `(module name, module source)` for every file under this directory.

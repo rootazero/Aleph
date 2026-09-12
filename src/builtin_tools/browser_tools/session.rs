@@ -129,12 +129,14 @@ async fn resolve_session_path(name: &str) -> std::result::Result<PathBuf, String
 #[async_trait]
 impl AlephTool for BrowserSessionTool {
     const NAME: &'static str = "browser_session";
-    // One-sided capability — `BrowserBackend::{save_state,load_state}` are
-    // served only by the managed Playwright backend; see `pdf.rs`.
+    // Two-of-three capability — `BrowserBackend::{save_state,load_state}` are
+    // served by the managed Playwright backend AND by the CDP backend
+    // (Task 13); the Chrome DevTools MCP backend takes the trait default, which
+    // refuses. See `pdf.rs`.
     const DESCRIPTION: &'static str =
         "Save or restore a browser login session (cookies + localStorage) by name, \
          so a logged-in state can be reused without re-authenticating \
-         — managed profiles only (e.g. profile='default')";
+         — managed or cdp profiles only (e.g. profile='default')";
     type Args = BrowserSessionArgs;
     type Output = BrowserSessionOutput;
 

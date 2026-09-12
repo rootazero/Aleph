@@ -149,12 +149,14 @@ impl BrowserCookiesTool {
 #[async_trait]
 impl AlephTool for BrowserCookiesTool {
     const NAME: &'static str = "browser_cookies";
-    // One-sided capability — `BrowserBackend::cookies` is served only by the
-    // managed Playwright backend; see `pdf.rs`. "in the managed browser
-    // session" read as a location, not as a restriction, so the model still
-    // reached for it on an existing-session profile.
+    // Two-of-three capability: `BrowserBackend::cookies` is served by the
+    // managed Playwright backend AND by the CDP backend (Task 13), and NOT by
+    // the Chrome DevTools MCP one, whose trait default refuses. "in the
+    // managed browser session" read as a location, not as a restriction, so
+    // the model still reached for it on an existing-session profile — which is
+    // why this says "only" rather than naming a place.
     const DESCRIPTION: &'static str = "List, get, set, delete, or clear cookies \
-         — managed profiles only (e.g. profile='default')";
+         — managed or cdp profiles only (e.g. profile='default')";
     type Args = BrowserCookiesArgs;
     type Output = BrowserCookiesOutput;
 

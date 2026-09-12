@@ -46,14 +46,16 @@ impl BrowserPdfTool {
 #[async_trait]
 impl AlephTool for BrowserPdfTool {
     const NAME: &'static str = "browser_pdf";
-    // The capability is one-sided: `BrowserBackend::pdf`'s default is served
-    // by the existing-session backend and returns an error naming it, so a
-    // description that promised PDF unconditionally cost the model a turn to
-    // discover its profile could not print. `browser_emulate` states its own
-    // split the same way.
+    // The capability is two-of-three: `BrowserBackend::pdf` is served by the
+    // managed Playwright backend and, since Task 12, by the CDP backend
+    // (`Page.printToPDF`, `pdf: Supported` on both engines); only the
+    // existing-session backend takes the trait default, which returns an error
+    // naming the driver that serves it. A description that promised PDF
+    // unconditionally cost the model a turn to discover its profile could not
+    // print. `browser_emulate` states its own split the same way.
     const DESCRIPTION: &'static str =
         "Print the current browser page to a PDF file at the given output path \
-         — managed profiles only (e.g. profile='default')";
+         — managed or cdp profiles only (e.g. profile='default')";
     type Args = BrowserPdfArgs;
     type Output = BrowserPdfOutput;
 

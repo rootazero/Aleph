@@ -2707,7 +2707,47 @@ mod tests {
     /// are in this 34.
     /// 34 B is the whole of the round's spend, well under the 400 B pruning
     /// threshold this plan sets before a raise is accepted.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_427;
+    ///
+    /// 2026-09-12 (browser dual-engine, task 13 fix round 1): 114_427 ->
+    /// 114_448 B, +21, spread over three tools at exactly 7 B each —
+    /// `browser_cookies`, `browser_session`, `browser_pdf`. **Both endpoints
+    /// are readings** again: without the edit the guard prints 114_427 B
+    /// (94_831 catalog + 16_613 + 1_039 + 1_944), with it 114_448 B (94_852 +
+    /// the same three), each read with the ceiling temporarily floored, and the
+    /// text-level count of the substitution ("managed profiles only" ->
+    /// "managed or cdp profiles only") agrees at +7. Measured on macOS
+    /// (aarch64-apple-darwin); `bash` is untouched again, so the +30 Windows
+    /// gap recorded in the entry above is carried forward unchanged and
+    /// neither widened nor closed.
+    ///
+    /// What the bytes buy: all three sentences said "managed profiles only" and
+    /// all three had become **false**. Task 12 gave `pdf` to the CDP backend;
+    /// this task gave it `cookies`, `save_state` and `load_state`. A model is
+    /// told before it decides whether to fetch the schema, and 判据 §17 in its
+    /// expensive direction — a refusal is believed rather than tested, so the
+    /// model would not have tried.
+    ///
+    /// Against the three questions:
+    /// (1) Runtime facts no schema can carry: which driver a profile runs is a
+    /// deployment property, not a parameter, and none of these three tools is
+    /// in `default_core_tools()`, so the catalog line is the whole of what is
+    /// read before the schema is fetched.
+    /// (2) A stronger model cannot infer them, and the failure is silent: told
+    /// "managed only", it does not attempt the call at all, so nothing ever
+    /// reports that the restriction was wrong.
+    /// (3) Nothing else says it. The trait docs on `BrowserBackend::{pdf,
+    /// save_state, load_state, cookies}` describe the same split, but those are
+    /// Rust doc comments no model reads; they were corrected in the same commit
+    /// for the human reader, at zero catalog cost.
+    ///
+    /// The spend is 21 B against a 400 B pruning threshold, and it replaces a
+    /// false sentence rather than adding a new one — the cheapest possible
+    /// version of this fix, since deleting the clause outright would have taken
+    /// the "(e.g. profile='default')" example with it.
+    /// `no_browser_description_claims_a_verb_is_managed_only`
+    /// (`builtin_tools::browser_tools::driver_claim_census`) is what makes the
+    /// next drift go red instead of merely becoming false.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_448;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

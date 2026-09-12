@@ -67,12 +67,12 @@ pub trait BrowserBackend: Send + Sync {
 
     /// Send a raw key press to the focused element.
     ///
-    /// Required method — both backends have a native key primitive.
+    /// Required method — all three backends have a native key primitive.
     async fn press_key(&self, tab_id: &str, key: &str) -> Result<(), BrowserError>;
 
     /// Navigate the tab's history: back, forward, or reload the current page.
     ///
-    /// Required method — both real backends implement it via a native history
+    /// Required method — all three backends implement it via a native history
     /// primitive so the command waits for the resulting navigation to complete.
     async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError>;
 
@@ -107,21 +107,22 @@ pub trait BrowserBackend: Send + Sync {
 
     /// Console messages captured for the tab.
     ///
-    /// Required method — both backends have a native console listing.
+    /// Required method — all three backends have a native console listing.
     async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError>;
 
     /// Network request log for the tab.
     ///
-    /// Required method — both backends have a native network listing.
+    /// Required method — all three backends have a native network listing.
     async fn network_log(&self, tab_id: &str) -> Result<String, BrowserError>;
 
     /// Print-to-PDF — writes PDF to `output_path`.
     ///
-    /// One-sided capability: only the managed Playwright backend has a `pdf`
-    /// command, so this default is served by exactly one backend — the
-    /// existing-session one — and therefore names it. A bare "pdf not
-    /// supported" leaves the model unable to tell whether the action, the
-    /// profile, or the page is at fault, while the remedy is always the same.
+    /// Not universal: the managed Playwright backend has a `pdf` command and
+    /// the CDP backend has `Page.printToPDF`, so this default is served by
+    /// exactly one backend — the existing-session one — and therefore names the
+    /// driver that does serve it. A bare "pdf not supported" leaves the model
+    /// unable to tell whether the action, the profile, or the page is at fault,
+    /// while the remedy is always the same.
     async fn pdf(&self, _tab_id: &str, _output_path: &Path) -> Result<(), BrowserError> {
         Err(unsupported_by_driver("pdf", BrowserDriver::Managed))
     }
@@ -129,7 +130,7 @@ pub trait BrowserBackend: Send + Sync {
     /// Bring the given tab to the foreground / make it the active page.
     ///
     /// Required method — Chrome `DevTools` MCP selects natively, the Playwright
-    /// CLI via `tab-select`.
+    /// CLI via `tab-select`, the CDP backend via `Target.activateTarget`.
     ///
     /// Note for callers: the selection only survives if whoever asks "which tab
     /// is active" next honors the driver's own `[selected]` marker — see
@@ -141,7 +142,7 @@ pub trait BrowserBackend: Send + Sync {
     /// `action` is "accept" or "dismiss"; `prompt_text` is the text to fill into a
     /// prompt before accepting (ignored for non-prompt dialogs).
     ///
-    /// Required method — both backends have a native dialog primitive.
+    /// Required method — all three backends have a native dialog primitive.
     async fn handle_dialog(
         &self,
         tab_id: &str,
@@ -152,7 +153,7 @@ pub trait BrowserBackend: Send + Sync {
     /// Drag-and-drop from one snapshot element onto another.
     /// Both targets must be snapshot refs (coordinates unsupported).
     ///
-    /// Required method — both backends have a native drag.
+    /// Required method — all three backends have a native drag.
     async fn drag(
         &self,
         tab_id: &str,
@@ -165,7 +166,7 @@ pub trait BrowserBackend: Send + Sync {
     /// existing-session/MCP backend; ignored by the managed CLI backend, which
     /// targets the page's file chooser directly).
     ///
-    /// Required method — both backends have a native upload.
+    /// Required method — all three backends have a native upload.
     async fn upload(
         &self,
         tab_id: &str,
@@ -175,14 +176,14 @@ pub trait BrowserBackend: Send + Sync {
 
     /// Resize the browser viewport / window to `width` × `height` CSS pixels.
     ///
-    /// Required method — both backends have a native resize.
+    /// Required method — all three backends have a native resize.
     async fn resize(&self, tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError>;
 
     /// Apply environment/device emulation overrides (color scheme, geolocation,
     /// network/CPU throttling, extra HTTP headers, user-agent) to a tab.
     /// Only the fields set in `opts` are applied.
     ///
-    /// Required method — both backends implement it (the managed one accepts
+    /// Required method — all three backends implement it (the managed one accepts
     /// only the subset the Playwright CLI can express, and names the rest).
     async fn emulate(&self, tab_id: &str, opts: &EmulateOptions) -> Result<(), BrowserError>;
 
@@ -190,9 +191,11 @@ pub trait BrowserBackend: Send + Sync {
     /// authentication state) to an absolute file path, so a logged-in session
     /// can be reused later.
     ///
-    /// One-sided capability: only the managed Playwright backend has a
-    /// storage-state primitive (see [`Self::pdf`] for why the default names the
-    /// backend it speaks for).
+    /// Not universal: the managed Playwright backend has a storage-state
+    /// primitive and the CDP backend assembles the same `storageState` shape
+    /// out of `Network.getAllCookies` plus the active origin's `localStorage`,
+    /// so only the existing-session backend takes this default (see
+    /// [`Self::pdf`] for why it names the driver it speaks for).
     async fn save_state(&self, _path: &Path) -> Result<(), BrowserError> {
         Err(unsupported_by_driver("save_state", BrowserDriver::Managed))
     }
@@ -200,7 +203,7 @@ pub trait BrowserBackend: Send + Sync {
     /// Restore a previously-saved storage state from an absolute file path,
     /// re-establishing cookies + localStorage.
     ///
-    /// One-sided capability — see [`Self::save_state`].
+    /// Not universal — see [`Self::save_state`].
     async fn load_state(&self, _path: &Path) -> Result<(), BrowserError> {
         Err(unsupported_by_driver("load_state", BrowserDriver::Managed))
     }
@@ -208,7 +211,7 @@ pub trait BrowserBackend: Send + Sync {
     /// Run a cookie-management operation, returning the backend's textual output
     /// (a cookie listing for `List` / `Get`; empty/confirmation for mutations).
     ///
-    /// One-sided capability — see [`Self::save_state`].
+    /// Not universal — see [`Self::save_state`].
     async fn cookies(&self, _op: &CookieOp) -> Result<String, BrowserError> {
         Err(unsupported_by_driver("cookies", BrowserDriver::Managed))
     }
