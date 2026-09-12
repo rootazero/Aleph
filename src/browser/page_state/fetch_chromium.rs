@@ -104,15 +104,7 @@ pub async fn fetch_chromium(
     let metrics = aleph_cdp::methods::page::get_layout_metrics(conn, Some(session))
         .await
         .map_err(cdp_err)?;
-    let viewport = Viewport {
-        width: non_negative_u32(metrics.css_visual_viewport.client_width),
-        height: non_negative_u32(metrics.css_visual_viewport.client_height),
-        scroll_x: px(metrics.css_visual_viewport.page_x).unwrap_or(0),
-        scroll_y: px(metrics.css_visual_viewport.page_y).unwrap_or(0),
-        content_width: non_negative_u32(metrics.css_content_size.width),
-        content_height: non_negative_u32(metrics.css_content_size.height),
-        dpr: metrics.css_visual_viewport.scale,
-    };
+    let viewport = viewport_from(&metrics)?;
 
     let tree = aleph_cdp::methods::page::get_frame_tree(conn, Some(session))
         .await
@@ -829,12 +821,66 @@ fn px(v: f64) -> Option<i32> {
         .then_some(rounded as i32)
 }
 
-fn non_negative_u32(v: f64) -> u32 {
-    if v.is_finite() && v > 0.0 {
-        v.round() as u32
-    } else {
-        0
-    }
+/// A non-negative whole-pixel length, or `None` when the number is not one this
+/// type can hold.
+///
+/// [`px`]'s twin, and it carried the same defect one screen below it for a whole
+/// round (判据 §16). The old body answered `0` for anything not finite and
+/// positive, and `v.round() as u32` for everything else — so `1e300` became
+/// `u32::MAX` and reached the model as `viewport=4294967295x…`. **Neither
+/// answer is a length**: one says the viewport has no width, the other says it
+/// is four billion pixels wide, and a model can act on either.
+///
+/// It survived `496cd85ca`, which fixed exactly this in `px`, because it lives
+/// in the I/O shell where no test could reach it — which is why its caller is
+/// now the pure [`viewport_from`] instead of a struct literal inside the async
+/// function.
+fn viewport_px(v: f64) -> Option<u32> {
+    let rounded = v.round();
+    (rounded.is_finite() && rounded >= 0.0 && rounded <= f64::from(u32::MAX))
+        .then_some(rounded as u32)
+}
+
+/// `Page.getLayoutMetrics` into a [`Viewport`], refusing numbers that are not
+/// lengths.
+///
+/// Pure, and that is the point: every fact in it used to live in the untested
+/// I/O shell. `fetch_chromium` cannot be exercised without a browser or Task
+/// 12's `FakeCdpServer`, so both of this round's arithmetic defects sat in code
+/// no test could reach — the cost of the pure/shell split is exactly what falls
+/// on the shell side, so the fix is to move things off it rather than to test
+/// it harder.
+///
+/// Refusing the whole capture is right HERE and wrong for a single unplaceable
+/// document (see [`frame_offsets`]): the viewport is one global fact the model
+/// reads directly, a nonsense value in it means the reply is malformed rather
+/// than partial, and the message names the verb that retries.
+fn viewport_from(
+    metrics: &aleph_cdp::methods::page::LayoutMetrics,
+) -> Result<Viewport, BrowserError> {
+    let bad = |field: &str, v: f64| {
+        BrowserError::ActionFailed(format!(
+            "Page.getLayoutMetrics reported {field} = {v}, which is not a \
+             length this build can represent. Re-run browser_snapshot."
+        ))
+    };
+    let vv = &metrics.css_visual_viewport;
+    Ok(Viewport {
+        width: viewport_px(vv.client_width).ok_or_else(|| bad("clientWidth", vv.client_width))?,
+        height: viewport_px(vv.client_height)
+            .ok_or_else(|| bad("clientHeight", vv.client_height))?,
+        // Scroll offsets are `i32` and legitimately negative (rubber-banding),
+        // so they take `px`. `.unwrap_or(0)` is gone for the same reason the
+        // lengths no longer fall back: a scroll of zero is a position, and this
+        // capture's coordinates are all relative to it.
+        scroll_x: px(vv.page_x).ok_or_else(|| bad("pageX", vv.page_x))?,
+        scroll_y: px(vv.page_y).ok_or_else(|| bad("pageY", vv.page_y))?,
+        content_width: viewport_px(metrics.css_content_size.width)
+            .ok_or_else(|| bad("contentWidth", metrics.css_content_size.width))?,
+        content_height: viewport_px(metrics.css_content_size.height)
+            .ok_or_else(|| bad("contentHeight", metrics.css_content_size.height))?,
+        dpr: vv.scale,
+    })
 }
 
 /// The four requested styles, read positionally — or `None` when the array is
@@ -1123,6 +1169,71 @@ mod tests {
             .as_array()?
             .iter()
             .position(|b| b.as_u64() == Some(backend))
+    }
+
+    // ---- the viewport, which used to live in the untested shell ----
+
+    fn metrics(
+        client_width: f64,
+        client_height: f64,
+        page_x: f64,
+        content_width: f64,
+    ) -> aleph_cdp::methods::page::LayoutMetrics {
+        aleph_cdp::methods::page::LayoutMetrics {
+            css_visual_viewport: aleph_cdp::methods::page::VisualViewport {
+                page_x,
+                page_y: 0.0,
+                client_width,
+                client_height,
+                scale: 1.0,
+            },
+            css_content_size: aleph_cdp::methods::page::ContentSize {
+                width: content_width,
+                height: 2000.0,
+            },
+        }
+    }
+
+    /// A length that is not a length is REFUSED, not rounded into one.
+    ///
+    /// `1e300 as u32` is `u32::MAX`, which reaches the model as
+    /// `viewport=4294967295x…`; the old code's other branch answered `0`, which
+    /// says the page has no width. Both are readable as facts, which is what
+    /// makes them worse than an error naming the recovery verb.
+    ///
+    /// This test exists because the fix in `496cd85ca` did not reach this
+    /// function: it was in the I/O shell, and nothing here could call it. That
+    /// is the whole argument for `viewport_from` being pure.
+    #[test]
+    fn a_layout_metric_that_is_not_a_length_is_refused_rather_than_saturated() {
+        let ok = viewport_from(&metrics(1000.0, 800.0, 0.0, 1000.0)).expect("ordinary metrics");
+        assert_eq!((ok.width, ok.height, ok.content_width), (1000, 800, 1000));
+
+        for (label, m) in [
+            ("width", metrics(1e300, 800.0, 0.0, 1000.0)),
+            ("height", metrics(1000.0, -1.0, 0.0, 1000.0)),
+            (
+                "contentWidth",
+                metrics(1000.0, 800.0, 0.0, f64::from(u32::MAX) + 1000.0),
+            ),
+            // Unreachable through serde — a `Value` cannot hold a non-finite
+            // float — but reachable through this typed path, which is where the
+            // `is_finite` half of the guard stops being decoration.
+            ("scrollX", metrics(1000.0, 800.0, f64::NAN, 1000.0)),
+        ] {
+            let err = viewport_from(&m)
+                .expect_err("{label} is not a length and must not be rounded into one");
+            let text = err.to_string();
+            assert!(
+                text.contains("browser_snapshot"),
+                "{label}: a fail-closed answer must name the recovery verb: {text}"
+            );
+        }
+
+        // A scroll offset is legitimately negative and must NOT be refused.
+        let bounced = viewport_from(&metrics(1000.0, 800.0, -20.0, 1000.0))
+            .expect("rubber-banding is a real scroll position");
+        assert_eq!(bounced.scroll_x, -20);
     }
 
     // ---- the hand-written capture: the branches a real page will not show ----
