@@ -334,7 +334,7 @@ pub fn stitch_snapshots(
     let accounted: HashSet<u64> = children.iter().map(|c| c.owner_backend_node_id).collect();
     let mut missing: Vec<u64> = Vec::new();
     for snapshot in std::iter::once(&parent_snapshot).chain(child_snapshots.iter()) {
-        missing.extend(unaccounted_frame_elements(snapshot, &accounted));
+        missing.extend(unaccounted_frame_elements(snapshot, &accounted)?);
     }
 
     if children.is_empty() {
@@ -345,8 +345,10 @@ pub fn stitch_snapshots(
         unreached.extend(missing.into_iter().map(UnreachedFrame::NotCaptured));
     } else if !missing.is_empty() {
         // Supplying any child IS a claim to have enumerated them, so here the
-        // same accounting is a gate. Empty by construction when the claim
-        // holds, which is why nothing has to be cleared.
+        // same accounting is a gate rather than a fact to carry. When the claim
+        // holds, no `NotCaptured` entry can be produced at all — which is why
+        // nothing has to be cleared. `Unplaceable` is unaffected: it describes
+        // a different failure and can still land with children supplied.
         return Err(BrowserError::ActionFailed(format!(
             "this capture claims to span the page, but {} frame element(s) \
              have no content document and no child capture: backendNodeId \
@@ -612,7 +614,10 @@ fn owner_origin(frames: &[RawFrame], backend_node_id: u64) -> Result<(i32, i32),
 
 /// Frame elements in this capture whose content is in neither the capture nor
 /// the supplied child list.
-fn unaccounted_frame_elements(snapshot: &Snapshot, accounted: &HashSet<u64>) -> Vec<u64> {
+fn unaccounted_frame_elements(
+    snapshot: &Snapshot,
+    accounted: &HashSet<u64>,
+) -> Result<Vec<u64>, BrowserError> {
     let mut out = Vec::new();
     for doc in &snapshot.documents {
         let owns: HashSet<usize> = doc
@@ -634,19 +639,34 @@ fn unaccounted_frame_elements(snapshot: &Snapshot, accounted: &HashSet<u64>) -> 
             if !FRAME_ELEMENTS.contains(&name.as_str()) || owns.contains(&i) {
                 continue;
             }
-            let backend = doc
+            // `0` is CDP's own "no node", so it must never become an entry in
+            // a carrier a caller ACTS on — that would be 判据 §8 inside the
+            // very carrier built to stop an absence reading as a fact, one
+            // level in. An unknown may say "I don't know", and here the only
+            // place that can be said is a refusal. Unreachable in practice:
+            // `check_array_lengths` has already made `backendNodeId` the right
+            // length, so the only way here is a negative id, which CDP does not
+            // issue.
+            let Some(backend) = doc
                 .nodes
                 .backend_node_id
                 .get(i)
                 .copied()
                 .and_then(|b| u64::try_from(b).ok())
-                .unwrap_or(0);
+            else {
+                return Err(BrowserError::ActionFailed(format!(
+                    "a frame element at node {i} has no usable backendNodeId, \
+                     so this capture cannot say which frame's content is \
+                     missing — and naming the wrong element is worse than \
+                     naming none. Re-run browser_snapshot."
+                )));
+            };
             if !accounted.contains(&backend) {
                 out.push(backend);
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Every parallel array of one document must agree about how many entries
@@ -822,6 +842,13 @@ fn index_set(indices: &[i64]) -> HashSet<usize> {
 /// `fixtures/`, counted at `f3e8e9b28`: `hn` 1, `local-sameorigin-iframe` 4,
 /// `local-oopif-parent` 4, `local-oopif-child` 0; of those, 7 carry `-1`. This
 /// doc said "three of the four" and neither number was measured.)
+///
+/// **Illustrative, not load-bearing**: nothing asserts it and no reader is
+/// wrong if it drifts — the behaviour it motivates is asserted by name in
+/// `the_real_same_origin_capture_fills_the_live_property_fields`, which reads
+/// `Some("")` off `#q` and `#notes`. Left as prose deliberately; converting
+/// every explanatory digit into an assertion is a cost with no failure behind
+/// it.
 ///
 /// Verbatim, not whitespace-collapsed like the attribute path: this is the
 /// user's text and a `<textarea>`'s newlines are part of it.
@@ -1112,10 +1139,12 @@ mod tests {
     /// `styles`, `bounds` and `text` by the position in `nodeIndex` itself, so
     /// a test that `filter_map`s before `enumerate` renumbers every slot after
     /// the first unreadable entry and then agrees with production only by
-    /// accident. No capture in `fixtures/` can expose that — censused
-    /// independently at `d52e514bc`: 1429 `nodeIndex` entries across all five
-    /// fixtures, minimum 0, zero non-integers — so the falsifier is this
-    /// function's own test rather than a recording.
+    /// accident. No capture in `fixtures/` can expose that, which is the claim
+    /// that makes this function's falsifier synthetic rather than lazy — and
+    /// that claim is now **asserted** in
+    /// `slots_are_raw_positions_and_an_unreadable_entry_shifts_nothing` rather
+    /// than stated here, because it is the one explanatory digit in this module
+    /// a reader would be wrong to believe if it drifted.
     fn slots_by_node(indices: &[Option<u64>]) -> std::collections::BTreeMap<u64, Vec<usize>> {
         let mut out: std::collections::BTreeMap<u64, Vec<usize>> =
             std::collections::BTreeMap::new();
@@ -1129,6 +1158,16 @@ mod tests {
 
     /// [`slots_by_node`] reports RAW positions, and an unreadable entry shifts
     /// nothing after it.
+    ///
+    /// The second half asserts the claim that makes the first half's input
+    /// synthetic: **no fixture in this directory contains a non-integer
+    /// `nodeIndex`.** That digit used to live only in a doc comment, where it
+    /// could rot into a false statement about coverage — the one of this
+    /// module's explanatory numbers that a reader would be *wrong* to believe
+    /// if it drifted, since it is what says a recording cannot exercise this
+    /// path. If a capture ever arrives carrying one, this goes red and says the
+    /// synthetic case is no longer the only falsifier, which is a thing worth
+    /// being told.
     #[test]
     fn slots_are_raw_positions_and_an_unreadable_entry_shifts_nothing() {
         let indices = vec![None, Some(5), Some(7), None, Some(7)];
@@ -1145,6 +1184,40 @@ mod tests {
             "both of node 7's entries, at their raw positions and in wire order"
         );
         assert_eq!(slots.len(), 2, "an unreadable entry is not a node");
+
+        // The claim that makes the input above synthetic rather than lazy.
+        let mut entries = 0usize;
+        for (name, text) in real_captures()
+            .iter()
+            .copied()
+            .chain(std::iter::once(("two-documents", TWO_DOCS)))
+        {
+            let value = json(text);
+            for (d, doc) in value["documents"]
+                .as_array()
+                .expect("documents[]")
+                .iter()
+                .enumerate()
+            {
+                for (slot, n) in doc["layout"]["nodeIndex"]
+                    .as_array()
+                    .expect("nodeIndex[]")
+                    .iter()
+                    .enumerate()
+                {
+                    entries += 1;
+                    assert!(
+                        n.as_u64().is_some(),
+                        "{name} doc[{d}] slot {slot} carries a nodeIndex that is \
+                         not a non-negative integer ({n}). A recording can now \
+                         exercise the filtered-enumeration defect, so this test's \
+                         synthetic case is no longer the only falsifier — say so \
+                         rather than deleting this assertion."
+                    );
+                }
+            }
+        }
+        assert_eq!(entries, 1429, "nodeIndex entries across all five fixtures");
     }
 
     /// The element-level rect a node's layout entries agree on, or why there
@@ -1234,25 +1307,65 @@ mod tests {
 
     // ---- the viewport, which used to live in the untested shell ----
 
-    fn metrics(
-        client_width: f64,
-        client_height: f64,
-        page_x: f64,
-        content_width: f64,
-    ) -> aleph_cdp::methods::page::LayoutMetrics {
+    /// `LayoutMetrics` with **seven distinct values**, so that every one of
+    /// `viewport_from`'s seven field mappings is falsifiable: any two of them
+    /// crossed changes an asserted number. An earlier version shared values
+    /// between fields and fixed two more, and three of the seven mappings were
+    /// then unasserted — `content_height` reading `css_content_size.width`
+    /// reddened nothing.
+    fn metrics() -> aleph_cdp::methods::page::LayoutMetrics {
         aleph_cdp::methods::page::LayoutMetrics {
             css_visual_viewport: aleph_cdp::methods::page::VisualViewport {
-                page_x,
-                page_y: 0.0,
-                client_width,
-                client_height,
-                scale: 1.0,
+                page_x: 13.0,
+                page_y: 27.0,
+                client_width: 1001.0,
+                client_height: 802.0,
+                scale: 1.5,
             },
             css_content_size: aleph_cdp::methods::page::ContentSize {
-                width: content_width,
-                height: 2000.0,
+                width: 3005.0,
+                height: 4007.0,
             },
         }
+    }
+
+    /// Every field of `Page.getLayoutMetrics` lands in the field of `Viewport`
+    /// that is named for it.
+    ///
+    /// Seven mappings, seven distinct values, seven assertions. The function
+    /// was made pure exactly so this class of fact would stop living where
+    /// nothing could reach it — and then three of the seven did not come
+    /// across, which is the same shape as moving code for testability and not
+    /// testing it.
+    #[test]
+    fn every_layout_metric_lands_in_the_viewport_field_named_for_it() {
+        let v = viewport_from(&metrics()).expect("ordinary metrics");
+        assert_eq!(v.width, 1001, "clientWidth");
+        assert_eq!(v.height, 802, "clientHeight");
+        assert_eq!(v.scroll_x, 13, "pageX");
+        assert_eq!(v.scroll_y, 27, "pageY");
+        assert_eq!(v.content_width, 3005, "contentWidth");
+        assert_eq!(v.content_height, 4007, "contentHeight");
+        assert!(
+            (v.page_scale - 1.5).abs() < f64::EPSILON,
+            "cssVisualViewport.scale — the page scale, and NOT a device pixel \
+             ratio; see Viewport::page_scale"
+        );
+    }
+
+    /// One field at a time, out of range, so each refusal is attributable.
+    fn metrics_with(field: &str, value: f64) -> aleph_cdp::methods::page::LayoutMetrics {
+        let mut m = metrics();
+        match field {
+            "clientWidth" => m.css_visual_viewport.client_width = value,
+            "clientHeight" => m.css_visual_viewport.client_height = value,
+            "pageX" => m.css_visual_viewport.page_x = value,
+            "pageY" => m.css_visual_viewport.page_y = value,
+            "contentWidth" => m.css_content_size.width = value,
+            "contentHeight" => m.css_content_size.height = value,
+            other => panic!("unlisted field {other}"),
+        }
+        m
     }
 
     /// A length that is not a length is REFUSED, not rounded into one.
@@ -1267,33 +1380,35 @@ mod tests {
     /// is the whole argument for `viewport_from` being pure.
     #[test]
     fn a_layout_metric_that_is_not_a_length_is_refused_rather_than_saturated() {
-        let ok = viewport_from(&metrics(1000.0, 800.0, 0.0, 1000.0)).expect("ordinary metrics");
-        assert_eq!((ok.width, ok.height, ok.content_width), (1000, 800, 1000));
-
-        for (label, m) in [
-            ("width", metrics(1e300, 800.0, 0.0, 1000.0)),
-            ("height", metrics(1000.0, -1.0, 0.0, 1000.0)),
-            (
-                "contentWidth",
-                metrics(1000.0, 800.0, 0.0, f64::from(u32::MAX) + 1000.0),
-            ),
+        // Every LENGTH field, one at a time, so each refusal is attributable to
+        // the field that caused it rather than to whichever is checked first.
+        for (field, value) in [
+            ("clientWidth", 1e300),
+            ("clientHeight", -1.0),
+            ("contentWidth", f64::from(u32::MAX) + 1000.0),
+            ("contentHeight", -0.6),
             // Unreachable through serde — a `Value` cannot hold a non-finite
             // float — but reachable through this typed path, which is where the
             // `is_finite` half of the guard stops being decoration.
-            ("scrollX", metrics(1000.0, 800.0, f64::NAN, 1000.0)),
+            ("pageX", f64::NAN),
+            ("pageY", f64::INFINITY),
         ] {
-            let err = viewport_from(&m)
-                .expect_err("{label} is not a length and must not be rounded into one");
+            let err = viewport_from(&metrics_with(field, value))
+                .err()
+                .unwrap_or_else(|| {
+                    panic!("{field} = {value} is not a coordinate and must not be rounded into one")
+                });
             let text = err.to_string();
+            assert!(text.contains(field), "must name the field: {text}");
             assert!(
                 text.contains("browser_snapshot"),
-                "{label}: a fail-closed answer must name the recovery verb: {text}"
+                "{field}: a fail-closed answer must name the recovery verb: {text}"
             );
         }
 
         // A scroll offset is legitimately negative and must NOT be refused.
-        let bounced = viewport_from(&metrics(1000.0, 800.0, -20.0, 1000.0))
-            .expect("rubber-banding is a real scroll position");
+        let bounced = viewport_from(&metrics_with("pageX", -20.0))
+            .expect("rubber-banding is a real position");
         assert_eq!(bounced.scroll_x, -20);
     }
 
@@ -1481,9 +1596,12 @@ mod tests {
             // `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`
             // give: frozen input, so a threshold is a weaker statement with no
             // compensating benefit. Predicate: non-empty `styles` rows summed
-            // over that capture's documents, at `f3e8e9b28`. They total 1413,
-            // which is 1418 layout entries less the one empty `#document` row
-            // per document.
+            // over that capture's documents, at `f3e8e9b28`. The four numbers
+            // below are the assertion; 1413 is their sum and 1418 layout
+            // entries less one empty `#document` row per document, so both of
+            // those are restatements of numbers this test already pins rather
+            // than facts of their own — if a fixture changes, these assertions
+            // go red before the arithmetic can mislead anyone.
             let want = match name {
                 "hacker-news" => 1291,
                 "same-origin" => 61,
@@ -2554,6 +2672,54 @@ mod tests {
             &l,
         )
         .expect("a fully accounted page stitches");
+    }
+
+    /// A frame element whose `backendNodeId` cannot be read is REFUSED, never
+    /// carried as `NotCaptured(0)`.
+    ///
+    /// `0` is CDP's own "no node". Putting it in this carrier would hand a
+    /// caller an id to resolve for an element that does not exist — 判据 §8
+    /// inside the carrier built to stop an absence reading as a fact, one level
+    /// in from the defect it exists to prevent. It is also the reason the
+    /// carrier is an enum rather than a `Vec<u64>`: a flat list would have had
+    /// to write that same `0` for every unplaceable document.
+    ///
+    /// Unreachable from a real capture — `check_array_lengths` has already made
+    /// `backendNodeId` full-length, so only a negative id reaches it and CDP
+    /// does not issue one — which is exactly why the falsifier is built here by
+    /// hand instead of waited for.
+    #[test]
+    fn a_frame_element_with_no_usable_id_is_refused_rather_than_named_zero() {
+        let mut value = json(TWO_DOCS);
+        // Unaccounted: no content document for the IFRAME at node 4 …
+        value["documents"][0]["nodes"]["contentDocumentIndex"] =
+            serde_json::json!({ "index": [], "value": [] });
+        // … and then take away the only identity it could be named by.
+        value["documents"][0]["nodes"]["backendNodeId"][4] = serde_json::json!(-1);
+
+        let err = parse_snapshot(&value, viewport(), &loaders())
+            .err()
+            .expect("an unnameable frame element must not be carried as node 0");
+        let text = err.to_string();
+        assert!(
+            text.contains("backendNodeId"),
+            "must say what is missing: {text}"
+        );
+        assert!(text.contains("browser_snapshot"), "{text}");
+
+        // Non-vacuity: with the id intact, the same capture is accepted and the
+        // element is named — so the refusal is about the id, not about the
+        // blanked index.
+        let mut ok = json(TWO_DOCS);
+        ok["documents"][0]["nodes"]["contentDocumentIndex"] =
+            serde_json::json!({ "index": [], "value": [] });
+        let dom = parse_snapshot(&ok, viewport(), &loaders()).expect("parses");
+        assert!(
+            dom.unreached_frames
+                .contains(&UnreachedFrame::NotCaptured(104)),
+            "{:?}",
+            dom.unreached_frames
+        );
     }
 
     /// A document no element owns is NAMED, not placed at the origin — and not

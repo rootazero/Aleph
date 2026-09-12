@@ -334,6 +334,21 @@ pub struct RawFrame {
 /// Two variants because the two cases know different things, and an `Option`
 /// that is always `Some` in one branch and always `None` in the other is a
 /// shape that invites a reader to check the wrong one.
+///
+/// # Why this is an enum and not a `Vec<u64>`, which is not a matter of taste
+///
+/// A flat list of `backendNodeId`s would have had to put **something** in the
+/// slot for an unplaceable document, which has no owning element and therefore
+/// no `backendNodeId` at all. The only candidate is `0` — and `0` is CDP's own
+/// "no node". That shape would reproduce 判据 §8 **inside the very carrier
+/// built to stop an absence reading as a fact**: a caller acting on the list
+/// would resolve a node that does not exist, one level in from the defect the
+/// list exists to prevent.
+///
+/// Its twin is live in the producer: `unaccounted_frame_elements` refuses a
+/// frame element whose `backendNodeId` is unreadable rather than writing `0`,
+/// for exactly the same reason. An unknown is allowed to say only "I don't
+/// know", and the place to say it is a refusal — never an identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnreachedFrame {
@@ -368,8 +383,16 @@ pub struct RawDom {
     /// It is the **output of an accounting the fetcher already performs**, not a
     /// second copy of one: a frame element is listed here exactly when it has no
     /// content document in the capture and no child capture was supplied for it,
-    /// so when a caller does supply the children the list is empty by
-    /// construction and there is nothing for anyone to remember to clear.
+    /// so there is nothing for anyone to remember to clear.
+    ///
+    /// **Precisely: [`UnreachedFrame::NotCaptured`] cannot be produced at all
+    /// once children are supplied — [`UnreachedFrame::Unplaceable`] still can,
+    /// because it describes a different failure.** An earlier version of this
+    /// doc said "the list is empty by construction", which is true of the first
+    /// variant and false of the field; a page with an unowned document and a
+    /// fully enumerated set of children reaches this list. The drift argument is
+    /// unaffected — neither variant is a value anyone maintains — but the
+    /// sentence was wrong and a reader would have believed it (判据 §1).
     ///
     /// No `#[serde(default)]`, for [`RawFrame::live_properties_observed`]'s
     /// reason: this is a capture's declaration about **itself**, and a capture
