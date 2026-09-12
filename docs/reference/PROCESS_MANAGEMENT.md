@@ -16,17 +16,23 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
   SQLite 走 `open_sqlite_safe`、vault/acp 走 `vault_io`/`atomic_io`、
   每个 CLI 子命令显式声明 policy、`acquire_instance_lock` 不再有遗留 caller。
 
-如果看到 `Stale lock file detected (PID X not running)`，可以安全
-`rm ~/.aleph/data/aleph.lock`（理论上不会出现，因为 flock 是 OS 管理的；
-该诊断仅作防御性提示）。持有者 PID 记在**未加锁**的 sidecar
-`aleph.lock.pid` 里：正常退出时随锁一起删除（`InstanceLock::drop`），
-服务端的强制退出失效路径（`SHUTDOWN_FAILSAFE` → `process::exit`）也会在
-退出前清掉它（`remove_held_holder_records_before_exit`），只有崩溃 /
-SIGKILL 会留下它——`aleph doctor` 的 `core/instance-lock` 就是给这种残留
-用的，`--fix` 会清掉。若文件系统本身
-拒绝加锁（无 lockd 的 NFS、不支持字节范围锁的挂载），启动会直接报该
-OS 错误而不是"stale lock"——那种情况下 `rm` 没有用，要把 `ALEPH_HOME`
-指到本地文件系统。
+启动时任何 `Another Aleph instance holds the lock …` 都意味着**锁此刻确实
+被某个活进程握着**（OS 报了争用；持有者一退出 OS 就释放）。三种措辞只是
+持有者记录 `aleph.lock.pid` 说了什么：`PID N` = 能点名 → `kill N` 或
+`aleph stop`；`holder record names PID N, which is not running` = 记录过期
+（通常是 fork 后没改写 PID 的守护进程）；`holder record … missing or
+unreadable` = 点不了名。**三种都不要 `rm aleph.lock`**：Unix 上删掉被锁的
+文件再重建是新 inode，下一个启动者会拿到另一把锁、和持有者并排跑——正是
+vault HMAC 丢数据的双实例条件。去进程列表里找到持有者停掉它。
+持有者 PID 记在**未加锁**的 sidecar `aleph.lock.pid` 里：正常退出时随锁
+一起删除（`InstanceLock::drop`），服务端的强制退出失效路径
+（`SHUTDOWN_FAILSAFE` → `process::exit`）也会在退出前清掉它
+（`remove_held_holder_records_before_exit`），只有崩溃 / SIGKILL 会留下
+它——锁本身此时已被 OS 释放，下一次启动直接赢得锁并覆盖记录，**不会**报
+上面那些话；`aleph doctor` 的 `core/instance-lock` 才是给这种残留用的，
+`--fix` 会清掉。若文件系统本身拒绝加锁（无 lockd 的 NFS、不支持字节范围锁
+的挂载），启动会直接报该 OS 错误——那种情况下 `rm` 同样没用，要把
+`ALEPH_HOME` 指到本地文件系统。
 
 ## 日志轮转 (Log Rotation)
 

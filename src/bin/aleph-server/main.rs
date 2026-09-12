@@ -126,13 +126,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     std::process::exit(64);
                 }
+                // Both arms below are still *held* locks (the OS reported
+                // contention); only the holder record is stale or missing.
+                // Never suggest removing the lock file here: on Unix the next
+                // starter would lock a fresh inode and run alongside the
+                // holder — the double-instance condition that corrupts the
+                // vault. A genuinely stale sidecar with a free lock never
+                // reaches this match (the lock is simply won and overwritten);
+                // `aleph doctor` is the surface for that leftover.
                 alephcore::utils::instance_lock::AcquireOutcome::HeldByOrphaned {
                     pid,
                     lock_path,
                 } => {
                     eprintln!(
-                        "Stale lock file detected (PID {pid} not running). \
-                         You may safely `rm {}` if no aleph process exists.",
+                        "Another Aleph instance holds the lock, but its holder record \
+                         names PID {pid}, which is not running — the record is stale \
+                         (usually a daemon whose PID was not rewritten after forking). \
+                         Find the holder in your process list and stop it (`aleph stop`). \
+                         Do not remove {} while it is held.",
+                        lock_path.display(),
+                    );
+                    std::process::exit(64);
+                }
+                alephcore::utils::instance_lock::AcquireOutcome::HeldByUnknown {
+                    lock_path,
+                    holder_path,
+                } => {
+                    eprintln!(
+                        "Another Aleph instance holds the lock, but its holder record ({}) \
+                         is missing or unreadable, so its PID is unknown. Find the holder \
+                         in your process list and stop it (`aleph stop`). \
+                         Do not remove {} while it is held.",
+                        holder_path.display(),
                         lock_path.display(),
                     );
                     std::process::exit(64);

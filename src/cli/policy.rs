@@ -14,40 +14,45 @@ use crate::utils::instance_lock::{self, AcquireOutcome, InstanceLock};
 /// string comparison.
 #[derive(Debug)]
 pub struct LockHeldError {
-    pub pid: u32,
+    pub holder: LockHolder,
     pub lock_path: std::path::PathBuf,
-    pub orphaned: bool,
+}
+
+/// Who holds the lock, as far as the holder sidecar can say. Mirrors the
+/// `Held*` arms of [`AcquireOutcome`] one-to-one, and like them every
+/// variant is a lock that **is held right now** — the OS reported
+/// contention. There is no "orphaned, nobody there" variant: that state
+/// never reaches a CLI command, because a free lock is simply acquired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockHolder {
+    /// The sidecar names a running process.
+    Live { pid: u32 },
+    /// The sidecar names a PID that is not running — the record is stale
+    /// (a daemon whose PID was not rewritten after forking, typically), but
+    /// the lock itself is held.
+    StaleRecord { pid: u32 },
+    /// The sidecar is missing or unreadable; the holder cannot be named.
+    Unknown,
 }
 
 impl fmt::Display for LockHeldError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let status = if self.orphaned {
-            "orphaned lock detected; no live server"
-        } else {
-            "server is running"
-        };
-        // PID 0 is never a real user-space process: it is how `acquire_or_held`
-        // spells "the lock file is held but the sidecar recording WHO holds it
-        // is missing". That call site already says so, and flips `orphaned` for
-        // exactly this reason — but the rendering kept printing the number
-        // anyway, so the message read "no live server (PID 0)": a figure the
-        // reader can act on, sitting next to a sentence saying nobody is there.
-        // Both halves of the same fact have to agree.
-        if self.pid == 0 {
-            return write!(
+        // Every arm says the lock is held. Only the first can name the
+        // process; the other two must not print a PID the reader could
+        // `kill` (0 is not a process, and a stale PID is somebody else's).
+        match self.holder {
+            LockHolder::Live { pid } => write!(f, "server is running (PID {pid})")?,
+            LockHolder::StaleRecord { pid } => write!(
                 f,
-                "{} (holder unknown). This command requires \
-                 exclusive access — run `aleph stop` first. Lock: {}",
-                status,
-                self.lock_path.display()
-            );
+                "server is running but its holder record is stale (names PID {pid}, \
+                 which is not running)"
+            )?,
+            LockHolder::Unknown => write!(f, "server is running (holder unknown)")?,
         }
         write!(
             f,
-            "{} (PID {}). This command requires \
-             exclusive access — run `aleph stop` first. Lock: {}",
-            status,
-            self.pid,
+            ". This command requires exclusive access — run `aleph stop` first. \
+             Do not remove the lock file while it is held. Lock: {}",
             self.lock_path.display()
         )
     }
@@ -100,29 +105,17 @@ where
 /// instead of a plain string so callers can distinguish lock contention
 /// from other failures.
 fn acquire_or_held(data_dir: &Path) -> anyhow::Result<InstanceLock> {
-    match instance_lock::try_acquire(data_dir)? {
-        AcquireOutcome::Acquired(lock) => Ok(lock),
+    let (holder, lock_path) = match instance_lock::try_acquire(data_dir)? {
+        AcquireOutcome::Acquired(lock) => return Ok(lock),
         AcquireOutcome::HeldByLive { pid, lock_path } => {
-            // `pid == 0` here means the holder sidecar was missing or
-            // unreadable (see `instance_lock::try_acquire`). PID 0 is never
-            // a valid user-space process, so don't surface "server is
-            // running (PID 0)" — treat it as orphaned/unknown and let the
-            // operator message stay honest.
-            let orphaned = pid == 0;
-            Err(LockHeldError {
-                pid: pid as u32,
-                lock_path,
-                orphaned,
-            }
-            .into())
+            (LockHolder::Live { pid: pid as u32 }, lock_path)
         }
-        AcquireOutcome::HeldByOrphaned { pid, lock_path } => Err(LockHeldError {
-            pid: pid as u32,
-            lock_path,
-            orphaned: true,
+        AcquireOutcome::HeldByOrphaned { pid, lock_path } => {
+            (LockHolder::StaleRecord { pid: pid as u32 }, lock_path)
         }
-        .into()),
-    }
+        AcquireOutcome::HeldByUnknown { lock_path, .. } => (LockHolder::Unknown, lock_path),
+    };
+    Err(LockHeldError { holder, lock_path }.into())
 }
 
 /// `with_policy` variant that returns `Err` instead of calling
@@ -247,55 +240,50 @@ mod tests {
         assert_eq!(result.unwrap_err().to_string(), "boom");
     }
 
-    /// Live-server case: orphaned=false, pid is real. The message must
-    /// name the holder PID so the operator knows which process to stop,
-    /// and must not say "orphaned".
+    fn held(holder: LockHolder) -> String {
+        LockHeldError {
+            holder,
+            lock_path: std::path::PathBuf::from("/tmp/aleph.lock"),
+        }
+        .to_string()
+    }
+
+    /// Live-server case: the message must name the holder PID so the
+    /// operator knows which process to stop. `spec_c_cli_refuse` greps
+    /// "server is running" on stderr, so that phrase is a wire contract.
     #[test]
     fn lock_held_error_display_for_live_holder() {
-        let err = LockHeldError {
-            pid: 1234,
-            lock_path: std::path::PathBuf::from("/tmp/aleph.lock"),
-            orphaned: false,
-        };
-        let msg = format!("{err}");
-        assert!(msg.contains("server is running"), "{msg}");
-        assert!(msg.contains("PID 1234"), "{msg}");
-        assert!(!msg.contains("orphaned"), "{msg}");
+        let msg = held(LockHolder::Live { pid: 1234 });
+        assert!(msg.contains("server is running (PID 1234)"), "{msg}");
+        assert!(!msg.contains("stale"), "{msg}");
         assert!(!msg.contains("holder unknown"), "{msg}");
     }
 
-    /// Orphaned-but-known case: pid is set, process_matches returned false
-    /// (the lock is held by a dead PID). The message must read "orphaned"
-    /// and still show the (dead) PID for operator forensics.
+    /// Stale-record case: the lock is held (contention), but the sidecar
+    /// names a PID that is not running. The message must say the server is
+    /// running, call the record stale, keep the dead PID for forensics, and
+    /// never call the lock orphaned — nobody is going to `rm` a held lock
+    /// on this message's advice.
     #[test]
-    fn lock_held_error_display_for_orphaned_with_pid() {
-        let err = LockHeldError {
-            pid: 5678,
-            lock_path: std::path::PathBuf::from("/tmp/aleph.lock"),
-            orphaned: true,
-        };
-        let msg = format!("{err}");
-        assert!(msg.contains("orphaned lock detected"), "{msg}");
+    fn lock_held_error_display_for_stale_record() {
+        let msg = held(LockHolder::StaleRecord { pid: 5678 });
+        assert!(msg.contains("server is running"), "{msg}");
+        assert!(msg.contains("stale"), "{msg}");
         assert!(msg.contains("PID 5678"), "{msg}");
-        assert!(!msg.contains("holder unknown"), "{msg}");
+        assert!(!msg.contains("orphaned"), "{msg}");
+        assert!(msg.contains("Do not remove the lock file"), "{msg}");
     }
 
-    /// Holder-unknown case: pid is 0, sidecar was unreadable. The message
-    /// must NOT print "PID 0" (it is never a real process) — instead it
-    /// says "holder unknown" while still labelling the lock as orphaned.
-    /// This is the M2 contract from review-results/cli.md.
+    /// Holder-unknown case: the sidecar was missing or unreadable. The
+    /// message must NOT print "PID 0" (it is never a real process) and must
+    /// NOT say nobody is there — the OS reported the lock as held.
     #[test]
     fn lock_held_error_display_when_holder_unknown() {
-        let err = LockHeldError {
-            pid: 0,
-            lock_path: std::path::PathBuf::from("/tmp/aleph.lock"),
-            orphaned: true,
-        };
-        let msg = format!("{err}");
-        assert!(msg.contains("orphaned lock detected"), "{msg}");
-        assert!(msg.contains("holder unknown"), "{msg}");
-        assert!(!msg.contains("(PID 0)"), "{msg}");
-        assert!(!msg.contains("PID 0)"), "{msg}");
+        let msg = held(LockHolder::Unknown);
+        assert!(msg.contains("server is running (holder unknown)"), "{msg}");
+        assert!(!msg.contains("PID 0"), "{msg}");
+        assert!(!msg.contains("orphaned"), "{msg}");
+        assert!(!msg.contains("no live server"), "{msg}");
     }
 
     #[test]
@@ -328,24 +316,22 @@ mod tests {
         assert!(format!("{:?}", result.unwrap_err()).contains("server is running"));
     }
 
-    /// M2: when the holder sidecar is unreadable, `try_acquire` returns
-    /// `HeldByLive { pid: 0 }`. `acquire_or_held` must surface that as
-    /// "orphaned / unknown" — never as "server is running (PID 0)" — so the
-    /// operator message stays honest.
+    /// A held lock whose sidecar is missing reaches the CLI as
+    /// `HeldByUnknown` and must read as a *running* server with an unknown
+    /// holder — never "PID 0", and never "orphaned / no live server": this
+    /// very test is holding the lock while the message is rendered, which
+    /// is exactly what the old wording denied.
     #[test]
-    fn held_by_live_with_pid_zero_is_treated_as_orphaned() {
+    fn held_by_unknown_reads_as_a_running_server_with_no_pid() {
         let dir = tempfile::tempdir().unwrap();
         // Take the lock so subsequent acquires see HeldBy*.
         let _hold = match crate::utils::instance_lock::try_acquire(dir.path()).unwrap() {
             crate::utils::instance_lock::AcquireOutcome::Acquired(g) => g,
             _ => panic!(),
         };
-        // Wipe the sidecar: instance_lock falls back to HeldByLive { pid: 0 }
-        // when the sidecar is missing.
+        // Wipe the sidecar; the exclusive lock is still held by `_hold`.
         let holder_path = dir.path().join("aleph.lock.pid");
         std::fs::remove_file(&holder_path).unwrap();
-        // The exclusive lock file is still held (we still own `_hold`),
-        // so the second acquire will return HeldByLive with pid 0.
         let result: anyhow::Result<i32> = try_with_policy::<_, i32>(
             CommandPolicy::LockOnly,
             dir.path(),
@@ -353,15 +339,14 @@ mod tests {
             serde_json::Value::Null,
         );
         let err = result.expect_err("should fail when held");
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("orphaned lock detected"),
-            "expected orphaned-lock message, got: {msg}"
-        );
-        assert!(
-            !msg.contains("(PID 0)"),
-            "must not surface PID 0 as a live holder: {msg}"
-        );
+        let held = err
+            .downcast_ref::<LockHeldError>()
+            .expect("contention surfaces as LockHeldError");
+        assert_eq!(held.holder, LockHolder::Unknown);
+        let msg = held.to_string();
+        assert!(msg.contains("server is running (holder unknown)"), "{msg}");
+        assert!(!msg.contains("PID 0"), "{msg}");
+        assert!(!msg.contains("orphaned"), "{msg}");
     }
 
     /// M1: `LockOrIpc` should retry local acquisition when the IPC forward

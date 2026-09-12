@@ -130,11 +130,37 @@ fn remove_registered_holder_records(registry: &Mutex<Vec<PathBuf>>) -> usize {
     records.len()
 }
 
+/// What `try_acquire` found. Every `Held*` arm means the OS reported the
+/// lock as **contended — some live process holds it right now** (the OS
+/// releases it the moment the holder exits). The arms differ only in what
+/// the unlocked holder sidecar says about who. None of them is ever "the
+/// lock file is stale, remove it": removing a held lock file on Unix creates
+/// a fresh inode for the next starter, which then runs alongside the holder
+/// — the double-instance condition that corrupts the vault.
 #[derive(Debug)]
 pub enum AcquireOutcome {
     Acquired(InstanceLock),
-    HeldByLive { pid: i32, lock_path: PathBuf },
-    HeldByOrphaned { pid: i32, lock_path: PathBuf },
+    /// The sidecar names a running process with a matching start time.
+    HeldByLive {
+        pid: i32,
+        lock_path: PathBuf,
+    },
+    /// The sidecar names a PID that is not running (or a different process
+    /// than recorded): the holder's record is stale. The usual cause is a
+    /// daemonized holder whose `rewrite_holder_pid` did not run; the lock is
+    /// still held by someone.
+    HeldByOrphaned {
+        pid: i32,
+        lock_path: PathBuf,
+    },
+    /// The sidecar is missing, empty, or unreadable, so the holder's PID is
+    /// unknown — never `HeldByLive { pid: 0 }`: 0 is not a process and each
+    /// consumer used to decode it differently (one printed `kill 0`, one
+    /// said "no live server" about a lock that was being held).
+    HeldByUnknown {
+        lock_path: PathBuf,
+        holder_path: PathBuf,
+    },
 }
 
 #[derive(Debug)]
@@ -256,7 +282,10 @@ fn classify_lock_failure(
     } else if pid > 0 {
         Ok(AcquireOutcome::HeldByOrphaned { pid, lock_path })
     } else {
-        Ok(AcquireOutcome::HeldByLive { pid: 0, lock_path })
+        Ok(AcquireOutcome::HeldByUnknown {
+            lock_path,
+            holder_path: holder_path.to_path_buf(),
+        })
     }
 }
 
@@ -597,6 +626,33 @@ mod tests {
                 assert_eq!(pid as u32, std::process::id());
             }
             other => panic!("expected HeldByOrphaned, got {other:?}"),
+        }
+    }
+
+    /// Contention with no sidecar (or an unparseable one) is a held lock
+    /// whose holder cannot be named — its own arm, not `HeldByLive { pid: 0 }`
+    /// for each consumer to decode.
+    #[test]
+    fn a_contended_lock_with_no_sidecar_is_held_by_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = dir.path().join(HOLDER_FILENAME);
+        let lock_path = dir.path().join(LOCK_FILENAME);
+        for garbage in [None, Some(""), Some("not-a-pid\n")] {
+            match garbage {
+                None => {
+                    let _ = std::fs::remove_file(&holder);
+                }
+                Some(text) => std::fs::write(&holder, text).unwrap(),
+            }
+            match classify_lock_failure(fs2::lock_contended_error(), &holder, lock_path.clone()) {
+                Ok(AcquireOutcome::HeldByUnknown {
+                    lock_path: l,
+                    holder_path: h,
+                }) => {
+                    assert_eq!((l, h), (lock_path.clone(), holder.clone()));
+                }
+                other => panic!("sidecar {garbage:?}: expected HeldByUnknown, got {other:?}"),
+            }
         }
     }
 
