@@ -697,10 +697,23 @@ pub(super) async fn scroll(
 /// to look.
 ///
 /// Bounded and short: this is not "wait for the page to finish scrolling", it is
-/// "do not answer before the answer is true". A page that genuinely cannot
-/// scroll (already at the end, no scroller under the point) must not cost the
-/// caller the whole window on every call, which is why the loop exits on the
-/// FIRST observed change rather than running to completion.
+/// "do not answer before the answer is true". The loop exits on the FIRST
+/// observed change, so a page that DOES scroll pays a poll or two (~40-80 ms),
+/// not the window.
+///
+/// ⚠️ **A page that cannot scroll pays the full 600 ms, every call.** An earlier
+/// version of this comment offered the early exit as the reason that case is
+/// cheap — it is not, and it cannot be: a page already at its end never changes,
+/// so there is nothing for the exit to fire on. The mechanism was real and the
+/// case it was cited for was the one it does not cover (判据 §1).
+///
+/// That cost is the deliberate price of the budget, not an oversight. The
+/// alternative is to decide up front whether a scroll is possible — compare the
+/// content size, the viewport and the current offset against the direction — and
+/// that is a SECOND derivation of "can this page scroll", competing with the
+/// engine's own answer, which is the only one that accounts for a nested
+/// scroller under the pointer. One derivation, paid for at the end of a page
+/// (判据 §12).
 const SCROLL_SETTLE_BUDGET: std::time::Duration = std::time::Duration::from_millis(600);
 const SCROLL_SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(40);
 
