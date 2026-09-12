@@ -4438,9 +4438,12 @@ Expected: 11 个阶段 `verdict: rc=0`，每个的 `assertions: N (floor F)` 满
 
 > 规则（r2 §0.1 原样）：一条「Verified:」必须能在你自己的 transcript 里找到那条真实的 cargo / bash 调用；数字带着它测于哪个 commit；变异先看红的**名字**是不是预期的那一份，再看条数；一次并行绿不算修好一个间歇性测试。
 
-### T0 — 基线（commit: ）
-- `--lib` 红名单条数 / 与记忆名单的名字差异：
-- `node --version`：
+### T0 — 基线（commit: 00f38fc31）
+- `--lib` 红名单条数 / 与记忆名单的名字差异：**51 条**（`test result: FAILED. 18493 passed; 51 failed; 17 ignored; finished in 683.84s`）。全名单已存 `<scratchpad>/baseline_failures.txt`（不进 git）。对比磁盘上找到的 2026-09-03 旧名单（`/c/Users/.../327cc4c4-.../scratchpad/baseline_failures.txt`，**17 行**——记忆 `windows-alephcore-lib-baseline-2026-09-02` 写的「18 条」与磁盘实测有一位漂移，以磁盘为准）：8 条两边都在（`acp::session::tests::test_spawn_and_drop_kills_child`、`harness::tests::budget::the_harness_line_budget_does_not_grow`、`mcp::transport::stdio::tests::{test_request_timeout_returns_mcp_timeout,test_spawn_echo_server,test_stdio_as_trait_object,test_stdio_implements_mcp_transport,test_timeout_configuration}`、`sandbox::worktree::tests::worktree_sandbox_executes_at_worktree_path`）；9 条只在旧名单（此次未复现，视为已解决）；**43 条新名字**，旧名单没有。
+  - 43 条新增里至少 4 条可归因**本 worktree 未 `git submodule update --init`**（`git submodule status` 对 `skills`/`plugins` 均显示前导 `-`）：`config::tests::skill_doc_drift::{no_bundled_snippet_hardcodes_the_aleph_config_path,the_bundled_self_skill_names_no_phantom_config_keys}`、`extension::validation::tests::every_bundled_plugin_passes_the_installers_own_validation`、`gateway::execution_engine::btw_wire_tests::no_shipped_command_word_resolves_as_a_side_question`——panic 消息原话都含「the skills/ submodule is not checked out」。5 条 `builtin_tools::pdf_generate::tests::*` panic 于「output_path escapes the workspace output dir」/ engine fallback，像是本 worktree 路径场景相关（未深挖，超出 T0 范围）。
+  - **非环境、疑似真实红，如实转述供后续任务参考**（T0 不做诊断，也不修）：`thinker::layers::extra_files::tests::blocks_prompt_injection_patterns`、`thinker::layers::identity_files::tests::blocks_prompt_injection_patterns`、`thinker::layers::soul::tests::workspace_soul_is_sanitized_against_injection`（三条都是 prompt-injection 防护断言失败）、`mcp::redact::tests::conservative_redact_is_case_insensitive_on_substring`（脱敏断言失败）、`gateway::pty::tests::a_write_reaches_a_real_subscriber_over_the_pty_screen_topic`（geometry 断言 `None` vs `Some((10,40))`）。`capability::census::tests::every_installed_global_is_a_capability_slot`（`50` vs 期望 `49`）与 `executor::builtin_registry::definitions::tests::catalog_description_bytes_ratchet`（超字节棘轮上限）两条棘轮测试本身注释已说明是已知漂移类型。**这些全部计入基线**——T1 起的红名单 diff 只应比对相对本文件这份基线**新增**的名字，以上条目不算本轮 r3 工作引入。
+  - 未发生 WEDGE（`.done` 在第 3 轮 9.67 分钟轮询内出现，未触发 `--test-threads=1` 重跑）。
+- `node --version`：`v24.13.0`（≥ v22.5 要求满足）；`tasklist //FI "IMAGENAME eq rustc.exe"` 启动前确认无其它 rustc 在跑。
 
 ### T1 — （commit: ）
 ### T2 — （commit: ）
