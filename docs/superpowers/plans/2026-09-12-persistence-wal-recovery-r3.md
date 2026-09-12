@@ -4445,7 +4445,16 @@ Expected: 11 个阶段 `verdict: rc=0`，每个的 `assertions: N (floor F)` 满
   - 未发生 WEDGE（`.done` 在第 3 轮 9.67 分钟轮询内出现，未触发 `--test-threads=1` 重跑）。
 - `node --version`：`v24.13.0`（≥ v22.5 要求满足）；`tasklist //FI "IMAGENAME eq rustc.exe"` 启动前确认无其它 rustc 在跑。
 
-### T1 — （commit: ）
+### T1 — （commit: a4fac37bd）
+- **RED**（改动前，只加了 brief 的测试）：`cargo check -p alephcore --tests` → `error: could not compile alephcore (lib test) due to 20 previous errors`，全部指向缺失的新 API：`E0599 no method named append_batch`×6、`E0433 cannot find type Durability`×8 / `Retire`×2 / `module fixtures`×1、`E0425 cannot find function durability_of / batch_durability / ignorable`×3。
+- **GREEN**（a4fac37bd）：`cargo test -p alephcore --lib -- session::store session::events agents::subagent_spawner::fork gateway::session_projector session::actor` → `test result: ok. 85 passed; 0 failed; 0 ignored; 18481 filtered out`。
+- **变异**（§11「4.1 retire out of the transaction」，各跑 `--lib -- session::store::tests`，30 条）：A = retire 挪到 `tx.commit()` 之后直接打 `conn` → 红名单恰 `retire_and_insert_are_one_transaction`（1/30），红在**第二条**断言 `[1] != [1, 6]`（成功批次的 commit 后 retire 把批次自己的 seq 6 也退休了）；brief 预测的 `[1,3,5] != [1,2,3,5]` 不是这条变异的形状——retire 在 commit 之后时，失败批次根本走不到 retire。B = retire 挪到 `BEGIN` 之前直接打 `conn` → 同一条测试红在**第一条**断言 `[1] != [1, 2, 3, 5]`（失败批次已经退休了 2/3/5）。两条断言各守一个方向。`git checkout -- src/session/store.rs` 还原，`grep -c MUTATION` = 0。
+- **全量 `--lib`**（a4fac37bd）：`test result: FAILED. 18495 passed; 54 failed; 17 ignored; 0 measured; 0 filtered out; finished in 681.19s`。按名字 `comm -13 baseline_failures.txt t1_failures.txt`：**新增 3 条**，基线 51 条一条未少。三条全在本任务**没碰**的模块，且 `rg` 证明它们不引用 `session::{store,events}` / `SessionEventStore`：`skill::usage::tests::concurrent_bumps_do_not_lose_counts`（98/100）、`tools::usage::store::tests::concurrent_records_do_not_lose_counts`（99/100）、`thinker::runtime_context::tests::cached_repo_root_releases_lock_before_filesystem_io`（20 ms sleep 竞争，该测试自己的注释写明「under the full suite's parallel load」敏感）。单独重跑三条：`test result: ok. 3 passed; 0 failed`。前两条是记忆 `windows-alephcore-lib-baseline-2026-09-02` 记的 `with_file_lock` 争用家族（379c5bb1e 修复、T0 并行基线里也绿）——本轮读作**并行负载下的间歇**，不读作 T1 引入；但那条记忆也警告 Windows 共享 fs 基础设施的红要当 bug report 看，**转给控制者裁定**，不在 T1 范围内修。
+- **A1 #3**：`let mut conn = self.conn.lock().await; conn.transaction_with_behavior(Immediate)` 与 `write_batch(&mut conn, …)`（形参 `&mut Connection`）在 `cargo check -p alephcore` 下直接通过——`tokio::sync::MutexGuard` 的 `DerefMut` 够用，无 E0596，不需要 `&mut *conn`。
+- **A1 #6**：`a_batch_whose_third_row_collides_leaves_nothing_behind` 绿——第三行 PK 冲突后 `Transaction` 未 commit 即 drop，live 只剩预置的 `[3]`，即 rusqlite 默认 `DropBehavior::Rollback` 成立。
+- **brief 测试的一处偏差**（实现未改）：`retire_and_insert_are_one_transaction` 末条断言 `search_events("old").is_empty()` 在 brief 自己的夹具下**不可能成立**——seq 1 是 `user_message("old")` 且 `Retire::From(2)` 不退休它，它合法地仍可搜到。改为断言命中恰为 `[1]`（退休的 2/3 已从 BM25 镜像删除、未退休的 1 未被误删），比 `is_empty` 更强。另 `barrier_restores_normal_after_success_and_after_failure` 里 brief 的 `sync` 闭包（返回借用实参的 async 块）编译报 `lifetime may not live long enough`，改为同体的嵌套 `async fn`，断言不变。
+- `impl SessionEventStore` 计数：**3 处**（`store.rs` 生产实现、`actor.rs::CollideOnceStore`、`session_projector.rs::UnreadableRetirement`），`rg "SessionEventStore for"` 在 `src/` + `tests/` 下无第四处。`SessionEvent` 穷举 `match` 计数：**3 处**（`extract_turn_id`、`event_type_tag`、`fork.rs::is_prompt_bearing`），均已加 `ResumeAttempted` 臂。
+- `fork/tests.rs` 里 `sample_of_every_kind` 实际范围 163–305（brief 写 311，尾行漂 6 行，首行准确）；删 163–306。
 ### T2 — （commit: ）
 ### T6 — （commit: ）
 ### T7 — （commit: ）
