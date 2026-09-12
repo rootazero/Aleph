@@ -995,7 +995,7 @@ mod tests {
     #[tokio::test]
     async fn test_per_persona_provider_resolution() {
         // Create a provider registry with a named provider
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         let special_provider = Arc::new(SequentialMockProvider::new(vec![
             "Special provider response.".to_string(),
         ]));
@@ -1179,7 +1179,7 @@ mod tests {
             call_count: AtomicUsize::new(0),
         });
 
-        let mut registry = crate::providers::ProviderRegistry::new();
+        let registry = crate::providers::ProviderRegistry::new();
         // Register a sentinel "arch" provider that has NO matching name;
         // we resolve via the registry path but on a name that won't be
         // found, triggering the warn path.

@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_registry_register() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         let provider = Arc::new(MockProvider::new("test"));
 
         let result = registry.register("openai".to_string(), provider);
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_registry_register_duplicate() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         let provider1 = Arc::new(MockProvider::new("test1"));
         let provider2 = Arc::new(MockProvider::new("test2"));
 
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_registry_get() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         let provider = Arc::new(MockProvider::new("test response"));
 
         registry.register("openai".to_string(), provider).unwrap();
@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_registry_contains() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         let provider = Arc::new(MockProvider::new("test"));
 
         registry.register("openai".to_string(), provider).unwrap();
@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_registry_names() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
 
         registry
             .register("claude".to_string(), Arc::new(MockProvider::new("test")))
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_registry_len() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         assert_eq!(registry.len(), 0);
 
         registry
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_registry_is_empty() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         assert!(registry.is_empty());
 
         registry
@@ -355,7 +355,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registry_provider_usage() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
         let provider = Arc::new(MockProvider::new("AI response"));
 
         registry.register("test".to_string(), provider).unwrap();
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_registry_multiple_providers() {
-        let mut registry = ProviderRegistry::new();
+        let registry = ProviderRegistry::new();
 
         let openai = Arc::new(MockProvider::new("openai response").with_name("openai"));
         let claude = Arc::new(MockProvider::new("claude response").with_name("claude"));

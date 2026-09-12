@@ -83,15 +83,6 @@ impl ToolLoopVerifier {
         }
     }
 
-    fn tier2_count(&self, session: &str) -> u32 {
-        self.tier2_consecutive
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(session)
-            .copied()
-            .unwrap_or(0)
-    }
-
     fn record_tier2(&self, session: &str) -> u32 {
         let mut map = self.tier2_consecutive.lock().unwrap_or_else(|e| e.into_inner());
         let count = map.entry(session.to_string()).or_insert(0);

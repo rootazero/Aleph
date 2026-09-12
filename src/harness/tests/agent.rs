@@ -27,6 +27,14 @@ use crate::session::store::{migrate_add_session_events, SessionEventStore, Sqlit
 use serde_json::{json, Value};
 
 #[test]
+// The boolean expressions below are intentionally written as
+// `> 0` / `> 3` / `== 0` (and a couple of negations) rather than
+// literal `true`/`false`, so a future edit to the inlined `errors`
+// predicate in `AgentHarness::run` can be mirrored here mechanically
+// instead of having to read the meaning back out of a bare constant.
+// Clippy's `assertions_on_constants` + `nonminimal_bool` lints would
+// otherwise push us toward `assert!(true)` — which loses the contract.
+#[allow(clippy::assertions_on_constants, clippy::nonminimal_bool)]
 fn failure_streak_counts_majority_failure_not_just_total_failure() {
     // (executed, errors) -> should this turn increment the streak?
     // Mirrors the inlined expression in `AgentHarness::run`'s
@@ -40,6 +48,12 @@ fn failure_streak_counts_majority_failure_not_just_total_failure() {
 }
 
 #[test]
+// Same rationale as
+// `failure_streak_counts_majority_failure_not_just_total_failure`:
+// these `errors == 0`-shape expressions are the mirror of the inlined
+// predicate in `AgentHarness::run`, and Clippy's lint suppression is
+// deliberate.
+#[allow(clippy::assertions_on_constants, clippy::nonminimal_bool)]
 fn failure_streak_resets_only_on_clean_turn() {
     // Mirrors the inlined `errors == 0` predicate in `AgentHarness::run`
     // (the deleted `is_clean_turn` const fn inlined there). Keep in

@@ -246,6 +246,18 @@ pub async fn wire_persistence(
     Arc::try_unwrap(tx).unwrap_or_else(|arc| (*arc).clone())
 }
 
+// Exposed to sibling test modules in `acp::manager::tests` so they can pin
+// the `ALEPH_HOME` override at the same path the persistence worker reads.
+// Lives outside `mod wire_persistence_tests` because the cross-module
+// consumer (`src/acp/manager/tests.rs`) needs `pub(super)` visibility,
+// which a nested mod can't grant — and clippy's `items_after_test_module`
+// lint rejects the original placement at end-of-file. Declared before the
+// test module so the lint stays quiet without a per-function `#[allow]`.
+#[cfg(test)]
+pub(super) fn acp_sessions_path_for_test() -> std::path::PathBuf {
+    acp_sessions_path()
+}
+
 #[cfg(test)]
 mod wire_persistence_tests {
     //! Concurrency tests for the persistence worker.
@@ -441,9 +453,4 @@ mod wire_persistence_tests {
         })
         .await;
     }
-}
-
-#[cfg(test)]
-pub(super) fn acp_sessions_path_for_test() -> std::path::PathBuf {
-    acp_sessions_path()
 }

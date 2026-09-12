@@ -164,6 +164,9 @@ struct CompiledRule {
 ///   the fall-through is still Deny.
 ///
 /// `label` names the rule source in log messages ("blocklist" / "allowlist").
+#[allow(clippy::regex_creation_in_loops)] // `MATCH_ANYTHING` is a `OnceLock`, so the
+                                          // embedded `Regex::new` runs at most once per
+                                          // process regardless of how many rules fail.
 fn compile_rules_grouped(
     rules: &[PolicyRule],
     fail_closed: bool,
@@ -191,11 +194,11 @@ fn compile_rules_grouped(
             }
             Err(e) => {
                 if fail_closed {
+                    // `(?s).*` is a fundamental regex — its compile can
+                    // only fail if the underlying engine regresses, and
+                    // then the process is already in trouble. `expect`
+                    // rather than `unwrap` so the failure mode is named.
                     let match_anything = MATCH_ANYTHING.get_or_init(|| {
-                        // `(?s).*` is a fundamental regex — its compile can
-                        // only fail if the underlying engine regresses, and
-                        // then the process is already in trouble. `expect`
-                        // rather than `unwrap` so the failure mode is named.
                         regex::Regex::new("(?s).*")
                             .expect("static regex pattern `(?s).*`")
                     });

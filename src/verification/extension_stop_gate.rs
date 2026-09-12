@@ -409,7 +409,7 @@ mod tests {
             .await;
         assert!(second.is_continue(), "flag-aware hook must allow round 2");
         // Counter resets on Allow, so a later stop starts fresh.
-        assert_eq!(gate.veto_count("s2"), 0);
+        assert_eq!(gate.veto_counters("s2").consecutive, 0);
     }
 
     #[cfg(unix)]
@@ -440,7 +440,7 @@ mod tests {
         // ...and the counter resets, so the NEXT run in this session gets a
         // fresh veto budget instead of a permanently-disabled gate.
         assert_eq!(
-            gate.veto_count("s4"),
+            gate.veto_counters("s4").consecutive,
             0,
             "ceiling breach must reset the count"
         );

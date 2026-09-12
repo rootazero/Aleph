@@ -210,13 +210,12 @@ mod tests {
         let bytes = s.as_bytes();
         let mut i = 0;
         while i + 5 <= bytes.len() {
-            if i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\n' || bytes[i - 1] == b'\t' {
-                if bytes[i..i + 2].iter().all(|b| b.is_ascii_digit())
-                    && bytes[i + 2] == b':'
-                    && bytes[i + 3..i + 5].iter().all(|b| b.is_ascii_digit())
-                {
-                    return true;
-                }
+            if (i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\n' || bytes[i - 1] == b'\t')
+                && bytes[i..i + 2].iter().all(|b| b.is_ascii_digit())
+                && bytes[i + 2] == b':'
+                && bytes[i + 3..i + 5].iter().all(|b| b.is_ascii_digit())
+            {
+                return true;
             }
             i += 1;
         }

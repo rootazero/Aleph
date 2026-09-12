@@ -408,11 +408,11 @@ impl McpManagerHandle {
 
     /// Check if the manager is still running
     ///
-    /// Returns false if the command channel has been closed. Test/debug-only
-    /// — production callers should drop the handle and let the actor's
+    /// Returns false if the command channel has been closed. Test-only —
+    /// production callers should drop the handle and let the actor's
     /// shutdown flow tear the channels down. Made crate-internal because the
     /// only consumers live in `manager::{actor,handle}` test modules.
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn is_running(&self) -> bool {
         !self.tx.is_closed()

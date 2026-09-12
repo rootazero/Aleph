@@ -122,7 +122,6 @@ impl SearchHandle {
 /// yields nothing usable, the same fallback the tool face resolves at boot
 /// ([`SearchRegistry::for_tool`] over a bare Tavily key, else an empty
 /// registry) — because that fallback is what a restart would install.
-#[must_use]
 fn rebuild_registry(
     cfg: &Config,
     vault: &SharedTokenManager,
@@ -254,8 +253,10 @@ mod tests {
         let vault = vault_with_token();
         let handle = SearchHandle::new(Arc::new(SearchRegistry::new("none")), vault);
 
-        let mut cfg = Config::default();
-        cfg.search = Some(ddg_config(9));
+        let cfg = Config {
+            search: Some(ddg_config(9)),
+            ..Config::default()
+        };
 
         assert!(handle.apply_config(&cfg), "a buildable config must land");
         assert_eq!(handle.snapshot().default_options().max_results, 9);
@@ -288,8 +289,10 @@ mod tests {
                 allow_private_upstream: false,
             },
         );
-        let mut cfg = Config::default();
-        cfg.search = Some(search);
+        let cfg = Config {
+            search: Some(search),
+            ..Config::default()
+        };
 
         assert!(handle.apply_config(&cfg));
         assert!(
@@ -329,8 +332,10 @@ mod tests {
                 allow_private_upstream: false,
             },
         );
-        let mut cfg = Config::default();
-        cfg.search = Some(search);
+        let cfg = Config {
+            search: Some(search),
+            ..Config::default()
+        };
 
         assert!(
             !handle.apply_config(&cfg),

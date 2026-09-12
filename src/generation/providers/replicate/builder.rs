@@ -104,6 +104,7 @@ impl ReplicateProviderBuilder {
     /// `src/generation/providers/factory.rs`) must use [`Self::try_build`]
     /// so a TLS / DNS resolver misconfiguration surfaces at startup instead
     /// of producing a provider with no per-request timeout.
+    #[cfg(test)]
     #[must_use]
     pub fn build(self) -> ReplicateProvider {
         let client = Client::builder()
