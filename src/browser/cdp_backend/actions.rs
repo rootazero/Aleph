@@ -1361,6 +1361,18 @@ mod tests {
             text.contains("browser_dialog"),
             "a closed gate names the door that opens it (判据 §14): {text}"
         );
+        // BOTH doors. `browser_dialog` is the right one almost always, but if
+        // this latch is stale and `dialog::says_no_dialog` does not recognise
+        // the engine's wording, that door is reachable and cannot clear it —
+        // and then this refusal is the only thing the model ever sees again on
+        // this tab. Naming the second door is what makes that case recoverable,
+        // so it is pinned rather than left as prose someone can trim.
+        assert!(
+            text.contains("browser_tabs"),
+            "the refusal must also name the door that opens when the latch \
+             itself is stale, which is the one case browser_dialog cannot \
+             fix: {text}"
+        );
         assert_eq!(
             methods(&server).len(),
             before,
