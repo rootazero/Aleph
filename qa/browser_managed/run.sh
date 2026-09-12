@@ -44,15 +44,21 @@ case "$QA_DRIVER" in
   *) echo "unknown ALEPH_QA_DRIVER: $QA_DRIVER (expected playwright_cli or cdp)" >&2; exit 64 ;;
 esac
 
-# The split, in ONE place, and a check that it covers the case arm above.
+# The split, and a check that it covers every scenario the `case` arm accepts.
 #
-# These two lists and the `case` arm are three spellings of one set, which is
-# exactly the shape that produced a documented contradiction while this was
-# being written: a README sentence listed `reap` as both runnable and refused
-# under cdp, and nothing could go red about it (判据 §1). So the set is written
-# once, and the classification is CHECKED against the only copy that decides
-# anything — a scenario added to the case arm and to neither list stops the run
-# by name instead of silently inheriting a driver it was never considered for.
+# ⚠️ The first version of this block claimed to be "CHECKED against the only
+# copy that decides anything" and was not: it RETYPED the ten names into its own
+# `for` loop, so it was a THIRD spelling rather than a derivation, and the
+# failure it existed to catch survived it intact — add `foo` to the case arm and
+# to neither list, and the loop (which never heard of `foo`) stayed green while
+# `foo` ran under cdp, because the refusal path tested only `CDP_REFUSED`
+# membership and everything unclassified defaulted to runnable. 判据 §1 in its
+# most expensive form: the false sentence was in the comment. 判据 §3: the
+# guard's green covered only the shapes it had been told to recognise.
+#
+# Now the list is DERIVED from the `case` arm — this file reads itself — and the
+# derivation carries its own self-check, because an empty derivation would make
+# the loop below vacuously true (判据 §2, the 恒绿 face).
 CDP_RUNNABLE="open tools frames exec-offload"
 # Six scenarios are ABOUT playwright-cli, chrome-devtools-mcp, or Managed-only
 # machinery — not about the browser. Running them under `cdp` would pass or fail
@@ -73,7 +79,28 @@ CDP_RUNNABLE="open tools frames exec-offload"
 #              Wiring the Cdp arm into the reaper is its own task.
 CDP_REFUSED="ambient attach pdf existing headed reap"
 
-for s in open ambient headed tools frames reap pdf existing exec-offload attach; do
+# The one copy that decides anything: the `case "$SCENARIO" in` arm at the top
+# of this file, read back out of this file.
+ALL_SCENARIOS=$(
+  awk '/^case "\$SCENARIO" in$/ { f = 1; next } f && /^esac$/ { exit } f' "${BASH_SOURCE[0]}" \
+    | sed -n 's/^  \([a-z|-]*\)) ;;$/\1/p' | tr '|' ' '
+)
+# Self-check, in two directions, because a derivation that silently stopped
+# matching would hand the loop an empty set and every scenario would pass it.
+if [ -z "$ALL_SCENARIOS" ]; then
+  echo "the scenario list could not be derived from this file's own case arm;" >&2
+  echo "the loop below would then be vacuously true. Fix the derivation." >&2
+  exit 78
+fi
+case " $ALL_SCENARIOS " in
+  *" $SCENARIO "*) ;;
+  *) echo "the derived scenario list ($ALL_SCENARIOS) does not contain '$SCENARIO'," >&2
+     echo "which the case arm above just accepted — so the derivation is reading" >&2
+     echo "something other than that arm." >&2
+     exit 78 ;;
+esac
+
+for s in $ALL_SCENARIOS; do
   case " $CDP_RUNNABLE $CDP_REFUSED " in
     *" $s "*) ;;
     *) echo "scenario '$s' is in the case arm but classified neither runnable" >&2
@@ -122,10 +149,8 @@ KEEP="${KEEP:-0}"
 
 GATEWAY_PORT="${GATEWAY_PORT:-18797}"
 PAGE_PORT="${PAGE_PORT:-18898}"
-# A SECOND origin. Same host, different port — which is a different origin under
-# the same-origin policy, and therefore a real out-of-process iframe. That is
-# what makes the `frames` scenario about OOPIF rather than about a same-origin
-# frame that would satisfy every claim for the wrong reason.
+# A SECOND SITE for the `frames` child — see CHILD_ORIGIN below for why the
+# host, not the port, is what does the work.
 PAGE2_PORT="${PAGE2_PORT:-18899}"
 DEAD_MOCK_PORT="${DEAD_MOCK_PORT:-18999}"
 # `exec-offload` is the only scenario that dials the provider, so it is the only
@@ -225,7 +250,35 @@ say "serve the page fixture on 127.0.0.1:$PAGE_PORT"
 PAGE2DIR="$QA_ROOT/page2"
 mkdir -p "$PAGE2DIR"
 PARENT_ORIGIN="http://127.0.0.1:$PAGE_PORT"
-CHILD_ORIGIN="http://127.0.0.1:$PAGE2_PORT"
+# `localhost`, NOT `127.0.0.1` — and this line is the whole `frames` scenario.
+#
+# Chrome partitions renderer processes by **site** (scheme + registrable
+# domain). **The port is not part of a site.** So `127.0.0.1:18898` and
+# `127.0.0.1:18899` are cross-ORIGIN and same-SITE: one renderer, an ordinary
+# in-process iframe. This fixture said the opposite in a comment for two tasks,
+# and every claim below it passed — because a same-process cross-origin frame
+# satisfies all three control legs (the `#probe`, the differing `src`, and a
+# null `contentDocument`) while `fetch_chromium` takes its single-renderer early
+# return and never executes one line of the OOPIF stack (判据 §2: the scenario
+# could not go red for the reason it named).
+#
+# Measured on Chrome 152.0.7977.76 with this fixture's own files and Aleph's own
+# argv, both directions:
+#   child on 127.0.0.1:  iframe targets 0 · parent childFrames 1 · documents 2
+#   child on localhost:  iframe targets 1 · parent childFrames 0 · documents 1
+# The second is exactly the signature `fetch_chromium.rs:154-170` names as OOPIF.
+#
+# `localhost` is a different registrable domain from `127.0.0.1`, so it is a
+# different site, so the child gets its own renderer and its own CDP target.
+# The QA policy already admits it: `add_browser_config.py` sets
+# `block_private = false`, and `network_policy.rs`'s
+# `test_disabled_ssrf_allows_everything` (network_policy.rs:494) pins that `http://localhost/` passes
+# under exactly that config.
+#
+# The precondition is asserted out of band in `scenario_frames` rather than
+# trusted from this comment — a comment is the half that lies (判据 §1), and
+# this one did.
+CHILD_ORIGIN="http://localhost:$PAGE2_PORT"
 
 cat > "$PAGEDIR/index.html" <<HTML
 <!doctype html><html><head><title>Aleph browser QA</title></head>

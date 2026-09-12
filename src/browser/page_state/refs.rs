@@ -14,6 +14,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RefId(pub String);
 
+/// Whether `candidate` has the shape this table MINTS (`e` + decimal digits,
+/// [`RefTable::mint`]).
+///
+/// Not "is it in the table" — that is `resolve`'s job and its answer is
+/// staleness. This separates a THIRD case the two used to share a spelling: a
+/// string that was never a ref of ours at all. The playwright-cli driver
+/// accepts a CSS selector as a `ref_id`, so a `browser_exec` script written
+/// against that driver arrives here with `#go`, and answering "stale, re-run
+/// browser_snapshot" sends the model to fetch a ref no snapshot will ever mint
+/// — it re-snapshots, fails again, and spends its budget in a loop
+/// (判据 §8: "I do not recognise this" must not be reported as "this expired").
+#[must_use]
+pub fn is_minted_shape(candidate: &str) -> bool {
+    let Some(digits) = candidate.strip_prefix('e') else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 impl std::fmt::Display for RefId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
@@ -169,6 +188,45 @@ fn parse_ref_number(s: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    /// The third case, which used to share a spelling with "stale".
+    ///
+    /// Both directions, and the negatives are the ones that matter: the other
+    /// driver takes a CSS selector as a `ref_id`, so `#go` and `.btn` really do
+    /// arrive here, and calling them stale sends the model to re-snapshot for
+    /// something no snapshot can mint.
+    #[test]
+    fn a_minted_ref_is_told_apart_from_a_string_that_was_never_one() {
+        for minted in ["e0", "e1", "e12", "e99999"] {
+            assert!(
+                super::is_minted_shape(minted),
+                "{minted} is exactly what mint() produces"
+            );
+        }
+        for foreign in [
+            "#go",  // a CSS id selector — the measured case
+            ".btn", // a class selector
+            "e",    // the prefix with no ordinal
+            "",     // nothing at all
+            "E1",   // the wrong case
+            "e1x",  // trailing junk
+            "1",    // the ordinal without the prefix
+            "button[ref=e1]",
+        ] {
+            assert!(
+                !super::is_minted_shape(foreign),
+                "{foreign:?} is not a ref this table mints"
+            );
+        }
+        // Derived, not assumed: whatever `mint` produces must be recognised by
+        // the recogniser, or the two can drift apart silently (判据 §1).
+        let mut table = super::RefTable::new();
+        let id = table.mint(&key("F1", "L1", 7), 1);
+        assert!(
+            super::is_minted_shape(&id.0),
+            "mint() produced {id:?}, which the recogniser rejects"
+        );
+    }
+
     use super::*;
 
     fn key(frame: &str, loader: &str, node: u64) -> RefKey {

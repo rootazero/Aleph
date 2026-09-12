@@ -75,6 +75,23 @@ pub(crate) fn snapshot_body(
     match format {
         SnapshotFormat::Text => Ok(snap.snapshot_text.clone()),
         SnapshotFormat::Json => match &snap.state_json {
+            // `Value::Null` is `page_state::render::to_json`'s FAILURE value —
+            // it is `serde_json::to_value(state).unwrap_or(Value::Null)`, so a
+            // serialization error arrives here as an ordinary `Some(_)`.
+            // Emitting it would ship the four bytes `null` with
+            // `success: true`, and the model would read a tree-shaped absence
+            // as a page with nothing on it. An error is only ever entitled to
+            // say "I do not know" (判据 §8), so it is said out loud — and NOT
+            // merged with the `None` arm below, whose remedy ("use a cdp
+            // profile") would be nonsense advice on a profile that already is
+            // one.
+            Some(serde_json::Value::Null) => Err(
+                "the page-state tree could not be serialized, so there is no \
+                 structured snapshot to return. This is a bug in the renderer, \
+                 not a property of the page — retry, and use format=\"text\" \
+                 meanwhile."
+                    .to_string(),
+            ),
             Some(v) => Ok(serde_json::to_string_pretty(v)
                 .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))),
             // A driver with no structured state says so and names the one that

@@ -4,12 +4,22 @@
 <h1 id="marker">__MARKER__</h1>
 <p id="parent-only">PARENT_BODY_TEXT</p>
 
-<!-- The child is served by a SECOND http server on a DIFFERENT PORT, which
-     makes it a different origin under the same-origin policy even though both
-     are 127.0.0.1. That is the whole point: an out-of-process iframe, not a
-     same-origin one. The scenario proves the cross-origin-ness itself before it
-     asks any question about it — a same-origin iframe would make every later
-     claim vacuous. -->
+<!-- The child is served by a SECOND http server on a different HOST NAME
+     (`localhost` against this page's `127.0.0.1`), which makes it a different
+     SITE and therefore a genuinely out-of-process iframe with its own renderer
+     and its own CDP target.
+
+     The host is what does the work, not the port. This comment used to say the
+     port did, and it was wrong: Chrome partitions renderers by site (scheme +
+     registrable domain) and the port is not part of a site, so the earlier
+     fixture was one renderer and the OOPIF code path never ran while every
+     claim passed. See `run.sh`'s CHILD_ORIGIN for the two-direction
+     measurement.
+
+     The scenario proves the cross-origin-ness in the page AND the
+     out-of-process-ness out of band (a `type: "iframe"` entry in the browser's
+     own target list) before it asks any question about it — cross-origin alone
+     would make every later claim vacuous. -->
 <iframe id="child" src="__CHILD_URL__" width="600" height="220"
         title="Cross origin child frame"></iframe>
 

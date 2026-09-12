@@ -71,9 +71,14 @@ ap.add_argument("--page-url", required=True)
 ap.add_argument("--marker", required=True)
 ap.add_argument(
     "--driver",
-    default="playwright_cli",
+    required=True,
     choices=["playwright_cli", "cdp"],
-    help="which driver the default profile runs; see the module docstring",
+    help="which driver the default profile runs; see the module docstring. "
+    "REQUIRED for the same reason `add_browser_config.py --driver` is: a "
+    "default makes the fixture measure whatever the product happens to do "
+    "that day, and this driver's claims are stated in ONE driver's vocabulary "
+    "(integer tab ids, a CLI session listing) — inheriting the wrong one "
+    "reports the wrong claims under the right name.",
 )
 ap.add_argument("--home", required=True, help="scratch HOME, for the CLI oracle")
 ap.add_argument("--cli", required=True)

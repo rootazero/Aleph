@@ -41,7 +41,16 @@ import sys
 import tempfile
 import time
 
-from qa_rpc import Ledger, Rpc, cli_sessions, open_session_count, session_status, ws_connect
+from qa_rpc import (
+    Ledger,
+    Rpc,
+    cli_sessions,
+    http_json,
+    open_session_count,
+    read_devtools_port_file,
+    session_status,
+    ws_connect,
+)
 
 # The two drivers print element handles differently, and the handle is what the
 # model passes back as `ref_id`:
@@ -540,6 +549,52 @@ async def scenario_frames(rpc, led, args):
         "…and the parent still cannot reach in at the moment we act",
         ok and val is True,
         f"contentDocument === null -> {val!r}",
+    )
+
+    # FOURTH leg, and the only one that is about THIS scenario's subject.
+    #
+    # The three above establish CROSS-ORIGIN. All three are equally true of a
+    # same-process cross-origin iframe — which is what this fixture actually
+    # served for two tasks, on two ports of one host, while a comment claimed
+    # otherwise. Under that fixture `fetch_chromium` takes its single-renderer
+    # early return, so `Target.getTargets`, `attachToTarget`, `DOM.getFrameOwner`,
+    # `stitch_snapshots`, the node-space remap and the completeness gate never
+    # executed — and every claim below still passed (判据 §2, §3: the control legs
+    # were genuine, they just asserted a DIFFERENT predicate from the one the
+    # scenario needs).
+    #
+    # The discriminator is not in the tool output at all. `unreached_frames` is
+    # NOT it: a correctly stitched OOPIF leaves that list EMPTY, which is also
+    # what the same-process fixture prints, so it cannot separate the two paths
+    # in either direction.
+    #
+    # It is in the browser: `/json/list` is the same browser-wide enumeration
+    # `Target.getTargets` answers — the exact call `fetch_chromium` makes — read
+    # OUT OF BAND, the way `attach` uses `pgrep` and `drive_browser` uses
+    # `DevToolsActivePort`. Measured on Chrome 152 in both directions:
+    # 0 iframe targets on the old same-site fixture, 1 on this one.
+    #
+    # Placed HERE, beside the other control legs and BEFORE the snapshot, so the
+    # premise is asserted at the moment of acting rather than inferred from a
+    # comment.
+    oopifs = []
+    detail = "no user-data-dir was passed, so the browser could not be asked"
+    if args.user_data_dir:
+        endpoint = read_devtools_port_file(os.path.join(args.user_data_dir, "DevToolsActivePort"))
+        if endpoint is None:
+            detail = "no DevToolsActivePort under the user-data-dir"
+        else:
+            try:
+                _status, targets = http_json(endpoint[0], "/json/list")
+                oopifs = [t for t in targets if t.get("type") == "iframe"]
+                detail = f"iframe targets={[t.get('url') for t in oopifs]}"
+            except Exception as e:  # noqa: BLE001 — the failure IS the claim
+                detail = f"/json/list failed: {e}"
+    led.check(
+        "the child frame is OUT OF PROCESS (a separate CDP target), not merely cross-origin",
+        any(args.child_origin in (t.get("url") or "") for t in oopifs),
+        f"{detail} — same-SITE hosts share one renderer, so this goes red the "
+        f"moment the fixture stops exercising the OOPIF path",
     )
 
     led.log("\n--- does the accessibility snapshot reach into the frame? ---")
@@ -1110,14 +1165,16 @@ def parse_args():
     ap.add_argument("--marker", required=True)
     ap.add_argument(
         "--driver",
-        default="playwright_cli",
+        required=True,
         choices=["playwright_cli", "cdp"],
         help="which driver the default profile runs. Every verb below is "
         "asserted by EFFECT on the page, so almost every claim is identical "
         "under both — that identity is what makes it a claim about the browser "
         "rather than about playwright-cli. The one axis where the two genuinely "
         "differ is emulation, and it is asserted in BOTH directions rather than "
-        "skipped on either.",
+        "skipped on either. REQUIRED rather than defaulted, for the reason "
+        "`add_browser_config.py --driver` gives: a default makes the fixture "
+        "measure whatever the product happens to do that day.",
     )
     ap.add_argument("--console-marker", default="")
     ap.add_argument("--late-marker", default="")

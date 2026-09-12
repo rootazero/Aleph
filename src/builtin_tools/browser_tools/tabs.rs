@@ -193,14 +193,23 @@ impl AlephTool for BrowserTabsTool {
                 }),
             },
             TabAction::Close { tab_id } => match backend.close_tab(&tab_id).await {
-                Ok(()) => Ok(BrowserTabsOutput {
-                    success: true,
-                    tabs: None,
-                    message: Some(format!(
-                        "Closed tab '{}' in profile '{}'",
-                        tab_id, args.profile
-                    )),
-                }),
+                Ok(()) => {
+                    // The tab is gone, so the tracking entry must go with it.
+                    // `TabRegistry::touch` is an insert with no eviction, and
+                    // until this call `forget` had exactly ONE caller — inside
+                    // the Managed-only idle reaper — so a `Cdp` tab the model
+                    // explicitly closed kept its entry for the life of the
+                    // process.
+                    self.manager.forget_tab(&args.profile, &tab_id);
+                    Ok(BrowserTabsOutput {
+                        success: true,
+                        tabs: None,
+                        message: Some(format!(
+                            "Closed tab '{}' in profile '{}'",
+                            tab_id, args.profile
+                        )),
+                    })
+                }
                 Err(e) => Ok(BrowserTabsOutput {
                     success: false,
                     tabs: None,
@@ -221,6 +230,88 @@ mod tests {
 
     fn manager() -> Arc<ProfileManager> {
         Arc::new(ProfileManager::new(BrowserSystemConfig::default()))
+    }
+
+    /// Closing a tab must stop it being tracked — asserted through the TOOL and
+    /// against a real backend, not by calling `forget_tab` directly.
+    ///
+    /// `TabRegistry::touch` is an insert with no eviction, and before this the
+    /// only `forget` caller in the crate was inside the Managed-only idle
+    /// reaper. So a `Cdp` tab the model explicitly closed kept its entry for the
+    /// life of the process, and `touch_tab`'s doc — which named the missing
+    /// SWEEPER — read as though removal-on-close still happened.
+    ///
+    /// Driven end to end because the cheap version ("call `forget_tab`, observe
+    /// the entry go") would be green with the tool-layer call site deleted: it
+    /// would pin the delegator rather than the wire (判据 §4).
+    #[tokio::test]
+    async fn closing_a_tab_stops_tracking_it() {
+        use crate::browser::cdp_backend::test_support::wire_session;
+        use crate::browser::engine::{Engine, EngineHandle};
+        use crate::browser::profile::{BrowserDriver, ProfileConfig};
+        use aleph_cdp::testkit::{FakeCdpServer, Responder};
+        use aleph_cdp::{CdpConnection, ConnectOptions, TargetId};
+        use serde_json::json;
+
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        server.on(
+            "Target.closeTarget",
+            Responder::Reply(json!({ "success": true })),
+        );
+
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "cdp".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                engine: Some(Engine::Chromium),
+                user_data_dir: Some("/nonexistent/aleph-tabs-test".into()),
+                ..Default::default()
+            },
+        );
+        let manager = Arc::new(ProfileManager::new(config));
+        let conn = CdpConnection::connect(
+            &server.ws_url(),
+            ConnectOptions {
+                command_timeout: std::time::Duration::from_millis(400),
+            },
+        )
+        .await
+        .expect("the fake server accepts a websocket");
+        let handle = Arc::new(EngineHandle::for_test(Engine::Chromium, "cdp", conn));
+        handle
+            .attach_tab(&TargetId("T1".into()))
+            .await
+            .expect("attach");
+        manager.engines().insert_for_test("cdp", handle).await;
+
+        // The precondition, asserted rather than assumed: something is being
+        // tracked, or "the entry went" and "there was never an entry" are the
+        // same observation.
+        manager.touch_tab("cdp", "T1");
+        assert!(
+            manager.has_tracked_tabs("cdp"),
+            "precondition: a cdp tab is tracked in the first place"
+        );
+
+        let tool = BrowserTabsTool::new(Arc::clone(&manager));
+        let result = tool
+            .call(BrowserTabsArgs {
+                profile: "cdp".into(),
+                action: TabAction::Close {
+                    tab_id: "T1".into(),
+                },
+            })
+            .await
+            .expect("the tool answers");
+        assert!(result.success, "close failed: {:?}", result.message);
+
+        assert!(
+            !manager.has_tracked_tabs("cdp"),
+            "the tab was closed, so its tracking entry must be gone — it was \
+             not, and nothing else in the crate would ever have removed it"
+        );
     }
 
     #[test]

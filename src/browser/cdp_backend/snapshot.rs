@@ -154,7 +154,7 @@ mod tests {
         let err = backend
             .snapshot("T1")
             .await
-            .expect_err("a tab the engine will not answer cannot be snapshotted");
+            .expect_err("a tab with an open dialog cannot be snapshotted");
         let text = err.to_string();
         assert!(
             text.contains("open dialog") && text.contains("saved!"),

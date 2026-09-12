@@ -202,6 +202,26 @@ async fn resolve_target(
 ) -> Result<Resolved, BrowserError> {
     match target {
         ActionTarget::Ref { ref_id } => {
+            // A string that was never a ref of ours is a DIFFERENT failure from
+            // a ref that expired, and the remedies are opposites: re-snapshot
+            // fixes the second and loops forever on the first. The other driver
+            // takes a CSS selector here, so this really does arrive (measured:
+            // a `browser_exec` step carrying `ref_id: "#go"` on a cdp profile).
+            //
+            // ⚠️ Scope: this repairs the MESSAGE. Whether `ref_id` should mean
+            // one thing on both drivers is a contract question, and it is a
+            // blocker on Tasks 16 and 19 rather than a fix here — flipping the
+            // default driver would silently change what every stored
+            // `browser_exec` script means.
+            if !crate::browser::page_state::refs::is_minted_shape(ref_id) {
+                return Err(BrowserError::ActionFailed(format!(
+                    "'{ref_id}' is not a ref this driver understands. Refs here \
+                     look like `e12` and come only from browser_snapshot on this \
+                     profile — a CSS selector is not one, and re-running \
+                     browser_snapshot will never produce it. Snapshot the page \
+                     and use the ref printed beside the element you want."
+                )));
+            }
             let resolved = {
                 let tabs = handle.tabs.lock().await;
                 let tab = tabs
@@ -495,8 +515,19 @@ pub(super) async fn tab_ready(
             // scenario the door is closing the tab. One line, no measurement,
             // and it is the difference between a recoverable wedge and a
             // permanent one.
-            "this tab has an open dialog ({}) and the engine will not answer any \
-             other command until it is closed. Answer it with \
+            // ⚠️ This used to continue "…and the engine will not answer any
+            // other command until it is closed." **That general claim is
+            // false**, measured on Chrome 152.0.7977.76 with a dialog provably
+            // up (a gated verb refused at that moment):
+            // `browser_navigate{refresh}` answered successfully in 0.5 s.
+            // Scope of that measurement: ONE of the verbs this gate does not
+            // cover, one engine, one dialog type — so the honest repair is not
+            // a narrower general claim but NO general claim. What this sentence
+            // can say for certain is what it is: THIS verb is refused, here is
+            // the door. 判据 §17, and the model reads this line on every single
+            // refusal.
+            "this tab has an open dialog ({}) so this action is refused — it \
+             would act on a page the dialog is covering. Answer it with \
              browser_dialog{{action:\"accept\"}} or \
              browser_dialog{{action:\"dismiss\"}}, then retry. If that reports \
              no dialog is open, Aleph's record of it is stale and the tab is \
@@ -602,7 +633,59 @@ pub(super) async fn scroll(
         delta_x: f64::from(dx),
         delta_y: f64::from(dy),
     };
-    send_mouse(be, &handle, &session, &ev).await
+    let before = scroll_offset(be, &handle, &session).await?;
+    send_mouse(be, &handle, &session, &ev).await?;
+    settle_scroll(be, &handle, &session, before).await;
+    Ok(())
+}
+
+/// How long to wait for a dispatched wheel to become observable, and how often
+/// to look.
+///
+/// Bounded and short: this is not "wait for the page to finish scrolling", it is
+/// "do not answer before the answer is true". A page that genuinely cannot
+/// scroll (already at the end, no scroller under the point) must not cost the
+/// caller the whole window on every call, which is why the loop exits on the
+/// FIRST observed change rather than running to completion.
+const SCROLL_SETTLE_BUDGET: std::time::Duration = std::time::Duration::from_millis(600);
+const SCROLL_SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(40);
+
+/// Wait until the wheel this call dispatched is visible in the page's own
+/// scroll offset, or the budget runs out.
+///
+/// **Why a verb waits at all.** `Input.dispatchMouseEvent` returns as soon as
+/// the event is queued; the scroll lands a frame or more later. Measured on
+/// Chrome 152.0.7977.76 through the real tool: `window.scrollY` read
+/// immediately after a successful `browser_scroll` was **0**, and **400** one
+/// and a half seconds later. So the verb reported success for an effect that had
+/// not happened, and a model doing the obvious thing — scroll, then snapshot —
+/// read the pre-scroll page and concluded the scroll did nothing. Reporting
+/// "done" before the thing is done is the most deceptive form of 判据 §11,
+/// because the operation is not even a no-op.
+///
+/// **Returns nothing, and deliberately does not fail.** A budget that expires
+/// means "I could not observe a change", which includes the legitimate case of a
+/// page already at its end — and 判据 §8 says an unknown must not be reported as
+/// a failure. The caller's success still means "the wheel was dispatched and
+/// accepted"; what this adds is that when the page DID move, the move is visible
+/// by the time we say so.
+async fn settle_scroll(
+    be: &CdpBackend,
+    handle: &EngineHandle,
+    session: &SessionId,
+    before: (f64, f64),
+) {
+    let deadline = std::time::Instant::now() + SCROLL_SETTLE_BUDGET;
+    while std::time::Instant::now() < deadline {
+        tokio::time::sleep(SCROLL_SETTLE_POLL).await;
+        // A failed read is not a verdict: keep waiting out the budget rather
+        // than treating "I could not ask" as "it did not move".
+        if let Ok(now) = scroll_offset(be, handle, session).await {
+            if (now.0 - before.0).abs() > f64::EPSILON || (now.1 - before.1).abs() > f64::EPSILON {
+                return;
+            }
+        }
+    }
 }
 
 pub(super) async fn type_text(
@@ -1319,7 +1402,7 @@ mod tests {
     }
 
     /// The other end of the wedge, and `pending_dialog`'s value finding its
-    /// first reader: a verb on a tab the engine will not answer refuses BY NAME
+    /// first reader: a gated verb on a tab with an open dialog refuses BY NAME
     /// instead of spending its own budget discovering that.
     ///
     /// A test of its own rather than a second half of the race above, so a
@@ -1403,8 +1486,11 @@ mod tests {
     /// replaces.
     #[test]
     fn the_dialog_gate_records_every_verb_as_gated_or_not() {
-        // Gated: the verb refuses by name when `pending_dialog` is set, because
-        // the engine will not answer it anyway.
+        // Gated: the verb refuses by name when `pending_dialog` is set,
+        // because it would act on a page the dialog is covering. (NOT "because
+        // the engine will not answer it anyway" — that was the old rationale
+        // and it is measured false for at least one ungated verb; see the
+        // KNOWN GAP note below.)
         let gated = [
             "click",
             "dblclick",
@@ -1433,13 +1519,24 @@ mod tests {
             "close_tab",
             "list_tabs",
             "switch_tab",
-            // KNOWN GAP, priced and deferred to Task 14 rather than claimed:
-            // these do reach the wire on a tab whose engine will not answer, so
-            // they still spend their budget and report their own verb as having
-            // failed. They are one `tab_ready` call each; what is missing is a
-            // real-machine check that the engine really does stall each one,
-            // which nothing here can do until a `driver = "cdp"` profile is
-            // constructible.
+            // KNOWN GAP — and Task 14 took the measurement this comment
+            // was waiting for, with a result that CONTRADICTS the assumption
+            // underneath it.
+            //
+            // The assumption was: these reach the wire on a tab whose engine
+            // will not answer, so they spend their whole budget and then report
+            // their own verb as having failed. Measured on Chrome 152.0.7977.76
+            // with a dialog provably pending (a GATED verb refused at that same
+            // moment, which is what establishes the precondition):
+            // `browser_navigate{refresh}` answered **successfully in 0.5 s**.
+            //
+            // So for `navigate` the premise is false — the engine answers — and
+            // gating it would REMOVE a working verb rather than save a budget.
+            // The other ungated names below are still unmeasured; one reading
+            // does not license a general claim in either direction (判据 §3),
+            // which is exactly the error the gate's own refusal sentence used to
+            // make. Whoever gates any of these owes the same measurement per
+            // verb first.
             "navigate",
             "history",
             "evaluate",

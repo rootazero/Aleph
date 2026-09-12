@@ -740,16 +740,23 @@ impl ProfileManager {
     /// user's own tabs and are neither tracked nor reaped (R5: don't disturb
     /// the user).
     ///
-    /// ⚠️ **A `Cdp` entry recorded here has no sweeper yet.**
+    /// ⚠️ **A `Cdp` entry recorded here has no idle SWEEPER yet.**
     /// [`Self::reap_idle_tabs`] and [`Self::idle_managed_profiles`] both filter
     /// on `driver == Managed`, and widening THEM is not this task's to do: they
     /// judge liveness through `playwright_cli_driver.chromium_alive`, which
     /// knows nothing about engines, so a `Cdp` profile would be selected and
     /// then judged by a predicate that cannot answer for it. So a CDP tab is
-    /// recorded and retained rather than swept. Said here rather than left to
-    /// be discovered: this is a writer whose reader is one task away, not a
-    /// reader that was forgotten. The QA's `reap` scenario refuses
-    /// `ALEPH_QA_DRIVER=cdp` for the same reason.
+    /// recorded and retained rather than reclaimed on an idle timer. This is a
+    /// writer whose reader is one task away, not a reader that was forgotten.
+    /// The QA's `reap` scenario refuses `ALEPH_QA_DRIVER=cdp` for the same
+    /// reason.
+    ///
+    /// It does **not** mean nothing ever removes an entry. [`Self::forget_tab`]
+    /// is called when a tab is closed, for every driver — the cheap half, and
+    /// the one the first version of this doc failed to name: it said the
+    /// sweeper was missing and left a reader to assume removal-on-close still
+    /// happened, when `forget`'s only caller was inside that same Managed-only
+    /// sweeper. A tab the model explicitly closed kept its entry forever.
     pub fn touch_tab(&self, profile_name: &str, tab_id: &str) {
         if matches!(
             self.get_driver(profile_name),
@@ -967,6 +974,18 @@ impl ProfileManager {
         if let Some(profile) = profiles.get_mut(profile_name) {
             profile.last_activity = std::time::Instant::now();
         }
+    }
+
+    /// Stop tracking a tab that is gone.
+    ///
+    /// The twin of [`Self::touch_tab`] and deliberately NOT driver-filtered:
+    /// `touch_tab` decides what gets tracked, and anything tracked must be
+    /// removable by the same event that ends it. Filtering here would leak
+    /// exactly the entries the other filter admitted. A profile that never
+    /// tracked the tab is a no-op, which is the honest answer to "forget
+    /// something I was not remembering".
+    pub fn forget_tab(&self, profile_name: &str, tab_id: &str) {
+        self.tab_registry.forget(profile_name, tab_id);
     }
 
     /// Test-only: whether any tabs are tracked for a profile.
@@ -1455,13 +1474,18 @@ mod tests {
         // And the other two arms must not have moved onto it. Asserted in both
         // directions because "everything is a CdpBackend now" would satisfy the
         // claim above on its own.
+        // POSITIVE downcasts, not `is_none::<CdpBackend>()`. "Not a
+        // CdpBackend" is true of every other backend there is, including a
+        // fourth one nobody meant to route to — so the assertion would have
+        // been weaker than the sentence beside it claimed, which is the same
+        // gap `is_ok()` left in the first arm.
         let managed = manager.get_backend("default").expect("default routes");
         assert!(
             managed
                 .as_ref()
                 .as_any()
-                .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
-                .is_none(),
+                .downcast_ref::<PlaywrightCliBackend>()
+                .is_some(),
             "the Managed arm must still produce a PlaywrightCliBackend"
         );
         let existing = manager.get_backend("user").expect("user routes");
@@ -1469,8 +1493,8 @@ mod tests {
             existing
                 .as_ref()
                 .as_any()
-                .downcast_ref::<crate::browser::cdp_backend::CdpBackend>()
-                .is_none(),
+                .downcast_ref::<ChromeMcpBackend>()
+                .is_some(),
             "the ExistingSession arm must still produce a ChromeMcpBackend"
         );
     }

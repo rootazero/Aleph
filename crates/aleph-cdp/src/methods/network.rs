@@ -142,16 +142,31 @@ pub async fn emulate_network_conditions(
     Ok(())
 }
 
-/// An absent `domain` deletes by name across domains, which is CDP's own semantics. Sending an
-/// empty string instead would match nothing and still report success.
+/// ⚠️ **`Network.deleteCookies` requires `url` OR `domain`.** This doc used to say an absent
+/// `domain` "deletes by name across domains, which is CDP's own semantics" — it does not, and that
+/// sentence is why the one caller in this workspace passed `None, None` and never deleted anything.
+/// Measured on Chrome 152.0.7977.76: `-32602 At least one of the url and domain needs to be
+/// specified`. The refusal does reach the caller (no silent success), so the cost was a verb that
+/// never worked rather than data loss — but the false half was the COMMENT (判据 §1).
+///
+/// `url` is the addressing `Network.setCookies` uses, so a caller that set a cookie against the
+/// page it is on can delete it the same way instead of re-deriving a domain from that page — one
+/// derivation, not two (判据 §12). `domain` + `path` remain for callers that mean a domain.
+///
+/// Still permissive rather than validating: this crate is a faithful transport for the protocol,
+/// and an engine that changes its own requirement should be the thing that says so.
 pub async fn delete_cookies(
     conn: &CdpConnection,
     session: Option<&SessionId>,
     name: &str,
+    url: Option<&str>,
     domain: Option<&str>,
     path: Option<&str>,
 ) -> Result<()> {
     let mut params = json!({ "name": name });
+    if let Some(u) = url {
+        params["url"] = json!(u);
+    }
     if let Some(d) = domain {
         params["domain"] = json!(d);
     }

@@ -229,7 +229,9 @@ pub(crate) async fn make_backend_and_tab(
 ) -> Result<(Arc<dyn BrowserBackend>, String), BrowserError> {
     let backend = make_backend(manager, profile)?;
     let tab_id = get_active_tab(backend.as_ref()).await?;
-    // Reset the per-tab idle timer (Managed profiles only — see `touch_tab`).
+    // Reset the per-tab idle timer. Tracked for the drivers whose browser
+    // Aleph launched (`Managed` and `Cdp`), never for the user's own
+    // `ExistingSession` tabs — see `touch_tab`, which owns that rule.
     manager.touch_tab(profile, &tab_id);
     Ok((backend, tab_id))
 }
@@ -262,7 +264,9 @@ pub(crate) async fn make_backend_and_tab_guarded(
              navigate to an allowed URL before reading page content"
         )));
     }
-    // Reset the per-tab idle timer (Managed profiles only — see `touch_tab`).
+    // Reset the per-tab idle timer. Tracked for the drivers whose browser
+    // Aleph launched (`Managed` and `Cdp`), never for the user's own
+    // `ExistingSession` tabs — see `touch_tab`, which owns that rule.
     manager.touch_tab(profile, &tab_id);
     Ok((backend, tab_id))
 }

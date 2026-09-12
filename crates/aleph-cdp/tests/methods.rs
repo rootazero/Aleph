@@ -1345,6 +1345,7 @@ async fn network_get_and_delete_cookies_send_exactly_their_arguments() {
         &conn,
         Some(&session()),
         "sid",
+        None,
         Some("example.test"),
         Some("/"),
     )
@@ -1355,15 +1356,35 @@ async fn network_get_and_delete_cookies_send_exactly_their_arguments() {
         json!({ "name": "sid", "domain": "example.test", "path": "/" })
     );
 
+    // The `url` arm, which is how a caller deletes a cookie on the page it is
+    // already on — the same addressing `Network.setCookies` takes.
     let (server, conn) = replying("Network.deleteCookies", json!({})).await;
-    network::delete_cookies(&conn, Some(&session()), "sid", None, None)
+    network::delete_cookies(
+        &conn,
+        Some(&session()),
+        "sid",
+        Some("https://example.test/app"),
+        None,
+        None,
+    )
+    .await
+    .expect("delete");
+    assert_eq!(
+        server.last_params("Network.deleteCookies").expect("params"),
+        json!({ "name": "sid", "url": "https://example.test/app" })
+    );
+
+    let (server, conn) = replying("Network.deleteCookies", json!({})).await;
+    network::delete_cookies(&conn, Some(&session()), "sid", None, None, None)
         .await
         .expect("delete");
     assert_eq!(
         server.last_params("Network.deleteCookies").expect("params"),
         json!({ "name": "sid" }),
-        "an absent domain deletes by name across domains; sending an empty string would match \
-         nothing and report success"
+        "the wrapper sends exactly what it was given and invents nothing — an empty string for an \
+         absent field would match nothing and still report success. NOTE this wire shape is one \
+         the ENGINE REJECTS (`-32602 At least one of the url and domain needs to be specified`); \
+         what is pinned here is the wrapper's faithfulness, not that the call works"
     );
 }
 
@@ -1544,7 +1565,7 @@ async fn call_void(conn: &CdpConnection, s: &SessionId, method: &str) -> Result<
         "Runtime.enable" => runtime::enable(conn, sess).await,
         "Network.enable" => network::enable(conn, sess).await,
         "Network.setCookies" => network::set_cookies(conn, sess, &[], None).await,
-        "Network.deleteCookies" => network::delete_cookies(conn, sess, "x", None, None).await,
+        "Network.deleteCookies" => network::delete_cookies(conn, sess, "x", None, None, None).await,
         "Network.clearBrowserCookies" => network::clear_browser_cookies(conn, sess).await,
         "Network.setExtraHTTPHeaders" => network::set_extra_http_headers(conn, sess, &[]).await,
         "Network.emulateNetworkConditions" => {

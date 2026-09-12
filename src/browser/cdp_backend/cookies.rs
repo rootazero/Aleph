@@ -169,10 +169,27 @@ pub(super) async fn cookies(be: &CdpBackend, op: &CookieOp) -> Result<String, Br
             ))
         }
         CookieOp::Delete { name } => {
-            network::delete_cookies(&handle.conn, s, name, None, None)
+            // The PAGE's url, exactly as the `Set` arm above uses it. CDP
+            // requires one of `url` / `domain` and refuses the call outright
+            // without either (`-32602`), so the previous `None, None` deleted
+            // nothing on every call it was ever given — honestly, with
+            // `success: false`, but never once working.
+            //
+            // Addressed by url rather than by a domain derived from that url:
+            // `set` attaches a domainless cookie by url, so deleting it by url
+            // is the same derivation rather than a second one that has to agree
+            // about leading dots (判据 §12).
+            let Some(page_url) = url.as_deref() else {
+                return Err(BrowserError::ActionFailed(
+                    "deleting a cookie needs a page on an http(s) URL to scope \
+                     it to — the browser is not on one"
+                        .into(),
+                ));
+            };
+            network::delete_cookies(&handle.conn, s, name, Some(page_url), None, None)
                 .await
                 .map_err(|e| map_cdp_err(be.engine(), "Network.deleteCookies", e))?;
-            Ok(format!("deleted cookie '{name}'"))
+            Ok(format!("deleted cookie '{name}' on {page_url}"))
         }
         CookieOp::Clear => {
             network::clear_browser_cookies(&handle.conn, s)
