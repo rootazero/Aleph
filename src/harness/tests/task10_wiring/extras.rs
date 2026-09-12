@@ -151,17 +151,20 @@ async fn split_session_directive_continues_run_in_child_session() {
 }
 
 // =============================================================================
-// Test — SplitSession fail-soft: registrar error → compact to fit and CONTINUE
-// (never-break). The old hard-stop (hit_limit + ContextBudgetExhausted + grace)
-// was removed; the fail-soft path now compacts in place and falls through to the
-// normal LLM call, so the run finishes with a real answer, not a hard stop.
+// Test — SplitSession survives a failed epoch registration. Since 2026-09-13
+// the split commits its two log batches (parent closer, child seed) BEFORE the
+// routing write; once those are in, the split has happened and a refused
+// `register_epoch` is logged, not returned — the boot heal
+// (`ProjectionReconciler::heal_split_epochs`) is what repairs routing. Returning
+// `Err` here would send the loop back to a parent whose run is already closed
+// while a child with an open `RunStarted` waits to be resumed as well.
 // =============================================================================
 #[tokio::test]
-async fn split_session_failsoft_compacts_and_continues() {
+async fn split_session_survives_a_failed_epoch_registration() {
     // Same budget config as above — trips SplitSession on first warning turn.
     let user_text = "y".repeat(80);
     let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
-    let provider = CountingProvider::new("continued after compaction");
+    let provider = CountingProvider::new("continued in the child");
 
     let mut cfg = tiny_budget_config(100, 0.50, 0.90);
     cfg.circuit_breaker_max = 1;
@@ -197,7 +200,8 @@ async fn split_session_failsoft_compacts_and_continues() {
         turn_timeout: None,
         turn_budget: None,
         result_store: None,
-        // FailRegistrar always returns Err → split fails → fail-soft compacts and continues.
+        // FailRegistrar always returns Err. The batches still land, so the
+        // split still happened; only the routing write is missing.
         session_epoch_registrar: Some(Arc::new(FailRegistrar)
             as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>),
         tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
@@ -211,7 +215,104 @@ async fn split_session_failsoft_compacts_and_continues() {
     harness
         .run(&sample_session_id(), &mut cb, &cancel)
         .await
-        .expect("run must complete Ok even when split fails");
+        .expect("run must complete Ok when only the epoch registration fails");
+
+    assert!(
+        !harness.hit_limit(),
+        "a failed registration must never set hit_limit",
+    );
+    assert_ne!(
+        harness.terminate_reason(),
+        crate::orchestrator::dispatch::TerminateReason::ContextBudgetExhausted,
+        "a failed registration must never terminate the run on context budget",
+    );
+    assert_eq!(
+        provider.call_count(),
+        1,
+        "the run continues into exactly one normal LLM call, in the child",
+    );
+    // The split happened: both batches are in the log, so the run continued
+    // in the child — the log leads, routing follows at the next boot.
+    let parent = sample_session_id();
+    assert_eq!(
+        harness.final_session_id(),
+        Some(parent.with_next_epoch()),
+        "final session must be the child even though routing was never told",
+    );
+    let log = session.snapshot().await;
+    assert!(
+        log.iter()
+            .any(|r| matches!(r.event, SessionEvent::SessionForked { .. })),
+        "the child seed landed: a SessionForked is in the log",
+    );
+}
+
+// =============================================================================
+// Test — SplitSession fail-soft on a FAILED BATCH: the contract that survives.
+// A store that cannot commit the split's batch returns `Err`; the directive
+// falls back to compact-to-fit on the parent and the run CONTINUES (never-break)
+// with a real answer, never a hard stop.
+// =============================================================================
+#[tokio::test]
+async fn split_session_failsoft_on_a_refused_batch_compacts_and_continues() {
+    // Same budget config as above — trips SplitSession on first warning turn.
+    let user_text = "y".repeat(80);
+    let session = MockSession::with_refused_batches(vec![
+        turn_started_event(),
+        user_message_event(&user_text),
+    ]);
+    let provider = CountingProvider::new("continued after compaction");
+
+    let mut cfg = tiny_budget_config(100, 0.50, 0.90);
+    cfg.circuit_breaker_max = 1;
+    cfg.max_splits = 1;
+    let budget = ContextBudget::new(&cfg);
+
+    let compactor = Arc::new(crate::context::compact::compactor::ContextCompactor::new(
+        Arc::new(FailingProvider) as Arc<dyn AiProvider>,
+        crate::context::compact::compactor::CompactorConfig {
+            fresh_tail: 1,
+            ..Default::default()
+        },
+    ));
+
+    let registrar = OkRegistrar::new();
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        llm: provider.clone(),
+        robustness_profile: crate::verification::ModelRobustnessProfile::conservative(),
+        verifier_chain: None,
+        context_budget: Some(Arc::new(AsyncMutex::new(budget))),
+        context_compactor: Some(compactor),
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        recall_context: None,
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: Some(
+            registrar.clone() as Arc<dyn crate::session::epoch_registrar::SessionEpochRegistrar>
+        ),
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = NoopHarnessCallback;
+
+    harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("run must complete Ok even when the split's batch is refused");
 
     // Never-break: a failed split must NOT hard-stop. The fail-soft path compacts
     // to fit and falls through to the normal LLM call, which produces the answer.
@@ -229,12 +330,17 @@ async fn split_session_failsoft_compacts_and_continues() {
         1,
         "the run must continue into exactly one normal LLM call after the failed split",
     );
-    // No split happened → final session is same as parent (epoch unchanged).
+    // No split happened → final session is same as parent (epoch unchanged),
+    // and routing was never told about a child the log does not hold.
     let final_id = harness.final_session_id();
     let parent = sample_session_id();
     assert!(
         final_id.is_none() || final_id.as_ref() == Some(&parent),
-        "final session must equal parent when split fails; got {final_id:?}",
+        "final session must equal parent when the batch is refused; got {final_id:?}",
+    );
+    assert!(
+        !registrar.called.load(Ordering::SeqCst),
+        "a refused batch must never reach the registrar",
     );
 }
 

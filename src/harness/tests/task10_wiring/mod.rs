@@ -25,7 +25,7 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::session::events::{
-    now_ms, EventSeq, MessageContent, SessionEvent, SessionEventRecord, TurnTrigger,
+    now_ms, EventSeq, MessageContent, Retire, SessionEvent, SessionEventRecord, TurnTrigger,
 };
 use crate::session::service::{SessionError, SessionHandle, SessionId, SessionService};
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
@@ -44,10 +44,25 @@ struct MockSessionInner {
 
 struct MockSession {
     inner: AsyncMutex<MockSessionInner>,
+    /// When set, `emit_batch` refuses (`SessionError::Storage`) while
+    /// `emit_event` keeps working — the shape of a store that cannot commit
+    /// atomically, which is what the session-split's batch failure fallback
+    /// is tested against. `emit_event` stays independent so the harness's own
+    /// per-turn writes are unaffected.
+    refuse_batches: bool,
 }
 
 impl MockSession {
     fn new(initial: Vec<SessionEvent>) -> Arc<Self> {
+        Self::build(initial, false)
+    }
+
+    /// A session whose `emit_batch` always fails. See `refuse_batches`.
+    fn with_refused_batches(initial: Vec<SessionEvent>) -> Arc<Self> {
+        Self::build(initial, true)
+    }
+
+    fn build(initial: Vec<SessionEvent>, refuse_batches: bool) -> Arc<Self> {
         // Match the real store: seqs are assigned from 1 (0 = empty head).
         let mut inner = MockSessionInner {
             next_seq: 1,
@@ -64,6 +79,7 @@ impl MockSession {
         }
         Arc::new(Self {
             inner: AsyncMutex::new(inner),
+            refuse_batches,
         })
     }
 
@@ -112,6 +128,39 @@ impl SessionService for MockSession {
             created_at_ms: now_ms(),
         });
         Ok(seq)
+    }
+    /// What `emit_event` does, for every row, under one lock — the mock's
+    /// "one transaction". Needed since the session split commits through
+    /// `emit_batch` (two batches: parent closer, child seed); the trait's
+    /// default is a fail-closed `Err`, which would make every split in these
+    /// tests fall back to compact-to-fit.
+    async fn emit_batch(
+        &self,
+        _id: &SessionId,
+        events: Vec<SessionEvent>,
+        retire: Option<Retire>,
+    ) -> Result<Vec<EventSeq>, SessionError> {
+        // The split never retires; a retire reaching this mock would be a
+        // producer this test file does not know about.
+        assert!(retire.is_none(), "no harness path retires through the mock");
+        if self.refuse_batches {
+            return Err(SessionError::Storage(
+                "mock refuses to commit atomically".into(),
+            ));
+        }
+        let mut inner = self.inner.lock().await;
+        let mut seqs = Vec::with_capacity(events.len());
+        for event in events {
+            let seq = inner.next_seq;
+            inner.next_seq += 1;
+            inner.events.push(SessionEventRecord {
+                seq,
+                event,
+                created_at_ms: now_ms(),
+            });
+            seqs.push(seq);
+        }
+        Ok(seqs)
     }
     async fn subscribe(
         &self,
