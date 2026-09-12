@@ -78,7 +78,7 @@ use super::shape_view::{HtmlFrameOverlay, ShapeView};
 use super::text_edit::{self, TextEditOverlay, TextEditState};
 use super::toolbar::CanvasToolbar;
 use super::viewport::{self, PanDrag};
-use super::{ai, asset_ingest, decks, export, present};
+use super::{ai, asset_ingest, decks, export, present, reveal};
 use crate::api::canvas::{CanvasApi, CanvasApplyError};
 use crate::components::admin_refusal;
 use crate::components::mode_sidebar::PanelMode;
@@ -494,6 +494,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     // While it is `Some`, the window key/paste handlers below stand down
     // (the overlay owns the keyboard; an arrow key must page, not nudge).
     let presenting: RwSignal<Option<String>> = RwSignal::new(None);
+    // Reveal playback on the editor surface (`reveal.rs`): idle = static
+    // rendering. Editor-scoped for the same reason as `presenting`.
+    let playback: RwSignal<reveal::Playback> = RwSignal::new(reveal::Playback::Idle);
 
     let space_down = RwSignal::new(false);
     let pan_drag: RwSignal<Option<PanDrag>> = RwSignal::new(None);
@@ -871,9 +874,12 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 let Some(d) = d.as_ref() else {
                     return Vec::new();
                 };
+                // The toolbar's current style, captured once per gesture —
+                // the machine itself never reads a signal.
+                let style = canvas.style.get_untracked();
                 machine
                     .try_update_value(|m| {
-                        m.begin_create(kind, world, id_mint::mint_shape_id(), &d.shapes)
+                        m.begin_create(kind, world, id_mint::mint_shape_id(), &d.shapes, style)
                     })
                     .unwrap_or_default()
             });
@@ -897,6 +903,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                 let Some(d) = d.as_ref() else {
                     return Vec::new();
                 };
+                let style = canvas.style.get_untracked();
                 machine
                     .try_update_value(|m| {
                         if tool == CanvasTool::Draw {
@@ -906,10 +913,11 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                                 id_mint::mint_shape_id(),
                                 &d.shapes,
                                 DRAW_MIN_DIST_PX / cam.zoom,
+                                style,
                             )
                         } else {
                             let hit = interaction::topmost_hit(&d.shapes, world);
-                            m.begin_arrow(world, hit, id_mint::mint_shape_id(), &d.shapes)
+                            m.begin_arrow(world, hit, id_mint::mint_shape_id(), &d.shapes, style)
                         }
                     })
                     .unwrap_or_default()
@@ -1118,12 +1126,15 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             node_ref=surface_ref
             class=move || {
                 let base = "relative flex-1 overflow-hidden bg-surface select-none";
+                // Reveal playback: the root class the `reveal.rs` rules key
+                // on (empty while idle — static rendering).
+                let play = playback.get().root_class();
                 if pan_drag.get().is_some() {
-                    format!("{base} cursor-grabbing")
+                    format!("{base} {play} cursor-grabbing")
                 } else if space_down.get() || canvas.tool.get() == CanvasTool::Pan {
-                    format!("{base} cursor-grab")
+                    format!("{base} {play} cursor-grab")
                 } else {
-                    base.to_string()
+                    format!("{base} {play}")
                 }
             }
             style="touch-action: none"
@@ -1136,6 +1147,8 @@ pub(super) fn CanvasEditor() -> impl IntoView {
             on:dragover=on_dragover
             on:drop=on_drop
         >
+            // The document's reveal stylesheet — present only while playing.
+            <reveal::PlaybackStyle doc=canvas.doc playback=playback />
             <svg class="absolute inset-0 w-full h-full block">
                 <g transform=move || viewport::svg_transform(camera.get())>
                     <For
@@ -1270,7 +1283,16 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     insert_frame=insert_ai_frame
                 />
                 <ai::AnnotateButton />
-                <export::ExportPngButton />
+                <export::ExportButton kind=export::ExportKind::Png />
+                <export::ExportButton kind=export::ExportKind::AnimatedSvg />
+                <reveal::PlaybackButton
+                    doc=canvas.doc
+                    playback=playback
+                    class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border \
+                           bg-surface-raised text-xs font-medium text-text-secondary \
+                           hover:text-text-primary hover:border-primary/50 shadow-sm \
+                           transition-colors"
+                />
                 <decks::DecksDrawer
                     on_commit=Callback::new(move |(redo, undo): (Vec<CanvasOp>, Vec<CanvasOp>)| {
                         commit(redo, undo);

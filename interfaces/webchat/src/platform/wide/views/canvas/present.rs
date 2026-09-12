@@ -15,13 +15,18 @@
 //! overlay is mounted the editor's own window key handler stands down (its
 //! `presenting` guard) — otherwise an arrow key would nudge the selection
 //! under the show.
+//!
+//! Reveal playback (`reveal.rs`) is per slide: the bottom bar's Play
+//! button replays the current frame's reveals from t=0, and changing slides
+//! drops back to static rendering. It only appears when the document has
+//! something to play.
 
 use aleph_protocol::canvas::{Deck, Shape};
 use leptos::prelude::*;
 
 use super::interaction::Bbox;
 use super::shape_view::{HtmlFrameOverlay, ShapeView};
-use super::viewport;
+use super::{reveal, viewport};
 use crate::i18n::{t, use_i18n};
 use crate::state::canvas::{Camera, CanvasState};
 
@@ -196,6 +201,19 @@ pub(super) fn PresentOverlay(
         index.update(|i| *i = step_index(len, *i, forward));
     };
 
+    // Reveal playback runs per slide: changing slides stops it (static
+    // rendering of the new frame), and Play starts the new frame's reveals
+    // from t=0. The stage is clipped to the frame, so only that frame's
+    // shapes are ever seen animating.
+    let playback: RwSignal<reveal::Playback> = RwSignal::new(reveal::Playback::Idle);
+    Effect::new(move |prev: Option<usize>| {
+        let i = index.get();
+        if prev.is_some_and(|p| p != i) {
+            playback.set(reveal::Playback::Idle);
+        }
+        i
+    });
+
     let key_handle = window_event_listener(
         leptos::ev::keydown,
         move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
@@ -261,7 +279,11 @@ pub(super) fn PresentOverlay(
                 advance(true);
             }
         >
-            <div class="absolute inset-0 bg-surface" style=stage_style>
+            <div
+                class=move || format!("absolute inset-0 bg-surface {}", playback.get().root_class())
+                style=stage_style
+            >
+                <reveal::PlaybackStyle doc=canvas.doc playback=playback />
                 <svg class="absolute inset-0 w-full h-full block">
                     <g transform=move || {
                         viewport::svg_transform(camera.get().unwrap_or_default())
@@ -301,6 +323,12 @@ pub(super) fn PresentOverlay(
                        px-3.5 py-2 rounded-full bg-black/50 cursor-default"
                 on:click=|ev: web_sys::MouseEvent| ev.stop_propagation()
             >
+                <reveal::PlaybackButton
+                    doc=canvas.doc
+                    playback=playback
+                    class="px-2 py-0.5 rounded-full text-[11px] font-medium text-white/80 \
+                           hover:text-white hover:bg-white/10 transition-colors"
+                />
                 <span class="text-[11px] text-white/70 tabular-nums">
                     {move || {
                         let n = slides.get().len();

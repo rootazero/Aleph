@@ -333,10 +333,28 @@ pub const MAX_PATH_D_BYTES: usize = 64 * 1024;
 /// tracks a current point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PathCmd {
-    MoveTo { x: f64, y: f64 },
-    LineTo { x: f64, y: f64 },
-    Quad { x1: f64, y1: f64, x: f64, y: f64 },
-    Cubic { x1: f64, y1: f64, x2: f64, y2: f64, x: f64, y: f64 },
+    MoveTo {
+        x: f64,
+        y: f64,
+    },
+    LineTo {
+        x: f64,
+        y: f64,
+    },
+    Quad {
+        x1: f64,
+        y1: f64,
+        x: f64,
+        y: f64,
+    },
+    Cubic {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        x: f64,
+        y: f64,
+    },
     Close,
 }
 
@@ -651,10 +669,21 @@ pub const PALETTE_SLOTS: [&str; 7] = [
     "default", "red", "orange", "yellow", "green", "blue", "violet",
 ];
 
+/// A `#rrggbb` literal — exactly six hex digits, either case. The one
+/// spelling of that rule: [`check_color`] admits colors through it and the
+/// Panel's painters (theme-token resolution, export hex pass-through) ask it
+/// the same question, so the gate and the renderers cannot drift apart.
+#[must_use]
+pub fn is_hex_color(color: &str) -> bool {
+    color
+        .strip_prefix('#')
+        .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// The single gate over `ShapeStyle.color`, shared by every writer.
 ///
-/// Admits the seven [`PALETTE_SLOTS`], a `#rrggbb` literal (exactly six hex
-/// digits, either case), and the empty string. The empty string is not a
+/// Admits the seven [`PALETTE_SLOTS`], a `#rrggbb` literal
+/// ([`is_hex_color`]), and the empty string. The empty string is not a
 /// loophole: it is what `ShapeStyle::default()` mints and what every shape
 /// written before this gate existed stores on disk — refusing it would make
 /// those shapes immovable (a Panel drag re-upserts the shape verbatim). It
@@ -663,11 +692,7 @@ pub const PALETTE_SLOTS: [&str; 7] = [
 /// Rejects, never rewrites (the `check_title` rule): `"Red"` and `"red "` are
 /// refused rather than normalised, so the value on disk is the value sent.
 pub fn check_color(color: &str) -> Result<(), String> {
-    if color.is_empty() || PALETTE_SLOTS.contains(&color) {
-        return Ok(());
-    }
-    let hex = color.strip_prefix('#').unwrap_or("");
-    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if color.is_empty() || PALETTE_SLOTS.contains(&color) || is_hex_color(color) {
         return Ok(());
     }
     Err(format!(
@@ -857,9 +882,10 @@ impl Shape {
             | Self::Note { style, .. }
             | Self::Arrow { style, .. }
             | Self::Path { style, .. } => Some(style),
-            Self::Image { .. } | Self::Frame { .. } | Self::Html { .. } | Self::AiImageFrame { .. } => {
-                None
-            }
+            Self::Image { .. }
+            | Self::Frame { .. }
+            | Self::Html { .. }
+            | Self::AiImageFrame { .. } => None,
         }
     }
 
@@ -1308,7 +1334,10 @@ mod tests {
         else {
             panic!("second shape is the arrow");
         };
-        assert_eq!((*bend, *head_start, *head_end), (0.0, ArrowHead::None, ArrowHead::Arrow));
+        assert_eq!(
+            (*bend, *head_start, *head_end),
+            (0.0, ArrowHead::None, ArrowHead::Arrow)
+        );
 
         let back = serde_json::to_value(&doc).unwrap();
         assert!(back.get("timeline").is_none(), "{back}");
@@ -1330,7 +1359,11 @@ mod tests {
     #[test]
     fn new_enum_variants_spell_snake_case_on_the_wire() {
         fn wire<T: Serialize>(v: T) -> String {
-            serde_json::to_value(v).unwrap().as_str().unwrap().to_string()
+            serde_json::to_value(v)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
         }
         for (v, s) in [
             (GeoForm::Rect, "rect"),
@@ -1517,7 +1550,10 @@ mod tests {
         let cmds = parse_path_d(src).unwrap();
         let d = cmds_to_d(&cmds);
         assert_eq!(parse_path_d(&d).unwrap(), cmds, "{d}");
-        assert!(d.starts_with("M1.5 2 L4.5 6"), "absolute, space-separated: {d}");
+        assert!(
+            d.starts_with("M1.5 2 L4.5 6"),
+            "absolute, space-separated: {d}"
+        );
         assert!(d.ends_with('Z'), "{d}");
     }
 
@@ -1533,9 +1569,16 @@ mod tests {
         // would break existing canvases.
         assert!(check_color("").is_ok());
         assert_eq!(ShapeStyle::default().color, "");
-        for bad in ["#abc", "#gggggg", "red ", " red", "Red", "#a1b2c3d", "a1b2c3", "#"] {
+        for bad in [
+            "#abc", "#gggggg", "red ", " red", "Red", "#a1b2c3d", "a1b2c3", "#",
+        ] {
             assert!(check_color(bad).is_err(), "{bad:?} must be refused");
+            assert!(!is_hex_color(bad), "{bad:?} is not a hex literal");
         }
+        // The hex predicate is the gate's own: a slot is admitted but is not
+        // hex, and the Panel's painters read exactly this boundary.
+        assert!(is_hex_color("#A1b2C3"));
+        assert!(!is_hex_color("red"));
     }
 
     #[test]
@@ -1547,7 +1590,15 @@ mod tests {
             mode: RevealMode::Fade,
         };
         assert!(ok.check().is_ok());
-        assert!(Reveal { duration_ms: 0, ..ok }.check().is_err(), "zero duration");
+        assert!(
+            Reveal {
+                duration_ms: 0,
+                ..ok
+            }
+            .check()
+            .is_err(),
+            "zero duration"
+        );
         assert!(
             Reveal {
                 start_ms: MAX_REVEAL_MS,

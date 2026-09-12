@@ -671,7 +671,7 @@ pub(super) fn AnnotateButton() -> impl IntoView {
             let viewbox = Bbox::of_shape(&image);
             let mut layers = vec![image.clone()];
             layers.extend(marks.iter().cloned());
-            let svg = export::export_svg(&layers, &all_shapes, &assets, viewbox, 0.0);
+            let svg = export::export_svg(&layers, &all_shapes, &assets, viewbox, 0.0, false);
             let (pw, ph) = export::raster_dimensions(viewbox.w, viewbox.h);
             let png_data_url = match export::rasterize_svg_to_png(&svg, pw, ph).await {
                 Ok(url) => url,

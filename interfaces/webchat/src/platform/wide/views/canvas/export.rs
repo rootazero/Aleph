@@ -1,4 +1,5 @@
-//! Rasterizing export: selected shapes → standalone SVG string → PNG.
+//! Export: selected shapes → standalone SVG string → PNG, or the SVG itself
+//! with its reveals embedded (the "animated SVG").
 //!
 //! # The pipeline
 //!
@@ -7,12 +8,16 @@
 //!    differences: image hrefs are inlined as `data:` URLs (a capability URL
 //!    in the export would 401 for anyone else — and an external href would
 //!    taint the rasterizing canvas, making `to_data_url` throw), and colors
-//!    are concrete hex values (below).
+//!    are concrete hex values (below). Geometry is never re-derived here:
+//!    every geo form, path, arrow shaft, sketch stroke and head mark comes
+//!    from the same `geo_path` / `arrow_geom` / `shape_view::outline_d`
+//!    functions the live view calls, and the reveal hooks and stylesheet
+//!    from `reveal.rs`.
 //! 2. [`rasterize_svg_to_png`] — SVG string → `data:` URL (CSP: no `blob:`) →
 //!    `HtmlImageElement::decode()` → `CanvasRenderingContext2d::draw_image`
-//!    → `to_data_url("image/png")`.
-//! 3. [`download_png`] — the `transcript.rs` blob/anchor idiom, via the
-//!    voice module's byte helpers.
+//!    → `to_data_url("image/png")`. PNG only; the animated export skips it.
+//! 3. [`download_png`] / `download_bytes` — the `transcript.rs` blob/anchor
+//!    idiom, via the voice module's byte helpers.
 //!
 //! The annotation flow (`ai.rs`) reuses steps 1–2 to composite an image with
 //! its annotation marks.
@@ -30,14 +35,15 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use aleph_protocol::canvas::{ArrowHead, GeoForm, Shape, ShapeStyle};
+use aleph_protocol::canvas::{is_hex_color, PathCmd, Shape, ShapeCommon, ShapeStyle};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
 
+use super::arrow_geom::{self, HeadMark};
 use super::interaction::{self, Bbox};
-use super::shape_view::HeadMark;
-use super::{asset_ingest, freehand, geo_path, shape_view};
+use super::shape_view::{self, OUTLINE_STROKE_W};
+use super::{asset_ingest, freehand, geo_path, reveal};
 use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
 use crate::context::DashboardState;
@@ -69,7 +75,7 @@ fn export_stroke(slot: &str) -> String {
         "green" => "#30a46c",
         "blue" => "#0091ff",
         "violet" => "#6e56cf",
-        hex if shape_view::is_hex_color(hex) => hex,
+        hex if is_hex_color(hex) => hex,
         _ => "#6e7781",
     }
     .to_string()
@@ -78,7 +84,7 @@ fn export_stroke(slot: &str) -> String {
 fn export_text_fill(style: &ShapeStyle) -> String {
     match style.color.as_str() {
         "red" | "orange" | "yellow" | "green" | "blue" | "violet" => export_stroke(&style.color),
-        hex if shape_view::is_hex_color(hex) => hex.to_string(),
+        hex if is_hex_color(hex) => hex.to_string(),
         _ => EXPORT_TEXT.to_string(),
     }
 }
@@ -100,18 +106,70 @@ fn push_head_mark(out: &mut String, mark: Option<HeadMark>, stroke: &str) {
             let _ = write!(
                 out,
                 "<polygon points=\"{points}\" fill=\"{fill}\" stroke=\"{stroke}\" \
-                 stroke-width=\"2\" stroke-linejoin=\"round\"/>"
+                 stroke-width=\"{OUTLINE_STROKE_W}\" stroke-linejoin=\"round\"/>"
             );
         }
         Some(HeadMark::Circle { cx, cy, r }) => {
-            let _ = write!(out, "<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"{stroke}\"/>");
+            let _ = write!(
+                out,
+                "<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"{stroke}\"/>"
+            );
         }
         Some(HeadMark::Line { x1, y1, x2, y2 }) => {
             let _ = write!(
                 out,
                 "<line x1=\"{x1}\" y1=\"{y1}\" x2=\"{x2}\" y2=\"{y2}\" stroke=\"{stroke}\" \
-                 stroke-width=\"2\"/>"
+                 stroke-width=\"{OUTLINE_STROKE_W}\"/>"
             );
+        }
+    }
+}
+
+/// The reveal attributes of one shape's outline (` class="…" pathLength="1"`,
+/// leading space) and body (` class="…"`) — empty strings without a reveal,
+/// the attribute twin of `shape_view::reveal_hooks`.
+fn reveal_attrs(common: &ShapeCommon) -> (String, String) {
+    let (outline, path_length, body) = shape_view::reveal_hooks(common);
+    let mut outline_attr = String::new();
+    if let Some(class) = outline {
+        let _ = write!(outline_attr, " class=\"{class}\"");
+    }
+    if let Some(len) = path_length {
+        let _ = write!(outline_attr, " pathLength=\"{len}\"");
+    }
+    let body_attr = body
+        .map(|class| format!(" class=\"{class}\""))
+        .unwrap_or_default();
+    (outline_attr, body_attr)
+}
+
+/// Open the reveal group (`<g class="rv-…">`) for a shape that reveals —
+/// the string twin of `shape_view::reveal_group`. Returns whether a group
+/// was opened, so the caller closes it.
+fn open_reveal_group(out: &mut String, common: &ShapeCommon) -> bool {
+    if common.reveal.is_none() {
+        return false;
+    }
+    let _ = write!(out, "<g class=\"{}\">", reveal::shape_class(&common.id));
+    true
+}
+
+/// Open the body group for a shape whose whole markup is body (text,
+/// cards, images) — the string twin of `shape_view::reveal_body`'s inner
+/// group. Returns whether a group was opened.
+fn open_body_group(out: &mut String, common: &ShapeCommon) -> bool {
+    let (_, body) = reveal_attrs(common);
+    if body.is_empty() {
+        return false;
+    }
+    let _ = write!(out, "<g{body}>");
+    true
+}
+
+fn close_groups(out: &mut String, opened: [bool; 2]) {
+    for was_opened in opened {
+        if was_opened {
+            out.push_str("</g>");
         }
     }
 }
@@ -171,6 +229,13 @@ fn push_text_block(out: &mut String, x: f64, first_baseline: f64, text: &str, fs
 /// against shapes that may not themselves be exported. `assets` maps asset
 /// id → `data:` URL; an image whose asset is missing renders the same
 /// dashed placeholder the live view uses, never a capability URL.
+///
+/// `animated` embeds the exported shapes' reveals as an inline `<style>`
+/// (`reveal::playback_css_for`, epoch 0) and marks the root with the play
+/// class, so the SVG plays on open. When none of the layers reveals the
+/// flag changes nothing — the markup is byte-identical either way, which
+/// [`tests::an_un_animated_export_is_byte_identical_with_or_without_animation`]
+/// pins.
 #[must_use]
 pub(super) fn export_svg(
     layers: &[Shape],
@@ -178,15 +243,29 @@ pub(super) fn export_svg(
     assets: &HashMap<String, String>,
     viewbox: Bbox,
     pad: f64,
+    animated: bool,
 ) -> String {
     let x = viewbox.x - pad;
     let y = viewbox.y - pad;
     let w = (viewbox.w + pad * 2.0).max(1.0);
     let h = (viewbox.h + pad * 2.0).max(1.0);
+    let css = if animated {
+        reveal::playback_css_for(layers, 0)
+    } else {
+        String::new()
+    };
+    let play_class = if css.is_empty() {
+        String::new()
+    } else {
+        format!(" class=\"{}\"", reveal::PLAY_CLASS)
+    };
     let mut out = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"{play_class} width=\"{w}\" height=\"{h}\" \
          viewBox=\"{x} {y} {w} {h}\" font-family=\"ui-sans-serif, system-ui, sans-serif\">"
     );
+    if !css.is_empty() {
+        let _ = write!(out, "<style>{css}</style>");
+    }
     // Opaque ground: a transparent export pasted into a dark surface reads
     // as broken, and the annotation composite must show the image on paper.
     let _ = write!(
@@ -200,14 +279,45 @@ pub(super) fn export_svg(
     out
 }
 
+/// One outline `<path>` at the shape origin: the shared `outline_d` choice
+/// (clean or sketched), the stroke-kind dash, and the reveal attributes.
+fn push_outline(
+    out: &mut String,
+    common: &ShapeCommon,
+    style: &ShapeStyle,
+    cmds: &[PathCmd],
+    fill: &str,
+) {
+    let (outline_attr, _) = reveal_attrs(common);
+    let _ = write!(
+        out,
+        "<path d=\"{}\" transform=\"translate({} {})\"{outline_attr} fill=\"{fill}\" \
+         stroke=\"{}\" stroke-width=\"{OUTLINE_STROKE_W}\" stroke-linecap=\"round\" \
+         stroke-linejoin=\"round\"{}/>",
+        shape_view::outline_d(cmds, style.stroke, &common.id),
+        common.x,
+        common.y,
+        export_stroke(&style.color),
+        dash_attr(style)
+    );
+}
+
 /// One shape's markup — the string twin of `shape_view::shape_svg`, arm for
-/// arm.
+/// arm, wrapped in the same reveal groups.
 fn push_shape(
     out: &mut String,
     shape: &Shape,
     all_shapes: &[Shape],
     assets: &HashMap<String, String>,
 ) {
+    let common = shape.common();
+    let reveal_open = open_reveal_group(out, common);
+    // Shapes with an outline emit their own body group; the rest are body
+    // wholesale (the live view's `reveal_body`).
+    let body_open = match shape {
+        Shape::Geo { .. } | Shape::Arrow { .. } | Shape::Path { .. } => false,
+        _ => open_body_group(out, common),
+    };
     match shape {
         Shape::Geo {
             common,
@@ -215,47 +325,12 @@ fn push_shape(
             style,
             text,
         } => {
-            let stroke = export_stroke(&style.color);
-            let fill = export_fill(style);
-            let dash = dash_attr(style);
-            match form {
-                GeoForm::Rect | GeoForm::Pill => {
-                    let rx = if *form == GeoForm::Pill {
-                        common.h / 2.0
-                    } else {
-                        4.0
-                    };
-                    let _ = write!(
-                        out,
-                        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{rx}\" \
-                         fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"2\"{dash}/>",
-                        common.x, common.y, common.w, common.h
-                    );
-                }
-                GeoForm::Ellipse => {
-                    let _ = write!(
-                        out,
-                        "<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" \
-                         fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"2\"{dash}/>",
-                        common.x + common.w / 2.0,
-                        common.y + common.h / 2.0,
-                        common.w / 2.0,
-                        common.h / 2.0
-                    );
-                }
-                GeoForm::Diamond | GeoForm::Triangle | GeoForm::Hexagon => {
-                    let points =
-                        geo_path::polygon_points(*form, common.x, common.y, common.w, common.h)
-                            .unwrap_or_default();
-                    let _ = write!(
-                        out,
-                        "<polygon points=\"{points}\" fill=\"{fill}\" stroke=\"{stroke}\" \
-                         stroke-width=\"2\" stroke-linejoin=\"round\"{dash}/>"
-                    );
-                }
-            }
+            let cmds = geo_path::geo_cmds(*form, common.w, common.h);
+            push_outline(out, common, style, &cmds, &export_fill(style));
             if !text.is_empty() {
+                let (_, body_attr) = reveal_attrs(common);
                 let fs = shape_view::font_size_for(style.size);
+                let _ = write!(out, "<g{body_attr}>");
                 push_text_block(
                     out,
                     common.x + 10.0,
@@ -264,6 +339,7 @@ fn push_shape(
                     fs,
                     &export_text_fill(style),
                 );
+                out.push_str("</g>");
             }
         }
         Shape::Ink {
@@ -377,40 +453,49 @@ fn push_shape(
             );
         }
         Shape::Arrow {
+            common,
             start,
             end,
             style,
             label,
+            bend,
             head_start,
             head_end,
-            ..
         } => {
-            // `bend` is not consulted: the live view draws the chord too
-            // (shape_view.rs module doc) — the two stay in step.
-            let (s, e) = shape_view::resolve_arrow_ends(all_shapes, start, end);
+            let (a, b) = arrow_geom::resolve_arrow_ends(all_shapes, start, end);
+            let shaft = arrow_geom::arrow_shaft(a, b, *bend);
             let stroke = export_stroke(&style.color);
+            let (outline_attr, body_attr) = reveal_attrs(common);
             let _ = write!(
                 out,
-                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{stroke}\" \
-                 stroke-width=\"2\"{}/>",
-                s.0,
-                s.1,
-                e.0,
-                e.1,
+                "<path d=\"{}\"{outline_attr} fill=\"none\" stroke=\"{stroke}\" \
+                 stroke-width=\"{OUTLINE_STROKE_W}\" stroke-linecap=\"round\" \
+                 stroke-linejoin=\"round\"{}/>",
+                shape_view::outline_d(&shaft.cmds, style.stroke, &common.id),
                 dash_attr(style)
             );
-            push_head_mark(out, shape_view::arrow_head_mark(*head_end, s, e), &stroke);
-            push_head_mark(out, shape_view::arrow_head_mark(*head_start, e, s), &stroke);
+            let _ = write!(out, "<g{body_attr}>");
+            push_head_mark(
+                out,
+                arrow_geom::arrow_head_mark(*head_end, shaft.end_from, shaft.end),
+                &stroke,
+            );
+            push_head_mark(
+                out,
+                arrow_geom::arrow_head_mark(*head_start, shaft.start_from, shaft.start),
+                &stroke,
+            );
             if !label.is_empty() {
                 let _ = write!(
                     out,
                     "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-size=\"12\" \
                      fill=\"{stroke}\">{}</text>",
-                    (s.0 + e.0) / 2.0,
-                    (s.1 + e.1) / 2.0 - 6.0,
+                    shaft.mid.0,
+                    shaft.mid.1 - 6.0,
                     xml_escape(label)
                 );
             }
+            out.push_str("</g>");
         }
         Shape::Path {
             common,
@@ -418,24 +503,15 @@ fn push_shape(
             d,
             closed,
         } => {
-            // The same parse → re-emit the live view does; an unparsable `d`
-            // exports nothing, exactly as it renders nothing.
-            if let Some(d) = geo_path::path_d(d, *closed) {
+            // The same parse the live view does; an unparsable `d` exports
+            // nothing, exactly as it renders nothing.
+            if let Some(cmds) = geo_path::path_cmds(d, *closed) {
                 let fill = if *closed {
                     export_fill(style)
                 } else {
                     "none".to_string()
                 };
-                let _ = write!(
-                    out,
-                    "<g transform=\"translate({} {})\"><path d=\"{d}\" fill=\"{fill}\" \
-                     stroke=\"{}\" stroke-width=\"2\" stroke-linecap=\"round\" \
-                     stroke-linejoin=\"round\"{}/></g>",
-                    common.x,
-                    common.y,
-                    export_stroke(&style.color),
-                    dash_attr(style)
-                );
+                push_outline(out, common, style, &cmds, &fill);
             }
         }
         Shape::AiImageFrame { common, prompt, .. } => {
@@ -454,6 +530,7 @@ fn push_shape(
             );
         }
     }
+    close_groups(out, [body_open, reveal_open]);
 }
 
 /// Rasterize a standalone SVG document to a PNG `data:` URL.
@@ -511,17 +588,11 @@ pub(super) async fn rasterize_svg_to_png(
         .map_err(|_| "PNG encoding failed".to_string())
 }
 
-/// Hand a PNG `data:` URL to the browser as a download — the
-/// `transcript.rs` blob/anchor idiom, through the voice module's byte
-/// helpers (a large `data:` href is unreliable where a `blob:` URL is not).
-pub(super) fn download_png(png_data_url: &str, filename: &str) {
-    let Some(b64) = asset_ingest::data_url_base64(png_data_url) else {
-        return;
-    };
-    let Some(bytes) = crate::views::voice::audio::base64_to_bytes(b64) else {
-        return;
-    };
-    let Some(url) = crate::views::voice::audio::bytes_to_object_url(&bytes, "image/png") else {
+/// Hand bytes to the browser as a download — the `transcript.rs`
+/// blob/anchor idiom, through the voice module's byte helpers (a large
+/// `data:` href is unreliable where a `blob:` URL is not).
+fn download_bytes(bytes: &[u8], mime: &str, filename: &str) {
+    let Some(url) = crate::views::voice::audio::bytes_to_object_url(bytes, mime) else {
         return;
     };
     let Some(document) = web_sys::window().and_then(|w| w.document()) else {
@@ -542,10 +613,33 @@ pub(super) fn download_png(png_data_url: &str, filename: &str) {
     let _ = web_sys::Url::revoke_object_url(&url);
 }
 
-/// "Export PNG" — visible while the selection is non-empty. Fetches the
-/// selected images' bytes, serializes, rasterizes, downloads.
+/// Hand a PNG `data:` URL to the browser as a download.
+fn download_png(png_data_url: &str, filename: &str) {
+    let Some(b64) = asset_ingest::data_url_base64(png_data_url) else {
+        return;
+    };
+    let Some(bytes) = crate::views::voice::audio::base64_to_bytes(b64) else {
+        return;
+    };
+    download_bytes(&bytes, "image/png", filename);
+}
+
+/// What an export button produces from the serialized SVG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExportKind {
+    /// Rasterized bitmap — the reveals are ignored (a bitmap holds one
+    /// instant).
+    Png,
+    /// The SVG document itself with the reveals embedded as CSS, so it
+    /// plays on open.
+    AnimatedSvg,
+}
+
+/// One export button — visible while the selection is non-empty. Fetches
+/// the selected images' bytes, serializes through [`export_svg`], then
+/// either rasterizes (`Png`) or downloads the animated document as-is.
 #[component]
-pub(super) fn ExportPngButton() -> impl IntoView {
+pub(super) fn ExportButton(kind: ExportKind) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
@@ -610,24 +704,44 @@ pub(super) fn ExportPngButton() -> impl IntoView {
                     }
                 }
             }
-            let svg = export_svg(&layers, &all_shapes, &assets, viewbox, EXPORT_PAD);
-            let (pw, ph) =
-                raster_dimensions(viewbox.w + EXPORT_PAD * 2.0, viewbox.h + EXPORT_PAD * 2.0);
-            match rasterize_svg_to_png(&svg, pw, ph).await {
-                Ok(data_url) => {
-                    let timestamp = js_sys::Date::new_0()
-                        .to_iso_string()
-                        .as_string()
-                        .unwrap_or_default()
-                        .replace(':', "-");
-                    download_png(&data_url, &format!("aleph-canvas-{timestamp}.png"));
+            let timestamp = js_sys::Date::new_0()
+                .to_iso_string()
+                .as_string()
+                .unwrap_or_default()
+                .replace(':', "-");
+            let svg = export_svg(
+                &layers,
+                &all_shapes,
+                &assets,
+                viewbox,
+                EXPORT_PAD,
+                kind == ExportKind::AnimatedSvg,
+            );
+            match kind {
+                ExportKind::AnimatedSvg => {
+                    download_bytes(
+                        svg.as_bytes(),
+                        "image/svg+xml",
+                        &format!("aleph-canvas-{timestamp}.svg"),
+                    );
                 }
-                Err(e) => {
-                    let _ = canvas.load_error.try_update(|v| {
-                        *v = Some(admin_refusal::settings_load_error(i18n, &e, |e| {
-                            format!("Failed to export the selection: {e}")
-                        }));
-                    });
+                ExportKind::Png => {
+                    let (pw, ph) = raster_dimensions(
+                        viewbox.w + EXPORT_PAD * 2.0,
+                        viewbox.h + EXPORT_PAD * 2.0,
+                    );
+                    match rasterize_svg_to_png(&svg, pw, ph).await {
+                        Ok(data_url) => {
+                            download_png(&data_url, &format!("aleph-canvas-{timestamp}.png"));
+                        }
+                        Err(e) => {
+                            let _ = canvas.load_error.try_update(|v| {
+                                *v = Some(admin_refusal::settings_load_error(i18n, &e, |e| {
+                                    format!("Failed to export the selection: {e}")
+                                }));
+                            });
+                        }
+                    }
                 }
             }
             let _ = busy.try_set(false);
@@ -651,7 +765,10 @@ pub(super) fn ExportPngButton() -> impl IntoView {
                         <polyline points="7 10 12 15 17 10" />
                         <line x1="12" y1="15" x2="12" y2="3" />
                     </svg>
-                    {t!(i18n, canvas.export_png)}
+                    {match kind {
+                        ExportKind::Png => t!(i18n, canvas.export_png).into_any(),
+                        ExportKind::AnimatedSvg => t!(i18n, canvas.export_svg).into_any(),
+                    }}
                 </button>
             })
         }}
@@ -661,7 +778,7 @@ pub(super) fn ExportPngButton() -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aleph_protocol::canvas::{FracIndex, ShapeCommon};
+    use aleph_protocol::canvas::{ArrowHead, FracIndex, GeoForm};
 
     fn common(id: &str, x: f64, y: f64, w: f64, h: f64) -> ShapeCommon {
         ShapeCommon {
@@ -703,7 +820,7 @@ mod tests {
             "abc.png".to_string(),
             "data:image/png;base64,AAAA".to_string(),
         );
-        let svg = export_svg(&shapes, &shapes, &assets, VIEW, 0.0);
+        let svg = export_svg(&shapes, &shapes, &assets, VIEW, 0.0, false);
         assert!(
             svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""),
             "{svg}"
@@ -723,7 +840,7 @@ mod tests {
     #[test]
     fn a_missing_asset_renders_a_placeholder_never_an_external_href() {
         let shapes = vec![image("i1", "abc.png")];
-        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0);
+        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, false);
         assert!(!svg.contains("<image"), "{svg}");
         assert!(svg.contains("stroke-dasharray=\"6 4\""), "{svg}");
     }
@@ -736,7 +853,7 @@ mod tests {
             style: ShapeStyle::default(),
             text: "<script>&\"attack\"</script>".to_string(),
         }];
-        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0);
+        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, false);
         assert!(!svg.contains("<script>"), "{svg}");
         assert!(
             svg.contains("&lt;script&gt;&amp;&quot;attack&quot;&lt;/script&gt;"),
@@ -748,7 +865,7 @@ mod tests {
     /// browsers refuse to draw an SVG image with no intrinsic size.
     #[test]
     fn the_root_svg_carries_viewbox_and_matching_intrinsic_size() {
-        let svg = export_svg(&[], &[], &HashMap::new(), VIEW, 16.0);
+        let svg = export_svg(&[], &[], &HashMap::new(), VIEW, 16.0, false);
         assert!(svg.contains("viewBox=\"-16 -16 132 112\""), "{svg}");
         assert!(svg.contains("width=\"132\" height=\"112\""), "{svg}");
         assert!(svg.ends_with("</svg>"), "{svg}");
@@ -784,12 +901,61 @@ mod tests {
             head_end: ArrowHead::Arrow,
         };
         let all = vec![arrow.clone(), target];
-        let svg = export_svg(&[arrow], &all, &HashMap::new(), VIEW, 0.0);
+        let svg = export_svg(&[arrow], &all, &HashMap::new(), VIEW, 0.0, false);
         assert!(
-            svg.contains("x2=\"200\" y2=\"20\""),
+            svg.contains("<path d=\"M0 20 L200 20\""),
             "the bound end must land on the target's left edge: {svg}"
         );
         assert!(!svg.contains("999"), "{svg}");
+    }
+
+    /// A bent arrow exports the same cubic chain the live view draws, with
+    /// its label on the arc's apex — never the chord.
+    #[test]
+    fn a_bent_arrow_exports_as_the_shared_arc() {
+        let arrow = Shape::Arrow {
+            common: common("a1", 0.0, 0.0, 100.0, 1.0),
+            start: aleph_protocol::canvas::ArrowEnd {
+                x: 0.0,
+                y: 0.0,
+                bind: None,
+            },
+            end: aleph_protocol::canvas::ArrowEnd {
+                x: 100.0,
+                y: 0.0,
+                bind: None,
+            },
+            style: ShapeStyle::default(),
+            label: "L".to_string(),
+            bend: 30.0,
+            head_start: ArrowHead::None,
+            head_end: ArrowHead::Arrow,
+        };
+        let shaft = arrow_geom::arrow_shaft((0.0, 0.0), (100.0, 0.0), 30.0);
+        let svg = export_svg(
+            std::slice::from_ref(&arrow),
+            std::slice::from_ref(&arrow),
+            &HashMap::new(),
+            VIEW,
+            0.0,
+            false,
+        );
+        assert!(
+            svg.contains(&format!(
+                "<path d=\"{}\"",
+                aleph_protocol::canvas::cmds_to_d(&shaft.cmds)
+            )),
+            "{svg}"
+        );
+        assert!(svg.contains(" C"), "an arc is cubics: {svg}");
+        assert!(
+            svg.contains(&format!(
+                "<text x=\"{}\" y=\"{}\"",
+                shaft.mid.0,
+                shaft.mid.1 - 6.0
+            )),
+            "the label sits on the apex: {svg}"
+        );
     }
 
     /// The raster cap scales the long edge down to the limit and floors
@@ -848,22 +1014,199 @@ mod tests {
                 head_end: ArrowHead::Bar,
             },
         ];
-        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0);
+        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, false);
         assert!(
-            svg.contains("<polygon points=\"50,0 100,25 50,50 0,25\""),
+            svg.contains("<path d=\"M50 0 L100 25 L50 50 L0 25 Z\" transform=\"translate(0 0)\""),
             "the diamond's corners come from geo_path: {svg}"
         );
-        assert!(svg.contains("stroke=\"#123abc\""), "hex passes through: {svg}");
+        assert!(
+            svg.contains("stroke=\"#123abc\""),
+            "hex passes through: {svg}"
+        );
         assert!(svg.contains("fill=\"#123abc2e\""), "hex fill wash: {svg}");
         assert!(svg.contains("stroke-dasharray=\"8 6\""), "dashed: {svg}");
         assert!(
-            svg.contains("<g transform=\"translate(10 20)\"><path d=\"M0 0 L30 0 L30 30 Z\""),
+            svg.contains("<path d=\"M0 0 L30 0 L30 30 Z\" transform=\"translate(10 20)\""),
             "the path is translated, absolute and closed: {svg}"
         );
-        assert!(svg.contains("<circle cx=\"0\" cy=\"0\""), "dot at the start: {svg}");
+        assert!(
+            svg.contains("<circle cx=\"0\" cy=\"0\""),
+            "dot at the start: {svg}"
+        );
         assert!(
             svg.contains("<line x1=\"100\" y1=\"5\" x2=\"100\" y2=\"-5\""),
             "bar at the end: {svg}"
+        );
+        assert!(
+            !svg.contains("<polygon points=\"50,0")
+                && !svg.contains("<ellipse")
+                && !svg.contains("<rect x=\"0\" y=\"0\" width=\"100\" height=\"50\""),
+            "no native geometry primitives: {svg}"
+        );
+    }
+
+    /// Every geo form — rect and ellipse included — exports as a `<path>`
+    /// whose `d` is exactly `geo_cmds`, and a sketch stroke exports the
+    /// same seeded synthesis the live view draws.
+    #[test]
+    fn every_geo_form_is_a_path_from_the_shared_table_and_sketch_is_seeded() {
+        use aleph_protocol::canvas::{cmds_to_d, StrokeKind};
+        for form in [
+            GeoForm::Rect,
+            GeoForm::Ellipse,
+            GeoForm::Diamond,
+            GeoForm::Triangle,
+            GeoForm::Hexagon,
+            GeoForm::Pill,
+        ] {
+            let shape = Shape::Geo {
+                common: common("g", 5.0, 6.0, 80.0, 40.0),
+                form,
+                style: ShapeStyle::default(),
+                text: String::new(),
+            };
+            let svg = export_svg(
+                std::slice::from_ref(&shape),
+                std::slice::from_ref(&shape),
+                &HashMap::new(),
+                VIEW,
+                0.0,
+                false,
+            );
+            let want = format!(
+                "<path d=\"{}\" transform=\"translate(5 6)\"",
+                cmds_to_d(&geo_path::geo_cmds(form, 80.0, 40.0))
+            );
+            assert!(svg.contains(&want), "{form:?}: {svg}");
+            assert!(
+                !svg.contains("<rect x=\"5\"") && !svg.contains("<ellipse"),
+                "{form:?}: {svg}"
+            );
+        }
+        let sketched = Shape::Geo {
+            common: common("g-sk", 0.0, 0.0, 80.0, 40.0),
+            form: GeoForm::Rect,
+            style: ShapeStyle {
+                stroke: StrokeKind::Sketch,
+                ..ShapeStyle::default()
+            },
+            text: String::new(),
+        };
+        let svg = export_svg(
+            std::slice::from_ref(&sketched),
+            std::slice::from_ref(&sketched),
+            &HashMap::new(),
+            VIEW,
+            0.0,
+            false,
+        );
+        let want = shape_view::outline_d(
+            &geo_path::geo_cmds(GeoForm::Rect, 80.0, 40.0),
+            StrokeKind::Sketch,
+            "g-sk",
+        );
+        assert!(svg.contains(&format!("<path d=\"{want}\"")), "{svg}");
+        assert!(
+            !svg.contains("stroke-dasharray"),
+            "sketch is not a dash pattern: {svg}"
+        );
+    }
+
+    /// A document with no reveals exports byte-identically whether or not
+    /// animation is requested: no `<style>`, no play class, no reveal
+    /// hooks — the "existing static rendering is unchanged" pin.
+    #[test]
+    fn an_un_animated_export_is_byte_identical_with_or_without_animation() {
+        let shapes = vec![
+            Shape::Geo {
+                common: common("g1", 0.0, 0.0, 50.0, 50.0),
+                form: GeoForm::Ellipse,
+                style: ShapeStyle::default(),
+                text: "hi".to_string(),
+            },
+            Shape::Text {
+                common: common("t1", 0.0, 0.0, 50.0, 20.0),
+                style: ShapeStyle::default(),
+                text: "t".to_string(),
+            },
+        ];
+        let plain = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, false);
+        let animated = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, true);
+        assert_eq!(plain, animated);
+        assert!(
+            !plain.contains("<style") && !plain.contains("rv-") && !plain.contains("pathLength"),
+            "{plain}"
+        );
+    }
+
+    /// With reveals, the animated export carries every shape's `reveal_css`
+    /// inline, the play class on the root, the reveal group around the
+    /// shape, and `pathLength="1"` on a draw-on outline; the PNG-bound
+    /// (un-animated) export keeps the hooks but no stylesheet.
+    #[test]
+    fn an_animated_export_embeds_the_reveal_stylesheet_and_hooks() {
+        use aleph_protocol::canvas::{Ease, Reveal, RevealMode};
+        let draw = Reveal {
+            start_ms: 100,
+            duration_ms: 600,
+            ease: Ease::Linear,
+            mode: RevealMode::Draw,
+        };
+        let mut revealed = common("g1", 0.0, 0.0, 50.0, 50.0);
+        revealed.reveal = Some(draw);
+        let shapes = vec![
+            Shape::Geo {
+                common: revealed,
+                form: GeoForm::Rect,
+                style: ShapeStyle::default(),
+                text: "hi".to_string(),
+            },
+            Shape::Text {
+                common: common("t1", 0.0, 0.0, 50.0, 20.0),
+                style: ShapeStyle::default(),
+                text: "t".to_string(),
+            },
+        ];
+        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, true);
+        assert!(
+            svg.starts_with(&format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"{}\"",
+                reveal::PLAY_CLASS
+            )),
+            "{svg}"
+        );
+        let css = reveal::reveal_css("g1", &draw, 0);
+        assert!(
+            svg.contains(&format!("<style>{css}")),
+            "the same reveal_css, epoch 0: {svg}"
+        );
+        assert!(
+            svg.contains(&format!("<g class=\"{}\"><path", reveal::shape_class("g1"))),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(&format!(
+                " class=\"{}\" pathLength=\"1\"",
+                reveal::OUTLINE_CLASS
+            )),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(&format!("<g class=\"{}\"><text", reveal::BODY_CLASS)),
+            "the label is body: {svg}"
+        );
+        assert!(
+            !svg.contains(&reveal::shape_class("t1")),
+            "an un-revealed shape gets no group: {svg}"
+        );
+        let png_bound = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, false);
+        assert!(
+            !png_bound.contains("<style") && !png_bound.contains(reveal::PLAY_CLASS),
+            "{png_bound}"
+        );
+        assert!(
+            png_bound.contains("pathLength=\"1\""),
+            "hooks are the shape's, not the export mode's: {png_bound}"
         );
     }
 
@@ -876,7 +1219,7 @@ mod tests {
             style: ShapeStyle::default(),
             points: vec![[0.0, 0.0, 0.5], [50.0, 10.0, 0.5]],
         }];
-        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0);
+        let svg = export_svg(&shapes, &shapes, &HashMap::new(), VIEW, 0.0, false);
         assert!(svg.contains("<path d=\"M"), "{svg}");
         assert!(svg.contains("fill=\"#6e7781\""), "{svg}");
         assert!(!svg.contains("polyline"), "{svg}");

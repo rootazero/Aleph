@@ -19,26 +19,30 @@
 //!
 //! # Drawing infrastructure (2026-09-12) — what this build renders
 //!
-//! - `Geo` forms beyond rect/ellipse are polygons from `geo_path.rs` (pill is
-//!   a rect with `rx = h/2`); `Path` is the contract-parsed `d` re-emitted.
-//! - `StrokeKind::Dashed` / `Dotted` are `stroke-dasharray`;
-//!   **`Sketch` renders as `Solid` here** — the seeded hand-drawn synthesis is
-//!   the next round's `sketch.rs`.
-//! - Arrow heads follow `head_start` / `head_end` ([`arrow_head_mark`]);
-//!   **`bend` is not yet rendered** — a bent arrow draws as its chord until
-//!   the arc geometry lands.
-//! - `reveal` / `timeline` are not consulted: playback is a later round, and
-//!   a shape with a reveal is simply visible.
+//! - Every `Geo` form is a `<path>` from `geo_path::geo_cmds` (no native
+//!   `<rect>`/`<ellipse>`/`<polygon>` for geometry — the `<rect>`s that
+//!   remain below are the Note card, the Frame, the Image placeholder, the
+//!   HTML placeholder and the AI-frame chrome, none of which is a `GeoForm`);
+//!   `Path` is the contract-parsed `d` re-emitted.
+//! - `StrokeKind::Dashed` / `Dotted` are `stroke-dasharray`; `Sketch` is the
+//!   seeded hand-drawn synthesis (`sketch.rs`, seeded by the shape id) on
+//!   every Geo / Path / Arrow outline.
+//! - `Arrow.bend` is the three-point arc of `arrow_geom.rs`; heads follow
+//!   `head_start` / `head_end` and lean along the arc's tangent.
+//! - `reveal` wraps the shape in the `reveal.rs` classes (and the outline
+//!   gets `pathLength="1"` for the draw-on mode) — attributes that exist
+//!   ONLY when a reveal does, so an un-animated document's markup is
+//!   unchanged. Playback itself is the surfaces' `PlaybackButton`.
 //!
 //! # Ink and arrows (Task 15)
 //!
 //! - `Ink` renders the pressure-aware freehand outline (`freehand.rs`) as a
 //!   single filled path — the polygon is the stroke's silhouette.
-//! - `Arrow` endpoints follow their bound shapes live: [`resolve_arrow_ends`]
-//!   reads the bound shapes out of the document and [`arrow_anchor`] projects
-//!   each endpoint onto the bound bbox's edge (center-to-edge intersection,
-//!   aimed at the other end). The resolution sits behind a `Memo` so an
-//!   unbound arrow never subscribes to the doc signal at all.
+//! - `Arrow` endpoints follow their bound shapes live:
+//!   `arrow_geom::resolve_arrow_ends` reads the bound shapes out of the
+//!   document and clips each endpoint onto the bound shape's outline, aimed
+//!   at the other end. The resolution sits behind a `Memo` so an unbound
+//!   arrow never subscribes to the doc signal at all.
 //!
 //! # HTML frames (Task 16)
 //!
@@ -63,27 +67,61 @@
 //!   limitation. The text-editing overlay (Task 14) owns real layout.
 
 use aleph_protocol::canvas::{
-    AiFrameStatus, ArrowEnd, ArrowHead, GeoForm, Shape, ShapeCommon, ShapeStyle, SizeKind,
-    StrokeKind,
+    cmds_to_d, is_hex_color, AiFrameStatus, GeoForm, PathCmd, Shape, ShapeCommon, ShapeStyle,
+    SizeKind, StrokeKind,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
+use super::arrow_geom::{self, HeadMark};
 use super::asset_ingest::SrcdocCache;
 use super::interaction::Bbox;
-use super::{freehand, geo_path};
+use super::{freehand, geo_path, reveal, sketch};
 use crate::api::canvas::CanvasApi;
 use crate::components::admin_refusal;
 use crate::context::DashboardState;
 use crate::i18n::{t, use_i18n, I18nCtx};
 use crate::state::canvas::CanvasState;
 
-/// Arrowhead length along the shaft, world units.
-const ARROW_HEAD_LEN: f64 = 12.0;
-/// Arrowhead half-width across the shaft, world units.
-const ARROW_HEAD_HALF: f64 = 5.0;
-/// Radius of an [`ArrowHead::Dot`] cap, world units.
-const ARROW_DOT_RADIUS: f64 = 4.0;
+/// Stroke width of every Geo / Path / Arrow outline, world units — also
+/// what scales the sketch synthesis. `pub(super)`: the export draws (and
+/// sketches) at the same width.
+pub(super) const OUTLINE_STROKE_W: f64 = 2.0;
+
+/// The `d` an outline renders with: the clean command list, or its seeded
+/// sketch for [`StrokeKind::Sketch`]. `seed` is the shape id (the wire
+/// contract's determinism promise). `pub(super)`: the export serializer
+/// makes the same choice through the same function.
+#[must_use]
+pub(super) fn outline_d(cmds: &[PathCmd], stroke: StrokeKind, seed: &str) -> String {
+    if stroke == StrokeKind::Sketch {
+        sketch::sketch_d(cmds, seed, OUTLINE_STROKE_W)
+    } else {
+        cmds_to_d(cmds)
+    }
+}
+
+/// Reveal hooks for one shape: `(outline class, pathLength, body class)`,
+/// all `None` when the shape has no reveal — so nothing about an
+/// un-animated shape's markup changes. `pub(super)`: the export emits the
+/// same hooks.
+#[must_use]
+pub(super) fn reveal_hooks(
+    common: &ShapeCommon,
+) -> (
+    Option<&'static str>,
+    Option<&'static str>,
+    Option<&'static str>,
+) {
+    match &common.reveal {
+        None => (None, None, None),
+        Some(r) => (
+            Some(reveal::OUTLINE_CLASS),
+            reveal::needs_path_length(Some(r)).then_some("1"),
+            Some(reveal::BODY_CLASS),
+        ),
+    }
+}
 
 /// One shape, looked up by id from the editor's shape map.
 #[component]
@@ -110,8 +148,10 @@ fn asset_href(asset_base: &str, asset_id: &str) -> String {
 ///
 /// Unknown slots (including the empty default) resolve to the neutral ink —
 /// an unrecognized color must degrade to *visible*, never to an error.
+/// `pub(super)`: the toolbar's swatches paint each slot with the same
+/// token the shapes will be drawn in.
 #[must_use]
-fn palette_var(slot: &str) -> String {
+pub(super) fn palette_var(slot: &str) -> String {
     match slot {
         "red" => "var(--color-danger)",
         "orange" => "var(--color-warning)",
@@ -125,19 +165,10 @@ fn palette_var(slot: &str) -> String {
     .to_string()
 }
 
-/// A `#rrggbb` literal — the only non-slot spelling `check_color` admits.
-/// `pub(super)`: the export serializer passes the same literals through.
-#[must_use]
-pub(super) fn is_hex_color(color: &str) -> bool {
-    color
-        .strip_prefix('#')
-        .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
 /// `stroke-dasharray` for a stroke kind; `None` draws a continuous line.
-/// `Sketch` is `None` here on purpose (module doc: it renders solid until
-/// the sketch synthesizer exists). `pub(super)`: the export serializer
-/// dashes the same way.
+/// `Sketch` is `None` here because its look comes from the path data
+/// ([`outline_d`]), not from a dash pattern. `pub(super)`: the export
+/// serializer dashes the same way.
 #[must_use]
 pub(super) fn stroke_dasharray(stroke: StrokeKind) -> Option<&'static str> {
     match stroke {
@@ -216,88 +247,6 @@ pub(super) fn prompt_excerpt(prompt: &str, max: usize) -> String {
     s
 }
 
-/// Where an arrow endpoint bound to a shape attaches: the point where the
-/// ray from the bbox's center toward `toward` crosses the bbox boundary.
-/// Degenerate cases (a zero-extent box, `toward` at the center) answer the
-/// center itself — an anchor must always exist.
-#[must_use]
-fn arrow_anchor(b: Bbox, toward: (f64, f64)) -> (f64, f64) {
-    let (cx, cy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
-    let (dx, dy) = (toward.0 - cx, toward.1 - cy);
-    if dx.abs() < 1e-9 && dy.abs() < 1e-9 {
-        return (cx, cy);
-    }
-    let tx = if dx.abs() > 1e-9 {
-        (b.w / 2.0) / dx.abs()
-    } else {
-        f64::INFINITY
-    };
-    let ty = if dy.abs() > 1e-9 {
-        (b.h / 2.0) / dy.abs()
-    } else {
-        f64::INFINITY
-    };
-    let t = tx.min(ty);
-    if !t.is_finite() {
-        return (cx, cy);
-    }
-    (cx + dx * t, cy + dy * t)
-}
-
-/// Resolve an arrow's endpoints against its bound shapes: a bound end
-/// projects onto its shape's edge ([`arrow_anchor`]), aimed at the other
-/// end's reference point (that end's bound shape's *center*, or its stored
-/// coordinates). An end whose bound shape vanished falls back to its stored
-/// x/y — the wire contract calls them "the recomputed fallback".
-/// `pub(super)`: the export serializer resolves endpoints identically —
-/// a second geometry would let the export and the live view disagree.
-#[must_use]
-pub(super) fn resolve_arrow_ends(
-    shapes: &[Shape],
-    start: &ArrowEnd,
-    end: &ArrowEnd,
-) -> ((f64, f64), (f64, f64)) {
-    let bbox_of = |bind: &Option<String>| -> Option<Bbox> {
-        bind.as_ref()
-            .and_then(|id| shapes.iter().find(|s| s.id() == id))
-            .map(Bbox::of_shape)
-    };
-    let center = |b: Bbox| (b.x + b.w / 2.0, b.y + b.h / 2.0);
-    let start_bbox = bbox_of(&start.bind);
-    let end_bbox = bbox_of(&end.bind);
-    let start_ref = start_bbox.map_or((start.x, start.y), center);
-    let end_ref = end_bbox.map_or((end.x, end.y), center);
-    (
-        start_bbox.map_or((start.x, start.y), |b| arrow_anchor(b, end_ref)),
-        end_bbox.map_or((end.x, end.y), |b| arrow_anchor(b, start_ref)),
-    )
-}
-
-/// `points=` polygon string for an arrowhead at `end`, pointing away from
-/// `start`. Empty when the arrow is degenerate (zero length) — a polygon
-/// with NaN vertices is an SVG parse error, not an invisible triangle.
-/// `pub(super)`: shared with the export serializer (same head, same math).
-#[must_use]
-pub(super) fn arrow_head_points(start: (f64, f64), end: (f64, f64)) -> String {
-    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < 1e-6 {
-        return String::new();
-    }
-    let (ux, uy) = (dx / len, dy / len);
-    let (bx, by) = (end.0 - ux * ARROW_HEAD_LEN, end.1 - uy * ARROW_HEAD_LEN);
-    let (px, py) = (-uy, ux);
-    format!(
-        "{},{} {},{} {},{}",
-        end.0,
-        end.1,
-        bx + px * ARROW_HEAD_HALF,
-        by + py * ARROW_HEAD_HALF,
-        bx - px * ARROW_HEAD_HALF,
-        by - py * ARROW_HEAD_HALF
-    )
-}
-
 /// `\n`-split text as a stack of `<text>` lines, first baseline at `y`.
 fn text_block(x: f64, y: f64, text: &str, fs: f64, fill: &str) -> AnyView {
     let line_height = fs * 1.4;
@@ -320,6 +269,29 @@ fn text_block(x: f64, y: f64, text: &str, fs: f64, fill: &str) -> AnyView {
         .into_any()
 }
 
+/// Wrap a shape's markup in its reveal group when it has a reveal — the
+/// selector root `reveal_css` targets. A shape without a reveal is returned
+/// untouched.
+fn reveal_group(common: &ShapeCommon, inner: AnyView) -> AnyView {
+    if common.reveal.is_none() {
+        return inner;
+    }
+    let class = reveal::shape_class(&common.id);
+    view! { <g class=class>{inner}</g> }.into_any()
+}
+
+/// The reveal group around markup that has no outline of its own (text,
+/// cards, images): the whole shape is "body", fading in during the second
+/// phase of a draw-on reveal.
+fn reveal_body(common: &ShapeCommon, inner: AnyView) -> AnyView {
+    let (_, _, body) = reveal_hooks(common);
+    let inner = match body {
+        None => inner,
+        Some(class) => view! { <g class=class>{inner}</g> }.into_any(),
+    };
+    reveal_group(common, inner)
+}
+
 fn shape_svg(shape: &Shape, canvas: CanvasState, i18n: I18nCtx) -> AnyView {
     match shape {
         Shape::Geo {
@@ -327,122 +299,89 @@ fn shape_svg(shape: &Shape, canvas: CanvasState, i18n: I18nCtx) -> AnyView {
             form,
             style,
             text,
-        } => geo_svg(common, *form, style, text),
+        } => reveal_group(common, geo_svg(common, *form, style, text)),
         Shape::Ink {
             common,
             style,
             points,
-        } => ink_svg(common, style, points),
+        } => reveal_body(common, ink_svg(common, style, points)),
         Shape::Text {
             common,
             style,
             text,
         } => {
             let fs = font_size_for(style.size);
-            view! {
-                <g>{text_block(common.x, common.y + fs, text, fs, &text_fill(style))}</g>
-            }
-            .into_any()
+            reveal_body(
+                common,
+                view! {
+                    <g>{text_block(common.x, common.y + fs, text, fs, &text_fill(style))}</g>
+                }
+                .into_any(),
+            )
         }
         Shape::Note {
             common,
             style,
             text,
-        } => note_svg(common, style, text),
+        } => reveal_body(common, note_svg(common, style, text)),
         Shape::Image {
             common, asset_id, ..
-        } => image_svg(common, asset_id, canvas),
-        Shape::Frame { common, title, .. } => frame_svg(common, title),
-        Shape::Html { common, .. } => html_placeholder_svg(common, i18n),
-        Shape::Arrow {
-            common: _,
-            start,
-            end,
-            style,
-            label,
-            bend: _,
-            head_start,
-            head_end,
-        } => arrow_svg(start, end, style, label, (*head_start, *head_end), canvas),
+        } => reveal_body(common, image_svg(common, asset_id, canvas)),
+        Shape::Frame { common, title, .. } => reveal_body(common, frame_svg(common, title)),
+        Shape::Html { common, .. } => reveal_body(common, html_placeholder_svg(common, i18n)),
+        Shape::Arrow { common, .. } => reveal_group(common, arrow_svg(shape, canvas)),
         Shape::Path {
             common,
             style,
             d,
             closed,
-        } => path_svg(common, style, d, *closed),
+        } => reveal_group(common, path_svg(common, style, d, *closed)),
         Shape::AiImageFrame {
             common,
             prompt,
             status,
             ..
-        } => ai_frame_svg(common, prompt, *status, i18n),
+        } => reveal_body(common, ai_frame_svg(common, prompt, *status, i18n)),
     }
 }
 
 fn geo_svg(common: &ShapeCommon, form: GeoForm, style: &ShapeStyle, text: &str) -> AnyView {
     let stroke = palette_var(&style.color);
     let paint = format!("stroke: {stroke}; fill: {};", fill_css(style));
-    let dash = stroke_dasharray(style.stroke);
     let fs = font_size_for(style.size);
-    let outline = match form {
-        GeoForm::Rect | GeoForm::Pill => {
-            let rx = if form == GeoForm::Pill {
-                common.h / 2.0
-            } else {
-                4.0
-            };
-            view! {
-                <rect
-                    x=common.x
-                    y=common.y
-                    width=common.w
-                    height=common.h
-                    rx=rx
-                    style=paint
-                    stroke-width=2
-                    stroke-dasharray=dash
-                />
-            }
-            .into_any()
-        }
-        GeoForm::Ellipse => view! {
-            <ellipse
-                cx=common.x + common.w / 2.0
-                cy=common.y + common.h / 2.0
-                rx=common.w / 2.0
-                ry=common.h / 2.0
-                style=paint
-                stroke-width=2
-                stroke-dasharray=dash
-            />
-        }
-        .into_any(),
-        GeoForm::Diamond | GeoForm::Triangle | GeoForm::Hexagon => {
-            let points =
-                geo_path::polygon_points(form, common.x, common.y, common.w, common.h)
-                    .unwrap_or_default();
-            view! {
-                <polygon
-                    points=points
-                    style=paint
-                    stroke-width=2
-                    stroke-linejoin="round"
-                    stroke-dasharray=dash
-                />
-            }
-            .into_any()
-        }
-    };
+    let (outline_class, path_length, body_class) = reveal_hooks(common);
+    let d = outline_d(
+        &geo_path::geo_cmds(form, common.w, common.h),
+        style.stroke,
+        &common.id,
+    );
     let label = (!text.is_empty()).then(|| {
-        text_block(
+        let text = text_block(
             common.x + 10.0,
             common.y + fs + 8.0,
             text,
             fs,
             &text_fill(style),
-        )
+        );
+        view! { <g class=body_class>{text}</g> }
     });
-    view! { <g>{outline}{label}</g> }.into_any()
+    view! {
+        <g>
+            <path
+                d=d
+                transform=format!("translate({} {})", common.x, common.y)
+                class=outline_class
+                pathLength=path_length
+                style=paint
+                stroke-width=OUTLINE_STROKE_W
+                stroke-linejoin="round"
+                stroke-linecap="round"
+                stroke-dasharray=stroke_dasharray(style.stroke)
+            />
+            {label}
+        </g>
+    }
+    .into_any()
 }
 
 fn ink_svg(common: &ShapeCommon, style: &ShapeStyle, points: &[[f32; 3]]) -> AnyView {
@@ -460,11 +399,12 @@ fn ink_svg(common: &ShapeCommon, style: &ShapeStyle, points: &[[f32; 3]]) -> Any
     .into_any()
 }
 
-/// A `Shape::Path`: the contract-parsed `d`, translated to the shape origin
-/// (shape-local coordinates, the `Ink` convention). A `d` this build cannot
-/// parse renders nothing — never a guess.
+/// A `Shape::Path`: the contract-parsed `d` (sketched when the stroke asks
+/// for it), translated to the shape origin (shape-local coordinates, the
+/// `Ink` convention). A `d` this build cannot parse renders nothing — never
+/// a guess.
 fn path_svg(common: &ShapeCommon, style: &ShapeStyle, d: &str, closed: bool) -> AnyView {
-    let Some(d) = geo_path::path_d(d, closed) else {
+    let Some(cmds) = geo_path::path_cmds(d, closed) else {
         return ().into_any();
     };
     let fill = if closed {
@@ -473,12 +413,15 @@ fn path_svg(common: &ShapeCommon, style: &ShapeStyle, d: &str, closed: bool) -> 
         "none".to_string()
     };
     let paint = format!("stroke: {}; fill: {fill};", palette_var(&style.color));
+    let (outline_class, path_length, _) = reveal_hooks(common);
     view! {
         <g transform=format!("translate({} {})", common.x, common.y)>
             <path
-                d=d
+                d=outline_d(&cmds, style.stroke, &common.id)
+                class=outline_class
+                pathLength=path_length
                 style=paint
-                stroke-width=2
+                stroke-width=OUTLINE_STROKE_W
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 stroke-dasharray=stroke_dasharray(style.stroke)
@@ -617,57 +560,6 @@ fn html_placeholder_svg(common: &ShapeCommon, i18n: I18nCtx) -> AnyView {
     .into_any()
 }
 
-/// One rendered arrow cap — the same value the export serializer draws, so
-/// the live view and the PNG agree on every head kind.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum HeadMark {
-    /// `points=`; `filled` paints it in the stroke color, else outlined.
-    Polygon { points: String, filled: bool },
-    Circle { cx: f64, cy: f64, r: f64 },
-    Line { x1: f64, y1: f64, x2: f64, y2: f64 },
-}
-
-/// The cap at `end` of an arrow coming from `start`, for `kind`. `None` for
-/// [`ArrowHead::None`] and for a degenerate (zero-length) arrow — the same
-/// NaN rule as [`arrow_head_points`]. For the start cap, call with the ends
-/// swapped. `pub(super)`: shared with the export serializer.
-#[must_use]
-pub(super) fn arrow_head_mark(
-    kind: ArrowHead,
-    start: (f64, f64),
-    end: (f64, f64),
-) -> Option<HeadMark> {
-    let (dx, dy) = (end.0 - start.0, end.1 - start.1);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < 1e-6 {
-        return None;
-    }
-    let (ux, uy) = (dx / len, dy / len);
-    let (px, py) = (-uy, ux);
-    Some(match kind {
-        ArrowHead::None => return None,
-        ArrowHead::Arrow => HeadMark::Polygon {
-            points: arrow_head_points(start, end),
-            filled: true,
-        },
-        ArrowHead::Triangle => HeadMark::Polygon {
-            points: arrow_head_points(start, end),
-            filled: false,
-        },
-        ArrowHead::Dot => HeadMark::Circle {
-            cx: end.0,
-            cy: end.1,
-            r: ARROW_DOT_RADIUS,
-        },
-        ArrowHead::Bar => HeadMark::Line {
-            x1: end.0 + px * ARROW_HEAD_HALF,
-            y1: end.1 + py * ARROW_HEAD_HALF,
-            x2: end.0 - px * ARROW_HEAD_HALF,
-            y2: end.1 - py * ARROW_HEAD_HALF,
-        },
-    })
-}
-
 fn head_mark_svg(mark: Option<HeadMark>, stroke: &str) -> AnyView {
     match mark {
         None => ().into_any(),
@@ -677,7 +569,7 @@ fn head_mark_svg(mark: Option<HeadMark>, stroke: &str) -> AnyView {
                 <polygon
                     points=points
                     style=format!("fill: {fill}; stroke: {stroke};")
-                    stroke-width=2
+                    stroke-width=OUTLINE_STROKE_W
                     stroke-linejoin="round"
                 />
             }
@@ -688,22 +580,32 @@ fn head_mark_svg(mark: Option<HeadMark>, stroke: &str) -> AnyView {
         }
         .into_any(),
         Some(HeadMark::Line { x1, y1, x2, y2 }) => view! {
-            <line x1=x1 y1=y1 x2=x2 y2=y2 style=format!("stroke: {stroke};") stroke-width=2 />
+            <line x1=x1 y1=y1 x2=x2 y2=y2 style=format!("stroke: {stroke};") stroke-width=OUTLINE_STROKE_W />
         }
         .into_any(),
     }
 }
 
-fn arrow_svg(
-    start: &ArrowEnd,
-    end: &ArrowEnd,
-    style: &ShapeStyle,
-    label: &str,
-    heads: (ArrowHead, ArrowHead),
-    canvas: CanvasState,
-) -> AnyView {
+fn arrow_svg(shape: &Shape, canvas: CanvasState) -> AnyView {
+    let Shape::Arrow {
+        common,
+        start,
+        end,
+        style,
+        label,
+        bend,
+        head_start,
+        head_end,
+    } = shape
+    else {
+        return ().into_any();
+    };
+    let bend = *bend;
     let stroke = palette_var(&style.color);
     let dash = stroke_dasharray(style.stroke);
+    let (outline_class, path_length, body_class) = reveal_hooks(common);
+    let stroke_kind = style.stroke;
+    let seed = common.id.clone();
     // Bound endpoints re-resolve whenever the document changes (the bound
     // shape may have moved), so the resolution reads the doc signal — but
     // only when a binding exists: an unbound arrow must not re-render on
@@ -712,51 +614,56 @@ fn arrow_svg(
     let has_binds = start.bind.is_some() || end.bind.is_some();
     let (start, end) = (start.clone(), end.clone());
     let raw = ((start.x, start.y), (end.x, end.y));
-    let ends: Memo<((f64, f64), (f64, f64))> = Memo::new(move |_| {
-        if !has_binds {
-            return raw;
-        }
-        canvas.doc.with(|d| {
-            let shapes = d.as_ref().map_or(&[][..], |d| d.shapes.as_slice());
-            resolve_arrow_ends(shapes, &start, &end)
-        })
+    let shaft: Memo<arrow_geom::Shaft> = Memo::new(move |_| {
+        let (a, b) = if has_binds {
+            canvas.doc.with(|d| {
+                let shapes = d.as_ref().map_or(&[][..], |d| d.shapes.as_slice());
+                arrow_geom::resolve_arrow_ends(shapes, &start, &end)
+            })
+        } else {
+            raw
+        };
+        arrow_geom::arrow_shaft(a, b, bend)
     });
     let label = label.to_string();
-    let (head_start, head_end) = heads;
+    let (head_start, head_end) = (*head_start, *head_end);
     let stroke_for_heads = stroke.clone();
     let stroke_for_label = stroke.clone();
     view! {
         <g>
-            <line
-                x1=move || ends.get().0.0
-                y1=move || ends.get().0.1
-                x2=move || ends.get().1.0
-                y2=move || ends.get().1.1
-                style=format!("stroke: {stroke};")
-                stroke-width=2
+            <path
+                d=move || shaft.with(|s| outline_d(&s.cmds, stroke_kind, &seed))
+                class=outline_class
+                pathLength=path_length
+                style=format!("stroke: {stroke}; fill: none;")
+                stroke-width=OUTLINE_STROKE_W
+                stroke-linecap="round"
+                stroke-linejoin="round"
                 stroke-dasharray=dash
             />
-            {move || {
-                let (s, e) = ends.get();
-                let stroke = stroke_for_heads.clone();
-                view! {
-                    {head_mark_svg(arrow_head_mark(head_end, s, e), &stroke)}
-                    {head_mark_svg(arrow_head_mark(head_start, e, s), &stroke)}
-                }
-            }}
-            {(!label.is_empty()).then(|| {
-                view! {
-                    <text
-                        x=move || (ends.get().0.0 + ends.get().1.0) / 2.0
-                        y=move || (ends.get().0.1 + ends.get().1.1) / 2.0 - 6.0
-                        text-anchor="middle"
-                        font-size=12
-                        style=format!("fill: {stroke_for_label}; user-select: none;")
-                    >
-                        {label}
-                    </text>
-                }
-            })}
+            <g class=body_class>
+                {move || {
+                    let s = shaft.get();
+                    let stroke = stroke_for_heads.clone();
+                    view! {
+                        {head_mark_svg(arrow_geom::arrow_head_mark(head_end, s.end_from, s.end), &stroke)}
+                        {head_mark_svg(arrow_geom::arrow_head_mark(head_start, s.start_from, s.start), &stroke)}
+                    }
+                }}
+                {(!label.is_empty()).then(|| {
+                    view! {
+                        <text
+                            x=move || shaft.with(|s| s.mid.0)
+                            y=move || shaft.with(|s| s.mid.1 - 6.0)
+                            text-anchor="middle"
+                            font-size=12
+                            style=format!("fill: {stroke_for_label}; user-select: none;")
+                        >
+                            {label}
+                        </text>
+                    }
+                })}
+            </g>
         </g>
     }
     .into_any()
@@ -1007,81 +914,19 @@ pub(super) fn HtmlFrameOverlay() -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_protocol::canvas::{parse_path_d, Ease, FracIndex, Reveal, RevealMode};
 
-    fn bbox(x: f64, y: f64, w: f64, h: f64) -> Bbox {
-        Bbox { x, y, w, h }
-    }
-
-    #[track_caller]
-    fn assert_close(got: (f64, f64), want: (f64, f64)) {
-        assert!(
-            (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
-            "got {got:?}, want {want:?}"
-        );
-    }
-
-    #[test]
-    fn arrow_anchor_lands_on_the_correct_edge_in_all_four_quadrants() {
-        // Box (0,0)–(100,60), center (50,30). Each target sits in a
-        // different quadrant relative to the center; the anchor must land on
-        // the boundary, on that quadrant's side.
-        let b = bbox(0.0, 0.0, 100.0, 60.0);
-        // NE, steep: exits the top edge, right half.
-        assert_close(arrow_anchor(b, (200.0, -120.0)), (80.0, 0.0));
-        // SE, shallow: exits the right edge, lower half.
-        assert_close(arrow_anchor(b, (250.0, 130.0)), (100.0, 55.0));
-        // SW, steep: exits the bottom edge, left half.
-        assert_close(arrow_anchor(b, (-150.0, 230.0)), (20.0, 60.0));
-        // NW, diagonal: exits the top edge, left half.
-        assert_close(arrow_anchor(b, (-50.0, -70.0)), (20.0, 0.0));
-    }
-
-    #[test]
-    fn arrow_anchor_degenerate_targets_answer_the_center() {
-        let b = bbox(0.0, 0.0, 100.0, 60.0);
-        assert_eq!(
-            arrow_anchor(b, (50.0, 30.0)),
-            (50.0, 30.0),
-            "toward = center"
-        );
-        let hairline = bbox(10.0, 10.0, 0.0, 0.0);
-        assert_eq!(arrow_anchor(hairline, (99.0, 99.0)), (10.0, 10.0));
-    }
-
-    #[test]
-    fn resolve_arrow_ends_follows_bound_shapes_and_falls_back_when_they_vanish() {
-        let target = Shape::Note {
-            common: ShapeCommon {
-                id: "n1".to_string(),
-                x: 200.0,
-                y: 0.0,
-                w: 100.0,
-                h: 60.0,
-                z: aleph_protocol::canvas::FracIndex::first(),
-                parent_id: None,
-                reveal: None,
-            },
-            style: ShapeStyle::default(),
-            text: String::new(),
-        };
-        let start = ArrowEnd {
+    fn common(id: &str, reveal: Option<Reveal>) -> ShapeCommon {
+        ShapeCommon {
+            id: id.to_string(),
             x: 0.0,
-            y: 30.0,
-            bind: None,
-        };
-        let end = ArrowEnd {
-            x: 210.0, // stale drawn coordinate — the binding overrides it
-            y: 10.0,
-            bind: Some("n1".to_string()),
-        };
-        let (s, e) = resolve_arrow_ends(std::slice::from_ref(&target), &start, &end);
-        assert_eq!(s, (0.0, 30.0), "an unbound end keeps its coordinates");
-        // The bound end sits on the shape's near edge, aimed at the start.
-        assert_close(e, (200.0, 30.0));
-        // The bound shape vanished (deleted by a broadcast): stored x/y is
-        // the documented fallback.
-        let (_, e) = resolve_arrow_ends(&[], &start, &end);
-        assert_eq!(e, (210.0, 10.0));
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+            z: FracIndex::first(),
+            parent_id: None,
+            reveal,
+        }
     }
 
     #[test]
@@ -1093,16 +938,53 @@ mod tests {
         assert!(cut.ends_with('…'));
     }
 
+    /// Dashed and dotted are dash arrays; solid AND sketch draw a
+    /// continuous stroke — sketch's look lives in the path data.
     #[test]
-    fn arrow_head_is_symmetric_and_empty_for_a_degenerate_arrow() {
+    fn stroke_kinds_map_to_dash_arrays_and_sketch_lives_in_the_path_data() {
+        assert_eq!(stroke_dasharray(StrokeKind::Solid), None);
+        assert_eq!(stroke_dasharray(StrokeKind::Sketch), None);
+        assert_eq!(stroke_dasharray(StrokeKind::Dashed), Some("8 6"));
+        assert_eq!(stroke_dasharray(StrokeKind::Dotted), Some("2 5"));
+        let cmds = geo_path::geo_cmds(GeoForm::Rect, 40.0, 20.0);
+        let clean = cmds_to_d(&cmds);
+        for kind in [StrokeKind::Solid, StrokeKind::Dashed, StrokeKind::Dotted] {
+            assert_eq!(outline_d(&cmds, kind, "s-1"), clean, "{kind:?}");
+        }
+        let sketched = outline_d(&cmds, StrokeKind::Sketch, "s-1");
+        assert_ne!(sketched, clean);
+        assert_eq!(sketched, sketch::sketch_d(&cmds, "s-1", OUTLINE_STROKE_W));
+        assert!(parse_path_d(&sketched).is_ok());
+    }
+
+    /// Reveal hooks exist only for a shape that reveals, and `pathLength`
+    /// only for the draw-on mode — the byte-identity of un-animated markup
+    /// rests on these three `None`s.
+    #[test]
+    fn reveal_hooks_are_absent_without_a_reveal_and_path_length_is_draw_only() {
+        assert_eq!(reveal_hooks(&common("a", None)), (None, None, None));
+        let draw = Reveal {
+            start_ms: 0,
+            duration_ms: 10,
+            ease: Ease::Linear,
+            mode: RevealMode::Draw,
+        };
         assert_eq!(
-            arrow_head_points((3.0, 4.0), (3.0, 4.0)),
-            "",
-            "a zero-length arrow must not emit NaN vertices"
+            reveal_hooks(&common("a", Some(draw))),
+            (
+                Some(reveal::OUTLINE_CLASS),
+                Some("1"),
+                Some(reveal::BODY_CLASS)
+            )
         );
-        // Horizontal arrow → barbs mirror across the shaft.
-        let pts = arrow_head_points((0.0, 0.0), (100.0, 0.0));
-        assert_eq!(pts, "100,0 88,5 88,-5");
+        let fade = Reveal {
+            mode: RevealMode::Fade,
+            ..draw
+        };
+        assert_eq!(
+            reveal_hooks(&common("a", Some(fade))),
+            (Some(reveal::OUTLINE_CLASS), None, Some(reveal::BODY_CLASS))
+        );
     }
 
     #[test]
@@ -1131,71 +1013,6 @@ mod tests {
             fill_css(&ShapeStyle { fill: true, ..hex }),
             "color-mix(in oklch, #123456 18%, transparent)"
         );
-    }
-
-    /// Dashed and dotted are dash arrays; solid AND sketch draw continuous
-    /// (sketch is solid until the synthesizer lands — module doc).
-    #[test]
-    fn stroke_kinds_map_to_dash_arrays_and_sketch_is_solid_for_now() {
-        assert_eq!(stroke_dasharray(StrokeKind::Solid), None);
-        assert_eq!(stroke_dasharray(StrokeKind::Sketch), None);
-        assert_eq!(stroke_dasharray(StrokeKind::Dashed), Some("8 6"));
-        assert_eq!(stroke_dasharray(StrokeKind::Dotted), Some("2 5"));
-    }
-
-    /// Every head kind yields its own mark (or none), and a degenerate arrow
-    /// yields none for every kind — the NaN rule of `arrow_head_points`.
-    #[test]
-    fn arrow_head_marks_cover_every_kind_and_vanish_when_degenerate() {
-        let (s, e) = ((0.0, 0.0), (100.0, 0.0));
-        assert_eq!(arrow_head_mark(ArrowHead::None, s, e), None);
-        assert_eq!(
-            arrow_head_mark(ArrowHead::Arrow, s, e),
-            Some(HeadMark::Polygon {
-                points: "100,0 88,5 88,-5".to_string(),
-                filled: true
-            })
-        );
-        assert_eq!(
-            arrow_head_mark(ArrowHead::Triangle, s, e),
-            Some(HeadMark::Polygon {
-                points: "100,0 88,5 88,-5".to_string(),
-                filled: false
-            })
-        );
-        assert_eq!(
-            arrow_head_mark(ArrowHead::Dot, s, e),
-            Some(HeadMark::Circle {
-                cx: 100.0,
-                cy: 0.0,
-                r: ARROW_DOT_RADIUS
-            })
-        );
-        assert_eq!(
-            arrow_head_mark(ArrowHead::Bar, s, e),
-            Some(HeadMark::Line {
-                x1: 100.0,
-                y1: 5.0,
-                x2: 100.0,
-                y2: -5.0
-            })
-        );
-        // The start cap is the same function with the ends swapped.
-        assert_eq!(
-            arrow_head_mark(ArrowHead::Arrow, e, s),
-            Some(HeadMark::Polygon {
-                points: "0,0 12,-5 12,5".to_string(),
-                filled: true
-            })
-        );
-        for kind in [
-            ArrowHead::Arrow,
-            ArrowHead::Triangle,
-            ArrowHead::Dot,
-            ArrowHead::Bar,
-        ] {
-            assert_eq!(arrow_head_mark(kind, s, s), None, "{kind:?}");
-        }
     }
 
     #[test]

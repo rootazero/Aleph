@@ -12,7 +12,7 @@
 //! the server must not know: which canvas this client is looking at, its
 //! camera, its active tool, and its in-flight error/conflict flags.
 
-use aleph_protocol::canvas::{CanvasDoc, CanvasEnvelope, CanvasOp, CanvasRow, GeoForm};
+use aleph_protocol::canvas::{CanvasDoc, CanvasEnvelope, CanvasOp, CanvasRow, GeoForm, ShapeStyle};
 use leptos::prelude::*;
 
 /// The optimistic `canvas.apply` batch currently on the wire.
@@ -110,6 +110,11 @@ pub struct CanvasState {
     pub selection: RwSignal<Vec<String>>,
     /// Active editor tool.
     pub tool: RwSignal<CanvasTool>,
+    /// The style every human-created shape is born with (color / fill /
+    /// size / stroke). Written ONLY by the toolbar's style panel
+    /// (`views/canvas/toolbar.rs`); read by the editor at the start of
+    /// each creation gesture. Per-device UI preference, never synced.
+    pub style: RwSignal<ShapeStyle>,
     /// Viewport camera. Per-device UI preference — never synced (spec §6).
     pub camera: RwSignal<Camera>,
     /// True while an optimistic apply has been refused with a revision
@@ -135,6 +140,7 @@ impl CanvasState {
             asset_base: RwSignal::new(None),
             selection: RwSignal::new(Vec::new()),
             tool: RwSignal::new(CanvasTool::default()),
+            style: RwSignal::new(ShapeStyle::default()),
             camera: RwSignal::new(Camera::default()),
             pending_conflict: RwSignal::new(false),
             inflight: RwSignal::new(None),

@@ -34,6 +34,7 @@
 //!    revision gap falls back to a whole-doc refetch.
 
 mod ai;
+mod arrow_geom;
 mod asset_ingest;
 mod decks;
 mod editor;
@@ -46,7 +47,9 @@ mod library;
 mod ops;
 mod present;
 mod reconcile;
+mod reveal;
 mod shape_view;
+mod sketch;
 mod text_edit;
 mod toolbar;
 mod viewport;

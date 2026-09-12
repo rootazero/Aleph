@@ -109,9 +109,10 @@ impl Bbox {
         let boxed = Self::from_corners((c.x, c.y), (c.x + c.w, c.y + c.h));
         match shape {
             Shape::Path { d, .. } => match geo_path::path_extent(d) {
-                Some((x0, y0, x1, y1)) => {
-                    boxed.union(Self::from_corners((c.x + x0, c.y + y0), (c.x + x1, c.y + y1)))
-                }
+                Some((x0, y0, x1, y1)) => boxed.union(Self::from_corners(
+                    (c.x + x0, c.y + y0),
+                    (c.x + x1, c.y + y1),
+                )),
                 None => boxed,
             },
             _ => boxed,
@@ -308,11 +309,18 @@ fn min_extent(mut b: Bbox) -> Bbox {
     b
 }
 
-/// The freshly created shape for a kind: default style, empty text, no
-/// parent. `z` is minted once per gesture (at `begin_create`) so the preview
-/// upserts keep replacing the same shape instead of stacking copies.
+/// The freshly created shape for a kind: the gesture's style (the toolbar's
+/// current `CanvasState::style`, captured at `begin_create`), empty text,
+/// no parent. `z` is minted once per gesture (at `begin_create`) so the
+/// preview upserts keep replacing the same shape instead of stacking copies.
 #[must_use]
-fn shape_for_create(kind: CreateKind, id: &str, z: &FracIndex, b: Bbox) -> Shape {
+fn shape_for_create(
+    kind: CreateKind,
+    id: &str,
+    z: &FracIndex,
+    b: Bbox,
+    style: &ShapeStyle,
+) -> Shape {
     let common = ShapeCommon {
         id: id.to_string(),
         x: b.x,
@@ -327,17 +335,17 @@ fn shape_for_create(kind: CreateKind, id: &str, z: &FracIndex, b: Bbox) -> Shape
         CreateKind::Geo(form) => Shape::Geo {
             common,
             form,
-            style: ShapeStyle::default(),
+            style: style.clone(),
             text: String::new(),
         },
         CreateKind::Note => Shape::Note {
             common,
-            style: ShapeStyle::default(),
+            style: style.clone(),
             text: String::new(),
         },
         CreateKind::Text => Shape::Text {
             common,
-            style: ShapeStyle::default(),
+            style: style.clone(),
             text: String::new(),
         },
         CreateKind::Frame => Shape::Frame {
@@ -353,7 +361,7 @@ fn shape_for_create(kind: CreateKind, id: &str, z: &FracIndex, b: Bbox) -> Shape
 /// to that origin — the wire contract of [`Shape::Ink`]. Total on empty
 /// input for defensiveness, though every producer seeds the press point.
 #[must_use]
-fn ink_shape(id: &str, z: &FracIndex, world_points: &[[f32; 3]]) -> Shape {
+fn ink_shape(id: &str, z: &FracIndex, world_points: &[[f32; 3]], style: &ShapeStyle) -> Shape {
     let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
     let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
     for p in world_points {
@@ -386,7 +394,7 @@ fn ink_shape(id: &str, z: &FracIndex, world_points: &[[f32; 3]]) -> Shape {
             parent_id: None,
             reveal: None,
         },
-        style: ShapeStyle::default(),
+        style: style.clone(),
         points,
     }
 }
@@ -401,6 +409,7 @@ fn arrow_shape(
     start_bind: Option<String>,
     end: (f64, f64),
     end_bind: Option<String>,
+    style: &ShapeStyle,
 ) -> Shape {
     let b = Bbox::from_corners(start, end);
     Shape::Arrow {
@@ -424,7 +433,7 @@ fn arrow_shape(
             y: end.1,
             bind: end_bind,
         },
-        style: ShapeStyle::default(),
+        style: style.clone(),
         label: String::new(),
         bend: 0.0,
         head_start: ArrowHead::None,
@@ -591,11 +600,15 @@ pub(super) enum Drag {
         /// Minimum world distance between successive points — the editor
         /// passes 2 screen px ÷ zoom.
         min_dist: f64,
+        /// The toolbar style captured at the press — every preview and the
+        /// commit are born with it.
+        style: ShapeStyle,
     },
     /// A two-point arrow being dragged out.
     ArrowDraft {
         id: String,
         z: FracIndex,
+        style: ShapeStyle,
         start: (f64, f64),
         /// Shape under the press, bound as the start endpoint.
         start_bind: Option<String>,
@@ -613,6 +626,7 @@ pub(super) enum Drag {
         id: String,
         /// Fresh z above the document top, minted once with the id.
         z: FracIndex,
+        style: ShapeStyle,
         origin: (f64, f64),
         moved: bool,
     },
@@ -758,7 +772,9 @@ impl InteractionState {
 
     /// Pointer down with a creation tool ([`create_kind`] `Some`). `id` is
     /// minted by the caller (`id_mint` is wasm-only; tests inject literals),
-    /// `shapes` seeds the fresh z above the document top.
+    /// `shapes` seeds the fresh z above the document top; `style` is the
+    /// toolbar's current style (the editor reads `CanvasState::style` once
+    /// per gesture — the machine stays DOM- and signal-free).
     ///
     /// Clears the selection — the gesture's focus is the shape being born,
     /// and a stale outline riding over the preview would fight it visually.
@@ -769,12 +785,14 @@ impl InteractionState {
         world: (f64, f64),
         id: String,
         shapes: &[Shape],
+        style: ShapeStyle,
     ) -> Vec<Effect> {
         let top = shapes.iter().map(|s| s.common().z.clone()).max();
         self.drag = Drag::Create {
             kind,
             id,
             z: FracIndex::between(top.as_ref(), None),
+            style,
             origin: world,
             moved: false,
         };
@@ -794,16 +812,18 @@ impl InteractionState {
         id: String,
         shapes: &[Shape],
         min_dist: f64,
+        style: ShapeStyle,
     ) -> Vec<Effect> {
         let top = shapes.iter().map(|s| s.common().z.clone()).max();
         let z = FracIndex::between(top.as_ref(), None);
         let points = vec![[world.0 as f32, world.1 as f32, pressure]];
-        let preview = ink_shape(&id, &z, &points);
+        let preview = ink_shape(&id, &z, &points, &style);
         self.drag = Drag::Drawing {
             id,
             z,
             points,
             min_dist,
+            style,
         };
         vec![
             Effect::SetSelection(Vec::new()),
@@ -821,6 +841,7 @@ impl InteractionState {
             z,
             points,
             min_dist,
+            style,
         } = &mut self.drag
         else {
             return None;
@@ -833,7 +854,7 @@ impl InteractionState {
             return Some(Vec::new());
         }
         points.push([world.0 as f32, world.1 as f32, pressure]);
-        Some(vec![Effect::Preview(vec![ink_shape(id, z, points)])])
+        Some(vec![Effect::Preview(vec![ink_shape(id, z, points, style)])])
     }
 
     /// Pointer down with the Arrow tool. `hit` is the shape under the press
@@ -845,11 +866,13 @@ impl InteractionState {
         hit: Option<&Shape>,
         id: String,
         shapes: &[Shape],
+        style: ShapeStyle,
     ) -> Vec<Effect> {
         let top = shapes.iter().map(|s| s.common().z.clone()).max();
         self.drag = Drag::ArrowDraft {
             id,
             z: FracIndex::between(top.as_ref(), None),
+            style,
             start: world,
             start_bind: hit.map(|s| s.id().to_string()),
             hover: None,
@@ -887,6 +910,7 @@ impl InteractionState {
             Drag::ArrowDraft {
                 id,
                 z,
+                style,
                 start,
                 start_bind,
                 hover,
@@ -905,12 +929,14 @@ impl InteractionState {
                     start_bind.clone(),
                     world,
                     None,
+                    style,
                 )])]
             }
             Drag::Create {
                 kind,
                 id,
                 z,
+                style,
                 origin,
                 moved,
             } => {
@@ -920,7 +946,9 @@ impl InteractionState {
                 }
                 *moved = true;
                 let b = min_extent(Bbox::from_corners(*origin, world));
-                vec![Effect::Preview(vec![shape_for_create(*kind, id, z, b)])]
+                vec![Effect::Preview(vec![shape_for_create(
+                    *kind, id, z, b, style,
+                )])]
             }
             Drag::Move {
                 start,
@@ -961,10 +989,16 @@ impl InteractionState {
     pub(super) fn pointer_up(&mut self, world: (f64, f64), shapes: &[Shape]) -> Vec<Effect> {
         match std::mem::take(&mut self.drag) {
             Drag::None => Vec::new(),
-            Drag::Drawing { id, z, points, .. } => {
+            Drag::Drawing {
+                id,
+                z,
+                points,
+                style,
+                ..
+            } => {
                 // Commit whatever accumulated — a tap is a dot. No selection
                 // change: the Draw tool stays armed, strokes come in batches.
-                let shape = ink_shape(&id, &z, &points);
+                let shape = ink_shape(&id, &z, &points, &style);
                 vec![Effect::Commit {
                     redo: vec![CanvasOp::UpsertShape { shape }],
                     undo: vec![CanvasOp::DeleteShape { id }],
@@ -973,6 +1007,7 @@ impl InteractionState {
             Drag::ArrowDraft {
                 id,
                 z,
+                style,
                 start,
                 start_bind,
                 moved,
@@ -983,7 +1018,7 @@ impl InteractionState {
                     return Vec::new();
                 }
                 let end_bind = bind_target(shapes, world, &id).map(|s| s.id().to_string());
-                let shape = arrow_shape(&id, &z, start, start_bind, world, end_bind);
+                let shape = arrow_shape(&id, &z, start, start_bind, world, end_bind, &style);
                 vec![
                     Effect::SetSelection(vec![id.clone()]),
                     Effect::Commit {
@@ -996,6 +1031,7 @@ impl InteractionState {
                 kind,
                 id,
                 z,
+                style,
                 origin,
                 moved,
             } => {
@@ -1013,7 +1049,7 @@ impl InteractionState {
                         h,
                     }
                 };
-                let shape = shape_for_create(kind, &id, &z, b);
+                let shape = shape_for_create(kind, &id, &z, b, &style);
                 let mut effects = vec![Effect::SetSelection(vec![id.clone()])];
                 if kind == CreateKind::Text {
                     // Handed to the text editor uncommitted: an empty text
@@ -1831,6 +1867,7 @@ mod tests {
             (100.0, 100.0),
             "fresh".to_string(),
             &shapes,
+            ShapeStyle::default(),
         );
         assert_eq!(
             ids(&effects),
@@ -1882,10 +1919,75 @@ mod tests {
         assert!(!m.is_dragging());
     }
 
+    /// Every human creation gesture — box, ink, arrow — is born with the
+    /// style handed to `begin_*` (the toolbar's), previews included: a
+    /// gesture that previewed in one style and committed in another would
+    /// flash on release.
+    #[test]
+    fn creation_gestures_honor_a_non_default_style_in_preview_and_commit() {
+        use aleph_protocol::canvas::{GeoForm, SizeKind, StrokeKind};
+        let style = ShapeStyle {
+            color: "violet".to_string(),
+            fill: true,
+            size: SizeKind::Large,
+            stroke: StrokeKind::Sketch,
+        };
+        let style_of = |effects: &[Effect]| -> Vec<ShapeStyle> {
+            effects
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::Preview(shapes) => shapes.first().cloned(),
+                    Effect::Commit { redo, .. } => match &redo[0] {
+                        CanvasOp::UpsertShape { shape } => Some(shape.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .map(|s| match s {
+                    Shape::Geo { style, .. }
+                    | Shape::Ink { style, .. }
+                    | Shape::Arrow { style, .. }
+                    | Shape::Note { style, .. } => style,
+                    other => panic!("unexpected {other:?}"),
+                })
+                .collect()
+        };
+
+        let mut m = InteractionState::new();
+        let _ = m.begin_create(
+            CreateKind::Geo(GeoForm::Pill),
+            (0.0, 0.0),
+            "g".to_string(),
+            &[],
+            style.clone(),
+        );
+        let preview = m.pointer_move((50.0, 50.0), &[], 2.0);
+        let commit = m.pointer_up((50.0, 50.0), &[]);
+        assert_eq!(style_of(&preview), vec![style.clone()], "geo preview");
+        assert_eq!(style_of(&commit), vec![style.clone()], "geo commit");
+
+        let preview = m.begin_draw((0.0, 0.0), 0.5, "k".to_string(), &[], 1.0, style.clone());
+        let commit = m.pointer_up((30.0, 30.0), &[]);
+        assert_eq!(style_of(&preview), vec![style.clone()], "ink press preview");
+        assert_eq!(style_of(&commit), vec![style.clone()], "ink commit");
+
+        let _ = m.begin_arrow((0.0, 0.0), None, "a".to_string(), &[], style.clone());
+        let preview = m.pointer_move((40.0, 0.0), &[], 2.0);
+        let commit = m.pointer_up((40.0, 0.0), &[]);
+        assert_eq!(style_of(&preview), vec![style.clone()], "arrow preview");
+        assert_eq!(style_of(&commit), vec![style], "arrow commit");
+    }
+
     #[test]
     fn a_click_with_a_creation_tool_lands_a_default_sized_shape_centered_on_the_press() {
         let mut m = InteractionState::new();
-        let _ = m.begin_create(CreateKind::Note, (50.0, 60.0), "n".to_string(), &[]);
+        let _ = m.begin_create(
+            CreateKind::Note,
+            (50.0, 60.0),
+            "n".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         // Jitter inside the slop, then release: still a click.
         assert!(m.pointer_move((51.0, 59.0), &[], 3.0).is_empty());
         let effects = m.pointer_up((51.0, 59.0), &[]);
@@ -1908,7 +2010,13 @@ mod tests {
     #[test]
     fn the_text_tool_hands_off_to_the_text_editor_instead_of_committing() {
         let mut m = InteractionState::new();
-        let _ = m.begin_create(CreateKind::Text, (10.0, 10.0), "t1".to_string(), &[]);
+        let _ = m.begin_create(
+            CreateKind::Text,
+            (10.0, 10.0),
+            "t1".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         let effects = m.pointer_up((10.0, 10.0), &[]);
         assert!(
             !effects.iter().any(|e| matches!(e, Effect::Commit { .. })),
@@ -1932,7 +2040,13 @@ mod tests {
     #[test]
     fn esc_discards_a_creation_preview_without_committing() {
         let mut m = InteractionState::new();
-        let _ = m.begin_create(CreateKind::Frame, (0.0, 0.0), "f1".to_string(), &[]);
+        let _ = m.begin_create(
+            CreateKind::Frame,
+            (0.0, 0.0),
+            "f1".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         let _ = m.pointer_move((300.0, 200.0), &[], 0.0);
         let effects = m.cancel();
         assert_eq!(
@@ -1946,7 +2060,13 @@ mod tests {
 
         // …and canceling before any movement has nothing to discard.
         let mut m = InteractionState::new();
-        let _ = m.begin_create(CreateKind::Note, (0.0, 0.0), "n1".to_string(), &[]);
+        let _ = m.begin_create(
+            CreateKind::Note,
+            (0.0, 0.0),
+            "n1".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         assert!(m.cancel().is_empty());
     }
 
@@ -1955,7 +2075,14 @@ mod tests {
     #[test]
     fn draw_decimates_close_points_and_normalizes_the_stroke_to_its_bbox() {
         let mut m = InteractionState::new();
-        let effects = m.begin_draw((10.0, 20.0), 0.5, "ink1".to_string(), &[], 2.0);
+        let effects = m.begin_draw(
+            (10.0, 20.0),
+            0.5,
+            "ink1".to_string(),
+            &[],
+            2.0,
+            ShapeStyle::default(),
+        );
         assert_eq!(
             ids(&effects),
             Vec::<String>::new(),
@@ -2021,7 +2148,14 @@ mod tests {
         let mut m = InteractionState::new();
         assert!(m.draw_move((0.0, 0.0), 0.5).is_none(), "no stroke active");
 
-        let _ = m.begin_draw((0.0, 0.0), 0.5, "ink1".to_string(), &[], 2.0);
+        let _ = m.begin_draw(
+            (0.0, 0.0),
+            0.5,
+            "ink1".to_string(),
+            &[],
+            2.0,
+            ShapeStyle::default(),
+        );
         let effects = m.cancel();
         assert_eq!(
             effects,
@@ -2046,7 +2180,13 @@ mod tests {
             note_at("b", 300.0, 0.0, 100.0, 100.0, "V"),
         ];
         let mut m = InteractionState::new();
-        let effects = m.begin_arrow((50.0, 50.0), Some(&shapes[0]), "ar1".to_string(), &shapes);
+        let effects = m.begin_arrow(
+            (50.0, 50.0),
+            Some(&shapes[0]),
+            "ar1".to_string(),
+            &shapes,
+            ShapeStyle::default(),
+        );
         assert_eq!(ids(&effects), Vec::<String>::new());
 
         // Over empty canvas: preview, no hover target.
@@ -2105,13 +2245,25 @@ mod tests {
     #[test]
     fn an_arrow_click_commits_nothing_and_esc_discards_a_moved_draft() {
         let mut m = InteractionState::new();
-        let _ = m.begin_arrow((10.0, 10.0), None, "ar1".to_string(), &[]);
+        let _ = m.begin_arrow(
+            (10.0, 10.0),
+            None,
+            "ar1".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         assert!(
             m.pointer_up((10.0, 10.0), &[]).is_empty(),
             "an arrow needs a drag — a click creates nothing"
         );
 
-        let _ = m.begin_arrow((10.0, 10.0), None, "ar2".to_string(), &[]);
+        let _ = m.begin_arrow(
+            (10.0, 10.0),
+            None,
+            "ar2".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         let _ = m.pointer_move((200.0, 200.0), &[], 2.0);
         assert_eq!(
             m.cancel(),
@@ -2119,14 +2271,26 @@ mod tests {
         );
         // …but an unmoved draft previewed nothing, so there is nothing to
         // discard.
-        let _ = m.begin_arrow((10.0, 10.0), None, "ar3".to_string(), &[]);
+        let _ = m.begin_arrow(
+            (10.0, 10.0),
+            None,
+            "ar3".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         assert!(m.cancel().is_empty());
     }
 
     #[test]
     fn a_zero_extent_creation_drag_is_clamped_to_a_visible_shape() {
         let mut m = InteractionState::new();
-        let _ = m.begin_create(CreateKind::Note, (0.0, 0.0), "n1".to_string(), &[]);
+        let _ = m.begin_create(
+            CreateKind::Note,
+            (0.0, 0.0),
+            "n1".to_string(),
+            &[],
+            ShapeStyle::default(),
+        );
         // A perfectly horizontal drag: height would be zero.
         let _ = m.pointer_move((50.0, 0.0), &[], 2.0);
         let effects = m.pointer_up((50.0, 0.0), &[]);
