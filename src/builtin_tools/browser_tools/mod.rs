@@ -1052,65 +1052,15 @@ mod tests {
 /// own source, so a 27th browser tool reds by name here rather than silently
 /// escaping the census (`no_catalog_entry_inlines_its_description` in
 /// `builtin_registry::definitions` is the precedent for this shape).
-/// The three verbs whose `DESCRIPTION` names which drivers serve them.
 ///
-/// `browser_cookies`, `browser_session` and `browser_pdf` each said "managed
-/// profiles only" — catalog bytes the model reads *before* it decides whether a
-/// call is worth making. Task 12 gave `pdf` to the CDP backend and Task 13 gave
-/// it `cookies`, `save_state` and `load_state`, so all three sentences became
-/// false in the expensive direction: a refusal is believed rather than tested
-/// (判据 §17).
-///
-/// **Nothing would have gone red**, which is why this is a census and not three
-/// edits. It is the same class the `browser_click` `DESCRIPTION` guard closes
-/// one door over, and the rule drawn from that round — *when your own change
-/// makes a model-facing sentence false, sweep for the others it falsified* —
-/// needs something that can fail.
-#[cfg(test)]
-mod driver_claim_census {
-    use crate::tools::AlephTool;
-
-    #[test]
-    fn no_browser_description_claims_a_verb_is_managed_only() {
-        let banned = "managed profiles only";
-        let faces: [(&str, &str); 3] = [
-            (
-                super::cookies::BrowserCookiesTool::NAME,
-                super::cookies::BrowserCookiesTool::DESCRIPTION,
-            ),
-            (
-                super::session::BrowserSessionTool::NAME,
-                super::session::BrowserSessionTool::DESCRIPTION,
-            ),
-            (
-                super::pdf::BrowserPdfTool::NAME,
-                super::pdf::BrowserPdfTool::DESCRIPTION,
-            ),
-        ];
-
-        // The control, and it is not optional: this asserts a NEGATIVE over a
-        // corpus that no longer holds a positive case, so a recogniser that
-        // stopped matching would look exactly like success (判据 §3).
-        assert!(
-            format!("— {banned} (e.g. profile='default')").contains(banned),
-            "the recogniser cannot see the sentence it exists to find"
-        );
-
-        for (name, desc) in faces {
-            assert!(
-                !desc.contains(banned),
-                "{name}'s DESCRIPTION still tells the model this verb is \
-                 managed-only, and the CDP backend implements it: {desc}"
-            );
-            assert!(
-                desc.contains("cdp"),
-                "{name}'s DESCRIPTION names which profiles serve it, so it has \
-                 to name the cdp one: {desc}"
-            );
-        }
-    }
-}
-
+/// ⚠️ This doc block describes **this** module. Task 13's fix round 1 appended
+/// a second census's paragraphs to the end of it, which re-pointed all 19 lines
+/// at that census and left this one undocumented — and the sentence above about
+/// re-deriving the `pub mod` list became a **coverage claim about a module that
+/// re-derives nothing**. Second occurrence on this branch (Task 12's `lag_note`
+/// was inserted between `wait_for_load`'s doc and its body). The mechanical
+/// check: **a doc block that names an item its own item does not contain is a
+/// stolen one.**
 #[cfg(test)]
 mod approval_wiring_census {
     /// `(module name, module source)` for every file under this directory.
@@ -1118,7 +1068,7 @@ mod approval_wiring_census {
     /// `include_str!` needs literal paths, so this list cannot be globbed —
     /// which is precisely why the test below re-derives the expected set from
     /// `mod.rs`'s `pub mod` declarations and fails on any name missing here.
-    const SOURCES: &[(&str, &str)] = &[
+    pub(super) const SOURCES: &[(&str, &str)] = &[
         ("exec", include_str!("exec.rs")),
         ("click", include_str!("click.rs")),
         ("console", include_str!("console.rs")),
@@ -1251,5 +1201,107 @@ mod approval_wiring_census {
              one, so their gate is inert in production (it will only ever fire in their own \
              unit tests): {ungated:?}"
         );
+    }
+}
+
+/// Source-level census: no browser tool tells the model a verb is
+/// "managed profiles only" when the CDP backend serves it.
+///
+/// `browser_cookies`, `browser_session` and `browser_pdf` each said exactly
+/// that — catalog bytes the model reads *before* deciding whether a call is
+/// worth making. Task 12 gave `pdf` to the CDP backend and Task 13 gave it
+/// `cookies`, `save_state` and `load_state`, so all three sentences became
+/// false in the expensive direction: a refusal is believed rather than tested
+/// (判据 §17), so nothing would ever report that the restriction was wrong.
+///
+/// **Nothing would have gone red**, which is why this is a census and not three
+/// edits — the rule it enforces being *when your own change makes a
+/// model-facing sentence false, sweep for the others it falsified.*
+///
+/// Scanned over [`approval_wiring_census::SOURCES`] — the module list that
+/// census already re-derives from `mod.rs`'s own `pub mod` declarations —
+/// rather than over a hand-written list of the three tools that had the
+/// problem. A hand list covers the world as it was written (判据 §5); the first
+/// draft of this census was one, and its own doc block was then accidentally
+/// re-pointed at the derived census two items down, so a reader was told it had
+/// coverage it did not have. Sharing the derived list is the cheaper fix and it
+/// makes the census complete: a 27th tool writing the phrase reds here.
+#[cfg(test)]
+mod driver_claim_census {
+    use crate::tools::AlephTool;
+
+    /// The claim is about a sentence a MODEL reads, so the scan runs over code
+    /// with comments stripped and string payloads kept — a doc comment
+    /// discussing the phrase (this module's own, for one) is not a tool telling
+    /// the model anything.
+    fn managed_only_hits(src: &str, banned: &str) -> Vec<String> {
+        crate::utils::source_scan::code_keeping_literals(src)
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.contains(banned))
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn no_browser_tool_claims_a_cdp_served_verb_is_managed_only() {
+        // Assembled, not written whole: this test lives in `mod.rs` and
+        // `mod.rs` is not in SOURCES, but the needle is assembled anyway so a
+        // future reader who adds it cannot make the census permanently red for
+        // a reason the assertion does not name (判据 §2's 恒红 face).
+        let banned = concat!("managed profiles", " only");
+
+        // The control. This asserts a NEGATIVE over a corpus that no longer
+        // holds a positive case, so a recogniser that silently stopped matching
+        // would look exactly like success, forever (判据 §3).
+        assert_eq!(
+            managed_only_hits(
+                &format!("const D: &str = \"Do a thing — {banned} (e.g. x)\";"),
+                banned
+            )
+            .len(),
+            1,
+            "the recogniser cannot see the sentence it exists to find"
+        );
+        assert!(
+            managed_only_hits(&format!("/// prose about {banned} in a doc\n"), banned).is_empty(),
+            "prose ABOUT the phrase is not a tool saying it to a model"
+        );
+
+        for (name, src) in super::approval_wiring_census::SOURCES {
+            let hits = managed_only_hits(src, banned);
+            assert!(
+                hits.is_empty(),
+                "{name} still tells the model a verb is managed-only. The CDP \
+                 backend serves cookies, save_state, load_state and pdf, so \
+                 name the drivers that do serve it: {hits:?}"
+            );
+        }
+
+        // The positive half: the three that were corrected must NAME the driver
+        // they gained, not merely drop the false clause. Explicit rather than
+        // derived, because "which tools describe their driver split" is a
+        // judgement about three specific sentences and not a property of the
+        // directory.
+        for (name, desc) in [
+            (
+                super::cookies::BrowserCookiesTool::NAME,
+                super::cookies::BrowserCookiesTool::DESCRIPTION,
+            ),
+            (
+                super::session::BrowserSessionTool::NAME,
+                super::session::BrowserSessionTool::DESCRIPTION,
+            ),
+            (
+                super::pdf::BrowserPdfTool::NAME,
+                super::pdf::BrowserPdfTool::DESCRIPTION,
+            ),
+        ] {
+            assert!(
+                desc.contains("cdp"),
+                "{name}'s DESCRIPTION names which profiles serve it, so it has \
+                 to name the cdp one: {desc}"
+            );
+        }
     }
 }
