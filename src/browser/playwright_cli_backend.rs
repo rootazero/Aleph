@@ -392,10 +392,17 @@ impl BrowserBackend for PlaywrightCliBackend {
         } else {
             output.stdout.clone()
         };
+        let ref_count = snapshot_text
+            .matches(crate::browser::types::REF_TOKEN)
+            .count();
         Ok(SnapshotOutput {
+            // An absent page header parses to an empty string; that is "the CLI
+            // told us nothing", not "the page has no URL".
+            page_url: Some(meta.url).filter(|s| !s.is_empty()),
+            page_title: Some(meta.title).filter(|s| !s.is_empty()),
+            ref_count,
+            state_json: None,
             snapshot_text,
-            page_url: meta.url,
-            page_title: meta.title,
         })
     }
 

@@ -1,4 +1,4 @@
-# engine=chromium gen=7 url="https://example.test/hn" viewport=1280x800 scroll=0,0 doc=1280x1400 no_box=2/11 fetch=142ms
+# engine=chromium gen=7 url="https://example.test/hn" viewport=1280x800 scroll=0,0 doc=1280x1400 no_box=2/11 unreached_frames=0 fetch=142ms
 - banner
   - link "Hacker News" [ref=e1] @130,11 83x15 /url: "https://news.ycombinator.com/"
   - button "Submit query" [disabled] [ref=e2] @900,10 80x20

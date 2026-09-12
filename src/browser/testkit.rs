@@ -251,9 +251,14 @@ impl BrowserBackend for FakeBackend {
     async fn snapshot(&self, _tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
         self.record("snapshot".into())?;
         Ok(SnapshotOutput {
+            ref_count: self
+                .snapshot_text
+                .matches(crate::browser::types::REF_TOKEN)
+                .count(),
             snapshot_text: self.snapshot_text.clone(),
-            page_url: "https://example.com".into(),
-            page_title: "Example".into(),
+            page_url: Some("https://example.com".into()),
+            page_title: Some("Example".into()),
+            state_json: None,
         })
     }
 

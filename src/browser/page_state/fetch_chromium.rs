@@ -13,11 +13,16 @@
 //! renderer**. A cross-origin iframe is a separate target with its own session:
 //! measured against real Chrome, the parent session's call returns one document
 //! and `Page.getFrameTree` on that session does not even list the child
-//! (ruling R57). So this module has two entry points that share one arithmetic:
-//! [`parse_snapshot`] for a single session, and [`stitch_snapshots`] for a
-//! parent plus the child sessions someone else enumerated. Both place a child
-//! document by its owner element's own rect; the same-origin path reads both
-//! sides out of one capture and the cross-origin path out of two.
+//! (ruling R57).
+//!
+//! So this module has one **I/O** entry point and two **pure** ones, and they
+//! share one arithmetic. [`fetch_chromium`] is the whole-page fetch: it turns
+//! auto-attach on, captures each renderer it finds, and hands the pieces to
+//! [`stitch_snapshots`]. [`parse_snapshot`] is one session's view — honest
+//! about what a single renderer can see, and defined as [`stitch_snapshots`]
+//! with no children. Both place a child document by its owner element's own
+//! rect; the same-origin path reads both sides out of one capture and the
+//! cross-origin path out of two.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -87,22 +92,31 @@ pub struct ChildCapture<'a> {
     pub raw: &'a serde_json::Value,
 }
 
-/// Capture the page as this session can see it.
+/// One session's raw capture: everything a `DOMSnapshot` needs and nothing
+/// interpreted.
 ///
-/// Three calls: layout metrics for the viewport, the frame tree for the loader
-/// ids, and the snapshot itself. The viewport is read from
-/// `Page.getLayoutMetrics` and NOT from `documents[0].contentWidth/Height`,
-/// which reports the same fact — one source, so the two cannot drift (判据 §1).
+/// The unit both entry points below assemble, so "how one renderer is
+/// captured" has exactly one derivation. A parent and a child are captured the
+/// same way; only what is done with the pieces differs (判据 §16).
+struct SessionCapture {
+    viewport: Viewport,
+    /// This session's frame tree, flattened to `frame id → loader id`. Only the
+    /// PAGE's copy names the main frame; a child's names its own subtree, and
+    /// the two are merged into one map before either is read.
+    loaders: HashMap<String, String>,
+    raw: serde_json::Value,
+}
+
+/// Capture one session: layout metrics for the viewport, the frame tree for the
+/// loader ids, and the snapshot itself.
 ///
-/// ⚠️ **Single session.** On a page with a cross-origin iframe, the `<iframe>`
-/// element is in the result with its box, `src` and title, and its content is
-/// not — see the module doc. Reaching that content needs `Target.setAutoAttach`
-/// and one `captureSnapshot` per child session (Task 12), handed to
-/// [`stitch_snapshots`] together with each child's owner element.
-pub async fn fetch_chromium(
+/// The viewport is read from `Page.getLayoutMetrics` and NOT from
+/// `documents[0].contentWidth/Height`, which reports the same fact — one
+/// source, so the two cannot drift (判据 §1).
+async fn capture_session(
     conn: &CdpConnection,
     session: &SessionId,
-) -> Result<RawDom, BrowserError> {
+) -> Result<SessionCapture, BrowserError> {
     let metrics = aleph_cdp::methods::page::get_layout_metrics(conn, Some(session))
         .await
         .map_err(cdp_err)?;
@@ -130,7 +144,202 @@ pub async fn fetch_chromium(
     .await
     .map_err(cdp_err)?;
 
-    parse_snapshot(&snapshot.raw, viewport, &loaders)
+    Ok(SessionCapture {
+        viewport,
+        loaders,
+        raw: snapshot.raw,
+    })
+}
+
+/// The `type` an out-of-process frame's target reports.
+///
+/// Measured on Chrome 152 with `--site-per-process`
+/// (`…-evidence/probes/t0-u4b-enumeration.mjs`): the cross-origin child of the T0 probe page comes
+/// back from `Target.getTargets` as `type: "iframe"`.
+const IFRAME_TARGET_TYPE: &str = "iframe";
+
+/// Capture the whole page, spanning every renderer it is spread across.
+///
+/// # Why this is more than one `captureSnapshot`
+///
+/// `captureSnapshot` covers every frame **in the calling session's renderer**. A cross-origin
+/// iframe is a separate target with its own session: measured against real Chrome, the parent's
+/// call returns one document and `Page.getFrameTree` on the parent does not even list the child
+/// (ruling R57, re-confirmed by `t0-u4b-enumeration.mjs`: `childFrames: []`). So a page with an
+/// OOPIF needs one `captureSnapshot` per child session, and one `DOM.getFrameOwner` per child on
+/// the PARENT session to learn which element the child sits inside. [`stitch_snapshots`] does the
+/// placing.
+///
+/// # The enumeration is bounded by the page's own accounting
+///
+/// The parent capture is parsed first, on its own. Its [`RawDom::unreached_frames`] is the list of
+/// `<iframe>`/`<frame>` elements with no content document — i.e. exactly the frames that must have
+/// come from another renderer. When that list is empty the page lives in one renderer and this
+/// function stops there, paying no extra round trip at all.
+///
+/// # It is request/response, with no event subscription anywhere
+///
+/// Ruling R57 offered two mechanisms — `Target.setAutoAttach`, or `Target.getTargets` filtered to
+/// `type == "iframe"` — and Task 0 measured only the first, in the shape where auto-attach is
+/// armed BEFORE the navigation that creates the child. A snapshot verb never has that shape: the
+/// page is already loaded when it is called. `t0-u4b-enumeration.mjs` measured the rest, after
+/// load, and the second mechanism needs strictly fewer things to be true:
+///
+/// * `Target.getTargets` lists the OOPIF under its **default** filter, so the `filter` parameter
+///   (Chrome 107+) is not depended on;
+/// * `Target.attachToTarget{flatten:true}` answers with the child's `sessionId` **in its own
+///   reply**, so nothing waits on `Target.attachedToTarget` and no event ordering is assumed;
+/// * `Target.detachFromTarget` releases it again, so a capture does not leak one session per
+///   out-of-process frame per snapshot.
+///
+/// Auto-attach would have worked too — it re-announces existing children, and `false` really does
+/// detach them — but it is sticky browser state that has to be toggled off and on to be read
+/// twice, and reading it means a timing window. None of that buys anything here.
+///
+/// # Starting from a browser-wide enumeration is safe because the join IS the membership test
+///
+/// `Target.getTargets` is browser-wide: it lists iframe targets belonging to every page, not just
+/// this one. `DOM.getFrameOwner` on **this** session answers a frame it owns with the owning
+/// element's `backendNodeId` and refuses one it does not (measured: `"Frame with the given id was
+/// not found."`). So the call that places a child is the same call that decides the child is ours
+/// — one derivation, not a filter and a join free to disagree (判据 §16).
+///
+/// ⚠️ This is the ONE place `Target.getTargets` may be consulted, and it is not a licence to use
+/// it for **tab** discovery: obscura answers that call with an empty list on a live browser (R13),
+/// which is why `cdp_backend::tabs::list_tabs` reads the tab table instead. Here the engine is
+/// always Chromium and an empty answer degrades to a fact the model is told, not to "this browser
+/// has no tabs".
+///
+/// # What it does when it cannot reach them all
+///
+/// It supplies the children it did capture and lets [`stitch_snapshots`] judge: with any child
+/// supplied, a frame element accounted for by neither a content document nor a capture is a
+/// **refusal** naming it. With none captured the same accounting is carried as
+/// [`UnreachedFrame::NotCaptured`] instead, and the render confesses it. Both are honest; neither
+/// is a page that quietly lost a subtree.
+pub async fn fetch_chromium(
+    conn: &CdpConnection,
+    session: &SessionId,
+) -> Result<RawDom, BrowserError> {
+    let parent = capture_session(conn, session).await?;
+    let viewport = parent.viewport.clone();
+    let single = parse_snapshot(&parent.raw, viewport.clone(), &parent.loaders)?;
+    if !single
+        .unreached_frames
+        .iter()
+        .any(|f| matches!(f, UnreachedFrame::NotCaptured(_)))
+    {
+        // One renderer holds the page. Nothing to enumerate, nothing to stitch,
+        // and the parse already done is the answer.
+        return Ok(single);
+    }
+
+    let targets = aleph_cdp::methods::target::get_targets(conn)
+        .await
+        .map_err(cdp_err)?;
+    let mut loaders = parent.loaders.clone();
+    let mut captures: Vec<(u64, serde_json::Value)> = Vec::new();
+    for target in targets.iter().filter(|t| t.r#type == IFRAME_TARGET_TYPE) {
+        // **The call that PLACES a child is the same call that decides the child is OURS.**
+        // Do not "optimise" this into a narrower enumeration with a separate join: a
+        // `type == "iframe"` filter plus a frameId match is two derivations of one membership
+        // fact, and two derivations of one fact are free to drift (判据 §12). Here there is one —
+        // `DOM.getFrameOwner` on THIS session answers a frame we own and refuses one we do not,
+        // so the browser-wide listing above needs no trust of its own.
+        let Some(owner) = frame_owner(conn, session, &target.target_id).await else {
+            continue;
+        };
+        let Some(capture) = capture_child(conn, &target.target_id).await else {
+            continue;
+        };
+        // **A union over sessions.** Each session's frame tree knows only its own frames, and a
+        // loader id is what `RefTable::reset_for_document` compares — a map built from the parent
+        // alone would leave every child frame with an empty loader id, so the table would never
+        // notice that an iframe navigated on its own.
+        loaders.extend(capture.loaders);
+        captures.push((owner, capture.raw));
+    }
+
+    let children: Vec<ChildCapture<'_>> = captures
+        .iter()
+        .map(|(owner, raw)| ChildCapture {
+            owner_backend_node_id: *owner,
+            raw,
+        })
+        .collect();
+    stitch_snapshots(&parent.raw, &children, viewport, &loaders)
+}
+
+/// The `backendNodeId` of the `<iframe>` element that owns `target` **in this page**, or `None`.
+///
+/// The join key, measured rather than guessed: the OOPIF target's `targetId`, the parent
+/// `<iframe>` node's `frameId` and the child document's own `frameId` are the same string (Task 0,
+/// U4). `DOMSnapshot` nodes carry no `frameId`, so the parent half of the join is not in the
+/// capture and has to be fetched — that is what this call is.
+///
+/// `None` covers two different facts on purpose, and the caller spends it correctly either way: a
+/// frame belonging to another page (measured to refuse with "Frame with the given id was not
+/// found") and a frame of ours we could not ask about. Both mean "no capture for this element",
+/// and the accounting in [`stitch_snapshots`] then reports it — as a refusal if other children were
+/// supplied, as [`UnreachedFrame::NotCaptured`] if none were. An `Err` is spent as "I do not know",
+/// never as "there is nothing there" (判据 §8).
+async fn frame_owner(
+    conn: &CdpConnection,
+    parent: &SessionId,
+    target: &aleph_cdp::TargetId,
+) -> Option<u64> {
+    match aleph_cdp::methods::dom::get_frame_owner(conn, Some(parent), target.as_str()).await {
+        // `0` is CDP's own "no node", so it is not an id any caller may act on.
+        Ok(id) => u64::try_from(id).ok().filter(|id| *id != 0),
+        Err(e) => {
+            tracing::debug!(
+                target = %target,
+                error = %e,
+                "this session does not own that iframe target, or could not be asked; it is not \
+                 placed in this capture"
+            );
+            None
+        }
+    }
+}
+
+/// Attach to a child target, capture it, and detach again.
+///
+/// **Detaches on both arms.** A session per out-of-process frame per snapshot, never released,
+/// would accumulate for the life of the browser; `CdpConnection::detach` is measured to release
+/// one (`t0-u4b-enumeration.mjs`).
+async fn capture_child(
+    conn: &CdpConnection,
+    target: &aleph_cdp::TargetId,
+) -> Option<SessionCapture> {
+    let session = match conn.attach(target).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                target = %target,
+                error = %e,
+                "could not attach to an out-of-process frame; its content is left out of this \
+                 capture and reported as unreached"
+            );
+            return None;
+        }
+    };
+    let capture = capture_session(conn, &session).await;
+    if let Err(e) = conn.detach(&session).await {
+        tracing::warn!(target = %target, error = %e, "could not detach a child frame session");
+    }
+    match capture {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!(
+                target = %target,
+                error = %e,
+                "could not capture an out-of-process frame's session; its content is left out of \
+                 this capture and reported as unreached"
+            );
+            None
+        }
+    }
 }
 
 fn cdp_err(e: aleph_cdp::CdpError) -> BrowserError {
@@ -289,9 +498,11 @@ pub fn parse_snapshot(
 /// it captured. Pass only the parent's and every child frame silently gets an
 /// empty loader id: tolerated by design (the main frame's reset still clears
 /// its refs), which means the mistake produces no error and no red — it just
-/// makes `RefTable` unable to tell that an iframe navigated on its own. This is
-/// the second of the three ways Task 12 can undo this task quietly; the first
-/// is calling [`parse_snapshot`] instead of this function.
+/// makes `RefTable` unable to tell that an iframe navigated on its own. The
+/// caller that gets this right is [`fetch_chromium`], which `extend`s the
+/// parent's map with each child's before it calls this; the other quiet way to
+/// undo the work is to call [`parse_snapshot`] instead of this function, which
+/// carries the missing content as a fact rather than fetching it.
 ///
 /// # What it refuses, and why refusing is the cheap direction
 ///

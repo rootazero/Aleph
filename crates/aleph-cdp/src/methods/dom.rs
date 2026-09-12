@@ -224,3 +224,36 @@ pub async fn focus(
     .await?;
     Ok(())
 }
+
+/// The `backendNodeId` of the `<iframe>`/`<frame>` element that owns `frame_id`, asked on the
+/// **parent** session.
+///
+/// This is the only way to join a child renderer's snapshot to the element it sits inside: a
+/// `DOMSnapshot` *document* carries a `frameId`, but a `DOMSnapshot` *node* does not, so the
+/// parent half of a `frameId`-keyed join simply is not in the capture (Task 0, U4). One call here
+/// converts the child's `frameId` — which is also its target id — into the `backendNodeId` that
+/// IS on every snapshot node.
+///
+/// The reply's `backendNodeId` is required. CDP uses `0` for "no node", and returning that as an
+/// id would place a whole child document at whatever `0` happens to resolve to (判据 §8), so an
+/// absent or zero id is a `Decode` error rather than a value.
+pub async fn get_frame_owner(
+    conn: &CdpConnection,
+    session: Option<&SessionId>,
+    frame_id: &str,
+) -> Result<i64> {
+    const M: &str = "DOM.getFrameOwner";
+    let reply = conn
+        .call(session, M, json!({ "frameId": frame_id }))
+        .await?;
+    let id = field(M, &reply, "backendNodeId")?.as_i64().ok_or_else(|| {
+        CdpError::Decode(format!("{M}: `backendNodeId` is not an integer: {reply}"))
+    })?;
+    if id == 0 {
+        return Err(CdpError::Decode(format!(
+            "{M}: `backendNodeId` is 0, which is CDP's own \"no node\" — frame {frame_id} has no \
+             owner element this session can see"
+        )));
+    }
+    Ok(id)
+}

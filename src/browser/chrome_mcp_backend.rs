@@ -333,10 +333,15 @@ impl BrowserBackend for ChromeMcpBackend {
         let snapshot_text = Self::extract_text(&result);
         // Best-effort: parse page URL and title from snapshot header lines
         let (page_url, page_title) = parse_snapshot_header(&snapshot_text);
+        let ref_count = snapshot_text
+            .matches(crate::browser::types::REF_TOKEN)
+            .count();
         Ok(SnapshotOutput {
+            page_url: Some(page_url).filter(|s| !s.is_empty()),
+            page_title: Some(page_title).filter(|s| !s.is_empty()),
+            ref_count,
+            state_json: None,
             snapshot_text,
-            page_url,
-            page_title,
         })
     }
 

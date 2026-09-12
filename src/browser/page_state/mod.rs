@@ -341,6 +341,22 @@ pub struct PageState {
     /// `(nodes with no box, nodes total)` — a runtime fact for the model, not
     /// a verdict about the page (R7).
     pub no_box: (usize, usize),
+    /// **What the capture could not read**, carried through from
+    /// [`RawDom::unreached_frames`] unchanged.
+    ///
+    /// A non-empty list means the model is being shown the page
+    /// **incompletely**: an `<iframe>` whose content lives in another renderer
+    /// and was never captured looks exactly like an empty one — the element is
+    /// here with its box, `src` and title, and its content simply is not
+    /// (判据 §17, 错的标签比缺的贵).
+    ///
+    /// It is on `PageState` and not read off the `RawDom` at each face because
+    /// this fact has two faces — the text render's header and the JSON tree —
+    /// and one derivation has to serve both (判据 §9). The producer is Task
+    /// 11's stitcher; carrying it no further than `RawDom` would leave every
+    /// measurement it took true and the model still not told (判据 §7: two ends
+    /// and no wire).
+    pub unreached_frames: Vec<UnreachedFrame>,
     /// How long this capture's CDP round trips took, in milliseconds.
     ///
     /// **Not "how long a barrier held us".** Neither fetcher can tell an
@@ -525,6 +541,7 @@ mod wire_face {
                 title: "t".into(),
                 viewport: viewport(),
                 no_box: (0, 1),
+                unreached_frames: vec![UnreachedFrame::NotCaptured(7)],
                 fetch_ms: 1,
                 nodes: vec![full],
             }),
@@ -535,6 +552,7 @@ mod wire_face {
                 "title",
                 "viewport",
                 "no_box",
+                "unreached_frames",
                 "fetch_ms",
                 "nodes",
             ])

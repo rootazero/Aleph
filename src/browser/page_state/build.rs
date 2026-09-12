@@ -59,6 +59,11 @@ impl PageState {
             title: title.to_string(),
             viewport: raw.viewport.clone(),
             no_box,
+            // Carried, never re-derived: the accounting is the fetcher's and
+            // this builder has no way to repeat it — a `RawDom` cannot tell a
+            // frame that was never captured from an iframe that is genuinely
+            // empty, which is exactly why the field exists.
+            unreached_frames: raw.unreached_frames.clone(),
             fetch_ms: u64::try_from(fetch.as_millis()).unwrap_or(u64::MAX),
             nodes,
         };

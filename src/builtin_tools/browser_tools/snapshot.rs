@@ -93,7 +93,14 @@ impl AlephTool for BrowserSnapshotTool {
                     // then count refs on the EMITTED text so the reported count
                     // matches exactly what the model can see and act on.
                     let (text, truncated) = super::bound_content(&snap.snapshot_text, max_chars);
-                    let ref_count = text.matches("[ref=").count();
+                    // `REF_TOKEN`, never a second literal: the renderer emits it
+                    // and this counts it, and two spellings of one token is how
+                    // a counter goes on reporting `0` after a format change
+                    // (判据 §1). The count is over the BOUNDED text on purpose —
+                    // it is "how many refs the model can see", which is a
+                    // different fact from `snap.ref_count`, "how many were
+                    // minted".
+                    let ref_count = text.matches(crate::browser::types::REF_TOKEN).count();
                     // Page-derived DOM text is untrusted external content: scrub
                     // embedded credentials, then wrap with the injection boundary
                     // so chat-template markers injected by a hostile page cannot

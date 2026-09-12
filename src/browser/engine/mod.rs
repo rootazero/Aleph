@@ -12,6 +12,7 @@
 //! know which engine wrote a record before it could read it would need a
 //! second derivation of that fact (判据 §12).
 
+pub mod capability;
 pub mod chromium;
 pub mod process;
 pub mod readiness;
@@ -26,6 +27,8 @@ use serde::{Deserialize, Serialize};
 
 use self::process::{EngineProcess, Launched};
 use super::error::BrowserError;
+
+pub use capability::{capabilities, supported_by, Cap, EngineCapabilities, CAP_FIELDS};
 
 /// Which browser process backs a profile.
 ///
@@ -272,6 +275,49 @@ impl EngineHandle {
                 active: Some(tab_id),
             }),
             process,
+        }
+    }
+
+    /// A handle wired to an already-connected `CdpConnection`, with no process
+    /// behind it. Test-only: the `cdp_backend` tests are about what goes on the
+    /// wire, and a real launch would make every one of them need a browser.
+    ///
+    /// `#[cfg(test)]`, NOT `#[cfg(any(test, feature = "test-helpers"))]`: the
+    /// body names [`crate::browser::testkit`], and that module is declared
+    /// `#[cfg(test)]` at `src/browser/mod.rs` (R84). Under
+    /// `cargo test --features test-helpers --test '*'` the library is built
+    /// WITHOUT `cfg(test)` and WITH the feature, so the wider gate would
+    /// compile this function against a module that does not exist (`E0433`) —
+    /// and that command is in this task's own verification set.
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test(engine: Engine, profile: &str, conn: aleph_cdp::CdpConnection) -> Self {
+        Self {
+            engine,
+            profile: profile.to_string(),
+            launched: Launched {
+                pid: 0,
+                endpoint: self::process::CdpEndpoint {
+                    http_url: String::new(),
+                    ws_url: String::new(),
+                    pid: 0,
+                },
+                sidecar_path: std::path::PathBuf::new(),
+                // Ruling R7: the launcher keeps the `Child` so it can reap it
+                // after a kill. There is no process behind a test handle, so
+                // the slot is empty — and empty here means "no child", which is
+                // the truth, not "we lost it".
+                child: std::sync::Arc::new(crate::sync_primitives::Mutex::new(None)),
+            },
+            conn,
+            tabs: tokio::sync::Mutex::new(TabTable::default()),
+            // `detached`, not `new`: `FakeEngineProcess::new(engine,
+            // &FakeCdpServer, &Path)` exists to hand a launcher a server to
+            // point a `Launched` at and a directory to write a sidecar into.
+            // A handle with no process behind it has neither, and inventing a
+            // temp dir here would make every `cdp_backend` test create one it
+            // never uses.
+            process: Arc::new(crate::browser::testkit::FakeEngineProcess::detached(engine)),
         }
     }
 

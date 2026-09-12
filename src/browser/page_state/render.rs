@@ -12,11 +12,19 @@
 //! print raw into this tree could forge a token in the model's own observation
 //! — a `placeholder` of `] [ref=e99]` used to close the bracket and open a ref
 //! the table never minted. Anything the page controls is data, and data is
-//! quoted: five sites, one helper.
+//! quoted: **five R40 sites**, numbered `Site N of 5` below.
+//!
+//! There are **six** `quote` calls, not five, and the sixth is deliberately not
+//! one of R40's: [`unreached_line`] quotes an unplaceable document's frame id,
+//! which the ENGINE mints rather than the page. It is quoted anyway because it
+//! reaches a line the model parses and quoting costs nothing — but counting it
+//! among R40's page-controlled sites would make that list say something it does
+//! not mean. A `grep -c 'quote('` here answers six; R40's list is five (判据
+//! §1: the number and its predicate travel together).
 
 use std::collections::HashSet;
 
-use super::{NodeStates, PageState, Rect, Role, StateNode};
+use super::{NodeStates, PageState, Rect, Role, StateNode, UnreachedFrame};
 
 /// Cap on a text leaf's rendered content. `bound_content` truncates the whole
 /// snapshot on line boundaries, so one unbounded line would spend the entire
@@ -161,13 +169,17 @@ pub fn render_text(state: &PageState) -> String {
 }
 
 /// The runtime facts, and nothing that is a judgement (R7): which engine
-/// produced this, which capture it is, how much of it had no box, and how long
-/// the capture's round trips took. `fetch=`, never `waited=`: neither fetcher
-/// can separate a barrier from ordinary latency, so the honest token is
-/// elapsed time.
+/// produced this, which capture it is, how much of it had no box, how much of
+/// it is missing entirely, and how long the capture's round trips took.
+/// `fetch=`, never `waited=`: neither fetcher can separate a barrier from
+/// ordinary latency, so the honest token is elapsed time.
+///
+/// One line, or two: [`unreached_line`] adds a second only when the capture
+/// has something to confess.
 fn header(state: &PageState) -> String {
-    format!(
-        "# engine={} gen={} url={} viewport={}x{} scroll={},{} doc={}x{} no_box={}/{} fetch={}ms",
+    let mut out = format!(
+        "# engine={} gen={} url={} viewport={}x{} scroll={},{} doc={}x{} no_box={}/{} \
+         unreached_frames={} fetch={}ms",
         state.engine.as_str(),
         state.generation,
         // Site 1 of 5. The URL is page-controlled too — a redirect chooses it.
@@ -180,7 +192,86 @@ fn header(state: &PageState) -> String {
         state.viewport.content_height,
         state.no_box.0,
         state.no_box.1,
+        state.unreached_frames.len(),
         state.fetch_ms,
+    );
+    if let Some(line) = unreached_line(state) {
+        out.push('\n');
+        out.push_str(&line);
+    }
+    out
+}
+
+/// How many `backendNodeId`s / frame ids the confession line names before it
+/// says "and N more". A page can legitimately hold dozens of frames, and one
+/// header line is not the place to list them all — the JSON face carries the
+/// whole list.
+const UNREACHED_NAMED_MAX: usize = 8;
+
+/// The line that says the model is looking at an **incomplete** page, or
+/// `None` when it is not.
+///
+/// Printed at all because the alternative is the failure the field exists for:
+/// a frame whose content was never captured is indistinguishable, in the tree
+/// below, from an iframe that is genuinely empty. The count alone would say
+/// *that* something is missing; the two variants say *what kind*, because the
+/// reader's next move differs — a not-captured frame may come back on a
+/// re-snapshot once its target is attachable, while an unplaceable document is
+/// a shape this build cannot position at all and will not fix by retrying.
+///
+/// It names a door (判据 §14). It does **not** promise the door opens: "re-run
+/// browser_snapshot" is the only verb a model holds here, and the sentence says
+/// what it means if that changes nothing rather than implying it will work.
+fn unreached_line(state: &PageState) -> Option<String> {
+    if state.unreached_frames.is_empty() {
+        return None;
+    }
+    let mut not_captured: Vec<String> = Vec::new();
+    let mut unplaceable: Vec<String> = Vec::new();
+    for frame in &state.unreached_frames {
+        match frame {
+            UnreachedFrame::NotCaptured(backend_node_id) => {
+                not_captured.push(backend_node_id.to_string());
+            }
+            // The sixth `quote` call, and NOT one of R40's five: a frame id is
+            // the ENGINE's string, not the page's. Quoted anyway because it
+            // lands on a line the model parses — see the module doc.
+            UnreachedFrame::Unplaceable(frame_id) => unplaceable.push(quote(frame_id)),
+        }
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !not_captured.is_empty() {
+        parts.push(format!(
+            "{} whose content is in another renderer and was not captured (backendNodeId {})",
+            not_captured.len(),
+            named(&not_captured)
+        ));
+    }
+    if !unplaceable.is_empty() {
+        parts.push(format!(
+            "{} captured but impossible to position, so their nodes were dropped (frame {})",
+            unplaceable.len(),
+            named(&unplaceable)
+        ));
+    }
+    Some(format!(
+        "# INCOMPLETE: {}. What is inside them is not in the tree below — an \
+         iframe missing here looks exactly like an empty one. Re-run \
+         browser_snapshot; if the same frames come back, this engine cannot \
+         read them and anything you conclude about that region is a guess.",
+        parts.join("; ")
+    ))
+}
+
+/// `a, b, c` — capped, and honest about the cap.
+fn named(ids: &[String]) -> String {
+    if ids.len() <= UNREACHED_NAMED_MAX {
+        return ids.join(", ");
+    }
+    format!(
+        "{}, and {} more",
+        ids[..UNREACHED_NAMED_MAX].join(", "),
+        ids.len() - UNREACHED_NAMED_MAX
     )
 }
 
@@ -412,6 +503,7 @@ mod tests {
             title: "x".into(),
             viewport: viewport(),
             no_box,
+            unreached_frames: Vec::new(),
             fetch_ms: 0,
             nodes,
         }
@@ -590,7 +682,7 @@ mod tests {
             rendered.lines().collect::<Vec<_>>(),
             vec![
                 "# engine=chromium gen=1 url=\"https://x.test/\" viewport=800x600 \
-                 scroll=0,0 doc=800x600 no_box=0/2 fetch=1ms",
+                 scroll=0,0 doc=800x600 no_box=0/2 unreached_frames=0 fetch=1ms",
                 "- button \"Save document\" [ref=e1] @1,2 3x4",
                 "  - text: \"Save\" [ref=e2]",
             ],
@@ -687,7 +779,7 @@ mod tests {
             rendered.lines().collect::<Vec<_>>(),
             vec![
                 "# engine=chromium gen=1 url=\"https://x.test/\" viewport=800x600 \
-                 scroll=0,0 doc=800x600 no_box=0/6 fetch=1ms",
+                 scroll=0,0 doc=800x600 no_box=0/6 unreached_frames=0 fetch=1ms",
                 "- table",
                 "  - row",
                 "    - cell \"The first paragraph of this comment explains the problem. \
@@ -743,7 +835,7 @@ mod tests {
             render_text(&state).lines().collect::<Vec<_>>(),
             vec![
                 "# engine=chromium gen=1 url=\"https://x.test/\" viewport=800x600 \
-                 scroll=0,0 doc=800x600 no_box=0/3 fetch=1ms",
+                 scroll=0,0 doc=800x600 no_box=0/3 unreached_frames=0 fetch=1ms",
                 "- generic",
                 "  - text: \"Remember me\" [ref=e1]",
                 "  - checkbox \"Remember me\" [ref=e2] @1,2 3x4",
@@ -782,8 +874,133 @@ mod tests {
         assert_eq!(
             render_text(&s).lines().next(),
             Some(
-                "# engine=chromium gen=12 url=\"https://x.test/\" viewport=800x600 scroll=0,900 doc=800x4000 no_box=4/40 fetch=142ms"
+                "# engine=chromium gen=12 url=\"https://x.test/\" viewport=800x600 scroll=0,900 doc=800x4000 no_box=4/40 unreached_frames=0 fetch=142ms"
             )
+        );
+    }
+
+    /// **A page the model is being shown incompletely must say so.**
+    ///
+    /// `RawDom::unreached_frames` is produced by the stitcher and would be a
+    /// measurement nobody reads if it stopped there: an `<iframe>` whose
+    /// content lives in another renderer renders here as an element with a box
+    /// and no children — byte for byte what a genuinely empty iframe renders
+    /// as. This is the consumer, and the assertion is on the TEXT the model
+    /// reads rather than on the field, because the field being populated is
+    /// what Task 11 already proved (判据 §4: assert the effect arrived).
+    #[test]
+    fn an_incomplete_capture_confesses_and_a_complete_one_stays_quiet() {
+        let whole = state(vec![node(Role::Button, "Go", true, None)]);
+        let rendered = render_text(&whole);
+        assert!(
+            rendered.contains("unreached_frames=0"),
+            "the count prints even at zero, or a reader cannot tell this build \
+             reports it at all: {rendered}"
+        );
+        assert_eq!(
+            rendered.lines().filter(|l| l.starts_with('#')).count(),
+            1,
+            "a complete capture has nothing to confess: {rendered}"
+        );
+
+        let mut holed = state(vec![node(Role::Button, "Go", true, None)]);
+        holed.unreached_frames = vec![UnreachedFrame::NotCaptured(42)];
+        let rendered = render_text(&holed);
+        assert!(rendered.contains("unreached_frames=1"), "{rendered}");
+        let confession = rendered
+            .lines()
+            .find(|l| l.contains("INCOMPLETE"))
+            .unwrap_or_else(|| panic!("no confession line in {rendered}"));
+        assert!(
+            confession.contains("42"),
+            "the line must name the frame element, or the model cannot tell \
+             WHICH region it may not reason about: {confession}"
+        );
+        assert!(
+            confession.contains("browser_snapshot"),
+            "a fail-closed answer names the door that reopens it (判据 §14): \
+             {confession}"
+        );
+        // The node lines still start with `- `, so the extra header line
+        // cannot be mistaken for a node the model can address.
+        assert!(
+            rendered
+                .lines()
+                .filter(|l| !l.starts_with('#'))
+                .all(|l| l.trim_start().starts_with("- ")),
+            "the confession must be a header line, not a node: {rendered}"
+        );
+    }
+
+    /// The two variants describe different failures and the reader's next move
+    /// differs, so they must not fan into one sentence (判据 §2). Poisoning one
+    /// at a time is also a mapping test: a variant whose wording does not move
+    /// is one nothing reads.
+    #[test]
+    fn the_two_unreached_variants_are_told_apart() {
+        let mut not_captured = state(vec![node(Role::Button, "Go", true, None)]);
+        not_captured.unreached_frames = vec![UnreachedFrame::NotCaptured(42)];
+        let a = render_text(&not_captured);
+
+        let mut unplaceable = state(vec![node(Role::Button, "Go", true, None)]);
+        unplaceable.unreached_frames = vec![UnreachedFrame::Unplaceable("F-ghost".into())];
+        let b = render_text(&unplaceable);
+
+        let line_a = a.lines().find(|l| l.contains("INCOMPLETE")).unwrap_or("");
+        let line_b = b.lines().find(|l| l.contains("INCOMPLETE")).unwrap_or("");
+        assert_ne!(
+            line_a, line_b,
+            "both variants render the same sentence, so the model cannot tell \
+             a frame that may come back on a retry from one this build cannot \
+             position at all"
+        );
+        assert!(line_a.contains("another renderer"), "{line_a}");
+        assert!(line_b.contains("impossible to position"), "{line_b}");
+        // The frame id is quoted — the sixth `quote` call, see the module doc.
+        assert!(line_b.contains("\"F-ghost\""), "{line_b}");
+
+        // Both at once: the counts are per-variant, not one total pretending to
+        // describe both.
+        let mut both = state(vec![node(Role::Button, "Go", true, None)]);
+        both.unreached_frames = vec![
+            UnreachedFrame::NotCaptured(42),
+            UnreachedFrame::NotCaptured(43),
+            UnreachedFrame::Unplaceable("F-ghost".into()),
+        ];
+        let rendered = render_text(&both);
+        assert!(rendered.contains("unreached_frames=3"), "{rendered}");
+        let line = rendered
+            .lines()
+            .find(|l| l.contains("INCOMPLETE"))
+            .unwrap_or("");
+        assert!(line.contains("2 whose content"), "{line}");
+        assert!(line.contains("1 captured but"), "{line}");
+    }
+
+    /// A page may hold more frames than a header line should list. The cap
+    /// must say it capped — a truncated list that reads as complete is the
+    /// wrong label, which costs more than a missing one (判据 §17).
+    #[test]
+    fn a_long_unreached_list_is_capped_and_says_so() {
+        let mut s = state(vec![node(Role::Button, "Go", true, None)]);
+        let total = UNREACHED_NAMED_MAX + 3;
+        s.unreached_frames = (0..total)
+            .map(|i| UnreachedFrame::NotCaptured(i as u64 + 100))
+            .collect();
+        let rendered = render_text(&s);
+        assert!(
+            rendered.contains(&format!("unreached_frames={total}")),
+            "the COUNT is never capped, only the name list: {rendered}"
+        );
+        let line = rendered
+            .lines()
+            .find(|l| l.contains("INCOMPLETE"))
+            .unwrap_or("");
+        assert!(line.contains("and 3 more"), "{line}");
+        assert!(line.contains("100"), "the first ids are named: {line}");
+        assert!(
+            !line.contains(&format!("{}", total + 99)),
+            "the last id is past the cap and must not be named: {line}"
         );
     }
 

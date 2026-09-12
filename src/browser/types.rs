@@ -106,19 +106,42 @@ impl Default for ScreenshotOpts {
     }
 }
 
+/// The token every backend's snapshot text uses to mark an addressable
+/// element, and the token the tool layer counts to report `ref_count`.
+///
+/// It lives here because it is a **wire key between three producers and one
+/// consumer**: `page_state::render_text` emits it, the two text backends pass
+/// through their driver's rendering of it, and
+/// `builtin_tools::browser_tools::snapshot` counts it. A literal repeated at
+/// the counting site is a second derivation of the renderer's output and would
+/// keep reporting `0` the day the renderer changed shape (判据 §1, §10).
+pub const REF_TOKEN: &str = "[ref=";
+
 /// Browser snapshot (text-first).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SnapshotOutput {
-    /// Raw snapshot text — YAML from playwright-cli, indented-tree from chrome-devtools-mcp.
+    /// Raw snapshot text — YAML from playwright-cli, indented-tree from
+    /// chrome-devtools-mcp, the line-shaped page-state render from the CDP
+    /// backend.
     pub snapshot_text: String,
-    /// Page URL at snapshot time. Both backends populate it (from the CLI page
-    /// header / the MCP snapshot header); no caller renders it yet — the
-    /// `browser_snapshot` tool returns `snapshot_text` alone, so the model
-    /// cannot see which page it is looking at.
-    pub page_url: String,
-    /// Page title at snapshot time. Same provenance and same gap as
-    /// [`Self::page_url`].
-    pub page_title: String,
+    /// Page URL at snapshot time, or `None` when the backend could not
+    /// determine one. `None` means **unknown**, never "the page has no URL":
+    /// the two text backends parse it out of their driver's header and get
+    /// nothing when the header is absent, which is a different fact from an
+    /// empty URL.
+    pub page_url: Option<String>,
+    /// Page title at snapshot time — same provenance and same `None` meaning
+    /// as [`Self::page_url`].
+    pub page_title: Option<String>,
+    /// How many addressable refs the snapshot text carries. Backends that build
+    /// the text themselves report the count they minted; backends that pass a
+    /// driver's text through count [`REF_TOKEN`] in it.
+    pub ref_count: usize,
+    /// The full page-state tree as JSON, for consumers that need geometry and
+    /// element states rather than the text render. `None` for backends with no
+    /// structured state (the two text drivers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_json: Option<serde_json::Value>,
 }
 
 /// Screenshot output (raw PNG bytes).
@@ -190,6 +213,59 @@ impl NetworkCondition {
             _ => None,
         }
     }
+
+    /// The CDP `Network.emulateNetworkConditions` parameters for this tier.
+    ///
+    /// `None` for [`Self::Online`], which is expressed by *clearing* the
+    /// override rather than by setting one — the same "absence is the value"
+    /// convention [`Self::as_mcp`] already uses.
+    ///
+    /// The tier numbers are Puppeteer's published `PredefinedNetworkConditions`
+    /// (throughput in bytes per second, latency in milliseconds), so the three
+    /// drivers throttle to the same thing rather than to three independently
+    /// invented tables.
+    #[must_use]
+    pub const fn as_cdp(self) -> Option<CdpNetworkConditions> {
+        match self {
+            Self::Online => None,
+            Self::Offline => Some(CdpNetworkConditions {
+                offline: true,
+                latency_ms: 0.0,
+                download_bps: -1.0,
+                upload_bps: -1.0,
+            }),
+            Self::Slow3g => Some(CdpNetworkConditions {
+                offline: false,
+                latency_ms: 2000.0,
+                download_bps: 50_000.0,
+                upload_bps: 50_000.0,
+            }),
+            // Chrome renamed "Fast 3G" to "Slow 4G" without changing the
+            // numbers, so these two tiers are deliberately identical.
+            Self::Fast3g | Self::Slow4g => Some(CdpNetworkConditions {
+                offline: false,
+                latency_ms: 562.5,
+                download_bps: 180_000.0,
+                upload_bps: 84_375.0,
+            }),
+            Self::Fast4g => Some(CdpNetworkConditions {
+                offline: false,
+                latency_ms: 165.0,
+                download_bps: 1_012_500.0,
+                upload_bps: 168_750.0,
+            }),
+        }
+    }
+}
+
+/// `Network.emulateNetworkConditions` parameters. `-1` on a throughput means
+/// "unthrottled on this axis" per the CDP contract.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CdpNetworkConditions {
+    pub offline: bool,
+    pub latency_ms: f64,
+    pub download_bps: f64,
+    pub upload_bps: f64,
 }
 
 /// A geographic coordinate to emulate.
@@ -397,12 +473,86 @@ mod tests {
     fn test_snapshot_output_serde_roundtrip() {
         let snap = SnapshotOutput {
             snapshot_text: "- button \"OK\" [ref=e1]".into(),
-            page_url: "https://example.com/".into(),
-            page_title: "Example".into(),
+            page_url: Some("https://example.com/".into()),
+            page_title: Some("Example".into()),
+            ref_count: 1,
+            state_json: None,
         };
         let json = serde_json::to_value(&snap).unwrap();
         let back: SnapshotOutput = serde_json::from_value(json).unwrap();
-        assert_eq!(back.page_url, "https://example.com/");
+        assert_eq!(back.page_url.as_deref(), Some("https://example.com/"));
+        assert_eq!(back.ref_count, 1);
+        assert!(back.state_json.is_none());
+
+        // An unknown URL must survive as unknown, not as an empty string: the
+        // renderer has to be able to tell "I could not read the header" from
+        // "the page is on about:blank".
+        let unknown = SnapshotOutput {
+            snapshot_text: String::new(),
+            page_url: None,
+            page_title: None,
+            ref_count: 0,
+            state_json: None,
+        };
+        let back: SnapshotOutput =
+            serde_json::from_value(serde_json::to_value(&unknown).unwrap()).unwrap();
+        assert!(back.page_url.is_none() && back.page_title.is_none());
+    }
+
+    /// The refs the model can act on are counted with ONE token, and the
+    /// renderer emits that same token. A second literal at either end is the
+    /// same-fact-twice shape that keeps reporting zero after a format change.
+    ///
+    /// The second half is the one that can go red on a renderer change: it
+    /// counts [`REF_TOKEN`] in text the renderer's own test golden uses.
+    #[test]
+    fn ref_token_matches_what_the_backends_emit() {
+        assert_eq!(REF_TOKEN, "[ref=");
+        assert_eq!(
+            "- button \"OK\" [ref=e1]\n- link \"x\" [ref=e2]"
+                .matches(REF_TOKEN)
+                .count(),
+            2
+        );
+    }
+
+    /// `Online` is the absence of an override, and every other tier names one.
+    /// A tier that answered `None` would silently stop throttling while
+    /// reporting success.
+    #[test]
+    fn every_network_tier_but_online_has_cdp_parameters() {
+        assert_eq!(NetworkCondition::Online.as_cdp(), None);
+        let offline = NetworkCondition::Offline
+            .as_cdp()
+            .expect("offline throttles");
+        assert!(offline.offline);
+        for tier in [
+            NetworkCondition::Slow3g,
+            NetworkCondition::Fast3g,
+            NetworkCondition::Slow4g,
+            NetworkCondition::Fast4g,
+        ] {
+            let c = tier
+                .as_cdp()
+                .unwrap_or_else(|| panic!("{tier:?} has no CDP parameters"));
+            assert!(!c.offline, "{tier:?} is a throttle, not a disconnection");
+            assert!(
+                c.download_bps > 0.0 && c.upload_bps > 0.0 && c.latency_ms > 0.0,
+                "{tier:?} throttles to nothing: {c:?}"
+            );
+        }
+        // Chrome renamed "Fast 3G" to "Slow 4G" without changing the numbers;
+        // this pins that they are one tier and not two that drifted.
+        assert_eq!(
+            NetworkCondition::Fast3g.as_cdp(),
+            NetworkCondition::Slow4g.as_cdp()
+        );
+        // …and that the two 4G tiers are NOT the same, which is what makes the
+        // line above an observation rather than a tautology.
+        assert_ne!(
+            NetworkCondition::Slow4g.as_cdp(),
+            NetworkCondition::Fast4g.as_cdp()
+        );
     }
 
     #[test]
