@@ -1095,6 +1095,72 @@ mod tests {
         );
     }
 
+    /// A `ref_id` that this driver never minted is refused as SUCH, not as a
+    /// stale ref.
+    ///
+    /// The other driver accepts a CSS selector here, so a stored `browser_exec`
+    /// script arrives with `#go` (measured on a real cdp profile). Answering
+    /// "stale — re-run browser_snapshot" sends the model to fetch a ref no
+    /// snapshot will ever mint: it re-snapshots, fails identically, and spends
+    /// its budget in a loop. "I do not recognise this" and "this expired" are
+    /// different facts with opposite remedies (判据 §8).
+    ///
+    /// Asserted at the verb, not on `is_minted_shape`: a unit test on the
+    /// recogniser stays green with the call site deleted.
+    #[tokio::test]
+    async fn a_selector_shaped_ref_is_refused_as_unrecognised_not_as_stale() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+
+        let err = backend
+            .click(
+                "T1",
+                ActionTarget::Ref {
+                    ref_id: "#go".into(),
+                },
+            )
+            .await
+            .expect_err("a selector is not a ref this driver mints");
+        let text = err.to_string();
+        assert!(
+            text.contains("not a ref this driver understands"),
+            "must name the real problem: {text}"
+        );
+        assert!(
+            !text.contains("is stale"),
+            "must NOT be reported as staleness — that remedy loops forever \
+             here: {text}"
+        );
+        // And nothing was spent on the page discovering it.
+        assert!(
+            !methods(&server).iter().any(|m| m.starts_with("Input.")),
+            "the refusal is ahead of the wire: {:?}",
+            methods(&server)
+        );
+
+        // The other direction, so this cannot pass by refusing everything: a
+        // MINTED-shape ref still reaches the ref table and fails as stale.
+        let stale = backend
+            .click(
+                "T1",
+                ActionTarget::Ref {
+                    ref_id: "e9".into(),
+                },
+            )
+            .await
+            .expect_err("e9 was never minted in this table");
+        assert!(
+            stale.to_string().contains("stale"),
+            "a ref-shaped id still goes through the staleness path: {stale}"
+        );
+    }
+
     /// Coordinates come out of the snapshot's geometry, which is printed in
     /// PAGE space. Dispatching them unconverted clicks the right pixel only
     /// while the page is at scroll 0 — i.e. it works in every test and fails on

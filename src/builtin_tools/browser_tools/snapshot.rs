@@ -648,6 +648,47 @@ mod tests {
         );
     }
 
+    /// `render::to_json` answers a serialization failure with `Value::Null`, so
+    /// the failure arrives here as an ordinary `Some(_)`. Without this, emitting
+    /// it would ship the four bytes `null` with `success: true` and the model
+    /// would read a tree-shaped absence as a page with nothing on it — an error
+    /// consumed as a value (判据 §8).
+    ///
+    /// The second assertion is the one that stops the easy wrong fix: merging
+    /// this into the `None` arm would produce "use a profile with driver =
+    /// cdp", which is nonsense advice on a profile that already is one.
+    #[test]
+    fn a_null_state_tree_is_refused_rather_than_shipped_as_a_json_body() {
+        use crate::browser::types::SnapshotOutput;
+        let snap = SnapshotOutput {
+            snapshot_text: "- button \"OK\" [ref=e1]".into(),
+            page_url: Some("https://example.com/".into()),
+            page_title: Some("Example".into()),
+            ref_count: 1,
+            state_json: Some(serde_json::Value::Null),
+        };
+        // The precondition that makes this hostile: `Null` is a perfectly
+        // ordinary `Some`, indistinguishable from a tree by `is_some()`.
+        assert!(snap.state_json.is_some());
+
+        let err = super::snapshot_body(&snap, super::SnapshotFormat::Json)
+            .expect_err("a Null tree is a serialization failure, not a body");
+        assert!(
+            err.contains("could not be serialized"),
+            "the refusal must name what actually went wrong: {err}"
+        );
+        assert!(
+            !err.contains("driver = \"cdp\""),
+            "and must NOT give the text-driver remedy, which is nonsense on a \
+             profile that already is a cdp one: {err}"
+        );
+        // `null` must never be what comes back.
+        assert_ne!(
+            super::snapshot_body(&snap, super::SnapshotFormat::Json).ok(),
+            Some("null".to_string())
+        );
+    }
+
     /// An unrecognised format is refused by name. Defaulting to text would
     /// answer a request for JSON with something the caller cannot parse, and
     /// the parse failure would read as a broken page rather than a bad argument.
