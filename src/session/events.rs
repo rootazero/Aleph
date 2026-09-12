@@ -46,10 +46,11 @@ pub enum ErrorKind {
     /// [`crate::orchestrator::harness_bridge`] when a run finishes having
     /// screened its input and said nothing.
     Guardrail,
-    /// A `BeforeAgentStart` hook refused or stopped the run before it started
-    /// (§5.4). Produced by `gateway::execution_engine::run_loop::hook_stop_receipt`,
-    /// which closes the run in the same batch, so the log says "a run happened
-    /// and the hook stopped it" — never `Unanswered`.
+    /// A pre-seed lifecycle hook (`BeforeAgentStart` / `UserPromptSubmit`)
+    /// refused or stopped the run before it started (§5.4). Produced by
+    /// `gateway::execution_engine::run_loop::hook_stop_receipt`, which closes
+    /// the run in the same batch, so the log says "a run happened and the hook
+    /// stopped it" — never `Unanswered`.
     HookStop,
 }
 

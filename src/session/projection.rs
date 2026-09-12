@@ -94,8 +94,9 @@ pub fn project_row(event: &SessionEvent) -> Option<ProjectedRow> {
         SessionEvent::Error { kind, message, .. } => {
             let label = match kind {
                 ErrorKind::Guardrail => "Input blocked",
-                // §5.4: a `BeforeAgentStart` hook stopped the run before it
-                // started; the message is the hook's own stop/deny text.
+                // §5.4: a pre-seed hook (`BeforeAgentStart` / `UserPromptSubmit`)
+                // stopped the run before it started; the message is the hook's
+                // own stop/deny text.
                 ErrorKind::HookStop => "Stopped by hook",
             };
             Some(plain("system", format!("{label}: {message}")))

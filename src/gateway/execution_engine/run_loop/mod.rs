@@ -443,10 +443,14 @@ pub(super) async fn ensure_session_under_request_scope(
     .await;
 }
 
-/// §5.4: what a `BeforeAgentStart` stop leaves on the log — a **closed** run
-/// with a receipt, so a reload shows "this turn was stopped by a hook" and
-/// the reducer reads `Clean` rather than `Unanswered` (which would retrigger
-/// a run the hook already refused).
+/// §5.4: what a pre-seed hook stop leaves on the log — a **closed** run with
+/// a receipt, so a reload shows "this turn was stopped by a hook" and the
+/// reducer reads `Clean` rather than `Unanswered` (which would retrigger a
+/// run the hook already refused). Two seams write it, and they are twins:
+/// `BeforeAgentStart` (this module) and `UserPromptSubmit` (`inner.rs`), both
+/// of which return before the harness is handed the request. The census
+/// `hook_stop_tests::every_pre_seed_hook_exit_journals_the_stop` derives that
+/// set from the code rather than naming it.
 ///
 /// The seed pair is written here because the bridge's `seed_history`
 /// (`runner_impl.rs`) never runs on this path; a resume (`is_resume`) already
@@ -997,44 +1001,197 @@ mod hook_stop_tests {
         assert_eq!(r.disposition, RunDisposition::Clean);
     }
 
-    /// Both stop arms owe the receipt, and owe it BEFORE they return — count
-    /// the `return`s inside the `BeforeAgentStart` match against the journal
-    /// calls in the segment that precedes each one. A journal call moved
-    /// after its `return` (or into the caller) leaves that segment empty.
-    #[test]
-    fn both_before_agent_start_exits_journal_the_stop() {
+    /// The corpus the two censuses below walk: each file of the loop that
+    /// dispatches lifecycle hooks, as comment- and literal-stripped production
+    /// code, with the **hand-off** after which a hook stop is no longer
+    /// "before the seed" — the seed pair is written by the bridge's
+    /// `seed_history`, which runs inside the stage each hand-off starts.
+    /// Everything before the hand-off is pre-seed by construction; nothing
+    /// here names which hooks live there.
+    struct PreSeedFile {
+        name: &'static str,
+        code: String,
+        hand_off: &'static str,
+    }
+
+    fn pre_seed_files() -> Vec<PreSeedFile> {
         use crate::utils::source_scan::{code_text, production_prefix};
-        let code = code_text(&production_prefix(include_str!("mod.rs")));
-        // The dispatch line is the anchor: a hook-event name inside a comment
-        // or a `warn!` string cannot satisfy it (`code_text` strips both).
-        const ANCHOR: &str = "execute_interceptors(HookEvent::BeforeAgentStart,";
+        vec![
+            PreSeedFile {
+                name: "run_loop/mod.rs",
+                code: code_text(&production_prefix(include_str!("mod.rs"))),
+                hand_off: ".run_agent_loop_inner(",
+            },
+            PreSeedFile {
+                name: "run_loop/inner.rs",
+                code: code_text(&production_prefix(include_str!("inner.rs"))),
+                hand_off: "run_dispatch_and_drain_classified(",
+            },
+        ]
+    }
+
+    /// The dispatch line is the anchor: a hook-event name inside a comment or
+    /// a `warn!` string cannot satisfy it (`code_text` strips both).
+    const DISPATCH: &str = "execute_interceptors(HookEvent::";
+
+    /// Where a file's pre-seed region ends — asserted unique so a moved or
+    /// renamed hand-off cannot silently widen or empty the region.
+    fn hand_off_at(file: &PreSeedFile) -> usize {
         assert_eq!(
-            code.matches(ANCHOR).count(),
+            file.code.matches(file.hand_off).count(),
             1,
-            "exactly one BeforeAgentStart dispatch in the production half"
+            "{}: the hand-off marker `{}` must occur exactly once in the production half",
+            file.name,
+            file.hand_off
         );
-        let block = code
-            .split(ANCHOR)
-            .nth(1)
-            .and_then(|rest| rest.split("Ok(_) => {}").next())
-            .expect("the BeforeAgentStart match's stop arms end at the pass-through arm");
-        let segments: Vec<&str> = block.split("return ").collect();
-        let exits = segments.len() - 1;
-        assert_eq!(
-            exits, 2,
-            "two stop exits (deny, prevent_continuation); got {exits}"
-        );
-        for (i, before) in segments[..exits].iter().enumerate() {
-            assert_eq!(
-                before.matches("journal_hook_stop(").count(),
-                1,
-                "exit {i} must journal exactly once before it returns; segment:\n{before}"
-            );
+        file.code.find(file.hand_off).expect("counted once above")
+    }
+
+    /// The block a hook dispatch is matched on: from the first `{` after the
+    /// anchor to its matching `}`. Brace-balanced on stripped code, so a
+    /// brace inside a literal cannot desynchronise it, and independent of
+    /// how the arms are spelled (`Ok(_) => {}`, `Err(e) =>`, an `if let`).
+    fn dispatch_body(after_anchor: &str) -> &str {
+        let open = after_anchor
+            .find('{')
+            .expect("a hook dispatch is followed by a block");
+        let mut depth = 0usize;
+        for (i, c) in after_anchor.char_indices() {
+            if i < open {
+                continue;
+            }
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return after_anchor.get(open..=i).expect("char boundaries");
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced braces after a hook dispatch:\n{after_anchor}");
+    }
+
+    /// Every hook exit that stops a run before the seed owes the receipt, and
+    /// owes it BEFORE it returns. Derived, not listed: the corpus is the two
+    /// loop files, the sites are every interceptor dispatch before each
+    /// file's hand-off, the exits are the `return`s inside each dispatch's
+    /// block, and the equality is `journal calls == exits` — so a third
+    /// pre-seed seam with a bare `return` is red on arrival, and a journal
+    /// call moved after its `return` (or into the caller) leaves that exit's
+    /// segment empty. The post-seed dispatch (`AgentEnd`) sits after the
+    /// hand-off and is deliberately outside the rule.
+    #[test]
+    fn every_pre_seed_hook_exit_journals_the_stop() {
+        let mut exits_total = 0usize;
+        let mut journaled_total = 0usize;
+        let mut sites: Vec<(&str, String, usize)> = Vec::new();
+        for file in pre_seed_files() {
+            let cut = hand_off_at(&file);
+            for (offset, _) in file.code.match_indices(DISPATCH) {
+                if offset >= cut {
+                    continue;
+                }
+                // The body is taken from the whole file so a block that
+                // straddles the cut is not truncated; only the site's
+                // position decides whether it is governed.
+                let after = file
+                    .code
+                    .get(offset + DISPATCH.len()..)
+                    .expect("char boundary");
+                let hook = after.split(',').next().unwrap_or("?").to_string();
+                let body = dispatch_body(after);
+                let segments: Vec<&str> = body.split("return ").collect();
+                let exits = segments.len() - 1;
+                for (i, before) in segments[..exits].iter().enumerate() {
+                    let n = before.matches("journal_hook_stop(").count();
+                    assert_eq!(
+                        n, 1,
+                        "{}: HookEvent::{hook} exit {i} must journal exactly once before it \
+                         returns; segment:\n{before}",
+                        file.name
+                    );
+                    journaled_total += n;
+                }
+                assert_eq!(
+                    segments[exits].matches("journal_hook_stop(").count(),
+                    0,
+                    "{}: HookEvent::{hook} — a journal call after the last return is unreachable",
+                    file.name
+                );
+                exits_total += exits;
+                sites.push((file.name, hook, exits));
+            }
         }
         assert_eq!(
-            segments[exits].matches("journal_hook_stop(").count(),
-            0,
-            "a journal call after the last return is unreachable"
+            journaled_total, exits_total,
+            "every pre-seed stop exit journals; derived sites (file, hook, exits): {sites:?}"
         );
+        assert!(
+            exits_total > 0,
+            "no pre-seed hook exit found at all — the dispatch anchor or a hand-off rotted; \
+             sites: {sites:?}"
+        );
+    }
+
+    /// The twins are PRE-SEED, which is what licenses the receipt to write the
+    /// seed pair (and, on a resume, to skip it): each dispatch sits before its
+    /// file's hand-off, and no seed writer is spelled on the path from the
+    /// enclosing function's signature to the dispatch. `prepare_history` on
+    /// that path may compact, but the seed-pair constructors it could reach
+    /// are pinned by `reduction::tests::user_message_producers_are_the_known_set`
+    /// — none is in the compactor. Names are written here on purpose: this
+    /// pins two facts, it does not count anything.
+    #[test]
+    fn the_twin_hook_seams_fire_before_anything_seeds_the_turn() {
+        const SEED_WRITERS: [&str; 4] = [
+            "user_turn(",
+            "seed_history(",
+            "seed_session(",
+            "UserMessage {",
+        ];
+        let files = pre_seed_files();
+        for (name, enclosing_fn, hook) in [
+            ("run_loop/mod.rs", "fn run_agent_loop<", "BeforeAgentStart"),
+            (
+                "run_loop/inner.rs",
+                "fn run_agent_loop_inner<",
+                "UserPromptSubmit",
+            ),
+        ] {
+            let file = files
+                .iter()
+                .find(|f| f.name == name)
+                .expect("the corpus names this file");
+            let anchor = format!("{DISPATCH}{hook},");
+            assert_eq!(
+                file.code.matches(&anchor).count(),
+                1,
+                "{name}: exactly one HookEvent::{hook} dispatch"
+            );
+            let at = file.code.find(&anchor).expect("counted once above");
+            let start = file
+                .code
+                .find(enclosing_fn)
+                .expect("the enclosing function is where it was");
+            assert!(
+                start < at && at < hand_off_at(file),
+                "{name}: HookEvent::{hook} must fire inside {enclosing_fn}.. and before the \
+                 hand-off `{}` — otherwise it is no longer pre-seed and the receipt would \
+                 double-seed",
+                file.hand_off
+            );
+            let path = file.code.get(start..at).expect("char boundaries");
+            for writer in SEED_WRITERS {
+                assert_eq!(
+                    path.matches(writer).count(),
+                    0,
+                    "{name}: `{writer}` on the path to HookEvent::{hook} — the seam is no \
+                     longer pre-seed; `hook_stop_receipt` would seed a second user message"
+                );
+            }
+        }
     }
 }
