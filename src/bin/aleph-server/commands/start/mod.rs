@@ -387,12 +387,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // consumed into `session_store` below. `SessionManager` implements both
     // `SessionStore` and `SessionEpochRegistrar`; saving it here lets the
     // orchestrator enable compaction-driven session-split in the SQLite path.
-    // `None` in file-backend deployments — split degrades to FinalReply there.
+    // `None` in file-backend deployments — there the `SplitSession` directive
+    // degrades to compact-to-fit on the parent
+    // (`context/compact/directive.rs`, the `(compactor, registrar)` match),
+    // and the boot heal counts `epoch_heal_skipped` instead of registering.
     let epoch_registrar_for_orchestrator: Option<
         std::sync::Arc<dyn alephcore::session::epoch_registrar::SessionEpochRegistrar>,
     > = sqlite_sm
         .as_ref()
         .map(|sm| std::sync::Arc::new(sm.clone()) as _);
+    // The same registrar, for the boot-scan wiring site below: the split
+    // writes its epoch AFTER its log batches, and `ProjectionReconciler`
+    // heals the crash window in between (`heal_split_epochs`). Cloned here
+    // because the orchestrator consumes the original.
+    let epoch_registrar_for_reconcile = epoch_registrar_for_orchestrator.clone();
     // Build the final session_store first so MessageProjector writes to the
     // same Arc<dyn SessionStore> that Panel reads from.
     //
@@ -2975,10 +2983,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // see `alephcore::tasks` for why — which also removes the only boot path
     // that built the per-OS desktop platform eagerly at start-up.
 
-    // Boot-scan: ProjectionReconciler (display back-fill) THEN ResumeCoordinator
-    // (agent re-execution), in one ordered detached task so back-filled old
-    // rows are appended before re-trigger appends new ones (the file backend's
-    // get_history returns append order). The reconciler runs unconditionally;
+    // Boot-scan: ProjectionReconciler (display back-fill + split-epoch heal)
+    // THEN ResumeCoordinator (agent re-execution), in one ordered detached
+    // task so back-filled old rows are appended before re-trigger appends new
+    // ones (the file backend's get_history returns append order), and so a
+    // forked child the routing table never learned is registered before the
+    // resume pass reads its open run. The reconciler runs unconditionally;
     // only re-trigger is gated by [resume] enabled. Detached — boot is NOT
     // blocked on it.
     {
@@ -2992,6 +3002,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 session_store_for_reconcile.clone(),
                 message_projector.clone(),
                 resume_cfg.max_age_secs,
+                epoch_registrar_for_reconcile,
             );
             let resume_collaborators = (
                 agent_result.execution_adapter.clone(),
@@ -3014,6 +3025,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     skipped_up_to_date = rr.skipped_up_to_date,
                     skipped_legacy = rr.skipped_legacy,
                     errored = rr.errored,
+                    epochs_healed = rr.epochs_healed,
+                    epoch_heal_skipped = rr.epoch_heal_skipped,
                     "ProjectionReconciler boot scan finished"
                 );
                 if let (Some(exec_adapter), Some(registry)) = resume_collaborators {
