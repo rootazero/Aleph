@@ -23,6 +23,7 @@ use crate::extension::HookEvent;
 use crate::gateway::agent_instance::AgentInstance;
 use crate::gateway::event_emitter::EventEmitter;
 use crate::projects::binding::ClaimSource;
+use crate::session::events::{now_ms, ErrorKind, MessageContent, RunOutcome, SessionEvent, TurnId};
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -442,6 +443,101 @@ pub(super) async fn ensure_session_under_request_scope(
     .await;
 }
 
+/// §5.4: what a `BeforeAgentStart` stop leaves on the log — a **closed** run
+/// with a receipt, so a reload shows "this turn was stopped by a hook" and
+/// the reducer reads `Clean` rather than `Unanswered` (which would retrigger
+/// a run the hook already refused).
+///
+/// The seed pair is written here because the bridge's `seed_history`
+/// (`runner_impl.rs`) never runs on this path; a resume (`is_resume`) already
+/// holds its user message in the log and gets only the run bracket. With no
+/// turn opened on that arm the receipt names `turn_id: None` — a turn id that
+/// points at no `TurnStarted` would be a specific lie. `RunStarted.envelope`
+/// is `None` for the same reason: this writer resolved no knobs, and the run
+/// is closed in the same batch so nothing ever replays it. `Error{HookStop}`
+/// reuses the guardrail receipt's projection row
+/// (`session::projection::project_row`) and is NOT prompt-bearing.
+///
+/// One `now_ms()` for the whole batch: it is one moment, and per-row calls
+/// can straddle a millisecond. The batch's durability is derived from its
+/// members by `events::durability_of` (U3) — `RunStarted` makes it a barrier
+/// on both arms — never chosen here.
+pub(super) fn hook_stop_receipt(
+    request: &RunRequest,
+    outcome: RunOutcome,
+    text: &str,
+) -> Vec<SessionEvent> {
+    let at = now_ms();
+    let run_id = format!("hookstop-{}", uuid::Uuid::new_v4());
+    // `Some` exactly when this batch opens the turn it files the receipt under.
+    let seeded_turn = (!request.is_resume()).then(TurnId::new_v4);
+    let mut events = Vec::with_capacity(5);
+    if let Some(turn_id) = seeded_turn {
+        events.extend(SessionEvent::user_turn(
+            turn_id,
+            MessageContent {
+                text: request.input.clone(),
+                blocks: Vec::new(),
+                thinking: None,
+                thinking_signature: None,
+            },
+            crate::scope::room_author_from_metadata(&request.metadata),
+            at,
+        ));
+    }
+    events.push(SessionEvent::RunStarted {
+        run_id: run_id.clone(),
+        at,
+        project_root: request
+            .workspace_override
+            .as_ref()
+            .map(|p| p.display().to_string()),
+        envelope: None,
+    });
+    events.push(SessionEvent::Error {
+        turn_id: seeded_turn,
+        kind: ErrorKind::HookStop,
+        message: text.to_string(),
+        // The model cannot retry its way past a hook; the hook (or the
+        // input it judged) has to change.
+        recoverable: false,
+        at,
+    });
+    events.push(SessionEvent::RunFinished {
+        run_id,
+        outcome,
+        at,
+    });
+    events
+}
+
+/// One batch, best-effort: a stop that could not be journaled still stops
+/// the run (the user already saw the text); the warn is the trace. Mirrors
+/// `harness_bridge::callback::record_input_block`, the guardrail twin.
+pub(super) async fn journal_hook_stop(request: &RunRequest, outcome: RunOutcome, text: &str) {
+    let Some(svc) = crate::session::service::global_session_service() else {
+        warn!(
+            session_key = %request.session_key.to_key_string(),
+            "session/service capability absent; hook stop not journaled — see `aleph doctor`"
+        );
+        return;
+    };
+    if let Err(e) = svc
+        .emit_batch(
+            &request.session_key,
+            hook_stop_receipt(request, outcome, text),
+            None,
+        )
+        .await
+    {
+        warn!(
+            session_key = %request.session_key.to_key_string(),
+            error = %e,
+            "hook stop receipt append failed"
+        );
+    }
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Run the agent loop (think->act two-step, Claude Code-inspired).
     ///
@@ -498,6 +594,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         reason = %reason,
                         "BeforeAgentStart hook aborted the run"
                     );
+                    // §5.4: the receipt goes down BEFORE the stop is reported,
+                    // so a reload cannot show a turn that never happened. A
+                    // deny surfaces as `Err` to the caller, so the closer says
+                    // `Errored` — the plan's word (the spec said `Cancelled`;
+                    // both reduce `Clean`, and `Errored` is what the caller's
+                    // `RunState::Failed` already says about this exit).
+                    journal_hook_stop(request, RunOutcome::Errored, &reason).await;
                     return Err(ExecutionError::Failed(format!(
                         "BeforeAgentStart hook aborted the run: {reason}"
                     )));
@@ -518,6 +621,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         run_id = run_id,
                         "BeforeAgentStart hook requested prevent_continuation; stopping run"
                     );
+                    // §5.4: same receipt as the deny arm; `Cancelled` because
+                    // the run did what the hook asked — this is not an error.
+                    journal_hook_stop(request, RunOutcome::Cancelled, &stop_msg).await;
                     return Ok(stop_msg);
                 }
                 Ok(_) => {}
@@ -658,5 +764,277 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
         result
+    }
+}
+
+/// The receipt a `BeforeAgentStart` stop leaves (§5.4) is a pure builder, so
+/// it is tested next to itself; `tests.rs` holds the integration-shaped ones.
+#[cfg(test)]
+mod hook_stop_tests {
+    use super::*;
+    use crate::session::events::{
+        batch_durability, Durability, ErrorKind, RunOutcome, SessionEvent, SessionEventRecord,
+    };
+    use crate::session::reduction::{reduce_run, RunDisposition};
+    use crate::session::store::event_type_tag;
+
+    fn request(input: &str, resume: bool) -> RunRequest {
+        let mut metadata = std::collections::HashMap::new();
+        if resume {
+            metadata.insert("resume".to_string(), "true".to_string());
+        }
+        RunRequest {
+            run_id: "test-run".to_string(),
+            input: input.to_string(),
+            session_key: crate::routing::session_key::SessionKey::main("hook-stop"),
+            timeout_secs: None,
+            metadata,
+            attachments: Vec::new(),
+            pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            sandbox_override: None,
+            workspace_override: None,
+            max_iterations_override: None,
+            model_override: None,
+        }
+    }
+
+    fn seq_log(events: Vec<SessionEvent>) -> Vec<SessionEventRecord> {
+        events
+            .into_iter()
+            .enumerate()
+            .map(|(i, e)| SessionEventRecord {
+                seq: i as u64 + 1,
+                event: e,
+                created_at_ms: (i as i64 + 1) * 10,
+            })
+            .collect()
+    }
+
+    fn kinds(events: &[SessionEvent]) -> Vec<&'static str> {
+        events.iter().map(event_type_tag).collect()
+    }
+
+    /// Every payload `at` in the batch is the same instant: it is one moment,
+    /// and per-row `now_ms()` calls can straddle a millisecond.
+    fn assert_one_instant(events: &[SessionEvent]) {
+        let ats: Vec<i64> = events
+            .iter()
+            .map(|e| match e {
+                SessionEvent::TurnStarted { at, .. }
+                | SessionEvent::UserMessage { at, .. }
+                | SessionEvent::RunStarted { at, .. }
+                | SessionEvent::Error { at, .. }
+                | SessionEvent::RunFinished { at, .. } => *at,
+                other => panic!("unexpected receipt member {other:?}"),
+            })
+            .collect();
+        assert!(
+            ats.windows(2).all(|w| w[0] == w[1]),
+            "one batch, one instant; got {ats:?}"
+        );
+    }
+
+    /// §5.4: the log says "a run happened and the hook stopped it" — five
+    /// events, reducing Clean, so §5.2 does not read it as an unanswered
+    /// message and retrigger it three times.
+    #[test]
+    fn a_stopping_hook_leaves_five_events_that_reduce_clean() {
+        let evs = hook_stop_receipt(
+            &request("hi", false),
+            RunOutcome::Cancelled,
+            "halted by policy",
+        );
+        assert_eq!(
+            kinds(&evs),
+            [
+                "turn_started",
+                "user_message",
+                "run_started",
+                "error",
+                "run_finished"
+            ]
+        );
+        assert!(matches!(
+            &evs[3],
+            SessionEvent::Error { kind: ErrorKind::HookStop, message, recoverable: false, .. }
+                if message == "halted by policy"
+        ));
+        let r = reduce_run(&seq_log(evs)).expect("legal");
+        assert_eq!(r.disposition, RunDisposition::Clean);
+        assert!(r.dangling.is_empty() && r.contradictions.is_empty());
+    }
+
+    /// The seed pair carries the user's text, the run bracket shares one
+    /// `run_id`, the receipt files under the turn the batch opened, and the
+    /// closer carries the outcome the arm chose.
+    #[test]
+    fn the_receipt_is_one_turn_one_run_one_instant() {
+        let evs = hook_stop_receipt(&request("hi", false), RunOutcome::Cancelled, "halted");
+        assert_one_instant(&evs);
+        let (
+            SessionEvent::TurnStarted { turn_id: t0, .. },
+            SessionEvent::UserMessage {
+                turn_id: t1,
+                content,
+                synthetic,
+                ..
+            },
+        ) = (&evs[0], &evs[1])
+        else {
+            panic!("seed pair first, got {:?}", kinds(&evs));
+        };
+        assert_eq!(t0, t1, "the seed pair shares a turn");
+        assert_eq!(content.text, "hi");
+        assert!(!synthetic, "the user's own words are not harness-authored");
+        let (
+            SessionEvent::RunStarted {
+                run_id: r0,
+                envelope,
+                ..
+            },
+            SessionEvent::Error { turn_id, .. },
+            SessionEvent::RunFinished {
+                run_id: r1,
+                outcome,
+                ..
+            },
+        ) = (&evs[2], &evs[3], &evs[4])
+        else {
+            panic!("run bracket around the receipt, got {:?}", kinds(&evs));
+        };
+        assert_eq!(r0, r1, "the bracket names one run");
+        assert!(
+            r0.starts_with("hookstop-"),
+            "a locally-minted marker id, got {r0}"
+        );
+        assert!(envelope.is_none(), "this writer resolved no knobs");
+        assert_eq!(
+            *turn_id,
+            Some(*t0),
+            "the receipt files under the turn it opened"
+        );
+        assert_eq!(*outcome, RunOutcome::Cancelled);
+    }
+
+    /// A resumed run already holds its user message; the receipt must not
+    /// seed a second, empty one — and with no turn opened here, the receipt
+    /// names none rather than a turn the log never saw.
+    #[test]
+    fn a_hook_stopped_resume_writes_no_seed_pair() {
+        let evs = hook_stop_receipt(&request("", true), RunOutcome::Errored, "denied");
+        assert_eq!(kinds(&evs), ["run_started", "error", "run_finished"]);
+        assert_one_instant(&evs);
+        assert!(
+            matches!(
+                &evs[1],
+                SessionEvent::Error {
+                    turn_id: None,
+                    kind: ErrorKind::HookStop,
+                    ..
+                }
+            ),
+            "no turn was opened, so none is named; got {:?}",
+            evs[1]
+        );
+        assert!(matches!(
+            &evs[2],
+            SessionEvent::RunFinished {
+                outcome: RunOutcome::Errored,
+                ..
+            }
+        ));
+        let r = reduce_run(&seq_log(evs)).expect("legal");
+        assert_eq!(r.disposition, RunDisposition::Clean);
+    }
+
+    /// U3: the batch's durability is DERIVED from its members by the store's
+    /// policy table, never chosen here. Both shapes carry `RunStarted`, so
+    /// both are a barrier — asserted through the real derivation, so a
+    /// receipt that lost its marker would fail here, not in production.
+    #[test]
+    fn both_receipt_shapes_derive_a_barrier_from_their_members() {
+        for (resume, label) in [(false, "seeded"), (true, "resume")] {
+            let evs = hook_stop_receipt(&request("hi", resume), RunOutcome::Cancelled, "x");
+            assert_eq!(
+                batch_durability(evs.iter()),
+                Durability::Barrier,
+                "{label}: a receipt without a barrier member could be lost on crash"
+            );
+        }
+    }
+
+    /// The effect, not the call: after `journal_hook_stop` the session log
+    /// holds the receipt, in order, and the real reducer reads it `Clean` —
+    /// so the census below is guarding a wire that actually reaches the
+    /// store. `SessionKey::ephemeral` mints a fresh id: the shared test
+    /// service is one store, and tests keep to their own keys.
+    #[tokio::test]
+    async fn journal_hook_stop_appends_the_receipt_to_the_session_log() {
+        use crate::session::service::SessionService;
+        let svc = crate::session::in_process::install_test_session_service();
+        let mut req = request("hi", false);
+        req.session_key = crate::routing::session_key::SessionKey::ephemeral("hook-stop");
+
+        journal_hook_stop(&req, RunOutcome::Cancelled, "halted by policy").await;
+
+        let records = svc
+            .get_events(&req.session_key, None, None)
+            .await
+            .expect("the log reads back");
+        let logged: Vec<&'static str> = records.iter().map(|r| event_type_tag(&r.event)).collect();
+        assert_eq!(
+            logged,
+            [
+                "turn_started",
+                "user_message",
+                "run_started",
+                "error",
+                "run_finished"
+            ],
+            "the receipt reached the store as one batch, in order"
+        );
+        let r = reduce_run(&records).expect("legal");
+        assert_eq!(r.disposition, RunDisposition::Clean);
+    }
+
+    /// Both stop arms owe the receipt, and owe it BEFORE they return — count
+    /// the `return`s inside the `BeforeAgentStart` match against the journal
+    /// calls in the segment that precedes each one. A journal call moved
+    /// after its `return` (or into the caller) leaves that segment empty.
+    #[test]
+    fn both_before_agent_start_exits_journal_the_stop() {
+        use crate::utils::source_scan::{code_text, production_prefix};
+        let code = code_text(&production_prefix(include_str!("mod.rs")));
+        // The dispatch line is the anchor: a hook-event name inside a comment
+        // or a `warn!` string cannot satisfy it (`code_text` strips both).
+        const ANCHOR: &str = "execute_interceptors(HookEvent::BeforeAgentStart,";
+        assert_eq!(
+            code.matches(ANCHOR).count(),
+            1,
+            "exactly one BeforeAgentStart dispatch in the production half"
+        );
+        let block = code
+            .split(ANCHOR)
+            .nth(1)
+            .and_then(|rest| rest.split("Ok(_) => {}").next())
+            .expect("the BeforeAgentStart match's stop arms end at the pass-through arm");
+        let segments: Vec<&str> = block.split("return ").collect();
+        let exits = segments.len() - 1;
+        assert_eq!(
+            exits, 2,
+            "two stop exits (deny, prevent_continuation); got {exits}"
+        );
+        for (i, before) in segments[..exits].iter().enumerate() {
+            assert_eq!(
+                before.matches("journal_hook_stop(").count(),
+                1,
+                "exit {i} must journal exactly once before it returns; segment:\n{before}"
+            );
+        }
+        assert_eq!(
+            segments[exits].matches("journal_hook_stop(").count(),
+            0,
+            "a journal call after the last return is unreachable"
+        );
     }
 }
