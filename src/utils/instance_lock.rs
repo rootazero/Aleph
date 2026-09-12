@@ -91,19 +91,25 @@ impl Drop for InstanceLock {
 }
 
 /// Unlink one holder sidecar. `NotFound` is not an error — an operator or
-/// `aleph doctor --fix` may already have cleared it; anything else is
-/// warned, because the next `aleph doctor` will report the leftover as a
-/// crashed daemon's.
-fn remove_holder_record(holder_path: &Path) {
+/// `aleph doctor --fix` may already have cleared it.
+fn unlink_holder_record(holder_path: &Path) -> std::io::Result<()> {
     match std::fs::remove_file(holder_path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => tracing::warn!(
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// [`unlink_holder_record`] for the release paths, which cannot return an
+/// error: anything but success is warned, because the next `aleph doctor`
+/// will report the leftover as a crashed daemon's.
+fn remove_holder_record(holder_path: &Path) {
+    if let Err(e) = unlink_holder_record(holder_path) {
+        tracing::warn!(
             holder = %holder_path.display(),
             error = %e,
             "instance lock released but its holder sidecar could not be removed; \
              `aleph doctor` will report it as stale until it is cleared"
-        ),
+        );
     }
 }
 
@@ -163,11 +169,16 @@ pub enum AcquireOutcome {
     },
 }
 
+/// What the holder sidecar says, for `aleph doctor`. `process_alive` is
+/// about the *recorded* PID only — whether the lock itself is held is a
+/// separate question, answered by [`is_lock_held`]; a stale record can sit
+/// next to a held lock (a daemon whose PID was never rewritten).
 #[derive(Debug)]
 pub struct HolderDiagnostic {
     pub pid: i32,
     pub process_alive: bool,
     pub lock_path: PathBuf,
+    pub holder_path: PathBuf,
 }
 
 /// Attempt to acquire the singleton lock for `data_dir`. Caller must
@@ -179,47 +190,7 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
     }
     let lock_path = data_dir.join(LOCK_FILENAME);
     let holder_path = data_dir.join(HOLDER_FILENAME);
-
-    // Refuse a symlink at `lock_path`. The path is fixed (`<data_dir>/aleph.lock`)
-    // and only this process should ever create the file, so a symlink there is
-    // either an attacker-planted redirect or a previous failed install — both
-    // of which must NOT be silently followed. Following the symlink would
-    // (a) lock an attacker-controlled file (DoS: lock against the real
-    // aleph.lock becomes a lock against their file), or (b) let the sidecar
-    // rename target an unexpected inode. `O_NOFOLLOW` is POSIX; Windows has
-    // no portable equivalent, so non-Unix falls back to the previous behavior.
-    #[cfg(unix)]
-    let file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&lock_path)
-        {
-            Ok(f) => f,
-            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!(
-                        "refusing to use lock file at {}: a symlink is present \
-                         where a regular file is required (possible tampering)",
-                        lock_path.display()
-                    ),
-                ));
-            }
-            Err(e) => return Err(e),
-        }
-    };
-    #[cfg(not(unix))]
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)?;
+    let file = open_lock_file(&lock_path, LockFileOpen::CreateForHolding)?;
 
     match file.try_lock_exclusive() {
         Ok(()) => {
@@ -289,6 +260,116 @@ fn classify_lock_failure(
     }
 }
 
+/// How [`open_lock_file`] opens `aleph.lock`.
+#[derive(Clone, Copy)]
+enum LockFileOpen {
+    /// `try_acquire`: read+write, created if absent — this process intends
+    /// to hold the lock.
+    CreateForHolding,
+    /// A probe: read-only, never created, so `NotFound` is the answer "there
+    /// is no lock file, hence nothing to hold".
+    ProbeExisting,
+}
+
+/// Open the lock file itself, refusing a symlink at `lock_path`.
+///
+/// The path is fixed (`<data_dir>/aleph.lock`) and only this process should
+/// ever create the file, so a symlink there is either an attacker-planted
+/// redirect or a previous failed install — both of which must NOT be
+/// silently followed. Following the symlink would (a) lock an
+/// attacker-controlled file (DoS: lock against the real aleph.lock becomes a
+/// lock against their file), or (b) let the sidecar rename target an
+/// unexpected inode. `O_NOFOLLOW` is POSIX; Windows has no portable
+/// equivalent, so non-Unix falls back to a plain open.
+fn open_lock_file(lock_path: &Path, mode: LockFileOpen) -> std::io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    if let LockFileOpen::CreateForHolding = mode {
+        options.create(true).write(true).truncate(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+        match options.open(lock_path) {
+            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to use lock file at {}: a symlink is present \
+                     where a regular file is required (possible tampering)",
+                    lock_path.display()
+                ),
+            )),
+            other => other,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        options.open(lock_path)
+    }
+}
+
+/// Probe whether the singleton lock for `data_dir` is held right now.
+///
+/// There is no portable "is this file locked" query, so the probe takes the
+/// lock non-blockingly and releases it at once when it is free. Nothing is
+/// written — no sidecar, no registry entry — which is what separates this
+/// from `try_acquire`. The price is a microsecond window in which a starter
+/// racing the probe sees one spurious contention.
+///
+/// `Ok(false)` when there is no lock file. Errors that are neither
+/// contention nor `NotFound` propagate: an unknown answer is not "free",
+/// and the doctor's stale-record repair deletes on "free".
+pub fn is_lock_held(data_dir: &Path) -> std::io::Result<bool> {
+    let file = match open_lock_file(&data_dir.join(LOCK_FILENAME), LockFileOpen::ProbeExisting) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(false), // released when `file` drops
+        Err(e) if is_lock_contended(&e) => Ok(true),
+        Err(e) => Err(e),
+    }
+}
+
+/// What [`remove_holder_record_if_lock_free`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleRecordRepair {
+    /// The lock was free; the holder record is gone.
+    Removed,
+    /// The lock is held by a running process; nothing was touched.
+    LockHeld,
+}
+
+/// Remove a stale holder record — but only while holding the lock, so that
+/// no running holder can be behind it.
+///
+/// Deleting on a mere liveness check of the recorded PID is the double-
+/// instance hazard in miniature: a daemon whose record was never rewritten
+/// after forking is alive and holding the lock while its record names a dead
+/// PID, and removing its files would let the next starter run alongside it.
+/// Here the lock itself is the witness: it is taken (non-blocking) for the
+/// duration of the unlink, exactly as `InstanceLock::drop` removes a record
+/// while still holding the lock, and released afterwards. Contention means
+/// `LockHeld` and no change. A missing lock file means nothing can hold it,
+/// so the record is simply removed.
+pub fn remove_holder_record_if_lock_free(data_dir: &Path) -> std::io::Result<StaleRecordRepair> {
+    let holder_path = data_dir.join(HOLDER_FILENAME);
+    let _held_for_unlink =
+        match open_lock_file(&data_dir.join(LOCK_FILENAME), LockFileOpen::ProbeExisting) {
+            Ok(file) => match file.try_lock_exclusive() {
+                Ok(()) => Some(file),
+                Err(e) if is_lock_contended(&e) => return Ok(StaleRecordRepair::LockHeld),
+                Err(e) => return Err(e),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+    unlink_holder_record(&holder_path)?;
+    Ok(StaleRecordRepair::Removed)
+}
+
 /// Read holder metadata from the sidecar WITHOUT competing for the lock.
 ///
 /// Returns:
@@ -317,6 +398,7 @@ pub fn diagnose_holder(data_dir: &Path) -> std::io::Result<Option<HolderDiagnost
         pid,
         process_alive: process_matches(pid, expected_start),
         lock_path: data_dir.join(LOCK_FILENAME),
+        holder_path,
     }))
 }
 
@@ -653,6 +735,88 @@ mod tests {
                 }
                 other => panic!("sidecar {garbage:?}: expected HeldByUnknown, got {other:?}"),
             }
+        }
+    }
+
+    /// The probe must answer both ways from the lock itself, and must not
+    /// leave a record behind when it briefly takes a free lock.
+    #[test]
+    fn is_lock_held_answers_from_the_lock_not_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !is_lock_held(dir.path()).unwrap(),
+            "no lock file: nothing holds it"
+        );
+
+        let hold = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        assert!(
+            is_lock_held(dir.path()).unwrap(),
+            "held while the guard lives"
+        );
+
+        drop(hold);
+        assert!(!is_lock_held(dir.path()).unwrap(), "free once released");
+        assert!(
+            !dir.path().join(HOLDER_FILENAME).exists(),
+            "a probe of a free lock writes no holder record"
+        );
+    }
+
+    /// The repair's whole point: a record that names a dead PID next to a
+    /// lock that is HELD must be left alone — that is a live holder whose
+    /// record was never rewritten, and deleting its files is how a second
+    /// instance gets to run beside it.
+    #[test]
+    fn stale_record_is_not_removed_while_the_lock_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let _hold = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        let holder = write_stale_sidecar(dir.path());
+        assert!(
+            !diagnose_holder(dir.path()).unwrap().unwrap().process_alive,
+            "precondition: the record reads as dead"
+        );
+
+        assert_eq!(
+            remove_holder_record_if_lock_free(dir.path()).unwrap(),
+            StaleRecordRepair::LockHeld
+        );
+        assert!(holder.exists(), "a held lock's record is not removed");
+        assert!(
+            dir.path().join(LOCK_FILENAME).exists(),
+            "the lock file is never removed"
+        );
+    }
+
+    /// And with the lock free, the same record goes — with or without a lock
+    /// file present.
+    #[test]
+    fn stale_record_is_removed_when_the_lock_is_free() {
+        for with_lock_file in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            if with_lock_file {
+                std::fs::write(dir.path().join(LOCK_FILENAME), b"").unwrap();
+            }
+            let holder = write_stale_sidecar(dir.path());
+
+            assert_eq!(
+                remove_holder_record_if_lock_free(dir.path()).unwrap(),
+                StaleRecordRepair::Removed,
+                "with_lock_file={with_lock_file}"
+            );
+            assert!(
+                !holder.exists(),
+                "with_lock_file={with_lock_file}: record removed"
+            );
+            assert!(
+                !is_lock_held(dir.path()).unwrap(),
+                "with_lock_file={with_lock_file}: the repair releases the lock it took"
+            );
         }
     }
 
