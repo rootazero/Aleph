@@ -63,6 +63,8 @@ use super::types::{
 };
 
 mod actions;
+mod cookies;
+mod dialog;
 mod evaluate;
 mod events;
 mod navigate;
@@ -162,6 +164,14 @@ impl CdpBackend {
     pub(crate) const fn command_timeout(&self) -> Duration {
         self.command_timeout
     }
+
+    /// The profile this backend serves — the name a `NoSession` has to carry.
+    ///
+    /// Reads `req.profile` rather than a second field, because [`Self::new`]
+    /// made that the one spelling of "which profile this backend drives".
+    pub(crate) fn profile_name(&self) -> &str {
+        &self.req.profile
+    }
 }
 
 /// Three CDP failures, three different operator problems.
@@ -241,19 +251,6 @@ pub(crate) fn require(
         verb,
         supported_by: supported_by(pick),
     })
-}
-
-/// Placeholder for the verbs Task 13 fills in.
-///
-/// Unreachable in production: nothing constructs a `CdpBackend` until Task 14
-/// adds the `get_backend` Cdp arm. Task 13 deletes this function and pins its
-/// absence with a census test, so it cannot become a permanent "reports success
-/// while doing nothing" (判据 §11) by outliving the task that owed the code.
-fn not_yet_wired(verb: &'static str) -> BrowserError {
-    BrowserError::ActionFailed(format!(
-        "CDP_VERB_NOT_WIRED: {verb} lands in the next task; this backend is not \
-         reachable from any profile yet"
-    ))
 }
 
 #[async_trait]
@@ -361,11 +358,11 @@ impl BrowserBackend for CdpBackend {
     }
     async fn handle_dialog(
         &self,
-        _t: &str,
-        _action: &str,
-        _prompt: Option<&str>,
+        tab_id: &str,
+        action: &str,
+        prompt_text: Option<&str>,
     ) -> Result<(), BrowserError> {
-        Err(not_yet_wired("handle_dialog"))
+        dialog::handle_dialog(self, capabilities(self.engine), tab_id, action, prompt_text).await
     }
     async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError> {
         events::console_messages(self, tab_id).await
@@ -373,14 +370,14 @@ impl BrowserBackend for CdpBackend {
     async fn network_log(&self, tab_id: &str) -> Result<String, BrowserError> {
         events::network_log(self, tab_id).await
     }
-    async fn cookies(&self, _op: &CookieOp) -> Result<String, BrowserError> {
-        Err(not_yet_wired("cookies"))
+    async fn cookies(&self, op: &CookieOp) -> Result<String, BrowserError> {
+        cookies::cookies(self, op).await
     }
-    async fn save_state(&self, _path: &std::path::Path) -> Result<(), BrowserError> {
-        Err(not_yet_wired("save_state"))
+    async fn save_state(&self, path: &std::path::Path) -> Result<(), BrowserError> {
+        cookies::save_state(self, path).await
     }
-    async fn load_state(&self, _path: &std::path::Path) -> Result<(), BrowserError> {
-        Err(not_yet_wired("load_state"))
+    async fn load_state(&self, path: &std::path::Path) -> Result<(), BrowserError> {
+        cookies::load_state(self, path).await
     }
     // `wait_for` and `fill_form` keep the trait's shared defaults
     // (`backend.rs`) — real shared implementations, not capability stubs, and
@@ -712,6 +709,105 @@ mod tests {
              a genuinely dead item the permit would go on hiding.",
             sites.join("\n  ")
         );
+    }
+
+    /// Task 12 left sixteen verbs answering with a marked placeholder because
+    /// the trait has no defaults for them and `navigate` needs a working
+    /// `BrowserBackend`. Task 13 owes the code; this census is what stops the
+    /// placeholder from outliving the task and becoming a permanent error
+    /// nobody reads as "unimplemented" (判据 §11).
+    ///
+    /// ⚠️ **A green here is not the whole claim.** This test knows only about
+    /// the marker that was left behind, so a verb whose placeholder was deleted
+    /// and never replaced by real code is invisible to it. The list it was
+    /// written against was counted first, from
+    /// `grep -o 'not_yet_wired("[a-z_]*")' mod.rs | sort -u` at `910b6b3ef`:
+    /// sixteen, and the sixteen delegations are in the `impl` above.
+    ///
+    /// The needles are ASSEMBLED, never written whole. This test is IN `mod.rs`
+    /// and scans `mod.rs`, so a literal here would match itself and the census
+    /// would be permanently red no matter what the production code did — the
+    /// 恒红 face of a predicate that cannot fail for the reason it names
+    /// (判据 §2), and not visible from the assertion.
+    #[test]
+    fn no_verb_is_left_unwired() {
+        let marker = concat!("CDP_VERB", "_NOT_WIRED");
+        let helper = concat!("not_yet", "_wired");
+        let scanned: [(&str, &str); 10] = [
+            ("mod.rs", include_str!("mod.rs")),
+            ("actions.rs", include_str!("actions.rs")),
+            ("cookies.rs", include_str!("cookies.rs")),
+            ("dialog.rs", include_str!("dialog.rs")),
+            ("evaluate.rs", include_str!("evaluate.rs")),
+            ("events.rs", include_str!("events.rs")),
+            ("navigate.rs", include_str!("navigate.rs")),
+            ("screenshot.rs", include_str!("screenshot.rs")),
+            ("snapshot.rs", include_str!("snapshot.rs")),
+            ("tabs.rs", include_str!("tabs.rs")),
+        ];
+
+        // `include_str!` needs literals, so the file list above is hand-written
+        // — and a hand-written list covers only the day it was written
+        // (判据 §5). The directory is the authority for what this module IS, so
+        // it is read back and compared: a module added later and forgotten here
+        // makes this red rather than silently going unscanned.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/browser/cdp_backend");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .expect("this module's own directory is readable")
+            .filter_map(|e| {
+                let name = e.ok()?.file_name().to_string_lossy().into_owned();
+                name.ends_with(".rs").then_some(name)
+            })
+            .collect();
+        on_disk.sort();
+        let mut listed: Vec<String> = scanned.iter().map(|(n, _)| (*n).to_string()).collect();
+        listed.sort();
+        assert_eq!(
+            listed, on_disk,
+            "the scanned list and this directory disagree; a file missing from \
+             the list is one this census never looks at"
+        );
+
+        // `code_keeping_literals`, not a line filter: it strips comments
+        // through the lexer (so a doc comment ABOUT the placeholder is not a
+        // hit, and neither is one trailing live code) while KEEPING literal
+        // payloads — and the marker lived inside a `format!` string, so a
+        // stripper that dropped payloads would report green for a restored
+        // placeholder.
+        let unwired = |src: &str| -> Vec<String> {
+            crate::utils::source_scan::code_keeping_literals(src)
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.contains(marker) || l.contains(helper))
+                .map(str::to_string)
+                .collect()
+        };
+
+        // The recogniser's control, and it is not optional: this test asserts a
+        // NEGATIVE over a corpus with no positive case left in it, so a
+        // recogniser that silently stopped matching would look exactly like
+        // success, forever (判据 §3).
+        let restored = format!(
+            "        Err({helper}({q}click{q}))\n\
+             fn x() {{ {q}{marker}: whatever{q} }}\n",
+            q = '"'
+        );
+        assert_eq!(
+            unwired(&restored).len(),
+            2,
+            "the recogniser does not see a restored placeholder, so its green \
+             says nothing"
+        );
+        assert!(
+            unwired(&format!("        // {helper} is gone; see {marker}\n")).is_empty(),
+            "prose ABOUT the placeholder must not count as one, or this census \
+             fires on its own documentation"
+        );
+
+        for (name, src) in scanned {
+            let hits = unwired(src);
+            assert!(hits.is_empty(), "{name} still has an unwired verb: {hits:?}");
+        }
     }
 
     /// The SSRF guard must be consulted BEFORE the wire, not after. "The
