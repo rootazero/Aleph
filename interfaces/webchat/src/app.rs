@@ -488,23 +488,22 @@ fn AppContent() -> impl IntoView {
 /// Chrome buttons that live INSIDE the `<main>` top drag band so they sit
 /// on the traffic-light y-baseline (window-y ≈ 15 on macOS).
 ///
-/// Two affordances, both chat-tab-only:
-///   • `LayoutToggle` — sits at the chat-surface top-right. Right offset
-///     is `right-[44px]` in `ChatOnly` (4 px left of the
-///     `NotificationCenter` bell) and `right-[calc(var(--aleph-workspace-w)+8px)]`
-///     in `Split` so it tracks the chat / workspace boundary: the pane is
-///     `--aleph-workspace-w` of main, so the toggle parks 8 px inside the
-///     chat surface, glued to the pane's leading edge at any window width.
-///   • Workspace label ("WORKSPACE · idle / tool") — Split-only, left
-///     offset is `left-[calc(100% - var(--aleph-workspace-w) + 16px)]` so
-///     the text sits 16 px inside the workspace pane's leading edge,
-///     matching the previous `WorkspaceHeader.px-4` placement.
+/// One affordance, chat-tab-only: `LayoutToggle` sits at the chat-surface
+/// top-right. Right offset is `right-[44px]` in `ChatOnly` (4 px left of
+/// the `NotificationCenter` bell) and
+/// `right-[calc(var(--aleph-workspace-w)+8px)]` in `Split` so it tracks
+/// the chat / workspace boundary: the pane is `--aleph-workspace-w` of
+/// main, so the toggle parks 8 px inside the chat surface, glued to the
+/// pane's leading edge at any window width. (The band's "WORKSPACE" label
+/// was deleted — see the body comment below.)
 ///
-/// Both offsets read the same `--aleph-workspace-w` token that sizes the
-/// pane (see `tailwind.css` `:root`), so they never drift from the real
-/// boundary — change the width in one place and all three follow.
+/// That offset is one of the three readers of `--aleph-workspace-w` (the
+/// pane's own width and the chat column's right padding are the other
+/// two); the token's default lives in `tailwind.css` `:root` and the
+/// resizer in `workspace_panel.rs` is its only runtime writer, on the
+/// document root, so all three readers follow one value.
 ///
-/// Both children opt out of the drag region (`aleph-no-drag` +
+/// The child opts out of the drag region (`aleph-no-drag` +
 /// `data-tauri-drag-region="false"`); the surrounding band space still
 /// drags the window on macOS Overlay-titlebar windows.
 #[component]

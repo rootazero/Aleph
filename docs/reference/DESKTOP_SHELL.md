@@ -283,6 +283,17 @@ Phase 2 is a CSS/theme-layer pass on `interfaces/webchat/`:
 - **Typography** — an explicit `-apple-system` / SF system font stack.
 - **Motion** — one converged ease-out curve; `prefers-reduced-motion` honored.
 - **Depth** — soft, layered shadow tokens.
+- **Workspace pane and the drag band** — the chat's right-hand workspace pane
+  is a **pane of bodies** (`WorkspaceBody { Artifacts, Deliverables, Tasks,
+  Canvas }`, `state/layout.rs`; the whiteboard canvas has been one of them
+  since 2026-09-12 and has no route or tab of its own). The only piece of it
+  the shell touches is the `LayoutToggle` parked inside the `<main>` top drag
+  band (`app.rs::ChatBandChrome`, `aleph-no-drag` +
+  `data-tauri-drag-region="false"`): its right offset reads
+  `--aleph-workspace-w`, which the pane's left-edge resizer publishes on the
+  **document root** so that the band chrome — outside `ChatView`'s subtree —
+  follows the dragged width. Mechanism, keep-alive rule and auto-reveal live in
+  [CANVAS.md §6](CANVAS.md); nothing here is shell-specific.
 
 The shell sets DOM flags via an `initialization_script`; the Panel only
 *reacts* to them in CSS. No business logic crosses the boundary.
