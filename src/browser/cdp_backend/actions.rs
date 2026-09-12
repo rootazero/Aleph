@@ -222,24 +222,25 @@ async fn resolve_target(
                      and use the ref printed beside the element you want."
                 )));
             }
-            let (resolved, main_frame) = {
+            let (resolved, in_another_renderer) = {
                 let tabs = handle.tabs.lock().await;
                 let tab = tabs
                     .entries
                     .get(tab_id)
                     .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))?;
-                (
-                    tab.refs.resolve(&RefId(ref_id.clone())),
-                    tab.refs.main_frame_id().map(str::to_string),
-                )
+                let resolved = tab.refs.resolve(&RefId(ref_id.clone()));
+                let cross = resolved
+                    .as_ref()
+                    .is_ok_and(|e| tab.refs.is_cross_renderer(&e.key.frame_id));
+                (resolved, cross)
             };
             let entry = resolved.map_err(|reason| BrowserError::StaleRef {
                 ref_id: ref_id.clone(),
                 reason,
             })?;
 
-            // **A ref in another frame is refused, and this is the whole of the
-            // fix for it.**
+            // **A ref in another RENDERER is refused — not a ref in another
+            // frame.**
             //
             // `backendNodeId` is scoped to ONE capture of ONE renderer. For an
             // out-of-process frame the child's ids live in the child's space,
@@ -252,10 +253,21 @@ async fn resolve_target(
             // `Text` does not have. That is not a node-space check; it cannot
             // tell "the right element" from "some other element".
             //
-            // So this refuses instead. It gives up nothing that works: acting on
-            // such a ref is exactly the operation that silently mis-resolves
-            // today. READING is untouched — the snapshot still stitches the
-            // frame's content in, and the model can still see it.
+            // ⚠️ The first version of this gate asked "is this the main
+            // frame", and that was WIDER than the hazard. A same-origin
+            // `<iframe>`, a `srcdoc`, an `about:blank` — each is its own
+            // `frameId` inside the PAGE's renderer, each resolves correctly
+            // against the page session, and each WORKED before that gate
+            // refused it. `frame != renderer` is `port != site` one level up,
+            // and this file re-introduced the very confusion the `frames`
+            // fixture had just been fixed for (判据 §5: a predicate wider than
+            // the hazard it names).
+            //
+            // So the predicate is the measured hazard and nothing wider. It
+            // still gives up nothing that works: a cross-renderer ref is
+            // exactly the operation that silently mis-resolves. READING is
+            // untouched at every depth — the snapshot still stitches those
+            // frames in, and the model can still see them.
             //
             // Acting in the frame's own session is a real capability and a real
             // cost (four consumers need the session; `Target.attachToTarget` is
@@ -264,10 +276,7 @@ async fn resolve_target(
             // chain walk). It is its own task. Until then the model is told
             // where the capability does live, which is the point of having two
             // drivers at all.
-            if main_frame
-                .as_deref()
-                .is_some_and(|m| m != entry.key.frame_id)
-            {
+            if in_another_renderer {
                 return Err(BrowserError::ActionFailed(format!(
                     "ref {ref_id} is inside an <iframe> from a different site, \
                      which this browser runs in a separate process. The cdp \
@@ -1157,7 +1166,9 @@ mod tests {
         let mut tabs = handle.tabs.lock().await;
         let entry = tabs.entries.get_mut(tab).expect("tab entry");
         entry.refs.reset_for_document("L1");
-        entry.refs.set_main_frame("F-main");
+        entry
+            .refs
+            .set_cross_renderer_frames(["F-child".to_string()]);
         let main = entry
             .refs
             .mint(

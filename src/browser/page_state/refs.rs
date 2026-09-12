@@ -75,15 +75,21 @@ pub struct RefEntry {
 pub struct RefTable {
     /// The main frame's loader id — which document these refs belong to.
     document: Option<String>,
-    /// The main frame's **id**, recorded so a ref can be told apart from a ref
-    /// in some OTHER frame of the same page.
+    /// Frames whose documents live in a renderer of their OWN, as of the last
+    /// capture.
     ///
-    /// Separate from [`Self::document`] because the two change on different
-    /// events: a navigation gives the main frame a new LOADER and keeps its
-    /// frame id, which is why `reset_for_document` does not take this and
-    /// `PageState::build` sets it instead — build has `frames[0]` in hand,
-    /// which is the main frame by definition.
-    main_frame_id: Option<String>,
+    /// ⚠️ This replaced a `main_frame_id`, and the replacement is the fix for a
+    /// capability regression rather than a tidy-up. "Is this ref in the main
+    /// frame" is a WIDER predicate than the hazard it was guarding: a
+    /// `backendNodeId` is scoped to a RENDERER, not to a frame, so ids from a
+    /// same-origin `<iframe>`, a `srcdoc` or an `about:blank` — all separate
+    /// `frameId`s inside the page's own renderer — resolve perfectly well
+    /// against the page's session, and refusing them took away something that
+    /// worked (判据 §5).
+    ///
+    /// Empty is the honest default: before any capture, and for every
+    /// single-renderer page, nothing here is out of process.
+    cross_renderer_frames: std::collections::HashSet<String>,
     /// Next number to hand out. **Monotonic for the life of the tab**, across
     /// navigations: that is what makes "never reissued" true.
     next: u64,
@@ -99,7 +105,7 @@ impl RefTable {
     pub fn new() -> Self {
         Self {
             document: None,
-            main_frame_id: None,
+            cross_renderer_frames: std::collections::HashSet::new(),
             next: 1,
             retired_below: 1,
             by_key: HashMap::new(),
@@ -168,25 +174,30 @@ impl RefTable {
         self.document.as_deref()
     }
 
-    /// Record which frame is the main one. Called by `PageState::build` on
-    /// every capture, from `raw.frames[0]`.
-    pub fn set_main_frame(&mut self, frame_id: &str) {
-        if self.main_frame_id.as_deref() != Some(frame_id) {
-            self.main_frame_id = Some(frame_id.to_string());
-        }
+    /// Record which frames were captured through a session of their own.
+    /// Called by `PageState::build` on every capture, from
+    /// [`RawFrame::separate_renderer`].
+    ///
+    /// **Replaced wholesale, not merged.** A frame that stopped being
+    /// out-of-process between two captures must stop being refused, and a set
+    /// that only ever grew would keep refusing it — a stale entry here is a
+    /// capability that never comes back (判据 §5: a list only describes the
+    /// world on the day it was written).
+    pub fn set_cross_renderer_frames<I: IntoIterator<Item = String>>(&mut self, frames: I) {
+        self.cross_renderer_frames = frames.into_iter().collect();
     }
 
-    /// The main frame's id, or `None` before any capture has happened.
+    /// Is this frame's document in a renderer other than the page's?
     ///
-    /// A ref whose [`RefKey::frame_id`] differs from this is a ref in another
-    /// document of the same page — an `<iframe>`. For a same-renderer page that
-    /// is only bookkeeping; for an out-of-process frame the id lives in a
-    /// DIFFERENT node space, where resolving it against this page's session is
-    /// meaningless (判据: an id outside its space carries an implicit namespace,
-    /// which is no namespace at all).
+    /// The question a driver must ask before resolving one of its
+    /// `backendNodeId`s against the page's session: a renderer is one node
+    /// space, so ids from any frame the page's own capture produced are
+    /// meaningful there and ids from another renderer collide silently
+    /// (measured: the page session answers such an id with a DIFFERENT node,
+    /// and the geometry call then succeeds on that one).
     #[must_use]
-    pub fn main_frame_id(&self) -> Option<&str> {
-        self.main_frame_id.as_deref()
+    pub fn is_cross_renderer(&self, frame_id: &str) -> bool {
+        self.cross_renderer_frames.contains(frame_id)
     }
 
     #[must_use]

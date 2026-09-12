@@ -788,6 +788,12 @@ fn frames_of(
             frame_id,
             loader_id,
             offset,
+            // Every document of THIS capture shares THIS session's renderer, so
+            // one flag for the whole capture is the honest granularity — and
+            // `is_page_root` already carries it, so nothing new has to be
+            // derived (判据 §12: the fact is in hand; wire it, do not re-infer
+            // it downstream).
+            separate_renderer: !is_page_root,
             // This fetcher reads `inputChecked`, `optionSelected`, `inputValue`
             // and `textValue` for every document it parses, which is exactly
             // what this declaration licenses: `build` may then read silence

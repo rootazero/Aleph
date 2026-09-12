@@ -265,6 +265,28 @@ pub struct RawFrame {
     pub loader_id: String,
     /// Where this document's origin sits in page coordinates.
     pub offset: (i32, i32),
+    /// **Is this document in a renderer of its own?**
+    ///
+    /// `false` for every frame that came out of the PAGE's capture — the main
+    /// document and any same-renderer `<iframe>` (same-site, `srcdoc`,
+    /// `about:blank`). `true` only for a frame captured through its own CDP
+    /// session, i.e. an out-of-process one.
+    ///
+    /// **This, not "is it the main frame", is what decides whether a
+    /// `backendNodeId` from this document means anything to the page's
+    /// session.** A renderer is one node space: ids from any frame the page's
+    /// own capture produced resolve correctly against the page's session, and
+    /// ids from another renderer collide with it silently (measured: the page
+    /// session answers such an id with a DIFFERENT node and `getBoxModel`
+    /// succeeds on it).
+    ///
+    /// The distinction cost a capability regression to learn. A gate written as
+    /// "another frame" refuses rich-text editors, same-origin preview panes and
+    /// `srcdoc` widgets — all of which are separate `frameId`s in ONE renderer
+    /// and all of which worked (判据 §5: a predicate wider than the hazard it
+    /// names). `frame != renderer` is the same confusion as `port != site` one
+    /// level up.
+    pub separate_renderer: bool,
     /// **Did this capture read the live DOM properties** for the three fields
     /// that have a page-attribute fallback — [`RawNode::checked`],
     /// [`RawNode::selected`] and [`RawNode::value`]?

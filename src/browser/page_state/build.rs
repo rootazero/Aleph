@@ -27,12 +27,17 @@ impl PageState {
     ) -> PageState {
         if let Some(main) = raw.frames.first() {
             refs.reset_for_document(&main.loader_id);
-            // `frames[0]` IS the main frame (`RawDom::frames`' own doc), so the
-            // two halves of "which document are these refs against" are set
-            // from one place. The driver needs the frame id to tell a ref in
-            // this document from a ref in an `<iframe>`.
-            refs.set_main_frame(&main.frame_id);
         }
+        // Which frames the driver must NOT resolve against the page's session.
+        // Set from every capture, including the single-renderer one where it is
+        // empty — a capture that left a previous page's set in place would go on
+        // refusing frames that are no longer out of process.
+        refs.set_cross_renderer_frames(
+            raw.frames
+                .iter()
+                .filter(|f| f.separate_renderer)
+                .map(|f| f.frame_id.clone()),
+        );
 
         let mut nodes: Vec<StateNode> = Vec::new();
         for frame in &raw.frames {
@@ -405,22 +410,77 @@ fn states_of(node: &RawNode, role: Role, live: bool) -> NodeStates {
 
 #[cfg(test)]
 mod tests {
-    /// The refusal in `cdp_backend::actions::resolve_target` compares a ref's
-    /// frame against `RefTable::main_frame_id`, and reads `None` as "no capture
-    /// has happened, so there is nothing to compare". That is only safe if the
-    /// production path always records it — so this pins that `build` does,
-    /// rather than leaving the guard resting on an unstated invariant.
+    /// `cdp_backend::actions::resolve_target` refuses a ref whose frame
+    /// `RefTable::is_cross_renderer` reports, so `build` has to populate that
+    /// set from every capture — and populate it with the RIGHT frames.
+    ///
+    /// **Both directions, because the wrong predicate was green in one of
+    /// them.** The first version of that gate asked "is this the main frame",
+    /// which refused a same-origin child — a `frameId` of its own inside the
+    /// page's own renderer, whose `backendNodeId`s resolve correctly and which
+    /// worked before the gate arrived. The thirteen-node fixture has exactly
+    /// that shape (`F-main` + a same-renderer `F-child`), so the positive case
+    /// is asserted on the fixture the rest of this file already trusts.
     #[test]
-    fn build_always_records_which_frame_is_the_main_one() {
+    fn build_records_which_frames_are_in_another_renderer_and_no_others() {
         let raw = fixture();
         let mut refs = RefTable::new();
-        assert_eq!(refs.main_frame_id(), None, "precondition: not set yet");
+        assert!(
+            !refs.is_cross_renderer("F-main") && !refs.is_cross_renderer("F-child"),
+            "precondition: nothing is recorded before a capture"
+        );
+
         let _ = build_once(&mut refs);
-        assert_eq!(
-            refs.main_frame_id(),
-            Some(raw.frames[0].frame_id.as_str()),
-            "build must record frames[0] — the main frame by definition — or \
-             every cross-frame ref silently passes the gate that reads this"
+
+        // The precondition that makes the next assertion mean anything: this
+        // fixture really does have a CHILD frame, so "no frame is cross-renderer"
+        // is not vacuously true of a single-document page.
+        assert!(
+            raw.frames.len() > 1 && raw.frames.iter().all(|f| !f.separate_renderer),
+            "the fixture must be a multi-frame SINGLE-renderer page: {:?}",
+            raw.frames
+                .iter()
+                .map(|f| (&f.frame_id, f.separate_renderer))
+                .collect::<Vec<_>>()
+        );
+        for f in &raw.frames {
+            assert!(
+                !refs.is_cross_renderer(&f.frame_id),
+                "{} came out of the page's own capture, so its ids resolve \
+                 against the page session — gating it takes away a capability \
+                 that works",
+                f.frame_id
+            );
+        }
+
+        // The other direction: a frame captured through its own session IS
+        // recorded, or the gate never fires and H2 is back.
+        let mut oopif = fixture();
+        oopif.frames[1].separate_renderer = true;
+        let mut refs2 = RefTable::new();
+        let _ = PageState::build(
+            &oopif,
+            &mut refs2,
+            7,
+            "https://example.test/hn",
+            "Hacker News",
+            Duration::from_millis(142),
+        );
+        assert!(
+            refs2.is_cross_renderer(&oopif.frames[1].frame_id),
+            "an out-of-process frame must be recorded"
+        );
+        assert!(
+            !refs2.is_cross_renderer(&oopif.frames[0].frame_id),
+            "…and the page's own frame must not be"
+        );
+
+        // And the set is REPLACED, not merged: a frame that stops being out of
+        // process must stop being refused.
+        let _ = build_once(&mut refs2);
+        assert!(
+            !refs2.is_cross_renderer(&oopif.frames[1].frame_id),
+            "a stale entry here is a capability that never comes back"
         );
     }
 

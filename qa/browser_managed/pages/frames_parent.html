@@ -23,6 +23,25 @@
 <iframe id="child" src="__CHILD_URL__" width="600" height="220"
         title="Cross origin child frame"></iframe>
 
+<!-- THE SAME-RENDERER CONTROL, and it is not decoration.
+     A `srcdoc` iframe has a `frameId` of its own and lives in the PAGE's
+     renderer — so its `backendNodeId`s resolve against the page session and
+     acting inside it works. It is the only input that separates the two
+     predicates a driver could gate on: "another frame" (which this is) and
+     "another renderer" (which this is not).
+     A gate written as the first refuses this button while it still works —
+     that shipped once, and this control is what makes it impossible to ship
+     again. Same-origin preview panes, rich-text editors and payment widgets
+     are all this shape. -->
+<iframe id="same" width="600" height="90" title="Same renderer child frame"
+        srcdoc="&lt;body style='margin:4px'&gt;
+                &lt;button id='sb' aria-label='Same renderer button'
+                        onclick=&quot;document.getElementById('sstate').textContent='same:yes'&quot;&gt;
+                  SAME RENDERER
+                &lt;/button&gt;
+                &lt;div id='sstate'&gt;same:no&lt;/div&gt;
+                &lt;/body&gt;"></iframe>
+
 <div id="probe">probe:unset</div>
 <script>
 // Record what the parent can see of the child. On a genuinely cross-origin

@@ -609,6 +609,7 @@ mod tests {
                 frames: vec![RawFrame {
                     frame_id: "F".into(),
                     loader_id: "L".into(),
+                    separate_renderer: false,
                     live_properties_observed: false,
                     offset: (0, 0),
                     nodes: raw,
@@ -1179,6 +1180,7 @@ mod tests {
             frames: vec![RawFrame {
                 frame_id: "F".into(),
                 loader_id: "L".into(),
+                separate_renderer: false,
                 live_properties_observed: false,
                 offset: (0, 0),
                 nodes: vec![
@@ -1402,7 +1404,8 @@ mod tests {
                 frames: vec![RawFrame {
                     frame_id: "F".into(),
                     loader_id: "L".into(),
-                    live_properties_observed: false,
+                    separate_renderer: false,
+            live_properties_observed: false,
                     offset: (0, 0),
                     nodes,
                 }],

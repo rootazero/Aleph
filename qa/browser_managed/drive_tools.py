@@ -608,7 +608,33 @@ async def scenario_frames(rpc, led, args):
         f"child marker {args.child_marker!r} " + ("found" if sees_child else "absent from the tree"),
     )
 
-    led.log("\n--- can a control inside the frame be acted on? ---")
+    # ---- THE SAME-RENDERER CONTROL ----------------------------------------
+    # A `srcdoc` iframe: its own frameId, the PAGE's renderer. Acting inside it
+    # must work on BOTH drivers, and it is the only input that tells the two
+    # candidate predicates apart — "another frame" (true here) and "another
+    # renderer" (false here). A gate on the first refuses this button while it
+    # still works; that shipped once, and this claim is why it cannot ship
+    # again. It runs BEFORE the cross-renderer case so a driver that refuses
+    # everything is caught by a green-expected claim rather than by the absence
+    # of a red one (判据 §5).
+    led.log("\n--- control: a SAME-renderer child frame must still be actionable ---")
+    sref = ref_for(snap, "Same renderer button")
+    if led.check("a ref inside the same-renderer frame is addressable", bool(sref),
+                 f"ref={sref!r}"):
+        ok, res = await p.call("browser_click", ref_id=sref)
+        led.check(
+            "clicking inside a SAME-renderer frame succeeds on this driver",
+            ok and res.get("success"),
+            json.dumps(res)[:240],
+        )
+        ok, snap_s, _ = await p.snapshot()
+        led.check(
+            "…and that frame's own handler really ran",
+            ok and "same:yes" in snap_s,
+            f"same-frame state: {[l for l in snap_s.splitlines() if 'same:' in l][:2]}",
+        )
+
+    led.log("\n--- can a control inside the CROSS-renderer frame be acted on? ---")
     cref = ref_for(snap, "Child frame button")
     if not led.check("a ref inside the frame is addressable from the snapshot", bool(cref),
                      f"ref={cref!r}"):
