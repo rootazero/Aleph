@@ -1837,6 +1837,45 @@ mod tests {
         );
     }
 
+    /// A seed a run DID pick up and then crashed is `Interrupted`, never
+    /// `Unanswered`: the `RunStarted` check comes first, so the interrupted
+    /// arm (boundary repair + resume) keeps the shape and the unanswered arm
+    /// (no repair) never sees it. Pinned at the full-log level because every
+    /// other `Interrupted` fixture omits the seed — swap the two checks in
+    /// `reduce_disposition` and only these go red.
+    #[test]
+    fn a_seed_a_run_picked_up_is_interrupted_not_unanswered() {
+        let picked_up = seq_log(vec![
+            turn_started(),
+            user("hi"),
+            started("r1"),
+            requested("c1"),
+        ]);
+        assert_eq!(
+            reduced(&picked_up).disposition,
+            RunDisposition::Interrupted { attempts: 0 }
+        );
+        assert_eq!(
+            reduce_disposition(&[rec(1, user("hi")), rec(2, started("r1"))]),
+            Ok(RunDisposition::Interrupted { attempts: 0 })
+        );
+        // A stamp before the seed sits in the interrupted tail and counts —
+        // the same stamp would count for nothing under the unanswered
+        // reading, which only counts stamps after the message.
+        let stamped_then_seeded = seq_log(vec![
+            started("a"),
+            finished("a"),
+            attempted(1, 1),
+            turn_started(),
+            user("hi"),
+            started("b"),
+        ]);
+        assert_eq!(
+            reduced(&stamped_then_seeded).disposition,
+            RunDisposition::Interrupted { attempts: 1 }
+        );
+    }
+
     /// The unanswered ratchet counts the stamps written FOR this message —
     /// the ones after it. A stamp that sits between the last finish and the
     /// message named something else (or nothing) and must not spend one of

@@ -2529,11 +2529,14 @@ mod last_run_face_tests {
         assert!(entry.label.contains("[interrupted]"), "{}", entry.label);
     }
 
-    /// §5.2: the server's word for a user message no run ever answered marks
-    /// the row and says one sentence on attach — the list face carries the
-    /// word alone, and that is enough for both.
+    /// §5.2: the server's word for a user message no run ever answered says
+    /// one sentence on attach. The picker-mark arm exists for exhaustiveness
+    /// and the safe direction, but **a picker row cannot carry the word
+    /// today**: `sessions.list` is fed by the marker-only list face, which by
+    /// design never says `unanswered` (the message lives outside the
+    /// markers). The mark assertion pins the arm, not a feature.
     #[test]
-    fn picker_marks_unanswered_and_the_notice_names_the_fact() {
+    fn the_unanswered_notice_names_the_fact_and_the_picker_mark_arm_is_pinned_though_unreachable() {
         let listed = LastRunState::from_markers(LastRunState::UNANSWERED, None, 0);
         assert_eq!(last_run_mark(&listed), Some("  [unanswered]"));
         let attached = LastRunState {

@@ -294,6 +294,14 @@ mod last_run_tests {
         }
     }
 
+    fn turn_started() -> SessionEvent {
+        SessionEvent::TurnStarted {
+            turn_id: TurnId::new_v4(),
+            trigger: crate::session::events::TurnTrigger::UserMessage,
+            at: 3,
+        }
+    }
+
     fn user(text: &str) -> SessionEvent {
         SessionEvent::UserMessage {
             turn_id: TurnId::new_v4(),
@@ -410,6 +418,26 @@ mod last_run_tests {
         assert_eq!(view.trailing_starts, 0);
         assert!(view.inspected);
         assert_ne!(view.disposition(), LastRunDisposition::Clean);
+    }
+
+    /// The production order — seed, then the run's marker, then the crash —
+    /// is `interrupted` on this face too, never `unanswered`: the run picked
+    /// the message up, and the lost call is named. Pinned here because the
+    /// interrupted fixture above omits the seed.
+    #[test]
+    fn a_seed_a_run_picked_up_is_interrupted_on_the_attach_face() {
+        let events = vec![
+            rec(1, turn_started()),
+            rec(2, user("hi")),
+            rec(3, started("run-a")),
+            rec(4, requested("call-1")),
+        ];
+        let view = last_run_from_events(&events);
+        assert_eq!(view.disposition(), LastRunDisposition::Interrupted);
+        assert_eq!(view.run_id.as_deref(), Some("run-a"));
+        let dangling = view.dangling().expect("this face looked");
+        assert_eq!(dangling.len(), 1);
+        assert_eq!(dangling[0].call_id, "call-1");
     }
 
     /// A `RunFinished` whose start is not in this log is still a marker, so the

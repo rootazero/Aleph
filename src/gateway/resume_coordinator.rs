@@ -95,9 +95,11 @@ pub fn global_resume_coordinator() -> Option<Arc<ResumeCoordinator>> {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ResumeReport {
     /// Sessions inspected that had at least one run marker, plus the
-    /// marker-less sessions in the activity window whose tail held a user
-    /// message no run answered (§5.2) — a marker-less session whose tail was
-    /// answered is not counted, because nothing about it was decided.
+    /// marker-less sessions in the activity window about which something was
+    /// decided: an unanswered message found (§5.2), or a tail the pass could
+    /// not read or the reducer refused (both filed under `refused`). A
+    /// marker-less session whose tail was answered is not counted, because
+    /// nothing about it was decided.
     pub scanned: usize,
     /// Interrupted runs successfully re-triggered.
     pub resumed: usize,
@@ -286,11 +288,61 @@ pub fn has_own_scheduler(key: &SessionId) -> bool {
 /// session has no user waiting on it).
 #[must_use]
 pub(crate) fn unanswered_eligible(key: &SessionId) -> bool {
-    !has_own_scheduler(key)
-        && !matches!(
-            key,
-            SessionId::Subagent { .. } | SessionId::Ephemeral { .. }
-        )
+    // Exhaustive on purpose: a retrigger is an LLM run nobody asked for, so a
+    // new session kind must be classified here before it can be eligible —
+    // a `!matches!` would admit it by default.
+    match key {
+        SessionId::Subagent { .. } | SessionId::Ephemeral { .. } => false,
+        SessionId::Main { .. }
+        | SessionId::DirectMessage { .. }
+        | SessionId::Group { .. }
+        | SessionId::Task { .. } => !has_own_scheduler(key),
+    }
+}
+
+/// What [`ResumeCoordinator::abandon`] is giving up on — the subject of the
+/// sentence the user reads. The closer is the same `RunFinished { Abandoned }`
+/// either way; the sentence is not, and a notice that says "an interrupted
+/// run" about a session in which no run ever existed is the expensive kind
+/// of wrong (criterion #17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Abandoned {
+    /// A `RunStarted` with no finish: the run existed and was cut off.
+    InterruptedRun,
+    /// A seeded message no run ever picked up (§5.2): no run existed.
+    UnansweredMessage,
+}
+
+impl Abandoned {
+    /// The one-line origin-channel notice.
+    fn notice(self, reason: &str) -> String {
+        match self {
+            Self::InterruptedRun => format!(
+                "⚠️ An interrupted run in this conversation could not be resumed \
+                 after a restart ({reason}) and was abandoned."
+            ),
+            Self::UnansweredMessage => format!(
+                "⚠️ Your last message in this conversation was never picked up by a \
+                 run, and after a restart it could not be retried ({reason}); it was \
+                 abandoned — send it again if you still need it."
+            ),
+        }
+    }
+
+    /// The note stored on a blocked goal.
+    fn goal_note(self, reason: &str) -> String {
+        match self {
+            Self::InterruptedRun => format!(
+                "Autonomous pursuit halted: its interrupted run was abandoned at daemon \
+                 restart ({reason}). Re-set the goal to continue."
+            ),
+            Self::UnansweredMessage => format!(
+                "Autonomous pursuit halted: the message that would have driven it was \
+                 never picked up by a run and was abandoned at daemon restart ({reason}). \
+                 Re-set the goal to continue."
+            ),
+        }
+    }
 }
 
 /// What a resume can still do with the model the crashed run was bound to.
@@ -770,6 +822,16 @@ impl ResumeCoordinator {
             Ok(rows) => {
                 for meta in rows {
                     let Some(id) = SessionId::from_key_string(&meta.key) else {
+                        // A stored key this process cannot parse is a session
+                        // nothing can be asked of — say so rather than dropping
+                        // it in silence (the reconciler twin does the same).
+                        // Not a report counter: every counter on this report
+                        // reaches the wire, and this row has no session to
+                        // name there.
+                        tracing::warn!(
+                            key = %meta.key,
+                            "resume: unparseable session key in the activity window; not scanned for an unanswered message"
+                        );
                         continue;
                     };
                     if seen.contains(&id) {
@@ -1111,6 +1173,7 @@ impl ResumeCoordinator {
             );
             self.abandon(
                 session_id,
+                Abandoned::InterruptedRun,
                 "the interrupted run was too old to resume safely",
             )
             .await;
@@ -1128,8 +1191,12 @@ impl ResumeCoordinator {
                 max_attempts = self.config.max_attempts,
                 "resume: crash-loop cap reached; abandoning"
             );
-            self.abandon(session_id, "it kept crashing on every resume attempt")
-                .await;
+            self.abandon(
+                session_id,
+                Abandoned::InterruptedRun,
+                "it kept crashing on every resume attempt",
+            )
+            .await;
             report.abandoned += 1;
             return;
         }
@@ -1303,7 +1370,18 @@ impl ResumeCoordinator {
                     .await;
                 true
             }
-            Ok(_) => false,
+            Ok(RunDisposition::Clean) => false,
+            // Unreachable by construction: every caller reaches here with a
+            // marker slice that reduced `Clean`, and the tail past the last
+            // finish holds no `RunStarted`. Spelled out rather than folded
+            // into "answered": a slice that says otherwise is worth a line.
+            Ok(RunDisposition::Interrupted { .. }) => {
+                tracing::warn!(
+                    session = ?session_id,
+                    "resume: the message tail reads as interrupted after the marker slice read clean; leaving it to the marker scan"
+                );
+                false
+            }
             Err(c) => {
                 tracing::warn!(
                     session = ?session_id,
@@ -1351,7 +1429,8 @@ impl ResumeCoordinator {
             );
             self.abandon(
                 session_id,
-                "the unanswered message was too old to resume safely",
+                Abandoned::UnansweredMessage,
+                "the unanswered message was too old to retry safely",
             )
             .await;
             report.abandoned += 1;
@@ -1364,8 +1443,12 @@ impl ResumeCoordinator {
                 max_attempts = self.config.max_attempts,
                 "resume: unanswered message hit the crash-loop cap; abandoning"
             );
-            self.abandon(session_id, "it kept crashing before the run could start")
-                .await;
+            self.abandon(
+                session_id,
+                Abandoned::UnansweredMessage,
+                "it kept crashing before the run could start",
+            )
+            .await;
             report.abandoned += 1;
             return;
         }
@@ -1408,7 +1491,10 @@ impl ResumeCoordinator {
     /// Deliberately does NOT touch loop state: loops are process-memory and
     /// the registry is empty at boot; "stopping" one here could only misfire
     /// against a loop the user started while the scan was still running.
-    async fn abandon(&self, session_id: &SessionId, reason: &str) {
+    ///
+    /// `what` names the thing being given up on — the two arms write the
+    /// same closer but must not say the same sentence to the user.
+    async fn abandon(&self, session_id: &SessionId, what: Abandoned, reason: &str) {
         let ev = SessionEvent::RunFinished {
             run_id: format!("abandoned-{}", uuid::Uuid::new_v4()),
             outcome: RunOutcome::Abandoned,
@@ -1439,10 +1525,7 @@ impl ResumeCoordinator {
         // be collateral-blocked by an unrelated abandoned run.
         let goal_blocked = crate::gateway::continuation_lifecycle::block_abandonable_session_goal(
             &session_id.to_key_string(),
-            &format!(
-                "Autonomous pursuit halted: its interrupted run was abandoned at daemon \
-                 restart ({reason}). Re-set the goal to continue."
-            ),
+            &what.goal_note(reason),
         );
 
         // One-line origin notice, mirroring `retrigger`'s fanout resolution.
@@ -1452,10 +1535,7 @@ impl ResumeCoordinator {
         if let Some(reg) = crate::gateway::event_emitter::origin_fanout::channel_registry() {
             if let Some(agent) = self.agent_registry.get(session_id.agent_id()).await {
                 if let Some((channel, conversation)) = agent.origin_route(session_id).await {
-                    let mut text = format!(
-                        "⚠️ An interrupted run in this conversation could not be resumed \
-                         after a restart ({reason}) and was abandoned."
-                    );
+                    let mut text = what.notice(reason);
                     if goal_blocked {
                         text.push_str(" Its standing goal was blocked — re-set it to continue.");
                     }
@@ -1487,10 +1567,10 @@ impl ResumeCoordinator {
     /// §5.1: write the intent BEFORE the action. `append` (A1) makes this a
     /// Barrier commit, so a crash one instruction later still counts.
     ///
-    /// `target` is the seq of the `RunStarted` being resumed; `attempt` is
-    /// this stamp's ordinal since the last `RunFinished` (the reducer counts
-    /// the stamps, not this number — the number is for the operator reading
-    /// the log).
+    /// `target` is the seq of the `RunStarted` being resumed, or of the
+    /// unanswered `UserMessage` being retried (§5.2); `attempt` is this
+    /// stamp's ordinal for that target (the reducer counts the stamps, not
+    /// this number — the number is for the operator reading the log).
     async fn stamp_resume_attempt(
         &self,
         session_id: &SessionId,
@@ -2377,6 +2457,38 @@ mod tests {
                 key.to_key_string()
             );
         }
+    }
+
+    /// The two things `abandon` gives up on get two true sentences. The
+    /// unanswered arm must never tell the user an "interrupted run" was
+    /// abandoned in a session where no run existed (criterion #17: the wrong
+    /// label is dearer than the missing one), and both must carry the reason.
+    #[test]
+    fn the_abandon_sentences_name_the_thing_that_was_abandoned() {
+        let run = Abandoned::InterruptedRun.notice("too old");
+        let message = Abandoned::UnansweredMessage.notice("too old");
+        assert!(
+            run.contains("interrupted run") && run.contains("too old"),
+            "{run}"
+        );
+        assert!(
+            !message.contains("interrupted run") && message.contains("never picked up"),
+            "{message}"
+        );
+        assert!(message.contains("too old"), "{message}");
+        assert_ne!(run, message);
+
+        let run_goal = Abandoned::InterruptedRun.goal_note("capped");
+        let message_goal = Abandoned::UnansweredMessage.goal_note("capped");
+        assert!(run_goal.contains("interrupted run") && run_goal.contains("capped"));
+        assert!(
+            !message_goal.contains("interrupted run") && message_goal.contains("capped"),
+            "{message_goal}"
+        );
+        assert!(
+            run_goal.contains("Re-set the goal") && message_goal.contains("Re-set the goal"),
+            "both tell the user what to do next"
+        );
     }
 
     /// `CRON_TASK_TYPE` / `HEARTBEAT_TASK_TYPE` are re-declared here because

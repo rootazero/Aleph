@@ -1099,15 +1099,25 @@ async fn a_fresh_stamp_does_not_resurrect_a_run_interrupted_too_long_ago() {
     );
 }
 
-/// A store that refuses the intent stamp and nothing else: every other batch
-/// reaches the real `SqliteEventStore` underneath, so the boundary repair
-/// lands and the log stays readable — only the `ResumeAttempted` append fails.
-struct StampRefusingStore {
+/// The one thing a [`FaultingStore`] refuses.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fault {
+    /// Any batch carrying a `ResumeAttempted` — the intent stamp (§5.1).
+    StampAppend,
+    /// Every `load_events_range` — the unanswered tail read (§5.2).
+    TailRead,
+}
+
+/// A store that refuses exactly one thing and nothing else: every other call
+/// reaches the real `SqliteEventStore` underneath, so the rest of the log
+/// stays readable and writable and the refusal is the only fault in play.
+struct FaultingStore {
     inner: Arc<dyn SessionEventStore>,
+    fault: Fault,
 }
 
 #[async_trait]
-impl SessionEventStore for StampRefusingStore {
+impl SessionEventStore for FaultingStore {
     async fn append_batch(
         &self,
         session_id: &SessionKey,
@@ -1116,9 +1126,10 @@ impl SessionEventStore for StampRefusingStore {
         retire: Option<Retire>,
         durability: Durability,
     ) -> Result<(), SessionError> {
-        if events
-            .iter()
-            .any(|(e, _)| matches!(e, SessionEvent::ResumeAttempted { .. }))
+        if self.fault == Fault::StampAppend
+            && events
+                .iter()
+                .any(|(e, _)| matches!(e, SessionEvent::ResumeAttempted { .. }))
         {
             return Err(SessionError::Storage("disk full: stamp refused".into()));
         }
@@ -1138,6 +1149,9 @@ impl SessionEventStore for StampRefusingStore {
         from: Option<EventSeq>,
         to: Option<EventSeq>,
     ) -> Result<Vec<alephcore::session::SessionEventRecord>, SessionError> {
+        if self.fault == Fault::TailRead {
+            return Err(SessionError::Storage("i/o error: tail read refused".into()));
+        }
         self.inner.load_events_range(session_id, from, to).await
     }
     async fn load_head_seq(&self, session_id: &SessionKey) -> Result<EventSeq, SessionError> {
@@ -1181,8 +1195,9 @@ async fn a_stamp_that_does_not_land_refuses_the_resume_without_retriggering() {
     let inner = store();
     let sid = SessionKey::main("stamp-refused-agent");
     seed_interrupted_run(&inner, &sid).await;
-    let store: Arc<dyn SessionEventStore> = Arc::new(StampRefusingStore {
+    let store: Arc<dyn SessionEventStore> = Arc::new(FaultingStore {
         inner: inner.clone(),
+        fault: Fault::StampAppend,
     });
 
     let adapter = Arc::new(RecordingAdapter::new());
@@ -1836,4 +1851,143 @@ async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
         "the abandon closer lands last: {:?}",
         all.last()
     );
+}
+
+/// §5.2's closed side: a tail that cannot be read is "I cannot tell whether
+/// the last message was answered", filed under its own word — not a repair
+/// failure (none was attempted), not `skipped` (nothing was decided), and
+/// nothing is stamped or dispatched on a question with no answer.
+#[tokio::test]
+async fn a_tail_that_cannot_be_read_refuses_without_stamping_or_retriggering() {
+    let inner = store();
+    let sid = SessionKey::main("tail-refused-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    inner
+        .append(
+            &sid,
+            1,
+            &SessionEvent::TurnStarted {
+                turn_id: tid,
+                trigger: alephcore::session::events::TurnTrigger::UserMessage,
+                at,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    inner
+        .append(&sid, 2, &seeded_user(tid, "hello?", at + 1), at + 1)
+        .await
+        .unwrap();
+    let store: Arc<dyn SessionEventStore> = Arc::new(FaultingStore {
+        inner: inner.clone(),
+        fault: Fault::TailRead,
+    });
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let report = ResumeCoordinator::new(
+        store,
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    )
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!(
+        (
+            report.scanned,
+            report.resumed,
+            report.skipped,
+            report.abandoned
+        ),
+        (1, 0, 0, 0),
+        "{report:?}"
+    );
+    assert_eq!(report.refused.len(), 1, "{:?}", report.refused);
+    let (refused_sid, refusal) = &report.refused[0];
+    assert_eq!(refused_sid, &sid);
+    assert!(
+        matches!(
+            refusal,
+            alephcore::gateway::ResumeRefusal::TailReadFailed(_)
+        ),
+        "filed under its own word, not as a repair failure: {refusal:?}"
+    );
+    assert_eq!(refusal.reason(), "tail_read_failed");
+    assert!(
+        calls.lock().await.is_empty(),
+        "an unanswerable question must not be dispatched"
+    );
+    assert!(stamps(&inner, &sid).await.is_empty(), "nothing was stamped");
+    assert_eq!(
+        inner.load_all_events(&sid).await.unwrap().len(),
+        2,
+        "not one append on a log nobody could read"
+    );
+}
+
+/// The verb's second face (criterion #9): `agent.resume` / `aleph-server
+/// resume` on a session with no run marker asks the same §5.2 question and
+/// acts on it — it used to return the zero report ("nothing to resume") for
+/// exactly the session whose user is waiting.
+#[tokio::test]
+async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_stamps_and_retriggers() {
+    let store = store();
+    let sid = SessionKey::main("unanswered-on-demand-agent");
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::TurnStarted {
+                turn_id: tid,
+                trigger: alephcore::session::events::TurnTrigger::UserMessage,
+                at,
+            },
+            at,
+        )
+        .await
+        .unwrap();
+    store
+        .append(&sid, 2, &seeded_user(tid, "hello?", at + 1), at + 1)
+        .await
+        .unwrap();
+    let sessions = sessions();
+    sessions.get_or_create(&sid).await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions,
+        test_bus(),
+    );
+
+    let report = coordinator
+        .resume_session(&sid)
+        .await
+        .expect("markers readable");
+    assert_eq!(
+        (report.scanned, report.resumed, report.skipped),
+        (1, 1, 0),
+        "{report:?}"
+    );
+    assert_eq!(
+        stamps(&store, &sid).await,
+        vec![(2, 1)],
+        "the stamp names the message"
+    );
+    let calls = calls.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, sid.to_key_string());
+    assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
 }

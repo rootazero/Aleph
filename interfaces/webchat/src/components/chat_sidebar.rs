@@ -2306,9 +2306,16 @@ mod last_run_face_tests {
 
     /// §5.2: the server's word for "your message reached the log and no run
     /// answered it". It is news on the attach face (one sentence, no numbers
-    /// — nothing ran, so there is nothing to count) and a badge on the row.
+    /// — nothing ran, so there is nothing to count).
+    ///
+    /// The row badge arm exists for exhaustiveness and the safe direction,
+    /// but **a row cannot carry the word today**: `SessionEntry` is fed by
+    /// `sessions.list`, whose `last_run_from_markers` is marker-only and by
+    /// design never says `unanswered` (the message lives outside the
+    /// markers). The second half here pins the arm, not a feature — if rows
+    /// should show it, the list face needs a bounded tail read.
     #[test]
-    fn an_unanswered_last_run_is_news_and_badges_the_row() {
+    fn an_unanswered_attach_face_is_news_and_the_row_badge_arm_is_pinned_though_unreachable() {
         let unanswered = LastRunState {
             disposition: LastRunState::UNANSWERED.into(),
             inspected: true,
