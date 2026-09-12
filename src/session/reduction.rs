@@ -107,8 +107,13 @@ pub enum LogContradiction {
     /// resume on age. Reported once per log (the first offender).
     ClockAnomaly { seq: EventSeq },
     /// A `ResumeAttempted` with nothing to resume: no run is open and no
-    /// user message is unanswered at that point. Reading: ignored — the
-    /// disposition is what it would be without the stamp.
+    /// user message is unanswered at that point. Reading: the stamp still
+    /// counts as an attempt if a `RunStarted` follows it before the next
+    /// `RunFinished` — [`reduce_disposition`] sees markers only, and a stamp
+    /// that named an unanswered `UserMessage` a later run answers (T7) must
+    /// still spend an attempt. With nothing after it the tail is `Clean`
+    /// regardless. This report is what tells the operator the stamp named
+    /// nothing at the moment it was written.
     ResumeWithoutTarget { seq: EventSeq },
 }
 
@@ -257,7 +262,9 @@ pub struct RunProgress {
     pub assistant_messages: usize,
     /// `created_at_ms` of the last record in scope — the *recording* time, not
     /// a max over payload timestamps. The question is "when was it last
-    /// alive", and recording order is the authoritative order.
+    /// alive", and recording order is the authoritative order. A
+    /// `ResumeAttempted` stamp is not in the running: it is the coordinator's
+    /// intent, not the run's activity.
     pub last_activity_at: Option<Timestamp>,
 }
 
@@ -570,10 +577,14 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
             .iter()
             .filter(|r| in_scope(r.seq) && matches!(r.event, SessionEvent::AssistantMessage { .. }))
             .count(),
+        // The coordinator's own `ResumeAttempted` is an intent record, not
+        // something the run did: it is the newest in-scope event after every
+        // boot, and counting it would date the run by its last ATTEMPT — the
+        // recency filter would then never see a stamped run as too old.
         last_activity_at: events
             .iter()
             .rev()
-            .find(|r| in_scope(r.seq))
+            .find(|r| in_scope(r.seq) && !matches!(r.event, SessionEvent::ResumeAttempted { .. }))
             .map(|r| r.created_at_ms),
     };
 
@@ -1196,22 +1207,72 @@ mod tests {
         );
     }
 
-    /// §5.6: a `ResumeAttempted` with nothing to resume — no run open at that
-    /// point. Reported, and the disposition is what it would be without it.
+    /// §5.6: a `ResumeAttempted` with no run open at the moment it was
+    /// written is REPORTED — and the two readings of it are pinned side by
+    /// side. With nothing after it, the tail holds no `RunStarted` and the
+    /// disposition is `Clean` (the stamp changes nothing). With a `RunStarted`
+    /// after it and before the next `RunFinished`, the stamp is in the
+    /// interrupted tail and it COUNTS: `reduce_disposition` sees markers only,
+    /// and a stamp T7 lets target an unanswered `UserMessage` that a later run
+    /// answers must still spend an attempt. The report is what tells the
+    /// operator the stamp named nothing when it was written.
     #[test]
-    fn a_stamp_with_nothing_to_resume_is_reported_and_ignored() {
-        let events = vec![
+    fn a_stamp_with_no_open_run_is_reported_and_counts_only_if_a_run_follows() {
+        let nothing_follows = vec![
             rec(1, started("a")),
             rec(2, finished("a")),
             rec(3, attempted(1, 1)),
         ];
-        let r = reduced(&events);
+        let r = reduced(&nothing_follows);
         assert_eq!(r.disposition, RunDisposition::Clean);
         assert_eq!(tags(&r), vec!["session-log-resume-without-target"]);
         assert_eq!(
             r.contradictions[0],
             LogContradiction::ResumeWithoutTarget { seq: 3 }
         );
+
+        let a_run_follows = vec![
+            rec(1, finished("a")),
+            rec(2, attempted(1, 1)),
+            rec(3, started("b")),
+        ];
+        let r = reduced(&a_run_follows);
+        assert_eq!(
+            r.disposition,
+            RunDisposition::Interrupted { attempts: 1 },
+            "the stamp sits in the interrupted tail, so it is an attempt"
+        );
+        assert_eq!(
+            tags(&r),
+            vec![
+                "session-log-finish-without-start",
+                "session-log-resume-without-target"
+            ],
+            "and it is still reported: no run was open when it was written"
+        );
+    }
+
+    /// A coordinator's intent stamp is not something the run DID. The recency
+    /// filter reads `last_activity_at` to decide "too old to resume", and a
+    /// stamp that refreshed it would let every boot's own attempt resurrect a
+    /// run the operator's `max_age_secs` had already ruled out.
+    #[test]
+    fn last_activity_at_is_not_refreshed_by_an_intent_stamp() {
+        let events = vec![
+            rec(1, started("a")),
+            rec(2, requested("c1")),
+            rec(3, attempted(1, 1)),
+        ];
+        let p = reduced(&events).progress;
+        assert_eq!(
+            p.last_activity_at,
+            Some(20),
+            "created_at_ms of the dispatch at seq 2, not of the stamp at seq 3"
+        );
+        // A run that opened, recorded nothing, and was then stamped: no
+        // activity at all, so the caller falls back to the marker's own time.
+        let only_stamped = vec![rec(1, started("a")), rec(2, attempted(1, 1))];
+        assert_eq!(reduced(&only_stamped).progress.last_activity_at, None);
     }
 
     // ---- open_run ---------------------------------------------------------

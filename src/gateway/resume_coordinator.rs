@@ -557,13 +557,20 @@ pub(crate) fn resume_metadata(
 /// is then the newest fact the log has about it. Pure, and separate from
 /// [`ResumeCoordinator::handle_interrupted`], so the rule is falsifiable
 /// without a coordinator, a store and an execution adapter.
+///
+/// `run_started` is the record that OPENED the run (`reduction.run_anchor`'s),
+/// never "the last marker": since §5.1 the last marker is usually the newest
+/// `ResumeAttempted`, and a coordinator's intent stamp is not the run being
+/// alive — measured from it, `max_age_secs` would count from the last attempt
+/// instead of the interruption. `progress.last_activity_at` excludes the stamp
+/// for the same reason.
 fn last_alive_at(
     reduction: &crate::session::reduction::RunReduction,
-    last_marker: &SessionEventRecord,
+    run_started: &SessionEventRecord,
 ) -> crate::session::events::Timestamp {
     match reduction.progress.last_activity_at {
-        Some(activity) => activity.max(last_marker.created_at_ms),
-        None => last_marker.created_at_ms,
+        Some(activity) => activity.max(run_started.created_at_ms),
+        None => run_started.created_at_ms,
     }
 }
 
@@ -835,8 +842,7 @@ impl ResumeCoordinator {
                 report.delegated += 1;
             }
             Ok(RunDisposition::Interrupted { attempts }) => {
-                self.handle_interrupted(session_id, markers, attempts, report)
-                    .await;
+                self.handle_interrupted(session_id, attempts, report).await;
             }
             // A refused slice is "I do not know", not "clean": it is
             // deliberately NOT counted as `skipped` (which `status_of` renders
@@ -923,16 +929,9 @@ impl ResumeCoordinator {
     async fn handle_interrupted(
         &self,
         session_id: &SessionId,
-        markers: &[SessionEventRecord],
         attempts: u32,
         report: &mut ResumeReport,
     ) {
-        // The dangling RunStarted is the last marker (reduce_disposition
-        // guarantees `markers` is non-empty here).
-        let Some(last) = markers.last() else {
-            return;
-        };
-
         let events = match self.event_store.load_all_events(session_id).await {
             Ok(events) => events,
             Err(e) => {
@@ -964,6 +963,24 @@ impl ResumeCoordinator {
         };
         report.contradictions += reduction.contradictions.len();
 
+        // The run being resumed: the last `RunStarted`, read off the SAME
+        // reduction everything below reads — not "the last marker", which
+        // since §5.1 is usually the newest `ResumeAttempted` stamp. Its record
+        // dates the run (`last_alive_at`) and its seq is the stamp's target.
+        // The disposition guarantees a `RunStarted` after the last finish, so
+        // this cannot miss; if the two reads of the log ever disagree, refuse
+        // rather than resume a run whose anchor nobody can name.
+        let Some(run_started) = reduction
+            .run_anchor
+            .and_then(|seq| events.iter().find(|r| r.seq == seq))
+        else {
+            report.refused.push((
+                session_id.clone(),
+                ResumeRefusal::IntentStampFailed("interrupted run has no RunStarted anchor".into()),
+            ));
+            return;
+        };
+
         // A clock anomaly makes the age unknown, and BOTH remaining verdicts
         // are decisions taken on an age: resuming says "recent enough",
         // abandoning says "too old". Neither is derivable, so this candidate
@@ -981,8 +998,10 @@ impl ResumeCoordinator {
             return;
         }
 
-        // Recency filter — abandon runs interrupted too long ago.
-        let age_ms = now_ms().saturating_sub(last_alive_at(&reduction, last));
+        // Recency filter — abandon runs interrupted too long ago. Dated by the
+        // run's own activity and its `RunStarted`; this boot's predecessors'
+        // stamps do not keep it young.
+        let age_ms = now_ms().saturating_sub(last_alive_at(&reduction, run_started));
         if age_ms > (self.config.max_age_secs as i64).saturating_mul(1000) {
             tracing::info!(
                 session = ?session_id,
@@ -1071,18 +1090,10 @@ impl ResumeCoordinator {
         // run's own `RunStarted` (admit / hook / seed) still moves the
         // ratchet. A stamp that did not land is a refusal, not a warning: a
         // retrigger without its stamp is the unbounded loop this closes.
-        // `run_anchor` is the last `RunStarted`, which the disposition
-        // guarantees exists after the last finish — but the reduction is what
-        // says so, and its absence is refused rather than defaulted.
-        let Some(target) = reduction.run_anchor else {
-            report.refused.push((
-                session_id.clone(),
-                ResumeRefusal::IntentStampFailed("interrupted run has no RunStarted anchor".into()),
-            ));
-            return;
-        };
+        // `saturating_add`: the ordinal must not depend on the cap check
+        // above having run first.
         if let Err(e) = self
-            .stamp_resume_attempt(session_id, target, attempts + 1)
+            .stamp_resume_attempt(session_id, run_started.seq, attempts.saturating_add(1))
             .await
         {
             tracing::warn!(
@@ -1621,6 +1632,47 @@ mod tests {
         let reduction = reduce_run(&events).expect("legal log");
         assert!(reduction.dangling.is_empty());
         assert_eq!(last_alive_at(&reduction, &events[0]), 3_000);
+    }
+
+    /// The coordinator's own stamp is not activity: a run interrupted long ago
+    /// and stamped a moment ago is still dated by its last real event. Read
+    /// against the `RunStarted` record (what `handle_interrupted` passes), not
+    /// against "the last marker" — since §5.1 the last marker is usually the
+    /// newest stamp, which is exactly the record that must not count.
+    #[test]
+    fn recency_is_not_refreshed_by_an_intent_stamp() {
+        let events = vec![
+            rec(1, run_started(10), 1_000),
+            rec(2, tool_requested("c1"), 2_000),
+            rec(
+                3,
+                SessionEvent::ResumeAttempted {
+                    target: 1,
+                    attempt: 1,
+                },
+                900_000,
+            ),
+        ];
+        let reduction = reduce_run(&events).expect("legal log");
+        assert_eq!(last_alive_at(&reduction, &events[0]), 2_000);
+
+        let only_stamped = vec![
+            rec(1, run_started(10), 1_000),
+            rec(
+                2,
+                SessionEvent::ResumeAttempted {
+                    target: 1,
+                    attempt: 1,
+                },
+                900_000,
+            ),
+        ];
+        let reduction = reduce_run(&only_stamped).expect("legal log");
+        assert_eq!(
+            last_alive_at(&reduction, &only_stamped[0]),
+            1_000,
+            "nothing happened inside the run; the marker that opened it dates it"
+        );
     }
 
     /// Every refusal carries a word of its own. A new variant that fans into

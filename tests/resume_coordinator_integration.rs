@@ -20,8 +20,11 @@ use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSess
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::ResumeCoordinator;
 use alephcore::routing::session_key::SessionKey;
-use alephcore::session::events::{now_ms, RunOutcome, SessionEvent, TurnId};
+use alephcore::session::events::{
+    now_ms, Durability, EventSeq, Retire, RunOutcome, SessionEvent, TurnId,
+};
 use alephcore::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
+use alephcore::session::SessionError;
 use alephcore::ResumeConfig;
 
 /// Mock `ExecutionAdapter` that records every `execute` call's
@@ -1035,6 +1038,205 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
         goal.note.as_deref().unwrap_or("").contains("too old"),
         "blocked note must carry the reason: {:?}",
         goal.note
+    );
+}
+
+/// `max_age_secs` is measured from the interruption, not from the last
+/// ATTEMPT to resume it. Since §5.1 every boot writes a `ResumeAttempted`
+/// stamp — the newest marker AND the newest in-scope event — and a stamp that
+/// counted as "alive" would let each boot's own attempt resurrect a run the
+/// operator's window had already ruled out. Here the run is two days old and
+/// the stamp is a moment old: still too old.
+#[tokio::test]
+async fn a_fresh_stamp_does_not_resurrect_a_run_interrupted_too_long_ago() {
+    let store = store();
+    let sid = SessionKey::main("stale-stamped-agent");
+    let old_at = now_ms() - 2 * 86_400 * 1000; // 2 days > default max_age 1 day
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r-old".into(),
+                at: old_at,
+                project_root: None,
+                envelope: None,
+            },
+            old_at,
+        )
+        .await
+        .unwrap();
+    store
+        .append(
+            &sid,
+            2,
+            &SessionEvent::ResumeAttempted {
+                target: 1,
+                attempt: 1,
+            },
+            now_ms(),
+        )
+        .await
+        .unwrap();
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+
+    assert_eq!((report.abandoned, report.resumed), (1, 0));
+    assert!(
+        calls.lock().await.is_empty(),
+        "a fresh stamp must not make a two-day-old run resumable"
+    );
+}
+
+/// A store that refuses the intent stamp and nothing else: every other batch
+/// reaches the real `SqliteEventStore` underneath, so the boundary repair
+/// lands and the log stays readable — only the `ResumeAttempted` append fails.
+struct StampRefusingStore {
+    inner: Arc<dyn SessionEventStore>,
+}
+
+#[async_trait]
+impl SessionEventStore for StampRefusingStore {
+    async fn append_batch(
+        &self,
+        session_id: &SessionKey,
+        first_seq: EventSeq,
+        events: &[(SessionEvent, i64)],
+        retire: Option<Retire>,
+        durability: Durability,
+    ) -> Result<(), SessionError> {
+        if events
+            .iter()
+            .any(|(e, _)| matches!(e, SessionEvent::ResumeAttempted { .. }))
+        {
+            return Err(SessionError::Storage("disk full: stamp refused".into()));
+        }
+        self.inner
+            .append_batch(session_id, first_seq, events, retire, durability)
+            .await
+    }
+    async fn load_all_events(
+        &self,
+        session_id: &SessionKey,
+    ) -> Result<Vec<alephcore::session::SessionEventRecord>, SessionError> {
+        self.inner.load_all_events(session_id).await
+    }
+    async fn load_events_range(
+        &self,
+        session_id: &SessionKey,
+        from: Option<EventSeq>,
+        to: Option<EventSeq>,
+    ) -> Result<Vec<alephcore::session::SessionEventRecord>, SessionError> {
+        self.inner.load_events_range(session_id, from, to).await
+    }
+    async fn load_head_seq(&self, session_id: &SessionKey) -> Result<EventSeq, SessionError> {
+        self.inner.load_head_seq(session_id).await
+    }
+    async fn retire_from(
+        &self,
+        session_id: &SessionKey,
+        from_seq: EventSeq,
+    ) -> Result<usize, SessionError> {
+        self.inner.retire_from(session_id, from_seq).await
+    }
+    async fn retire_through(
+        &self,
+        session_id: &SessionKey,
+        through_seq: EventSeq,
+    ) -> Result<usize, SessionError> {
+        self.inner.retire_through(session_id, through_seq).await
+    }
+    async fn is_retired(
+        &self,
+        session_id: &SessionKey,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        self.inner.is_retired(session_id, seq).await
+    }
+    async fn load_run_markers(
+        &self,
+    ) -> Result<Vec<(SessionKey, Vec<alephcore::session::SessionEventRecord>)>, SessionError> {
+        self.inner.load_run_markers().await
+    }
+}
+
+/// §5.1's closed side: a stamp that does not land REFUSES the resume. The
+/// alternative — warn and retrigger anyway — is a resume the next boot cannot
+/// count, i.e. the unbounded loop the stamp exists to close. Pinned at the
+/// effect: the refusal is filed under its own word, the adapter is never
+/// called, and nothing pretends the run was abandoned either.
+#[tokio::test]
+async fn a_stamp_that_does_not_land_refuses_the_resume_without_retriggering() {
+    let inner = store();
+    let sid = SessionKey::main("stamp-refused-agent");
+    seed_interrupted_run(&inner, &sid).await;
+    let store: Arc<dyn SessionEventStore> = Arc::new(StampRefusingStore {
+        inner: inner.clone(),
+    });
+
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let coordinator = ResumeCoordinator::new(
+        store,
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+
+    assert_eq!(
+        (report.scanned, report.resumed, report.abandoned),
+        (1, 0, 0)
+    );
+    assert_eq!(report.refused.len(), 1, "{:?}", report.refused);
+    let (refused_sid, refusal) = &report.refused[0];
+    assert_eq!(refused_sid, &sid);
+    assert!(
+        matches!(
+            refusal,
+            alephcore::gateway::ResumeRefusal::IntentStampFailed(_)
+        ),
+        "filed under its own word, not as a retrigger or repair failure: {refusal:?}"
+    );
+    assert_eq!(refusal.reason(), "intent_stamp_failed");
+    assert!(
+        calls.lock().await.is_empty(),
+        "a resume without its stamp must not be dispatched"
+    );
+
+    let all = inner.load_all_events(&sid).await.unwrap();
+    assert!(
+        all.iter().any(|r| matches!(&r.event, SessionEvent::ToolError { call_id, .. } if call_id == "dangling-1")),
+        "the boundary repair before the stamp still landed"
+    );
+    assert!(
+        !all.iter().any(|r| matches!(
+            &r.event,
+            SessionEvent::RunFinished {
+                outcome: RunOutcome::Abandoned,
+                ..
+            }
+        )),
+        "a refused stamp is not an abandonment: the run stays resumable"
+    );
+    assert!(
+        !all.iter()
+            .any(|r| matches!(r.event, SessionEvent::ResumeAttempted { .. })),
+        "the refused stamp is not in the log"
     );
 }
 
