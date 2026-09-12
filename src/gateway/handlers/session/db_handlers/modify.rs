@@ -713,7 +713,7 @@ pub async fn handle_truncate_db(
     // from `keep_count`: `messages` is not a 1:1 image of the live event log
     // (boot-time orphan notices and other writers append rows with no source
     // event), so a count is an ordinal in the projection's index space, while
-    // `retire_live_events` wants a seq in the log's. Taking the MINIMUM source
+    // `retire_events_and_balance` wants a seq in the log's. Taking the MINIMUM source
     // seq over every dropped row keeps the two halves describing the same cut
     // even when the dropped range straddles rows that carry no seq.
     let cut_seq = match manager.get_history(&key, None).await {

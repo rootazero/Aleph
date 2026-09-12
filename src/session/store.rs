@@ -42,15 +42,19 @@ pub trait SessionEventStore: Send + Sync + 'static {
     /// Append `events` at consecutive seqs starting from `first_seq`, in ONE
     /// transaction, optionally retiring a range in that same transaction.
     ///
-    /// This is the only write path: a multi-step durable operation (`/compact`,
-    /// session split, `/undo`) either lands whole or not at all. Fails — with
-    /// nothing written and nothing retired — if any `(session_id, seq)` already
-    /// exists. `retire` runs BEFORE the inserts so the batch's own rows stay
-    /// live. `durability` decides whether the commit fsyncs the WAL
+    /// This is the only write path: a multi-step durable operation either
+    /// lands whole or not at all — manual `/compact` is its summary row, its
+    /// checkpoint row and `Retire::Through(cut)` in one call; `chat.rewind` /
+    /// `session.truncate` are `Retire::From(seq)` plus the `RunFinished`
+    /// closer the cut would otherwise leave owed. Fails — with nothing written
+    /// and nothing retired — if any `(session_id, seq)` already exists.
+    /// `retire` runs BEFORE the inserts so the batch's own rows stay live.
+    /// `durability` decides whether the commit fsyncs the WAL
     /// ([`Durability::Barrier`]) or rides the store's resting level.
     ///
     /// An empty `events` with no `retire` is refused: a "batch" that could do
-    /// nothing would report success for nothing.
+    /// nothing would report success for nothing. An empty `events` WITH a
+    /// `retire` is a retire-only batch and is legal.
     async fn append_batch(
         &self,
         session_id: &SessionId,
@@ -97,50 +101,36 @@ pub trait SessionEventStore: Send + Sync + 'static {
     async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError>;
 
     /// Retire every event with `seq >= from_seq`, removing it from the live
-    /// conversation. Returns how many events this call newly retired.
+    /// conversation, as a transaction of its own. Returns how many events this
+    /// call newly retired.
+    ///
+    /// The standalone retire: `chat.clear` / `sessions.reset` /
+    /// `sessions.delete` (`retire_live_events`) come through here because they
+    /// retire from 1 and append nothing. A retire that must land WITH new rows
+    /// (`chat.rewind` / `session.truncate` and their `RunFinished` closer,
+    /// manual `/compact` and its summary) is not a second call after
+    /// [`append_batch`] — it is the `retire` argument OF that batch
+    /// ([`Retire::From`] / [`Retire::Through`]); the head-side `Through` has no
+    /// standalone method at all. Same SQL either way (`retire_in_txn`).
     ///
     /// Soft delete: the rows survive, so the append-only log stays intact and
     /// seq allocation is unaffected. All readers of the live conversation
     /// (`load_all_events`, `load_events_range`, `load_run_markers`,
     /// `search_events`) skip retired events, so the model stops replaying them.
+    /// The BM25 mirror rows for the range are deleted too — see
+    /// [`Retire::From`] for why the two sides differ.
     ///
     /// Idempotent: already-retired events keep their original retirement
     /// timestamp and are not counted again.
+    ///
+    /// [`append_batch`]: SessionEventStore::append_batch
+    /// [`Retire::From`]: crate::session::events::Retire::From
+    /// [`Retire::Through`]: crate::session::events::Retire::Through
     async fn retire_from(
         &self,
         session_id: &SessionId,
         from_seq: EventSeq,
     ) -> Result<usize, SessionError>;
-
-    /// Retire every event with `seq <= through_seq` — the head-side mirror of
-    /// [`retire_from`], and the primitive behind manual `/compact`.
-    ///
-    /// Two deliberate differences from [`retire_from`]:
-    ///
-    /// 1. **The BM25 mirror is kept.** `retire_from` backs `chat.clear` /
-    ///    `chat.rewind`, where leaving the content searchable would hand the
-    ///    model the very turns the user just erased. Compaction is the
-    ///    opposite intent: the turns leave the *live prompt* but must stay
-    ///    recallable, so `recall_events` can still surface a detail the
-    ///    summary abstracted away. Deleting the FTS rows here would make the
-    ///    "compaction is not a net loss" contract false.
-    /// 2. **No default `Ok(0)`.** A store that cannot retire must say so
-    ///    rather than silently report a compaction that did not happen — the
-    ///    caller appends its summary first and treats this error as
-    ///    "summary recorded, context unchanged".
-    ///
-    /// Idempotent, like its mirror: already-retired events keep their original
-    /// timestamp and are not counted again.
-    async fn retire_through(
-        &self,
-        session_id: &SessionId,
-        through_seq: EventSeq,
-    ) -> Result<usize, SessionError> {
-        let _ = (session_id, through_seq);
-        Err(SessionError::Storage(
-            "this event store does not support head-side retirement (manual compaction)".into(),
-        ))
-    }
 
     /// True when the event at `seq` exists and has been retired.
     ///
@@ -363,7 +353,11 @@ fn encode_payload(event: &SessionEvent) -> Result<String, SessionError> {
 /// erased. The FTS table is a derived index, not the log, so a physical
 /// delete there does not break the append-only guarantee. `Through` keeps
 /// the mirror: compaction evicts turns from the prompt but they must stay
-/// recallable — see [`SessionEventStore::retire_through`].
+/// recallable, so `recall_events` can still surface a detail the summary
+/// abstracted away — deleting the FTS rows would make the "compaction is not
+/// a net loss" contract false. `Through` is reached only as the `retire`
+/// argument of [`SessionEventStore::append_batch`]; `From` also has the
+/// standalone [`SessionEventStore::retire_from`].
 fn retire_in_txn(
     tx: &rusqlite::Transaction<'_>,
     session_key: &str,
@@ -630,27 +624,6 @@ impl SessionEventStore for SqliteEventStore {
             .map_err(|e| SessionError::Storage(e.to_string()))?;
         tx.commit()
             .map_err(|e| SessionError::Storage(format!("retire_from COMMIT failed: {e}")))?;
-        Ok(n)
-    }
-
-    async fn retire_through(
-        &self,
-        session_id: &SessionId,
-        through_seq: EventSeq,
-    ) -> Result<usize, SessionError> {
-        let session_key = session_id_to_string(session_id)?;
-        let at = crate::session::events::now_ms();
-
-        let mut conn = self.conn.lock().await;
-        // Same shape as `retire_from`; the arm differs in keeping the BM25
-        // mirror (see the trait doc for why compaction must stay recallable).
-        let tx = conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|e| SessionError::Storage(format!("retire_through BEGIN failed: {e}")))?;
-        let n = retire_in_txn(&tx, &session_key, Retire::Through(through_seq), at)
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-        tx.commit()
-            .map_err(|e| SessionError::Storage(format!("retire_through COMMIT failed: {e}")))?;
         Ok(n)
     }
 
@@ -1050,15 +1023,17 @@ pub(crate) mod test_support {
     /// A real SQLite store that counts its write entry points, so a test can
     /// assert "one transaction" as a NUMBER instead of trusting the caller.
     ///
-    /// The three counted methods are the three ways a caller can change the
-    /// live log. `append` is deliberately NOT overridden: the trait default
-    /// routes it through `self.append_batch`, so a single-row write is counted
-    /// too — every write that reaches this store is a batch it counted.
+    /// The two counted methods are the two ways a caller can change the live
+    /// log (`append_batch`, which carries the batch's retire, and the
+    /// standalone `retire_from`). `append` is deliberately NOT overridden: the
+    /// trait default routes it through `self.append_batch`, so a single-row
+    /// write is counted too — every write that reaches this store is a batch
+    /// it counted. "One transaction" therefore reads as
+    /// `append_batches == 1 && retire_froms == 0`.
     pub(crate) struct CountingStore {
         pub inner: Arc<SqliteEventStore>,
         pub append_batches: AtomicUsize,
         pub retire_froms: AtomicUsize,
-        pub retire_throughs: AtomicUsize,
     }
 
     impl CountingStore {
@@ -1070,7 +1045,6 @@ pub(crate) mod test_support {
                 inner: Arc::new(SqliteEventStore::new(conn)),
                 append_batches: AtomicUsize::new(0),
                 retire_froms: AtomicUsize::new(0),
-                retire_throughs: AtomicUsize::new(0),
             })
         }
     }
@@ -1120,16 +1094,6 @@ pub(crate) mod test_support {
             self.retire_froms
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.inner.retire_from(session_id, from_seq).await
-        }
-
-        async fn retire_through(
-            &self,
-            session_id: &SessionId,
-            through_seq: EventSeq,
-        ) -> Result<usize, SessionError> {
-            self.retire_throughs
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            self.inner.retire_through(session_id, through_seq).await
         }
 
         async fn is_retired(
@@ -1787,6 +1751,34 @@ mod tests {
         assert_eq!(live[0].seq, 2);
     }
 
+    /// `Retire::Through` has no standalone method: it is reached only as the
+    /// `retire` argument of `append_batch`, so a retire-only batch is how the
+    /// head-side bound is driven here.
+    async fn retire_through_batch(store: &SqliteEventStore, sid: &SessionId, through: EventSeq) {
+        let next = store.load_head_seq(sid).await.unwrap() + 1;
+        store
+            .append_batch(
+                sid,
+                next,
+                &[],
+                Some(Retire::Through(through)),
+                Durability::Normal,
+            )
+            .await
+            .unwrap();
+    }
+
+    /// `retired_at` of one row, read off the private connection.
+    async fn retired_at(store: &SqliteEventStore, sid: &SessionId, seq: EventSeq) -> Option<i64> {
+        let conn = store.conn.lock().await;
+        conn.query_row(
+            "SELECT retired_at FROM session_events WHERE session_id = ?1 AND seq = ?2",
+            params![session_id_to_string(sid).unwrap(), seq as i64],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn retire_through_drops_the_prefix_and_keeps_the_tail() {
         let store = make_store();
@@ -1800,24 +1792,47 @@ mod tests {
                 .unwrap();
         }
 
-        let retired = store.retire_through(&sid, 2).await.unwrap();
-        assert_eq!(retired, 2);
+        retire_through_batch(&store, &sid, 2).await;
 
         let live = store.load_all_events(&sid).await.unwrap();
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].seq, 3, "only the tail survives the head retirement");
-        // Idempotent, exactly like its `retire_from` mirror.
-        assert_eq!(store.retire_through(&sid, 2).await.unwrap(), 0);
+        assert!(retired_at(&store, &sid, 1).await.is_some());
+        assert!(
+            retired_at(&store, &sid, 2).await.is_some(),
+            "the bound is inclusive"
+        );
+        assert!(retired_at(&store, &sid, 3).await.is_none());
+
+        // Idempotent, exactly like its `retire_from` mirror: an already-retired
+        // row keeps its ORIGINAL retirement timestamp. Pinned with a sentinel
+        // rather than by counting, since a batch reports no count — and a
+        // sentinel is not vacuous when the two calls share a millisecond.
+        {
+            let conn = store.conn.lock().await;
+            conn.execute(
+                "UPDATE session_events SET retired_at = 4242 WHERE session_id = ?1 AND seq = 1",
+                params![session_id_to_string(&sid).unwrap()],
+            )
+            .unwrap();
+        }
+        retire_through_batch(&store, &sid, 2).await;
+        assert_eq!(
+            retired_at(&store, &sid, 1).await,
+            Some(4242),
+            "retiring the same range twice must not re-stamp the rows"
+        );
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
         // Seq allocation is unaffected — the rows are still there.
         assert_eq!(store.load_head_seq(&sid).await.unwrap(), 3);
     }
 
     #[tokio::test]
     async fn retire_through_keeps_the_search_index_unlike_clear() {
-        // The one deliberate asymmetry with `retire_from`: `chat.clear` must
-        // erase content from the BM25 mirror, compaction must NOT — the turns
-        // leave the live prompt but stay recallable. Losing this makes the
-        // "compaction is not a net loss" contract false.
+        // The one deliberate asymmetry between the two `Retire` arms:
+        // `chat.clear` must erase content from the BM25 mirror, compaction
+        // must NOT — the turns leave the live prompt but stay recallable.
+        // Losing this makes the "compaction is not a net loss" contract false.
         let store = make_store();
         let sid = sample_session_id();
         let tid = uuid::Uuid::new_v4();
@@ -1831,7 +1846,7 @@ mod tests {
             .await
             .unwrap();
 
-        store.retire_through(&sid, 1).await.unwrap();
+        retire_through_batch(&store, &sid, 1).await;
         assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
         assert!(
             !store
@@ -1870,7 +1885,7 @@ mod tests {
             .await
             .unwrap();
 
-        store.retire_through(&sid_b, 1).await.unwrap();
+        retire_through_batch(&store, &sid_b, 1).await;
 
         assert_eq!(store.load_all_events(&sid_a).await.unwrap().len(), 1);
         assert!(store.load_all_events(&sid_b).await.unwrap().is_empty());

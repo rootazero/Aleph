@@ -633,13 +633,14 @@ fn peer_echo_frame(
 /// conversation the user just cleared.
 ///
 /// ⚠️ `retired_at` has two writers with **opposite** intent, and this gate reads
-/// only the flag. `retire_from` (`chat.clear` / `chat.rewind`) means "erase" —
-/// suppressing the row is the whole point. `retire_through` (manual `/compact`,
-/// `context::compact::manual`) means "stop replaying, keep everything" — for it
-/// the suppression is collateral: a compacted event that had not yet drained
-/// loses its Panel row. Distinguishing the two would take a retirement *reason*
-/// on the row; that is a schema change with no observed failure behind it. If
-/// one ever shows up, this is the place.
+/// only the flag. `Retire::From` (`chat.clear` / `chat.rewind` /
+/// `session.truncate`) means "erase" — suppressing the row is the whole point.
+/// `Retire::Through` (manual `/compact`, `context::compact::manual`, the
+/// `retire` argument of its one `append_batch`) means "stop replaying, keep
+/// everything" — for it the suppression is collateral: a compacted event that
+/// had not yet drained loses its Panel row. Distinguishing the two would take a
+/// retirement *reason* on the row; that is a schema change with no observed
+/// failure behind it. If one ever shows up, this is the place.
 ///
 /// `Ok(false)` when there is no event log installed (CLI one-shot, unit tests):
 /// nothing can have been retired. An `Err` is neither "retired" nor "live" —

@@ -1164,13 +1164,6 @@ impl SessionEventStore for FaultingStore {
     ) -> Result<usize, SessionError> {
         self.inner.retire_from(session_id, from_seq).await
     }
-    async fn retire_through(
-        &self,
-        session_id: &SessionKey,
-        through_seq: EventSeq,
-    ) -> Result<usize, SessionError> {
-        self.inner.retire_through(session_id, through_seq).await
-    }
     async fn is_retired(
         &self,
         session_id: &SessionKey,

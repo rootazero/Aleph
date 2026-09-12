@@ -272,7 +272,7 @@ static IN_FLIGHT: Mutex<std::collections::BTreeSet<String>> =
 ///
 /// Two overlapping compactions are not merely wasteful. Both read the same
 /// un-retired log, both pay the summarizer, and both append their summary
-/// *above* the other's `retire_through` boundary — so neither retires the
+/// *above* the other's `Retire::Through` boundary — so neither retires the
 /// other's, and every future prompt of that session carries two near-identical
 /// `[Context Summary]` blocks until some later compaction sweeps them up.
 struct CompactionBracket {
@@ -454,11 +454,14 @@ pub async fn compact_session(
     }
 
     let summary_turn = uuid::Uuid::new_v4();
+    // One instant for both payloads: the batch is one moment, and two
+    // `now_ms()` calls can straddle a millisecond.
+    let at = crate::session::events::now_ms();
     let batch = vec![
         SessionEvent::SystemMessage {
             turn_id: summary_turn,
             content: format!("{SUMMARY_MARKER}\n{SUMMARY_FRAMING}\n\n{body}"),
-            at: crate::session::events::now_ms(),
+            at,
         },
         SessionEvent::CompactionPerformed {
             from_seq,
@@ -466,7 +469,7 @@ pub async fn compact_session(
             // The summary's turn_id: the one reference known BEFORE the batch
             // commits (its seq is allocated by the actor inside the commit).
             summary_ref: summary_turn.to_string(),
-            at: crate::session::events::now_ms(),
+            at,
         },
     ];
     // Summary, checkpoint and retire commit together or not at all (§4.1).
@@ -1098,9 +1101,9 @@ mod tests {
             "summary + checkpoint + retire = ONE append_batch"
         );
         assert_eq!(
-            store.retire_throughs.load(Ordering::SeqCst),
+            store.retire_froms.load(Ordering::SeqCst),
             0,
-            "no second step"
+            "no second step: the only other write entry point was never called"
         );
         let after = service.get_events(&sid, None, None).await.unwrap();
         let summary = after
@@ -1135,9 +1138,15 @@ mod tests {
             after.iter().all(|r| r.seq > *to_seq),
             "prefix retired in the same step"
         );
+        // Fixture consistency, not a production pin: the `created_at_ms` here
+        // is the TEST DOUBLE's one-stamp-per-batch (`StoreBackedService::
+        // emit_batch`), standing in for the actor's (`session::actor::
+        // handle_emit_batch`, pinned by T2's actor tests). What it guards on
+        // this side is that a reader must never order inside a batch by time —
+        // seq is the order.
         assert_eq!(
             summary.created_at_ms, ckpt.created_at_ms,
-            "one batch stamps one created_at_ms; seq is the order inside it"
+            "the double stamps one created_at_ms per batch; seq is the order inside it"
         );
     }
 
