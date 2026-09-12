@@ -1511,6 +1511,7 @@ mod tests {
             seq: 7,
             provenance: crate::session::reduction::DanglingProvenance::EarlierRun,
             denied,
+            parked: None,
         }
     }
 

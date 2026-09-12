@@ -56,6 +56,49 @@ pub enum ErrorKind {
     HookStop,
 }
 
+/// Why a dispatched call stopped at a gate instead of running (§6.1).
+///
+/// Serde name = the wire word; `Display` = the clause the boundary repair
+/// reads to the model ("… was still waiting for {reason}"). Two spellings of
+/// one fact, pinned to each other by
+/// `tests::park_reason_wire_word_is_the_serde_name_and_display_is_the_clause`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParkReason {
+    /// A confirmation / operator card
+    /// (`tools::scoped::dispatch::confirm_with_memory`).
+    Approval,
+    /// `ask_user` waiting for the person's answer (`clarification::ask`).
+    Clarification,
+    /// A card a `BeforeToolCall` hook's `Ask` raised. NOT "the hook script
+    /// was running": a crash inside a hook script stays OUTCOME UNKNOWN,
+    /// because no release fact exists for it.
+    PreHook,
+}
+
+impl ParkReason {
+    /// The serde word, for a caller that wants the wire spelling without a
+    /// serializer round-trip.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Approval => "approval",
+            Self::Clarification => "clarification",
+            Self::PreHook => "pre_hook",
+        }
+    }
+}
+
+impl std::fmt::Display for ParkReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Approval => "operator approval",
+            Self::Clarification => "the answer to your question",
+            Self::PreHook => "a pre-tool hook",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageContent {
     /// Free-form text body (UI-displayable).
@@ -430,6 +473,17 @@ pub enum SessionEvent {
         reason: String,
         at: Timestamp,
     },
+    /// Written by the gate BEFORE it parks (§6.1) — an intent stamp, so a
+    /// crash while parked reads "never ran" instead of "outcome unknown".
+    /// Normal durability (U3): a lost stamp reads as "outcome unknown", the
+    /// safe direction. No `tool_name`: the dispatch this pairs with owns it,
+    /// and `clarification::ask` cannot know its caller's name. Written
+    /// through ONE writer, `session::call_log::emit_for_ambient_call`.
+    ToolCallParked {
+        turn_id: TurnId,
+        call_id: String,
+        reason: ParkReason,
+    },
     ToolResult {
         turn_id: TurnId,
         call_id: String,
@@ -542,6 +596,9 @@ pub const fn durability_of(event: &SessionEvent) -> Durability {
         | SessionEvent::SystemMessage { .. }
         | SessionEvent::ToolCallApproved { .. }
         | SessionEvent::ToolCallDenied { .. }
+        // U3: an intent stamp whose LOSS reads "outcome unknown" — the safe
+        // direction — so it does not buy an fsync.
+        | SessionEvent::ToolCallParked { .. }
         | SessionEvent::ToolResult { .. }
         | SessionEvent::ToolError { .. }
         | SessionEvent::SubagentSpawned { .. }
@@ -549,8 +606,6 @@ pub const fn durability_of(event: &SessionEvent) -> Durability {
         | SessionEvent::CompactionPerformed { .. }
         | SessionEvent::SessionForked { .. }
         | SessionEvent::Error { .. } => Durability::Normal,
-        // T11 adds `| SessionEvent::ToolCallParked { .. }` to THIS group (U3: Normal) and its
-        // sample to `fixtures::sample_of_every_kind` — the census refuses to compile until it does.
     }
 }
 
@@ -694,6 +749,14 @@ pub(crate) mod fixtures {
                     call_id: "c".into(),
                     reason: "no".into(),
                     at: 0,
+                },
+            ),
+            (
+                "ToolCallParked",
+                SessionEvent::ToolCallParked {
+                    turn_id: t,
+                    call_id: "c".into(),
+                    reason: ParkReason::Approval,
                 },
             ),
             (
@@ -1096,6 +1159,37 @@ mod tests {
             serde_json::to_string(&RunOutcome::Abandoned).unwrap(),
             "\"abandoned\""
         );
+    }
+
+    /// `ParkReason` has two spellings of one fact: the serde word (what the
+    /// wire and `as_str` say) and the `Display` clause (what the boundary
+    /// repair reads to the model). They must differ — a wire word read aloud
+    /// is not a sentence — and the event must round-trip under its own tag.
+    #[test]
+    fn park_reason_wire_word_is_the_serde_name_and_display_is_the_clause() {
+        for r in [
+            ParkReason::Approval,
+            ParkReason::Clarification,
+            ParkReason::PreHook,
+        ] {
+            assert_eq!(
+                serde_json::to_value(r).unwrap(),
+                serde_json::json!(r.as_str())
+            );
+            assert_ne!(r.as_str(), r.to_string());
+        }
+        let ev = SessionEvent::ToolCallParked {
+            turn_id: TurnId::new_v4(),
+            call_id: "c".into(),
+            reason: ParkReason::PreHook,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(
+            json.contains("\"type\":\"tool_call_parked\"")
+                && json.contains("\"reason\":\"pre_hook\""),
+            "{json}"
+        );
+        let _: SessionEvent = serde_json::from_str(&json).unwrap();
     }
 
     // -----------------------------------------------------------------------

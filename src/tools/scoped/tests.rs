@@ -4028,3 +4028,93 @@ fn a_side_question_refusal_names_itself_not_the_plan_handoff() {
         "expected SideQuestion, got {rule:?}"
     );
 }
+
+// -------------------------------------------------------------------------
+// §6.2 — every production dispatch into the gate carries a CallIdentity
+// -------------------------------------------------------------------------
+
+/// A file that DEFINES `execute_with_cancel` forwards or implements it (the
+/// trait default, the scoped service, the allowlist / MCP-scope decorators);
+/// ORIGINATORS only call it. Today that set is the harness Act phase alone,
+/// each call inside a `with_call_identity(..)` scope — which is what lets
+/// `session::call_log::emit_for_ambient_call` treat a missing identity as a
+/// counted, logged anomaly rather than an expected shape (spec §6.2). Equality
+/// on the originator set, derived from the source: a new originator must scope
+/// an identity around its dispatch, or not reach the gate.
+#[test]
+fn every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity() {
+    use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut originators: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
+    for (rel, src) in rust_sources_under(&root) {
+        let code = code_text(&production_text(std::path::Path::new(&rel), &src));
+        if code.contains("fn execute_with_cancel(") {
+            continue;
+        }
+        let calls = code.matches(".execute_with_cancel(").count();
+        if calls > 0 {
+            originators.insert(rel, (calls, code.matches("with_call_identity(").count()));
+        }
+    }
+    assert_eq!(
+        originators.keys().collect::<Vec<_>>(),
+        vec!["src/harness/agent/act.rs"],
+        "a new originator must scope a CallIdentity around its dispatch, or not reach the gate: {originators:?}"
+    );
+    let (calls, scoped) = originators["src/harness/agent/act.rs"];
+    assert!(calls >= 1, "self-protection: the scan found the Act phase");
+    assert_eq!(
+        calls, scoped,
+        "every dispatch in act.rs is wrapped by exactly one identity scope"
+    );
+}
+
+/// §6.1 from the writer's side, through the one writer and the real actor
+/// service: a gate that is asked and answered leaves `ToolCallParked` and THEN
+/// the decision, in that order, in one session's log — the shape the
+/// reducer's `an_answered_gate_ends_the_park` reads. The "before the
+/// requester" half is `tests/parked_gate_integration.rs`; this pins the pair.
+/// `SessionKey::ephemeral` so the shared test service's other users cannot
+/// interleave rows here.
+#[tokio::test]
+async fn an_answered_gate_leaves_park_then_decision_in_the_session_log() {
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    use crate::session::events::{ParkReason, SessionEvent, TurnId};
+    use crate::session::service::SessionService as _;
+    let sessions = crate::session::in_process::install_test_session_service();
+    let key = crate::routing::session_key::SessionKey::ephemeral("parked-gate-unit");
+    let mut turn = turn_ctx("parked-gate-unit");
+    turn.session_key = key.clone();
+    let requester = StdArc::new(FakeRequester::new(ApprovalOutcome::Denied));
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn)
+        .with_confirmation(StdArc::clone(&requester) as _);
+    let identity = crate::approval::CallIdentity {
+        turn_id: TurnId::new_v4(),
+        call_id: "toolu_unit".into(),
+    };
+    let result =
+        crate::approval::with_call_identity(Some(identity), svc.execute("danger", json!({}))).await;
+    assert!(result.is_err(), "a denied card does not run the tool");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "the gate asked once"
+    );
+
+    let rows = sessions.get_events(&key, None, None).await.unwrap();
+    let kinds: Vec<&str> = rows
+        .iter()
+        .map(|r| crate::session::store::event_type_tag(&r.event))
+        .collect();
+    assert_eq!(kinds, ["tool_call_parked", "tool_call_denied"]);
+    assert!(
+        matches!(
+            &rows[0].event,
+            SessionEvent::ToolCallParked { call_id, reason: ParkReason::Approval, .. }
+                if call_id == "toolu_unit"
+        ),
+        "the confirm card parks as `Approval`, under the ambient call id: {:?}",
+        rows[0].event
+    );
+}

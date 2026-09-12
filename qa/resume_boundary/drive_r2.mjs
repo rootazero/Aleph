@@ -253,6 +253,15 @@ const userText = (body) =>
     )
     .join("\n");
 
+// The lead words of every boundary-repair arm the server can write for a
+// dangling call: "OUTCOME UNKNOWN" (may have run) and "NOT EXECUTED" (denied,
+// or parked at a gate — §6.1's fourth arm, which the `knobs` stage's dangle
+// takes because it parks at the `ask` gate). A stage that only wants to know
+// "did the resumed run reach the provider carrying a repair" asks this; a
+// stage that asserts WHICH arm matches the arm's own sentence.
+const REPAIR_MARKERS = ["OUTCOME UNKNOWN", "NOT EXECUTED"];
+const carriesRepair = (text) => REPAIR_MARKERS.some((m) => text.includes(m));
+
 const show = (v, max = 700) => (JSON.stringify(v ?? null) ?? "null").slice(0, max);
 
 const readSession = () => fs.readFileSync(SESSION_FILE, "utf8").trim();
@@ -802,7 +811,7 @@ async function cmdKnobs(sub, arg, tier) {
   );
   const resumed = await until(
     () => {
-      const hits = requests().filter((r) => userText(r.body).includes("OUTCOME UNKNOWN"));
+      const hits = requests().filter((r) => carriesRepair(userText(r.body)));
       return hits.length > 0 ? hits : null;
     },
     180_000,

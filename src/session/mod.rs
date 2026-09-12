@@ -9,6 +9,7 @@
 
 pub mod actor;
 pub mod boundary_repair;
+pub mod call_log;
 pub mod epoch_registrar;
 pub mod events;
 pub mod in_process;

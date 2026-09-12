@@ -38,7 +38,7 @@ use std::fmt;
 use serde::Serialize;
 
 use crate::session::events::{
-    EventSeq, RunEnvelopeSnapshot, SessionEvent, SessionEventRecord, Timestamp, TurnId,
+    EventSeq, ParkReason, RunEnvelopeSnapshot, SessionEvent, SessionEventRecord, Timestamp, TurnId,
 };
 
 /// One thing a session log says that it must not say.
@@ -116,6 +116,10 @@ pub enum LogContradiction {
     /// `Clean` regardless. This report is what tells the operator the stamp
     /// named nothing at the moment it was written.
     ResumeWithoutTarget { seq: EventSeq },
+    /// A `ToolCallParked` with no unanswered dispatch of its `call_id` before
+    /// it. Reading: ignored — it names nothing the log can pair it with, so
+    /// no dangling call is marked parked by it.
+    ParkedWithoutRequest { seq: EventSeq, call_id: String },
 }
 
 impl LogContradiction {
@@ -143,6 +147,7 @@ impl LogContradiction {
             Self::DanglingDeniedCall { .. } => "session-log-dangling-denied-call",
             Self::ClockAnomaly { .. } => "session-log-clock-anomaly",
             Self::ResumeWithoutTarget { .. } => "session-log-resume-without-target",
+            Self::ParkedWithoutRequest { .. } => "session-log-parked-without-request",
         }
     }
 }
@@ -183,6 +188,10 @@ impl fmt::Display for LogContradiction {
             Self::ResumeWithoutTarget { seq } => write!(
                 f,
                 "ResumeAttempted at seq {seq} names no open run and no unanswered message"
+            ),
+            Self::ParkedWithoutRequest { seq, call_id } => write!(
+                f,
+                "park for call_id `{call_id}` at seq {seq} names no unanswered dispatch"
             ),
         }
     }
@@ -259,6 +268,12 @@ pub struct DanglingCall {
     /// landed". Always paired with a
     /// [`LogContradiction::DanglingDeniedCall`] in `contradictions`.
     pub denied: bool,
+    /// Parked at a gate when the log ends and nothing answered the gate: it
+    /// never ran (§6.1), and the repair says what it was waiting for. Cleared
+    /// by a later `ToolCallApproved` (it went on to run — unknown again) or
+    /// `ToolCallDenied` (the denied arm speaks instead). Never `Some` together
+    /// with `denied`.
+    pub parked: Option<ParkReason>,
 }
 
 /// What a run got done before it stopped. Scoped to the current run — see
@@ -435,6 +450,9 @@ struct Dispatch<'a> {
     /// `seq` of the receipt that answered it, once one has.
     answered: Option<EventSeq>,
     denied: bool,
+    /// The newest gate event: `Some` after a `ToolCallParked`, `None` again
+    /// after the gate is answered either way.
+    parked: Option<ParkReason>,
 }
 
 /// Reduce a session's event log to its run state.
@@ -572,7 +590,37 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     turn_id: *turn_id,
                     answered: None,
                     denied: false,
+                    parked: None,
                 });
+            }
+            // The gate's intent stamp (§6.1): the nearest unanswered dispatch
+            // of its id is parked from here until the gate is answered. With
+            // no such dispatch it names nothing — reported, not acted on.
+            SessionEvent::ToolCallParked {
+                call_id, reason, ..
+            } => {
+                match dispatches
+                    .iter_mut()
+                    .rev()
+                    .find(|d| d.call_id == call_id && d.answered.is_none())
+                {
+                    Some(d) => d.parked = Some(*reason),
+                    None => contradictions.push(LogContradiction::ParkedWithoutRequest {
+                        seq: record.seq,
+                        call_id: call_id.clone(),
+                    }),
+                }
+            }
+            // The gate was answered yes: the call went on to run, so from
+            // here a crash is OUTCOME UNKNOWN again, not "never ran".
+            SessionEvent::ToolCallApproved { call_id, .. } => {
+                if let Some(d) = dispatches
+                    .iter_mut()
+                    .rev()
+                    .find(|d| d.call_id == call_id && d.answered.is_none())
+                {
+                    d.parked = None;
+                }
             }
             SessionEvent::ToolCallDenied { call_id, .. } => {
                 if let Some(d) = dispatches
@@ -581,6 +629,8 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     .find(|d| d.call_id == call_id && d.answered.is_none())
                 {
                     d.denied = true;
+                    // The denied arm speaks for it now; a park it was in is over.
+                    d.parked = None;
                 }
             }
             SessionEvent::ToolResult { call_id, .. } | SessionEvent::ToolError { call_id, .. } => {
@@ -630,6 +680,7 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
             seq: d.seq,
             provenance,
             denied: d.denied,
+            parked: d.parked,
         });
     }
     if let Some(first_seq) = unmarked_first {
@@ -737,7 +788,7 @@ pub fn own_work_start(events: &[SessionEventRecord]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::events::{MessageContent, RunOutcome, TurnTrigger};
+    use crate::session::events::{MessageContent, ParkReason, RunOutcome, TurnTrigger};
 
     /// Needles for the source census at the bottom of this module. Defined up
     /// here, far from every call site in these tests, so the census window
@@ -848,6 +899,23 @@ mod tests {
         }
     }
 
+    fn parked(call: &str, reason: ParkReason) -> SessionEvent {
+        SessionEvent::ToolCallParked {
+            turn_id: TurnId::new_v4(),
+            call_id: call.to_string(),
+            reason,
+        }
+    }
+
+    fn approved(call: &str) -> SessionEvent {
+        SessionEvent::ToolCallApproved {
+            turn_id: TurnId::new_v4(),
+            call_id: call.to_string(),
+            by: crate::session::events::ApprovalSource::User,
+            at: 4,
+        }
+    }
+
     fn content(text: &str) -> MessageContent {
         MessageContent {
             text: text.to_string(),
@@ -945,9 +1013,10 @@ mod tests {
             LogContradiction::DanglingDeniedCall { .. } => 7,
             LogContradiction::ClockAnomaly { .. } => 8,
             LogContradiction::ResumeWithoutTarget { .. } => 9,
+            LogContradiction::ParkedWithoutRequest { .. } => 10,
         }
     }
-    const KIND_COUNT: usize = 10;
+    const KIND_COUNT: usize = 11;
 
     fn one_of_each() -> Vec<LogContradiction> {
         let all = vec![
@@ -976,6 +1045,10 @@ mod tests {
             },
             LogContradiction::ClockAnomaly { seq: 1 },
             LogContradiction::ResumeWithoutTarget { seq: 1 },
+            LogContradiction::ParkedWithoutRequest {
+                seq: 1,
+                call_id: "c".into(),
+            },
         ];
         let mut seen = vec![false; KIND_COUNT];
         for c in &all {
@@ -1261,6 +1334,74 @@ mod tests {
         let r = reduced(&receipted);
         assert!(r.contradictions.is_empty());
         assert!(r.dangling.is_empty());
+    }
+
+    /// §6.1: the gate's intent stamp. A dispatch whose newest gate event is a
+    /// `ToolCallParked` never ran, and the dangling call says which gate it
+    /// was waiting on. Not a contradiction — it is the designed crash shape.
+    #[test]
+    fn a_parked_dangling_call_carries_its_reason() {
+        let r = reduced(&[
+            rec(1, started("a")),
+            rec(2, requested("c1")),
+            rec(3, parked("c1", ParkReason::Approval)),
+        ]);
+        assert_eq!(r.dangling[0].parked, Some(ParkReason::Approval));
+        assert!(!r.dangling[0].denied && tags(&r).is_empty());
+    }
+
+    /// An answered gate ends the park: approved ⇒ the call went on to run, so
+    /// a crash after that is OUTCOME UNKNOWN again; denied ⇒ the denied arm,
+    /// never the parked one.
+    #[test]
+    fn an_answered_gate_ends_the_park() {
+        let r = reduced(&[
+            rec(1, started("a")),
+            rec(2, requested("c1")),
+            rec(3, parked("c1", ParkReason::Approval)),
+            rec(4, approved("c1")),
+        ]);
+        assert_eq!(
+            r.dangling[0].parked, None,
+            "approved ⇒ it went on to run ⇒ unknown, not never-ran"
+        );
+        let r = reduced(&[
+            rec(1, started("a")),
+            rec(2, requested("c1")),
+            rec(3, parked("c1", ParkReason::PreHook)),
+            rec(4, denied("c1")),
+        ]);
+        assert!(r.dangling[0].parked.is_none() && r.dangling[0].denied);
+    }
+
+    /// Same pairing rule as receipts (③-D1): a park names the NEAREST
+    /// unanswered dispatch of its id, so a reused `call_id` whose first
+    /// dispatch was answered pairs the park with the second.
+    #[test]
+    fn a_park_pairs_with_the_nearest_unanswered_dispatch_of_its_id() {
+        let r = reduced(&[
+            rec(1, started("a")),
+            rec(2, requested("c1")),
+            rec(3, result_for("c1")),
+            rec(4, requested("c1")),
+            rec(5, parked("c1", ParkReason::Clarification)),
+        ]);
+        assert_eq!(
+            (r.dangling.len(), r.dangling[0].seq, r.dangling[0].parked),
+            (1, 4, Some(ParkReason::Clarification))
+        );
+    }
+
+    /// A stamp with nothing to pair with is REPORTED and changes no reading:
+    /// it names no dispatch, so there is nothing for it to mark parked.
+    #[test]
+    fn a_park_without_a_dispatch_is_reported_and_ignored() {
+        let r = reduced(&[
+            rec(1, started("a")),
+            rec(2, parked("ghost", ParkReason::Approval)),
+        ]);
+        assert!(r.dangling.is_empty());
+        assert_eq!(tags(&r), vec!["session-log-parked-without-request"]);
     }
 
     #[test]
@@ -1598,6 +1739,25 @@ mod tests {
                     run_meta("r2"),
                 ]),
                 allowed: &[FINISH_WITHOUT_START],
+            },
+            LegalShape {
+                // §6.1: the gate stamps its intent BEFORE parking; the human
+                // answers; the call runs. Neither the park nor the approval
+                // is a contradiction — they are the designed shape.
+                name: "approval-parked call, approved, then result",
+                events: seq_log(vec![
+                    turn_started(),
+                    user("hi"),
+                    started("r1"),
+                    requested("c1"),
+                    parked("c1", ParkReason::Approval),
+                    approved("c1"),
+                    result_for("c1"),
+                    assistant("done"),
+                    finished("r1"),
+                    run_meta("r1"),
+                ]),
+                allowed: &[],
             },
             LegalShape {
                 name: "steering UserMessage in a tool gap",

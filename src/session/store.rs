@@ -789,6 +789,7 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
         | SessionEvent::ToolCallRequested { turn_id, .. }
         | SessionEvent::ToolCallApproved { turn_id, .. }
         | SessionEvent::ToolCallDenied { turn_id, .. }
+        | SessionEvent::ToolCallParked { turn_id, .. }
         | SessionEvent::ToolResult { turn_id, .. }
         | SessionEvent::ToolError { turn_id, .. }
         | SessionEvent::SubagentSpawned { turn_id, .. }
@@ -829,6 +830,7 @@ pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
         SessionEvent::ToolCallRequested { .. } => "tool_call_requested",
         SessionEvent::ToolCallApproved { .. } => "tool_call_approved",
         SessionEvent::ToolCallDenied { .. } => "tool_call_denied",
+        SessionEvent::ToolCallParked { .. } => "tool_call_parked",
         SessionEvent::ToolResult { .. } => "tool_result",
         SessionEvent::ToolError { .. } => "tool_error",
         SessionEvent::SubagentSpawned { .. } => "subagent_spawned",
