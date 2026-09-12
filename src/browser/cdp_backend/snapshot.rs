@@ -127,6 +127,48 @@ mod tests {
     use crate::browser::cdp_backend::test_support::*;
     use crate::browser::engine::Engine;
 
+    /// `snapshot` is the one READ verb behind the dialog gate, because it is
+    /// the verb a model reaches for right after a click that opened one. The
+    /// census in `actions` records it as gated; this is what makes that record
+    /// true rather than a claim — a census listing a verb as covered while the
+    /// code does not cover it is a guard reporting coverage it does not have.
+    #[tokio::test]
+    async fn a_snapshot_on_a_tab_with_an_open_dialog_refuses_before_the_wire() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        handle
+            .attach_tab(&aleph_cdp::TargetId("T1".into()))
+            .await
+            .expect("attach");
+        {
+            let mut tabs = handle.tabs.lock().await;
+            tabs.entries
+                .get_mut("T1")
+                .expect("tab entry")
+                .pending_dialog = Some("alert: saved!".into());
+        }
+
+        let before = methods(&server).len();
+        let err = backend
+            .snapshot("T1")
+            .await
+            .expect_err("a tab the engine will not answer cannot be snapshotted");
+        let text = err.to_string();
+        assert!(
+            text.contains("open dialog") && text.contains("saved!"),
+            "the refusal names the dialog, not the snapshot: {text}"
+        );
+        assert_eq!(
+            methods(&server).len(),
+            before,
+            "refusing before the wire is the whole point — ungated this spent \
+             the command budget and then blamed the snapshot: {:?}",
+            methods(&server)
+        );
+    }
+
     /// Task 0's captured Chrome reply, not a hand-written literal: a fixture I
     /// wrote myself would prove `fetch_chromium` parses what I imagined Chrome
     /// sends.

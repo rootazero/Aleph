@@ -114,9 +114,12 @@ fn says_no_dialog(err: &CdpError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use aleph_cdp::testkit::{FakeCdpServer, Responder};
     use serde_json::json;
 
+    use super::{CdpBackend, EngineHandle};
     use crate::browser::backend::BrowserBackend;
     use crate::browser::cdp_backend::test_support::*;
     use crate::browser::engine::{Cap, Engine};
@@ -216,17 +219,14 @@ mod tests {
         );
     }
 
-    /// **The gate stays up AND the door stays open.** An engine that does not
-    /// answer establishes nothing (判据 §8), so a timeout must not be read as
-    /// "the dialog is gone".
+    /// A tab with a pending dialog and an engine that never answers — the setup
+    /// both halves of the timeout claim need.
     ///
-    /// Two assertions, not one, because the unconditional clear got both
-    /// directions wrong at once: it dropped the gate while the dialog was still
-    /// up, and the pre-check it left behind then refused the retry — a state
-    /// with no verb that could recover it, which is worse than the fail-dead it
-    /// was meant to avoid.
-    #[tokio::test]
-    async fn an_engine_timeout_keeps_the_gate_up_and_leaves_the_door_open() {
+    /// Returned rather than inlined twice: the two halves are separate tests so
+    /// a mutation names the half it broke, and two copies of a fixture are
+    /// where two tests start disagreeing about what "the same setup" means.
+    async fn a_tab_whose_engine_will_not_answer() -> (FakeCdpServer, CdpBackend, Arc<EngineHandle>)
+    {
         let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
         wire_session(&server, "S1");
         // `Delay`, NOT `Hang`, and the reason is a property of the instrument
@@ -267,19 +267,35 @@ mod tests {
             matches!(err, crate::browser::error::BrowserError::EngineBusy { .. }),
             "a peer that does not answer is a timeout, not a verdict: {err:?}"
         );
+        (server, backend, handle)
+    }
 
-        // (1) The gate is still up: the dialog was never established to be
-        // gone, so every other verb keeps refusing by name.
+    /// **Half one: the gate stays up.** An engine that does not answer
+    /// establishes nothing (判据 §8), so a timeout must not be read as "the
+    /// dialog is gone" — the dialog is still there and every other verb still
+    /// has to refuse.
+    #[tokio::test]
+    async fn an_engine_timeout_keeps_the_gate_up() {
+        let (_server, _backend, handle) = a_tab_whose_engine_will_not_answer().await;
         assert_eq!(
             handle.tabs.lock().await.entries["T1"]
                 .pending_dialog
                 .as_deref(),
             Some("confirm: really?"),
-            "a timeout must not be read as 'the dialog is gone'"
+            "a timeout must not take the gate down while the danger is still there"
         );
+    }
 
-        // (2) The door is still open: a retry REACHES the engine rather than
-        // being refused by a local copy of the fact.
+    /// **Half two: the door stays open.** A retry REACHES the engine instead of
+    /// being refused by a local copy of the fact.
+    ///
+    /// Its own test rather than a second assertion, so a mutation names the
+    /// half it broke — the unconditional clear plus the pre-check got both
+    /// directions wrong at once, and "one name, one claim" is what keeps a
+    /// mutation run able to say which.
+    #[tokio::test]
+    async fn an_engine_timeout_leaves_the_door_open() {
+        let (server, backend, _handle) = a_tab_whose_engine_will_not_answer().await;
         let before = methods(&server)
             .iter()
             .filter(|m| *m == "Page.handleJavaScriptDialog")
@@ -293,7 +309,8 @@ mod tests {
             after,
             before + 1,
             "the retry must reach the engine — this call is the only caller of \
-             Page.handleJavaScriptDialog, so a local refusal here is a wedge"
+             Page.handleJavaScriptDialog, so a local refusal here is a wedge \
+             with no verb that recovers it"
         );
     }
 
