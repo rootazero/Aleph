@@ -63,6 +63,7 @@ use super::types::{
 };
 
 mod evaluate;
+mod events;
 mod navigate;
 mod screenshot;
 mod snapshot;
@@ -130,17 +131,23 @@ impl CdpBackend {
     /// may open one — the same split, for the same reason, as
     /// `PlaywrightCliBackend::run` / `run_launching`.
     pub(crate) async fn handle(&self) -> Result<Arc<EngineHandle>, BrowserError> {
-        self.registry
+        let handle = self
+            .registry
             .handle(self.engine, &self.req, EngineLaunch::Refuse)
-            .await
+            .await?;
+        events::ensure_pump(&handle);
+        Ok(handle)
     }
 
     /// The profile's engine, launching one if there is none — i.e. the caller is
     /// saying "give me a browser".
     pub(crate) async fn handle_launching(&self) -> Result<Arc<EngineHandle>, BrowserError> {
-        self.registry
+        let handle = self
+            .registry
             .handle(self.engine, &self.req, EngineLaunch::Allow)
-            .await
+            .await?;
+        events::ensure_pump(&handle);
+        Ok(handle)
     }
 
     pub(crate) const fn engine(&self) -> Engine {
@@ -350,11 +357,11 @@ impl BrowserBackend for CdpBackend {
     ) -> Result<(), BrowserError> {
         Err(not_yet_wired("handle_dialog"))
     }
-    async fn console_messages(&self, _t: &str) -> Result<String, BrowserError> {
-        Err(not_yet_wired("console_messages"))
+    async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError> {
+        events::console_messages(self, tab_id).await
     }
-    async fn network_log(&self, _t: &str) -> Result<String, BrowserError> {
-        Err(not_yet_wired("network_log"))
+    async fn network_log(&self, tab_id: &str) -> Result<String, BrowserError> {
+        events::network_log(self, tab_id).await
     }
     async fn cookies(&self, _op: &CookieOp) -> Result<String, BrowserError> {
         Err(not_yet_wired("cookies"))
@@ -426,21 +433,28 @@ pub(crate) mod test_support {
         }))
     }
 
-    /// Register the responders every session needs: attach, and the three
-    /// `enable`s `attach_tab` issues.
+    /// Register the responders every session needs: attach, the three `enable`s
+    /// `attach_tab` issues, and the discovery subscription the event pump opens.
     ///
-    /// `Target.setDiscoverTargets` is deliberately NOT here. The brief scripts
-    /// it for the event pump's first act — and the pump is Task 13's, so in
-    /// Task 12 nothing sends it. A responder for a method nothing sends is one
-    /// that can never fire, which is the same shape as a guard that can never
-    /// go red (判据 §2); Task 13 adds it in the commit that adds the sender.
+    /// `Target.setDiscoverTargets` arrives HERE, with its sender. Task 12 left
+    /// it out on the rule that a responder for a method nothing sends can never
+    /// fire, which is the same shape as a guard that can never go red
+    /// (判据 §2); `events::ensure_pump` sends it as of Task 13, so it now has
+    /// one. Registered explicitly rather than left to `scripted(vec![])`'s
+    /// catch-all `Reply({})`, so this list stays a readable inventory of what a
+    /// session actually puts on the wire.
     pub(crate) fn wire_session(server: &FakeCdpServer, session_id: &str) {
         let sid = session_id.to_string();
         server.on(
             "Target.attachToTarget",
             Responder::Reply(json!({ "sessionId": sid })),
         );
-        for m in ["Page.enable", "Runtime.enable", "Network.enable"] {
+        for m in [
+            "Page.enable",
+            "Runtime.enable",
+            "Network.enable",
+            "Target.setDiscoverTargets",
+        ] {
             server.on(m, Responder::Reply(json!({})));
         }
     }

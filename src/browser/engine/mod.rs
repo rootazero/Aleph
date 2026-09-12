@@ -196,6 +196,22 @@ pub struct EngineHandle {
     pub launched: Launched,
     pub conn: aleph_cdp::CdpConnection,
     pub tabs: tokio::sync::Mutex<TabTable>,
+    /// Whether this connection's event pump has been claimed.
+    ///
+    /// **Not bookkeeping for a double-spawn guard** — that is the smaller half
+    /// of what it does. The three fields below it on [`TabEntry`] (`console`,
+    /// `network`, `pending_dialog`) are filled by that pump and by nothing
+    /// else, and an empty `VecDeque` answers *"the page logged nothing"* and
+    /// *"nobody was listening"* with the same bytes. Only the second of those
+    /// is a fail-closed answer, and consuming it as an observation is 判据 §8.
+    /// This flag is the only thing that tells them apart, so
+    /// `cdp_backend::events::render_ring` reads it and says which of the two
+    /// the caller is looking at.
+    ///
+    /// Claimed by `cdp_backend::events::ensure_pump` through a
+    /// compare-exchange, so two verbs resolving the same handle concurrently
+    /// start one pump rather than two.
+    pub pump_started: std::sync::atomic::AtomicBool,
     process: Arc<dyn EngineProcess>,
 }
 
@@ -274,6 +290,7 @@ impl EngineHandle {
                 entries,
                 active: Some(tab_id),
             }),
+            pump_started: std::sync::atomic::AtomicBool::new(false),
             process,
         }
     }
@@ -311,6 +328,7 @@ impl EngineHandle {
             },
             conn,
             tabs: tokio::sync::Mutex::new(TabTable::default()),
+            pump_started: std::sync::atomic::AtomicBool::new(false),
             // `detached`, not `new`: `FakeEngineProcess::new(engine,
             // &FakeCdpServer, &Path)` exists to hand a launcher a server to
             // point a `Launched` at and a directory to write a sidecar into.
