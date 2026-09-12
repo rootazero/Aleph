@@ -577,10 +577,29 @@ pub fn stitch_snapshots(
 ) -> Result<RawDom, BrowserError> {
     let parent_snapshot = decode(parent)?;
     let (mut frames, mut unreached) = frames_of(&parent_snapshot, (0, 0), loaders, true)?;
+    // **Where the parent's node space ends.** Everything `frames_of` produced
+    // above came from ONE capture and therefore from one renderer, so those ids
+    // are mutually comparable; everything appended below comes from a different
+    // renderer and is not. Measured on the Task 0 fixtures rather than assumed:
+    // the two documents of the same-origin capture share **zero**
+    // `backendNodeId`s, while the OOPIF parent and child captures — two
+    // renderers — collide on **15** of them.
+    let parent_frames = frames.len();
 
     let mut child_snapshots = Vec::with_capacity(children.len());
     for child in children {
-        let base = owner_origin(&frames, child.owner_backend_node_id)?;
+        // `&frames[..parent_frames]`, never all of `frames`. By the time the
+        // second child is placed, `frames` also holds the FIRST child's nodes,
+        // whose ids live in that child's renderer — and `owner_backend_node_id`
+        // is this function's contract: `DOM.getFrameOwner`'s answer taken on the
+        // PARENT session, so it is always an id in the parent's space (U4c
+        // measured that the page session refuses a frame owned by another
+        // target, so no other id can reach here). Searching the whole vector
+        // matched on a bare integer across two spaces and could place an entire
+        // child document at another child's element's coordinates — plausible
+        // numbers, wrong page (判据 §12: a value chosen in one ordering and
+        // applied in another names a different thing).
+        let base = owner_origin(&frames[..parent_frames], child.owner_backend_node_id)?;
         let snapshot = decode(child.raw)?;
         let (child_frames, child_unplaceable) = frames_of(&snapshot, base, loaders, false)?;
         frames.extend(child_frames);
@@ -623,9 +642,34 @@ pub fn stitch_snapshots(
     // rather than the parent's content plus a confession.
     let accounted: HashSet<u64> = children.iter().map(|c| c.owner_backend_node_id).collect();
     let unenumerable = unaccounted_frame_elements(&parent_snapshot, &accounted)?;
+
+    // **`accounted` is the PARENT's node space and must not be applied here.**
+    //
+    // Every id in it is an `owner_backend_node_id`, which this function's
+    // contract defines as `DOM.getFrameOwner`'s answer on the PARENT session —
+    // so each one addresses an element in the parent's renderer. The ids coming
+    // out of a CHILD's capture address elements in that child's renderer. The
+    // two are different spaces that share an integer type, and they collide
+    // constantly: measured on the Task 0 fixtures, the OOPIF parent (ids 2-99)
+    // and its child (ids 1-17) have **15** ids in common.
+    //
+    // Filtering child-space ids through this set therefore did not skip
+    // already-placed frames — no child's owner can be inside another child's
+    // document, because the page session cannot resolve one there (U4c) — it
+    // silently DELETED any grandchild whose id happened to equal some parent
+    // element's id, and `unreached_frames` came back empty while the header
+    // printed `unreached_frames=0`. The wrong label grew inside the confession
+    // machinery built to prevent exactly that (判据 §17).
+    //
+    // An empty set, spelled out rather than reusing `accounted`, because "this
+    // filter is inapplicable here" is the fact worth reading.
+    let nothing_is_accounted_in_a_childs_space: HashSet<u64> = HashSet::new();
     let mut nested: Vec<u64> = Vec::new();
     for snapshot in &child_snapshots {
-        nested.extend(unaccounted_frame_elements(snapshot, &accounted)?);
+        nested.extend(unaccounted_frame_elements(
+            snapshot,
+            &nothing_is_accounted_in_a_childs_space,
+        )?);
     }
 
     if !children.is_empty() && !unenumerable.is_empty() {
@@ -3061,6 +3105,72 @@ mod tests {
         assert!(
             err.to_string().contains("65"),
             "and the refusal still names it: {err}"
+        );
+    }
+
+    /// **A grandchild whose id collides with a parent element's is still
+    /// confessed.**
+    ///
+    /// `backendNodeId`s are per renderer, so the same integer routinely names
+    /// two different elements in two captures — measured on these very
+    /// fixtures: the OOPIF parent's ids run 2-99 and its child's run 1-17,
+    /// overlapping on **15** values. The accounting used to filter a child's
+    /// ids through the PARENT-space `accounted` set, so a colliding grandchild
+    /// was silently dropped and the header printed `unreached_frames=0` on a
+    /// page with a hole in it: the wrong label growing inside the machinery
+    /// built to prevent wrong labels (判据 §17).
+    ///
+    /// The collision here is CONSTRUCTED rather than hoped for — the middle
+    /// frame's own `<iframe>` is renumbered to exactly the parent's owner id —
+    /// so the test cannot pass by the two happening to differ.
+    #[test]
+    fn a_grandchild_whose_id_collides_with_a_parent_element_is_still_confessed() {
+        let parent = json(OOPIF_PARENT);
+        let mut middle = json(OOPIF_PARENT);
+
+        // The parent's `<iframe>` is backendNodeId 65 and is the owner this
+        // capture claims. Make the MIDDLE frame's own iframe carry 65 as well,
+        // in the middle's node space — two elements, one integer.
+        let iframe_slot =
+            wire_node_with_backend_id(&middle, 0, 65).expect("the fixture's iframe is 65");
+        for (i, b) in middle["documents"][0]["nodes"]["backendNodeId"]
+            .as_array_mut()
+            .expect("backendNodeId[]")
+            .iter_mut()
+            .enumerate()
+        {
+            // Shift everything out of the way first, then put 65 back on the
+            // frame element alone, so 65 means exactly one thing in each space.
+            let id = b.as_u64().expect("a backend id");
+            *b = serde_json::json!(if i == iframe_slot { 65 } else { id + 100_000 });
+        }
+
+        let middle_frame = "F-MIDDLE";
+        let idx = middle["strings"].as_array().expect("strings[]").len();
+        middle["strings"]
+            .as_array_mut()
+            .expect("strings[]")
+            .push(serde_json::json!(middle_frame));
+        middle["documents"][0]["frameId"] = serde_json::json!(idx);
+
+        let mut l = loaders_of(&parent);
+        l.extend(loaders_of(&middle));
+
+        let dom = stitch_snapshots(
+            &parent,
+            &[ChildCapture {
+                owner_backend_node_id: 65,
+                raw: &middle,
+            }],
+            viewport(),
+            &l,
+        )
+        .expect("a colliding id must not refuse the page either");
+
+        assert_eq!(
+            dom.unreached_frames,
+            vec![UnreachedFrame::NotCaptured(65)],
+            "the grandchild collides with the parent's owner id and must STILL              be confessed — an id filtered across node spaces is a frame the              model is never told about"
         );
     }
 

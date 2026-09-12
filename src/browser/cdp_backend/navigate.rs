@@ -27,6 +27,31 @@ struct LoadOutcome {
     completed: bool,
 }
 
+/// How many events this subscriber never saw, phrased for a model.
+///
+/// The broadcast buffers [`aleph_cdp::EVENT_CHANNEL_CAPACITY`] events per
+/// subscriber and `EventStream::next` counts a lag and steps over it. If
+/// `Page.loadEventFired` was among the ones skipped, the barrier times out on a
+/// page that loaded — and "did not report load" would then be a confident wrong
+/// answer rather than an unknown. The count is cheap and it is the only thing
+/// that separates the two, so it goes in the sentence the model reads
+/// (判据 §17: the wrong label costs more than the vague one).
+///
+/// Takes the COUNT, not the `&EventStream` it came from. With the stream in the
+/// signature this function's non-empty arm could not be tested at all —
+/// `EventStream::new` is `pub(crate)` to `aleph-cdp`, so no test in this crate
+/// can build a lagged one — which made the reader added to close 判据 §2's
+/// 没装上 face carry that same face itself.
+fn lag_note(lagged: u64) -> String {
+    match lagged {
+        0 => String::new(),
+        n => format!(
+            " ({n} engine event(s) were dropped while this call was waiting, so \
+             the load may in fact have completed unseen)"
+        ),
+    }
+}
+
 /// Wait for the tab to stop loading, watching THREE events at once.
 ///
 /// `Page.loadEventFired` is what Chromium sends; obscura was measured to emit
@@ -43,25 +68,6 @@ struct LoadOutcome {
 /// `events` is passed in, not opened here: the subscription has to exist BEFORE
 /// the caller issues its command, or a cached page's load event arrives while
 /// nobody is listening and the barrier waits out the whole budget.
-/// How many events this subscriber never saw, phrased for a model.
-///
-/// The broadcast buffers [`aleph_cdp::EVENT_CHANNEL_CAPACITY`] events per
-/// subscriber and `EventStream::next` counts a lag and steps over it. If
-/// `Page.loadEventFired` was among the ones skipped, the barrier below times
-/// out on a page that loaded — and "did not report load" would then be a
-/// confident wrong answer rather than an unknown. The count is cheap and it is
-/// the only thing that separates the two, so it goes in the sentence the model
-/// reads (判据 §17: the wrong label costs more than the vague one).
-fn lag_note(events: &aleph_cdp::EventStream) -> String {
-    match events.lagged() {
-        0 => String::new(),
-        n => format!(
-            " ({n} engine event(s) were dropped while this call was waiting, so \
-             the load may in fact have completed unseen)"
-        ),
-    }
-}
-
 async fn wait_for_load(
     events: &mut aleph_cdp::EventStream,
     session: &SessionId,
@@ -209,7 +215,7 @@ pub(super) async fn navigate(be: &CdpBackend, tab_id: &str, url: &str) -> Result
              loading; re-run browser_snapshot to see what is there",
             crate::browser::page_state::quote(url),
             budget.as_secs_f64(),
-            lag_note(&events)
+            lag_note(events.lagged())
         )))
     }
 }
@@ -287,7 +293,7 @@ pub(super) async fn history(
         Err(BrowserError::NavigationFailed(format!(
             "the history navigation did not report load within {}s{}",
             be.command_timeout().as_secs_f64(),
-            lag_note(&events)
+            lag_note(events.lagged())
         )))
     }
 }
@@ -301,6 +307,32 @@ mod tests {
     use crate::browser::cdp_backend::test_support::*;
     use crate::browser::engine::Engine;
     use crate::browser::error::BrowserError;
+
+    /// `lag_note` says nothing when nothing was dropped, and says the useful
+    /// thing when something was.
+    ///
+    /// Both arms, because the silent one is what keeps the message clean on
+    /// every ordinary timeout and the loud one is the whole reason the function
+    /// exists — and until its signature took the count rather than the stream,
+    /// the loud arm could not be reached by any test in this crate at all
+    /// (`EventStream::new` is `pub(crate)` to `aleph-cdp`). A reader added to
+    /// close 判据 §2's 没装上 face that itself cannot be reddened is the same
+    /// face one level in.
+    #[test]
+    fn a_dropped_event_is_named_in_the_timeout_and_silence_costs_nothing() {
+        assert_eq!(super::lag_note(0), "", "a clean wait adds no words");
+
+        let note = super::lag_note(7);
+        assert!(note.contains('7'), "the count is the fact: {note}");
+        assert!(
+            note.contains("may in fact have completed"),
+            "the point is that 'did not report load' might be WRONG, not that \
+             some events went missing: {note}"
+        );
+        // It is appended to a sentence, so it has to read as a continuation
+        // rather than start one.
+        assert!(note.starts_with(' '), "{note:?}");
+    }
 
     /// A navigation that starts a new document must invalidate the refs minted
     /// against the old one. The observable effect is on the ref table, not on

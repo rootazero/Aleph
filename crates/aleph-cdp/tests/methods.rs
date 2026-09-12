@@ -815,10 +815,17 @@ async fn dom_get_frame_owner_joins_a_frame_to_its_element_and_refuses_a_zero_id(
         .expect_err("an absent field is not a zero and not an id");
     assert!(matches!(err, CdpError::Decode(_)), "{err:?}");
 
-    // And a frame this session does not own is the PEER's refusal, which must
-    // reach the caller as a protocol error rather than as "no owner" — the
-    // CDP backend spends exactly this distinction to decide whether an iframe
+    // And a frame this session cannot resolve is the PEER's refusal, which must
+    // reach the caller as a protocol error rather than as "no owner" — the CDP
+    // backend spends exactly this distinction to decide whether an iframe
     // target belongs to the page it is capturing.
+    //
+    // The text scripted below is Chrome's UNKNOWN-frame refusal. Chrome sends a
+    // different sentence for a frame that exists but belongs to another target
+    // ("Frame with the given id does not belong to the target.", measured in
+    // `t0-u4c-nested.mjs`); both arrive as `Protocol`, which is the only thing
+    // this wrapper or its caller reads. Naming the wrong one of the two in the
+    // prose is how the next reader learns a distinction that is not there.
     let server = FakeCdpServer::start(scripted(vec![(
         "DOM.getFrameOwner",
         Responder::Error {
