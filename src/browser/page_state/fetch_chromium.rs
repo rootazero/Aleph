@@ -1527,6 +1527,14 @@ mod tests {
             let value = json(text);
             let strings = value["strings"].as_array().expect("strings[]");
             let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+            // Same index assumption as the census test, stated for the same
+            // reason.
+            assert_eq!(
+                dom.frames.len(),
+                value["documents"].as_array().expect("documents[]").len(),
+                "{name}: a document was dropped, so frames no longer line up \
+                 with documents"
+            );
             for (d, doc) in value["documents"]
                 .as_array()
                 .expect("documents[]")
@@ -2067,6 +2075,15 @@ mod tests {
         for (name, text) in real_captures() {
             let value = json(text);
             let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+            // `dom.frames[d]` below assumes frame index == document index,
+            // which holds only while nothing was dropped as unplaceable.
+            // Stated rather than assumed, because the drop is new behaviour.
+            assert_eq!(
+                dom.frames.len(),
+                value["documents"].as_array().expect("documents[]").len(),
+                "{name}: a document was dropped, so frames no longer line up \
+                 with documents and every index below is off"
+            );
             for (d, doc) in value["documents"]
                 .as_array()
                 .expect("documents[]")
