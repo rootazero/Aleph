@@ -806,7 +806,10 @@ mod tests {
 
         for (name, src) in scanned {
             let hits = unwired(src);
-            assert!(hits.is_empty(), "{name} still has an unwired verb: {hits:?}");
+            assert!(
+                hits.is_empty(),
+                "{name} still has an unwired verb: {hits:?}"
+            );
         }
     }
 

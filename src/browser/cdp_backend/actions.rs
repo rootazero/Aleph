@@ -381,7 +381,13 @@ async fn press_and_release(
     y: f64,
     click_count: u32,
 ) -> Result<(), BrowserError> {
-    send_mouse(be, handle, session, &mouse(input::MouseType::Moved, x, y, 0)).await?;
+    send_mouse(
+        be,
+        handle,
+        session,
+        &mouse(input::MouseType::Moved, x, y, 0),
+    )
+    .await?;
     send_mouse(
         be,
         handle,
@@ -899,7 +905,10 @@ mod tests {
             .await
             .expect_err("a ref from the previous document must not resolve");
         match err {
-            BrowserError::StaleRef { ref_id: got, reason } => {
+            BrowserError::StaleRef {
+                ref_id: got,
+                reason,
+            } => {
                 assert_eq!(got, ref_id);
                 assert_eq!(reason, StaleReason::Navigated);
             }
@@ -1262,7 +1271,9 @@ mod tests {
             "one insert for the whole segment: {sent:?}"
         );
         assert_eq!(
-            sent.iter().filter(|m| *m == "Input.dispatchKeyEvent").count(),
+            sent.iter()
+                .filter(|m| *m == "Input.dispatchKeyEvent")
+                .count(),
             0,
             "the insertText path sends no key events: {sent:?}"
         );
@@ -1300,7 +1311,9 @@ mod tests {
         );
         // Three characters, a keyDown and a keyUp each.
         assert_eq!(
-            sent.iter().filter(|m| *m == "Input.dispatchKeyEvent").count(),
+            sent.iter()
+                .filter(|m| *m == "Input.dispatchKeyEvent")
+                .count(),
             6,
             "one down/up pair per character: {sent:?}"
         );

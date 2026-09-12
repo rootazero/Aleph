@@ -72,7 +72,9 @@ fn render_arg(arg: &serde_json::Value) -> String {
     }
     format!(
         "<{}>",
-        arg.get("type").and_then(|t| t.as_str()).unwrap_or("unknown")
+        arg.get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown")
     )
 }
 
