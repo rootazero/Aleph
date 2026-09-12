@@ -20,8 +20,10 @@ Singleton 强制由 OS 级 `flock` 保证（Spec C, 2026-05-02 起改为结构�
 `rm ~/.aleph/data/aleph.lock`（理论上不会出现，因为 flock 是 OS 管理的；
 该诊断仅作防御性提示）。持有者 PID 记在**未加锁**的 sidecar
 `aleph.lock.pid` 里：正常退出时随锁一起删除（`InstanceLock::drop`），
-只有崩溃 / SIGKILL / 强制 `process::exit` 会留下它——`aleph doctor` 的
-`core/instance-lock` 就是给这种残留用的，`--fix` 会清掉。若文件系统本身
+服务端的强制退出失效路径（`SHUTDOWN_FAILSAFE` → `process::exit`）也会在
+退出前清掉它（`remove_held_holder_records_before_exit`），只有崩溃 /
+SIGKILL 会留下它——`aleph doctor` 的 `core/instance-lock` 就是给这种残留
+用的，`--fix` 会清掉。若文件系统本身
 拒绝加锁（无 lockd 的 NFS、不支持字节范围锁的挂载），启动会直接报该
 OS 错误而不是"stale lock"——那种情况下 `rm` 没有用，要把 `ALEPH_HOME`
 指到本地文件系统。

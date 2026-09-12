@@ -8,8 +8,9 @@
 //! uses `LockFileEx` and an exclusive lock blocks reads from all other handles.
 //! The lock is automatically released by the OS when the holder process exits
 //! (graceful, panic, SIGKILL — all release). The sidecar is removed on a clean
-//! release (`Drop`); only a crash, SIGKILL, or a forced `process::exit` leaves
-//! it behind, which is what `aleph doctor`'s stale-lock finding is for.
+//! release (`Drop`) and by the server's forced-exit failsafe
+//! ([`remove_held_holder_records_before_exit`]); only a crash or SIGKILL
+//! leaves it behind, which is what `aleph doctor`'s stale-lock finding is for.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,16 @@ use fs2::FileExt;
 
 use super::atomic_io::{is_lock_contended, write_atomic};
 use super::process_alive::{process_matches, process_start_time};
+use crate::sync_primitives::Mutex;
+
+/// Holder sidecars written by the `InstanceLock`s alive in this process —
+/// registered on acquire, deregistered on `Drop`. It exists for the exit
+/// paths that bypass destructors (`std::process::exit`): they can ask for
+/// exactly the records this process is entitled to remove, and nothing
+/// else. Production holds at most one; a test binary holds several at once
+/// (one per tempdir), which is why the removal below is parameterised by
+/// registry rather than always draining this static.
+static HELD_HOLDER_RECORDS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 const LOCK_FILENAME: &str = "aleph.lock";
 /// Sidecar that records the current holder's PID (+ start time). Kept separate
@@ -66,20 +77,57 @@ impl Drop for InstanceLock {
     /// it behind" after every `aleph stop`. A crash, SIGKILL, or the forced
     /// `std::process::exit` paths still skip this — which is exactly the case
     /// that finding exists for. The fork parents in `daemonize` also exit via
-    /// `process::exit`, so only the daemonized grandchild ever runs this.
+    /// `process::exit`, so only the daemonized grandchild ever runs this; the
+    /// server's own forced-exit failsafe calls
+    /// [`remove_held_holder_records_before_exit`] instead.
     fn drop(&mut self) {
-        match std::fs::remove_file(&self.holder_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(
-                holder = %self.holder_path.display(),
-                error = %e,
-                "instance lock released but its holder sidecar could not be removed; \
-                 `aleph doctor` will report it as stale until it is cleared"
-            ),
-        }
+        HELD_HOLDER_RECORDS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p| p != &self.holder_path);
+        remove_holder_record(&self.holder_path);
         // `file` drops after this returns and releases the OS-level fs2 lock.
     }
+}
+
+/// Unlink one holder sidecar. `NotFound` is not an error — an operator or
+/// `aleph doctor --fix` may already have cleared it; anything else is
+/// warned, because the next `aleph doctor` will report the leftover as a
+/// crashed daemon's.
+fn remove_holder_record(holder_path: &Path) {
+    match std::fs::remove_file(holder_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(
+            holder = %holder_path.display(),
+            error = %e,
+            "instance lock released but its holder sidecar could not be removed; \
+             `aleph doctor` will report it as stale until it is cleared"
+        ),
+    }
+}
+
+/// For exit paths that bypass destructors (`std::process::exit`): remove the
+/// holder record of every `InstanceLock` alive in this process, exactly as
+/// `Drop` would have. Call it immediately before `process::exit`, while the
+/// lock is still held — the OS releases the lock only at exit, so no
+/// successor can have written a record of its own yet. A process holding no
+/// lock (a CLI, a test) removes nothing and returns 0.
+pub fn remove_held_holder_records_before_exit() -> usize {
+    remove_registered_holder_records(&HELD_HOLDER_RECORDS)
+}
+
+/// Drain `registry` and unlink each record it named. Split from the public
+/// entry point so a test can exercise it on a registry of its own instead
+/// of draining the process-wide one out from under every other test that
+/// holds a lock in the same binary.
+fn remove_registered_holder_records(registry: &Mutex<Vec<PathBuf>>) -> usize {
+    let records: Vec<PathBuf> =
+        std::mem::take(&mut *registry.lock().unwrap_or_else(|e| e.into_inner()));
+    for holder_path in &records {
+        remove_holder_record(holder_path);
+    }
+    records.len()
 }
 
 #[derive(Debug)]
@@ -154,6 +202,10 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
             // every platform.
             let pid = std::process::id();
             write_holder(&holder_path, pid)?;
+            HELD_HOLDER_RECORDS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(holder_path.clone());
             Ok(AcquireOutcome::Acquired(InstanceLock {
                 file,
                 holder_path,
@@ -359,6 +411,64 @@ mod tests {
         assert!(
             matches!(diagnose_holder(dir.path()), Ok(None)),
             "after a clean release the doctor must see a free singleton, not a stale holder"
+        );
+    }
+
+    /// The registry the forced-exit path reads must follow acquire and
+    /// release — otherwise that path removes nothing (a no-op reported as
+    /// 0) or, worse, keeps a released path and removes a successor's record.
+    /// Read-only on the process-wide registry: other tests in this binary
+    /// hold locks of their own at the same time.
+    #[test]
+    fn held_records_follow_acquire_and_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let holder = dir.path().join(HOLDER_FILENAME);
+        let registered = || {
+            HELD_HOLDER_RECORDS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&holder)
+        };
+        let lock = match try_acquire(dir.path()).unwrap() {
+            AcquireOutcome::Acquired(g) => g,
+            other => panic!("first acquire should succeed, got {other:?}"),
+        };
+        assert!(registered(), "an acquired lock registers its holder record");
+
+        drop(lock);
+
+        assert!(
+            !registered(),
+            "a released lock deregisters its holder record"
+        );
+    }
+
+    /// The forced-exit removal unlinks every record it was given and only
+    /// those: a neighbouring file no lock wrote stays, and the registry is
+    /// drained so a second call has nothing left to do.
+    #[test]
+    fn forced_exit_removal_unlinks_registered_records_only() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let record_a = a.path().join(HOLDER_FILENAME);
+        let record_b = b.path().join(HOLDER_FILENAME);
+        let bystander = a.path().join("not-a-holder-record");
+        for p in [&record_a, &record_b, &bystander] {
+            std::fs::write(p, "1\n").unwrap();
+        }
+        let registry = Mutex::new(vec![record_a.clone(), record_b.clone()]);
+
+        assert_eq!(remove_registered_holder_records(&registry), 2);
+
+        assert!(
+            !record_a.exists() && !record_b.exists(),
+            "every registered record is removed"
+        );
+        assert!(bystander.exists(), "a file no lock wrote is left alone");
+        assert_eq!(
+            remove_registered_holder_records(&registry),
+            0,
+            "the registry is drained by the removal"
         );
     }
 

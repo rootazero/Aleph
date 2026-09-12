@@ -1,11 +1,12 @@
 //! `core/instance-lock` — detect and clear a stale singleton lock file.
 //!
 //! The OS releases the `flock` on process exit, and a clean release also
-//! removes the holder sidecar (`aleph.lock.pid`, see `InstanceLock::drop`).
-//! A crash, SIGKILL, or a forced `process::exit` skips that, leaving a
-//! sidecar that names a dead PID. It is harmless to `flock`-based
-//! acquisition — the next `try_acquire` simply wins the lock and overwrites
-//! it — so this check is the only place the leftover is ever reported.
+//! removes the holder sidecar (`aleph.lock.pid`, see `InstanceLock::drop`;
+//! the server's forced-exit failsafe does the same before `process::exit`).
+//! A crash or SIGKILL skips both, leaving a sidecar that names a dead PID.
+//! It is harmless to `flock`-based acquisition — the next `try_acquire`
+//! simply wins the lock and overwrites it — so this check is the only place
+//! the leftover is ever reported.
 //! Clearing it is a deterministic, safe repair — but ONLY when the holder
 //! is dead.
 //!

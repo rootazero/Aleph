@@ -517,6 +517,23 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // is the case where orphans are most likely, not least. Idempotent
         // with the `start_server` call site.
         let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
+        // Third thing the skipped destructors would have done: `main`'s
+        // `InstanceLock` removes its holder sidecar in `Drop`, and `Drop` is
+        // exactly what `std::process::exit(0)` never runs. Without this the
+        // sidecar outlives the exit naming a dead PID and the next `aleph
+        // doctor` reports "a crashed daemon left it behind" for a shutdown
+        // that was merely slow. Still holding the lock here — the OS releases
+        // it at exit — so no successor can have written a record yet. One
+        // `unlink`, the cheapest line in this block, so it goes before the
+        // browser stop by the same ordering-by-cost rule the next comment
+        // spells out.
+        let records = alephcore::utils::instance_lock::remove_held_holder_records_before_exit();
+        if records > 0 {
+            tracing::warn!(
+                count = records,
+                "removed instance-lock holder record before forced exit"
+            );
+        }
         // The wedged path. `std::process::exit(0)` below skips the orderly
         // block entirely, so the browser stop has to be here too — and this is
         // the path that matters most: `SHUTDOWN_FAILSAFE` is matched to
@@ -697,5 +714,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The forced-exit path skips `main`'s `InstanceLock::drop`, so it has to
+    /// remove the holder sidecar itself — otherwise every wedged shutdown
+    /// leaves a record naming a dead PID and `aleph doctor` reports a crashed
+    /// daemon. Only this file is pinned: the orderly path returns from `main`
+    /// and `Drop` handles it there, so `start/mod.rs` has nothing to call.
+    /// Same call-not-name discipline as the reaper pin above.
+    #[test]
+    fn the_forced_exit_path_removes_the_holder_sidecar_itself() {
+        let src = include_str!("helpers.rs").replace('\r', "");
+        let production = alephcore::utils::source_scan::production_prefix(&src);
+        assert!(
+            production.len() < src.len(),
+            "the #[cfg(test)] bound matched nothing — this test would be reading its own source"
+        );
+        let call = "remove_held_holder_records_before_exit(";
+        let call_at = production.find(call).unwrap_or_else(|| {
+            panic!("start/helpers.rs must call {call}) on its forced-exit path")
+        });
+        let exit_at = production
+            .rfind("std::process::exit(0)")
+            .expect("the forced-exit path ends in std::process::exit(0)");
+        assert!(
+            call_at < exit_at,
+            "the sidecar removal must run before the forced exit, not after it"
+        );
     }
 }
