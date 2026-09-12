@@ -502,6 +502,7 @@ mod tests {
         }
         PageState::build(
             &RawDom {
+                unreached_frames: Vec::new(),
                 engine: Engine::Chromium,
                 viewport: viewport(),
                 frames: vec![RawFrame {
@@ -946,6 +947,7 @@ mod tests {
             cursor_pointer: false,
         });
         let raw = RawDom {
+            unreached_frames: Vec::new(),
             engine: Engine::Chromium,
             viewport: viewport(),
             frames: vec![RawFrame {
@@ -1168,6 +1170,7 @@ mod tests {
                 });
             }
             let raw = RawDom {
+                unreached_frames: Vec::new(),
                 engine: Engine::Chromium,
                 viewport: viewport(),
                 frames: vec![RawFrame {

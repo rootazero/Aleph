@@ -16,7 +16,9 @@ pub use accname::{accessible_name, AccName, FrameIndex, NAME_MAX_CHARS};
 pub use fetch_chromium::{
     fetch_chromium, parse_snapshot, stitch_snapshots, ChildCapture, COMPUTED_STYLES,
 };
-pub use raw::{attr_of, Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, Viewport};
+pub use raw::{
+    attr_of, Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, UnreachedFrame, Viewport,
+};
 pub use refs::{FrameKey, RefEntry, RefId, RefKey, RefTable, StaleReason};
 pub use render::{quote, render_text, rendered_indices, to_json, TEXT_MAX_CHARS};
 pub use roles::{is_interactive, role_for, role_from_aria};

@@ -328,10 +328,57 @@ pub struct RawFrame {
     pub nodes: Vec<RawNode>,
 }
 
+/// A frame whose content is **not** in this capture, and the most this capture
+/// knows about it.
+///
+/// Two variants because the two cases know different things, and an `Option`
+/// that is always `Some` in one branch and always `None` in the other is a
+/// shape that invites a reader to check the wrong one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnreachedFrame {
+    /// A frame ELEMENT whose content lives in another renderer and whose
+    /// capture was not supplied — carried as the element's own
+    /// `backendNodeId`, which is the key the stitcher places children by and
+    /// therefore the one a caller can act on.
+    NotCaptured(u64),
+    /// A DOCUMENT this capture contains that no element owns, so there is
+    /// nowhere to put it — carried as the document's own frame id, because an
+    /// unowned document is precisely the case where no owning element is
+    /// known. Its nodes are dropped rather than placed at the page origin,
+    /// where every one of them would have a plausible wrong coordinate.
+    Unplaceable(String),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawDom {
     pub engine: Engine,
     pub viewport: Viewport,
+    /// **What this capture could not read.** Empty means the capture is whole.
+    ///
+    /// # Why this is a field and not a paragraph
+    ///
+    /// Without it, a page whose cross-origin subtree was never captured is
+    /// indistinguishable from a page whose iframe is genuinely empty: the
+    /// `<iframe>` element is in [`Self::frames`] with its box, `src` and title,
+    /// and its content is simply absent. An absence that reads as a fact is
+    /// 判据 §17's 错的标签, and nothing downstream can recover it — a consumer
+    /// of a `RawDom` cannot know a frame was never captured.
+    ///
+    /// It is the **output of an accounting the fetcher already performs**, not a
+    /// second copy of one: a frame element is listed here exactly when it has no
+    /// content document in the capture and no child capture was supplied for it,
+    /// so when a caller does supply the children the list is empty by
+    /// construction and there is nothing for anyone to remember to clear.
+    ///
+    /// No `#[serde(default)]`, for [`RawFrame::live_properties_observed`]'s
+    /// reason: this is a capture's declaration about **itself**, and a capture
+    /// that does not say what it failed to read is one nobody can read safely
+    /// (判据 §8). Omitting it is a missing-field error from serde and an
+    /// `E0063` at every construction site — which is the cost that makes the
+    /// declaration real, and whose absence is why an earlier round left this
+    /// fact in a doc comment instead.
+    pub unreached_frames: Vec<UnreachedFrame>,
     pub frames: Vec<RawFrame>,
 }
 

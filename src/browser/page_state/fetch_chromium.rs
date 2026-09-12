@@ -25,7 +25,9 @@ use serde::Deserialize;
 
 use aleph_cdp::{CdpConnection, SessionId};
 
-use super::raw::{Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, Viewport};
+use super::raw::{
+    Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, UnreachedFrame, Viewport,
+};
 use crate::browser::error::BrowserError;
 
 /// The computed values asked for, in the order the response's `styles` arrays
@@ -314,37 +316,51 @@ pub fn stitch_snapshots(
     loaders: &HashMap<String, String>,
 ) -> Result<RawDom, BrowserError> {
     let parent_snapshot = decode(parent)?;
-    let mut frames = frames_of(&parent_snapshot, (0, 0), loaders, true)?;
+    let (mut frames, mut unreached) = frames_of(&parent_snapshot, (0, 0), loaders, true)?;
 
     let mut child_snapshots = Vec::with_capacity(children.len());
     for child in children {
         let base = owner_origin(&frames, child.owner_backend_node_id)?;
         let snapshot = decode(child.raw)?;
-        frames.extend(frames_of(&snapshot, base, loaders, false)?);
+        let (child_frames, child_unplaceable) = frames_of(&snapshot, base, loaders, false)?;
+        frames.extend(child_frames);
+        unreached.extend(child_unplaceable);
         child_snapshots.push(snapshot);
     }
 
-    if !children.is_empty() {
-        let accounted: HashSet<u64> = children.iter().map(|c| c.owner_backend_node_id).collect();
-        let mut missing: Vec<u64> = Vec::new();
-        for snapshot in std::iter::once(&parent_snapshot).chain(child_snapshots.iter()) {
-            missing.extend(unaccounted_frame_elements(snapshot, &accounted));
-        }
-        if !missing.is_empty() {
-            return Err(BrowserError::ActionFailed(format!(
-                "this capture claims to span the page, but {} frame element(s) \
-                 have no content document and no child capture: backendNodeId \
-                 {missing:?}. Their content would be missing from the page \
-                 state with nothing saying so. Attach each frame's target and \
-                 capture it, or re-run browser_snapshot.",
-                missing.len()
-            )));
-        }
+    // Every frame element with no content document in any of these captures.
+    // Computed the same way in both modes — it is one accounting, read twice,
+    // not two rules (判据 §16).
+    let accounted: HashSet<u64> = children.iter().map(|c| c.owner_backend_node_id).collect();
+    let mut missing: Vec<u64> = Vec::new();
+    for snapshot in std::iter::once(&parent_snapshot).chain(child_snapshots.iter()) {
+        missing.extend(unaccounted_frame_elements(snapshot, &accounted));
+    }
+
+    if children.is_empty() {
+        // A single-session capture does not claim to be the page, so an
+        // unreached frame is a fact to carry rather than a failure. This is the
+        // list that keeps a missing cross-origin subtree distinguishable from a
+        // genuinely empty iframe.
+        unreached.extend(missing.into_iter().map(UnreachedFrame::NotCaptured));
+    } else if !missing.is_empty() {
+        // Supplying any child IS a claim to have enumerated them, so here the
+        // same accounting is a gate. Empty by construction when the claim
+        // holds, which is why nothing has to be cleared.
+        return Err(BrowserError::ActionFailed(format!(
+            "this capture claims to span the page, but {} frame element(s) \
+             have no content document and no child capture: backendNodeId \
+             {missing:?}. Their content would be missing from the page \
+             state with nothing saying so. Attach each frame's target and \
+             capture it, or re-run browser_snapshot.",
+            missing.len()
+        )));
     }
 
     Ok(RawDom {
         engine: crate::browser::engine::Engine::Chromium,
         viewport,
+        unreached_frames: unreached,
         frames,
     })
 }
@@ -382,7 +398,7 @@ fn frames_of(
     base: (i32, i32),
     loaders: &HashMap<String, String>,
     is_page_root: bool,
-) -> Result<Vec<RawFrame>, BrowserError> {
+) -> Result<(Vec<RawFrame>, Vec<UnreachedFrame>), BrowserError> {
     let strings = &snapshot.strings;
     // Before anything reads by index. `frame_offsets` indexes `bounds` by a
     // layout slot, so a check that ran only inside `parse_nodes` would let a
@@ -393,9 +409,10 @@ fn frames_of(
     // Built once and shared, so "which layout entry is this node's box" has
     // exactly one derivation (判据 §12).
     let slots: Vec<HashMap<usize, usize>> = snapshot.documents.iter().map(layout_slots).collect();
-    let offsets = frame_offsets(&snapshot.documents, &slots, base, strings)?;
+    let offsets = frame_offsets(&snapshot.documents, &slots, base);
 
     let mut frames = Vec::with_capacity(snapshot.documents.len());
+    let mut unplaceable = Vec::new();
     for (doc_index, doc) in snapshot.documents.iter().enumerate() {
         let Some(frame_id) = string_at(strings, doc.frame_id) else {
             return Err(BrowserError::ActionFailed(format!(
@@ -418,10 +435,18 @@ fn frames_of(
             None => String::new(),
         };
 
+        // No owner, so nowhere to put it. Named rather than placed at the page
+        // origin, and named rather than refusing the whole capture: everything
+        // else on the page is still worth having (判据 §14).
+        let Some(offset) = offsets[doc_index] else {
+            unplaceable.push(UnreachedFrame::Unplaceable(frame_id));
+            continue;
+        };
+
         frames.push(RawFrame {
             frame_id,
             loader_id,
-            offset: offsets[doc_index],
+            offset,
             // This fetcher reads `inputChecked`, `optionSelected`, `inputValue`
             // and `textValue` for every document it parses, which is exactly
             // what this declaration licenses: `build` may then read silence
@@ -433,7 +458,7 @@ fn frames_of(
             nodes: parse_nodes(doc, &slots[doc_index], strings)?,
         });
     }
-    Ok(frames)
+    Ok((frames, unplaceable))
 }
 
 /// Where each document's origin sits in page coordinates.
@@ -452,12 +477,19 @@ fn frames_of(
 /// `display: none`, whose subtree Chrome does not lay out either — so every
 /// node in that child has `rect: None` and the offset is unobservable. A
 /// refusal here would take down the whole capture over a hidden tracker frame.
+///
+/// `None` at index *d* means document *d* is owned by no element in this
+/// capture, so there is nowhere to put it. **That is reported, not refused**:
+/// an earlier round returned `Err` for the whole capture, which meant a page
+/// that is 99% placeable returned nothing and left the model's next move
+/// undefined (判据 §14). The caller drops those documents and names them in
+/// [`RawDom::unreached_frames`]. Transitive by construction — a document whose
+/// parent has no offset gets none either, and is named in its turn.
 fn frame_offsets(
     documents: &[DocumentSnapshot],
     slots: &[HashMap<usize, usize>],
     base: (i32, i32),
-    strings: &[String],
-) -> Result<Vec<(i32, i32)>, BrowserError> {
+) -> Vec<Option<(i32, i32)>> {
     // owner[child document] = (owning document, node index within it)
     let mut owner: HashMap<usize, (usize, usize)> = HashMap::new();
     for (d, doc) in documents.iter().enumerate() {
@@ -492,20 +524,6 @@ fn frame_offsets(
     }
 
     offsets
-        .into_iter()
-        .enumerate()
-        .map(|(d, offset)| {
-            offset.ok_or_else(|| {
-                let frame = string_at(strings, documents[d].frame_id).unwrap_or_default();
-                BrowserError::ActionFailed(format!(
-                    "documents[{d}] (frame '{frame}') is owned by no element in \
-                     this capture, so there is nowhere to place it. Putting it \
-                     at the page origin would give every node in it a plausible \
-                     and wrong coordinate. Re-run browser_snapshot."
-                ))
-            })
-        })
-        .collect()
 }
 
 /// Which layout entry is each node's box: **the one that is not a text run**,
@@ -2262,11 +2280,7 @@ mod tests {
     /// **This reads a frozen `include_str!`, so a Chrome that changed its mind
     /// cannot redden it** — only a recapture can, and then it reddens on the
     /// new bytes rather than on the browser. An earlier version of this
-    /// sentence claimed the opposite, one screen from the honest pin-not-a-
-    /// tripwire paragraph on
-    /// `a_single_session_capture_leaves_a_cross_origin_iframes_content_unmentioned`:
-    /// two dispositions of the same fixture in the same file, and the false one
-    /// was the one that read like coverage (判据 §1).
+    /// sentence claimed the opposite (判据 §1: the comment is the lying half).
     #[test]
     fn a_cross_origin_iframe_contributes_no_document_to_its_parents_capture() {
         let value = json(OOPIF_PARENT);
@@ -2343,66 +2357,6 @@ mod tests {
                 .map(|r| (r.x, r.y, r.w, r.h)),
             Some((10, 500, 90, 30)),
             "the parser took the text run's box because it came first"
-        );
-    }
-
-    /// **A PIN ON A KNOWN LIMITATION, NOT A TRIPWIRE. Read this before quoting
-    /// its green.**
-    ///
-    /// A single-session capture of a page with a cross-origin iframe yields a
-    /// `RawDom` in which the `<iframe>` element stands there with its box, its
-    /// `src` and its title, and **nothing anywhere says its subtree was never
-    /// read**. That is the current behaviour, it is the documented limit of
-    /// [`parse_snapshot`], and this test writes it down so that a change to it
-    /// is deliberate rather than incidental.
-    ///
-    /// **It will NOT go red when Task 12 lands.** Task 12 attaches the child
-    /// target and hands the capture to [`stitch_snapshots`]; this fixture stays
-    /// a single-session capture for ever, so this test keeps asserting exactly
-    /// what it asserts now. **Its green is therefore not evidence that
-    /// cross-origin content reaches the model** — that claim belongs to
-    /// `qa/browser_managed`'s `frames` scenario, which serves the child from a
-    /// second port and checks the child's text and a clickable ref inside the
-    /// frame on a real browser. A pin whose green gets read as coverage is
-    /// worse than no pin (判据 §17), which is why this paragraph is longer than
-    /// the test.
-    #[test]
-    fn a_single_session_capture_leaves_a_cross_origin_iframes_content_unmentioned() {
-        let value = json(OOPIF_PARENT);
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
-
-        assert_eq!(dom.frames.len(), 1, "one session, one renderer, one frame");
-        let (i, owner) = dom.frames[0]
-            .nodes
-            .iter()
-            .enumerate()
-            .find(|(_, n)| n.tag_lower() == "iframe")
-            .expect("the iframe element itself is present");
-        assert_eq!(owner.backend_node_id, 65);
-        assert!(owner.rect.is_some(), "with its box");
-        assert!(owner.attr("src").is_some(), "and its src");
-
-        // The pinned fact: nothing under it, and nothing that says so. A child
-        // of the iframe would be a node whose parent chain reaches `i`.
-        let descendants = dom.frames[0]
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| {
-                let mut cursor = n.parent;
-                while let Some(p) = cursor {
-                    if p == i {
-                        return true;
-                    }
-                    cursor = dom.frames[0].nodes.get(p).and_then(|n| n.parent);
-                }
-                false
-            })
-            .count();
-        assert_eq!(
-            descendants, 0,
-            "the iframe gained a subtree — if that came from a stitch, this pin \
-             is describing the wrong thing now and should be re-aimed"
         );
     }
 
@@ -2585,21 +2539,126 @@ mod tests {
         .expect("a fully accounted page stitches");
     }
 
-    /// A document no iframe owns is refused rather than placed at the origin.
+    /// A document no element owns is NAMED, not placed at the origin — and not
+    /// refused either.
     ///
-    /// Every document past the first is some element's content document; one
-    /// that is not means this capture has a shape the parser does not model,
-    /// and `(0, 0)` would put its whole subtree on top of the page's own
-    /// content with coordinates that look perfectly plausible.
+    /// Three dispositions were available and two of them are wrong. `(0, 0)`
+    /// would put its whole subtree on top of the page's own content with
+    /// coordinates that look perfectly plausible. Refusing the capture — which
+    /// this did until the fix round — means a page that is 99% placeable
+    /// returns nothing and the model's next move is undefined (判据 §14),
+    /// generalised from one fixture at that. What is left is to keep every
+    /// document that can be placed and say which one could not.
     #[test]
-    fn a_document_no_iframe_owns_is_refused_rather_than_placed_at_the_origin() {
+    fn a_document_no_element_owns_is_named_rather_than_placed_or_refused() {
         let mut value = json(SAMEORIGIN);
+        let child_frame = value["strings"][usize::try_from(
+            value["documents"][1]["frameId"].as_i64().expect("frameId"),
+        )
+        .expect("a string index")]
+        .as_str()
+        .expect("the child document's frame id")
+        .to_string();
+
         value["documents"][0]["nodes"]["contentDocumentIndex"] =
             serde_json::json!({ "index": [], "value": [] });
-        let err = parse_snapshot(&value, viewport(), &loaders_of(&value))
-            .expect_err("an unowned document must not be placed");
-        let text = err.to_string();
-        assert!(text.contains("browser_snapshot"), "{text}");
+        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value))
+            .expect("the rest of the page is still worth having");
+
+        assert_eq!(dom.frames.len(), 1, "the main frame is kept");
+        assert_eq!(
+            dom.frames[0].nodes.len(),
+            90,
+            "and keeps all of its own nodes"
+        );
+        // BOTH facts, and both are true of this input: blanking
+        // `contentDocumentIndex` removes the link from both sides at once, so
+        // the document has no owner *and* the `<iframe>` element (backendNodeId
+        // 88, the same-origin page's) has no content document. A real OOPIF
+        // produces only the second. Asserted exactly rather than with
+        // `contains`, so a rule that started emitting one of them everywhere
+        // could not hide inside a laxer assertion.
+        assert_eq!(
+            dom.unreached_frames,
+            vec![
+                UnreachedFrame::Unplaceable(child_frame),
+                UnreachedFrame::NotCaptured(88),
+            ],
+            "the document that could not be placed is named by its frame id — \
+             the only identity an unowned document has — and the element whose \
+             content went with it by its backendNodeId"
+        );
+    }
+
+    /// **What a single-session capture could not read is carried, not implied.**
+    ///
+    /// This replaces a pin that asserted the opposite. Until the carrier
+    /// existed, the honest thing a test could say about
+    /// `local-oopif-parent` was that the `<iframe>` stands there with its box
+    /// and nothing anywhere says its subtree was never read — and that test had
+    /// to warn readers not to quote its green, because it would stay green
+    /// whatever Task 12 did. Now the fact is in the `RawDom`, so the assertion
+    /// is about what the capture SAYS rather than about what it omits, and a
+    /// producer that stopped saying it goes red here.
+    #[test]
+    fn a_single_session_capture_names_the_frame_elements_it_could_not_read() {
+        let value = json(OOPIF_PARENT);
+        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+
+        // The element is present — the missing thing is its content.
+        let (i, owner) = dom.frames[0]
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(_, n)| n.tag_lower() == "iframe")
+            .expect("the iframe element itself is in the capture");
+        assert_eq!(owner.backend_node_id, 65);
+        assert!(owner.rect.is_some() && owner.attr("src").is_some());
+
+        // Nothing under it: a child of the iframe would reach `i` by parent
+        // chain.
+        let descendants = dom.frames[0]
+            .nodes
+            .iter()
+            .filter(|n| {
+                let mut cursor = n.parent;
+                while let Some(p) = cursor {
+                    if p == i {
+                        return true;
+                    }
+                    cursor = dom.frames[0].nodes.get(p).and_then(|n| n.parent);
+                }
+                false
+            })
+            .count();
+        assert_eq!(descendants, 0, "its subtree is genuinely absent");
+
+        // And the capture says so, by the key a caller can act on.
+        assert_eq!(
+            dom.unreached_frames,
+            vec![UnreachedFrame::NotCaptured(65)],
+            "a page with an uncaptured cross-origin subtree must not look like \
+             a page whose iframe is empty"
+        );
+
+        // The same-origin capture of the same page reaches its child, so the
+        // list is empty — the two fixtures differ by exactly this fact, which
+        // is what makes the assertion above about the capture and not about
+        // the code path (判据 §2: say what makes it red).
+        let same = json(SAMEORIGIN);
+        let reached = parse_snapshot(&same, viewport(), &loaders_of(&same)).expect("parses");
+        assert_eq!(reached.frames.len(), 2);
+        assert!(
+            reached.unreached_frames.is_empty(),
+            "a same-origin iframe's content IS in the capture: {:?}",
+            reached.unreached_frames
+        );
+        // And a page with no frames at all has nothing to report.
+        let hn = json(HN);
+        assert!(parse_snapshot(&hn, viewport(), &loaders_of(&hn))
+            .expect("parses")
+            .unreached_frames
+            .is_empty());
     }
 
     /// `RawDom` is built by the fetchers and nowhere else (spec §7.3's other
