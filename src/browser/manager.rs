@@ -372,7 +372,7 @@ impl ProfileManager {
     /// guard restored it, and kill the Chromium of an Aleph they have running.
     ///
     /// What the seal costs is only the wire, not the decision: the decision is
-    /// covered against injected effects in `chromium_launch::reap_orphans`, and
+    /// covered against injected effects in `engine::process::reap_orphans`, and
     /// the wire is pinned by `the_boot_hook_still_calls_the_orphan_sweep`.
     ///
     /// Off the async worker: the sweep does a `read_dir`, a `sysinfo` refresh
@@ -380,16 +380,16 @@ impl ProfileManager {
     /// documented as syscall-heavy.
     #[cfg(not(test))]
     async fn sweep_orphaned_engines(
-    ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
-        tokio::task::spawn_blocking(super::chromium_launch::reap_orphans_now).await
+    ) -> Result<super::engine::process::ReapOutcome, tokio::task::JoinError> {
+        tokio::task::spawn_blocking(super::engine::process::reap_orphans_now).await
     }
 
     /// The sealed twin. See the production one above for why it is sealed.
     #[cfg(test)]
     #[allow(clippy::unused_async)]
     async fn sweep_orphaned_engines(
-    ) -> Result<super::chromium_launch::ReapOutcome, tokio::task::JoinError> {
-        Ok(super::chromium_launch::ReapOutcome::default())
+    ) -> Result<super::engine::process::ReapOutcome, tokio::task::JoinError> {
+        Ok(super::engine::process::ReapOutcome::default())
     }
 
     /// The managed driver's configuration, for the one consumer that runs a
@@ -993,7 +993,7 @@ impl ProfileManager {
         };
         self.playwright_cli_driver.insert_test_child(
             profile,
-            super::chromium_launch::ChromiumChild::from_parts(
+            super::engine::chromium::ChromiumChild::from_parts(
                 child,
                 endpoint,
                 std::path::PathBuf::from("/tmp/aleph-test-udd"),
@@ -1647,8 +1647,8 @@ mod tests {
             "spawn_idle_reaper must still call the boot sweep"
         );
         assert!(
-            production.contains("chromium_launch::reap_orphans_now"),
-            "the sweep must reach chromium_launch::reap_orphans_now — it is the \
+            production.contains("engine::process::reap_orphans_now"),
+            "the sweep must reach engine::process::reap_orphans_now — it is the \
              only thing that ever finds a browser a crashed daemon left running"
         );
     }

@@ -7,6 +7,14 @@
 //! argv probe, the four reap outcomes, the `.corrupt` quarantine, the atomic
 //! write — moved unchanged, and its reasoning moved with it: those doc
 //! comments are the record of four review findings and are not decoration.
+//!
+//! ⚠️ `chromium_launch.rs` **no longer exists**: it was a re-export shim after
+//! the move and Task 14 deleted it. The `chromium_launch.rs:NNN` line anchors
+//! in the doc comments below are therefore against `0a3e8a48a`, the commit
+//! named above, and nowhere else — kept rather than rewritten because they are
+//! citations for WHY a decision was made, and re-pointing them at this file's
+//! own moving line numbers would turn a stable citation into one that rots
+//! every time someone edits above it (判据 §1).
 
 use std::path::{Path, PathBuf};
 use std::process::Child;

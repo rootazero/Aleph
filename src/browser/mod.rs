@@ -2,7 +2,6 @@ pub mod backend;
 pub(crate) mod cdp_backend;
 pub(crate) mod chrome_mcp;
 pub(crate) mod chrome_mcp_backend;
-pub(crate) mod chromium_launch;
 pub(crate) mod chromium_resolve;
 mod discovery;
 pub mod engine;
@@ -35,7 +34,7 @@ pub use discovery::find_chromium;
 pub use error::BrowserError;
 // Crate-internal: `live_endpoint` is `pub(crate)` too, and its first real
 // consumer (the live view, Plan 2) lives in this crate.
-pub(crate) use chromium_launch::CdpEndpoint;
+pub(crate) use engine::process::CdpEndpoint;
 
 /// R72 class guard: fails when a `#[test]`/`#[tokio::test]` fn anywhere under
 /// `src/browser/` resolves `ALEPH_HOME` without holding the one guard that

@@ -173,7 +173,7 @@ impl BrowserBackend for PlaywrightCliBackend {
         // `tab-new` rejects it outright (`Unknown option: --headed`, exit 1),
         // so prepending it made every headed call a hard failure rather than a
         // degraded one. Headedness now rides on the launch, in
-        // `chromium_launch::ChromiumLaunchSpec::argv`.
+        // `engine::chromium::ChromiumLaunchSpec::argv`.
         let _ = self
             .run_launching(&["tab-new", url], self.nav_timeout())
             .await?;

@@ -1,7 +1,7 @@
 //! What it takes to hand one `playwright-cli` session a browser Aleph launched.
 //!
 //! The managed driver used to launch the browser through `playwright-cli open`.
-//! It no longer does: Aleph spawns Chromium itself (`chromium_launch`) and the
+//! It no longer does: Aleph spawns Chromium itself (`engine::chromium`) and the
 //! CLI joins it with `attach --cdp <http-url>`. Two measurements forced the
 //! change and one forbids going back:
 //!
@@ -174,11 +174,11 @@ pub fn output_dir_for(session_key: &str) -> Result<PathBuf, super::error::Browse
 /// No `--headed` and no `--browser`: neither is an option of `attach`
 /// (verified against the CLI's own `--help`), and headedness and engine choice
 /// are now properties of the Chrome argv Aleph builds — see
-/// [`super::chromium_launch::ChromiumLaunchSpec::argv`] and
+/// [`super::engine::chromium::ChromiumLaunchSpec::argv`] and
 /// [`super::chromium_resolve::resolve_binary`].
 #[must_use]
 pub(crate) fn attach_argv(
-    endpoint: &super::chromium_launch::CdpEndpoint,
+    endpoint: &super::engine::process::CdpEndpoint,
     config_path: &Path,
 ) -> Vec<String> {
     vec![
@@ -288,7 +288,7 @@ mod tests {
 
     /// The config file's key set, exactly. Everything that used to live under
     /// `browser` moved onto the Chrome argv Aleph now builds itself
-    /// (`chromium_launch::ChromiumLaunchSpec::argv`), so a `userDataDir` or
+    /// (`engine::chromium::ChromiumLaunchSpec::argv`), so a `userDataDir` or
     /// `launchOptions` surviving here would be a SECOND answer to where the
     /// profile directory and the proxy come from — and the CLI's copy would be
     /// the one nothing honours, because it no longer launches anything.
@@ -320,7 +320,7 @@ mod tests {
     /// run in could instrument or redirect the agent's browser.
     #[test]
     fn attach_argv_names_the_endpoint_and_always_carries_an_explicit_config() {
-        let endpoint = crate::browser::chromium_launch::CdpEndpoint {
+        let endpoint = crate::browser::engine::process::CdpEndpoint {
             http_url: "http://127.0.0.1:58363".into(),
             ws_url: "ws://127.0.0.1:58363/devtools/browser/abc".into(),
             pid: 4242,
@@ -372,7 +372,7 @@ mod tests {
     /// untouched. Nothing in this module may emit the verb again.
     #[test]
     fn the_launch_verb_is_attach_and_never_open() {
-        let endpoint = crate::browser::chromium_launch::CdpEndpoint {
+        let endpoint = crate::browser::engine::process::CdpEndpoint {
             http_url: "http://127.0.0.1:1".into(),
             ws_url: "ws://127.0.0.1:1/devtools/browser/x".into(),
             pid: 1,

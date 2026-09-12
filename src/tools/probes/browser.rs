@@ -1,12 +1,13 @@
 //! `BrowserRuntimeProbe` — gates the `browser_*` tool family on the
 //! presence of a usable browser runtime.
 //!
-//! `BrowserDriver` (`browser::profile`) has THREE variants, and
-//! `browser::manager::get_backend`'s three match arms — one per variant —
-//! route two of them to a real backend, each with its own prerequisite
-//! ([`self::tests::get_backend_still_refuses_cdp_by_name`] pins the third
-//! arm's current behaviour, so a future arm that gives `Cdp` a real backend
-//! reddens this doc instead of leaving it quietly wrong):
+//! `BrowserDriver` (`browser::profile`) has THREE variants and
+//! `browser::manager::get_backend` has three match arms, one per variant. All
+//! three now route to a real backend; this probe asks after the prerequisites
+//! of **two** of them
+//! ([`self::tests::a_cdp_profile_routes_to_a_backend_this_probe_never_asks_about`]
+//! pins that split, so a change on either side reddens this doc instead of
+//! leaving it quietly wrong):
 //!   * `BrowserDriver::ExistingSession` → `ChromeMcpBackend`, which attaches to
 //!     a locally-installed Chromium by launching `npx chrome-devtools-mcp`. It
 //!     needs **both** a Chromium binary ([`find_chromium`]) **and** `npx`.
@@ -14,9 +15,11 @@
 //!     ledger-provisioned `playwright-cli` binary (`browser::playwright_cli`
 //!     resolves it through `runtimes::ensure_capability("playwright-cli", …)`)
 //!     and brings its own Chromium. It does **not** run `npx`.
-//!   * `BrowserDriver::Cdp` has no backend in this build — `get_backend`
-//!     refuses it by name — and no auto-injected profile uses it. This probe
-//!     asks nothing about it.
+//!   * `BrowserDriver::Cdp` → `CdpBackend`, over Aleph's own CDP client
+//!     (Task 14). Its prerequisite is an obscura or Chromium binary this
+//!     process can launch and speak CDP to — a **third** question, which this
+//!     probe does not ask. No auto-injected profile uses this driver, so a
+//!     `cdp` profile exists only where an operator wrote one.
 //!
 //! Both auto-injected profiles always exist — `ProfileManager::new` injects a
 //! `default` (managed) and a `user` (existing-session) profile — so the probe
@@ -29,8 +32,9 @@
 //! guard's green only covers the shapes it was written to recognise (判据
 //! §3). [`self::tests::covered_drivers_is_every_driver_except_cdp`] ties the
 //! two-out-of-three claim to `BrowserDriver::ALL`, so a fourth driver reddens
-//! this file instead of leaving this paragraph quietly wrong again. Task 14
-//! owns whatever `Cdp` needs; this file is not it.
+//! this file instead of leaving this paragraph quietly wrong again. Extending
+//! the probe to the CDP driver's prerequisite is a task of its own; this file
+//! is not it.
 //!
 //! # The question this used to ask, and why it was the wrong one
 //!
@@ -200,18 +204,26 @@ mod tests {
         );
     }
 
-    /// L3: `covered_drivers_is_every_driver_except_cdp` only catches a FOURTH
-    /// variant appearing — it stays green through the change that is actually
-    /// scheduled, Task 14 giving `Cdp` a real backend, because
-    /// `BrowserDriver::ALL` and `COVERED_DRIVERS` would both be unchanged by
-    /// that. This is the premise pin for the other half of the module doc's
-    /// claim: that `get_backend` currently refuses a `Cdp` profile rather than
-    /// running it. It is not a `Cdp` health check (Task 14 owns that) — it
-    /// only pins today's refusal, so that the day `get_backend` starts
-    /// returning `Ok` for `Cdp`, this test reddens and forces the module doc
-    /// (which cites this test by name) to be updated in the same commit.
+    /// The premise pin for the module doc's split, and it has already done
+    /// its job once.
+    ///
+    /// It used to read `get_backend_still_refuses_cdp_by_name`, pinning the
+    /// sentence "`Cdp` has no backend in this build". Task 14 gave that arm a
+    /// real `CdpBackend`, this test went red exactly as its author intended,
+    /// and the doc was rewritten in that same commit. It is INVERTED rather
+    /// than deleted: the doc's live sentence is now "all three arms route, and
+    /// this probe asks after two of them", and a sentence with no guard is a
+    /// sentence that rots.
+    ///
+    /// `covered_drivers_is_every_driver_except_cdp` does not cover this. It
+    /// catches a FOURTH variant appearing and nothing else — reverting the
+    /// `Cdp` arm to a refusal would leave `BrowserDriver::ALL` and
+    /// `COVERED_DRIVERS` untouched, and it green.
+    ///
+    /// Not a `Cdp` health check: whether the engine could actually launch is
+    /// the third question this probe deliberately does not ask.
     #[test]
-    fn get_backend_still_refuses_cdp_by_name() {
+    fn a_cdp_profile_routes_to_a_backend_this_probe_never_asks_about() {
         use crate::browser::manager::ProfileManager;
         use crate::browser::profile::{BrowserSystemConfig, ProfileConfig};
 
@@ -220,34 +232,34 @@ mod tests {
             "cdp-profile".to_string(),
             ProfileConfig {
                 driver: BrowserDriver::Cdp,
+                // Explicit so the routing never derives a path from
+                // `ALEPH_HOME`: this test lives outside `src/browser/`, so the
+                // class guard that serialises those does not cover it, and a
+                // probe test must not touch the developer's browser storage.
+                user_data_dir: Some("/nonexistent/aleph-probe-test".into()),
                 ..Default::default()
             },
         );
         let manager = ProfileManager::new(config);
-        // `Arc<dyn BrowserBackend>` isn't `Debug`, so `.expect_err(..)` can't
-        // be used here — match instead.
-        let err = match manager.get_backend("cdp-profile") {
-            Err(e) => e,
-            Ok(_) => panic!(
-                "get_backend must still refuse Cdp — if this now succeeds, \
-                 Task 14 has landed a real backend and this module's doc \
-                 needs updating"
+        // `Arc<dyn BrowserBackend>` isn't `Debug`, so `.expect(..)` can't be
+        // used here — match instead.
+        match manager.get_backend("cdp-profile") {
+            Ok(_) => {}
+            Err(e) => panic!(
+                "a driver=cdp profile must route to a backend — if this now \
+                 refuses, the Cdp arm was reverted and this module's doc \
+                 (which says all three arms route) is false: {e}"
             ),
-        };
-        // Keyed on the MESSAGE, not just `is_err()` (M2): `get_backend` is
-        // sync while R43 makes engine resolution/launch async, so Task 14
-        // cannot resolve inside it and must return a constructed backend
-        // like its two infallible siblings — but that is an inference about
-        // code nobody has written yet. If Task 14 instead ships something
-        // like `self.engines.get(profile).ok_or_else(...)?` (Err because no
-        // engine process is launched for this profile, not because Cdp has
-        // no backend), an `is_err()`-only check would stay green while this
-        // doc's premise had already gone false. Asserting the message reds
-        // under either shape.
+        }
+
+        // …and the probe still says nothing about it: the driver it routes to
+        // is not one of the two this file asks prerequisites for. Both halves
+        // in one test on purpose — the doc's sentence is the CONJUNCTION, and
+        // either half alone can be true while the sentence is false.
         assert!(
-            err.to_string().contains("has no backend for yet"),
-            "must still be refused for the reason this module's doc names \
-             (no backend exists for Cdp), not merely some other Err: {err}"
+            !COVERED_DRIVERS.contains(&BrowserDriver::Cdp),
+            "the doc says this probe asks nothing about the CDP driver; \
+             COVERED_DRIVERS now claims otherwise"
         );
     }
 

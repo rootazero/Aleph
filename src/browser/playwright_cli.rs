@@ -20,9 +20,8 @@ use crate::security::secret_env::is_secret_env;
 use crate::sync_primitives::RwLock;
 use crate::utils::no_window::NoWindow;
 
-use super::chromium_launch::{
-    CdpEndpoint, ChromiumChild, ChromiumLaunchSpec, DEVTOOLS_PORT_DEADLINE,
-};
+use super::engine::chromium::{ChromiumChild, ChromiumLaunchSpec, DEVTOOLS_PORT_DEADLINE};
+use super::engine::process::CdpEndpoint;
 use super::error::BrowserError;
 use super::playwright_launch::{attach_argv, write_launch_config, LaunchPolicy, SessionLaunch};
 use super::profile::{BrowserRuntimeConfig, PlaywrightCliConfig};

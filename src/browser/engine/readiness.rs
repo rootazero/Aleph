@@ -2,7 +2,7 @@
 //!
 //! **Ready ≠ healthy.** The launch-chain round paid for that distinction: a
 //! Chromium that answers `/json/version` can still never answer a navigation
-//! (the macOS keychain stall — `chromium_launch.rs`'s `--use-mock-keychain`
+//! (the macOS keychain stall — `engine::chromium`'s `--use-mock-keychain`
 //! comment). A sentinel that only probes the reachable half is a gate that
 //! cannot go red (判据 §2), so this asks all three questions and refuses on
 //! any of them.
