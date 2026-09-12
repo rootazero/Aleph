@@ -443,6 +443,157 @@ mod tests {
         }
     }
 
+    /// The other half of the narrowed predicate, end to end, on the wire.
+    ///
+    /// `a_cdp_profile_lowers_a_coordinate_double_click_instead_of_refusing_it`
+    /// above proves the RESOLUTION; it says nothing about whether the call
+    /// reaches a page, because `resolve_target` never touches one. This is the
+    /// half that needed Task 14's manager wiring: a `driver = "cdp"` profile
+    /// routed to a real `CdpBackend`, and a registry seeded with a handle so no
+    /// browser is launched.
+    ///
+    /// Asserted by EFFECT, on the wire: six `Input.dispatchMouseEvent` frames
+    /// in the order `dblclick` dispatches them, at the requested point. "The
+    /// tool returned success" is equally true of a backend that sent nothing
+    /// (判据 §4).
+    #[tokio::test]
+    async fn a_coordinate_double_click_reaches_the_page_on_a_cdp_profile() {
+        use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
+        use crate::browser::cdp_backend::test_support::wire_session;
+        use crate::browser::engine::{Engine, EngineHandle};
+        use crate::browser::profile::ProfileConfig;
+        use aleph_cdp::testkit::{FakeCdpServer, Responder};
+        use aleph_cdp::{CdpConnection, ConnectOptions, TargetId};
+        use async_trait::async_trait;
+        use serde_json::json;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingAllow(Arc<AtomicUsize>);
+        #[async_trait]
+        impl ApprovalPolicy for CountingAllow {
+            async fn check(&self, _req: &ActionRequest) -> ApprovalDecision {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                ApprovalDecision::Allow
+            }
+            async fn record(&self, _req: &ActionRequest, _dec: &ApprovalDecision) {}
+        }
+
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        // Scroll offset 0 keeps the page→viewport arithmetic out of THIS claim;
+        // the conversion has its own test, and one that is deliberately
+        // scrolled:
+        // `cdp_backend::actions::tests::a_coordinate_click_is_converted_from_page_space_to_the_viewport`.
+        // Asserted below rather than assumed, so "the point arrived" cannot
+        // quietly become "the point happened to survive a conversion".
+        server.on(
+            "Page.getLayoutMetrics",
+            Responder::Reply(json!({
+                "cssVisualViewport": {
+                    "pageX": 0.0, "pageY": 0.0,
+                    "clientWidth": 1280.0, "clientHeight": 800.0, "scale": 1.0
+                },
+                "cssContentSize": { "width": 1280.0, "height": 800.0 }
+            })),
+        );
+        server.on("Input.dispatchMouseEvent", Responder::Reply(json!({})));
+
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "cdp".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Cdp,
+                engine: Some(Engine::Chromium),
+                // Explicit, so routing never derives a path from `ALEPH_HOME`.
+                user_data_dir: Some("/nonexistent/aleph-click-test".into()),
+                ..Default::default()
+            },
+        );
+        let manager = Arc::new(ProfileManager::new(config));
+        let conn = CdpConnection::connect(
+            &server.ws_url(),
+            ConnectOptions {
+                command_timeout: std::time::Duration::from_millis(400),
+            },
+        )
+        .await
+        .expect("the fake server accepts a websocket");
+        let handle = Arc::new(EngineHandle::for_test(Engine::Chromium, "cdp", conn));
+        handle
+            .attach_tab(&TargetId("T1".into()))
+            .await
+            .expect("attach");
+        manager.engines().insert_for_test("cdp", handle).await;
+
+        let asked = Arc::new(AtomicUsize::new(0));
+        let tool = BrowserClickTool::new(Arc::clone(&manager))
+            .with_approval_policy(
+                Arc::new(CountingAllow(Arc::clone(&asked))) as Arc<dyn ApprovalPolicy>
+            );
+
+        let result = tool
+            .call(BrowserClickArgs {
+                profile: "cdp".into(),
+                ref_id: None,
+                x: Some(120.0),
+                y: Some(48.0),
+                double: true,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            result.success,
+            "the guard must let a cdp profile through: {:?}",
+            result.message
+        );
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "the call reached the approval gate exactly once — the guard did \
+             not refuse it beforehand, and did not skip the gate either"
+        );
+
+        let mouse: Vec<(String, f64, f64, u64)> = server
+            .received()
+            .iter()
+            .filter(|m| m["method"].as_str() == Some("Input.dispatchMouseEvent"))
+            .map(|m| {
+                (
+                    m["params"]["type"].as_str().unwrap_or_default().to_string(),
+                    m["params"]["x"].as_f64().unwrap_or_default(),
+                    m["params"]["y"].as_f64().unwrap_or_default(),
+                    m["params"]["clickCount"].as_u64().unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        // Two press/release pairs, each preceded by its own move — the sequence
+        // `actions::dblclick` builds. A single `clickCount: 2` press does not
+        // produce a `dblclick` event in Chromium, which is why there are two
+        // pairs rather than one.
+        let shape: Vec<(&str, u64)> = mouse.iter().map(|(t, _, _, c)| (t.as_str(), *c)).collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("mouseMoved", 0),
+                ("mousePressed", 1),
+                ("mouseReleased", 1),
+                ("mouseMoved", 0),
+                ("mousePressed", 2),
+                ("mouseReleased", 2),
+            ],
+            "got {mouse:?}"
+        );
+        assert!(
+            mouse
+                .iter()
+                .all(|(_, x, y, _)| (*x - 120.0).abs() < f64::EPSILON
+                    && (*y - 48.0).abs() < f64::EPSILON),
+            "every event lands on the requested point: {mouse:?}"
+        );
+    }
+
     #[tokio::test]
     async fn test_click_with_ref_id() {
         let config = BrowserSystemConfig::default();

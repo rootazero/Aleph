@@ -2747,7 +2747,41 @@ mod tests {
     /// `no_browser_description_claims_a_verb_is_managed_only`
     /// (`builtin_tools::browser_tools::driver_claim_census`) is what makes the
     /// next drift go red instead of merely becoming false.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_448;
+    /// 2026-09-06 (browser dual-engine, task 14): **+77 B on macOS** for
+    /// `browser_snapshot`'s DESCRIPTION, which now names the `format` argument.
+    /// Measured, not derived — the guard printed `114525 B` against a ceiling
+    /// of `114448 B`, and 77 is that subtraction, not a count of characters in
+    /// the diff. Well under the 400 B pruning threshold, so no prune was owed.
+    ///
+    /// Against the three questions:
+    /// (1) A runtime fact about THIS repository: that a snapshot comes in two
+    /// shapes at all, one of which carries geometry, is a property of what
+    /// `CdpBackend` produces here — not of snapshots in general — and
+    /// `browser_snapshot` is not in `default_core_tools()`, so the catalog line
+    /// is the whole of what a model reads before deciding whether to fetch the
+    /// schema.
+    /// (2) A stronger model cannot guess it, and the failure is the silent
+    /// kind: no other tool face says an observation comes in two shapes, so a
+    /// model that assumed the ordinary one would never ask for the geometry it
+    /// needs to place a coordinate click — and nothing would ever report that
+    /// the geometry had been available all along.
+    /// (3) Nothing else owns the sentence. The per-field doc on
+    /// `BrowserSnapshotArgs::format` carries what `json` contains and how
+    /// `max_chars` clamps it, which is why this line names the argument and its
+    /// two values and then stops; restating the field docs here would be the
+    /// same fact twice (判据 §1).
+    ///
+    /// The consumer is shipped and dispatched rather than promised:
+    /// `resolve_format` refuses anything but the two values it names,
+    /// `snapshot_body` produces the JSON from `CdpBackend`'s `state_json`, and
+    /// a text-driver profile is told to switch rather than handed the text tree
+    /// under a `json` label.
+    ///
+    /// ⚠️ Tasks 16 and 19 raise this same scalar (`browser_session` gains the
+    /// capability sentence; `browser_open` gains `engine`). Whichever lands
+    /// last must RE-MEASURE and set the ceiling to what the guard prints —
+    /// never add its own delta to a number a sibling already moved.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_525;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS
