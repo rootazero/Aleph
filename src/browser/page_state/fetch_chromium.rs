@@ -997,6 +997,49 @@ mod tests {
         out
     }
 
+    /// Each node's **RAW** positions in `layout.nodeIndex`, in wire order.
+    ///
+    /// One derivation for a question two tests ask — which entries belong to
+    /// this node — because the two spellings were separate and would part
+    /// company (判据 §12). The raw position is the point: production indexes
+    /// `styles`, `bounds` and `text` by the position in `nodeIndex` itself, so
+    /// a test that `filter_map`s before `enumerate` renumbers every slot after
+    /// the first unreadable entry and then agrees with production only by
+    /// accident. No capture in `fixtures/` can expose that — censused
+    /// independently at `d52e514bc`: 1429 `nodeIndex` entries across all five
+    /// fixtures, minimum 0, zero non-integers — so the falsifier is this
+    /// function's own test rather than a recording.
+    fn slots_by_node(indices: &[Option<u64>]) -> std::collections::BTreeMap<u64, Vec<usize>> {
+        let mut out: std::collections::BTreeMap<u64, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (slot, node) in indices.iter().enumerate() {
+            if let Some(node) = node {
+                out.entry(*node).or_default().push(slot);
+            }
+        }
+        out
+    }
+
+    /// [`slots_by_node`] reports RAW positions, and an unreadable entry shifts
+    /// nothing after it.
+    #[test]
+    fn slots_are_raw_positions_and_an_unreadable_entry_shifts_nothing() {
+        let indices = vec![None, Some(5), Some(7), None, Some(7)];
+        let slots = slots_by_node(&indices);
+        assert_eq!(
+            slots.get(&5).map(Vec::as_slice),
+            Some([1].as_slice()),
+            "node 5 is at raw position 1, not 0 — a filtered enumeration would \
+             say 0 and then read another node's styles row"
+        );
+        assert_eq!(
+            slots.get(&7).map(Vec::as_slice),
+            Some([2, 4].as_slice()),
+            "both of node 7's entries, at their raw positions and in wire order"
+        );
+        assert_eq!(slots.len(), 2, "an unreadable entry is not a node");
+    }
+
     /// The element-level rect a node's layout entries agree on, or why there
     /// is none.
     ///
@@ -1318,20 +1361,16 @@ mod tests {
                 .iter()
                 .enumerate()
             {
-                // RAW positions (see the census test): a `slot` here must be a
-                // position in `nodeIndex` itself, because that is what
-                // production indexes into `styles` (判据 §12).
                 let indices: Vec<Option<u64>> = doc["layout"]["nodeIndex"]
                     .as_array()
                     .expect("nodeIndex[]")
                     .iter()
                     .map(serde_json::Value::as_u64)
                     .collect();
-                for (slot, node) in indices.iter().enumerate() {
-                    let Some(node) = node else { continue };
-                    if indices.iter().flatten().filter(|n| *n == node).count() != 1 {
-                        continue;
-                    }
+                for (node, slots) in slots_by_node(&indices) {
+                    // Exactly one entry, so this test is about the style
+                    // mapping and never about which entry is the box.
+                    let [slot] = slots[..] else { continue };
                     let arr = doc["layout"]["styles"][slot]
                         .as_array()
                         .expect("a styles row");
@@ -1347,7 +1386,7 @@ mod tests {
                             .unwrap_or_default()
                             .to_ascii_lowercase()
                     };
-                    let node = usize::try_from(*node).expect("a node index");
+                    let node = usize::try_from(node).expect("a node index");
                     let got = dom.frames[d].nodes[node]
                         .computed
                         .unwrap_or_else(|| panic!("{name} doc[{d}] node {node} lost its styles"));
@@ -1828,32 +1867,17 @@ mod tests {
                 .enumerate()
             {
                 let layout = &doc["layout"];
-                // RAW positions, kept as `Option`: a slot is a position in
-                // `nodeIndex` itself, which is what production indexes. A
-                // `filter_map` here would renumber every slot after the first
-                // unreadable entry, so the test's `slot` and production's
-                // `slot` would be two derivations of one thing agreeing only
-                // because no fixture has a negative `nodeIndex` (判据 §12).
                 let indices: Vec<Option<u64>> = layout["nodeIndex"]
                     .as_array()
                     .expect("nodeIndex[]")
                     .iter()
                     .map(serde_json::Value::as_u64)
                     .collect();
-                let doubled: std::collections::BTreeSet<u64> = indices
-                    .iter()
-                    .flatten()
-                    .copied()
-                    .filter(|n| indices.iter().flatten().filter(|m| *m == n).count() > 1)
-                    .collect();
-                for node in doubled {
+                for (node, slots) in slots_by_node(&indices) {
+                    if slots.len() < 2 {
+                        continue;
+                    }
                     multi_entry_nodes += 1;
-                    let slots: Vec<usize> = indices
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, n)| **n == Some(node))
-                        .map(|(s, _)| s)
-                        .collect();
                     // Chrome's own border box for this element, from an array
                     // this parser does not deserialise at all.
                     //
