@@ -213,12 +213,6 @@ mod tests {
 
         let tabs = backend.list_tabs().await.expect("list ok");
         assert_eq!(tabs.len(), 2, "both tabs are listed: {tabs:?}");
-        assert_eq!(
-            tabs.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
-            vec!["AAA", "BBB"],
-            "the listing is ordered, or the last-listed fallback picks at \
-             random: {tabs:?}"
-        );
 
         backend.switch_tab("BBB").await.expect("switch ok");
         let tabs = backend.list_tabs().await.expect("list ok");
@@ -243,6 +237,48 @@ mod tests {
             .map(|t| t.id.as_str())
             .collect();
         assert_eq!(selected, vec!["AAA"], "the marker must MOVE: {tabs:?}");
+    }
+
+    /// **The listing is ordered**, because `tab_registry::active_tab` falls back
+    /// to LAST-listed when nothing carries the `[selected]` marker — so an
+    /// arbitrary order makes that fallback pick an arbitrary tab.
+    ///
+    /// # Why six tabs and not two
+    ///
+    /// This claim lived inside the switch test with **two** tabs, and against a
+    /// dropped `sort_by` that is a coin flip rather than a guard: a two-entry
+    /// `HashMap` walks in sorted order about half the time. **Measured** — the
+    /// mutation was applied and the test binary run 12 times under
+    /// `--test-threads=1`: 6 FAILED, 6 ok. A guard that fires on half its runs
+    /// reports the allocator's mood, not the code (判据 §2 — it looks like it is
+    /// working, and the only question that separates it from one that is not is
+    /// "in what case does this go red", to which the honest answer was "some of
+    /// them").
+    ///
+    /// Six ids inserted in reverse leaves a 1-in-720 accidental pass, and the
+    /// assertion is the whole sequence rather than a spot check.
+    #[tokio::test]
+    async fn the_listing_is_ordered_whatever_order_the_tabs_were_inserted_in() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("pre-seeded handle");
+
+        let want = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"];
+        for id in want.iter().rev() {
+            handle
+                .attach_tab(&aleph_cdp::TargetId((*id).to_string()))
+                .await
+                .expect("attach ok");
+        }
+
+        let tabs = backend.list_tabs().await.expect("list ok");
+        assert_eq!(
+            tabs.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            want.to_vec(),
+            "the listing must be ordered by the id the browser assigned, \
+             whatever order the table happens to walk in: {tabs:?}"
+        );
     }
 
     /// `Target.closeTarget` answering `success: false` is the engine saying it
