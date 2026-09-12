@@ -400,7 +400,7 @@ mod wire_face {
             scroll_y: 0,
             content_width: 800,
             content_height: 600,
-            dpr: 1.0,
+            page_scale: 1.0,
         }
     }
 
@@ -547,7 +547,7 @@ mod wire_face {
                 "scroll_y",
                 "content_width",
                 "content_height",
-                "dpr",
+                "page_scale",
             ])
         );
         assert_eq!(

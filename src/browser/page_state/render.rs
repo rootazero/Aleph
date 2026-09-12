@@ -344,8 +344,9 @@ pub fn quote(s: &str) -> String {
 /// what makes a thing go red; nothing here does). It is kept because deleting
 /// it would put an `expect` on a page-derived value, not because it fires.
 ///
-/// One consequence of that same `dpr` behaviour: a state whose viewport is
-/// non-finite serialises to `dpr: null` and will NOT deserialise back, so
+/// One consequence of that same `f64` behaviour: a state whose viewport
+/// `page_scale` is non-finite serialises to `null` and will NOT deserialise
+/// back (the field was called `dpr` when this was written), so
 /// `to_json_round_trips_the_state` proves the round trip over finite viewports
 /// only — parsing proves a superset, never equality (判据 §10).
 #[must_use]
@@ -367,7 +368,7 @@ mod tests {
             scroll_y: 0,
             content_width: 800,
             content_height: 600,
-            dpr: 1.0,
+            page_scale: 1.0,
         }
     }
 

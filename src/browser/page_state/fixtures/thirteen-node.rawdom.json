@@ -2,7 +2,7 @@
   "engine": "chromium",
   "viewport": {
     "width": 1280, "height": 800, "scroll_x": 0, "scroll_y": 0,
-    "content_width": 1280, "content_height": 1400, "dpr": 1.0
+    "content_width": 1280, "content_height": 1400, "page_scale": 1.0
   },
   "frames": [
     {

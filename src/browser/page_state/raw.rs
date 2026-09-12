@@ -28,11 +28,27 @@ pub struct Viewport {
     pub scroll_y: i32,
     pub content_width: u32,
     pub content_height: u32,
-    /// The page scale factor `Page.getLayoutMetrics` reports — the ratio the
-    /// geometry above is already expressed in. NOT `window.devicePixelRatio`:
-    /// that is a different number, and reading this as that would mis-scale
-    /// every coordinate on a zoomed page.
-    pub dpr: f64,
+    /// The **page scale factor** — pinch-zoom — that `Page.getLayoutMetrics`
+    /// reports as `cssVisualViewport.scale`, and the ratio the geometry above is
+    /// already expressed in.
+    ///
+    /// This field was called `dpr` and held this same value, which is 判据
+    /// §17's 错的标签比缺的贵 in its purest form: `devicePixelRatio` and the
+    /// page scale are different numbers, both are near 1 on an ordinary desktop
+    /// page, and **a reader cannot tell a wrong DPR from a right one** — where
+    /// "there is no DPR here" is a state any consumer can handle. The doc
+    /// underneath said the right thing while the name said the wrong one, and
+    /// the name is what a caller reads (判据 §1: the copy that lies is the one
+    /// nobody re-reads).
+    ///
+    /// It reaches a model on the JSON face in Task 14, which is what made the
+    /// name worth changing rather than commenting. A real device pixel ratio is
+    /// **not** fetched: it would cost a `Runtime.evaluate` round trip per
+    /// capture for a value nothing reads today, and a field with no reader is
+    /// what this module CUT twice already (`Computed::overflow_clip`,
+    /// `RawNode::shadow_root`). If Task 14 wants one, it arrives with its
+    /// consumer.
+    pub page_scale: f64,
 }
 
 /// The four computed values the fetchers ask for, and nothing else.

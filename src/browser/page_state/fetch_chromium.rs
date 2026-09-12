@@ -879,7 +879,7 @@ fn viewport_from(
             .ok_or_else(|| bad("contentWidth", metrics.css_content_size.width))?,
         content_height: viewport_px(metrics.css_content_size.height)
             .ok_or_else(|| bad("contentHeight", metrics.css_content_size.height))?,
-        dpr: vv.scale,
+        page_scale: vv.scale,
     })
 }
 
@@ -956,7 +956,7 @@ mod tests {
             scroll_y: 0,
             content_width: 1000,
             content_height: 2000,
-            dpr: 1.0,
+            page_scale: 1.0,
         }
     }
 
