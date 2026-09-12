@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the managed browser stack against a REAL browser over `tools.invoke`.
+"""Drive an Aleph-launched browser stack against a REAL browser over `tools.invoke`.
 
 Why this fixture exists
 -----------------------
@@ -18,7 +18,8 @@ The oracle
 ----------
 `playwright-cli list` is read out of band, with the scenario's scratch HOME
 (the CLI's session store is HOME-scoped). It reports whether a session is open
-at all.
+at all. Under `--driver cdp` there is no CLI session to report, so that reading
+is inverted rather than dropped — see "Two drivers, one set of claims" below.
 
 That is as far as it goes now. Since the launch chain flipped — Aleph spawns
 Chromium itself and the CLI joins over `attach --cdp` — the CLI no longer owns
@@ -30,6 +31,21 @@ INSIDE `--expect-user-data-dir` plus a live `/json/version` on the port it
 names — the port file is written by Chrome itself, into the directory Aleph
 chose, which is a claim about the browser rather than about the CLI's copy of
 our config.
+
+Two drivers, one set of claims
+------------------------------
+`--driver` selects which of Aleph's two Aleph-launched drivers the default
+profile uses. Every claim below that is about the BROWSER is made identically
+under both — that is the whole point of running it twice, and a claim that holds
+under both is a claim about the page rather than about `playwright-cli`.
+
+The few claims that are about a driver's own bookkeeping (its session listing,
+the SHAPE of its tab ids, the files it writes) are RE-STATED in the other
+driver's terms rather than skipped, because a skipped claim and a claim that
+cannot fail look the same from the verdict line. Exactly one pair is stated as
+not-applicable, and it says so in the log: only `playwright-cli` writes page
+snapshots to disk at all, so under `cdp` both halves of that check would pass
+because nothing was written anywhere — a vacuous pass (判据 §2).
 
 The control group
 -----------------
@@ -43,6 +59,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 
 from qa_rpc import Ledger, Rpc, cli_sessions, http_json, read_devtools_port_file, ws_connect
@@ -52,6 +69,12 @@ ap.add_argument("url")
 ap.add_argument("scenario", choices=["open", "ambient", "headed"])
 ap.add_argument("--page-url", required=True)
 ap.add_argument("--marker", required=True)
+ap.add_argument(
+    "--driver",
+    default="playwright_cli",
+    choices=["playwright_cli", "cdp"],
+    help="which driver the default profile runs; see the module docstring",
+)
 ap.add_argument("--home", required=True, help="scratch HOME, for the CLI oracle")
 ap.add_argument("--cli", required=True)
 ap.add_argument("--expect-user-data-dir", required=True)
@@ -64,6 +87,11 @@ ap.add_argument(
 )
 args = ap.parse_args()
 
+# Read once, next to the argument, rather than spelled `args.driver == "..."` at
+# each of the four sites below: four spellings of one predicate is four places
+# for one of them to drift.
+CLI_DRIVER = args.driver == "playwright_cli"
+
 # The RPC plumbing and the out-of-band `playwright-cli` oracle live in
 # `qa_rpc.py`, shared with `drive_tools.py`: the two drivers are meant to
 # disagree about what to assert, never about how they talk to the gateway.
@@ -71,6 +99,8 @@ _led = Ledger()
 log = Ledger.log
 check = _led.check
 _rpc = [None]
+# The DevTools endpoint as first seen, for the "was it relaunched" claim.
+FIRST_ENDPOINT = [None]
 
 
 async def invoke(ws, tool, arguments):
@@ -120,16 +150,41 @@ async def scenario(ws):
     check("browser_open reports success", ok and res.get("success"), json.dumps(res)[:220])
     tab_id = (res or {}).get("tab_id")
     # `"last"` is the sentinel the code falls back to when the listing parses to
-    # nothing — which is what every real listing did before this round. A
-    # numeric id is the proof the real `- 0: [](url)` format now parses.
+    # nothing — which is what every real listing did before this round.
+    #
+    # The two drivers have different id SPACES: the CLI mints small integers,
+    # the CDP driver hands back CDP target ids. The claim is the SAME claim in
+    # both — "a real id came back, not the sentinel" — expressed in the space
+    # the driver actually has. A shared `!= "last"` would pass for a driver
+    # returning any garbage at all, which is why each side names its shape.
+    if CLI_DRIVER:
+        ok_id = tab_id is not None and str(tab_id).isdigit()
+        shape = "a parsed integer id"
+    else:
+        ok_id = tab_id is not None and re.fullmatch(r"[0-9A-Fa-f]{8,}", str(tab_id)) is not None
+        shape = "a CDP target id"
     check(
-        "the tab id is a parsed id, not the 'last' sentinel",
-        tab_id is not None and str(tab_id).isdigit(),
+        f"the tab id is {shape}, not the 'last' sentinel",
+        ok_id,
         f"tab_id={tab_id!r}",
     )
 
+    # The managed driver's oracle is the CLI's own session listing. The CDP
+    # driver has no CLI session at all, so the equivalent question — did a
+    # browser come up that Aleph is talking to — is asked of the browser itself,
+    # a few lines below (`DevToolsActivePort` plus a live `/json/version`). What
+    # is asserted HERE under `cdp` is the negative that makes the positive
+    # meaningful: no playwright-cli session exists, i.e. the run really did go
+    # through the other driver.
     after = sessions()
-    check("the CLI now reports an open session", "status: open" in after, after.strip()[:200])
+    if CLI_DRIVER:
+        check("the CLI now reports an open session", "status: open" in after, after.strip()[:200])
+    else:
+        check(
+            "no playwright-cli session exists (the CDP driver does not use one)",
+            "status: open" not in after,
+            f"a CLI session here would mean the wrong driver ran: {after.strip()[:200]!r}",
+        )
 
     log(f"\n--- the generated --config must have reached the browser ---")
     # Not `playwright-cli list` echoing `user-data-dir:` — under `attach --cdp`
@@ -140,6 +195,9 @@ async def scenario(ws):
     # with our user-data-dir, not merely that the CLI was told about one.
     port_file = os.path.join(args.expect_user_data_dir, "DevToolsActivePort")
     endpoint = read_devtools_port_file(port_file)
+    # Captured for the relaunch claim at the end, which under `cdp` compares the
+    # port BEFORE and AFTER the second open.
+    FIRST_ENDPOINT[0] = endpoint
     check(
         "the launch honored user_data_dir from the profile (DevToolsActivePort appeared there)",
         endpoint is not None,
@@ -193,6 +251,13 @@ async def scenario(ws):
     # whatever directory the server was started in. (It did: a full snapshot of
     # a visited site turned up in a git checkout.)
     log(f"\n--- browsed page content must not land in the server's cwd ---")
+    # Only the managed driver writes page snapshots to disk at all, so only it
+    # can put them in the wrong directory. Under `cdp` BOTH halves below would
+    # pass for the wrong reason — nothing was written anywhere — which is a
+    # vacuous pass, so the pair is stated as not-applicable instead of run.
+    if not CLI_DRIVER:
+        log("  (skipped: only the playwright-cli driver writes snapshot files)")
+        return await second_open(tab_id)
     litter = os.path.join(args.cwd, ".playwright-cli")
     strays = sorted(os.listdir(litter)) if os.path.isdir(litter) else []
     check(
@@ -212,24 +277,50 @@ async def scenario(ws):
         f"output root {args.output_dir_root} holds {[os.path.basename(f) for f in landed][:5]}",
     )
 
+    return await second_open(tab_id)
+
+
+async def second_open(tab_id):
+    """The last two claims, shared by both drivers.
+
+    A function rather than straight-line code because the block above returns
+    early under `cdp`, and a `return` that skipped these would have quietly
+    dropped two claims that ARE about the browser.
+    """
     log(f"\n--- a second tab proves tab addressing on real listings ---")
-    ok, res = await invoke(ws, "browser_open", {"url": args.page_url, "profile": "default"})
+    ok, res = await invoke(None, "browser_open", {"url": args.page_url, "profile": "default"})
     second = (res or {}).get("tab_id")
     check("a second browser_open succeeds", ok and res.get("success"), json.dumps(res)[:200])
     check(
         "the second tab gets a distinct parsed id",
-        second is not None and str(second).isdigit() and second != tab_id,
+        second is not None and str(second) != "last" and second != tab_id,
         f"first={tab_id!r} second={second!r}",
     )
     # A second open must NOT have relaunched the browser: `playwright-cli open`
     # is destructive (new pid, every tab dropped), which is precisely why the
     # launch is lazy and gated on the CLI's own refusal.
-    both_numeric = all(x is not None and str(x).isdigit() for x in (tab_id, second))
-    check(
-        "the browser was not relaunched (tab ids keep increasing)",
-        both_numeric and int(second) > int(tab_id),
-        f"ids {tab_id!r} -> {second!r} should be increasing within one browser",
-    )
+    #
+    # The managed driver proves it with increasing integer ids. CDP target ids
+    # carry no order at all, so that claim is not available there — the stronger
+    # and more direct one is used instead: the DevTools port the browser
+    # published did not change, i.e. it is the same process.
+    if CLI_DRIVER:
+        both_numeric = all(x is not None and str(x).isdigit() for x in (tab_id, second))
+        check(
+            "the browser was not relaunched (tab ids keep increasing)",
+            both_numeric and int(second) > int(tab_id),
+            f"ids {tab_id!r} -> {second!r} should be increasing within one browser",
+        )
+    else:
+        port_file = os.path.join(args.expect_user_data_dir, "DevToolsActivePort")
+        after_endpoint = read_devtools_port_file(port_file)
+        check(
+            "the browser was not relaunched (the DevTools port is unchanged)",
+            FIRST_ENDPOINT[0] is not None
+            and after_endpoint is not None
+            and FIRST_ENDPOINT[0][0] == after_endpoint[0],
+            f"port {FIRST_ENDPOINT[0]} -> {after_endpoint}",
+        )
 
 
 async def main():

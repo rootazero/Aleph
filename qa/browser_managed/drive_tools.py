@@ -319,13 +319,41 @@ async def scenario_tools(rpc, led, args):
     led.check("…and the page really went offline", ok and val is False, f"onLine={val!r}")
     await p.call("browser_emulate", network_condition="online")
 
-    ok, res = await p.call("browser_emulate", color_scheme="dark")
-    blob = json.dumps(res)
-    led.check(
-        "an emulation axis this driver cannot apply is refused, not silently dropped",
-        not (ok and res.get("success")) and "network_condition" in blob,
-        blob[:220],
-    )
+    # Both drivers apply the network axis above; they differ on the REST, and
+    # that difference is itself the claim. The managed driver has no live
+    # command for a colour scheme and must refuse BY NAME — a tool that quietly
+    # accepted an override it cannot apply is the worse failure, and only the
+    # negative case can catch it. The CDP driver has
+    # `Emulation.setEmulatedMedia` and must APPLY it, asserted by effect in the
+    # page, because "the tool returned ok" is exactly what a silently-dropped
+    # override also produces (判据 §4).
+    if args.driver == "playwright_cli":
+        ok, res = await p.call("browser_emulate", color_scheme="dark")
+        blob = json.dumps(res)
+        led.check(
+            "an emulation axis this driver cannot apply is refused, not silently dropped",
+            not (ok and res.get("success")) and "network_condition" in blob,
+            blob[:220],
+        )
+    else:
+        ok, val = await p.js("matchMedia('(prefers-color-scheme: dark)').matches")
+        led.check(
+            "baseline: the page is not already in dark mode",
+            ok and val is False,
+            f"matches={val!r} — if it already were, the claim below would pass "
+            f"without the override doing anything",
+        )
+        ok, res = await p.call("browser_emulate", color_scheme="dark")
+        led.check(
+            "browser_emulate(color_scheme) returns success",
+            ok and res.get("success"),
+            json.dumps(res)[:200],
+        )
+        ok, val = await p.js("matchMedia('(prefers-color-scheme: dark)').matches")
+        led.check(
+            "…and the page really sees the dark scheme", ok and val is True, f"matches={val!r}"
+        )
+        await p.call("browser_emulate", color_scheme="auto")
 
     # ---- cookies -----------------------------------------------------------
     led.log("\n--- browser_cookies ---")
@@ -1080,6 +1108,17 @@ def parse_args():
     ap.add_argument("--page-url", required=True)
     ap.add_argument("--second-url", default="")
     ap.add_argument("--marker", required=True)
+    ap.add_argument(
+        "--driver",
+        default="playwright_cli",
+        choices=["playwright_cli", "cdp"],
+        help="which driver the default profile runs. Every verb below is "
+        "asserted by EFFECT on the page, so almost every claim is identical "
+        "under both — that identity is what makes it a claim about the browser "
+        "rather than about playwright-cli. The one axis where the two genuinely "
+        "differ is emulation, and it is asserted in BOTH directions rather than "
+        "skipped on either.",
+    )
     ap.add_argument("--console-marker", default="")
     ap.add_argument("--late-marker", default="")
     ap.add_argument("--child-marker", default="")

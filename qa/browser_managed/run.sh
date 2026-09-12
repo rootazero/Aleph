@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real-machine QA for the managed (playwright-cli) browser driver.
+# Real-machine QA for Aleph's browser drivers.
 #
 #   ./qa/browser_managed/run.sh open      # launch, tab ids, snapshot, --config
 #   ./qa/browser_managed/run.sh ambient   # a planted cwd cli.config.json is ignored
@@ -11,6 +11,8 @@
 #   ./qa/browser_managed/run.sh existing  # the OTHER driver (Chrome DevTools MCP)
 #   ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 #   ./qa/browser_managed/run.sh attach    # Aleph starts Chrome; playwright-cli joins over CDP
+#
+#   ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs, over Aleph's own CDP client
 #
 # Same scratch-HOME discipline as qa/busy_input/run.sh. Every scenario but
 # `exec-offload` needs NO mock provider: they drive `tools.invoke`, which runs
@@ -31,6 +33,65 @@ case "$SCENARIO" in
   open|ambient|headed|tools|frames|reap|pdf|existing|exec-offload|attach) ;;
   *) echo "unknown scenario: $SCENARIO" >&2; exit 64 ;;
 esac
+
+# Which driver the default profile uses. The same scenarios under both is what
+# separates "the browser did it" from "the playwright CLI did it": a claim that
+# survives the switch is about the page, and a claim that does not is re-stated
+# in the other driver's terms rather than skipped.
+QA_DRIVER="${ALEPH_QA_DRIVER:-playwright_cli}"
+case "$QA_DRIVER" in
+  playwright_cli|cdp) ;;
+  *) echo "unknown ALEPH_QA_DRIVER: $QA_DRIVER (expected playwright_cli or cdp)" >&2; exit 64 ;;
+esac
+
+# The split, in ONE place, and a check that it covers the case arm above.
+#
+# These two lists and the `case` arm are three spellings of one set, which is
+# exactly the shape that produced a documented contradiction while this was
+# being written: a README sentence listed `reap` as both runnable and refused
+# under cdp, and nothing could go red about it (判据 §1). So the set is written
+# once, and the classification is CHECKED against the only copy that decides
+# anything — a scenario added to the case arm and to neither list stops the run
+# by name instead of silently inheriting a driver it was never considered for.
+CDP_RUNNABLE="open tools frames exec-offload"
+# Six scenarios are ABOUT playwright-cli, chrome-devtools-mcp, or Managed-only
+# machinery — not about the browser. Running them under `cdp` would pass or fail
+# for reasons that have nothing to do with the CDP backend, which is worse than
+# not running them (判据 §2: a predicate that cannot go red for the reason it
+# names is not a gate).
+#   ambient  — the CLI's cwd config discovery.
+#   attach   — the CLI joining a browser Aleph launched.
+#   pdf      — pdf_generate's own playwright-cli session.
+#   existing — the other driver entirely (chrome-devtools-mcp).
+#   headed   — its only oracle is the CLI's own `headed: true` listing; the CDP
+#              equivalent needs a process-argv probe that qa/browser_dual builds.
+#   reap     — idle reclamation has NO Cdp arm: `ProfileManager::reap_idle`
+#              walks `idle_managed_profiles()` (filtering
+#              `driver == BrowserDriver::Managed`) and the existing-session set,
+#              and `reap_idle_tabs` is Managed-only too. `scenario_reap` also
+#              asserts on `cli_sessions(...)`, which a CDP run has none of.
+#              Wiring the Cdp arm into the reaper is its own task.
+CDP_REFUSED="ambient attach pdf existing headed reap"
+
+for s in open ambient headed tools frames reap pdf existing exec-offload attach; do
+  case " $CDP_RUNNABLE $CDP_REFUSED " in
+    *" $s "*) ;;
+    *) echo "scenario '$s' is in the case arm but classified neither runnable" >&2
+       echo "nor refused under ALEPH_QA_DRIVER=cdp. Classify it before running." >&2
+       exit 78 ;;
+  esac
+done
+
+if [ "$QA_DRIVER" = "cdp" ]; then
+  case " $CDP_REFUSED " in
+    *" $SCENARIO "*)
+      echo "scenario '$SCENARIO' is about playwright-cli, chrome-devtools-mcp," >&2
+      echo "or Managed-only machinery; it has no meaning under ALEPH_QA_DRIVER=cdp." >&2
+      echo "Runnable under cdp: $CDP_RUNNABLE" >&2
+      exit 64
+      ;;
+  esac
+fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -227,6 +288,31 @@ PROVIDER_PORT="$DEAD_MOCK_PORT"
 python3 "$SHARED/patch_config.py" "$CONFIG" \
   --gateway-port "$GATEWAY_PORT" --mock-port "$PROVIDER_PORT" || exit 1
 BROWSER_CFG_ARGS=(--cli-binary "$CLI" --user-data-dir "$UDD" --headless "$HEADLESS")
+if [ "$QA_DRIVER" = "cdp" ]; then
+  # The CDP driver launches the browser itself, so the browser has to be pinned
+  # the same way the `attach` scenario pins it — otherwise the run depends on
+  # which browsers this machine happens to have.
+  CDP_CHROME="${ALEPH_QA_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+  if [ ! -x "$CDP_CHROME" ]; then
+    echo "no browser at $CDP_CHROME; set ALEPH_QA_CHROME" >&2
+    exit 69
+  fi
+  # `engine = "chromium"` is as explicit as `driver`: this run asks whether the
+  # CDP driver reaches parity with the managed one on the SAME engine, so it
+  # must not follow a product default that a later task moves to obscura.
+  BROWSER_CFG_ARGS+=(--driver cdp --engine chromium
+                     --runtime-binary-path "$CDP_CHROME" --prefer-system-browser false)
+  echo "driver: cdp (engine=chromium, pinned at $CDP_CHROME)"
+else
+  # `managed` is passed EXPLICITLY, never left to the default. A later task
+  # flips the built-in default profile to engine=obscura/driver=cdp, and a
+  # regression run that relied on the default would silently start testing the
+  # new default under the name of the driver it is named after — a fixture that
+  # measures whatever the product currently does is not a regression test
+  # (判据 §5: a default only describes the world on the day it was written).
+  BROWSER_CFG_ARGS+=(--driver managed)
+  echo "driver: playwright_cli (managed, pinned explicitly)"
+fi
 if [ "$SCENARIO" = "existing" ]; then
   # Pin the MCP server to the newest copy already in the developer's npx cache.
   # The default (`npx -y chrome-devtools-mcp@latest`) resolves against $HOME,
@@ -398,6 +484,7 @@ case "$SCENARIO" in
   open|ambient|headed)
     python3 "$HERE/drive_browser.py" \
       "ws://127.0.0.1:$GATEWAY_PORT/ws" "$SCENARIO" \
+      --driver "$QA_DRIVER" \
       --page-url "http://127.0.0.1:$PAGE_PORT/" \
       --marker "$MARKER" \
       --home "$QA_ROOT/home" \
@@ -436,6 +523,7 @@ case "$SCENARIO" in
     esac
     python3 "$HERE/drive_tools.py" \
       "ws://127.0.0.1:$GATEWAY_PORT/ws" "$SCENARIO" \
+      --driver "$QA_DRIVER" \
       --page-url "$DRIVE_URL" \
       --second-url "http://127.0.0.1:$PAGE_PORT/second.html" \
       --marker "$MARKER" \

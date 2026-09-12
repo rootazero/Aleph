@@ -27,6 +27,8 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/browser_managed/run.sh exec-offload # browser_exec's spill, inside a real turn
 ./qa/browser_managed/run.sh attach   # Aleph starts Chrome; playwright-cli joins over CDP
                                      # (unix only: pgrep)
+ALEPH_QA_DRIVER=cdp ./qa/browser_managed/run.sh tools   # the same verbs over Aleph's own CDP client
+                                     # runnable under cdp: open tools frames exec-offload
 
 ./qa/file_search/run.sh floor   # deny_read_globs from a CONFIG FILE binds grep/find,
                                 # and no_ignore=true does not lift it
@@ -1155,7 +1157,17 @@ widened a narrowly-scoped change into that question. Tracked in
   停机后把戳改成**降序**再重读——**生产数据上两序恒合，所以不打乱就等于没测**。断言：服务序不变 ·
   `session.truncate` 真的到达数据库 · 它留下的是**头部** · 两个 backend 销毁同一批行。
 - **`browser_managed`** — 改 `src/browser/` 或 `src/builtin_tools/browser_tools/` 前跑。
-  `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**两个 driver 的每个动词都有效果断言**。
+  `{open,ambient,headed,tools,frames,reap,pdf,existing,exec-offload,attach}`——**每个动词都有效果断言**。
+  **两条 driver 轴，别混淆**：① 场景本身覆盖 `managed`（playwright-cli）与 `existing_session`
+  （chrome-devtools-mcp）两个 driver；② `ALEPH_QA_DRIVER=cdp` 把**默认 profile** 改走 Aleph 自己的
+  CDP 客户端（`engine=chromium` 显式钉住，不跟产品默认走）。
+  轴 ② 下**可跑的是 `open` `tools` `frames` `exec-offload`**；`ambient` `attach` `pdf` `existing`
+  `headed` `reap` 会以 exit 64 **被拒绝并说明理由**——它们测的是 CLI、MCP server 或只有 Managed 臂的
+  收割器，在 `cdp` 下会「通过但什么都没测」（判据 §2）。两个 driver 都绿的断言才是关于**页面**的；
+  只在一个 driver 下成立的断言，会在另一个 driver 的词汇里**重述**而不是跳过。
+  这份清单与 `run.sh` 里的 `CDP_RUNNABLE` / `CDP_REFUSED` 两个变量对应，而**脚本自己会在启动时检查
+  `case` 臂里的每个场景都被这两个列表之一分类过**（否则 exit 78）——所以新增场景不会默默继承一条
+  从没为它考虑过的 driver 轴。
   `attach` 证的是 Aleph 自己启动 Chrome、`playwright-cli` 只 `attach --cdp` 上去；已知缺口见下方
   "Known gap: tab identity does not survive a re-attach"。
   **改启动链（`engine/chromium` / `engine/process` / `chromium_resolve` / `playwright_launch` / `playwright_cli`）必须跑

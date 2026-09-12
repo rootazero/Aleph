@@ -28,10 +28,16 @@ Three settings, each load-bearing:
   127.0.0.1. That is what makes the scenario hermetic — no public site is
   involved — and it is a policy knob, not a hole punched for the test.
 
-* **`user_data_dir`** is the one launch setting the CLI echoes back out of band
-  (`playwright-cli list` prints `user-data-dir:`), which makes it the oracle for
-  "the `--config` file Aleph generated actually reached the browser" as opposed
-  to merely "a browser came up".
+* **`user_data_dir`** is where the browser writes `DevToolsActivePort`, which
+  makes it the oracle for "the profile Aleph generated actually reached the
+  browser" as opposed to merely "a browser came up". Read out of the directory
+  rather than out of `playwright-cli list`: under `attach --cdp` the CLI does
+  not own the profile dir and has nothing to echo, and under `--driver cdp`
+  there is no CLI session at all.
+
+* **`--driver`** picks which of Aleph's two Aleph-launched drivers the default
+  profile uses, and is REQUIRED. See its help text: a default here would make
+  the fixture measure whatever the product currently does.
 """
 import argparse
 import re
@@ -41,6 +47,23 @@ p.add_argument("path")
 p.add_argument("--cli-binary", required=True)
 p.add_argument("--user-data-dir", required=True)
 p.add_argument("--headless", default="true", choices=["true", "false"])
+p.add_argument(
+    "--driver",
+    required=True,
+    choices=["managed", "cdp"],
+    help="the default profile's driver. `managed` is playwright-cli; `cdp` is "
+    "Aleph's own CDP client. The same scenarios run under both, which is the "
+    "only way to tell a claim about the BROWSER from a claim about the CLI. "
+    "REQUIRED rather than defaulted: a later task flips the product's default "
+    "profile to engine=obscura/driver=cdp, and a fixture that inherited the "
+    "default would quietly stop testing the driver its own name promises.",
+)
+p.add_argument(
+    "--engine",
+    default="",
+    choices=["", "chromium", "obscura"],
+    help="the default profile's engine; only meaningful with --driver cdp",
+)
 p.add_argument(
     "--idle-timeout-secs",
     type=int,
@@ -158,10 +181,12 @@ if args.prefer_system_browser:
 # would not be.
 default_lines = [
     "[general.browser.profiles.default]",
-    'driver = "managed"',
+    f'driver = "{args.driver}"',
     f'user_data_dir = "{args.user_data_dir}"',
     'extra_args = ["--disable-gpu"]',
 ]
+if args.engine:
+    default_lines.append(f'engine = "{args.engine}"')
 if args.idle_timeout_secs is not None:
     default_lines.append(f"idle_timeout_secs = {args.idle_timeout_secs}")
 if args.tab_idle_timeout_secs is not None:
@@ -173,6 +198,9 @@ src += "\n" + "\n".join(default_lines) + "\n"
 if args.control_profile:
     control_lines = [
         f"[general.browser.profiles.{args.control_profile}]",
+        # Deliberately NOT `args.driver`: this profile's job is to be the one
+        # the sweep must not close, and keeping it on the driver whose reaper
+        # behaviour is already known is what makes it a control.
         'driver = "managed"',
         'extra_args = ["--disable-gpu"]',
         # Far enough out that no QA run reaches it: this profile's job is to be
