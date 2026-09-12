@@ -7,30 +7,38 @@
 //! sequence of CDP commands whichever engine is on the far end; a fourth branch
 //! is the signal that a second backend is growing inside this one.
 //!
-//! # The `dead_code` allow, and the exact condition for deleting it
+//! # The `dead_code` permit below has a lifetime, and a test that ends it
 //!
-//! **Nothing constructs a `CdpBackend` yet.** `manager::get_backend` grows its
-//! `Cdp` arm in Task 14, and until it does, every item this module defines is
-//! reachable only from `#[cfg(test)]` — which `cargo clippy --lib` does not
-//! compile, so it reports 26 true `dead_code` warnings about code that is
-//! tested and correct.
+//! **Nothing in production constructs a `CdpBackend` yet.** `manager::get_backend`
+//! has a `BrowserDriver::Cdp` arm, but that arm refuses by name; Task 14 replaces
+//! it with the real construction. Until then every item this module defines is
+//! reachable only from `#[cfg(test)]`, which the `lib` target does not compile —
+//! so the repo's own gate, `cargo clippy --workspace --all-targets`, reports a
+//! `dead_code` warning for each of them, about code that is tested and correct.
+//! (**Measured**, not assumed: with the permit removed, that command names this
+//! module in a warning block for every item, all of them emitted by the `(lib)`
+//! target rather than `(lib test)`. `cargo clippy -p alephcore --lib` was NOT a
+//! sufficient measurement — it does not build the test target at all, so it
+//! could not tell "the gate sees these" from "only a `check`-shaped build does".)
 //!
-//! They are silenced in ONE place rather than 26, because 26 known warnings are
-//! how a 27th — a real one — becomes invisible (判据 §3: a guard is worth its
-//! scope, and a signal nobody can read is not a signal). The cost is that a
-//! genuinely dead item added INSIDE this module would not be reported either,
-//! so this is a debt with a due date, not a decision:
+//! They are silenced in ONE place because a page of known warnings is how the
+//! next real one becomes invisible (判据 §3). The cost is real and is the reason
+//! this needs an expiry rather than a promise: a genuinely dead item added
+//! INSIDE this module is not reported either, for as long as the permit stands.
 //!
-//! **Task 14 deletes this attribute in the same commit that adds the `Cdp` arm
-//! to `get_backend`.** The condition is mechanical — once one production site
-//! constructs a `CdpBackend`, every one of these warnings disappears on its own,
-//! so `cargo clippy -p alephcore --lib` after that commit either stays quiet
-//! with the attribute gone, or names the item that really is dead.
+//! **The permit's stated reason expires the moment anything constructs a
+//! `CdpBackend`, and `the_dead_code_permit_is_gone_once_production_constructs_this_backend`
+//! goes red at exactly that moment.** A debt recorded only in a report is a debt
+//! nobody collects: Task 13's `pump_started` obligation is self-executing (forget
+//! it and the build fails), and this one is the opposite — forget to delete this
+//! attribute and nothing happens, forever. So the guard is the thing that
+//! remembers, not the reader.
 //!
 //! Visibility was NOT the fix. Making this module `pub` would also silence them
 //! — `pub` items in a library are never dead-code-warned — but that widens the
 //! crate's public API to work around a lint, and every other backend here is
 //! `pub(crate)`.
+
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -501,6 +509,138 @@ mod tests {
     use crate::browser::engine::Engine;
     use crate::browser::error::BrowserError;
     use crate::browser::wait_probe::WAIT_PROBE_FOUND;
+
+    /// Whether `src` carries a MODULE-level permit that includes `dead_code`.
+    ///
+    /// Deliberately broader than the one spelling in use: a permit rewritten as
+    /// `#![allow(dead_code, unused)]` suppresses exactly as much, and a
+    /// recogniser that only knew the current spelling would report the same
+    /// green for "the permit is gone" and "the permit was reworded" (判据 §3).
+    fn module_dead_code_permit(src: &str) -> bool {
+        src.lines()
+            .map(str::trim)
+            .any(|l| l.starts_with("#![allow(") && l.contains("dead_code"))
+    }
+
+    /// Whether `code` constructs a `CdpBackend`.
+    fn constructs_the_backend(code: &str) -> bool {
+        code.contains("CdpBackend::new(")
+    }
+
+    /// The recogniser controls, and they are not optional here.
+    ///
+    /// `src/` contains no production construction today, so the guard below is
+    /// asserting a NEGATIVE over a corpus with no positive case in it. Without
+    /// these, a recogniser that silently stopped matching would look exactly
+    /// like "Task 14 has not landed yet", and the permit would ship forever
+    /// with the guard green — which is the same trap
+    /// `the_roster_recogniser_knows_a_roster_from_an_accessor` exists for in
+    /// `capability::census`.
+    #[test]
+    fn the_permit_and_construction_recognisers_match_what_they_claim_to() {
+        for permit in [
+            "#![allow(dead_code)]",
+            "#![allow(dead_code, unused)]",
+            "  #![allow(unused, dead_code)]  ",
+        ] {
+            assert!(
+                module_dead_code_permit(permit),
+                "a module-level permit this shape is not recognised, so the \
+                 expiry guard would never fire while it stood: {permit:?}"
+            );
+        }
+        for not_a_permit in [
+            "#[allow(dead_code)]",
+            "#![allow(unused_imports)]",
+            "let s = \"#![allow(dead_code)]\";",
+        ] {
+            assert!(
+                !module_dead_code_permit(&crate::utils::source_scan::code_text(not_a_permit)),
+                "recognised as a module permit and it is not one: {not_a_permit:?}"
+            );
+        }
+
+        assert!(constructs_the_backend(
+            "Ok(Arc::new(CdpBackend::new(reg, engine)))"
+        ));
+        assert!(
+            !constructs_the_backend(&crate::utils::source_scan::code_text(
+                "// Task 14 replaces this arm with CdpBackend::new(...)"
+            )),
+            "a mention in a COMMENT must not count as a construction, or the \
+             permit expires against prose"
+        );
+    }
+
+    /// **The permit at the top of this file expires the moment anything in
+    /// production constructs a `CdpBackend`.**
+    ///
+    /// The permit's stated reason is "nothing constructs one yet". That reason
+    /// is checkable, so it is checked here rather than promised in a report:
+    /// the day `manager::get_backend`'s `Cdp` arm builds a real backend, every
+    /// warning the permit hides disappears on its own — and any that does not
+    /// is a genuinely dead item the permit would go on hiding.
+    ///
+    /// ⚠️ Not written as "does the `Cdp` arm exist": it already does, refusing
+    /// by name, so that trigger would be red on its first run. The trigger is
+    /// the CONSTRUCTION, which is the thing the reason actually names.
+    ///
+    /// ⚠️ Not `#[expect(dead_code)]` either. The test build reaches every one
+    /// of these items, so `dead_code` never fires there and the expectation
+    /// would be unfulfilled today — the same reason `capability::census`
+    /// records for not using it.
+    ///
+    /// `production_text`, not `production_prefix`: a whole-file test module
+    /// carries no `#[cfg(test)]` of its own, and the per-file cut would hand
+    /// this walk 100% of such a file as production.
+    #[test]
+    fn the_dead_code_permit_is_gone_once_production_constructs_this_backend() {
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let sources = rust_sources_under(&root);
+        assert!(
+            sources.len() > 100,
+            "the source walk found only {} files under src/ — the census \
+             scanned nothing, which is not the same as finding nothing wrong",
+            sources.len()
+        );
+
+        let me = std::fs::read_to_string(root.join("browser/cdp_backend/mod.rs"))
+            .expect("this module's own source is readable");
+        assert!(
+            me.contains("pub struct CdpBackend"),
+            "the guard is reading the wrong file — it found no CdpBackend \
+             declaration where this module lives"
+        );
+        let permit = module_dead_code_permit(&me);
+
+        let mut sites: Vec<String> = Vec::new();
+        for (rel, text) in sources {
+            // This module's own tests construct one on purpose; the permit is
+            // about PRODUCTION reachability.
+            if rel.starts_with("src/browser/cdp_backend/") {
+                continue;
+            }
+            if constructs_the_backend(&code_text(&production_text(
+                std::path::Path::new(&rel),
+                &text,
+            ))) {
+                sites.push(rel);
+            }
+        }
+
+        assert!(
+            sites.is_empty() || !permit,
+            "production now constructs a CdpBackend:\n  {}\n\nbut \
+             src/browser/cdp_backend/mod.rs still carries a module-level \
+             `dead_code` permit. Its stated reason — \"nothing constructs one \
+             yet\" — has expired. Delete the attribute: every warning it was \
+             hiding disappears with the construction, and any that does not is \
+             a genuinely dead item the permit would go on hiding.",
+            sites.join("\n  ")
+        );
+    }
 
     /// The SSRF guard must be consulted BEFORE the wire, not after. "The
     /// navigation was refused" and "the navigation was refused after the
