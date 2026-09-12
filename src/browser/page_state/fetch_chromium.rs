@@ -2698,8 +2698,7 @@ mod tests {
         value["documents"][0]["nodes"]["backendNodeId"][4] = serde_json::json!(-1);
 
         let err = parse_snapshot(&value, viewport(), &loaders())
-            .err()
-            .expect("an unnameable frame element must not be carried as node 0");
+            .expect_err("an unnameable frame element must not be carried as node 0");
         let text = err.to_string();
         assert!(
             text.contains("backendNodeId"),
