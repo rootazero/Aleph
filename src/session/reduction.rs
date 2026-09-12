@@ -2278,13 +2278,14 @@ mod tests {
                 }
             }
         }
-        // The map is what the scan prints at THIS commit; T8 re-derives it
-        // when it deletes the fast-path literals.
+        // The map is what the scan prints at THIS commit (re-derived by T8,
+        // which deleted the fast-path literals: the L0 fast path now writes
+        // its `UserMessage` through `SessionEvent::user_turn`, inside a
+        // `[RunStarted, RunFinished]` pair — a run, so `Interrupted` and not
+        // `Unanswered` is what a crash there reads as).
         let expected: std::collections::BTreeMap<String, usize> = [
             // child seed — excluded by `unanswered_eligible` (Subagent/Ephemeral keys)
             ("agents/subagent_spawner/mod.rs", 1),
-            // L0 fast path: user then assistant, no markers (answered ⇒ Clean)
-            ("gateway/execution_engine/fast_path.rs", 2),
             // Simulated engine: user then assistant, no markers
             ("gateway/execution_engine/simple.rs", 1),
             // steer: only into a RUNNING session
@@ -2293,10 +2294,13 @@ mod tests {
             ("gateway/openai_api/completions/agent.rs", 1),
             // legacy transcript backfill, followed by a run
             ("orchestrator/harness_bridge/backfill.rs", 1),
-            // THE producer (prompt + multimodal + history's trailing prompt)
-            ("orchestrator/harness_bridge/session_seed.rs", 3),
-            // synthetic_user (in-run, `synthetic: true` — never "the user waiting")
-            ("session/events.rs", 1),
+            // THE producer (prompt + multimodal; history's trailing prompt
+            // now goes through `user_turn`)
+            ("orchestrator/harness_bridge/session_seed.rs", 2),
+            // synthetic_user (in-run, `synthetic: true` — never "the user
+            // waiting") + user_turn (the seed pair's one constructor: the
+            // bridge's history seed and the L0 fast path)
+            ("session/events.rs", 2),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

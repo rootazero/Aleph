@@ -110,37 +110,25 @@ async fn seed_history(
         }
     }
     // Announce a new user turn so the harness scans from the right
-    // tail boundary (see `tail_start_index` in agent.rs).
+    // tail boundary (see `tail_start_index` in agent.rs). The pair has one
+    // constructor (`SessionEvent::user_turn`, shared with the L0 fast path);
+    // the seed's write shape — two `emit_event`s — is unchanged.
     let turn_id = uuid::Uuid::new_v4();
-    service
-        .emit_event(
-            session_id,
-            SessionEvent::TurnStarted {
-                turn_id,
-                trigger: TurnTrigger::UserMessage,
-                at: now_ms(),
-            },
-        )
-        .await
-        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
-    service
-        .emit_event(
-            session_id,
-            SessionEvent::UserMessage {
-                turn_id,
-                content: MessageContent {
-                    text: prompt,
-                    blocks: Vec::new(),
-                    thinking: None,
-                    thinking_signature: None,
-                },
-                at: now_ms(),
-                synthetic: false,
-                author_user_id: crate::scope::ambient_room_author(),
-            },
-        )
-        .await
-        .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
+    for event in SessionEvent::user_turn(
+        turn_id,
+        MessageContent {
+            text: prompt,
+            blocks: Vec::new(),
+            thinking: None,
+            thinking_signature: None,
+        },
+        crate::scope::ambient_room_author(),
+    ) {
+        service
+            .emit_event(session_id, event)
+            .await
+            .map_err(|e| FlowError::Internal(format!("session seed: {e}")))?;
+    }
     Ok(())
 }
 

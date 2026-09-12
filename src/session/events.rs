@@ -92,6 +92,32 @@ impl SessionEvent {
             author_user_id: None,
         }
     }
+
+    /// The seed pair every user-driven run opens with: `TurnStarted` then the
+    /// `UserMessage`, sharing one `turn_id`. Two writers (the bridge's
+    /// `seed_history` and the L0 fast path) used to spell it by hand.
+    #[must_use]
+    pub fn user_turn(
+        turn_id: TurnId,
+        content: MessageContent,
+        author_user_id: Option<String>,
+    ) -> [SessionEvent; 2] {
+        let at = now_ms();
+        [
+            SessionEvent::TurnStarted {
+                turn_id,
+                trigger: TurnTrigger::UserMessage,
+                at,
+            },
+            SessionEvent::UserMessage {
+                turn_id,
+                content,
+                at,
+                synthetic: false,
+                author_user_id,
+            },
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

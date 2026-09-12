@@ -815,7 +815,7 @@ pub(crate) const MARKER_EVENT_TYPES: [&str; 3] =
 /// Kept as a `&'static str` to avoid per-append allocation and to give the
 /// storage layer a stable taxonomy independent of serde rename decisions.
 // rust-doctor-disable-next-line high-cyclomatic-complexity
-const fn event_type_tag(event: &SessionEvent) -> &'static str {
+pub(crate) const fn event_type_tag(event: &SessionEvent) -> &'static str {
     match event {
         SessionEvent::SessionWoken { .. } => "session_woken",
         SessionEvent::RunStarted { .. } => "run_started",
