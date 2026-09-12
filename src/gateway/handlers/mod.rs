@@ -140,14 +140,16 @@ pub mod voice;
 pub mod wizard;
 pub mod workspace;
 
-/// Close a run marker that a *retire* left open, for the two verbs that
-/// shorten a session log (`chat.rewind`, `session.truncate`).
+/// Retire every live event from `from_seq` onward and, in the same store
+/// transaction, close the run marker that retire would leave open — for the
+/// two verbs that shorten a session log (`chat.rewind`, `session.truncate`).
+/// Returns how many events this call retired.
 ///
 /// One helper, not one call per verb: the two are twins, and the first version
 /// of this rule existed only on the rewind side, which meant `/undo` produced
 /// exactly the state rewind was fixed for. The derivation itself lives in
 /// [`crate::session::marker_balance`]; this is the gateway glue that resolves
-/// the process-wide store and answers "is a run in flight" from the
+/// the process-wide service and answers "is a run in flight" from the
 /// authoritative in-memory registry.
 ///
 /// **`is_running` fails closed.** With no run manager wired (the CLI one-shot,
@@ -158,48 +160,42 @@ pub mod workspace;
 /// marker open costs one redundant candidate on the next boot; closing a live
 /// one corrupts the log.
 ///
-/// Best-effort by construction: the retire has already committed, and failing
-/// the RPC afterwards would tell the user their edit did not happen when it
-/// did. A failure is logged and re-decided on the next boot.
-pub(crate) async fn balance_run_markers_after_retire(
+/// `Ok(0)` when no session service is installed (CLI one-shot, tests) — there
+/// is no event log, hence nothing that could still be replayed.
+///
+/// # Errors
+///
+/// The batch did not commit: nothing was retired and nothing was appended, so
+/// the caller must fail its RPC rather than realign a projection to a cut the
+/// log never took.
+pub(crate) async fn retire_events_and_balance(
     session_key: &crate::session::service::SessionId,
+    from_seq: crate::session::events::EventSeq,
     run_manager: Option<&Arc<agent::AgentRunManager>>,
-) {
-    let Some(store) = crate::session::store::global_session_event_store() else {
-        // No event log in this process — nothing was retired from one either
-        // (`retire_live_events` is `Ok(0)` here), so there is no marker to
-        // balance.
-        return;
+) -> Result<usize, crate::session::service::SessionError> {
+    // A counted reader of the process-wide session service (T17 census).
+    let Some(service) = crate::session::service::global_session_service() else {
+        return Ok(0);
     };
-    let running: Vec<String> = match run_manager {
-        Some(rm) => rm.running_sessions(),
-        None => Vec::new(),
-    };
+    let running: Vec<String> = run_manager
+        .map(|rm| rm.running_sessions())
+        .unwrap_or_default();
     let knows_runs = run_manager.is_some();
-    let result = crate::session::marker_balance::close_open_run_after_retire(
-        store.as_ref(),
+    let out = crate::session::marker_balance::retire_from_and_close_run(
+        service.as_ref(),
         session_key,
+        from_seq,
         |key| !knows_runs || running.iter().any(|k| k == &key.to_key_string()),
     )
-    .await;
-    match result {
-        Ok(Some(run_id)) => {
-            tracing::debug!(
-                session = %session_key.to_key_string(),
-                run_id,
-                "retire left a run marker open; closed it as cancelled"
-            );
-        }
-        Ok(None) => {}
-        Err(e) => {
-            tracing::warn!(
-                session = %session_key.to_key_string(),
-                error = %e,
-                "retire left the run markers unbalanced and they could not be closed; \
-                 the next boot scan will re-decide this session"
-            );
-        }
+    .await?;
+    if let Some(run_id) = &out.closed_run {
+        tracing::debug!(
+            session = %session_key.to_key_string(),
+            run_id,
+            "retire closed the run it would have left open"
+        );
     }
+    Ok(out.retired)
 }
 
 pub use config::{handle_get_full_config, handle_patch_config};

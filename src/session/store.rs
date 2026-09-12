@@ -928,22 +928,25 @@ fn cap_chars(s: &str, max: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// `ConsumerDecides`, and this handle is the sharper case of the pair in this
-/// batch: five production reads produce five *different* answers, two of which
+/// batch: the production reads produce *different* answers, some of which
 /// are reported to the caller as success.
 ///
 /// | reader | an uninstalled read becomes |
 /// |---|---|
 /// | `builtin_tools/recall_events.rs` | `Ok(empty)` plus a note to the model |
-/// | `builtin_tools/sessions/compact_tool.rs` | an `AlephError` |
 /// | [`retire_live_events`] | `Ok(0)` — "retired nothing", indistinguishable from "there was nothing to retire" |
 /// | `gateway/session_projector.rs` | reads `is_retired` on its own store handle (no process-wide accessor needed) |
 /// | `gateway/execution_engine/run_loop/inner.rs` | the legacy backfill is skipped in silence |
 ///
-/// Each arm is individually defensible (all five doc-comment their reasoning),
+/// (`builtin_tools/sessions/compact_tool.rs` left this table on 2026-09-12:
+/// `/compact` now writes through the session service's `emit_batch` and reads
+/// no store handle of its own.)
+///
+/// Each arm is individually defensible (all doc-comment their reasoning),
 /// which is exactly why no `IndistinguishableDefault { reads_as }` sentence
 /// could be written for this slot: there is no single thing a missing handle
-/// reads as. Task 15 adjudicates the arms; this variant records that there are
-/// five of them.
+/// reads as. Task 15 adjudicates the arms; this variant records that there is
+/// more than one of them — recount rather than inherit a number.
 static GLOBAL_EVENT_STORE: CapabilitySlot<Arc<dyn SessionEventStore>> =
     CapabilitySlot::new("session/event-store", MissingSemantics::ConsumerDecides);
 
@@ -1037,6 +1040,122 @@ pub(crate) fn install_test_event_store() -> Arc<SqliteEventStore> {
 // row" contract was unwired. If a future caller needs the global accessor,
 // re-introduce it together with a real call site — the half-wired slot was
 // worse than either end state.
+
+/// Test instrument for "this operation is ONE store transaction".
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A real SQLite store that counts its write entry points, so a test can
+    /// assert "one transaction" as a NUMBER instead of trusting the caller.
+    ///
+    /// The three counted methods are the three ways a caller can change the
+    /// live log. `append` is deliberately NOT overridden: the trait default
+    /// routes it through `self.append_batch`, so a single-row write is counted
+    /// too — every write that reaches this store is a batch it counted.
+    pub(crate) struct CountingStore {
+        pub inner: Arc<SqliteEventStore>,
+        pub append_batches: AtomicUsize,
+        pub retire_froms: AtomicUsize,
+        pub retire_throughs: AtomicUsize,
+    }
+
+    impl CountingStore {
+        /// A fresh in-memory store, migrated, with every counter at zero.
+        pub(crate) fn in_memory() -> Arc<Self> {
+            let conn = Connection::open_in_memory().expect("in-memory sqlite");
+            migrate_add_session_events(&conn).expect("migrate session_events");
+            Arc::new(Self {
+                inner: Arc::new(SqliteEventStore::new(conn)),
+                append_batches: AtomicUsize::new(0),
+                retire_froms: AtomicUsize::new(0),
+                retire_throughs: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SessionEventStore for CountingStore {
+        async fn append_batch(
+            &self,
+            session_id: &SessionId,
+            first_seq: EventSeq,
+            events: &[(SessionEvent, i64)],
+            retire: Option<Retire>,
+            durability: Durability,
+        ) -> Result<(), SessionError> {
+            self.append_batches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner
+                .append_batch(session_id, first_seq, events, retire, durability)
+                .await
+        }
+
+        async fn load_all_events(
+            &self,
+            session_id: &SessionId,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            self.inner.load_all_events(session_id).await
+        }
+
+        async fn load_events_range(
+            &self,
+            session_id: &SessionId,
+            from: Option<EventSeq>,
+            to: Option<EventSeq>,
+        ) -> Result<Vec<SessionEventRecord>, SessionError> {
+            self.inner.load_events_range(session_id, from, to).await
+        }
+
+        async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError> {
+            self.inner.load_head_seq(session_id).await
+        }
+
+        async fn retire_from(
+            &self,
+            session_id: &SessionId,
+            from_seq: EventSeq,
+        ) -> Result<usize, SessionError> {
+            self.retire_froms
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.retire_from(session_id, from_seq).await
+        }
+
+        async fn retire_through(
+            &self,
+            session_id: &SessionId,
+            through_seq: EventSeq,
+        ) -> Result<usize, SessionError> {
+            self.retire_throughs
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.retire_through(session_id, through_seq).await
+        }
+
+        async fn is_retired(
+            &self,
+            session_id: &SessionId,
+            seq: EventSeq,
+        ) -> Result<bool, SessionError> {
+            self.inner.is_retired(session_id, seq).await
+        }
+
+        async fn load_run_markers(
+            &self,
+        ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+            self.inner.load_run_markers().await
+        }
+
+        async fn search_events(
+            &self,
+            session_id: &SessionId,
+            query: &str,
+            limit: usize,
+        ) -> Result<Vec<SessionEventHit>, SessionError> {
+            self.inner.search_events(session_id, query, limit).await
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

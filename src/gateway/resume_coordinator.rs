@@ -749,7 +749,7 @@ impl ResumeCoordinator {
     /// admits against. An adapter with no run registry answers with an empty
     /// set, which is honest for it (a `SimpleExecutionEngine` runs nothing
     /// concurrently) and is why this is not a fail-closed predicate the way
-    /// `marker_balance::close_open_run_after_retire`'s is: that one closes the
+    /// `marker_balance::retire_from_and_close_run`'s is: that one closes the
     /// marker of a run the *user* just cut, this one only ever declines to
     /// touch a log.
     fn is_running(&self, session_id: &SessionId) -> bool {

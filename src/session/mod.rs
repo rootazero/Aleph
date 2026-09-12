@@ -30,7 +30,7 @@ pub use events::{
     Timestamp, ToolOutput, TurnId, TurnTrigger,
 };
 pub use in_process::InProcessActorSessionService;
-pub use marker_balance::close_open_run_after_retire;
+pub use marker_balance::{open_run_after_retire, retire_from_and_close_run, RetireOutcome};
 pub use projection::project_row;
 pub use reduction::{
     reduce_disposition, reduce_run, validate_slice, DanglingCall, DanglingProvenance,

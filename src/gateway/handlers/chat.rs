@@ -812,7 +812,19 @@ pub async fn handle_rewind(
 
     debug!(session_key = %params.session_key, seq = params.seq, "Rewinding chat");
 
-    let retired = match crate::session::store::retire_live_events(&session_key, params.seq).await {
+    // A rewind that cut away a `RunFinished` and left its `RunStarted` behind
+    // does not corrupt anything — it makes the log SAY a run is still open, and
+    // the boot scan believes it: every later boot re-classifies this session
+    // `Interrupted`, appends a crash-boundary repair and re-triggers a run the
+    // user deleted, forever, because nothing else ever closes that marker. So
+    // the retire and the closer that balances it commit as ONE batch.
+    let retired = match super::retire_events_and_balance(
+        &session_key,
+        params.seq,
+        run_manager.as_ref(),
+    )
+    .await
+    {
         Ok(n) => n,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -822,13 +834,6 @@ pub async fn handle_rewind(
             );
         }
     };
-
-    // A rewind that cut away a `RunFinished` and left its `RunStarted` behind
-    // does not corrupt anything — it makes the log SAY a run is still open, and
-    // the boot scan believes it: every later boot re-classifies this session
-    // `Interrupted`, appends a crash-boundary repair and re-triggers a run the
-    // user deleted, forever, because nothing else ever closes that marker.
-    super::balance_run_markers_after_retire(&session_key, run_manager.as_ref()).await;
 
     // Realign the Panel's projection with the shortened log by deleting the
     // rows the retired events produced — matched by their source seq, never by

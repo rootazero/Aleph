@@ -423,6 +423,9 @@ pub enum SessionEvent {
     CompactionPerformed {
         from_seq: EventSeq,
         to_seq: EventSeq,
+        /// Turn id of the summary `SystemMessage` written in the same batch
+        /// (before 2026-09-12: its seq). No production reader resolves it; a
+        /// future one must accept both.
         summary_ref: String,
         at: Timestamp,
     },
