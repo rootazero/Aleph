@@ -2495,72 +2495,17 @@ mod tests {
     /// ephemeral side session, or the seed — before it may exist.
     #[test]
     fn user_message_producers_are_the_known_set() {
-        use crate::utils::source_scan::{
-            cfg_test_portion, code_text, production_text, rust_sources_under,
-        };
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
 
-        /// The fourth whole-file test-module shape, which
-        /// `source_scan::declared_as_a_test_module` does not resolve (its doc
-        /// names three): a directory declared from an INLINE cfg-test block
-        /// in the grandparent — `#[cfg(test)] mod tests { mod act; … }` in
-        /// `harness/mod.rs` makes every file under `harness/tests/` test
-        /// code, yet `production_text` returns each one whole because no
-        /// `harness/tests/mod.rs` exists to ask. Walks the file's ancestor
-        /// directories and asks each one's parent module, through the
-        /// instrument's own `cfg_test_portion`, whether it opens `mod <dir> {`
-        /// under `#[cfg(test)]`. Local to this census; when the instrument
-        /// learns the shape, the self-check below goes red and this goes.
-        fn under_inline_cfg_test_block(rel: &str) -> bool {
-            /// `pub` / `pub(crate)` / `pub(super)` removed, so the bare
-            /// `mod x {` can be compared either way.
-            fn strip_visibility(line: &str) -> &str {
-                let Some(rest) = line.strip_prefix("pub") else {
-                    return line;
-                };
-                let rest = match rest.strip_prefix('(') {
-                    Some(inner) => match inner.find(')') {
-                        Some(end) => inner.get(end + 1..).unwrap_or(""),
-                        None => return line,
-                    },
-                    None => rest,
-                };
-                rest.trim_start()
-            }
-            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-            let mut dir = std::path::Path::new(rel).parent();
-            while let Some(d) = dir {
-                let Some(name) = d.file_name().map(|n| n.to_string_lossy().to_string()) else {
-                    break;
-                };
-                if name == "src" {
-                    break;
-                }
-                let Some(up) = d.parent() else { break };
-                let opens = format!("mod {name} {{");
-                let declared = [up.join("mod.rs"), up.with_extension("rs")]
-                    .iter()
-                    .filter_map(|p| std::fs::read_to_string(root.join(p)).ok())
-                    .any(|text| {
-                        cfg_test_portion(&text)
-                            .lines()
-                            .any(|l| strip_visibility(l.trim()) == opens)
-                    });
-                if declared {
-                    return true;
-                }
-                dir = Some(up);
-            }
-            false
-        }
-
+        // `production_text` asks the file's ANCESTORS, not only its parent,
+        // so `src/harness/tests/*` (declared from the inline
+        // `#[cfg(test)] mod tests { … }` block in `harness/mod.rs`) contributes
+        // nothing here. This census carried its own walk for that shape until
+        // the instrument learned it; `source_scan`'s
+        // `ancestor_declared_test_modules_are_recognised` now pins it.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut found: std::collections::BTreeMap<String, usize> = Default::default();
-        let mut skipped_inline_block = 0usize;
         for (path, src) in rust_sources_under(&root) {
-            if under_inline_cfg_test_block(&path) {
-                skipped_inline_block += 1;
-                continue;
-            }
             let code = code_text(&production_text(std::path::Path::new(&path), &src));
             for body in code.split("SessionEvent::UserMessage {").skip(1) {
                 let mut depth = 1usize;
@@ -2622,21 +2567,6 @@ mod tests {
                 .get("orchestrator/harness_bridge/session_seed.rs")
                 .is_some(),
             "the scan found no seed — blind, not clean"
-        );
-        // Self-check on the local skip: it must have removed something the
-        // shared instrument returned whole (`harness/tests/*` at least). A
-        // zero here means the instrument now resolves the inline-block shape
-        // itself — delete `under_inline_cfg_test_block`, it has no work left.
-        assert!(
-            skipped_inline_block > 0
-                && under_inline_cfg_test_block("src/harness/tests/act.rs")
-                && !production_text(
-                    std::path::Path::new("src/harness/tests/act.rs"),
-                    "fn x() {}"
-                )
-                .is_empty(),
-            "the inline cfg-test block skip did no work — either the instrument \
-             learned the shape (then remove the local helper) or the walk changed"
         );
         assert_eq!(
             found, expected,
