@@ -1349,8 +1349,9 @@ mod tests {
             .join("\n");
         assert!(
             scanned.contains("impl BrowserBackend for CdpBackend {"),
-            "the scan is reading the wrong tree — it found no CdpBackend impl \
-             under {}",
+            "found no `impl BrowserBackend for CdpBackend {{` under {} — either \
+             the scan is pointed at the wrong tree, or that impl was \
+             reformatted, renamed or moved and this literal needs updating",
             dir.display()
         );
 
