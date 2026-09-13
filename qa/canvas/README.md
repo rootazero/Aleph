@@ -5,9 +5,29 @@ manual checklist (items 1–9 from the implementation plan's Task 20, item 10
 added for the gallery and rewritten for the right-pane body). Unlike its siblings,
 this fixture **boots and waits** rather than driving scenarios itself: every
 item below is about live Panel behaviour — broadcast latency between two
-tabs, optimistic-lock conflict recovery, fullscreen presentation — so the
-driving hand is a browser (plus chrome-devtools-mcp when you want the
-assertions machine-checked). Each item already carries its effect assertion.
+tabs, optimistic-lock conflict recovery, deck presentation on the pane
+stage — so the driving hand is a browser (plus chrome-devtools-mcp when you
+want the assertions machine-checked). Each item already carries its effect
+assertion.
+
+**Scripted driving (how Item 10 was run on 2026-09-13):** Playwright on Node
+24 against headless **system** Chrome (`chromium.launch({channel: 'chrome'})`
+— no bundled browser download), one fresh browser context per script. The
+scripts are **not in the repo** (they lived in a session scratchpad); what
+they needed: an `addInitScript` that hijacks `WebSocket.prototype.send` (frame
+tally — count `canvas.apply` / `canvas.get` / `subscribe`) and
+`Storage.prototype.setItem` / `removeItem` (persistence assertions) before the
+Panel boots; the locale cookie `i18n_pref_locale=en` so tab labels read
+`Artifacts` / `Canvas`; `page.waitForEvent('download')` registered **before**
+the export click (the PNG download fires inside the click's own turn — a late
+`waitForEvent` times out); for wire cross-checks either Node 24's global
+`WebSocket` out of process or an in-page second socket flagged so the hijack
+skips it. Playwright's `mouse.wheel` honours a held `Control` for the zoom
+path, and pointer capture on the resizer works headless, including a pointer
+at negative x. Icon glyphs render as boxes (no icon font headless) —
+cosmetic. The Linux toolchain this needed (wasm32 target, wasm-bindgen
+0.2.122, binaryen 130, `just`) is the dev box's own; the earlier rounds ran
+on macOS.
 
 ## What the fixture guarantees
 
@@ -186,12 +206,70 @@ gallery is a picker popover on the canvas header strip and the same list is
 inlined in the welcome pane. Everything below is driven in one browser tab on
 the chat route unless a step says otherwise.
 
-**Status: the browser half has NOT been run.** The 2026-09-12 round was built
-on a Linux box with no wasm toolchain; every assertion below is backed only by
-the native unit tests named in FEATURE_LOCATOR §6.10 (block "画布入右栏"). The
-gallery assertions marked *(held 2026-08-17)* passed on the left-column host
-and are host-independent by construction — they still need one run on the
-picker host. Run the list, then replace this paragraph with the date.
+**Status: browser half run 2026-09-13.** Driven on the Linux dev box against
+three isolated `run.sh` fixtures (ports 18798 pane / 18898 drawing / 18998
+reveal + mock — one per section group, so the picker scripts' library wipe
+and the mock restarts never collided), the Panel built with `just wasm` from
+this worktree, headless system Chrome 151 driven by Playwright (recipe at the
+top of this file). **29 bullets driven: 27 PASS on the first run, 2 FAIL, plus
+2 defects found off the bullet list; all four fixed the same day and
+re-verified from fresh browser contexts against a rebuilt `dist/` (`cmp`
+against the served wasm), zero page errors in every script.** The assertions
+marked *(held 2026-08-17)* were re-driven on the picker host and hold.
+
+1. *Rename, surface 2* (FAIL) — Escape committed the draft it was dropping and
+   Enter sent `set_doc_meta` twice (one rename burned two revisions and a
+   `-32031` retry). `mod.rs`'s `commit_title` gated on `open_canvas`, not on
+   the editing state, and the `blur` fired by the unmounting input
+   re-submitted. Fixed by the shared `library::end_rename` gate (the header's
+   `editing_title` is now `Option<String>` like the row's `renaming`); tests
+   `a_rename_ends_once_and_a_second_commit_after_it_sends_nothing`,
+   `the_header_title_ends_its_rename_through_the_shared_gate`.
+2. *Play draws on*, Pause half (FAIL) — draw-mode outlines kept running under
+   `rv-paused`; only fade groups froze. The per-shape `animation` shorthand
+   (specificity 0,3,0) resets `animation-play-state` and beat
+   `.rv-play.rv-paused *` (0,2,0). Fixed: every animated block ends with
+   `animation-play-state:var(--rv-play-state,running)` and the paused root
+   sets the variable; test
+   `every_animated_rule_reads_its_play_state_from_the_paused_root`.
+3. Off-list — the picker's `fixed inset-0` click-catcher only covered the
+   pane: the pane's `glass` backdrop-filter makes `aside.aleph-workspace-pane`
+   the containing block for `position: fixed`, so a click on the chat column
+   left the popover open (the *Picker* bullet as written passed — it only
+   clicks the pane's backdrop). Fixed with a window `pointerdown` outside-click
+   listener, catcher deleted; census
+   `no_canvas_popover_dismisses_through_a_fixed_catcher`. **The re-run caught a
+   regression of that fix**: `pointerdown` arrives before `blur`, so the
+   dismiss disposed `CanvasList` while a row-rename input was focused, and
+   `Callback::run` on the disposed callback panicked the page
+   (`reactive_graph traits.rs:732`, crash overlay, 2/2). Fixed with
+   `commit_rename.try_run` + `end_rename` reading `try_get_untracked`
+   (disposed ⇒ nothing to commit); test
+   `a_blur_after_the_edit_is_disposed_commits_nothing_and_does_not_panic`.
+4. Off-list — the presentation stage was `fixed inset-0` (pane-sized by the
+   same containing-block accident, so it *looked* right) while fitting slides
+   to `window.innerWidth/Height`: the old fit would have put a 1600 px wide
+   slide on a 999 px stage (601 px overflow at 1600×1000). Fixed: `absolute
+   inset-0` over the editor surface + a `ResizeObserver` on the stage feeding
+   `stage_viewport(measured, current)` (the window is only the pre-layout
+   seed); test `a_measured_stage_wins_over_the_window_seed_unless_degenerate`.
+   Live re-fit on a resizer drag and on a window resize verified while
+   presenting.
+
+Known and **not** fixed (follow-ups; also in CANVAS.md §9 and FEATURE_LOCATOR
+§6.10): a plain click on the resizer handle commits a width write
+(`workspace_panel.rs` pointer-up calls `set_width` unconditionally; a dblclick
+writes twice before the remove); the stored pane width is clamped only when a
+drag produces it — a reload publishes the stored px verbatim and a window
+resize never re-clamps, so a width stored on a wide window overhangs a
+narrower one (`aside x=-80` at 1280 px stored / 1200 px window);
+`WorkspaceBody` is not persisted (every reload lands on Artifacts — the *Cold
+load* transition below was read from the hidden keep-alive body, then
+confirmed visible on the Canvas tab); reload never restores the previous
+conversation, so the *Replay never reveals* reload path is only drivable as
+reload-then-reselect; the mock's turn 1 on a conversation's first message is
+consumed by the server's planning side-call (see the mock's module doc — count
+results in `request_log.jsonl` rather than trusting LIST index = turn).
 
 Several of the new wire fields have **no human editor input**: `bend`,
 `head_start` / `head_end`, `reveal`, `timeline` and the `path` shape are

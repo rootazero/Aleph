@@ -97,6 +97,7 @@ tween 动画 · rough.js / 任何 JS 依赖 · 间隙吸附链 · 服务端布�
 
 ## 6. 让什么变难了
 - 画布只能在 Chat 路由下打开；没有全屏编辑器（`present.rs` 全屏播放仍在，resizer 最宽 80vw）。
+  - ⚠️ 2026-09-13 实测注记：「全屏播放仍在」写下时就不成立——舞台 `fixed inset-0` 挂在右栏 `aside` 下，aside 的 backdrop-filter 让它成为包含块，舞台一直只有 pane 大小，而 fit 按窗口算（1600×1000 下溢出 601 px）。当日改为 `absolute` 贴编辑器表面 + `ResizeObserver` 自测量；全屏播放与全屏编辑器一样归入 §5「以后」。全文 FEATURE_LOCATOR §6.10「2026-09-13」(h) · 附录 D.7.34。
 - 手机端失去画布。
 - `Shape` 新字段对**旧版纯壳 Panel** 是硬解析失败而非降级（同 tag 发版可接受；LAN 纯壳需同步升级）。
 - reveal 未来扩 tween 时须保证"一个属性只有一个驱动者"（nikola §4 的不变量），届时 `Reveal` 与 tween 的相互排斥要进闸。
