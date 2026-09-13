@@ -631,6 +631,18 @@ fn mirror_key_for(runtime: &str) -> Option<MirrorKey> {
 ///   re-upload under the same tag. The version before this one emitted a
 ///   conditional about a `download_host` here, i.e. it went quiet exactly when
 ///   the operator had set nothing and most needed a next step.
+/// **The property, stated on the function because it is about all THREE arms.**
+/// Every sentence any arm returns describes WHERE the bytes came from and what
+/// to do about it; **none reports the result of a comparison.** That is
+/// load-bearing because this string is also rendered by
+/// [`ReleaseError::LongerThanDeclared`], which is reached *before*
+/// `verify_sha256` runs at all — so a comparison result here would be a claim
+/// about a check that did not happen (N5). The measured mismatch belongs to
+/// [`ReleaseError::DigestMismatch`]'s own message, the only place that ran it.
+///
+/// ⚠️ This paragraph used to sit as a comment **attached to the one arm that
+/// violated it** (N6), which is 判据 §1 at the shortest possible distance. It
+/// governs the function, so it lives on the function.
 fn digest_mismatch_advice(runtime: &str, mirror_configured: bool) -> String {
     if !mirror_configured {
         // "in effect", not "configured" (N4): `configured_host` rejects a
@@ -652,20 +664,6 @@ fn digest_mismatch_advice(runtime: &str, mirror_configured: bool) -> String {
              GitHub directly, and treat the mirror as suspect until you know which it was.",
             key.path
         ),
-        // N5: every sentence here describes WHERE the bytes came from and what
-        // to do about it, and none of them reports the result of a comparison.
-        // That is deliberate and load-bearing, because this string is reused by
-        // `LongerThanDeclared`, which is reached BEFORE `verify_sha256` runs at
-        // all. The previous version opened "…served bytes that do not match the
-        // checksum GitHub's API publishes", which sat one sentence after "the
-        // download was abandoned before it could be checked against the release
-        // checksum" — the first saying the comparison never happened, the
-        // second reporting its result. True by inference (a different-length
-        // body cannot hash to the published digest) and false as a statement
-        // about what this code did: a sentence stronger than the mechanism
-        // under it, which is the whole subject of fix A. The measured mismatch
-        // belongs to `DigestMismatch`'s own message, which is the only place
-        // that ran the comparison.
         // Unreachable in production: a runtime with no mirror key can never
         // have `mirror_configured == true`, because `configured_host` returns
         // the default host for exactly those runtimes, and
@@ -673,8 +671,18 @@ fn digest_mismatch_advice(runtime: &str, mirror_configured: bool) -> String {
         // release-installed runtimes equal to the set of keyed ones. Written as
         // a stated answer rather than `unreachable!()` because those two
         // predicates agreeing is a property of this file, not of the types.
-        None => "The configured download mirror is serving bytes that do not match the checksum \
-                 GitHub's API publishes for this asset."
+        //
+        // N6: this arm kept the pre-N5 wording for one round — a comparison
+        // result, and "configured" where its sibling says "in effect" — with
+        // the comment asserting the opposite property attached directly above
+        // it. Being unreachable is why nobody looked, and is not a licence: it
+        // renders through the same `{advice}` slot as the other two.
+        None => "These bytes came from a configured download mirror, and this installer has no \
+                 config key name for this runtime to point you at. Most often a mirror is stale \
+                 or does not carry this release — but it is also what a mirror serving \
+                 substituted bytes looks like, and the two cannot be told apart from here. \
+                 Install from GitHub directly, and treat the mirror as suspect until you know \
+                 which it was."
             .to_string(),
     }
 }
@@ -1198,9 +1206,17 @@ mod tests {
     /// comparison states it itself.
     #[test]
     fn the_shared_advice_reports_no_comparison_that_may_not_have_happened() {
+        // **All THREE arms.** The first version enumerated two and claimed a
+        // property over the whole function — and the third arm broke it, while
+        // `the_no_key_arm_names_no_section_it_cannot_justify` rendered that
+        // same arm green on a different property. One test green on the arm,
+        // another green over the function it violates (判据 §3, and 判据 §6:
+        // two counted where there are three). `("node", true)` is the only
+        // input that reaches it.
         for (label, advice) in [
             ("with mirror", digest_mismatch_advice("obscura", true)),
             ("no mirror", digest_mismatch_advice("obscura", false)),
+            ("mirror but no key", digest_mismatch_advice("node", true)),
         ] {
             for claim in ["do not match", "does not match", "hash", "checksum"] {
                 assert!(
@@ -1288,6 +1304,35 @@ mod tests {
             server.asset_requests(),
             0,
             "the checksum step failed closed, so nothing may have been downloaded"
+        );
+
+        // **N7: the mirror of the same swap.** Closing one direction leaves the
+        // other free — flipping `Fetch::Asset` to `Fetch::Checksum` at its
+        // three sites left every test green, because nothing made the asset
+        // fetch itself fail. The drift an operator would then read is the
+        // sharpest form of 判据 §17: the mirror's own URL named, and denied in
+        // the same breath — "could not reach https://mirror… for the release
+        // checksum, which is … never from a download_host mirror".
+        let swapped = ReleaseSource {
+            api_host: server.host(),
+            asset_host: "http://127.0.0.1:1".to_string(),
+        };
+        let err = install_release("obscura", "o/p", "v0.2.2", "a.tar.gz", "obscura", &swapped)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("the release asset bytes"),
+            "a dead ASSET host must name the asset fetch: {err}"
+        );
+        assert!(
+            !err.contains("the release checksum"),
+            "the checksum host is live here; naming it sends the operator at the wrong \
+             host — and at the one this message elsewhere says a mirror never supplies: {err}"
+        );
+        assert!(
+            err.contains("127.0.0.1:1"),
+            "and it names the host that actually failed: {err}"
         );
     }
 
