@@ -379,6 +379,67 @@ impl StateDatabase {
         })
         .await
     }
+
+    /// Main-lane `interrupted` rows the resume coordinator has not yet
+    /// adjudicated, created at or after `since_secs` (unix seconds), oldest
+    /// first.
+    ///
+    /// Main lane only: a subagent row has no user conversation to tell
+    /// anything to. The window is the caller's `[resume] max_age_secs`, so a
+    /// row older than what the coordinator would act on is never examined —
+    /// and, unstamped, is never re-examined either: the age window and the
+    /// stamp together bound the work to one look per row within the window.
+    pub async fn unadjudicated_interrupted_tasks(
+        &self,
+        since_secs: i64,
+    ) -> Result<Vec<AgentTask>, AlephError> {
+        self.with_conn(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    r#"
+                    SELECT id, parent_session_id, agent_id, task_prompt, status,
+                           risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+                           recursion_depth, parent_task_id, created_at, updated_at,
+                           started_at, completed_at, metadata_json
+                    FROM agent_tasks
+                    WHERE status = 'interrupted' AND lane = 'main'
+                      AND adjudicated_at_ms IS NULL AND created_at >= ?1
+                    ORDER BY created_at ASC
+                    "#,
+                )
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to prepare unadjudicated query: {e}"))
+                })?;
+
+            let rows = stmt
+                .query_map(params![since_secs], agent_task_from_row)
+                .map_err(|e| AlephError::config(format!("Failed to run unadjudicated query: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    AlephError::config(format!("Failed to collect unadjudicated rows: {e}"))
+                })?;
+
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Stamp when the resume coordinator decided about this row — whatever it
+    /// decided. A stamped row drops out of
+    /// [`unadjudicated_interrupted_tasks`](Self::unadjudicated_interrupted_tasks)
+    /// for good.
+    pub async fn mark_task_adjudicated(&self, task_id: &str, at_ms: i64) -> Result<(), AlephError> {
+        let id = task_id.to_string();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE agent_tasks SET adjudicated_at_ms = ?1 WHERE id = ?2",
+                params![at_ms, id],
+            )
+            .map_err(|e| AlephError::config(format!("Failed to stamp adjudicated_at_ms: {e}")))?;
+            Ok(())
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -467,5 +528,42 @@ mod tests {
 
         assert_eq!(db.reconcile_orphaned_tasks().await.unwrap().len(), 1);
         assert!(db.reconcile_orphaned_tasks().await.unwrap().is_empty());
+    }
+
+    /// A Main-lane orphan is listed until it is stamped, and only inside the
+    /// window: the resume coordinator adjudicates each row ONCE per lifetime,
+    /// not once per boot.
+    #[tokio::test]
+    async fn unadjudicated_interrupted_tasks_are_listed_once() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "run-1", TaskStatus::Running).await;
+        db.reconcile_orphaned_tasks().await.unwrap();
+        // `task()` builds lane Subagent; flip one to Main the way the engine does
+        db.with_conn(|c| {
+            c.execute("UPDATE agent_tasks SET lane='main'", [])
+                .map(|_| ())
+                .map_err(|e| AlephError::config(e.to_string()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            db.unadjudicated_interrupted_tasks(0).await.unwrap().len(),
+            1
+        );
+        db.mark_task_adjudicated("run-1", 5).await.unwrap();
+        assert!(
+            db.unadjudicated_interrupted_tasks(0)
+                .await
+                .unwrap()
+                .is_empty(),
+            "stamped rows drop out"
+        );
+        assert!(
+            db.unadjudicated_interrupted_tasks(i64::MAX)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the window bounds it"
+        );
     }
 }

@@ -603,6 +603,74 @@ pub fn migrate_add_group_chat_owner(conn: &Connection) -> Result<(), AlephError>
     Ok(())
 }
 
+/// Migrate to add `adjudicated_at_ms` column to `agent_tasks`.
+///
+/// The resume coordinator examines every Main-lane `interrupted` row once —
+/// did its seed reach the session log, or was the user's message lost before
+/// it was recorded? — and stamps the row with when it decided, whatever it
+/// decided. Without the stamp the question is re-asked on every boot and a
+/// lost-input notice is re-written each time.
+///
+/// Existing rows are backfilled with `NULL`, so a database upgraded past this
+/// point adjudicates its historical orphans exactly once on the next boot;
+/// the coordinator's age window bounds how far back that reaches.
+///
+/// # Safety
+/// - Uses savepoint for atomic migration
+/// - Idempotent: skips if column already exists
+pub fn migrate_add_agent_tasks_adjudicated_at(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_agent_tasks_adjudicated")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to begin agent_tasks_adjudicated migration: {e}"
+            ))
+        })?;
+
+    let column_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('agent_tasks') WHERE name='adjudicated_at_ms'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if let Err(rollback_err) =
+                conn.execute_batch("ROLLBACK TO migration_agent_tasks_adjudicated")
+            {
+                tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_adjudicated failed");
+            }
+            AlephError::config(format!(
+                "Failed to check agent_tasks.adjudicated_at_ms column: {e}"
+            ))
+        })?;
+
+    if column_exists == 0 {
+        conn.execute_batch("ALTER TABLE agent_tasks ADD COLUMN adjudicated_at_ms INTEGER")
+            .map_err(|e| {
+                if let Err(rollback_err) =
+                    conn.execute_batch("ROLLBACK TO migration_agent_tasks_adjudicated")
+                {
+                    tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_adjudicated failed");
+                }
+                AlephError::config(format!(
+                    "Failed to add adjudicated_at_ms column to agent_tasks: {e}"
+                ))
+            })?;
+
+        tracing::info!("Added adjudicated_at_ms column to agent_tasks");
+    } else {
+        tracing::debug!("agent_tasks.adjudicated_at_ms already exists, skipping");
+    }
+
+    conn.execute_batch("RELEASE migration_agent_tasks_adjudicated")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to commit agent_tasks_adjudicated migration: {e}"
+            ))
+        })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

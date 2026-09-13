@@ -215,7 +215,12 @@ impl StateDatabase {
                 completed_at INTEGER,
 
                 -- Extensible metadata
-                metadata_json TEXT
+                metadata_json TEXT,
+
+                -- When the resume coordinator decided whether this interrupted
+                -- row's seed reached the session log (unix ms). Stamped once,
+                -- whatever it decided; NULL = not yet examined.
+                adjudicated_at_ms INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent_session ON agent_tasks(parent_session_id);
