@@ -143,6 +143,15 @@ pub enum ReleaseError {
         /// they never set.
         advice: String,
     },
+    /// The asset is over **this installer's own** ceiling — the number this
+    /// code chose, which no response can raise.
+    ///
+    /// `ceiling` is [`MAX_ASSET_BYTES`] at every construction site, and that is
+    /// the whole point of the variant: it used to be reachable with
+    /// `ceiling: declared.min(MAX_ASSET_BYTES)`, so the real 76 MB asset
+    /// rendered "over this installer's 76038298-byte ceiling" when the
+    /// installer's ceiling is 536_870_912 — one label over two different facts,
+    /// showing the number that is not the ceiling (判据 §17).
     #[error(
         "release asset {asset} is {declared} bytes, over this installer's {ceiling}-byte ceiling"
     )]
@@ -150,6 +159,41 @@ pub enum ReleaseError {
         asset: String,
         declared: u64,
         ceiling: u64,
+    },
+    /// One member expands past the ceiling. Separate from [`Self::TooLarge`]
+    /// because the asset's declared size bounds the **compressed** bytes and
+    /// says nothing about what they expand to — and because `asset` there is an
+    /// asset name, while this needs an archive and a member (判据 §9: one
+    /// field, one kind of value).
+    #[error(
+        "archive {archive}: member {member} expands past this installer's {ceiling}-byte ceiling"
+    )]
+    MemberTooLarge {
+        archive: String,
+        member: String,
+        ceiling: u64,
+    },
+    /// The host served **more bytes than the release document declares**.
+    ///
+    /// Its own variant because it is not a ceiling breach and must not be
+    /// labelled as one: nothing here is too big for this installer, the two
+    /// hosts simply disagree about the asset's length. It carries the same
+    /// `advice` a [`Self::DigestMismatch`] would, because it means the same
+    /// thing and an operator needs the same next step — the bytes are
+    /// abandoned **before** they can reach `verify_sha256`, so without this the
+    /// path would surface with no advice, no mirror key and no next step. **A
+    /// length-changing substitution is the more likely stale-mirror shape than
+    /// an equal-length one**, so this is the path a stale mirror is most likely
+    /// to take, not the rare one.
+    #[error(
+        "{asset}: the release document declares {declared} bytes and the download host served \
+         more, so the download was abandoned before it could be checked against the release \
+         checksum. {advice}"
+    )]
+    LongerThanDeclared {
+        asset: String,
+        declared: u64,
+        advice: String,
     },
     #[error("archive {archive}: {detail}")]
     Archive { archive: String, detail: String },
@@ -354,7 +398,12 @@ pub fn extract_one(
 /// An uncapped `io::copy` here is the decompression half of the bounds
 /// question: the asset's own declared size bounds the *compressed* bytes and
 /// says nothing about what they expand to.
-fn copy_member_capped(src: &mut impl Read, dest: &Path, label: &str) -> Result<(), ReleaseError> {
+fn copy_member_capped(
+    src: &mut impl Read,
+    dest: &Path,
+    label: &str,
+    member: &str,
+) -> Result<(), ReleaseError> {
     let mut out = std::fs::File::create(dest).map_err(|e| ReleaseError::Io {
         path: dest.display().to_string(),
         source: e,
@@ -371,9 +420,9 @@ fn copy_member_capped(src: &mut impl Read, dest: &Path, label: &str) -> Result<(
         // The partial write is removed: a truncated binary under the name the
         // probe searches for is worse than nothing there at all.
         let _ = std::fs::remove_file(dest);
-        return Err(ReleaseError::TooLarge {
-            asset: format!("{label} member"),
-            declared: copied,
+        return Err(ReleaseError::MemberTooLarge {
+            archive: label.to_string(),
+            member: member.to_string(),
             ceiling: MAX_ASSET_BYTES,
         });
     }
@@ -404,7 +453,7 @@ fn extract_from_targz(
         if path.to_string_lossy() != member {
             continue;
         }
-        copy_member_capped(&mut entry, dest, label)?;
+        copy_member_capped(&mut entry, dest, label, member)?;
         return Ok(true);
     }
     Ok(false)
@@ -433,7 +482,7 @@ fn extract_from_zip(
         if !wanted.iter().any(|w| w == &name) {
             continue;
         }
-        copy_member_capped(&mut entry, dest, label)?;
+        copy_member_capped(&mut entry, dest, label, member)?;
         return Ok(true);
     }
     Ok(false)
@@ -476,8 +525,13 @@ fn make_executable(path: &Path) -> Result<(), ReleaseError> {
 /// so a plaintext asset mirror could not substitute bytes undetected even if it
 /// were honoured. What this prevents is an operator silently downgrading their
 /// own transport with a typo — not an attack the digest would otherwise miss.
+/// **Private, not CUT** (N3). At BASE `bootstrap.rs` called this directly; A(1)
+/// replaced that call with [`ReleaseSource::for_runtime`], which calls it
+/// internally — so `pub` became a visibility with no consumer outside this
+/// module, which is G's own shape created by G's own round. It still has one
+/// in-module caller, so the remedy is P5's "default to private", not a cut.
 #[must_use]
-pub fn configured_host(runtime: &str) -> String {
+fn configured_host(runtime: &str) -> String {
     let Some(key) = mirror_key_for(runtime) else {
         return DEFAULT_DOWNLOAD_HOST.to_string();
     };
@@ -537,34 +591,53 @@ fn mirror_key_for(runtime: &str) -> Option<MirrorKey> {
     }
 }
 
-/// What a digest mismatch tells the operator to look at first.
+/// What a mismatch between the bytes and the release document tells the
+/// operator to look at first.
 ///
-/// **A hostile mirror never reaches this error at all** — it would serve
-/// matching bytes and, if it served the metadata, a matching digest. Since the
-/// checksum always comes from GitHub's API, this error can only ever mean *two
-/// honest hosts disagree*, and the two ways that happens need different
-/// sentences:
+/// ⚠️ **This doc used to open "a hostile mirror never reaches this error at
+/// all". That was true at BASE and A(1) repealed it**, and the sentence carried
+/// its own refutation: it reasoned *"since the checksum always comes from
+/// GitHub's API…"*, which is exactly the change that makes a substituting
+/// mirror **reachable** here. Before A(1) the mirror served the bytes *and* the
+/// digest, so the pair always matched and no mismatch could occur; now the
+/// mirror cannot choose the hash, and this error is the **only** thing that
+/// catches substituted bytes. The module header at the top of this file has
+/// said so all along — a mirror "can … serve the wrong ones and be caught" —
+/// so the file contradicted itself 490 lines apart (判据 §1, both halves in one
+/// file). A premise consumed by the fix it justified.
 ///
-/// * **with a mirror configured** — the likely cause is the mirror being out
-///   of date or not mirroring this release, so the sentence names its key;
-/// * **with no mirror** — GitHub's API and its own asset host disagree, most
-///   often because the release was re-uploaded under the same tag. The previous
-///   version emitted a conditional about a `download_host` in this case, i.e.
-///   it went quiet exactly when the operator had set nothing and most needed a
-///   next step.
+/// So the with-mirror list is deliberately **not exhaustive**. An
+/// "either out of date or not mirroring this release" pair reads as a closed
+/// set of *benign* causes at the one error that can also mean substitution, and
+/// a wrong label reads as a fact (判据 §17). From here the two are
+/// indistinguishable, and saying so is the honest sentence.
+///
+/// * **with a mirror in effect** — most often stale or not carrying this
+///   release; also what substituted bytes look like, and the message says both;
+/// * **with none** — GitHub's API and its own asset host disagree, most often a
+///   re-upload under the same tag. The version before this one emitted a
+///   conditional about a `download_host` here, i.e. it went quiet exactly when
+///   the operator had set nothing and most needed a next step.
 fn digest_mismatch_advice(runtime: &str, mirror_configured: bool) -> String {
     if !mirror_configured {
-        return "No download_host mirror is configured, so GitHub's API and its release-asset host \
-                disagree about this asset — most often because the release was re-uploaded under \
-                the same tag. Retry; if it persists, the pinned tag has to be re-checked against \
-                upstream."
+        // "in effect", not "configured" (N4): `configured_host` rejects a
+        // non-https mirror and returns the default, so an operator can reach
+        // this arm with a `download_host` line sitting in their config file. A
+        // `warn!` fires at rejection time; this sentence describes the
+        // effective source, which is the fact that matters here.
+        return "No mirror is in effect for this runtime, so GitHub's API and its release-asset \
+                host disagree about this asset — most often because the release was re-uploaded \
+                under the same tag. Retry; if it persists, the pinned tag has to be re-checked \
+                against upstream."
             .to_string();
     }
     match mirror_key_for(runtime) {
         Some(key) => format!(
-            "The {} mirror is serving bytes that do not match the checksum GitHub's API publishes \
-             for this asset. Either it is out of date or it is not mirroring this release; clear \
-             the key to install from GitHub directly.",
+            "The {} mirror served bytes that do not match the checksum GitHub's API publishes for \
+             this asset. Most often that means the mirror is stale or does not carry this \
+             release — but it is also what a mirror serving substituted bytes looks like, and the \
+             two cannot be told apart from here. Clear the key to install from GitHub directly, \
+             and treat the mirror as suspect until you know which it was.",
             key.path
         ),
         // Unreachable in production: a runtime with no mirror key can never
@@ -681,14 +754,14 @@ pub async fn install_release(
     // declared size is absurd — fails in a second instead of after 90 MB.
     let meta = asset_meta(&release, asset)?;
 
+    // One advice string for both ways the bytes can disagree with the release
+    // document — a wrong hash, and a wrong length. They mean the same thing to
+    // an operator and the second is the more likely one (N2).
+    let advice = digest_mismatch_advice(runtime, source.mirror_configured());
     let dl_url = asset_url(&source.asset_host, repo, tag, asset);
-    let bytes = download_capped(&client, &dl_url, meta.size).await?;
+    let bytes = download_capped(&client, &dl_url, asset, meta.size, &advice).await?;
 
-    verify_sha256(
-        &bytes,
-        &meta.digest,
-        &digest_mismatch_advice(runtime, source.mirror_configured()),
-    )?;
+    verify_sha256(&bytes, &meta.digest, &advice)?;
 
     // Extracted from the SAME buffer that was just hashed. No scratch file, so
     // nothing can change between the check and the use.
@@ -734,7 +807,37 @@ pub async fn install_release(
     Ok(dest)
 }
 
-/// Download `url` into memory, refusing past `declared` bytes.
+/// Which bound a body crossed, and therefore what to call the refusal.
+///
+/// Two bounds apply at once and they are **different facts**: the release
+/// document's `declared` size, and this installer's own [`MAX_ASSET_BYTES`].
+/// Collapsing them into one `TooLarge { ceiling: declared.min(MAX) }` printed
+/// "over this installer's 76038298-byte ceiling" for the real asset, when the
+/// installer's ceiling is 536_870_912 — the number shown was the one that is
+/// not the ceiling (判据 §17).
+///
+/// The `declared` breach also carries `advice`: it is a host and an API
+/// disagreeing about the same asset, which is what [`ReleaseError::DigestMismatch`]
+/// means, and it is reached **before** `verify_sha256` can say so. Without
+/// that, the most likely stale-mirror shape — a body of a different length —
+/// would surface with no mirror key and no next step.
+fn over_bound(total: u64, declared: u64, asset: &str, advice: &str) -> ReleaseError {
+    if total > MAX_ASSET_BYTES {
+        ReleaseError::TooLarge {
+            asset: asset.to_string(),
+            declared: total,
+            ceiling: MAX_ASSET_BYTES,
+        }
+    } else {
+        ReleaseError::LongerThanDeclared {
+            asset: asset.to_string(),
+            declared,
+            advice: advice.to_string(),
+        }
+    }
+}
+
+/// Download the asset into memory, refusing past `declared` bytes.
 ///
 /// Streamed rather than `resp.bytes()`, and the buffer is **not** pre-allocated
 /// from `declared`: the point of the bound is that a number in someone else's
@@ -744,7 +847,9 @@ pub async fn install_release(
 async fn download_capped(
     client: &reqwest::Client,
     url: &str,
+    asset: &str,
     declared: u64,
+    advice: &str,
 ) -> Result<Vec<u8>, ReleaseError> {
     let cap = declared.min(MAX_ASSET_BYTES);
     let resp = client
@@ -766,11 +871,7 @@ async fn download_capped(
     }
     if let Some(len) = resp.content_length() {
         if len > cap {
-            return Err(ReleaseError::TooLarge {
-                asset: url.to_string(),
-                declared: len,
-                ceiling: cap,
-            });
+            return Err(over_bound(len, declared, asset, advice));
         }
     }
     let mut buf: Vec<u8> = Vec::new();
@@ -783,11 +884,7 @@ async fn download_capped(
         })?;
         let total = buf.len() as u64 + chunk.len() as u64;
         if total > cap {
-            return Err(ReleaseError::TooLarge {
-                asset: url.to_string(),
-                declared: total,
-                ceiling: cap,
-            });
+            return Err(over_bound(total, declared, asset, advice));
         }
         buf.extend_from_slice(&chunk);
     }
@@ -1020,7 +1117,76 @@ mod tests {
             without.contains("tag"),
             "and must still be told what to do next: {without}"
         );
+        // N4: `configured_host` rejects a non-https mirror and returns the
+        // default, so an operator can reach this arm with a `download_host`
+        // line sitting in their config. "in effect" is true then; "configured"
+        // is not.
+        assert!(
+            !without.contains("configured"),
+            "this arm is reached with a download_host line present but rejected, so it \
+             must describe the effective source, not the config file: {without}"
+        );
         assert_ne!(with, without, "the two cases are not the same sentence");
+    }
+
+    /// **N1.** Before A(1) the mirror supplied the bytes AND the digest, so the
+    /// pair always matched and a substituting mirror could not produce a
+    /// mismatch at all. A(1) pinned the checksum to GitHub's API, which makes
+    /// this error the ONLY thing that catches substituted bytes — so an
+    /// exhaustive-sounding pair of benign causes ("either stale or not
+    /// mirroring this release") is a wrong label at exactly the wrong place
+    /// (判据 §17).
+    ///
+    /// Asserted as the property that matters: the operator is told the causes
+    /// are **not** exhaustive and that substitution is among them.
+    #[test]
+    fn the_with_mirror_advice_does_not_present_benign_causes_as_exhaustive() {
+        let with = digest_mismatch_advice("obscura", true);
+        assert!(
+            with.contains("substituted"),
+            "a mismatch under a mirror can mean substituted bytes, and this is the only \
+             error that catches them: {with}"
+        );
+        assert!(
+            !with.contains("Either it is out of date or it is not mirroring"),
+            "the benign pair may not be presented as the whole set: {with}"
+        );
+        assert!(
+            with.contains("suspect") || with.contains("until you know"),
+            "and the operator needs a next step that does not assume the benign case: {with}"
+        );
+    }
+
+    /// **N2, both arms rendered.** Two bounds apply at once and they are
+    /// different facts. Collapsing them printed "over this installer's
+    /// 76038298-byte ceiling" for the real asset, when the installer's ceiling
+    /// is 536_870_912 — the number shown was the one that is not the ceiling.
+    #[test]
+    fn over_bound_calls_the_installers_own_ceiling_by_its_real_number() {
+        let ceiling = over_bound(MAX_ASSET_BYTES + 1, 10, "a.tar.gz", "ADVICE").to_string();
+        assert!(
+            ceiling.contains(&MAX_ASSET_BYTES.to_string()),
+            "the ceiling arm must print the installer's own ceiling: {ceiling}"
+        );
+        assert!(
+            !ceiling.contains("10-byte"),
+            "and must not print the per-asset declared size as if it were the ceiling: {ceiling}"
+        );
+
+        let declared = over_bound(50, 10, "a.tar.gz", "ADVICE").to_string();
+        assert!(
+            !declared.contains("ceiling"),
+            "a body longer than the document declares is not a ceiling breach: {declared}"
+        );
+        assert!(
+            declared.contains("10"),
+            "it names what was declared: {declared}"
+        );
+        assert!(
+            declared.contains("ADVICE"),
+            "and carries the same advice a digest mismatch would, because it means the \
+             same thing and is reached before verify_sha256 can say so: {declared}"
+        );
     }
 
     /// The no-key arm exists because the function is total over `Option`, not
@@ -1350,6 +1516,59 @@ mod tests {
         );
     }
 
+    /// **N2 end to end: the path a stale mirror is most likely to take.** A
+    /// host serving a body of a different length than the release document
+    /// declares never reaches `verify_sha256`, so before this it surfaced as a
+    /// bare ceiling breach — no advice, no mirror key, no next step — and with
+    /// the wrong number called "this installer's ceiling".
+    #[tokio::test]
+    async fn a_body_longer_than_the_document_declares_is_refused_with_the_mirror_advice() {
+        let archive = tiny_targz();
+        let digest = sha256_hex(&archive);
+        let declared = archive.len() - 1;
+        let server = FixtureRelease::start_declaring(
+            "o/p",
+            "v0.2.2",
+            "a.tar.gz",
+            archive,
+            Some(digest),
+            declared,
+        )
+        .await;
+
+        let home = TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        let source = server.source();
+        // Precondition: the fixture is only hostile if it counts as a mirror,
+        // which is what selects the with-mirror advice arm.
+        assert!(
+            source.mirror_configured(),
+            "precondition: a mirror is in effect"
+        );
+
+        let err = install_release("obscura", "o/p", "v0.2.2", "a.tar.gz", "obscura", &source)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&declared.to_string()),
+            "names what the document declared: {err}"
+        );
+        assert!(
+            !err.contains("ceiling"),
+            "this is a disagreement about length, not a breach of this installer's \
+             ceiling — and the ceiling is not the number to print: {err}"
+        );
+        assert!(
+            err.contains("[general.browser.obscura] download_host"),
+            "and it carries the same advice a digest mismatch would, because it means the \
+             same thing: {err}"
+        );
+        let dir = install_dir("obscura", "v0.2.2").unwrap();
+        assert!(!dir.join("obscura").exists(), "no binary may be laid down");
+    }
+
     /// An asset the release does not list must fail at the METADATA step,
     /// **before anything is downloaded** — asserted by counting the fixture's
     /// asset requests, not by looking for a scratch file that no longer exists.
@@ -1400,11 +1619,27 @@ mod tests {
             body: Vec<u8>,
             digest: Option<String>,
         ) -> Self {
+            let declared = body.len();
+            Self::start_declaring(repo, tag, asset, body, digest, declared).await
+        }
+
+        /// A fixture whose release document declares a length **different from
+        /// the body it serves** — the shape a stale or substituting mirror
+        /// takes, and the one `install_release` refuses before
+        /// `verify_sha256` can be reached.
+        async fn start_declaring(
+            repo: &str,
+            tag: &str,
+            asset: &str,
+            body: Vec<u8>,
+            digest: Option<String>,
+            declared: usize,
+        ) -> Self {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let api_path = format!("/repos/{repo}/releases/tags/{tag}");
             let asset_path = format!("/{repo}/releases/download/{tag}/{asset}");
-            let mut entry = serde_json::json!({ "name": asset, "size": body.len() });
+            let mut entry = serde_json::json!({ "name": asset, "size": declared });
             if let Some(d) = digest {
                 entry["digest"] = serde_json::Value::String(format!("sha256:{d}"));
             }
