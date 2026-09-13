@@ -248,17 +248,23 @@ pub enum RunOutcome {
 /// `RunStarted` marker so a resume replays the crashed run's configuration
 /// instead of re-deriving it from whatever the knobs say now.
 ///
-/// Every field is a **String**, spelled with the same literal word the
+/// Every knob field is a **String**, spelled with the same literal word the
 /// `identity_meta.custom` bag uses, so the snapshot, the session row and the
 /// client-facing `SessionSnapshot` share one vocabulary rather than three
-/// enums that have to be kept convertible. The key set is pinned against
-/// [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`] by a census
-/// test: a seventh knob has to appear in both places or that test fails.
+/// enums that have to be kept convertible. The key set is pinned by a census
+/// test against [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`]
+/// ∪ [`RUN_ENVELOPE_FACT_KEYS`]: a new field has to be filed as a knob there
+/// or as a fact here, or that test fails.
 ///
 /// `model` / `model_provider` are the pair the run was **actually bound to**
 /// after provider validation — not the pin that was asked for. A resume that
 /// replayed the unvalidated hint would re-derive a route the crashed run never
 /// took.
+///
+/// The last two fields are per-run **facts**, not knobs: they have no
+/// `custom` twin and no session / global rung, so a resume replays them from
+/// this snapshot or not at all, and their absence is the normal case rather
+/// than a loss.
 ///
 /// Absent from the wire when `None` — a legacy log deserialises to `None`,
 /// which `ResumeReport::unsnapshotted` counts rather than papers over.
@@ -280,27 +286,83 @@ pub struct RunEnvelopeSnapshot {
     /// Model id the run was **served by** — the directive's model when it
     /// carried one, else what the provider chain said it was about to serve.
     ///
-    /// `None` means the writer could not name the model AT ALL, not "the run
-    /// carried no pin". The narrower reading is load-bearing: a resume that
-    /// finds `None` here re-derives the model from today's session, which is a
-    /// different model than the crashed run used whenever the session was
-    /// re-pinned in between — so `plan_resume` treats `None` as a degrade and
-    /// says so, rather than answering on a substitute in silence.
+    /// `None` means the writer could not name a model, not "the run carried
+    /// no pin" — either because the chain could not say what served (a
+    /// dynamic route with no `serving_model_hint`) or because nothing served
+    /// at all (the slash-command fast path makes no LLM call). The narrower
+    /// reading is load-bearing: a resume that finds `None` here re-derives
+    /// the model from today's session, which is a different model than the
+    /// crashed run used whenever the session was re-pinned in between — so
+    /// `plan_resume` treats `None` as a degrade and says so, rather than
+    /// answering on a substitute in silence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Provider the model above was pinned to, or `None` for an unqualified
     /// pin (the resolver picks the provider by model-name heuristic).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider: Option<String>,
+    /// `/<skill>` `allowed-tools` this run executed under. `Some(vec![])` is
+    /// deny-all, `None` "declared nothing" (the `slash_skill_scope` tri-state).
+    /// A per-run FACT, not a knob: on resume it has one rung — this snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
+    /// The `/btw` stamp exactly as `btw::BTW_METADATA_KEY` carried it, so a
+    /// resumed side question keeps its read-only ceiling
+    /// (`turn_permissions`'s one `contains_key` read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub btw: Option<String>,
 }
 
+/// The per-run FACTS the envelope freezes alongside the knobs — the marker's
+/// own field names, spelled so the two facts cannot drift from the metadata
+/// keys they are copied from and replayed to: the `/btw` stamp's field IS the
+/// stamp's key (`btw::BTW_METADATA_KEY`), and the skill scope is named
+/// literally because its request-metadata spelling belongs to
+/// `slash_skill_scope` (`SLASH_SKILL_ALLOWED_TOOLS_KEY`) and is deliberately
+/// not the marker's word.
+///
+/// Not knobs: no `custom` twin, no session / global rung, so `plan_resume`
+/// replays them from the snapshot or not at all. That is also why this array
+/// lives here and not next to
+/// [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`]:
+/// `session_snapshot.rs` is the knob decoder, and `btw` must never appear in
+/// it (`btw::guard_tests::btw_is_not_filed_with_the_five_session_knobs` reads
+/// that file for the word). The census in this module's tests asserts the
+/// envelope's key set == KNOB ∪ FACT.
+pub const RUN_ENVELOPE_FACT_KEYS: [&str; 2] =
+    ["allowed_tools", crate::gateway::btw::BTW_METADATA_KEY];
+
 impl RunEnvelopeSnapshot {
+    /// The knob half of a snapshot, spelled once.
+    ///
+    /// Both writers — the harness bridge (`runner_impl::run_envelope_snapshot`)
+    /// and the slash-command fast path (`slash_command::slash_gate_reason`) —
+    /// go through this, so the `id()` vocabulary the resume parses back has a
+    /// single derivation. The model pair and the two per-run facts are left
+    /// `None` for the caller: which of them a writer can name differs per
+    /// path, and that difference is the caller's to state.
+    #[must_use]
+    pub fn from_knobs(
+        exec_tier: Option<crate::config::types::policies::ExecTier>,
+        session_mode: Option<crate::config::types::policies::SessionMode>,
+        think_level: Option<crate::agents::thinking::ThinkLevel>,
+        memory_mode: Option<crate::memory::session_memory_mode::MemoryMode>,
+    ) -> Self {
+        Self {
+            exec_tier: exec_tier.map(|t| t.id().to_string()),
+            session_mode: session_mode.map(|m| m.id().to_string()),
+            think_level: think_level.map(|l| l.id().to_string()),
+            memory_mode: memory_mode.map(|m| m.id().to_string()),
+            ..Self::default()
+        }
+    }
+
     /// True when the writer resolved nothing at all.
     ///
     /// Distinct from a `None` envelope: `None` means *no writer captured one*
-    /// (a legacy marker, or a producer — split / compaction / sub-agent — that
-    /// has no envelope to capture), while an empty one means the capture
-    /// happened and the gateway had resolved nothing.
+    /// (a legacy marker, or a producer that has no envelope to capture — a
+    /// hook-stop receipt closes a run that never ran a turn), while an empty
+    /// one means the capture happened and the gateway had resolved nothing.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.exec_tier.is_none()
@@ -309,6 +371,8 @@ impl RunEnvelopeSnapshot {
             && self.memory_mode.is_none()
             && self.model.is_none()
             && self.model_provider.is_none()
+            && self.allowed_tools.is_none()
+            && self.btw.is_none()
     }
 }
 
@@ -987,6 +1051,8 @@ mod tests {
                 memory_mode: Some("off".into()),
                 model: Some("m-old".into()),
                 model_provider: Some("p-old".into()),
+                allowed_tools: Some(vec!["grep".into()]),
+                btw: Some("is it green?".into()),
             }),
         };
         let json = serde_json::to_string(&ev).unwrap();
@@ -1000,10 +1066,47 @@ mod tests {
                 assert_eq!(env.memory_mode.as_deref(), Some("off"));
                 assert_eq!(env.model.as_deref(), Some("m-old"));
                 assert_eq!(env.model_provider.as_deref(), Some("p-old"));
+                assert_eq!(env.allowed_tools.as_deref(), Some(&["grep".to_string()][..]));
+                assert_eq!(env.btw.as_deref(), Some("is it green?"));
                 assert!(!env.is_empty());
             }
             other => panic!("expected RunStarted, got {other:?}"),
         }
+    }
+
+    /// The two per-run FACTS (skill scope, `/btw` stamp) are additive on the
+    /// wire: a marker written before they existed decodes to `None` for both,
+    /// `None` is never serialised, and an EMPTY scope is still a declaration
+    /// (`[]` on the wire, `is_empty() == false`) — the `slash_skill_scope`
+    /// tri-state survives the marker.
+    #[test]
+    fn an_old_run_started_without_the_fact_keys_decodes_to_none_and_none_stays_off_the_wire() {
+        let old = r#"{"type":"run_started","run_id":"r","at":1,"envelope":{"exec_tier":"ask"}}"#;
+        let SessionEvent::RunStarted {
+            envelope: Some(env),
+            ..
+        } = serde_json::from_str(old).unwrap()
+        else {
+            panic!("a run_started with an envelope object decodes to Some");
+        };
+        assert_eq!((env.allowed_tools.as_ref(), env.btw.as_ref()), (None, None));
+        let json = serde_json::to_string(&env).unwrap();
+        assert!(
+            !json.contains("allowed_tools") && !json.contains("btw"),
+            "{json}"
+        );
+        let scoped = RunEnvelopeSnapshot {
+            allowed_tools: Some(vec![]),
+            btw: Some("q?".into()),
+            ..Default::default()
+        };
+        assert!(
+            serde_json::to_string(&scoped)
+                .unwrap()
+                .contains("\"allowed_tools\":[]"),
+            "an empty list is a declaration"
+        );
+        assert!(!scoped.is_empty());
     }
 
     /// A captured-but-empty envelope is NOT the same answer as an absent one:
@@ -1030,8 +1133,10 @@ mod tests {
     }
 
     /// Census: the envelope's key set IS the knob vocabulary
-    /// `session_snapshot` publishes. A seventh knob added to one side and not
-    /// the other fails here — which is the whole reason the array exists.
+    /// `session_snapshot` publishes PLUS the per-run facts
+    /// [`RUN_ENVELOPE_FACT_KEYS`] names. A field added to the struct and filed
+    /// with neither list fails here — which is the whole reason both arrays
+    /// exist: the author has to say which kind the new field is.
     #[test]
     fn the_envelope_carries_exactly_the_published_knob_keys() {
         let all = RunEnvelopeSnapshot {
@@ -1041,6 +1146,8 @@ mod tests {
             memory_mode: Some("d".into()),
             model: Some("e".into()),
             model_provider: Some("f".into()),
+            allowed_tools: Some(vec!["g".into()]),
+            btw: Some("h".into()),
         };
         let value = serde_json::to_value(&all).unwrap();
         let mut got: Vec<String> = value
@@ -1052,10 +1159,38 @@ mod tests {
         got.sort();
         let mut want: Vec<String> = crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS
             .iter()
+            .chain(RUN_ENVELOPE_FACT_KEYS.iter())
             .map(|k| (*k).to_string())
             .collect();
         want.sort();
         assert_eq!(got, want);
+    }
+
+    /// One derivation for the knob half: both writers — the harness bridge
+    /// and the slash-command fast path — spell the `id()` vocabulary through
+    /// this, so the resume parses one spelling. Everything that is not a knob
+    /// (the model pair, the two per-run facts) is left for the caller.
+    #[test]
+    fn from_knobs_spells_each_knob_by_its_id_and_leaves_the_rest_unset() {
+        use crate::agents::thinking::ThinkLevel;
+        use crate::config::types::policies::{ExecTier, SessionMode};
+        use crate::memory::session_memory_mode::MemoryMode;
+
+        let snap = RunEnvelopeSnapshot::from_knobs(
+            Some(ExecTier::Ask),
+            Some(SessionMode::Code),
+            Some(ThinkLevel::High),
+            Some(MemoryMode::Off),
+        );
+        assert_eq!(snap.exec_tier.as_deref(), Some(ExecTier::Ask.id()));
+        assert_eq!(snap.session_mode.as_deref(), Some(SessionMode::Code.id()));
+        assert_eq!(snap.think_level.as_deref(), Some(ThinkLevel::High.id()));
+        assert_eq!(snap.memory_mode.as_deref(), Some(MemoryMode::Off.id()));
+        assert_eq!(
+            (snap.model, snap.model_provider, snap.allowed_tools, snap.btw),
+            (None, None, None, None)
+        );
+        assert!(RunEnvelopeSnapshot::from_knobs(None, None, None, None).is_empty());
     }
 
     /// The four `custom`-bag names in that array are the ones the session

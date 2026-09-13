@@ -22,8 +22,8 @@ use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, StopHook
 use crate::verification::{StopHookVerifier, VerifierChain};
 
 use super::{
-    sample_session_id, tiny_budget_config, turn_started_event, user_message_event,
-    CountingProvider, FailingProvider, MockSession, NoopTools,
+    run_started_event, sample_session_id, tiny_budget_config, turn_started_event,
+    user_message_event, CountingProvider, FailingProvider, MockSession, NoopTools,
 };
 
 // =============================================================================
@@ -76,7 +76,11 @@ async fn split_session_directive_continues_run_in_child_session() {
     // (warn=0.50, critical=0.90). circuit_breaker_max=1 → first record_compaction
     // trips it. max_splits=1 → SplitSession (not FinalReply).
     let user_text = "y".repeat(80);
-    let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event(&user_text),
+        run_started_event(),
+    ]);
     // Provider returns a short text answer → loop ends cleanly after one turn in child.
     let provider = CountingProvider::new("all done");
 
@@ -163,7 +167,11 @@ async fn split_session_directive_continues_run_in_child_session() {
 async fn split_session_survives_a_failed_epoch_registration() {
     // Same budget config as above — trips SplitSession on first warning turn.
     let user_text = "y".repeat(80);
-    let session = MockSession::new(vec![turn_started_event(), user_message_event(&user_text)]);
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event(&user_text),
+        run_started_event(),
+    ]);
     let provider = CountingProvider::new("continued in the child");
 
     let mut cfg = tiny_budget_config(100, 0.50, 0.90);
@@ -257,9 +265,13 @@ async fn split_session_survives_a_failed_epoch_registration() {
 async fn split_session_failsoft_on_a_refused_batch_compacts_and_continues() {
     // Same budget config as above — trips SplitSession on first warning turn.
     let user_text = "y".repeat(80);
+    // The opener is seeded so the split is refused by the STORE, not by the
+    // "no open run to inherit" precheck — the contract under test is the
+    // refused batch.
     let session = MockSession::with_refused_batches(vec![
         turn_started_event(),
         user_message_event(&user_text),
+        run_started_event(),
     ]);
     let provider = CountingProvider::new("continued after compaction");
 

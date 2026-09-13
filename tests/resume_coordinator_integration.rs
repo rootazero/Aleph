@@ -382,6 +382,8 @@ async fn a_resume_replays_the_crashed_runs_envelope_on_carriers_that_cannot_rais
             memory_mode: Some(MemoryMode::Off.id().to_string()),
             model: Some("aleph-test-model".to_string()),
             model_provider: Some("openai".to_string()),
+            allowed_tools: None,
+            btw: None,
         }),
     )
     .await;

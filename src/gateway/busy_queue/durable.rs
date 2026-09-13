@@ -446,11 +446,11 @@ pub async fn reinject_survivors(
         // the bus alone). Mirrors `ResumeCoordinator::retrigger`.
         //
         // A `/btw` survivor (lane key ≠ addressed key ⇒ derived side session)
-        // is deliberately NOT fanned out: the four pre-existing
-        // `OriginFanoutEmitter` sites are all unreachable by side questions,
-        // and this one opts out by rule instead — a re-delivered side answer
-        // must not land on the origin channel unmarked (`format_side_answer`'s
-        // doc carries the census).
+        // is deliberately NOT fanned out: it opts out by rule, as the resume
+        // coordinator does for a replayed stamp, because a re-delivered side
+        // answer must not land on the origin channel unmarked
+        // (`format_side_answer`'s doc carries the census of every
+        // `OriginFanoutEmitter` site and which answer each gives).
         let is_side_question = payload.lane_key != payload.addressed_session_key;
         let base: std::sync::Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
             std::sync::Arc::new(crate::gateway::event_emitter::GatewayEventEmitter::new(

@@ -1437,6 +1437,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     // session default; primary dispatch inherits whatever
                     // the gateway already resolved.
                     response_language: None,
+                    // §6.3 per-run facts for the `RunStarted` envelope: the
+                    // SAME scope that narrowed the tool surface above, and
+                    // the SAME stamp `turn_permissions` read for the
+                    // read-only ceiling. Neither is rendered; both are
+                    // replayed on resume.
+                    allowed_tools: slash_skill_scope.as_ref().map(|scope| {
+                        let mut names: Vec<String> = scope.iter().cloned().collect();
+                        names.sort();
+                        names
+                    }),
+                    btw: request
+                        .metadata
+                        .get(crate::gateway::btw::BTW_METADATA_KEY)
+                        .cloned(),
                 },
                 // This turn's explicit model pick. Cloned because the request is
                 // rebuilt on each retry iteration of the enclosing loop.

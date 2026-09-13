@@ -442,7 +442,9 @@ pub(crate) struct ResumePlan {
     pub(crate) model_override: Option<crate::gateway::model_override::ModelOverride>,
     /// Request metadata the resumed run carries: the three replayable knobs
     /// plus the tier CEILING (never the tier request rung — see
-    /// [`crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY`]).
+    /// [`crate::gateway::execution_engine::RESUME_TIER_CEILING_KEY`]), plus
+    /// the two per-run facts (skill scope, `/btw` stamp) under the keys their
+    /// owning modules spell.
     pub(crate) knobs: HashMap<String, String>,
     /// What the model is told it lost, if anything.
     pub(crate) degrade: Option<crate::session::boundary_repair::DegradeNote>,
@@ -520,6 +522,30 @@ pub(crate) fn plan_resume(
         }
     }
 
+    // §6.3 per-run facts: snapshot rung only. Absent = "declared nothing" —
+    // not a degrade, and never a session/global fallback.
+    if let Some(tools) = env.allowed_tools.as_deref() {
+        crate::gateway::execution_engine::slash_skill_scope::stamp_list(&mut plan.knobs, tools);
+    }
+    match env.btw.as_deref() {
+        Some(stamp) if stamp == crate::gateway::btw::PROMOTE_STAMP => {
+            // A promote is served before `admit_run` and is not a run; a
+            // marker carrying its sentinel is a writer-side oddity, and
+            // replaying it would route the resume into the promote arm.
+            tracing::warn!(
+                run_id = %facts.run_id,
+                "resume: marker carries a promote stamp; a promote is not a run and is not replayed"
+            );
+        }
+        Some(stamp) => {
+            plan.knobs.insert(
+                crate::gateway::btw::BTW_METADATA_KEY.to_string(),
+                stamp.to_string(),
+            );
+        }
+        None => {}
+    }
+
     if let Some(model) = env
         .model
         .as_deref()
@@ -548,12 +574,14 @@ pub(crate) fn plan_resume(
             }
         }
     } else {
-        // The envelope is here and the model half is not: the writer could not
-        // name what served this run (a dynamic route whose provider chain had
+        // The envelope is here and the model half is not. Two origins, and
+        // the sentence has to be true for both: a full run whose writer could
+        // not name what served it (a dynamic route whose provider chain had
         // no `serving_model_hint`, or a marker from before that fallback
-        // existed). The resume proceeds on today's chain — but that chain is
-        // free to have moved, and this is the ONLY place that knows it might
-        // have.
+        // existed), and a slash-command fast path, which makes no LLM call and
+        // so served on no model at all. The resume proceeds on today's chain —
+        // but that chain is free to have moved, and this is the ONLY place
+        // that knows it might have.
         //
         // `unsnapshotted` cannot carry this: it means "no envelope was
         // captured", and one was. `degraded` is the field whose definition
@@ -561,8 +589,9 @@ pub(crate) fn plan_resume(
         // on the existing wire instead of a new counter that four faces would
         // then have to learn to render (判据 #9).
         sentences.push(
-            "The model that served this run was not recorded; it resumes on this \
-             session's current model, which may not be the same one."
+            "This run recorded no model — a slash-command fast path serves on none, and a \
+             full run may have failed to name what served it; it resumes on this session's \
+             current model."
                 .to_string(),
         );
         plan.degraded = true;
@@ -576,6 +605,48 @@ pub(crate) fn plan_resume(
 fn degrade_note(sentences: Vec<String>) -> Option<crate::session::boundary_repair::DegradeNote> {
     (!sentences.is_empty())
         .then(|| crate::session::boundary_repair::DegradeNote::new(sentences.join(" ")))
+}
+
+/// The emitter a re-triggered run reports through.
+///
+/// Live frames go on the bus (`base`). The final reply additionally fans out
+/// to the session's bound origin channel — the human who asked. Without that
+/// the resumed run completed into a collect-and-drop emitter: the
+/// crash-recovered answer existed only in the session log and the
+/// Telegram/Slack user never heard back (R5). Mirrors `spawn_continuation_run`;
+/// a Panel-only session (`gui:chat`, no origin route) has no channel to fan out
+/// to and rides the bus alone. Best-effort: the boot scan may outrun a slow
+/// channel connect — the fanout decorator warns-and-drops on send failure,
+/// never fails the resumed run itself.
+///
+/// A resume that replays the `/btw` stamp (`is_side_question`) rides the bus
+/// alone whatever the registry and route say — the same rule
+/// `busy_queue/durable.rs` applies to a reinjected side question: a
+/// re-delivered side answer must not land on the origin conversation unmarked
+/// (`btw::format_side_answer`'s doc carries the census of fan-out sites).
+///
+/// A free function so the choice is testable with a registry and a route in
+/// hand; `retrigger` is the only production caller.
+fn retrigger_emitter(
+    base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+    registry: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
+    route: Option<(String, String)>,
+    is_side_question: bool,
+) -> Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> {
+    if is_side_question {
+        return base;
+    }
+    match (registry, route) {
+        (Some(reg), Some((channel, conversation))) => Arc::new(
+            crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
+                base,
+                reg,
+                channel,
+                conversation,
+            ),
+        ),
+        _ => base,
+    }
 }
 
 /// Build a resumed run's metadata: the resume marker, the original working
@@ -1662,6 +1733,10 @@ impl ResumeCoordinator {
         // this ordering keeps that true by construction rather than by
         // inspection.
         metadata.extend(plan.knobs.iter().map(|(k, v)| (k.clone(), v.clone())));
+        // A replayed `/btw` stamp makes this resume a side question. Read
+        // here, before `metadata` moves into the request, because the
+        // emitter choice below depends on it.
+        let is_side_question = metadata.contains_key(crate::gateway::btw::BTW_METADATA_KEY);
 
         let request = RunRequest {
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -1696,31 +1771,12 @@ impl ResumeCoordinator {
         let base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> = Arc::new(
             crate::gateway::event_emitter::GatewayEventEmitter::new(Arc::clone(&self.event_bus)),
         );
-        // Fan the recovered run's final reply out to the session's bound
-        // origin channel — the human who asked. Without this the resumed run
-        // completed into a collect-and-drop emitter: the crash-recovered
-        // answer existed only in the session log and the Telegram/Slack user
-        // never heard back (R5). Mirrors `spawn_continuation_run`; a Panel-
-        // only session (`gui:chat`, no origin route) has no channel to fan out
-        // to and rides the bus alone.
-        // Best-effort: the boot scan may outrun a slow channel connect — the
-        // fanout decorator warns-and-drops on send failure, never fails the
-        // resumed run itself.
-        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-            match crate::gateway::event_emitter::origin_fanout::channel_registry() {
-                Some(reg) => match agent.origin_route(session_id).await {
-                    Some((channel, conversation)) => Arc::new(
-                        crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
-                            base,
-                            reg,
-                            channel,
-                            conversation,
-                        ),
-                    ),
-                    None => base,
-                },
-                None => base,
-            };
+        let emitter = retrigger_emitter(
+            base,
+            crate::gateway::event_emitter::origin_fanout::channel_registry(),
+            agent.origin_route(session_id).await,
+            is_side_question,
+        );
 
         tracing::info!(session = ?session_id, agent_id, "resume: re-triggering interrupted run");
 
@@ -2080,6 +2136,8 @@ mod tests {
             memory_mode: Some("off".to_string()),
             model: model.map(str::to_string),
             model_provider: provider.map(str::to_string),
+            allowed_tools: None,
+            btw: None,
         }
     }
 
@@ -2095,6 +2153,12 @@ mod tests {
     /// sat unresumed, that chain answers with a different model. `unsnapshotted`
     /// cannot report it — the envelope is right here — so before this the fact
     /// had no carrier at all and every face showed a clean recovery.
+    ///
+    /// The sentence has two origins and must be true for both: a full run
+    /// whose chain could not name what served it, and a slash-command fast
+    /// path that served on NO model at all. "The model … was not recorded"
+    /// asserted a model existed and was lost, which is false for the second
+    /// origin — so the wording is pinned here, positively and negatively.
     #[test]
     fn an_envelope_that_never_named_the_model_resumes_degraded_and_says_so() {
         let plan = plan_resume(
@@ -2115,13 +2179,189 @@ mod tests {
             .as_ref()
             .expect("a degrade must carry the sentence the model reads");
         assert!(
-            note.sentence.contains("was not recorded"),
-            "the note must say the model is unknown, not invent one: {}",
+            note.sentence.contains("This run recorded no model")
+                && note.sentence.contains("fast path serves on none")
+                && note
+                    .sentence
+                    .contains("resumes on this session's current model"),
+            "the note must say no model was recorded, name both origins, and \
+             say what it resumes on: {}",
+            note.sentence
+        );
+        assert!(
+            !note.sentence.contains("was not recorded"),
+            "the old wording asserted a model existed and was lost, which is \
+             false for a fast-path run: {}",
             note.sentence
         );
         assert!(
             plan.model_override.is_none(),
             "nothing was recorded, so there is nothing to pin"
+        );
+    }
+
+    /// §6.3 the skill scope is a per-run FACT with one rung: the snapshot.
+    /// Present ⇒ it reaches the resumed request under the same key the run
+    /// loop decodes; absent ⇒ nothing is stamped (full surface) and nothing
+    /// degrades — "declared nothing" is the normal case, not a loss.
+    #[test]
+    fn a_snapshot_scope_reaches_the_request_and_an_absent_one_stamps_nothing() {
+        use crate::gateway::execution_engine::slash_skill_scope::from_metadata;
+        let mut env = envelope_with(Some("gpt-5.6"), Some("openai"), Some("full"));
+        env.allowed_tools = Some(vec!["file_read".to_string()]);
+        let plan = plan_resume(
+            Some(&facts(None, Some(env))),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            from_metadata(&plan.knobs),
+            Some(["file_read".to_string()].into_iter().collect())
+        );
+        assert!(!plan.degraded && !plan.unsnapshotted);
+
+        let plan = plan_resume(
+            Some(&facts(
+                None,
+                Some(envelope_with(Some("gpt-5.6"), Some("openai"), Some("full"))),
+            )),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            from_metadata(&plan.knobs),
+            None,
+            "no declaration ⇒ full surface"
+        );
+        assert!(!plan.degraded, "an optional fact never degrades a resume");
+    }
+
+    /// The `/btw` stamp is replayed verbatim so the resumed side question
+    /// keeps its read-only ceiling — except the promote sentinel: a promote
+    /// is not a run, and replaying it would send the resume into the promote
+    /// arm instead of a turn.
+    #[test]
+    fn a_btw_question_is_replayed_but_a_promote_sentinel_is_not() {
+        use crate::gateway::btw::{BTW_METADATA_KEY, PROMOTE_STAMP};
+        let mut env = envelope_with(Some("m"), Some("openai"), Some("ask"));
+        env.btw = Some("is it green?".into());
+        let plan = plan_resume(
+            Some(&facts(None, Some(env.clone()))),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            plan.knobs.get(BTW_METADATA_KEY).map(String::as_str),
+            Some("is it green?")
+        );
+
+        env.btw = Some(PROMOTE_STAMP.into());
+        let plan = plan_resume(
+            Some(&facts(None, Some(env))),
+            Some(&pinnable(&["openai"])),
+            &|_| true,
+        );
+        assert_eq!(
+            plan.knobs.get(BTW_METADATA_KEY),
+            None,
+            "a promote is not a run; replaying it would hit the promote arm"
+        );
+    }
+
+    /// The mirror of `busy_queue/durable.rs`'s rule: a re-triggered run that
+    /// carries the side-question stamp rides the bus alone. With a channel
+    /// registry AND a bound origin route in hand, the stamped run's final
+    /// reply must still reach no channel — a re-delivered side answer must
+    /// not land on the origin conversation unmarked — while the unstamped
+    /// twin, same registry, same route, fans out.
+    #[tokio::test]
+    async fn a_stamped_resume_skips_the_origin_fan_out_and_an_unstamped_one_takes_it() {
+        use crate::gateway::channel::{
+            Channel, ChannelCapabilities, ChannelId, ChannelInfo, ChannelResult, ChannelState,
+            ChannelStatus, MessageId, OutboundMessage, SendResult,
+        };
+        use crate::gateway::channel_registry::ChannelRegistry;
+        use crate::gateway::event_emitter::{CollectingEventEmitter, RunSummary, StreamEvent};
+
+        struct Seen {
+            info: ChannelInfo,
+            state: ChannelState,
+            seen: Arc<tokio::sync::Mutex<Vec<String>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl Channel for Seen {
+            fn info(&self) -> &ChannelInfo {
+                &self.info
+            }
+            fn state(&self) -> &ChannelState {
+                &self.state
+            }
+            async fn start(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn stop(&mut self) -> ChannelResult<()> {
+                Ok(())
+            }
+            async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
+                self.seen.lock().await.push(message.text.clone());
+                Ok(SendResult {
+                    message_id: MessageId::new("ok"),
+                    timestamp: chrono::Utc::now(),
+                })
+            }
+        }
+
+        let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let registry = Arc::new(ChannelRegistry::new());
+        registry
+            .register(Box::new(Seen {
+                info: ChannelInfo {
+                    id: ChannelId::new("origin"),
+                    name: "origin".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                state: ChannelState::new(8),
+                seen: seen.clone(),
+            }))
+            .await;
+        let route = Some(("origin".to_string(), "conv-1".to_string()));
+
+        let reply = |text: &str| StreamEvent::RunComplete {
+            run_id: "r".to_string(),
+            seq: 0,
+            summary: RunSummary {
+                final_response: Some(text.to_string()),
+                ..Default::default()
+            },
+            total_duration_ms: 0,
+        };
+
+        let bus = Arc::new(CollectingEventEmitter::new());
+        retrigger_emitter(bus.clone(), Some(registry.clone()), route.clone(), true)
+            .emit(reply("side answer"))
+            .await
+            .unwrap();
+        assert_eq!(
+            bus.events().await.len(),
+            1,
+            "the bus still carries the stamped run's frames"
+        );
+        assert!(
+            seen.lock().await.is_empty(),
+            "a stamped resume must not fan its answer out to the origin channel"
+        );
+
+        retrigger_emitter(bus, Some(registry), route, false)
+            .emit(reply("ordinary answer"))
+            .await
+            .unwrap();
+        assert_eq!(
+            seen.lock().await.as_slice(),
+            ["ordinary answer".to_string()],
+            "the unstamped twin, same registry and route, fans out"
         );
     }
 

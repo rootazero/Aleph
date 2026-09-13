@@ -33,10 +33,17 @@ pub enum SplitError {
     /// The session key kind has no epoch — `with_next_epoch()` returned the
     /// key unchanged (Group/Task/Subagent/Ephemeral).
     NotSplittable,
-    /// Summarization or event emission failed. Epoch registration is NOT
-    /// fatal (see step 5 in [`perform_session_split`]): once both batches are
-    /// committed the split has happened, and a refused routing write is
-    /// logged and healed at the next boot rather than reported here.
+    /// The parent log holds no open `RunStarted` to inherit from — either no
+    /// marker at all, or the last one is already closed. The child's opener
+    /// is a clone of the parent's, so with nothing to clone the split is
+    /// refused before any batch is written rather than seeded with an empty
+    /// envelope that a later crash would resume unsnapshotted.
+    NoOpenRun,
+    /// The parent log could not be reduced, summarization failed, or event
+    /// emission failed. Epoch registration is NOT fatal (see step 5 in
+    /// [`perform_session_split`]): once both batches are committed the split
+    /// has happened, and a refused routing write is logged and healed at the
+    /// next boot rather than reported here.
     Failed(anyhow::Error),
 }
 
@@ -44,6 +51,10 @@ impl std::fmt::Display for SplitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotSplittable => write!(f, "session key kind is not splittable"),
+            Self::NoOpenRun => write!(
+                f,
+                "parent log has no open RunStarted for the child to inherit"
+            ),
             Self::Failed(e) => write!(f, "session split failed: {e}"),
         }
     }
@@ -93,6 +104,21 @@ pub async fn perform_session_split(
     // boundary back over it would re-seed the child with a run the parent
     // already finished. See the guard's doc in `event_snap`.
     let tail_start = super::event_snap::snap_past_tool_results(events, tail_start);
+
+    // The run the child continues. Its opener below is a CLONE of the
+    // parent's open `RunStarted` — the envelope a resume replays and the
+    // project root it resumes in — because a crash after the split is
+    // detected against the child, and a child opened with no envelope
+    // resumes unsnapshotted: every knob replaced by today's value, the skill
+    // scope gone. `reduce_run` is the one derivation of "which run is open"
+    // (the last `RunStarted` with no `RunFinished` after it); an `Err` here
+    // means the log cannot be reasoned about, which is a failure, and no
+    // open run means nothing to inherit, which is a refusal — both before
+    // the summarizer is paid for and before either batch is written.
+    let open_run = crate::session::reduction::reduce_run(events)
+        .map_err(|c| SplitError::Failed(anyhow::anyhow!("parent log contradiction: {c}")))?
+        .open_run
+        .ok_or(SplitError::NoOpenRun)?;
 
     // The split path used to be the one compaction surface with zero
     // telemetry: the breaker escalated to it, and the only trace of what
@@ -176,12 +202,12 @@ pub async fn perform_session_split(
     child_batch.push(SessionEvent::RunStarted {
         run_id: split_run_id,
         at,
-        // Session-split forks emit a marker on the child session; the child
-        // inherits whatever project context the parent was running under
-        // via the in-memory RunRequest, so the resume path does not need a
-        // duplicate persisted value here.
-        project_root: None,
-        envelope: None,
+        // The parent's open run, verbatim. The in-memory `RunRequest` does
+        // carry the same facts for the LIVE continuation — but a resume
+        // after a crash has no `RunRequest`; it has only this marker, and
+        // reads its project root and envelope from nowhere else.
+        project_root: open_run.project_root,
+        envelope: open_run.envelope,
     });
     session
         .emit_batch(&child, child_batch, None)
@@ -368,7 +394,8 @@ mod tests {
     use crate::providers::mock::MockProvider;
     use crate::routing::session_key::SessionKey;
     use crate::session::events::{
-        now_ms, EventSeq, MessageContent, Retire, RunOutcome, SessionEventRecord,
+        now_ms, EventSeq, MessageContent, Retire, RunEnvelopeSnapshot, RunOutcome,
+        SessionEventRecord,
     };
     use crate::session::service::{SessionError, SessionHandle, SessionService};
     use crate::sync_primitives::Arc as AlephArc;
@@ -596,6 +623,60 @@ mod tests {
         }
     }
 
+    /// The envelope the parent's open run carries in every fixture below —
+    /// distinctive values so the child-opener test can tell "inherited" from
+    /// "defaulted".
+    fn parent_envelope() -> RunEnvelopeSnapshot {
+        RunEnvelopeSnapshot {
+            exec_tier: Some("ask".to_string()),
+            model: Some("m-parent".to_string()),
+            allowed_tools: Some(vec!["grep".to_string()]),
+            ..RunEnvelopeSnapshot::default()
+        }
+    }
+
+    const PARENT_ROOT: &str = "/parent/project";
+
+    fn run_started_record(seq: EventSeq, run_id: &str) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event: SessionEvent::RunStarted {
+                run_id: run_id.to_string(),
+                at: now_ms(),
+                project_root: Some(PARENT_ROOT.to_string()),
+                envelope: Some(parent_envelope()),
+            },
+            created_at_ms: now_ms(),
+        }
+    }
+
+    fn run_finished_record(seq: EventSeq, run_id: &str) -> SessionEventRecord {
+        SessionEventRecord {
+            seq,
+            event: SessionEvent::RunFinished {
+                run_id: run_id.to_string(),
+                outcome: RunOutcome::Completed,
+                at: now_ms(),
+            },
+            created_at_ms: now_ms(),
+        }
+    }
+
+    /// A parent log the harness bridge would have produced: the run's opener
+    /// first, then the user messages. Every fixture that expects the split to
+    /// SUCCEED starts from this — the child inherits the opener's envelope,
+    /// so a parent without one is refused, not seeded blind.
+    fn parent_log(messages: &[&str]) -> Vec<SessionEventRecord> {
+        std::iter::once(run_started_record(1, "run-parent"))
+            .chain(
+                messages
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| user_record(i as EventSeq + 2, text)),
+            )
+            .collect()
+    }
+
     // -------------------------------------------------------------------------
     // Test 1: non-epoch key is not splittable
     // -------------------------------------------------------------------------
@@ -652,11 +733,7 @@ mod tests {
             epoch: 0,
         };
         let child = parent.with_next_epoch();
-        let events = vec![
-            user_record(1, "pre-tail 1"),
-            user_record(2, "pre-tail 2"),
-            user_record(3, "fresh tail"),
-        ];
+        let events = parent_log(&["pre-tail 1", "pre-tail 2", "fresh tail"]);
         let trace = Arc::new(Mutex::new(vec![]));
         let session = RecordingSessionService::with_trace(trace.clone());
         let registrar = RecordingRegistrar::with_trace(trace.clone());
@@ -671,7 +748,7 @@ mod tests {
             &compactor,
             &parent,
             &events,
-            2,
+            3,
         )
         .await
         .unwrap();
@@ -719,13 +796,13 @@ mod tests {
         };
         let expected_child = parent.with_next_epoch();
 
-        // Build events: 2 pre-tail + 1 fresh tail.
-        let events = vec![
-            user_record(1, "pre-tail message 1"),
-            user_record(2, "pre-tail message 2"),
-            user_record(3, "fresh tail message"),
-        ];
-        let tail_start = 2; // events[..2] summarized; events[2..] copied verbatim
+        // Build events: the opener + 2 pre-tail + 1 fresh tail.
+        let events = parent_log(&[
+            "pre-tail message 1",
+            "pre-tail message 2",
+            "fresh tail message",
+        ]);
+        let tail_start = 3; // events[..3] summarized; events[3..] copied verbatim
 
         let session = RecordingSessionService::new();
         let registrar = RecordingRegistrar::new();
@@ -825,6 +902,120 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // The child's opener inherits the parent's run envelope — the crash path
+    // -------------------------------------------------------------------------
+
+    /// A crash after a split is resumed against the CHILD, and a resume
+    /// replays whatever the child's opener froze. An opener written with
+    /// `envelope: None` resumes unsnapshotted — every knob replaced by
+    /// today's value, the skill scope gone — so the child's `RunStarted`
+    /// must carry the parent's open run's envelope and project root, read
+    /// through the service the batch was handed to.
+    #[tokio::test]
+    async fn the_child_opener_carries_the_parents_envelope_and_project_root() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let events = parent_log(&["pre-tail", "fresh tail"]);
+        let session = RecordingSessionService::new();
+        let registrar = RecordingRegistrar::new();
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            2,
+        )
+        .await
+        .expect("split should succeed");
+
+        let child = parent.with_next_epoch();
+        let openers: Vec<(Option<String>, Option<RunEnvelopeSnapshot>)> = session
+            .emitted()
+            .await
+            .into_iter()
+            .filter(|(target, _)| *target == child)
+            .filter_map(|(_, event)| match event {
+                SessionEvent::RunStarted {
+                    project_root,
+                    envelope,
+                    ..
+                } => Some((project_root, envelope)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            openers,
+            vec![(Some(PARENT_ROOT.to_string()), Some(parent_envelope()))],
+            "the child's opener must be a clone of the parent's open run's \
+             envelope and project root, not a blank marker"
+        );
+    }
+
+    /// No open `RunStarted` in the parent log ⇒ nothing to inherit ⇒ the split
+    /// is REFUSED before either batch is written: the parent keeps its log,
+    /// routing never learns a child, and the caller falls back to
+    /// compact-to-fit. Two shapes of "no open run": no marker at all, and a
+    /// run the log already closed.
+    #[tokio::test]
+    async fn a_parent_without_an_open_run_is_refused_before_any_batch() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        let no_marker = vec![user_record(1, "pre-tail"), user_record(2, "fresh tail")];
+        let closed_run = vec![
+            run_started_record(1, "run-parent"),
+            user_record(2, "pre-tail"),
+            run_finished_record(3, "run-parent"),
+            user_record(4, "fresh tail"),
+        ];
+        for (label, events, tail_start) in [
+            ("no marker at all", no_marker, 1),
+            ("a run the log already closed", closed_run, 3),
+        ] {
+            let session = RecordingSessionService::new();
+            let registrar = RecordingRegistrar::new();
+            let compactor = ContextCompactor::new(
+                AlephArc::new(MockProvider::new("S")),
+                CompactorConfig::default(),
+            );
+
+            let result = perform_session_split(
+                session.as_ref(),
+                registrar.as_ref(),
+                &compactor,
+                &parent,
+                &events,
+                tail_start,
+            )
+            .await;
+
+            assert!(
+                matches!(result, Err(SplitError::NoOpenRun)),
+                "{label}: expected NoOpenRun, got {result:?}"
+            );
+            assert!(
+                session.batches().await.is_empty(),
+                "{label}: a refused split must write nothing — not even the parent closer"
+            );
+            assert!(
+                registrar.keys().await.is_empty(),
+                "{label}: routing must never learn a child"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Test 4: routing is not fatal — the log leads, the boot heal follows
     // -------------------------------------------------------------------------
 
@@ -840,7 +1031,7 @@ mod tests {
             main_key: "main".into(),
             epoch: 0,
         };
-        let events = vec![user_record(1, "pre-tail"), user_record(2, "fresh tail")];
+        let events = parent_log(&["pre-tail", "fresh tail"]);
         let session = RecordingSessionService::new();
         let registrar = RecordingRegistrar::refusing();
         let compactor = ContextCompactor::new(
@@ -854,7 +1045,7 @@ mod tests {
             &compactor,
             &parent,
             &events,
-            1,
+            2,
         )
         .await
         .expect("both batches committed: the split succeeded even though routing refused");
@@ -890,7 +1081,7 @@ mod tests {
             main_key: "main".into(),
             epoch: 0,
         };
-        let events = vec![user_record(1, "pre-tail"), user_record(2, "fresh tail")];
+        let events = parent_log(&["pre-tail", "fresh tail"]);
         let session = RecordingSessionService::failing_batch_at(0);
         let registrar = RecordingRegistrar::new();
         let compactor = ContextCompactor::new(
@@ -904,7 +1095,7 @@ mod tests {
             &compactor,
             &parent,
             &events,
-            1,
+            2,
         )
         .await;
 
@@ -931,7 +1122,7 @@ mod tests {
             main_key: "main".into(),
             epoch: 0,
         };
-        let events = vec![user_record(1, "pre-tail"), user_record(2, "fresh tail")];
+        let events = parent_log(&["pre-tail", "fresh tail"]);
         let session = RecordingSessionService::failing_batch_at(1);
         let registrar = RecordingRegistrar::new();
         let compactor = ContextCompactor::new(
@@ -945,7 +1136,7 @@ mod tests {
             &compactor,
             &parent,
             &events,
-            1,
+            2,
         )
         .await;
 
@@ -1046,14 +1237,14 @@ mod tests {
             main_key: "main".to_string(),
             epoch: 0,
         };
-        let events = vec![user_record(1, "only message")];
+        let events = parent_log(&["only message"]);
 
         let session = RecordingSessionService::new();
         let registrar = RecordingRegistrar::new();
         let provider = AlephArc::new(MockProvider::new("summary"));
         let compactor = ContextCompactor::new(provider, CompactorConfig::default());
 
-        // tail_start = 5 ≫ events.len() = 1.
+        // tail_start = 5 ≫ events.len() = 2.
         let outcome = perform_session_split(
             session.as_ref(),
             registrar.as_ref(),

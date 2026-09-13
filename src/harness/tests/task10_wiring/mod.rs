@@ -273,6 +273,23 @@ fn turn_started_event() -> SessionEvent {
     }
 }
 
+/// The opener the harness bridge writes before it drives the loop. A test
+/// whose run is expected to SPLIT needs it in the seed: the split clones the
+/// parent's open run's envelope onto the child's opener and refuses a parent
+/// that has none, and these doubles bypass the bridge that would have written
+/// it.
+fn run_started_event() -> SessionEvent {
+    SessionEvent::RunStarted {
+        run_id: "run-task10".to_string(),
+        at: now_ms(),
+        project_root: None,
+        envelope: Some(crate::session::events::RunEnvelopeSnapshot {
+            exec_tier: Some("full".to_string()),
+            ..Default::default()
+        }),
+    }
+}
+
 fn assistant_message_event_with_text(text: &str) -> SessionEvent {
     SessionEvent::AssistantMessage {
         turn_id: uuid::Uuid::new_v4(),

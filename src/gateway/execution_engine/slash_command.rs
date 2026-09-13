@@ -608,18 +608,32 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
         Ok(crate::session::events::RunEnvelopeSnapshot {
-            exec_tier: Some(exec_tier.id().to_string()),
-            session_mode: Some(mode.id().to_string()),
-            think_level: think.map(|l| l.id().to_string()),
-            memory_mode: Some(memory.id().to_string()),
-            // Everything else stays `None` from the default. No LLM call on
-            // this path: the run served on no model, so `model` /
-            // `model_provider` are "the writer could not name the model",
-            // which is the truth. Fields a later task adds (a skill's
-            // `allowed_tools`, `btw`) stay `None` too: the fast path never
-            // runs a `/<skill>` and a side question never resolves to a
-            // direct tool.
-            ..crate::session::events::RunEnvelopeSnapshot::default()
+            // The `/btw` stamp, copied verbatim as `run_loop` does for a full
+            // turn. On the shipped catalog this is always `None`: the channel
+            // router claims `/btw` ahead of the parser, and no shipped command
+            // word resolves as a side question (both pinned in
+            // `btw_wire_tests`). But `stamp_slash_mode` stamps the key and
+            // THEN asks the parser, so a user-installed tool named `btw`
+            // would bring a stamped `/btw …` here — and the marker must
+            // record what the run actually carried, not what the catalog
+            // usually holds.
+            btw: request
+                .metadata
+                .get(crate::gateway::btw::BTW_METADATA_KEY)
+                .cloned(),
+            // `allowed_tools` stays `None` and that is the truth: the `skill`
+            // arm of the dispatcher above always falls through to the full
+            // loop, and a `direct_tool` mode JSON carries no `allowed_tools`,
+            // so no fast-path run ever executes under a skill scope. `model`
+            // / `model_provider` stay `None` too: no LLM call on this path,
+            // so the run served on no model — the reading `plan_resume`'s
+            // "recorded no model" sentence names.
+            ..crate::session::events::RunEnvelopeSnapshot::from_knobs(
+                Some(exec_tier),
+                Some(mode),
+                think,
+                Some(memory),
+            )
         })
     }
 }

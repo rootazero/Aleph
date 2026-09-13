@@ -33,8 +33,9 @@ use crate::tool_metadata::UnifiedTool;
 
 /// Request-metadata key carrying this run's skill tool scope.
 ///
-/// Written by [`stamp_from_mode`], read by [`from_metadata`], removed by
-/// [`strip`]. Nothing outside this module should spell it.
+/// Written by [`stamp_list`] (for [`stamp_from_mode`] and the resume replay),
+/// read by [`from_metadata`], removed by [`strip`]. Nothing outside this
+/// module should spell it.
 pub(crate) const SLASH_SKILL_ALLOWED_TOOLS_KEY: &str = "slash_skill_allowed_tools";
 
 /// Lift the skill scope out of a parsed slash-command envelope into request
@@ -52,7 +53,19 @@ pub(crate) fn stamp_from_mode(metadata: &mut HashMap<String, String>, mode: &ser
         .iter()
         .filter_map(|v| v.as_str().map(str::to_string))
         .collect();
-    if let Ok(encoded) = serde_json::to_string(&tools) {
+    stamp_list(metadata, &tools);
+}
+
+/// Write an explicit declaration (an empty one included) under the key.
+///
+/// The one encoder: [`stamp_from_mode`] feeds it the mode JSON's list, and
+/// `resume_coordinator::plan_resume` feeds it the list frozen on the crashed
+/// run's `RunStarted` envelope, so a replayed scope is byte-for-byte the wire
+/// the run loop decodes.
+pub(crate) fn stamp_list(metadata: &mut HashMap<String, String>, tools: &[String]) {
+    // `if let` is the shape serde hands back, not a swallow: a `&[String]`
+    // cannot fail to serialise.
+    if let Ok(encoded) = serde_json::to_string(tools) {
         metadata.insert(SLASH_SKILL_ALLOWED_TOOLS_KEY.to_string(), encoded);
     }
 }
@@ -192,6 +205,21 @@ mod tests {
         stamp_from_mode(&mut meta, &mode(serde_json::json!(["grep"])));
         strip(&mut meta);
         assert!(from_metadata(&meta).is_none());
+    }
+
+    /// The list encoder a resume replays a frozen scope through writes the
+    /// same wire `stamp_from_mode` does — the empty declaration included,
+    /// which is the case a second encoder is most likely to drop.
+    #[test]
+    fn stamp_list_round_trips_through_from_metadata_including_the_empty_declaration() {
+        for tools in [vec![], vec!["grep".to_string(), "file_read".to_string()]] {
+            let mut meta = HashMap::new();
+            stamp_list(&mut meta, &tools);
+            assert_eq!(
+                from_metadata(&meta),
+                Some(tools.iter().cloned().collect::<HashSet<_>>())
+            );
+        }
     }
 }
 
