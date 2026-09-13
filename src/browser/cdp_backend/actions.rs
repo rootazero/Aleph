@@ -1519,6 +1519,89 @@ mod tests {
         );
     }
 
+    /// **`fill_form` driven end to end on a cdp profile, per field.** (Task 14
+    /// gate 4.)
+    ///
+    /// Until now this verb's coverage was *guarded but never observed*: after
+    /// Task 14 cut its source-scanning census, the only thing left claiming
+    /// `fill_form` reaches the renderer gate was
+    /// `fill_forms_exemption_holds_because_this_backend_does_not_override_it`
+    /// — an absence check on a named method. That test says nobody overrode the
+    /// trait default; it does not say the default's `self.fill` loop actually
+    /// arrives at the gate, because it never calls it. This one calls it.
+    ///
+    /// Two halves, because one alone would be an empty guard (判据 §3):
+    ///
+    /// * the cross-renderer field is REFUSED with the cross-renderer sentence,
+    ///   proving the per-field path really is gated and not merely adjacent to
+    ///   something that is;
+    /// * a main-frame-only form gets PAST the gate and dies on the fake's own
+    ///   wire, proving this is not "fill_form refuses everything".
+    ///
+    /// ⚠️ **Recorded while writing it, not fixed here:** the trait default
+    /// (`backend.rs:240-251`) `?`s out on the first failing field and DISCARDS
+    /// its running `filled` count, so a form whose second field is refused
+    /// tells the model nothing about the first. On a login form that is
+    /// "username is set, password is not", reported as a bare error. Changing
+    /// the signature is a contract change for three backends and is out of this
+    /// task's scope; it is named here rather than left for the next reader to
+    /// rediscover from a half-filled form.
+    #[tokio::test]
+    async fn fill_form_is_gated_per_field_on_a_cdp_profile() {
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let (main_ref, frame_ref) = seed_main_and_frame_refs(&handle, "T1").await;
+
+        // The gate, reached THROUGH fill_form's per-field loop.
+        let err = backend
+            .fill_form(
+                "T1",
+                &[(
+                    ActionTarget::Ref {
+                        ref_id: frame_ref.clone(),
+                    },
+                    "secret".to_string(),
+                )],
+            )
+            .await
+            .expect_err("a cross-renderer field must not be filled");
+        let text = err.to_string();
+        assert!(
+            text.contains("different site") && text.contains("separate process"),
+            "fill_form did not reach the renderer gate — this is the claim Task \
+             14's cut census was the only thing making: {text}"
+        );
+        assert!(
+            text.contains("driver = \"managed\""),
+            "the refusal must still name the door that opens: {text}"
+        );
+        // Ahead of the wire: nothing was typed into the page before the refusal.
+        assert!(
+            !methods(&server)
+                .iter()
+                .any(|m| m.starts_with("Input.") || m == "DOM.focus"),
+            "a refused field must not have been focused or typed into: {:?}",
+            methods(&server)
+        );
+
+        // The other direction: a main-frame field gets PAST the gate and fails
+        // later, on the fake's own wire. Without this the assertion above is
+        // satisfied by a fill_form that refuses everything.
+        let served = backend
+            .fill_form(
+                "T1",
+                &[(ActionTarget::Ref { ref_id: main_ref }, "hello".to_string())],
+            )
+            .await
+            .expect_err("the fake server resolves no real node");
+        assert!(
+            !served.to_string().contains("different site"),
+            "a main-frame field must not hit the renderer gate: {served}"
+        );
+    }
+
     /// A `ref_id` that this driver never minted is refused as SUCH, not as a
     /// stale ref.
     ///
