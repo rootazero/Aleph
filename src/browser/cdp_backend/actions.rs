@@ -5,16 +5,16 @@
 //! exists to prevent is a click that returned success while landing on a cookie
 //! banner.
 
-use aleph_cdp::methods::{dom, input, page, runtime};
 use aleph_cdp::SessionId;
+use aleph_cdp::methods::{dom, input, page, runtime};
 
 use crate::browser::engine::EngineHandle;
 use crate::browser::engine::{Cap, EngineCapabilities};
 use crate::browser::error::BrowserError;
-use crate::browser::page_state::{quote, RefId, StaleReason};
+use crate::browser::page_state::{RefId, StaleReason, quote};
 use crate::browser::types::{ActionTarget, ScrollDirection};
 
-use super::{map_cdp_err, CdpBackend};
+use super::{CdpBackend, map_cdp_err};
 
 /// A target that has been turned into something dispatchable.
 enum Resolved {
@@ -1100,7 +1100,7 @@ mod tests {
     use crate::browser::cdp_backend::test_support::*;
     use crate::browser::engine::{Cap, Engine};
     use crate::browser::error::BrowserError;
-    use crate::browser::page_state::{quote, RefKey, StaleReason};
+    use crate::browser::page_state::{RefKey, StaleReason, quote};
     use crate::browser::types::ActionTarget;
 
     /// Seed a tab whose ref table holds one ref minted against document `L1`,
@@ -1257,9 +1257,12 @@ mod tests {
     /// Shared by the census and its own controls, so a control cannot pass
     /// against a different extractor from the one the census uses (判据 §1).
     ///
-    /// ⚠️ **All of them, not the first.** A verb is defined twice in this
-    /// backend — once in `mod.rs`'s `impl BrowserBackend`, which only delegates,
-    /// and once in `actions.rs`, which does the work. `rust_sources_under`
+    /// ⚠️ **All of them, not the first.** **Every** ref-taking verb is defined
+    /// twice in this backend, in exactly the same shape — once in `mod.rs`'s
+    /// `impl BrowserBackend`, which only delegates, and once in `actions.rs`,
+    /// which does the work. Read as one verb's special case, `any` looks like a
+    /// small tolerance; it is the universal shape here, which is what makes
+    /// `any` load-bearing and what CONTROL 5 has to compensate for. `rust_sources_under`
     /// walks `read_dir`, whose order is the filesystem's, so "the first
     /// definition" is whichever file that walk happened to yield first. On this
     /// machine `actions.rs` comes first and the census was right by luck; the
@@ -1348,11 +1351,13 @@ mod tests {
     ///   would go red — a false positive, and deliberately the fail-loud
     ///   direction: a human looks, rather than a gate quietly not covering
     ///   something.
-    /// * Its own recognisers are constrained by four controls, and the fourth
-    ///   exists because the first three could not see an unbounded extractor:
-    ///   a positive control is SATISFIED by over-extraction, and a synthetic
-    ///   negative cannot exercise bounding at all. A control has to run on the
-    ///   real corpus to constrain how the real corpus is read.
+    /// * Its own recognisers are constrained by controls, each named at the
+    ///   assertion rather than counted here — a count in a comment is one more
+    ///   thing to leave behind (判据 §1). They exist because the obvious two
+    ///   could not see an unbounded extractor: a positive control is SATISFIED
+    ///   by over-extraction, and a synthetic negative cannot exercise bounding
+    ///   at all. A control has to run on the real corpus to constrain how the
+    ///   real corpus is read.
     ///
     /// The whole `cdp_backend/` DIRECTORY is scanned, not `actions.rs` and
     /// `mod.rs` by name: a verb implemented in a third file would otherwise
@@ -1360,18 +1365,35 @@ mod tests {
     /// is also one fewer hand-written list (判据 §5).
     #[test]
     fn every_ref_taking_verb_reaches_the_gate_or_is_exempt_and_absent() {
-        use crate::utils::source_scan::{production_text, rust_sources_under};
+        use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
 
         let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        // BOTH sides of the census go through the SAME two filters. The corpus
+        // side ran `production_text` and the derivation side read raw, so the
+        // derivation would have picked up a `#[cfg(test)]` mock's method and
+        // then demanded it of the backend — and neither side stripped comments,
+        // which is worse: a `// … goes through prepare(…)` inside a delegating
+        // body makes that body "reach", the fail-OPEN direction. `code_text` is
+        // lexer-based and also blanks literal payloads, so a `'{'` char literal
+        // or a brace inside a string cannot shift the brace walk either.
+        let read = |path: &std::path::Path, text: &str| code_text(&production_text(path, text));
 
         // ---- the verb list, DERIVED from the trait ------------------------
         // Every `BrowserBackend` method whose signature mentions `ActionTarget`.
         // Typed out here it would only describe the day it was written.
-        let backend_src = std::fs::read_to_string(src_root.join("browser/backend.rs"))
-            .expect("the trait's own source is readable");
+        let backend_path = src_root.join("browser/backend.rs");
+        let backend_src = read(
+            &backend_path,
+            &std::fs::read_to_string(&backend_path).expect("the trait's own source is readable"),
+        );
         let mut verbs: Vec<String> = Vec::new();
+        // Each accepted signature's `[start, end)` in `backend_src`, kept for
+        // the residue check below rather than recomputed there (判据 §1).
+        let mut spans: Vec<(usize, usize)> = Vec::new();
         for (i, _) in backend_src.match_indices("async fn ") {
-            let rest = &backend_src[i + "async fn ".len()..];
+            let base = i + "async fn ".len();
+            let rest = &backend_src[base..];
             let Some(paren) = rest.find('(') else {
                 continue;
             };
@@ -1389,6 +1411,7 @@ mod tests {
                 .unwrap_or(rest.len());
             if rest[..end].contains("ActionTarget") {
                 verbs.push(name.to_string());
+                spans.push((base, base + end));
             }
         }
 
@@ -1405,11 +1428,40 @@ mod tests {
              something other than the trait: {verbs:?}"
         );
 
+        // CONTROL 3b — **residue**: every `ActionTarget` the trait mentions is
+        // accounted for by a signature this derivation attributed.
+        //
+        // "Non-empty and contains `click`" is satisfied by a parser that
+        // silently returned ONLY `click`, which shrinks the census to one verb
+        // and stays green. This one is not: the other ten signatures' tokens
+        // then belong to no span and it reddens naming their line numbers.
+        // There is no count and no name list here, so there is nothing to rot
+        // (判据 §5) — the single exemption is structural, everything above the
+        // trait declaration being the import block.
+        let trait_at = backend_src
+            .find("pub trait BrowserBackend")
+            .expect("backend.rs declares the trait this census is about");
+        let orphans: Vec<usize> = backend_src
+            .match_indices("ActionTarget")
+            .map(|(i, _)| i)
+            .filter(|i| *i >= trait_at)
+            .filter(|i| !spans.iter().any(|(s, e)| i >= s && i < e))
+            .map(|i| backend_src[..i].lines().count())
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "these `ActionTarget` occurrences in backend.rs fall inside no \
+             signature the derivation attributed, so it did not read all of the \
+             trait and the census below is over a subset — backend.rs lines \
+             {orphans:?}, against {} attributed signature(s)",
+            spans.len()
+        );
+
         // ---- the backend's own production source, whole directory ---------
         let dir = src_root.join("browser/cdp_backend");
         let scanned: String = rust_sources_under(&dir)
             .into_iter()
-            .map(|(rel, text)| production_text(std::path::Path::new(&rel), &text))
+            .map(|(rel, text)| read(std::path::Path::new(&rel), &text))
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
@@ -1437,65 +1489,116 @@ mod tests {
         );
 
         // CONTROL 4 — **the extractor is BOUNDED**, exercised on the REAL
-        // corpus. The three controls above cannot make this claim, which is why
-        // the guard was 恒绿 under the one break that matters:
-        //   * control 1 is SATISFIED by over-extraction — if a "body" runs to
-        //     the end of the corpus it contains `prepare(`, so a verb that
-        //     reaches is still seen reaching. The control passes BECAUSE the
-        //     extractor is broken in that direction.
-        //   * control 2 is a one-line synthetic input, where bounding cannot
-        //     matter, so it cannot see the difference.
-        // Measured: make the extractor return the remainder instead of the
-        // balanced span and the whole guard stayed green (`1 passed`) while
-        // reporting every verb as reaching. That is 判据 §2 landing on the
-        // instrument, which is this branch's most repeated lesson.
+        // corpus, over EVERY verb and EVERY one of its bodies. The controls
+        // above cannot make this claim: control 1 is SATISFIED by
+        // over-extraction (a "body" running to the end of the corpus contains
+        // `prepare(`), and control 2 is a one-line synthetic where bounding
+        // cannot matter. Measured: an unbounded extractor left the whole guard
+        // green while reporting every verb as reaching — 判据 §2 landing on the
+        // instrument rather than on the code.
         //
-        // TWO assertions, and neither needs a magic number — a byte count
-        // would be a fixture that rots.
+        // ⚠️ The earlier version of this control sampled ONE verb and asked
+        // whether its body contained another derived verb's `fn`. That was
+        // right by accident: `click` happens to be the one verb both of whose
+        // definitions are followed by another derived verb, and the same
+        // over-reach sampled at `upload` measured `1 passed`. The rule below is
+        // STRUCTURAL — no item line may follow the body's first — so it does
+        // not depend on what the swallowed text happens to contain, and it runs
+        // over all of them so it does not depend on which one was sampled
+        // (判据 §3, §12).
         //
-        // ⚠️ Which one actually fires was MEASURED here, not inherited, and it
-        // is not the one that was recommended. Brace balance was proposed as
-        // sufficient on the reading that a truncated remainder is unbalanced.
-        // Against THIS corpus it is not: running the remainder mutation, the
-        // balance assertion **passed** and the over-reach assertion is what
-        // caught it. The corpus is complete files joined, so a span running to
-        // the end of it can balance perfectly well — the missing closers are
-        // only the ones before the span started.
-        //
-        //   * NO OTHER VERB'S DEFINITION — the one that fired. Over-extraction
-        //     of any distance swallows a neighbouring `fn`, whether or not the
-        //     braces happen to come out even. Derived from the verb list, so it
-        //     is not a hand-written set.
-        //   * BALANCE — kept, because it catches a truncation that stops
-        //     mid-body, which the other cannot see, and because "one function
-        //     body" balancing is what the extractor's contract MEANS. It is the
-        //     cheaper check and it is not the load-bearing one here.
-        //
-        // Both stay: they catch different break shapes, and this round is the
-        // evidence that assuming which one covers you is how a control gets
-        // written that cannot fire.
+        // BOTH assertions are load-bearing, for disjoint shapes, and this is
+        // the third attempt at saying which — the previous two each named the
+        // wrong one:
+        //   * a TRUNCATED span (stops mid-body) → balance only; over-reach
+        //     cannot see it.
+        //   * a BOUNDED over-reach (swallows exactly one whole following
+        //     function) → over-reach only; a whole function is brace-balanced,
+        //     so two of them concatenated are too.
+        //   * the REMAINDER break (runs to the end of the corpus) → **both**.
+        //     Over-reach merely reports first, because it fires on `click`'s
+        //     body in `actions.rs` before the loop reaches the one in `mod.rs`.
+        //     That ordering is the whole reason an earlier note here concluded
+        //     balance "does not fire against this corpus": balance was never
+        //     evaluated on the body that fails it. Measured with over-reach
+        //     neutralised, it fires at `61 open, 62 close` — an EXTRA CLOSER
+        //     carried INSIDE the span (`mod.rs`'s `impl` block closing without
+        //     its `{`, because that body starts inside the block), which is the
+        //     opposite of that note's stated mechanism.
+        for verb in &verbs {
+            for body in fn_bodies(&scanned, verb) {
+                let (opens, closes) = (body.matches('{').count(), body.matches('}').count());
+                assert_eq!(
+                    opens, closes,
+                    "the extractor did not return one balanced body for \
+                     `{verb}` ({opens} open, {closes} close) — it either \
+                     truncated the body or ran past its end, and both make the \
+                     census's answer for `{verb}` meaningless"
+                );
+                for line in body.lines().skip(1) {
+                    let mut item = line.trim_start();
+                    for prefix in [
+                        "pub(super) ",
+                        "pub(crate) ",
+                        "pub ",
+                        "async ",
+                        "unsafe ",
+                        "const ",
+                    ] {
+                        if let Some(rest) = item.strip_prefix(prefix) {
+                            item = rest;
+                        }
+                    }
+                    assert!(
+                        !item.starts_with("fn "),
+                        "`{verb}`'s extracted body contains a second item — \
+                         `{}` — so the extractor is running past the end of it \
+                         and everything this census reports about `{verb}` is \
+                         about somebody else's code too",
+                        line.trim()
+                    );
+                }
+            }
+        }
+
+        // …and it returns EVERY definition, not the first. Without this, half
+        // of that fix is a claim rather than a checked fact: reverting the walk
+        // to stop after the first definition leaves the guard green and puts
+        // the census back on `read_dir` order.
         let click_bodies = fn_bodies(&scanned, "click");
         assert!(
-            !click_bodies.is_empty(),
-            "the extractor found no `click` body in the real corpus, so the \
-             assertions below would be vacuous"
+            click_bodies.len() >= 2,
+            "`click` resolves to only {} definition — this backend defines \
+             every ref-taking verb twice (a delegating body in mod.rs's impl, \
+             the real one in actions.rs), so the extractor is returning one of \
+             them and the census is back to depending on read_dir order",
+            click_bodies.len()
         );
-        for body in &click_bodies {
-            let (opens, closes) = (body.matches('{').count(), body.matches('}').count());
-            assert_eq!(
-                opens, closes,
-                "the extractor returned an UNBALANCED span for `click` \
-                 ({opens} open, {closes} close) — it is not bounding the body, \
-                 so every verb's 'body' trails into the rest of the corpus and \
-                 every verb reports as reaching the gate"
-            );
-            for other in verbs.iter().filter(|v| *v != "click") {
+
+        // CONTROL 5 — every DEFINITION either reaches the gate itself or
+        // delegates to a function of the SAME NAME.
+        //
+        // The census asks `any`, and `any` is the right question: nine of the
+        // eighteen definitions are `mod.rs`'s delegating bodies and reach in
+        // zero cases, so `all` would redden everything. But `any` alone lets a
+        // verb's answer come from a definition nothing dispatches to —
+        // measured, rewiring `mod.rs`'s `click` to call `actions::hover` left
+        // the census passing. This is the wire between the two halves (判据 §7).
+        //
+        // Kept as its own assertion rather than folded into `reaches_the_gate`:
+        // folded in, CONTROL 1 is what fires, and it says "the recogniser
+        // cannot see `click` reaching the gate" — a complaint about the
+        // instrument for a defect in the code. Separate, the red names the verb.
+        for verb in &verbs {
+            for body in fn_bodies(&scanned, verb) {
                 assert!(
-                    !body.contains(&format!("fn {other}(")),
-                    "`click`'s extracted body contains the definition of \
-                     `{other}` — the extractor is over-reaching, and a body \
-                     that spans other functions makes every verb look like it \
-                     reaches the gate"
+                    body.contains("prepare(")
+                        || body.contains("resolve_target(")
+                        || body.contains(&format!("::{verb}(")),
+                    "a definition of `{verb}` neither reaches the gate nor \
+                     delegates to a function of the same name, so whatever the \
+                     census answers for `{verb}` may come from a definition \
+                     nothing dispatches to"
                 );
             }
         }
@@ -1987,8 +2090,8 @@ mod tests {
     /// does.
     #[tokio::test]
     async fn a_click_that_opens_a_dialog_answers_on_the_event_not_the_budget() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let seen = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&seen);
