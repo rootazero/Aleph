@@ -113,6 +113,41 @@ pub struct EngineSidecar {
     pub build: String,
 }
 
+/// Lock a browser's per-profile data directory down to its owner.
+///
+/// **One author for both engines.** Chromium's user-data-dir and obscura's
+/// storage-dir hold the same class of thing — cookies and localStorage for
+/// every site the profile has visited, with no OS keychain in front of
+/// either — so they get the same bit. Two copies of this would be two answers
+/// to "how private is a browser profile on disk", free to drift the day one is
+/// hardened (判据 §16); `what` exists only so the failure names which engine's
+/// directory it was, because that is the half the operator needs.
+///
+/// Non-unix is a deliberate no-op rather than a refusal: Windows privacy here
+/// comes from the per-user profile root, and failing the launch on a platform
+/// with no `mode` bits would refuse a browser for a control that does not
+/// exist there.
+pub(crate) async fn restrict_to_owner(dir: &Path, what: &str) -> Result<(), BrowserError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .await
+            .map_err(|e| BrowserError::LaunchFailed {
+                stage: "spawn",
+                detail: format!(
+                    "cannot restrict the {what} {} to owner-only: {e}",
+                    dir.display()
+                ),
+            })?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, what);
+    }
+    Ok(())
+}
+
 /// The one directory every sidecar lives in.
 pub fn sidecar_registry_dir() -> Result<PathBuf, BrowserError> {
     crate::browser::playwright_launch::browser_state_dir(SIDECAR_REGISTRY_LEAF)

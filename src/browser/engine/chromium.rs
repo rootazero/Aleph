@@ -158,22 +158,9 @@ pub(crate) fn endpoint_from_port_file(text: &str, pid: u32) -> Option<CdpEndpoin
 /// Windows has no equivalent bit this crate sets today (ACLs are a separate,
 /// larger mechanism) — deliberately a no-op there, not an omission.
 async fn restrict_udd_to_owner(dir: &Path) -> Result<(), BrowserError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-            .await
-            .map_err(|e| BrowserError::LaunchFailed {
-                stage: "spawn",
-                detail: format!(
-                    "cannot restrict the chromium user-data-dir {} to owner-only: {e}",
-                    dir.display()
-                ),
-            })?;
-    }
-    #[cfg(not(unix))]
-    let _ = dir;
-    Ok(())
+    // Delegated so obscura's storage dir and this one cannot be hardened
+    // differently (判据 §16); the naming is all that stays here.
+    super::process::restrict_to_owner(dir, "chromium user-data-dir").await
 }
 
 /// One Chromium process owned by this Aleph.

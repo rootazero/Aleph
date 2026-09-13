@@ -2827,7 +2827,37 @@ mod tests {
     /// (3) Nothing else owns the sentence — the honest face,
     /// `installable_names().join(", ")` in the refusal, is only read AFTER the
     /// model has already guessed wrong.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_538;
+    ///
+    /// 2026-09-14 (browser dual-engine, task 16): 114_538 -> 114_669 B, +131.
+    /// Measured, then attributed: the guard printed
+    ///   114_669 B (95_073 catalog + 16_613 registry-only + 1_039 injected
+    ///               + 1_944 bridge)
+    /// against the previous entry's 114_538 B (94_942 catalog + the same three
+    /// unchanged) — so the whole delta is the catalog component, and the only
+    /// catalog description this round touched is `browser_session`'s. Its
+    /// literal grew from 192 B to 323 B, which is the +131 exactly; the
+    /// subtraction of the two totals and the length of the edited literal are
+    /// two independent routes to the same number. Measured on macOS
+    /// (aarch64-apple-darwin) — the guard's "Largest" line printed `bash` at
+    /// 4_740, the Unix assembly, so the +30 Windows gap recorded above is
+    /// carried forward unchanged and neither widened nor closed.
+    ///
+    /// What the bytes buy: one sentence naming `action='capabilities'`.
+    /// Against the three questions:
+    /// (1) The action's EXISTENCE is a runtime fact. Nothing else on the tool
+    /// face says an engine capability table can be asked for, and a model that
+    /// cannot ask has to discover each gap by tripping over it — one wasted
+    /// turn per gap, on the engine that is now the default.
+    /// (2) A stronger model cannot infer that obscura is the default engine,
+    /// nor that it has gaps at all, so this does not become a cage: it names a
+    /// door, it does not say what to do.
+    /// (3) No other tool says it — `browser_session` owns the engine-switch
+    /// surface. And the capability TABLE itself is deliberately NOT here
+    /// (R2'): it is the action's RESULT, not prompt bytes, which is what keeps
+    /// this entry at 131 B instead of four lines of engine prose per turn.
+    /// `session::tests::the_description_points_at_the_action_and_does_not_carry_the_table`
+    /// is the guard on that.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_669;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

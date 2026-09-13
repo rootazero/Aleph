@@ -26,6 +26,10 @@ pub enum SessionAction {
     Save,
     /// Restore cookies + localStorage from a previously-saved state file.
     Load,
+    /// What each browser engine supports, and which engine to switch to for a
+    /// verb this one cannot do. Reads a constant table: no browser is
+    /// launched, no file is touched, no approval is consumed.
+    Capabilities,
 }
 
 /// Arguments for the `browser_session` tool.
@@ -39,7 +43,16 @@ pub struct BrowserSessionArgs {
     /// Name of the saved session (e.g. "github"). Stored under the managed
     /// browser state directory; must contain only letters, digits, '-', '_', '.'
     /// and may not start with '.' (no path separators or traversal).
-    pub name: String,
+    ///
+    /// Required for `save` and `load`; ignored by `capabilities`.
+    ///
+    /// `Option` rather than `String` because `capabilities` has no session to
+    /// name. A `save` that arrives without one is REFUSED with a message
+    /// naming the field — never given a default, which would write somebody's
+    /// whole authenticated identity to a filename the caller did not choose.
+    /// Same shape, for the same reason, as `runtime_manage`'s `capability`.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Output from the `browser_session` tool.
@@ -49,6 +62,9 @@ pub struct BrowserSessionOutput {
     /// Absolute path of the state file that was written or read.
     pub path: Option<String>,
     pub message: Option<String>,
+    /// The engine capability table, on `capabilities` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<serde_json::Value>,
 }
 
 /// Persists / restores browser login sessions via storage-state files.
@@ -133,19 +149,57 @@ impl AlephTool for BrowserSessionTool {
     // served by the managed Playwright backend AND by the CDP backend
     // (Task 13); the Chrome DevTools MCP backend takes the trait default, which
     // refuses. See `pdf.rs`.
+    // One sentence, not the table (plan ruling R2'). `DESCRIPTION` is a
+    // `const &'static str` and the builtin catalog is a `const` array fed from
+    // it, so the generated table cannot be injected here at runtime and a
+    // hand-written copy would be a second author for it. The action serves the
+    // table; `BrowserError::UnsupportedByEngine` names the gap and its remedy
+    // at the moment a model actually trips over one.
     const DESCRIPTION: &'static str =
         "Save or restore a browser login session (cookies + localStorage) by name, \
          so a logged-in state can be reused without re-authenticating \
-         — managed or cdp profiles only (e.g. profile='default')";
+         — managed or cdp profiles only (e.g. profile='default'). \
+         action='capabilities' lists what each browser engine supports and which \
+         engine to switch to for a verb the current one cannot do.";
     type Args = BrowserSessionArgs;
     type Output = BrowserSessionOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        if let Err(e) = validate_session_name(&args.name) {
+        // First, and deliberately: this action reads a constant, launches
+        // nothing, writes nothing and moves no credential, so it must not pass
+        // through the session-name check (it has no name), the approval gate
+        // (there is nothing to approve) or the directory creation (a read must
+        // not leave a directory behind).
+        if matches!(args.action, SessionAction::Capabilities) {
+            return Ok(BrowserSessionOutput {
+                success: true,
+                path: None,
+                message: Some(crate::browser::engine::describe_for_tool()),
+                capabilities: Some(crate::browser::engine::capabilities_json()),
+            });
+        }
+        // `name` is optional on the wire so `capabilities` could omit it. Every
+        // other action needs one, and the refusal names the field rather than
+        // inventing a default — a defaulted name here writes a whole
+        // authenticated identity to a path the caller did not choose.
+        let Some(name) = args.name.clone() else {
+            return Ok(BrowserSessionOutput {
+                success: false,
+                path: None,
+                message: Some(format!(
+                    "{:?} needs a `name` (the saved session to write or read). \
+                     action='capabilities' is the one action that does not.",
+                    args.action
+                )),
+                capabilities: None,
+            });
+        };
+        if let Err(e) = validate_session_name(&name) {
             return Ok(BrowserSessionOutput {
                 success: false,
                 path: None,
                 message: Some(e),
+                capabilities: None,
             });
         }
 
@@ -158,7 +212,7 @@ impl AlephTool for BrowserSessionTool {
             self.approval_policy.as_ref(),
             ActionType::BrowserSessionState,
             "session",
-            &format!("{:?} auth state '{}'", args.action, args.name),
+            &format!("{:?} auth state '{name}'", args.action),
         )
         .await
         {
@@ -166,16 +220,18 @@ impl AlephTool for BrowserSessionTool {
                 success: false,
                 path: None,
                 message: Some(message),
+                capabilities: None,
             });
         }
 
-        let path = match resolve_session_path(&args.name).await {
+        let path = match resolve_session_path(&name).await {
             Ok(p) => p,
             Err(e) => {
                 return Ok(BrowserSessionOutput {
                     success: false,
                     path: None,
                     message: Some(e),
+                    capabilities: None,
                 });
             }
         };
@@ -188,12 +244,21 @@ impl AlephTool for BrowserSessionTool {
                     success: false,
                     path: None,
                     message: Some(super::backend_error_text(&self.manager, &e)),
+                    capabilities: None,
                 });
             }
         };
         let result = match args.action {
             SessionAction::Save => backend.save_state(&path).await,
             SessionAction::Load => backend.load_state(&path).await,
+            // Answered above, before the backend was even constructed. Spelled
+            // as its own arm rather than folded into a `_ =>` so that the next
+            // action added to this enum is a compile error here instead of
+            // silently inheriting somebody else's behaviour (判据 §3 — count
+            // the arms at the `match`, not at the test).
+            SessionAction::Capabilities => {
+                unreachable!("the capabilities action returns as call()'s first statement")
+            }
         };
         match result {
             Ok(()) => Ok(BrowserSessionOutput {
@@ -201,12 +266,16 @@ impl AlephTool for BrowserSessionTool {
                 path: Some(path_str.clone()),
                 message: Some(match args.action {
                     SessionAction::Save => {
-                        format!("Saved session '{}' to {}", args.name, path_str)
+                        format!("Saved session '{name}' to {path_str}")
                     }
                     SessionAction::Load => {
-                        format!("Loaded session '{}' from {}", args.name, path_str)
+                        format!("Loaded session '{name}' from {path_str}")
+                    }
+                    SessionAction::Capabilities => {
+                        unreachable!("the capabilities action returns as call()'s first statement")
                     }
                 }),
+                capabilities: None,
             }),
             Err(e) => Ok(BrowserSessionOutput {
                 success: false,
@@ -216,6 +285,7 @@ impl AlephTool for BrowserSessionTool {
                     args.action,
                     super::backend_error_text(&self.manager, &e)
                 )),
+                capabilities: None,
             }),
         }
     }
@@ -248,7 +318,7 @@ mod tests {
             .call(BrowserSessionArgs {
                 profile: "default".into(),
                 action: SessionAction::Save,
-                name: "unit-test".into(),
+                name: Some("unit-test".into()),
             })
             .await
             .unwrap();
@@ -276,7 +346,7 @@ mod tests {
             .call(BrowserSessionArgs {
                 profile: "default".into(),
                 action: SessionAction::Save,
-                name: "github".into(),
+                name: Some("github".into()),
             })
             .await
             .unwrap();
@@ -302,7 +372,7 @@ mod tests {
             .call(BrowserSessionArgs {
                 profile: "default".into(),
                 action: SessionAction::Load,
-                name: "github".into(),
+                name: Some("github".into()),
             })
             .await
             .unwrap();
@@ -325,7 +395,7 @@ mod tests {
             .call(BrowserSessionArgs {
                 profile: "default".into(),
                 action: SessionAction::Load,
-                name: "../evil".into(),
+                name: Some("../evil".into()),
             })
             .await
             .unwrap();
@@ -343,11 +413,107 @@ mod tests {
             .call(BrowserSessionArgs {
                 profile: "default".into(),
                 action: SessionAction::Load,
-                name: "../evil".into(),
+                name: Some("../evil".into()),
             })
             .await
             .unwrap();
         assert!(!result.success);
         assert!(result.message.unwrap().contains("invalid session name"));
+    }
+
+    /// `capabilities` answers from a constant table. It must not require a
+    /// session name, must not create the sessions directory, and must not
+    /// consume an approval — it reads nothing and moves no credential.
+    ///
+    /// Driven through a DENY policy on purpose: a `capabilities` that fell
+    /// through to the gate would be refused here, so this is the assertion
+    /// that the short-circuit is really first (判据 §4 — the effect, not the
+    /// call).
+    #[tokio::test]
+    async fn capabilities_needs_no_name_no_directory_and_no_approval() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSessionTool::new(manager).with_approval_policy(deny_policy());
+        let out = tool
+            .call(BrowserSessionArgs {
+                profile: "default".into(),
+                action: SessionAction::Capabilities,
+                name: None,
+            })
+            .await
+            .expect("capabilities must not error");
+        assert!(out.success, "{:?}", out.message);
+        assert!(out.path.is_none(), "nothing is written");
+        let caps = out.capabilities.expect("the table must be in the output");
+        assert_eq!(caps["obscura"]["js_dialogs"], "unsupported");
+        assert_eq!(caps["chromium"]["js_dialogs"], "supported");
+        let message = out.message.unwrap_or_default();
+        assert!(
+            message.contains("switch_engine"),
+            "the prose must name the way across: {message}"
+        );
+        assert!(
+            !message.contains("denied by approval policy"),
+            "the approval gate ran for an action that moves no credential: {message}"
+        );
+    }
+
+    /// `name` became optional so `capabilities` could omit it. A `save` with no
+    /// name must therefore REFUSE and say which field is missing — not invent
+    /// one, and not fall through to a path built from a default. Mirrors
+    /// `runtime_manage`'s `install_without_a_capability_refuses_instead_of_guessing`.
+    #[tokio::test]
+    async fn save_without_a_name_refuses_instead_of_guessing() {
+        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
+        let tool = BrowserSessionTool::new(manager);
+        for action in [SessionAction::Save, SessionAction::Load] {
+            let out = tool
+                .call(BrowserSessionArgs {
+                    profile: "default".into(),
+                    action,
+                    name: None,
+                })
+                .await
+                .unwrap();
+            assert!(!out.success, "{action:?}");
+            let msg = out.message.unwrap_or_default();
+            assert!(msg.contains("name"), "{action:?}: {msg}");
+            assert!(out.path.is_none(), "{action:?}: {:?}", out.path);
+        }
+    }
+
+    /// The description must name the action — a table with an owner and no verb
+    /// is a producer nothing can reach (判据 §7) — and the catalog must serve
+    /// the tool's own const rather than a literal of its own. That substitution
+    /// is the defect `definitions.rs`'s module doc records, and it is invisible
+    /// from every direction except this assertion.
+    #[test]
+    fn the_catalog_serves_this_tools_own_description() {
+        let d = <BrowserSessionTool as AlephTool>::DESCRIPTION;
+        assert!(d.contains("capabilities"), "{d}");
+        let entry = crate::executor::BUILTIN_TOOL_DEFINITIONS
+            .iter()
+            .find(|e| e.name == <BrowserSessionTool as AlephTool>::NAME)
+            .expect("browser_session must be in the catalog");
+        assert_eq!(entry.description, d);
+    }
+
+    /// R2': the capability TABLE is the action's RESULT and must never be in
+    /// the tool's `DESCRIPTION`, where it would cost prompt bytes on every turn
+    /// for a fact most turns never need. A guard rather than a comment, because
+    /// the natural "improvement" is to paste the helpful paragraph in.
+    #[test]
+    fn the_description_points_at_the_action_and_does_not_carry_the_table() {
+        let d = <BrowserSessionTool as AlephTool>::DESCRIPTION;
+        let table = crate::browser::engine::describe_for_tool();
+        for line in table.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(
+                !d.contains(line),
+                "the capability table has leaked into DESCRIPTION (R2'): {line:?}"
+            );
+        }
+        // And the specific facts it must not spend bytes on.
+        for leaked in ["unsupported", "Measured on", "v0.2.2"] {
+            assert!(!d.contains(leaked), "DESCRIPTION carries {leaked:?}: {d}");
+        }
     }
 }

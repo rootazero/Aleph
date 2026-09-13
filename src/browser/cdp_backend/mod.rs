@@ -223,11 +223,13 @@ pub(crate) fn map_cdp_err(engine: Engine, method: &str, err: CdpError) -> Browse
 /// R42). The table stays the authority — production hands this
 /// `capabilities(engine)` and nothing else — but a branch whose input is a
 /// parameter can be driven to both outcomes by a test, and a branch that reads
-/// a `static` directly cannot. That matters right now rather than in theory:
-/// with `file_upload` and `insert_text` `Supported` on both engines, `upload`'s
-/// refusal and `type_text`'s per-character fallback are branches **nothing can
+/// a `static` directly cannot. That mattered concretely: while `file_upload`
+/// and `insert_text` both read `Supported` on both engines, `upload`'s refusal
+/// and `type_text`'s per-character fallback were branches **nothing could
 /// reach** through the public verb, and a guard that cannot go red is not a
-/// guard (判据 §2 恒绿, §3).
+/// guard (判据 §2 恒绿, §3). Task 16 corrected obscura's `file_upload` to
+/// `Unsupported` against Task 0's probe, so `upload`'s refusal is now live —
+/// `insert_text`'s fallback is still parameter-only, which is why this stays.
 ///
 /// `supported_by` deliberately consults the REAL table rather than `caps`: the
 /// hint has to name an engine that genuinely supports the verb, so that a test

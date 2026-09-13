@@ -203,11 +203,13 @@ impl ProfileManager {
                 config.runtime.clone(),
             )),
         );
-        // Obscura's launcher is registered by Task 16. Until then the registry
-        // answers a named error for it rather than a panic or a silent
-        // fallback to Chromium — an engine the operator asked for and did not
-        // get must say so.
-        //
+        processes.insert(
+            Engine::Obscura,
+            Arc::new(engine::obscura::ObscuraLauncher::new(
+                config.obscura.clone(),
+            )),
+        );
+
         // ⚠️ `cdp_command_timeout()` is captured HERE, at construction, and a
         // `browser.update` that changes it needs a restart. The SSRF bit two
         // screens down (`launch_request_for`'s `allow_private_network`) is

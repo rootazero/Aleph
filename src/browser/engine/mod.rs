@@ -14,6 +14,7 @@
 
 pub mod capability;
 pub mod chromium;
+pub mod obscura;
 pub mod process;
 pub mod readiness;
 pub mod registry;
@@ -28,7 +29,11 @@ use serde::{Deserialize, Serialize};
 use self::process::{EngineProcess, Launched};
 use super::error::BrowserError;
 
-pub use capability::{capabilities, supported_by, Cap, EngineCapabilities, CAP_FIELDS};
+pub use capability::{
+    capabilities, capabilities_json, describe_for_tool, supported_by, Cap, EngineCapabilities,
+    CAP_FIELDS,
+};
+pub use obscura::ObscuraLauncher;
 
 /// Declares the [`Engine`] variants **once** and emits both the enum and its
 /// [`Engine::ALL`].

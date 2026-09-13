@@ -177,12 +177,14 @@ pub enum BrowserError {
 
     /// The profile already has a live engine, and it is not the one asked for.
     ///
-    /// ⚠️ **Forward reference.** The message names `browser_session{action:
-    /// "switch_engine", engine:"…"}`, and at HEAD `BrowserSessionArgs.name` is
-    /// a required `String` — so between this task and Task 19, which makes it
-    /// `Option<String>`, the call it names is one the schema rejects. Task 19's
-    /// acceptance list must keep that field change, or this message has to name
-    /// the profile too.
+    /// ⚠️ **Forward reference, now half-closed.** The message names
+    /// `browser_session{action:"switch_engine", engine:"…"}`. Task 16 made
+    /// `BrowserSessionArgs.name` an `Option<String>` (for `action:
+    /// "capabilities"`), so that half no longer rejects the call — but
+    /// `SessionAction` still has no `SwitchEngine` variant and the args carry
+    /// no `engine` field, so until Task 19 adds both, this is still a message
+    /// naming a call the schema rejects. Task 19's acceptance list has to close
+    /// the remaining half.
     ///
     /// Not a silent swap: changing engines under an open profile discards its
     /// cookies, its tabs and every ref the model is holding. That is

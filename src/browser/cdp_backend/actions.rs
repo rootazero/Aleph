@@ -1052,10 +1052,14 @@ pub(super) async fn upload(
     target: Option<ActionTarget>,
     paths: &[String],
 ) -> Result<(), BrowserError> {
-    // Unreachable with today's table — both engines implement
-    // `DOM.setFileInputFiles` — and kept, driven by a parameter, so it is a
-    // branch a test can reach and a future `Unsupported` row cannot silently
-    // meet an arm nobody has ever run (R42).
+    // **Reachable in production since task 16**, and it was not before: the
+    // obscura row read `Supported` on a source survey that saw the
+    // `DOM.setFileInputFiles` arm and not the `--allow-file-access` gate in
+    // front of it. Task 0's probe of the running binary got the refusal, so
+    // obscura is `Unsupported` and this is the refusal a model meets when it
+    // tries to upload on the default engine. Still driven by a parameter
+    // rather than by the static table (R42), which is what let a test reach
+    // this branch during the year it was unreachable.
     super::require(caps, be.engine(), |c| c.file_upload, "upload")?;
     if paths.is_empty() {
         return Err(BrowserError::ActionFailed(
