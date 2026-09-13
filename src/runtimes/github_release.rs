@@ -165,6 +165,19 @@ pub enum ReleaseError {
     /// says nothing about what they expand to — and because `asset` there is an
     /// asset name, while this needs an archive and a member (判据 §9: one
     /// field, one kind of value).
+    ///
+    /// **Deliberately not exercised by a test, and the reason is ordering, not
+    /// cost.** Extraction runs *after* verification — `verify_sha256` then
+    /// `spawn_blocking(extract_one)` in [`install_release`] — so a member that
+    /// expands past the ceiling can only reach [`copy_member_capped`] inside an
+    /// archive that **hashes to the digest `api.github.com` published**. An
+    /// attacker-supplied decompression bomb cannot get here at all unless the
+    /// API itself served it, and that is exactly the case this module's
+    /// trust-model doc already concedes it does not cover. So this arm is
+    /// defence-in-depth against (a) a threat the layer above concedes and
+    /// (b) the upstream binary genuinely growing 6x. Both are worth bounding
+    /// and neither is worth a >512 MiB fixture: a test here would measure the
+    /// fixture, not the property.
     #[error(
         "archive {archive}: member {member} expands past this installer's {ceiling}-byte ceiling"
     )]
@@ -625,21 +638,34 @@ fn digest_mismatch_advice(runtime: &str, mirror_configured: bool) -> String {
         // this arm with a `download_host` line sitting in their config file. A
         // `warn!` fires at rejection time; this sentence describes the
         // effective source, which is the fact that matters here.
-        return "No mirror is in effect for this runtime, so GitHub's API and its release-asset \
-                host disagree about this asset — most often because the release was re-uploaded \
-                under the same tag. Retry; if it persists, the pinned tag has to be re-checked \
-                against upstream."
+        return "No mirror is in effect for this runtime, so this is GitHub's API and its own \
+                release-asset host disagreeing about the same asset — most often because the \
+                release was re-uploaded under the same tag. Retry; if it persists, the pinned tag \
+                has to be re-checked against upstream."
             .to_string();
     }
     match mirror_key_for(runtime) {
         Some(key) => format!(
-            "The {} mirror served bytes that do not match the checksum GitHub's API publishes for \
-             this asset. Most often that means the mirror is stale or does not carry this \
-             release — but it is also what a mirror serving substituted bytes looks like, and the \
-             two cannot be told apart from here. Clear the key to install from GitHub directly, \
-             and treat the mirror as suspect until you know which it was.",
+            "These bytes came from the {} mirror. Most often that means it is stale or does not \
+             carry this release — but it is also what a mirror serving substituted bytes looks \
+             like, and the two cannot be told apart from here. Clear the key to install from \
+             GitHub directly, and treat the mirror as suspect until you know which it was.",
             key.path
         ),
+        // N5: every sentence here describes WHERE the bytes came from and what
+        // to do about it, and none of them reports the result of a comparison.
+        // That is deliberate and load-bearing, because this string is reused by
+        // `LongerThanDeclared`, which is reached BEFORE `verify_sha256` runs at
+        // all. The previous version opened "…served bytes that do not match the
+        // checksum GitHub's API publishes", which sat one sentence after "the
+        // download was abandoned before it could be checked against the release
+        // checksum" — the first saying the comparison never happened, the
+        // second reporting its result. True by inference (a different-length
+        // body cannot hash to the published digest) and false as a statement
+        // about what this code did: a sentence stronger than the mechanism
+        // under it, which is the whole subject of fix A. The measured mismatch
+        // belongs to `DigestMismatch`'s own message, which is the only place
+        // that ran the comparison.
         // Unreachable in production: a runtime with no mirror key can never
         // have `mirror_configured == true`, because `configured_host` returns
         // the default host for exactly those runtimes, and
@@ -1154,6 +1180,114 @@ mod tests {
         assert!(
             with.contains("suspect") || with.contains("until you know"),
             "and the operator needs a next step that does not assume the benign case: {with}"
+        );
+    }
+
+    /// **N5.** The advice string is reused by two errors, and only one of them
+    /// ran a comparison. `LongerThanDeclared` abandons the body at the first
+    /// chunk past the cap, so `verify_sha256` never runs — and the advice that
+    /// followed it said *"served bytes that do not match the checksum"*, one
+    /// sentence after the error itself said *"abandoned before it could be
+    /// checked against the release checksum"*. The first says the comparison
+    /// never happened; the second reports its result. True by inference, false
+    /// as a statement about what this code did — a sentence stronger than the
+    /// mechanism under it, which is fix A's whole subject.
+    ///
+    /// Asserted as the property that keeps the split honest: **the advice
+    /// reports no comparison result**, and the error that did run the
+    /// comparison states it itself.
+    #[test]
+    fn the_shared_advice_reports_no_comparison_that_may_not_have_happened() {
+        for (label, advice) in [
+            ("with mirror", digest_mismatch_advice("obscura", true)),
+            ("no mirror", digest_mismatch_advice("obscura", false)),
+        ] {
+            for claim in ["do not match", "does not match", "hash", "checksum"] {
+                assert!(
+                    !advice.contains(claim),
+                    "{label} advice asserts {claim:?}, but it is also rendered by \
+                     LongerThanDeclared, which never reached verify_sha256: {advice}"
+                );
+            }
+        }
+
+        // The error that DID measure it says so, in its own message.
+        let measured = verify_sha256(
+            b"x",
+            &"f".repeat(64),
+            &digest_mismatch_advice("obscura", true),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            measured.contains("hash to"),
+            "the mismatch this code actually measured belongs here: {measured}"
+        );
+
+        // And the length error states what did NOT happen, without also
+        // reporting what it would have found.
+        let unmeasured =
+            over_bound(50, 10, "a.tar.gz", &digest_mismatch_advice("obscura", true)).to_string();
+        assert!(
+            unmeasured.contains("before it could be checked"),
+            "{unmeasured}"
+        );
+        assert!(
+            !unmeasured.contains("do not match"),
+            "this path abandoned the body; it may not report a comparison result: {unmeasured}"
+        );
+    }
+
+    /// **`Fetch` is one fact with two faces, and nothing pinned either.** Swap
+    /// `Fetch::Checksum` and `Fetch::Asset` at their construction sites and,
+    /// before this test, nothing in the suite went red (判据 §9).
+    ///
+    /// The fail-closed behaviour was never in doubt — every metadata site is
+    /// `?` or `return Err`. What was unverified is the 判据 §17 half: that the
+    /// message says **which** fetch failed. This is ordinary operation, not an
+    /// exotic arm: offline, a firewall, DNS, or `api.github.com`'s 60/hr
+    /// unauthenticated rate limit — and A(1) makes it *more* reachable for
+    /// exactly the mirror population, who set a mirror because they cannot
+    /// reach github.com in the first place.
+    #[tokio::test]
+    async fn a_dead_checksum_host_says_it_was_the_checksum_that_could_not_be_reached() {
+        let archive = tiny_targz();
+        let digest = sha256_hex(&archive);
+        let server =
+            FixtureRelease::start("o/p", "v0.2.2", "a.tar.gz", archive, Some(digest)).await;
+
+        let home = TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        // The asset host is live; only the checksum host is dead. Port 1 is
+        // reserved and refuses immediately, so this does not wait on a timeout.
+        let source = ReleaseSource {
+            api_host: "http://127.0.0.1:1".to_string(),
+            asset_host: server.host(),
+        };
+
+        let err = install_release("obscura", "o/p", "v0.2.2", "a.tar.gz", "obscura", &source)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("the release checksum"),
+            "the refusal must name which of the two fetches failed: {err}"
+        );
+        assert!(
+            err.contains("never from a download_host mirror"),
+            "and say why a mirror cannot substitute for it, since the operators who hit \
+             this are the ones who configured a mirror: {err}"
+        );
+        assert!(
+            !err.contains("the release asset bytes"),
+            "the asset host is live in this fixture; naming it would send the operator \
+             at the wrong host: {err}"
+        );
+        assert_eq!(
+            server.asset_requests(),
+            0,
+            "the checksum step failed closed, so nothing may have been downloaded"
         );
     }
 
