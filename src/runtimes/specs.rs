@@ -609,7 +609,7 @@ mod tests {
     /// that will never start. 判据 §2's question ("when does this go red?")
     /// has a concrete answer: aarch64-windows.
     #[test]
-    fn supported_on_current_os_consults_the_asset_table_not_just_the_os_arm() {
+    fn supported_on_consults_the_asset_table_not_just_the_os_arm() {
         let spec = find_spec(OBSCURA_RUNTIME).unwrap();
         let oi = select_install(spec.install, TargetOs::Windows)
             .expect("the windows arm exists — that is exactly the trap");

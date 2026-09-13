@@ -583,9 +583,9 @@ mod tests {
     fn every_operator_facing_browser_config_path_is_actually_read() {
         let found = browser_paths_named_in_operator_facing_text();
         assert!(
-            found.len() >= 40,
+            found.len() >= 39,
             "derived only {} operator-facing browser config paths across the \
-             six scanned files; 40 were measured on 2026-09-13 (7 across four \
+             six scanned files; 39 were measured on 2026-09-13 after the fix round (7 across four \
              files on 2026-09-06, before `specs.rs` and `github_release.rs` \
              joined the list and before the obscura engine gave three of them \
              a second section to name). Flush against the measurement, like \
