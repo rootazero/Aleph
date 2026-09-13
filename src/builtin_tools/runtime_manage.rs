@@ -123,8 +123,24 @@ pub(crate) struct RealEngineLocator;
 
 #[async_trait]
 impl EngineLocator for RealEngineLocator {
+    /// Iterated over [`Engine::ALL`] with an exhaustive `match`, not written
+    /// as `vec![chromium_row(), obscura_row()]`.
+    ///
+    /// The trait doc above says the row count IS `Engine`'s variant count; a
+    /// hand-written vec makes that sentence a claim rather than a fact, and a
+    /// third engine would then compile cleanly and silently have no row
+    /// (判据 §5 — a list that was complete on the day it was written). Here a
+    /// new variant is a compile error in this function. Falsified: adding a
+    /// third `Engine` variant fails the build naming this match.
     async fn locate_all(&self) -> Vec<RuntimeRow> {
-        vec![chromium_row().await, obscura_row().await]
+        let mut rows = Vec::with_capacity(crate::browser::engine::Engine::ALL.len());
+        for engine in crate::browser::engine::Engine::ALL {
+            rows.push(match engine {
+                crate::browser::engine::Engine::Chromium => chromium_row().await,
+                crate::browser::engine::Engine::Obscura => obscura_row().await,
+            });
+        }
+        rows
     }
 }
 
