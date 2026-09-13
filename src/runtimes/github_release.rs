@@ -1,30 +1,55 @@
 //! `InstallStrategy::GithubRelease` — fetch a release asset, verify its sha256
 //! against the release metadata, extract one member, make it executable.
 //!
-//! # Why the digest is not optional
+//! # The trust model, stated as what it does and does not cover
 //!
 //! The end of this path is `chmod 755` on a ~90 MB binary that Aleph then
-//! spawns. GitHub publishes a `digest` for every release asset, so declining
-//! to check it would be choosing not to look. A release whose asset carries no
-//! digest is therefore a **refusal**, not a permission: "the metadata did not
-//! say" is a form of "I do not know", and the one thing an unknown may never
-//! be spent as is a go-ahead (判据 §8).
+//! spawns, so the sentence describing its integrity has to be exactly true.
 //!
-//! # Why the extraction is in-process
+//! **The checksum and the bytes come from different hosts, on purpose.** The
+//! release metadata — and therefore the expected sha256 — is fetched from
+//! GitHub's API **always**, regardless of `download_host`
+//! ([`ReleaseSource::for_runtime`]). Only the asset bytes follow the
+//! operator's mirror. That is the whole of what the digest check buys: a
+//! mirror can fail to serve the bytes, or serve the wrong ones and be caught,
+//! but it cannot choose the hash it is checked against.
+//!
+//! **What it does NOT cover**, said plainly because the previous version of
+//! this module claimed otherwise: a compromised or spoofed `api.github.com`
+//! can substitute the metadata and the asset together, and no check here would
+//! notice — the digest is not pinned in this repository. Pinning digests
+//! beside the tag in `SPECS` is the strictly stronger design; it is deferred
+//! because only one of the five platform archives has a measured digest, and a
+//! guard covering one of five reads as covering all five.
+//!
+//! **A release whose asset carries no digest is a refusal**, not a permission:
+//! "the metadata did not say" is a form of "I do not know", and the one thing
+//! an unknown may never be spent as is a go-ahead (判据 §8).
+//!
+//! # Why the extraction is in-process, and from memory
 //!
 //! `Command::new("tar")` would add three failure modes this code does not have
 //! — the tool absent, PATH resolving a different `tar`, and an exit code that
 //! cannot say which member failed — and it cannot take one member without also
 //! writing the ~86 MB `obscura-worker` beside it.
 //!
+//! The archive is extracted from **the same buffer that was hashed**. An
+//! earlier version wrote the download to `<asset>.part` and re-opened it, so
+//! the verified object and the consumed object were different objects across a
+//! filesystem round trip, at a boundary ending in `chmod 755`. Extracting from
+//! a [`std::io::Cursor`] over the verified bytes deletes the write, the
+//! read-back, and both scratch-file cleanup paths.
+//!
 //! # Order is the contract
 //!
-//! metadata → digest → download → **verify** → extract → rename. Extracting
-//! before verifying would put unverified bytes on disk under the exact name
-//! [`super::probe`] already searches for.
+//! metadata → digest + size → download (bounded) → **verify** → extract →
+//! rename. The binary appears under the name [`super::probe`] searches for only
+//! once it is complete and verified.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
@@ -40,38 +65,91 @@ const DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600
 /// mirror must fail in seconds, not in ten minutes.
 const METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The hard ceiling on anything this module holds in memory or writes to disk,
+/// for one asset and for one extracted member.
+///
+/// **This bounds memory, not authenticity.** The per-asset `size` the metadata
+/// declares is the tighter, derived bound (see [`AssetMeta`]) — but it comes
+/// from the same document as the digest, so it is only as trustworthy as that
+/// document, and a metadata response saying `size: 9999999999` must be
+/// *refused* rather than honoured. That is what this constant is for: a number
+/// this code chose, which no response can raise.
+///
+/// 512 MiB against a largest real asset of 76 MB (`obscura-aarch64-macos`,
+/// 76_038_298 bytes, measured) and a largest real member of ~86 MB
+/// (`obscura-worker`, which this ledger deliberately does not extract). Roughly
+/// 6x headroom, and still a bound a single allocation cannot cross.
+const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Which of the two fetches an error is about.
+///
+/// The two are different operator actions — one says "your network cannot
+/// reach GitHub's API", the other says "your mirror is not serving this" — and
+/// a single message covering both is a label that is wrong half the time
+/// (判据 §17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fetch {
+    /// The release metadata, i.e. the checksum. Always from GitHub's API.
+    Checksum,
+    /// The asset bytes. From the operator's mirror when one is configured.
+    Asset,
+}
+
+impl std::fmt::Display for Fetch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Checksum => f.write_str(
+                "the release checksum, which is always read from GitHub's API and never from a \
+                 download_host mirror",
+            ),
+            Self::Asset => f.write_str("the release asset bytes"),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ReleaseError {
     #[error("cannot resolve the runtimes directory: {0}")]
     Paths(String),
-    #[error("{url}: {source}")]
+    #[error("could not reach {url} for {what}: {source}")]
     Http {
         url: String,
+        what: Fetch,
         #[source]
         source: reqwest::Error,
     },
-    #[error("{url} answered HTTP {status}")]
-    Status { url: String, status: u16 },
+    #[error("{url} answered HTTP {status} while fetching {what}")]
+    Status {
+        url: String,
+        what: Fetch,
+        status: u16,
+    },
     #[error("{url} did not return a release document: {detail}")]
     Metadata { url: String, detail: String },
     #[error("release asset {asset}: {detail}")]
     Digest { asset: String, detail: String },
     #[error(
         "sha256 mismatch: the release metadata says {expected}, the {bytes} downloaded bytes \
-         hash to {actual}. The download was deleted and nothing was installed. If {mirror} is \
-         set, it is serving different bytes than the release it claims to mirror."
+         hash to {actual}. Nothing was installed. {advice}"
     )]
     DigestMismatch {
         expected: String,
         actual: String,
         bytes: usize,
-        /// The operator-facing name of the knob to suspect first, built by
-        /// [`mirror_clause`] from the same `match` that decides which key is
-        /// actually read. A generic "a download_host mirror" here would send
-        /// an operator hunting for a key this runtime does not have, and
-        /// naming the Chromium one would send them to a key that exists and
-        /// does nothing for this download (判据 §17: 错的标签比缺的贵).
-        mirror: String,
+        /// What an operator should look at first, chosen by
+        /// [`digest_mismatch_advice`] from whether a mirror is configured at
+        /// all. With a mirror it names that mirror's key; without one it says
+        /// so, rather than handing the operator a conditional about a knob
+        /// they never set.
+        advice: String,
+    },
+    #[error(
+        "release asset {asset} is {declared} bytes, over this installer's {ceiling}-byte ceiling"
+    )]
+    TooLarge {
+        asset: String,
+        declared: u64,
+        ceiling: u64,
     },
     #[error("archive {archive}: {detail}")]
     Archive { archive: String, detail: String },
@@ -94,20 +172,17 @@ pub fn install_dir(runtime: &str, tag: &str) -> Result<PathBuf, ReleaseError> {
         .join(tag))
 }
 
-/// Where [`install_release`] puts — and [`super::probe`] looks for — the binary.
-pub fn installed_binary(
-    runtime: &str,
-    tag: &str,
-    binary_in_archive: &str,
-) -> Result<PathBuf, ReleaseError> {
-    Ok(install_dir(runtime, tag)?.join(binary_in_archive))
-}
-
 /// The release-metadata URL.
 ///
-/// `github.com` keeps its API on a different host; a mirror serves both trees
+/// `github.com` keeps its API on a different host; a fixture serves both trees
 /// itself. One `format!` for both would work against a fixture server and 404
 /// against the real thing — a defect only a real run finds.
+///
+/// In production this is only ever called with [`DEFAULT_DOWNLOAD_HOST`], so
+/// the first arm is the only one that ships; the second exists because a test
+/// fixture has to be able to answer this route. [`ReleaseSource::for_runtime`]
+/// is what makes that true, and `the_checksum_host_never_follows_the_mirror`
+/// is what keeps it true.
 #[must_use]
 pub fn api_url(host: &str, repo: &str, tag: &str) -> String {
     let host = host.trim_end_matches('/');
@@ -127,12 +202,33 @@ pub fn asset_url(host: &str, repo: &str, tag: &str, asset: &str) -> String {
     )
 }
 
-/// The lowercase hex sha256 the release claims for `asset`.
+/// What the release document says about one asset.
+///
+/// Both fields come from the **same entry**, looked up once: a second scan for
+/// the size could find a different entry than the digest did if the document
+/// ever carried two assets with one name (判据 §12 — derive them where the
+/// answer is already known).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetMeta {
+    /// Lowercase hex sha256, already validated as 64 hex characters.
+    pub digest: String,
+    /// The declared byte length. **Bounds memory, not authenticity** — it
+    /// arrives in the same document as `digest`, so it is exactly as
+    /// trustworthy as that document, and [`MAX_ASSET_BYTES`] is the bound it
+    /// cannot raise.
+    pub size: u64,
+}
+
+/// What the release claims for `asset`: its sha256 and its length.
 ///
 /// Every non-answer is an error naming the asset: absent from the list, no
 /// `digest` field, a digest that is not `sha256:`, or one that is not 64 hex
 /// characters. None of them may degrade into "install it anyway".
-pub fn digest_for_asset(release: &serde_json::Value, asset: &str) -> Result<String, ReleaseError> {
+///
+/// A missing or unreadable `size` is **not** fatal — it costs the derived
+/// bound, not the integrity check — so it falls back to [`MAX_ASSET_BYTES`],
+/// which is the bound that was always going to be enforced anyway.
+pub fn asset_meta(release: &serde_json::Value, asset: &str) -> Result<AssetMeta, ReleaseError> {
     let assets = release
         .get("assets")
         .and_then(serde_json::Value::as_array)
@@ -171,17 +267,32 @@ pub fn digest_for_asset(release: &serde_json::Value, asset: &str) -> Result<Stri
             detail: format!("digest {raw:?} is not 64 hex characters"),
         });
     }
-    Ok(hex_part.to_ascii_lowercase())
+    let size = entry
+        .get("size")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(MAX_ASSET_BYTES);
+    if size > MAX_ASSET_BYTES {
+        return Err(ReleaseError::TooLarge {
+            asset: asset.to_string(),
+            declared: size,
+            ceiling: MAX_ASSET_BYTES,
+        });
+    }
+    Ok(AssetMeta {
+        digest: hex_part.to_ascii_lowercase(),
+        size,
+    })
 }
 
 /// Hash `bytes` and compare. The error names BOTH hashes: an operator has to
 /// be able to tell "my mirror is stale" from "the pinned tag moved" without
 /// re-running anything.
-/// `mirror` is the clause [`mirror_clause`] built for the runtime being
-/// installed, so the refusal names the knob an operator can actually turn. It
-/// is a parameter rather than a lookup inside because this function is the
-/// pure hash compare and knows nothing about runtimes or config sections.
-pub fn verify_sha256(bytes: &[u8], expect_hex: &str, mirror: &str) -> Result<(), ReleaseError> {
+///
+/// `advice` is built by the caller, which is the only layer that knows whether
+/// a mirror is configured. It is a parameter rather than a lookup inside
+/// because this function is the pure hash compare and knows nothing about
+/// runtimes, hosts or config sections.
+pub fn verify_sha256(bytes: &[u8], expect_hex: &str, advice: &str) -> Result<(), ReleaseError> {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let actual = hex::encode(hasher.finalize());
@@ -192,115 +303,137 @@ pub fn verify_sha256(bytes: &[u8], expect_hex: &str, mirror: &str) -> Result<(),
         expected: expect_hex.to_ascii_lowercase(),
         actual,
         bytes: bytes.len(),
-        mirror: mirror.to_string(),
+        advice: advice.to_string(),
     })
 }
 
-/// Extract exactly the member named `member` from `archive` to `dest`.
+/// Extract exactly the member named `member` out of `archive` to `dest`.
+///
+/// `archive` is the **verified buffer**, not a path. That is the fix for a
+/// TOCTOU: the previous version hashed a buffer and then re-opened a file, so
+/// what was checked and what was executed were different objects. A
+/// [`std::io::Cursor`] over the same bytes removes the gap, and with it the
+/// scratch file, its cleanup paths, and their discarded errors.
 ///
 /// Paths are compared **whole**, never by suffix: `obscura` and `bin/obscura`
-/// are different members, and a suffix match takes whichever comes first —
-/// the same reasoning `chromium_launch::argv_names_dir` gives for comparing
-/// argv tokens rather than scanning a joined string.
+/// are different members, and a suffix match takes whichever comes first.
 ///
-/// `is_zip` is a PARAMETER, and that is the whole point. The obvious spelling
-/// reads the format off `archive.extension()` — but the path this is handed is
-/// the download scratch file, `<asset>.part`, so the Windows asset
-/// `obscura-x86_64-windows.zip` arrives as `…zip.part` whose extension is
-/// `"part"`. A real zip would then be fed to `GzDecoder` and every Windows
-/// install would fail with "cannot read tar entries", green in a test suite
+/// `is_zip` is a PARAMETER, and that is the point. The obvious spelling sniffs
+/// the format off a filename — and the name this used to be handed was the
+/// download scratch file `<asset>.part`, whose extension is `"part"`, so a zip
+/// went to `GzDecoder` and every Windows install failed, green in a test suite
 /// whose fixtures are all `.tar.gz`. The format is a property of the ASSET, so
-/// the asset name is what decides it (判据 §12: derive it where it is known).
+/// the asset name decides it (判据 §12).
+///
+/// `label` names the archive in error messages; it is the asset name, not a
+/// path, because there is no longer a path.
 pub fn extract_one(
-    archive: &Path,
+    archive: &[u8],
+    label: &str,
     member: &str,
     dest: &Path,
     is_zip: bool,
 ) -> Result<(), ReleaseError> {
-    let file = std::fs::File::open(archive).map_err(|e| ReleaseError::Io {
-        path: archive.display().to_string(),
-        source: e,
-    })?;
     let found = if is_zip {
-        extract_from_zip(file, member, dest, archive)?
+        extract_from_zip(archive, member, dest, label)?
     } else {
-        extract_from_targz(file, member, dest, archive)?
+        extract_from_targz(archive, member, dest, label)?
     };
     if !found {
         return Err(ReleaseError::Archive {
-            archive: archive.display().to_string(),
+            archive: label.to_string(),
             detail: format!("does not contain a member named {member:?}"),
         });
     }
     make_executable(dest)
 }
 
+/// Copy at most [`MAX_ASSET_BYTES`] from `src` into `dest`, refusing rather
+/// than truncating if the member is larger.
+///
+/// An uncapped `io::copy` here is the decompression half of the bounds
+/// question: the asset's own declared size bounds the *compressed* bytes and
+/// says nothing about what they expand to.
+fn copy_member_capped(src: &mut impl Read, dest: &Path, label: &str) -> Result<(), ReleaseError> {
+    let mut out = std::fs::File::create(dest).map_err(|e| ReleaseError::Io {
+        path: dest.display().to_string(),
+        source: e,
+    })?;
+    // `+ 1` so that hitting the ceiling exactly is distinguishable from
+    // exceeding it: a member of exactly MAX_ASSET_BYTES is legal, one byte
+    // more is not, and `take(MAX)` alone cannot tell those apart.
+    let mut limited = src.take(MAX_ASSET_BYTES + 1);
+    let copied = std::io::copy(&mut limited, &mut out).map_err(|e| ReleaseError::Io {
+        path: dest.display().to_string(),
+        source: e,
+    })?;
+    if copied > MAX_ASSET_BYTES {
+        // The partial write is removed: a truncated binary under the name the
+        // probe searches for is worse than nothing there at all.
+        let _ = std::fs::remove_file(dest);
+        return Err(ReleaseError::TooLarge {
+            asset: format!("{label} member"),
+            declared: copied,
+            ceiling: MAX_ASSET_BYTES,
+        });
+    }
+    Ok(())
+}
+
 fn extract_from_targz(
-    file: std::fs::File,
+    archive: &[u8],
     member: &str,
     dest: &Path,
-    archive: &Path,
+    label: &str,
 ) -> Result<bool, ReleaseError> {
-    let mut tarball = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let mut tarball =
+        tar::Archive::new(flate2::read::GzDecoder::new(std::io::Cursor::new(archive)));
     let entries = tarball.entries().map_err(|e| ReleaseError::Archive {
-        archive: archive.display().to_string(),
+        archive: label.to_string(),
         detail: format!("cannot read tar entries: {e}"),
     })?;
     for entry in entries {
         let mut entry = entry.map_err(|e| ReleaseError::Archive {
-            archive: archive.display().to_string(),
+            archive: label.to_string(),
             detail: format!("cannot read a tar entry: {e}"),
         })?;
         let path = entry.path().map_err(|e| ReleaseError::Archive {
-            archive: archive.display().to_string(),
+            archive: label.to_string(),
             detail: format!("a tar entry has an unreadable path: {e}"),
         })?;
         if path.to_string_lossy() != member {
             continue;
         }
-        let mut out = std::fs::File::create(dest).map_err(|e| ReleaseError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
-        std::io::copy(&mut entry, &mut out).map_err(|e| ReleaseError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
+        copy_member_capped(&mut entry, dest, label)?;
         return Ok(true);
     }
     Ok(false)
 }
 
 fn extract_from_zip(
-    file: std::fs::File,
+    archive: &[u8],
     member: &str,
     dest: &Path,
-    archive: &Path,
+    label: &str,
 ) -> Result<bool, ReleaseError> {
-    let mut zipfile = zip::ZipArchive::new(file).map_err(|e| ReleaseError::Archive {
-        archive: archive.display().to_string(),
-        detail: format!("cannot open zip: {e}"),
-    })?;
+    let mut zipfile =
+        zip::ZipArchive::new(std::io::Cursor::new(archive)).map_err(|e| ReleaseError::Archive {
+            archive: label.to_string(),
+            detail: format!("cannot open zip: {e}"),
+        })?;
     // The Windows asset holds `obscura.exe`, not `obscura`; accepting either
     // keeps the spec's `binary_in_archive` one string across all platforms.
     let wanted = [member.to_string(), format!("{member}.exe")];
     for i in 0..zipfile.len() {
         let mut entry = zipfile.by_index(i).map_err(|e| ReleaseError::Archive {
-            archive: archive.display().to_string(),
+            archive: label.to_string(),
             detail: format!("cannot read zip entry {i}: {e}"),
         })?;
         let name = entry.name().to_string();
         if !wanted.iter().any(|w| w == &name) {
             continue;
         }
-        let mut out = std::fs::File::create(dest).map_err(|e| ReleaseError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
-        std::io::copy(&mut entry, &mut out).map_err(|e| ReleaseError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
+        copy_member_capped(&mut entry, dest, label)?;
         return Ok(true);
     }
     Ok(false)
@@ -326,52 +459,59 @@ fn make_executable(path: &Path) -> Result<(), ReleaseError> {
     Ok(())
 }
 
-/// The mirror the operator configured for `runtime`, or [`DEFAULT_DOWNLOAD_HOST`].
+/// The mirror the operator configured for `runtime`'s asset bytes, or
+/// [`DEFAULT_DOWNLOAD_HOST`].
 ///
-/// Mirrors `post_install::config_env`'s discipline
-/// (`src/runtimes/post_install.rs`): a config we could not read is NOT a config
-/// with no mirror, so it warns and proceeds with the default. That is safe here
-/// for a reason that does not hold there, and the reason is worth stating: the
-/// digest check runs against the bytes whatever host served them, so the worst
-/// a wrong host can do is fail to download. It cannot install different bytes.
+/// Mirrors `post_install::config_env`'s discipline: a config we could not read
+/// is NOT a config with no mirror, so it warns and proceeds with the default.
 ///
 /// **Per runtime, and never `[general.browser.runtime] download_host`.** That
-/// key is `PLAYWRIGHT_DOWNLOAD_HOST` (`browser::profile::BrowserRuntimeConfig`,
-/// and `runtimes::post_install` is its one reader) — an npmmirror-shaped
-/// Playwright CDN mirror, which serves no GitHub release tree at all. Reading
-/// it here would let a chromium mirror silently rewrite every obscura URL into
-/// a 404. A runtime with no mirror key of its own gets the default host rather
-/// than another runtime's mirror, and
-/// `every_release_installed_runtime_has_a_mirror_key` is what stops that from
-/// becoming a default nobody chose.
+/// key is `PLAYWRIGHT_DOWNLOAD_HOST` — an npmmirror-shaped Playwright CDN
+/// mirror, which serves no GitHub release tree at all. Reading it here would
+/// let a chromium mirror silently rewrite every obscura URL into a 404.
+///
+/// **A non-`https` mirror is rejected and the default used.** This is
+/// **hygiene, not integrity**, and the distinction is the whole subject of this
+/// module's trust-model doc: the checksum comes from GitHub's API regardless,
+/// so a plaintext asset mirror could not substitute bytes undetected even if it
+/// were honoured. What this prevents is an operator silently downgrading their
+/// own transport with a typo — not an attack the digest would otherwise miss.
 #[must_use]
 pub fn configured_host(runtime: &str) -> String {
     let Some(key) = mirror_key_for(runtime) else {
         return DEFAULT_DOWNLOAD_HOST.to_string();
     };
-    match crate::config::Config::load() {
-        Ok(cfg) => (key.read)(&cfg).unwrap_or_else(|| DEFAULT_DOWNLOAD_HOST.to_string()),
+    let configured = match crate::config::Config::load() {
+        Ok(cfg) => (key.read)(&cfg),
         Err(e) => {
             warn!("cannot read config for the {runtime} release download host: {e}");
-            DEFAULT_DOWNLOAD_HOST.to_string()
+            None
         }
+    };
+    let Some(host) = configured else {
+        return DEFAULT_DOWNLOAD_HOST.to_string();
+    };
+    if !host.starts_with("https://") {
+        warn!(
+            "{} is {host:?}, which is not https; ignoring it and using {DEFAULT_DOWNLOAD_HOST}",
+            key.path
+        );
+        return DEFAULT_DOWNLOAD_HOST.to_string();
     }
+    host
 }
 
 /// A runtime's download mirror: how to READ it, and what to CALL it.
 ///
 /// Both halves in one value because they are one fact with two faces (判据 §9)
 /// — the key `configured_host` consults and the key a refusal tells the
-/// operator to check must never be different keys. Splitting them into a
-/// lookup and a message literal is how a remedy ends up naming a knob the code
-/// does not read.
+/// operator to check must never be different keys.
 struct MirrorKey {
     /// The operator-facing spelling, exactly as it appears in `config.toml`.
     path: &'static str,
     /// How to read it out of the loaded config. A `fn` rather than a dotted
     /// string because the config is a typed tree and the accessor is what
-    /// already applies the blank-is-unset rule
-    /// ([`crate::browser::profile::ObscuraRuntimeConfig::download_host`]).
+    /// already applies the blank-is-unset rule.
     read: fn(&crate::config::Config) -> Option<String>,
 }
 
@@ -397,18 +537,88 @@ fn mirror_key_for(runtime: &str) -> Option<MirrorKey> {
     }
 }
 
-/// What a refusal calls the mirror for `runtime`, as a clause that reads
-/// correctly whether or not the runtime has a key of its own.
+/// What a digest mismatch tells the operator to look at first.
 ///
-/// Derived from [`mirror_key_for`], never written out beside it: a message
-/// naming one key while the code reads another is 判据 §1 with the expensive
-/// copy in an operator's config file.
-#[must_use]
-pub fn mirror_clause(runtime: &str) -> String {
-    mirror_key_for(runtime).map_or_else(
-        || "a download_host mirror".to_string(),
-        |k| format!("the {} mirror", k.path),
-    )
+/// **A hostile mirror never reaches this error at all** — it would serve
+/// matching bytes and, if it served the metadata, a matching digest. Since the
+/// checksum always comes from GitHub's API, this error can only ever mean *two
+/// honest hosts disagree*, and the two ways that happens need different
+/// sentences:
+///
+/// * **with a mirror configured** — the likely cause is the mirror being out
+///   of date or not mirroring this release, so the sentence names its key;
+/// * **with no mirror** — GitHub's API and its own asset host disagree, most
+///   often because the release was re-uploaded under the same tag. The previous
+///   version emitted a conditional about a `download_host` in this case, i.e.
+///   it went quiet exactly when the operator had set nothing and most needed a
+///   next step.
+fn digest_mismatch_advice(runtime: &str, mirror_configured: bool) -> String {
+    if !mirror_configured {
+        return "No download_host mirror is configured, so GitHub's API and its release-asset host \
+                disagree about this asset — most often because the release was re-uploaded under \
+                the same tag. Retry; if it persists, the pinned tag has to be re-checked against \
+                upstream."
+            .to_string();
+    }
+    match mirror_key_for(runtime) {
+        Some(key) => format!(
+            "The {} mirror is serving bytes that do not match the checksum GitHub's API publishes \
+             for this asset. Either it is out of date or it is not mirroring this release; clear \
+             the key to install from GitHub directly.",
+            key.path
+        ),
+        // Unreachable in production: a runtime with no mirror key can never
+        // have `mirror_configured == true`, because `configured_host` returns
+        // the default host for exactly those runtimes, and
+        // `every_release_installed_runtime_has_a_mirror_key` keeps the set of
+        // release-installed runtimes equal to the set of keyed ones. Written as
+        // a stated answer rather than `unreachable!()` because those two
+        // predicates agreeing is a property of this file, not of the types.
+        None => "The configured download mirror is serving bytes that do not match the checksum \
+                 GitHub's API publishes for this asset."
+            .to_string(),
+    }
+}
+
+/// Where the two halves of an install come from.
+///
+/// Two fields rather than one host, because they are not the same question.
+/// The bytes may come from wherever the operator points them; **the checksum
+/// may not**, or the mirror would be choosing both the archive and the hash it
+/// is checked against, and the digest check would verify transport rather than
+/// provenance.
+#[derive(Debug, Clone)]
+pub struct ReleaseSource {
+    /// Where the release METADATA — and therefore the expected sha256 — is
+    /// fetched from. [`Self::for_runtime`] fixes this at
+    /// [`DEFAULT_DOWNLOAD_HOST`]; it is a field at all so a test fixture can
+    /// answer the route.
+    pub api_host: String,
+    /// Where the asset BYTES are fetched from: the operator's mirror, or the
+    /// default.
+    pub asset_host: String,
+}
+
+impl ReleaseSource {
+    /// The production constructor, and the single place that decides a mirror
+    /// may not supply the checksum.
+    ///
+    /// `the_checksum_host_never_follows_the_mirror` is the falsifier: point
+    /// `api_host` at [`configured_host`] and it goes red with a mirror set.
+    #[must_use]
+    pub fn for_runtime(runtime: &str) -> Self {
+        Self {
+            api_host: DEFAULT_DOWNLOAD_HOST.to_string(),
+            asset_host: configured_host(runtime),
+        }
+    }
+
+    /// Whether the operator pointed the asset bytes somewhere other than
+    /// GitHub. The one input [`digest_mismatch_advice`] needs.
+    #[must_use]
+    fn mirror_configured(&self) -> bool {
+        self.asset_host.trim_end_matches('/') != DEFAULT_DOWNLOAD_HOST
+    }
 }
 
 /// Fetch, verify, extract. Returns the absolute path of the installed binary.
@@ -418,7 +628,7 @@ pub async fn install_release(
     tag: &str,
     asset: &str,
     binary_in_archive: &str,
-    host: &str,
+    source: &ReleaseSource,
 ) -> Result<PathBuf, ReleaseError> {
     let dir = install_dir(runtime, tag)?;
     tokio::fs::create_dir_all(&dir)
@@ -432,11 +642,14 @@ pub async fn install_release(
         .user_agent(concat!("aleph/", env!("ALEPH_VERSION")))
         .build()
         .map_err(|e| ReleaseError::Http {
-            url: host.to_string(),
+            url: source.api_host.clone(),
+            what: Fetch::Checksum,
             source: e,
         })?;
 
-    let meta_url = api_url(host, repo, tag);
+    // The checksum, from GitHub's API — never from the mirror. Every failure
+    // here is fail-closed and says which fetch it was (判据 §8, §17).
+    let meta_url = api_url(&source.api_host, repo, tag);
     let resp = client
         .get(&meta_url)
         .timeout(METADATA_TIMEOUT)
@@ -444,16 +657,19 @@ pub async fn install_release(
         .await
         .map_err(|e| ReleaseError::Http {
             url: meta_url.clone(),
+            what: Fetch::Checksum,
             source: e,
         })?;
     if !resp.status().is_success() {
         return Err(ReleaseError::Status {
             url: meta_url,
+            what: Fetch::Checksum,
             status: resp.status().as_u16(),
         });
     }
     let body = resp.text().await.map_err(|e| ReleaseError::Http {
         url: meta_url.clone(),
+        what: Fetch::Checksum,
         source: e,
     })?;
     let release: serde_json::Value =
@@ -461,61 +677,35 @@ pub async fn install_release(
             url: meta_url.clone(),
             detail: e.to_string(),
         })?;
-    // Before the download, so a platform with no build fails in a second
-    // instead of after 90 MB.
-    let expect = digest_for_asset(&release, asset)?;
+    // Before the download, so a platform with no build — or an asset whose
+    // declared size is absurd — fails in a second instead of after 90 MB.
+    let meta = asset_meta(&release, asset)?;
 
-    let dl_url = asset_url(host, repo, tag, asset);
-    let resp = client
-        .get(&dl_url)
-        .timeout(DOWNLOAD_TIMEOUT)
-        .send()
-        .await
-        .map_err(|e| ReleaseError::Http {
-            url: dl_url.clone(),
-            source: e,
-        })?;
-    if !resp.status().is_success() {
-        return Err(ReleaseError::Status {
-            url: dl_url,
-            status: resp.status().as_u16(),
-        });
-    }
-    let bytes = resp.bytes().await.map_err(|e| ReleaseError::Http {
-        url: dl_url,
-        source: e,
-    })?;
+    let dl_url = asset_url(&source.asset_host, repo, tag, asset);
+    let bytes = download_capped(&client, &dl_url, meta.size).await?;
 
-    // `.part` so a crash mid-write never leaves a file the extractor would
-    // read as a complete archive.
-    let part = dir.join(format!("{asset}.part"));
-    tokio::fs::write(&part, &bytes)
-        .await
-        .map_err(|e| ReleaseError::Io {
-            path: part.display().to_string(),
-            source: e,
-        })?;
-    if let Err(e) = verify_sha256(&bytes, &expect, &mirror_clause(runtime)) {
-        // Deleted before returning: leaving the bad archive behind invites the
-        // next reader to "just extract it manually".
-        let _ = tokio::fs::remove_file(&part).await;
-        return Err(e);
-    }
+    verify_sha256(
+        &bytes,
+        &meta.digest,
+        &digest_mismatch_advice(runtime, source.mirror_configured()),
+    )?;
 
+    // Extracted from the SAME buffer that was just hashed. No scratch file, so
+    // nothing can change between the check and the use.
     let dest = dir.join(binary_in_archive);
     let staged = dir.join(format!("{binary_in_archive}.tmp"));
-    let (part_for_task, staged_for_task) = (part.clone(), staged.clone());
+    let (staged_for_task, label) = (staged.clone(), asset.to_string());
     let member = binary_in_archive.to_string();
-    // From the ASSET name, never from `part`'s extension — that is `"part"`.
+    // From the ASSET name. There is no scratch path to sniff any more, and
+    // there must never be one again.
     let is_zip = asset
         .rsplit('.')
         .next()
         .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
     let extracted = tokio::task::spawn_blocking(move || {
-        extract_one(&part_for_task, &member, &staged_for_task, is_zip)
+        extract_one(&bytes, &label, &member, &staged_for_task, is_zip)
     })
     .await;
-    let _ = tokio::fs::remove_file(&part).await;
     match extracted {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -544,19 +734,79 @@ pub async fn install_release(
     Ok(dest)
 }
 
+/// Download `url` into memory, refusing past `declared` bytes.
+///
+/// Streamed rather than `resp.bytes()`, and the buffer is **not** pre-allocated
+/// from `declared`: the point of the bound is that a number in someone else's
+/// document cannot make this process allocate. `Content-Length` is checked when
+/// present and the running total is checked regardless, because a header that
+/// can be absent can also lie.
+async fn download_capped(
+    client: &reqwest::Client,
+    url: &str,
+    declared: u64,
+) -> Result<Vec<u8>, ReleaseError> {
+    let cap = declared.min(MAX_ASSET_BYTES);
+    let resp = client
+        .get(url)
+        .timeout(DOWNLOAD_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| ReleaseError::Http {
+            url: url.to_string(),
+            what: Fetch::Asset,
+            source: e,
+        })?;
+    if !resp.status().is_success() {
+        return Err(ReleaseError::Status {
+            url: url.to_string(),
+            what: Fetch::Asset,
+            status: resp.status().as_u16(),
+        });
+    }
+    if let Some(len) = resp.content_length() {
+        if len > cap {
+            return Err(ReleaseError::TooLarge {
+                asset: url.to_string(),
+                declared: len,
+                ceiling: cap,
+            });
+        }
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| ReleaseError::Http {
+            url: url.to_string(),
+            what: Fetch::Asset,
+            source: e,
+        })?;
+        let total = buf.len() as u64 + chunk.len() as u64;
+        if total > cap {
+            return Err(ReleaseError::TooLarge {
+                asset: url.to_string(),
+                declared: total,
+                ceiling: cap,
+            });
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     /// A real gzipped tar holding TWO members, in the order the upstream
     /// archive has them (`obscura` then `obscura-worker`, measured with
     /// `tar tzf`). A single-member fixture would let a "take the first entry"
     /// extractor pass.
-    fn tiny_targz(dir: &std::path::Path) -> std::path::PathBuf {
-        let path = dir.join("fixture.tar.gz");
-        let file = std::fs::File::create(&path).unwrap();
-        let enc = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+    fn tiny_targz() -> Vec<u8> {
+        let enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         let mut builder = tar::Builder::new(enc);
         for (name, body) in [
             ("obscura", &b"#!/bin/sh\necho obscura 0.2.2\n"[..]),
@@ -568,8 +818,18 @@ mod tests {
             header.set_cksum();
             builder.append_data(&mut header, name, body).unwrap();
         }
-        builder.into_inner().unwrap().finish().unwrap();
-        path
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn tiny_zip() -> Vec<u8> {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().unix_permissions(0o755);
+        w.start_file("obscura.exe", opts).unwrap();
+        std::io::Write::write_all(&mut w, b"MZ fake windows binary\n").unwrap();
+        w.start_file("obscura-worker.exe", opts).unwrap();
+        std::io::Write::write_all(&mut w, b"worker\n").unwrap();
+        w.finish().unwrap().into_inner()
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
@@ -578,11 +838,11 @@ mod tests {
         hex::encode(h.finalize())
     }
 
-    /// github.com keeps its API on a DIFFERENT host; a mirror serves both
+    /// github.com keeps its API on a DIFFERENT host; a fixture serves both
     /// trees itself. One `format!` for both works against a fixture server and
     /// 404s against the real thing — a defect only a real run would find.
     #[test]
-    fn urls_split_github_com_into_its_api_host_but_keep_a_mirror_whole() {
+    fn urls_split_github_com_into_its_api_host_but_keep_a_fixture_whole() {
         assert_eq!(
             api_url("https://github.com", "o/p", "v1.2.3"),
             "https://api.github.com/repos/o/p/releases/tags/v1.2.3"
@@ -601,73 +861,192 @@ mod tests {
         );
     }
 
+    /// **The checksum never follows the mirror.** With a mirror configured, the
+    /// asset host moves and the API host does not — otherwise the mirror would
+    /// choose both the bytes and the hash they are checked against, and the
+    /// digest would verify transport rather than provenance.
+    #[tokio::test]
+    async fn the_checksum_host_never_follows_the_mirror() {
+        let home = TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        std::fs::write(
+            home.path().join("config.toml"),
+            b"[general.browser.obscura]\ndownload_host = \"https://mirror.invalid/gh\"\n",
+        )
+        .expect("write config");
+        // Precondition: the fixture is hostile only if a mirror really is set.
+        let cfg = crate::config::Config::load().expect("the fixture config must parse");
+        assert_eq!(
+            cfg.general.browser.obscura.download_host(),
+            Some("https://mirror.invalid/gh"),
+            "precondition: a mirror must actually be configured"
+        );
+
+        let source = ReleaseSource::for_runtime("obscura");
+        assert_eq!(source.asset_host, "https://mirror.invalid/gh");
+        assert_eq!(
+            source.api_host, DEFAULT_DOWNLOAD_HOST,
+            "a mirror may supply the bytes; it may not supply the checksum"
+        );
+        assert!(source.mirror_configured());
+        assert!(
+            api_url(&source.api_host, "o/p", "v1").starts_with("https://api.github.com/"),
+            "the metadata URL must resolve to GitHub's API"
+        );
+    }
+
+    /// A non-https mirror is ignored. **Hygiene, not integrity**: once the
+    /// checksum comes from the API regardless, a plaintext asset mirror could
+    /// not substitute bytes undetected anyway. What this stops is an operator
+    /// downgrading their own transport by typo.
+    #[tokio::test]
+    async fn a_non_https_mirror_is_rejected_in_favour_of_the_default() {
+        let home = TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        std::fs::write(
+            home.path().join("config.toml"),
+            b"[general.browser.obscura]\ndownload_host = \"http://plaintext.invalid/gh\"\n",
+        )
+        .expect("write config");
+        let cfg = crate::config::Config::load().expect("the fixture config must parse");
+        assert_eq!(
+            cfg.general.browser.obscura.download_host(),
+            Some("http://plaintext.invalid/gh"),
+            "precondition: the plaintext mirror must actually be set"
+        );
+        assert_eq!(configured_host("obscura"), DEFAULT_DOWNLOAD_HOST);
+    }
+
     /// A release whose asset carries no usable digest must REFUSE. "The
     /// metadata did not say" is a form of "I do not know", and an unknown may
-    /// never be spent as a go-ahead — least of all one that ends in `chmod
-    /// 755` on 90 MB we then execute (判据 §8).
+    /// never be spent as a go-ahead — least of all one that ends in `chmod 755`
+    /// on 90 MB we then execute (判据 §8).
     #[test]
     fn a_missing_or_malformed_digest_is_a_refusal_not_a_default() {
         let release = serde_json::json!({"assets": [
-            {"name": "a.tar.gz", "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+            {"name": "a.tar.gz", "size": 10, "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
             {"name": "b.tar.gz"},
             {"name": "c.tar.gz", "digest": "md5:deadbeef"},
             {"name": "d.tar.gz", "digest": "sha256:nothex"}
         ]});
+        let ok = asset_meta(&release, "a.tar.gz").unwrap();
         assert_eq!(
-            digest_for_asset(&release, "a.tar.gz").unwrap(),
+            ok.digest,
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );
+        assert_eq!(ok.size, 10);
         for (name, needle) in [
             ("b.tar.gz", "no digest"),
             ("c.tar.gz", "sha256:"),
             ("d.tar.gz", "64 hex"),
             ("nope.tar.gz", "not in the release"),
         ] {
-            let err = digest_for_asset(&release, name).unwrap_err().to_string();
+            let err = asset_meta(&release, name).unwrap_err().to_string();
             assert!(err.contains(needle), "{name}: {err}");
             assert!(err.contains(name), "the refusal must name the asset: {err}");
         }
+    }
+
+    /// **A declared size this installer will not honour is refused, not
+    /// obeyed.** `size` arrives in the same document as the digest, so it
+    /// bounds memory and not authenticity; the ceiling is the number this code
+    /// chose, and no response may raise it.
+    #[test]
+    fn a_declared_size_over_the_ceiling_is_refused_rather_than_honoured() {
+        let release = serde_json::json!({"assets": [
+            {"name": "huge.tar.gz", "size": 9_999_999_999u64,
+             "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+        ]});
+        let err = asset_meta(&release, "huge.tar.gz").unwrap_err().to_string();
+        assert!(err.contains("9999999999"), "names what was declared: {err}");
+        assert!(
+            err.contains(&MAX_ASSET_BYTES.to_string()),
+            "names the ceiling it exceeded: {err}"
+        );
+    }
+
+    /// A release document with no `size` still installs: the declared size is a
+    /// tighter bound, not the only one, and losing it must not cost the
+    /// integrity check.
+    #[test]
+    fn a_missing_size_falls_back_to_the_ceiling_rather_than_refusing() {
+        let release = serde_json::json!({"assets": [
+            {"name": "a.tar.gz",
+             "digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+        ]});
+        assert_eq!(
+            asset_meta(&release, "a.tar.gz").unwrap().size,
+            MAX_ASSET_BYTES
+        );
     }
 
     #[test]
     fn verify_sha256_names_both_hashes_when_they_differ() {
         let bytes = b"hello";
         let good = sha256_hex(bytes);
-        verify_sha256(bytes, &good, &mirror_clause("obscura"))
-            .expect("a matching digest must verify");
+        verify_sha256(bytes, &good, "advice").expect("a matching digest must verify");
         let bad = "f".repeat(64);
-        let err = verify_sha256(bytes, &bad, &mirror_clause("obscura"))
+        let err = verify_sha256(bytes, &bad, "advice")
             .unwrap_err()
             .to_string();
         assert!(err.contains(&good), "must name what we measured: {err}");
         assert!(err.contains(&bad), "must name what was expected: {err}");
     }
 
-    /// The refusal must name the knob this runtime's installer actually reads.
-    /// A generic "a download_host mirror" sends an operator hunting; naming
-    /// `[general.browser.runtime]` sends them to a key that exists, is read by
-    /// something else, and does nothing for this download (判据 §17).
+    /// The two arms of the mismatch advice, asserted as **properties** rather
+    /// than as pinned prose.
+    ///
+    /// The no-mirror arm is the one that used to go quiet: it emitted a
+    /// conditional about a `download_host` to an operator who had set none.
     #[test]
-    fn the_mirror_clause_names_the_key_configured_host_reads() {
-        assert_eq!(
-            mirror_clause("obscura"),
-            "the [general.browser.obscura] download_host mirror"
+    fn the_mismatch_advice_has_an_arm_for_having_no_mirror_at_all() {
+        let with = digest_mismatch_advice("obscura", true);
+        assert!(
+            with.contains("[general.browser.obscura] download_host"),
+            "with a mirror set, name the key that is most likely at fault: {with}"
         );
         assert!(
-            !mirror_clause("obscura").contains("[general.browser.runtime]"),
-            "the Playwright CDN key cannot serve a GitHub release"
+            !with.contains("[general.browser.runtime]"),
+            "the Playwright CDN key cannot serve a GitHub release: {with}"
         );
-        // A runtime with no key of its own says so generically rather than
-        // borrowing obscura's.
-        assert_eq!(mirror_clause("node"), "a download_host mirror");
+
+        let without = digest_mismatch_advice("obscura", false);
+        assert!(
+            !without.contains('['),
+            "with no mirror set, the operator must not be handed a config section they \
+             never touched: {without}"
+        );
+        assert!(
+            without.contains("tag"),
+            "and must still be told what to do next: {without}"
+        );
+        assert_ne!(with, without, "the two cases are not the same sentence");
+    }
+
+    /// The no-key arm exists because the function is total over `Option`, not
+    /// because anything reaches it: `every_release_installed_runtime_has_a
+    /// _mirror_key` (below) keeps the set of release-installed runtimes equal
+    /// to the set of keyed ones, so `mirror_configured == true` with no key is
+    /// unreachable in production.
+    ///
+    /// Asserted as a **property** — it names no config section it cannot
+    /// justify — rather than by pinning wording whose rendering line cannot be
+    /// pointed at (判据 §17).
+    #[test]
+    fn the_no_key_arm_names_no_section_it_cannot_justify() {
+        let advice = digest_mismatch_advice("node", true);
+        assert!(
+            !advice.contains('['),
+            "a runtime with no mirror key must not name one: {advice}"
+        );
+        assert!(!advice.is_empty());
     }
 
     #[test]
     fn extract_one_takes_the_named_member_and_only_that_one() {
         let dir = TempDir::new().unwrap();
-        let archive = tiny_targz(dir.path());
         let dest = dir.path().join("obscura");
-        extract_one(&archive, "obscura", &dest, false).unwrap();
+        extract_one(&tiny_targz(), "fixture.tar.gz", "obscura", &dest, false).unwrap();
         let body = std::fs::read_to_string(&dest).unwrap();
         assert!(body.contains("echo obscura 0.2.2"), "{body}");
         assert!(
@@ -692,9 +1071,7 @@ mod tests {
     #[test]
     fn extract_one_compares_whole_paths_not_suffixes() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("nested.tar.gz");
-        let file = std::fs::File::create(&path).unwrap();
-        let enc = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         let mut builder = tar::Builder::new(enc);
         let body = &b"nested\n"[..];
         let mut header = tar::Header::new_gnu();
@@ -704,11 +1081,17 @@ mod tests {
         builder
             .append_data(&mut header, "bin/obscura", body)
             .unwrap();
-        builder.into_inner().unwrap().finish().unwrap();
+        let archive = builder.into_inner().unwrap().finish().unwrap();
 
-        let err = extract_one(&path, "obscura", &dir.path().join("x"), false)
-            .unwrap_err()
-            .to_string();
+        let err = extract_one(
+            &archive,
+            "nested.tar.gz",
+            "obscura",
+            &dir.path().join("x"),
+            false,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("obscura"), "{err}");
         assert!(
             !dir.path().join("x").exists(),
@@ -716,52 +1099,41 @@ mod tests {
         );
     }
 
-    /// The Windows path, through the scratch name that broke it. `.zip.part`
-    /// has extension `"part"`, so anything that sniffs the path decides "tar"
-    /// and hands a zip to `GzDecoder`. Every other fixture in this module is a
-    /// `.tar.gz`, so without this test the Windows install ships green and
-    /// fails on the first real machine.
+    /// The zip branch reaches the `.exe` sibling. Every other fixture in this
+    /// module is a `.tar.gz`, so without this the Windows install ships green
+    /// and fails on the first real machine.
     #[test]
-    fn a_zip_is_extracted_even_when_the_scratch_path_ends_in_part() {
+    fn a_zip_member_is_extracted_through_its_exe_sibling() {
         let dir = TempDir::new().unwrap();
-        let zip_path = dir.path().join("obscura-x86_64-windows.zip.part");
-        // The premise this fixture rests on, asserted rather than assumed: a
-        // reader that sniffed the format off the path would see "part" here.
-        assert_eq!(
-            zip_path.extension().and_then(|e| e.to_str()),
-            Some("part"),
-            "the scratch name must NOT look like a zip, or this test proves nothing"
-        );
-        {
-            let file = std::fs::File::create(&zip_path).unwrap();
-            let mut w = zip::ZipWriter::new(file);
-            let opts: zip::write::FileOptions<'_, ()> =
-                zip::write::FileOptions::default().unix_permissions(0o755);
-            w.start_file("obscura.exe", opts).unwrap();
-            std::io::Write::write_all(&mut w, b"MZ fake windows binary\n").unwrap();
-            w.start_file("obscura-worker.exe", opts).unwrap();
-            std::io::Write::write_all(&mut w, b"worker\n").unwrap();
-            w.finish().unwrap();
-        }
         let dest = dir.path().join("obscura");
-        // `binary_in_archive` is the bare name on every platform; the zip
-        // branch accepts the `.exe` sibling.
-        extract_one(&zip_path, "obscura", &dest, true).unwrap();
+        extract_one(
+            &tiny_zip(),
+            "obscura-x86_64-windows.zip",
+            "obscura",
+            &dest,
+            true,
+        )
+        .unwrap();
         assert!(
             std::fs::read_to_string(&dest)
                 .unwrap()
                 .contains("fake windows binary"),
-            "the zip branch must run for a .zip.part scratch file"
+            "the zip branch must accept `obscura.exe` for `obscura`"
         );
     }
 
     #[test]
     fn extract_one_refuses_an_archive_that_does_not_hold_the_member() {
         let dir = TempDir::new().unwrap();
-        let archive = tiny_targz(dir.path());
-        let err = extract_one(&archive, "not-there", &dir.path().join("x"), false)
-            .unwrap_err()
-            .to_string();
+        let err = extract_one(
+            &tiny_targz(),
+            "fixture.tar.gz",
+            "not-there",
+            &dir.path().join("x"),
+            false,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("not-there"), "{err}");
         assert!(
             !dir.path().join("x").exists(),
@@ -771,9 +1143,9 @@ mod tests {
 
     /// Every runtime this crate installs from a GitHub release must have a
     /// mirror key of its own, or an operator on a network that blocks
-    /// `objects.githubusercontent.com` has no door (判据 §14) — and the one
-    /// door that exists next door, `[general.browser.runtime] download_host`,
-    /// is a Playwright CDN mirror that would 404 every URL built here.
+    /// `objects.githubusercontent.com` has no door (判据 §14) — and the one door
+    /// next to it, `[general.browser.runtime] download_host`, is a Playwright
+    /// CDN mirror that would 404 every URL built here.
     ///
     /// Derived from `SPECS` rather than from a list of runtime names: adding a
     /// second `GithubRelease` spec without a mirror key goes red here instead
@@ -803,51 +1175,8 @@ mod tests {
         );
     }
 
-    /// The Playwright mirror is NOT this module's mirror, asserted as an
-    /// EFFECT rather than as a property of this file's source text.
-    ///
-    /// `[general.browser.runtime] download_host` is `PLAYWRIGHT_DOWNLOAD_HOST`;
-    /// a host serving Playwright's browser CDN serves no
-    /// `/repos/…/releases/tags/…` tree, so reading it here would turn one
-    /// operator setting into a 404 on a different subsystem's install
-    /// (判据 §1 — one key, two meanings).
-    ///
-    /// The first version of this test was a source scan over
-    /// `include_str!("github_release.rs")`, and it went red on its first run
-    /// for the dumbest possible reason: the forbidden string is written **in
-    /// the assertion**, so the scan found its own needle (判据 §18 — the
-    /// instrument reporting on itself). Replaced rather than patched: a config
-    /// the function really reads is the thing being claimed.
-    #[tokio::test]
-    async fn configured_host_ignores_the_playwright_cdn_mirror() {
-        let home = TempDir::new().unwrap();
-        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
-        std::fs::write(
-            home.path().join("config.toml"),
-            b"[general.browser.runtime]\ndownload_host = \"https://npmmirror.invalid/playwright\"\n",
-        )
-        .expect("write config");
-        // Precondition: the fixture is hostile only if the config really
-        // parsed and really carries that key. A config that failed to load
-        // would send `configured_host` down its warn-and-default arm and this
-        // test would pass for the wrong reason.
-        let cfg = crate::config::Config::load().expect("the fixture config must parse");
-        assert_eq!(
-            cfg.general.browser.runtime.download_host(),
-            Some("https://npmmirror.invalid/playwright"),
-            "precondition: the Playwright mirror must actually be set"
-        );
-        assert_eq!(cfg.general.browser.obscura.download_host(), None);
-
-        assert_eq!(
-            configured_host("obscura"),
-            DEFAULT_DOWNLOAD_HOST,
-            "a Playwright CDN mirror must not be spent as a GitHub release host"
-        );
-    }
-
-    /// The positive half: obscura's own key IS read, and a runtime with no
-    /// mirror key of its own gets the default rather than obscura's.
+    /// The positive half of the mirror lookup: obscura's own key IS read, and a
+    /// runtime with no mirror key gets the default rather than obscura's.
     #[tokio::test]
     async fn configured_host_reads_the_runtimes_own_mirror_key() {
         let home = TempDir::new().unwrap();
@@ -872,21 +1201,48 @@ mod tests {
         );
     }
 
-    /// End to end against a local fixture "GitHub". The assertion is the
-    /// EFFECT — an executable file at the tag-named path whose CONTENTS are
-    /// the archive member's — not that a download happened.
+    /// The Playwright CDN mirror is not this module's mirror, asserted as an
+    /// effect: a config that sets only `[general.browser.runtime]` leaves the
+    /// obscura host at the default.
     #[tokio::test]
-    async fn install_release_verifies_the_digest_then_lays_down_the_binary() {
-        let scratch = TempDir::new().unwrap();
-        let archive = tiny_targz(scratch.path());
-        let bytes = std::fs::read(&archive).unwrap();
-        let digest = sha256_hex(&bytes);
-        let server = FixtureRelease::start("o/p", "v0.2.2", "a.tar.gz", bytes, Some(digest)).await;
+    async fn configured_host_ignores_the_playwright_cdn_mirror() {
+        let home = TempDir::new().unwrap();
+        let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+        std::fs::write(
+            home.path().join("config.toml"),
+            b"[general.browser.runtime]\ndownload_host = \"https://npmmirror.invalid/playwright\"\n",
+        )
+        .expect("write config");
+        let cfg = crate::config::Config::load().expect("the fixture config must parse");
+        assert_eq!(
+            cfg.general.browser.runtime.download_host(),
+            Some("https://npmmirror.invalid/playwright"),
+            "precondition: the Playwright mirror must actually be set"
+        );
+        assert_eq!(cfg.general.browser.obscura.download_host(), None);
+
+        assert_eq!(
+            configured_host("obscura"),
+            DEFAULT_DOWNLOAD_HOST,
+            "a Playwright CDN mirror must not be spent as a GitHub release host"
+        );
+    }
+
+    /// End to end against a local fixture "GitHub". **The name says happy-path**
+    /// on purpose: with a matching digest this test cannot tell verification
+    /// from its absence (measured — it stayed green with `verify_sha256` mutated
+    /// to always answer `Ok`). What it asserts is the EFFECT of a successful
+    /// install: an executable at the tag-named path whose contents are the
+    /// archive MEMBER's. `a_digest_mismatch_installs_nothing` is the only guard
+    /// that verification happens at all.
+    #[tokio::test]
+    async fn install_release_lays_down_the_archive_member_on_the_happy_path() {
+        let archive = tiny_targz();
+        let digest = sha256_hex(&archive);
+        let server =
+            FixtureRelease::start("o/p", "v0.2.2", "a.tar.gz", archive, Some(digest)).await;
 
         let home = TempDir::new().unwrap();
-        // `AlephHomeEnvGuard`, not `HomeEnvGuard`: `install_dir` resolves through
-        // `$ALEPH_HOME` first and `$HOME` only as a fallback, and the two guards
-        // take different mutexes.
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
 
         let out = install_release(
@@ -895,7 +1251,7 @@ mod tests {
             "v0.2.2",
             "a.tar.gz",
             "obscura",
-            &server.host(),
+            &server.source(),
         )
         .await
         .expect("install must succeed against the fixture release");
@@ -909,53 +1265,30 @@ mod tests {
                 .contains("echo obscura 0.2.2"),
             "the installed file must be the archive MEMBER, not the archive"
         );
-        assert!(
-            !install_dir("obscura", "v0.2.2")
-                .unwrap()
-                .join("a.tar.gz.part")
-                .exists(),
-            "the download scratch file must not survive a success"
-        );
-        assert!(
-            !install_dir("obscura", "v0.2.2")
-                .unwrap()
-                .join("obscura.tmp")
-                .exists(),
-            "the staging file must not survive a success"
-        );
+        // There is no scratch download file any more — the archive is never
+        // written to disk at all. Asserted as "the directory holds exactly the
+        // binary" so that reintroducing one goes red here.
+        let dir = install_dir("obscura", "v0.2.2").unwrap();
+        let left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(left, vec!["obscura".to_string()], "{left:?}");
     }
 
     /// **The zip branch, reached through `install_release` rather than by
-    /// handing `extract_one` an `is_zip` a caller chose.**
-    ///
-    /// `a_zip_is_extracted_even_when_the_scratch_path_ends_in_part` above
-    /// passes `is_zip: true` itself, so it proves the extractor handles a zip
-    /// — and says nothing about the line that DECIDES. The mutation the whole
-    /// `is_zip` parameter exists to catch (compute it from `part.extension()`,
-    /// which is `"part"`) leaves that test green. This one is the falsifier:
-    /// with the derivation moved to the scratch path, the zip is fed to
-    /// `GzDecoder` and this fails (判据 §4 — assert the effect at the surface
-    /// that owns the decision).
+    /// handing `extract_one` an `is_zip` a caller chose.** The
+    /// `extract_one`-level test passes `is_zip` itself, so it proves the
+    /// extractor handles a zip and says nothing about the line that DECIDES.
     #[tokio::test]
     async fn install_release_chooses_the_zip_branch_from_the_asset_name() {
-        let scratch = TempDir::new().unwrap();
-        let zip_path = scratch.path().join("obscura-x86_64-windows.zip");
-        {
-            let file = std::fs::File::create(&zip_path).unwrap();
-            let mut w = zip::ZipWriter::new(file);
-            let opts: zip::write::FileOptions<'_, ()> =
-                zip::write::FileOptions::default().unix_permissions(0o755);
-            w.start_file("obscura.exe", opts).unwrap();
-            std::io::Write::write_all(&mut w, b"MZ fake windows binary\n").unwrap();
-            w.finish().unwrap();
-        }
-        let bytes = std::fs::read(&zip_path).unwrap();
-        let digest = sha256_hex(&bytes);
+        let archive = tiny_zip();
+        let digest = sha256_hex(&archive);
         let server = FixtureRelease::start(
             "o/p",
             "v0.2.2",
             "obscura-x86_64-windows.zip",
-            bytes,
+            archive,
             Some(digest),
         )
         .await;
@@ -969,33 +1302,29 @@ mod tests {
             "v0.2.2",
             "obscura-x86_64-windows.zip",
             "obscura",
-            &server.host(),
+            &server.source(),
         )
         .await
         .expect("a zip asset must install");
-        // The scratch file `install_release` wrote was
-        // `obscura-x86_64-windows.zip.part`, whose extension is "part" — the
-        // premise of this test, and the reason the decision cannot live there.
         assert!(
             std::fs::read_to_string(&out)
                 .unwrap()
                 .contains("fake windows binary"),
-            "the zip branch must be chosen from the ASSET name, not the scratch path"
+            "the zip branch must be chosen from the ASSET name"
         );
     }
 
-    /// The point of the digest: a byte-flipped asset installs nothing, the
-    /// partial download is gone, and the error names BOTH hashes so an
-    /// operator can tell a stale mirror from a moved pin without re-running.
+    /// **The only guard that verification happens at all.** A byte-flipped
+    /// asset installs nothing and the error names both hashes, so an operator
+    /// can tell a stale mirror from a moved pin without re-running.
     #[tokio::test]
-    async fn a_digest_mismatch_refuses_deletes_the_download_and_installs_nothing() {
-        let scratch = TempDir::new().unwrap();
-        let archive = tiny_targz(scratch.path());
-        let mut bytes = std::fs::read(&archive).unwrap();
-        let claimed = sha256_hex(&bytes);
-        bytes.push(0x00); // one byte, added AFTER the digest was computed
+    async fn a_digest_mismatch_installs_nothing() {
+        let mut archive = tiny_targz();
+        let claimed = sha256_hex(&archive);
+        archive.push(0x00); // one byte, added AFTER the digest was computed
         let server =
-            FixtureRelease::start("o/p", "v0.2.2", "a.tar.gz", bytes, Some(claimed.clone())).await;
+            FixtureRelease::start("o/p", "v0.2.2", "a.tar.gz", archive, Some(claimed.clone()))
+                .await;
 
         let home = TempDir::new().unwrap();
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
@@ -1006,41 +1335,30 @@ mod tests {
             "v0.2.2",
             "a.tar.gz",
             "obscura",
-            &server.host(),
+            &server.source(),
         )
         .await
         .unwrap_err()
         .to_string();
         assert!(err.contains(&claimed), "names the expected digest: {err}");
         assert!(err.contains("sha256"), "{err}");
-        // …and the knob to check first, which must be obscura's own key and
-        // not the Playwright CDN one next door.
-        assert!(
-            err.contains("[general.browser.obscura] download_host"),
-            "the refusal must name the mirror this installer reads: {err}"
-        );
-        assert!(
-            !err.contains("[general.browser.runtime]"),
-            "the Playwright CDN key cannot serve a GitHub release: {err}"
-        );
         let dir = install_dir("obscura", "v0.2.2").unwrap();
         assert!(!dir.join("obscura").exists(), "no binary may be laid down");
         assert!(
-            !dir.join("a.tar.gz.part").exists(),
-            "the bad download must be deleted"
+            !dir.join("obscura.tmp").exists(),
+            "and no staging file may be left behind"
         );
     }
 
     /// An asset the release does not list must fail at the METADATA step,
-    /// before anything is downloaded — the network is not the place to
-    /// discover that a platform has no build.
+    /// **before anything is downloaded** — asserted by counting the fixture's
+    /// asset requests, not by looking for a scratch file that no longer exists.
     #[tokio::test]
     async fn an_unlisted_asset_fails_before_any_download() {
-        let scratch = TempDir::new().unwrap();
-        let archive = tiny_targz(scratch.path());
-        let bytes = std::fs::read(&archive).unwrap();
-        let digest = sha256_hex(&bytes);
-        let server = FixtureRelease::start("o/p", "v0.2.2", "a.tar.gz", bytes, Some(digest)).await;
+        let archive = tiny_targz();
+        let digest = sha256_hex(&archive);
+        let server =
+            FixtureRelease::start("o/p", "v0.2.2", "a.tar.gz", archive, Some(digest)).await;
 
         let home = TempDir::new().unwrap();
         let _guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
@@ -1051,28 +1369,26 @@ mod tests {
             "v0.2.2",
             "other.tar.gz",
             "obscura",
-            &server.host(),
+            &server.source(),
         )
         .await
         .unwrap_err()
         .to_string();
         assert!(err.contains("other.tar.gz"), "{err}");
         assert!(err.contains("not in the release"), "{err}");
-        assert!(
-            !install_dir("obscura", "v0.2.2")
-                .unwrap()
-                .join("other.tar.gz.part")
-                .exists(),
-            "nothing may be downloaded once the metadata step has refused"
+        assert_eq!(
+            server.asset_requests(),
+            0,
+            "the metadata step refused, so nothing may have been downloaded"
         );
     }
 
-    /// A minimal HTTP server speaking the two routes `install_release` uses.
-    /// `tokio::net::TcpListener` on 127.0.0.1:0 — the shape already used
-    /// elsewhere in this tree for local fixtures, so no dev-dependency enters
-    /// for it.
+    /// A minimal HTTP server speaking the two routes `install_release` uses,
+    /// and counting the asset route so a test can assert a download did NOT
+    /// happen.
     struct FixtureRelease {
         port: u16,
+        asset_hits: Arc<AtomicUsize>,
         _task: tokio::task::JoinHandle<()>,
     }
 
@@ -1088,11 +1404,13 @@ mod tests {
             let port = listener.local_addr().unwrap().port();
             let api_path = format!("/repos/{repo}/releases/tags/{tag}");
             let asset_path = format!("/{repo}/releases/download/{tag}/{asset}");
-            let mut entry = serde_json::json!({ "name": asset });
+            let mut entry = serde_json::json!({ "name": asset, "size": body.len() });
             if let Some(d) = digest {
                 entry["digest"] = serde_json::Value::String(format!("sha256:{d}"));
             }
             let api_body = serde_json::json!({ "assets": [entry] }).to_string();
+            let asset_hits = Arc::new(AtomicUsize::new(0));
+            let hits_for_task = asset_hits.clone();
             let task = tokio::spawn(async move {
                 loop {
                     let Ok((mut sock, _)) = listener.accept().await else {
@@ -1102,6 +1420,7 @@ mod tests {
                     let asset_path = asset_path.clone();
                     let api_body = api_body.clone();
                     let body = body.clone();
+                    let hits = hits_for_task.clone();
                     tokio::spawn(async move {
                         use tokio::io::{AsyncReadExt, AsyncWriteExt};
                         let mut buf = vec![0u8; 4096];
@@ -1111,6 +1430,7 @@ mod tests {
                         let (status, payload): (&str, Vec<u8>) = if target == api_path {
                             ("200 OK", api_body.into_bytes())
                         } else if target == asset_path {
+                            hits.fetch_add(1, Ordering::SeqCst);
                             ("200 OK", body)
                         } else {
                             ("404 Not Found", b"no".to_vec())
@@ -1126,11 +1446,29 @@ mod tests {
                     });
                 }
             });
-            Self { port, _task: task }
+            Self {
+                port,
+                asset_hits,
+                _task: task,
+            }
         }
 
         fn host(&self) -> String {
             format!("http://127.0.0.1:{}", self.port)
+        }
+
+        /// Both halves pointed at the fixture. Production never builds a
+        /// `ReleaseSource` this way — [`ReleaseSource::for_runtime`] is the only
+        /// production constructor and it fixes `api_host`.
+        fn source(&self) -> ReleaseSource {
+            ReleaseSource {
+                api_host: self.host(),
+                asset_host: self.host(),
+            }
+        }
+
+        fn asset_requests(&self) -> usize {
+            self.asset_hits.load(Ordering::SeqCst)
         }
     }
 }

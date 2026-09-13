@@ -446,14 +446,19 @@ async fn run_github_release(
             ),
         };
     };
-    let host = crate::runtimes::github_release::configured_host(name);
+    // The production constructor, and the only one: it fixes the checksum host
+    // at GitHub's API and lets only the asset bytes follow the operator's
+    // mirror. A mirror that supplied both would be choosing the archive AND
+    // the hash it is checked against.
+    let source = crate::runtimes::github_release::ReleaseSource::for_runtime(name);
+    let asset_host = source.asset_host.clone();
     match crate::runtimes::github_release::install_release(
         name,
         repo,
         tag,
         asset_name,
         binary_in_archive,
-        &host,
+        &source,
     )
     .await
     {
@@ -462,7 +467,7 @@ async fn run_github_release(
             CmdOutcome::Success
         }
         Err(e) => CmdOutcome::Failed {
-            stderr: format!("{name} {tag} from {host}: {e}"),
+            stderr: format!("{name} {tag} (assets from {asset_host}): {e}"),
         },
     }
 }
