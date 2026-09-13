@@ -752,10 +752,10 @@ mod tests {
     /// **One limit, and it is the only one.** A file passes by containing any
     /// retirement entry point *anywhere* in it, so this proves the wire exists
     /// in the file, not that it is on every path through it. Concretely: it
-    /// names `session_split.rs`, `new_tool.rs`, `chat.rs` and
-    /// `agent_instance.rs` when their wires are removed, but it would **not**
-    /// have caught the `sessions.reset` gap on its own, because `modify.rs`
-    /// already contained a retirement for its delete arm.
+    /// names `session_split.rs`, `new_tool.rs` and `chat.rs` when their wires
+    /// are removed, but it would **not** have caught the `sessions.reset` gap
+    /// on its own, because `modify.rs` already contained a retirement for its
+    /// delete arm.
     ///
     /// Going finer would mean guessing where one `fn` ends inside a lexical
     /// scan, and a window whose boundary is a character count rather than the
@@ -827,9 +827,13 @@ mod tests {
         // Self-check: distinguishes "every file is wired" from "the scanner
         // stopped seeing anything", which read identically in the report that
         // let two of these through.
-        // Tight against today's tree (8 files / 12 sites), so shrinkage — a
-        // marker that stops matching, a split that swallows a file — reddens
-        // instead of quietly narrowing the guard's world.
+        // Tight against today's tree (8 files / 12 sites, re-measured
+        // 2026-09-13 by setting the floor to 99: `AgentInstance::reset_session`,
+        // zero callers, left the set that day and the split heal in
+        // `projection_reconciler.rs` — `register_epoch` on the registrar —
+        // had joined it, so the numbers did not move), so shrinkage — a marker
+        // that stops matching, a split that swallows a file — reddens instead
+        // of quietly narrowing the guard's world.
         assert!(
             with_markers.len() >= 8 && sites >= 12,
             "census went blind: {} file(s) / {} site(s) — the markers or the \

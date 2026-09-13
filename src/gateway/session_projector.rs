@@ -2074,4 +2074,38 @@ mod tests {
              missed seqs, not start at them: {projected:?}"
         );
     }
+
+    /// SSOT (P1): `session_events` is the log and this projector is the ONLY
+    /// production writer of the `messages` projection. Derived from the tree,
+    /// equality on the set of files: a second writer bypasses the log — its
+    /// rows are invisible to `request_repair`, to the resume pass and to
+    /// `chat.rewind`'s retire — and must route through the event log instead.
+    ///
+    /// Measured at `5e85060b8` the set was `{orphan_notice.rs,
+    /// agent_instance.rs, session_projector.rs}`: T16 folded the first into the
+    /// resume arm, T17 deleted the second's writers (zero production callers).
+    /// The store's own tree (`gateway/session_store/`) defines and forwards the
+    /// method and originates no row, so it is out of scope by construction.
+    /// Mutation (T17): restore `orphan_notice.rs` from `5e85060b8` and its
+    /// `pub mod` line ⇒ red naming the file.
+    #[test]
+    fn the_projector_is_the_only_production_writer_of_the_messages_table() {
+        use crate::utils::source_scan::{production_text, rust_sources_under, strip_comment_lines};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let writers: BTreeSet<String> = rust_sources_under(&root.join("src"))
+            .into_iter()
+            .filter(|(rel, _)| !rel.starts_with("src/gateway/session_store/"))
+            .filter(|(rel, text)| {
+                strip_comment_lines(&production_text(std::path::Path::new(rel), text))
+                    .contains(".append_message(")
+            })
+            .map(|(rel, _)| rel)
+            .collect();
+        assert_eq!(
+            writers,
+            BTreeSet::from(["src/gateway/session_projector.rs".to_string()]),
+            "a second `messages` writer bypasses the SSOT: route it through the event log \
+             and `request_repair`"
+        );
+    }
 }
