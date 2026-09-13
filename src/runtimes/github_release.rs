@@ -607,6 +607,22 @@ fn mirror_key_for(runtime: &str) -> Option<MirrorKey> {
 /// What a mismatch between the bytes and the release document tells the
 /// operator to look at first.
 ///
+/// **The property, stated on the function because it is about all THREE arms.**
+/// Every sentence any arm returns describes WHERE the bytes came from and what
+/// to do about it; **none reports the result of a comparison.** That is
+/// load-bearing because this string is also rendered by
+/// [`ReleaseError::LongerThanDeclared`], which is reached *before*
+/// `verify_sha256` runs at all — so a comparison result here would be a claim
+/// about a check that did not happen (N5). The measured mismatch belongs to
+/// [`ReleaseError::DigestMismatch`]'s own message, the only place that ran it.
+///
+/// ⚠️ That paragraph used to sit as a comment **attached to the one arm that
+/// violated it** (N6), which is 判据 §1 at the shortest possible distance. It
+/// governs the function, so it lives on the function — and above the per-arm
+/// list rather than after it, because a paragraph trailing a Markdown list is
+/// parsed as that list's continuation (`doc list item without indentation`,
+/// eight warnings on the first attempt).
+///
 /// ⚠️ **This doc used to open "a hostile mirror never reaches this error at
 /// all". That was true at BASE and A(1) repealed it**, and the sentence carried
 /// its own refutation: it reasoned *"since the checksum always comes from
@@ -630,19 +646,9 @@ fn mirror_key_for(runtime: &str) -> Option<MirrorKey> {
 /// * **with none** — GitHub's API and its own asset host disagree, most often a
 ///   re-upload under the same tag. The version before this one emitted a
 ///   conditional about a `download_host` here, i.e. it went quiet exactly when
-///   the operator had set nothing and most needed a next step.
-/// **The property, stated on the function because it is about all THREE arms.**
-/// Every sentence any arm returns describes WHERE the bytes came from and what
-/// to do about it; **none reports the result of a comparison.** That is
-/// load-bearing because this string is also rendered by
-/// [`ReleaseError::LongerThanDeclared`], which is reached *before*
-/// `verify_sha256` runs at all — so a comparison result here would be a claim
-/// about a check that did not happen (N5). The measured mismatch belongs to
-/// [`ReleaseError::DigestMismatch`]'s own message, the only place that ran it.
-///
-/// ⚠️ This paragraph used to sit as a comment **attached to the one arm that
-/// violated it** (N6), which is 判据 §1 at the shortest possible distance. It
-/// governs the function, so it lives on the function.
+///   the operator had set nothing and most needed a next step;
+/// * **with a mirror but no key for this runtime** — unreachable in production
+///   (see the arm), and it kept the pre-N5 wording for a round because of it.
 fn digest_mismatch_advice(runtime: &str, mirror_configured: bool) -> String {
     if !mirror_configured {
         // "in effect", not "configured" (N4): `configured_host` rejects a
