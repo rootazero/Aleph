@@ -351,7 +351,22 @@ pub(crate) fn last_run_notice(
 ) -> Option<String> {
     use aleph_protocol::LastRunDisposition as D;
 
-    let dangling = last_run.dangling().map(<[_]>::len);
+    // One split, from the protocol's own count: the calls the log proves
+    // never completed, and the rest, whose outcome nobody can vouch for. Both
+    // halves are `None` together — the list face never looked.
+    let counts = last_run
+        .dangling()
+        .zip(last_run.never_completed_count())
+        .map(|(d, never_completed)| (d.len() - never_completed, never_completed));
+    let parked_line =
+        |m: usize| td_string!(locale, narration.last_run_parked, parked = m as i64).to_string();
+    let with_parked = |base: String, m: usize| {
+        if m > 0 {
+            format!("{base} {}", parked_line(m))
+        } else {
+            base
+        }
+    };
     match last_run.disposition() {
         D::LogInconsistent => {
             // The server always names at least one tag on this path; an empty
@@ -364,15 +379,18 @@ pub(crate) fn last_run_notice(
             };
             Some(td_string!(locale, narration.last_run_log_inconsistent, tags = tags).to_string())
         }
-        D::Interrupted => Some(match (last_run.progress, dangling) {
-            (Some(p), Some(n)) => td_string!(
-                locale,
-                narration.last_run_interrupted,
-                answered = i64::from(p.tool_calls_answered),
-                dispatched = i64::from(p.tool_calls_dispatched),
-                unknown = n as i64
-            )
-            .to_string(),
+        D::Interrupted => Some(match (last_run.progress, counts) {
+            (Some(p), Some((unknown, never_completed))) => with_parked(
+                td_string!(
+                    locale,
+                    narration.last_run_interrupted,
+                    answered = i64::from(p.tool_calls_answered),
+                    dispatched = i64::from(p.tool_calls_dispatched),
+                    unknown = unknown as i64
+                )
+                .to_string(),
+                never_completed,
+            ),
             _ => td_string!(locale, narration.last_run_interrupted_plain).to_string(),
         }),
         D::Unrecognized => Some(
@@ -387,10 +405,12 @@ pub(crate) fn last_run_notice(
         // stopped between the seed and the run's own marker, and recovery
         // retries the message.
         D::Unanswered => Some(td_string!(locale, narration.last_run_unanswered).to_string()),
-        D::Clean | D::NeverRan => match dangling {
-            Some(n) if n > 0 => {
-                Some(td_string!(locale, narration.last_run_dangling, count = n as i64).to_string())
-            }
+        D::Clean | D::NeverRan => match counts {
+            Some((unknown, never_completed)) if unknown > 0 => Some(with_parked(
+                td_string!(locale, narration.last_run_dangling, count = unknown as i64).to_string(),
+                never_completed,
+            )),
+            Some((0, never_completed)) if never_completed > 0 => Some(parked_line(never_completed)),
             _ => None,
         },
     }
@@ -2167,6 +2187,7 @@ mod last_run_face_tests {
                 tool_name: "shell".into(),
                 provenance: DanglingCallView::THIS_RESTART.into(),
                 denied: false,
+                parked: None,
             })
             .collect()
     }
@@ -2265,6 +2286,42 @@ mod last_run_face_tests {
         };
         let notice = last_run_notice(&unmarked, Locale::default()).expect("lost calls are news");
         assert!(notice.contains('2'), "the count rides: {notice}");
+    }
+
+    /// §6.1: a call the log shows parked at a gate never completed, and the
+    /// sentence must not count it among the outcomes nobody can vouch for.
+    /// The split comes from the protocol's own predicate, so a parked call is
+    /// the same bucket as a denied one on every face.
+    #[test]
+    fn parked_calls_are_counted_as_never_completed_not_unknown() {
+        let mut lr = interrupted();
+        lr.dangling[0].parked = Some("approval".into());
+        let notice = last_run_notice(&lr, Locale::default()).expect("news");
+        assert!(
+            notice.contains("2/5") && notice.contains('1') && !notice.contains('3'),
+            "2 unknown, 1 never completed — not 3 unknown: {notice}"
+        );
+        assert_ne!(
+            notice,
+            last_run_notice(&interrupted(), Locale::default()).unwrap(),
+            "a parked call changes the sentence"
+        );
+        let all_parked = LastRunState {
+            disposition: LastRunState::NEVER_RAN.into(),
+            inspected: true,
+            dangling: lr
+                .dangling
+                .iter()
+                .map(|d| DanglingCallView {
+                    parked: Some("clarification".into()),
+                    ..d.clone()
+                })
+                .collect(),
+            ..LastRunState::default()
+        };
+        let n = last_run_notice(&all_parked, Locale::default())
+            .expect("never-completed calls are news too");
+        assert!(n.contains('3') && !n.contains('0'), "{n}");
     }
 
     /// The list face fills the word and nothing else, and that is enough to

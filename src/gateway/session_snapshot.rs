@@ -243,6 +243,9 @@ fn dangling_view(call: &crate::session::reduction::DanglingCall) -> DanglingCall
         }
         .to_string(),
         denied: call.denied,
+        // The wire word is the event's serde word (`ParkReason::as_str`), so a
+        // client reads the same spelling off `chat.history` as off the log.
+        parked: call.parked.map(|r| r.as_str().to_string()),
     }
 }
 
@@ -258,7 +261,7 @@ fn progress_view(progress: &RunProgress) -> RunProgressView {
 #[cfg(test)]
 mod last_run_tests {
     use super::*;
-    use crate::session::events::{RunOutcome, SessionEvent, ToolOutput, TurnId};
+    use crate::session::events::{ParkReason, RunOutcome, SessionEvent, ToolOutput, TurnId};
     use aleph_protocol::LastRunDisposition;
 
     fn rec(seq: u64, event: SessionEvent) -> SessionEventRecord {
@@ -328,6 +331,46 @@ mod last_run_tests {
                 metadata: Default::default(),
             },
             at: 4,
+        }
+    }
+
+    fn parked(call: &str, reason: ParkReason) -> SessionEvent {
+        SessionEvent::ToolCallParked {
+            turn_id: TurnId::new_v4(),
+            call_id: call.to_string(),
+            reason,
+        }
+    }
+
+    /// §6.1 on the attach face: a call parked at a gate when the log ended
+    /// carries the park's reason, and the string on the wire IS the event's
+    /// serde word — pinned through the view for every reason the core can
+    /// stamp, not through a literal this test would have written itself.
+    #[test]
+    fn a_parked_dangling_call_carries_the_reasons_wire_word() {
+        for reason in ParkReason::ALL {
+            let events = vec![
+                rec(1, started("run-a")),
+                rec(2, requested("c1")),
+                rec(3, parked("c1", reason)),
+            ];
+            let view = last_run_from_events(&events);
+            let dangling = view.dangling().expect("this face looked");
+            assert_eq!(dangling.len(), 1, "{reason:?}");
+            assert_eq!(
+                dangling[0].parked.as_deref(),
+                Some(reason.as_str()),
+                "{reason:?}"
+            );
+            assert_eq!(
+                serde_json::to_value(reason).unwrap(),
+                serde_json::json!(dangling[0].parked),
+                "the wire word is the serde word: {reason:?}"
+            );
+            assert!(
+                dangling[0].never_completed() && !dangling[0].denied,
+                "{reason:?}"
+            );
         }
     }
 

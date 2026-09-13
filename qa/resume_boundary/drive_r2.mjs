@@ -1,5 +1,6 @@
-// Real-machine driver for crash-recovery round 2 — the five stages `run.sh`
-// adds on top of the round-1 `crash` / `attribute` pair.
+// Real-machine driver for crash-recovery round 2 onwards — the Node stages
+// `run.sh` adds on top of the round-1 `crash` / `attribute` pair (its `case`
+// list is the roster; this header deliberately does not count them).
 //
 //   drive_r2.mjs <gateway-port> <qa-root> <cmd> [args…]
 //
@@ -315,17 +316,124 @@ const sendTurn = async (conn, text, sessionKey, model, tier) => {
 async function cmdDangle(marker = "qa-dangle", model = null, tier = null) {
   const conn = new Conn("driver");
   await conn.open();
+  await dangleOn(conn, marker, model, tier);
+  conn.close();
+}
+
+/** The body of `cmdDangle`, on a connection the caller owns. */
+async function dangleOn(conn, marker, model = null, tier = null) {
   const prior = fs.existsSync(SESSION_FILE) ? readSession() : null;
   const started = await sendTurn(conn, `${marker} please run the long command`, prior, model, tier);
   fs.writeFileSync(SESSION_FILE, started.session_key);
   const landed = await until(() => danglingIds(started.session_key).length > 0, 180_000, 400);
-  conn.close();
   if (!landed) {
     console.error("INSTRUMENT FAILURE: no dangling dispatch ever reached the durable log");
     console.error(`  events for ${started.session_key}: ${eventsOf(started.session_key).length}`);
     process.exit(1);
   }
   log(`dangling now: ${danglingIds(started.session_key).join(",")}`);
+}
+
+/** Dangling call ids that also have a `tool_call_parked` row — the park as a FACT, not a card. */
+const parkedIds = () => {
+  const open = new Set(danglingIds());
+  return eventsOf()
+    .filter((r) => r.event_type === "tool_call_parked")
+    .map((r) => {
+      try {
+        return JSON.parse(r.payload_json).call_id;
+      } catch {
+        return null;
+      }
+    })
+    .filter((id) => id && open.has(id));
+};
+
+/**
+ * Stage `parked`'s dangle: the same `ask`-gated `bash` dispatch as every r2
+ * stage, but the kill must land AFTER the gate's `tool_call_parked` stamp is
+ * durable — a kill between the dispatch and the stamp is the `claims` shape
+ * (OUTCOME UNKNOWN), and this stage would then be measuring that one. The
+ * second check proves the park is live in the process, not merely logged.
+ *
+ * ONE connection for both halves. Measured 2026-09-13 on this host: a second
+ * WebSocket opened and closed in the same driver process made Node v24 abort
+ * inside `process.exit` (`Assertion failed: !(handle->flags &
+ * UV_HANDLE_CLOSING), src\win\async.c:76`) AFTER both checks had passed —
+ * the shell then read the abort as "no parked dangle".
+ */
+async function cmdDangleParked(marker = "qa-dangle") {
+  const conn = new Conn("driver");
+  await conn.open();
+  await dangleOn(conn, marker);
+  const landed = await until(() => (parkedIds().length > 0 ? parkedIds() : null), 60_000, 300);
+  check(
+    Boolean(landed),
+    "a tool_call_parked row landed for the dangling call BEFORE the kill",
+    show(eventsOf().slice(-4)),
+  );
+  if (!landed) process.exit(1);
+  const pending = (await conn.attempt("exec.approvals.pending")).result?.pending ?? [];
+  check(
+    pending.some((p) => p.record?.tool_call_id === landed[0]),
+    "and exec.approvals.pending holds that call id — the gate is parked on it, not merely logged",
+    show(pending),
+  );
+  conn.close();
+}
+
+/**
+ * Stage `parked`: a call the log shows parked at a gate when the server died
+ * must be reported as NEVER RAN, not "unknown". `sub=wire` runs before the
+ * resume (the reducer's reading of the log, on the exact field the Panel and
+ * TUI render); `sub=model` after it (what the repair put in front of the
+ * model, and the receipt that says the resume happened at all).
+ */
+async function cmdParked(sub, receiptFile) {
+  const key = readSession();
+  if (sub === "model") {
+    const hit = await until(
+      () => requests().find((r) => userText(r.body).includes("never ran")) || null,
+      180_000,
+      1000,
+    );
+    check(
+      Boolean(hit),
+      "the model's next request says the call NEVER RAN",
+      `${requests().length} requests, none carrying the phrase`,
+    );
+    const text = hit ? userText(hit.body) : "";
+    check(text.includes("operator approval"), "and names what it was waiting for", text.slice(0, 400));
+    check(text.includes("bash"), "and names the tool", text.slice(0, 400));
+    check(
+      !requests().some((r) => userText(r.body).includes("OUTCOME UNKNOWN")),
+      "and no request calls that parked call's outcome UNKNOWN",
+    );
+    let receipt = null;
+    try {
+      receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    } catch {
+      /* asserted below */
+    }
+    check(receipt?.resumed === 1, "the receipt counts one resumed run", show(receipt));
+    return;
+  }
+  const conn = new Conn("driver");
+  await conn.open();
+  const { lastRun } = await lastRunOf(conn, key);
+  const d = (lastRun?.dangling || [])[0] || {};
+  check(
+    d.parked === "approval",
+    "the wire face says the dangling call was parked awaiting approval",
+    show(lastRun?.dangling),
+  );
+  check(d.denied === false, "and not denied", show(d));
+  check(
+    lastRun?.disposition === "interrupted",
+    "and still reads the run as interrupted",
+    show(lastRun?.disposition),
+  );
+  conn.close();
 }
 
 /** The instrument self-check the shell runs after the kill. */
@@ -1052,6 +1160,9 @@ const main = async () => {
     case "dangle":
       await cmdDangle(REST[0], REST[1], REST[2]);
       break;
+    case "dangle-parked":
+      await cmdDangleParked(REST[0]);
+      break;
     case "assert-dangling":
       await cmdAssertDangling(REST[0] ?? 1);
       break;
@@ -1066,6 +1177,9 @@ const main = async () => {
       break;
     case "denied":
       await cmdDenied(REST[0] ?? "wire");
+      break;
+    case "parked":
+      await cmdParked(REST[0] ?? "wire", REST[1]);
       break;
     case "rewind":
       await cmdRewind(REST[0] ?? "do", REST[1]);

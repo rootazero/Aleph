@@ -46,8 +46,8 @@ MOCK_PORT="${MOCK_PORT:-18832}"
 
 case "$STAGE" in
   crash|attribute) ;;
-  claims|denied|rewind|knobs|holes) ;;
-  *) echo "unknown stage: $STAGE (crash|attribute|claims|denied|rewind|knobs|holes)" >&2; exit 64 ;;
+  claims|denied|rewind|knobs|holes|parked) ;;
+  *) echo "unknown stage: $STAGE (crash|attribute|claims|denied|rewind|knobs|holes|parked)" >&2; exit 64 ;;
 esac
 
 # Build BEFORE HOME is redirected: cargo's registry/git-cache/toolchain all
@@ -235,7 +235,7 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
   RC=0
   # The floor each stage's phases have to reach to be called green. These are
   # MEASURED values, not targets: each is the count the stage printed on the
-  # tree that introduced it (2026-09-03, this worktree). Adding an assertion
+  # tree that introduced it (the r2 rows on 2026-09-03). Adding an assertion
   # raises the number here in the same commit; a number that drops on its own
   # is the defect this guard exists for.
   case "$STAGE" in
@@ -244,6 +244,7 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
     rewind) FLOOR=11 ;;
     knobs)  FLOOR=10 ;;
     holes)  FLOOR=12 ;;
+    parked) FLOOR=11 ;;
     *)      FLOOR=0 ;;
   esac
   case "$STAGE" in
@@ -287,6 +288,24 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
         "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"
         echo "resume rc=$? receipt:"; cat "$RECEIPT"
         drive denied model || RC=1
+      fi
+      ;;
+    parked)
+      # Resume OFF so the receipt is the only pass. The dangle is the r2
+      # instrument (BASH_POLICY=ask parks at the gate); new here: the kill
+      # waits for the PARK ROW, not just the dispatch.
+      node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" false "$BASH_POLICY" >/dev/null || exit 1
+      start_server || exit 1
+      drive dangle-parked qa-dangle || { echo "instrument failure: no parked dangle" >&2; RC=1; }
+      hard_kill_server
+      [ "$RC" = "0" ] && { drive assert-dangling 1 || RC=1; }
+      [ "$RC" = "0" ] && { start_server || exit 1; }
+      [ "$RC" = "0" ] && { drive parked wire || RC=1; }
+      if [ "$RC" = "0" ]; then
+        say "aleph-server resume --json"
+        "$BIN" resume --json "$(cat "$SESSION_FILE")" >"$RECEIPT" 2>"$QA_ROOT/resume.err"
+        echo "resume rc=$? receipt:"; cat "$RECEIPT"
+        drive parked model "$RECEIPT" || RC=1
       fi
       ;;
     rewind)
@@ -377,7 +396,7 @@ fi
 # nobody had checked which of the two it gets wrong.
 if [ "$(python3 -c 'print("py-ok")' 2>/dev/null)" != "py-ok" ]; then
   echo "stage '$STAGE' is Python and this host has no usable python3 (both python3 and python are the WindowsApps stub: no output, exit 49)." >&2
-  echo "The round-2 stages cover this tree and are Node: claims | denied | rewind | knobs | holes" >&2
+  echo "The round-2 stages cover this tree and are Node: claims | denied | rewind | knobs | holes | parked" >&2
   exit 78
 fi
 

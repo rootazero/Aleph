@@ -1074,7 +1074,22 @@ fn apply_history(state: &mut AppState, result: &Value, mode: AttachMode) {
 /// The counts are withheld then rather than printed as zeroes, which would read
 /// as "nothing was lost" off a face that never looked.
 fn last_run_notice(last_run: &LastRunState) -> Option<String> {
-    let dangling = last_run.dangling().map(<[_]>::len);
+    // One split, from the protocol's own count: the calls the log proves
+    // never completed, and the rest, whose outcome nobody can vouch for. Both
+    // halves are `None` together — the list face never looked.
+    let counts = last_run
+        .dangling()
+        .zip(last_run.never_completed_count())
+        .map(|(d, never_completed)| (d.len() - never_completed, never_completed));
+    let parked_line =
+        |m: usize| format!("其中 {m} 次工具调用未完成 — 服务停止时还在等审批 / 等回答，或已被拒绝");
+    let with_parked = |base: String, m: usize| {
+        if m > 0 {
+            format!("{base} {}", parked_line(m))
+        } else {
+            base
+        }
+    };
     match last_run.disposition() {
         LastRunDisposition::LogInconsistent => {
             let tags = if last_run.contradictions.is_empty() {
@@ -1086,10 +1101,13 @@ fn last_run_notice(last_run: &LastRunState) -> Option<String> {
                 "会话日志不一致（{tags}）— 恢复已拒绝，请运行 aleph doctor"
             ))
         }
-        LastRunDisposition::Interrupted => Some(match (last_run.progress, dangling) {
-            (Some(p), Some(n)) => format!(
-                "上一轮运行被中断 — {}/{} 次工具回执已落盘，{n} 次结果未知",
-                p.tool_calls_answered, p.tool_calls_dispatched
+        LastRunDisposition::Interrupted => Some(match (last_run.progress, counts) {
+            (Some(p), Some((unknown, never_completed))) => with_parked(
+                format!(
+                    "上一轮运行被中断 — {}/{} 次工具回执已落盘，{unknown} 次结果未知",
+                    p.tool_calls_answered, p.tool_calls_dispatched
+                ),
+                never_completed,
             ),
             _ => "上一轮运行被中断".to_string(),
         }),
@@ -1106,8 +1124,12 @@ fn last_run_notice(last_run: &LastRunState) -> Option<String> {
         // no run marker at all, which reduces to `never_ran`. Keying the notice
         // on the word alone would leave those calls produced by the server and
         // rendered by nobody (criterion #17).
-        LastRunDisposition::Clean | LastRunDisposition::NeverRan => match dangling {
-            Some(n) if n > 0 => Some(format!("上一轮留下 {n} 次未回执的工具调用 — 结果未知")),
+        LastRunDisposition::Clean | LastRunDisposition::NeverRan => match counts {
+            Some((unknown, never_completed)) if unknown > 0 => Some(with_parked(
+                format!("上一轮留下 {unknown} 次未回执的工具调用 — 结果未知"),
+                never_completed,
+            )),
+            Some((0, never_completed)) if never_completed > 0 => Some(parked_line(never_completed)),
             _ => None,
         },
     }
@@ -2373,6 +2395,7 @@ mod last_run_face_tests {
                 tool_name: "shell".into(),
                 provenance: DanglingCallView::THIS_RESTART.into(),
                 denied: false,
+                parked: None,
             }],
             progress: Some(RunProgressView {
                 tool_calls_dispatched: 3,
@@ -2464,6 +2487,7 @@ mod last_run_face_tests {
                 tool_name: "file_write".into(),
                 provenance: DanglingCallView::EARLIER_RUN.into(),
                 denied: false,
+                parked: None,
             }],
             inspected: true,
             ..LastRunState::default()
@@ -2471,6 +2495,23 @@ mod last_run_face_tests {
         let lines = notices(&history_with(Some(Some(unmarked))));
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("1 次未回执"), "{}", lines[0]);
+    }
+
+    /// §6.1: a call the log shows parked at a gate never completed, and this
+    /// screen must not count it among the outcomes nobody can vouch for. The
+    /// split comes from the protocol's own predicate — the same bucket a
+    /// denied call lands in, on every face.
+    #[test]
+    fn parked_calls_are_reported_as_never_completed() {
+        let mut lr = interrupted();
+        lr.dangling[0].parked = Some("approval".into());
+        let lines = notices(&history_with(Some(Some(lr))));
+        assert_eq!(lines.len(), 1, "still one line about the previous run");
+        assert!(
+            lines[0].contains("0 次结果未知") && lines[0].contains("1 次工具调用未完成"),
+            "the parked call moves out of the unknown count: {}",
+            lines[0]
+        );
     }
 
     /// The picker's title is the row's own `topic`. It used to read `name` — a

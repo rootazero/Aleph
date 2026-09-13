@@ -523,6 +523,14 @@ impl LastRunState {
     pub fn dangling(&self) -> Option<&[DanglingCallView]> {
         self.inspected.then_some(self.dangling.as_slice())
     }
+
+    /// Of the dangling calls, how many never completed; `None` on the list
+    /// face (see [`Self::dangling`]).
+    #[must_use]
+    pub fn never_completed_count(&self) -> Option<usize> {
+        self.dangling()
+            .map(|d| d.iter().filter(|c| c.never_completed()).count())
+    }
 }
 
 /// The closed set of run dispositions a client renders, plus the arm for a
@@ -567,6 +575,12 @@ pub struct DanglingCallView {
     /// started.
     #[serde(default)]
     pub denied: bool,
+    /// Why the call was parked at a gate when the log ends (`"approval"` /
+    /// `"clarification"` / `"pre_hook"`, the core's `ParkReason` words): it
+    /// never completed. Absent = not parked, or an older core; neither is
+    /// "never completed".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked: Option<String>,
 }
 
 impl DanglingCallView {
@@ -575,6 +589,15 @@ impl DanglingCallView {
     /// Left over from an earlier run — also the honest answer whenever the
     /// provenance cannot be established.
     pub const EARLIER_RUN: &'static str = "earlier_run";
+
+    /// The log proves this call produced no result: refused by the gate,
+    /// still parked waiting for approval / a hook (it never started), or
+    /// parked waiting for an answer that never came (its question was
+    /// delivered). One predicate for every face (Panel, TUI, sub-agent note).
+    #[must_use]
+    pub fn never_completed(&self) -> bool {
+        self.denied || self.parked.is_some()
+    }
 }
 
 /// What a run got done before it stopped.
@@ -662,6 +685,7 @@ mod last_run_tests {
                 tool_name: "shell".into(),
                 provenance: DanglingCallView::THIS_RESTART.into(),
                 denied: true,
+                parked: None,
             }],
             ..LastRunState::from_markers(LastRunState::INTERRUPTED, None, 1)
         };
@@ -671,6 +695,48 @@ mod last_run_tests {
         assert_eq!(calls[0].tool_name, "shell");
         assert!(calls[0].denied);
         assert_eq!(calls[0].provenance, DanglingCallView::THIS_RESTART);
+    }
+
+    /// The fourth fact a dangling call can carry (§6.1): it was parked at a
+    /// gate when the log ended. On the wire that is the core's `ParkReason`
+    /// word; to every face it is "never completed" — the same bucket as
+    /// `denied`, and one predicate for all of them. Absent is the older
+    /// core's silence, and silence is "cannot vouch", never "never completed".
+    #[test]
+    fn a_parked_dangling_call_reads_as_never_completed_and_an_old_view_reads_as_unknown() {
+        let parked = DanglingCallView {
+            call_id: "c".into(),
+            tool_name: "bash".into(),
+            provenance: DanglingCallView::THIS_RESTART.into(),
+            denied: false,
+            parked: Some("approval".into()),
+        };
+        assert!(parked.never_completed());
+        let old: DanglingCallView =
+            serde_json::from_value(serde_json::json!({"call_id":"c","tool_name":"bash"})).unwrap();
+        assert!(
+            old.parked.is_none() && !old.never_completed(),
+            "absent is 'cannot vouch', never 'never completed'"
+        );
+        assert!(
+            !serde_json::to_value(&old)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("parked"),
+            "`None` stays off the wire"
+        );
+        let s = LastRunState {
+            inspected: true,
+            dangling: vec![parked, old],
+            ..LastRunState::from_markers(LastRunState::INTERRUPTED, None, 1)
+        };
+        assert_eq!(s.never_completed_count(), Some(1));
+        assert_eq!(
+            LastRunState::from_markers(LastRunState::INTERRUPTED, None, 1).never_completed_count(),
+            None,
+            "the list face cannot vouch"
+        );
     }
 
     /// A snapshot from a core that predates the field parses, and the absent
