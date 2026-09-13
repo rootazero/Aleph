@@ -1450,14 +1450,30 @@ mod tests {
         // reporting every verb as reaching. That is 判据 §2 landing on the
         // instrument, which is this branch's most repeated lesson.
         //
-        // Two assertions because the two break shapes are different, and
-        // neither needs a magic number — a byte count would be a fixture that
-        // rots:
-        //   * BALANCE catches "return the rest of the corpus" (measured at
-        //     992 open / 988 close, unbalanced).
-        //   * NO OTHER VERB'S DEFINITION catches "return the whole corpus",
-        //     which IS balanced, since the corpus is complete files joined.
-        //     Derived from the verb list, so it is not a hand-written set.
+        // TWO assertions, and neither needs a magic number — a byte count
+        // would be a fixture that rots.
+        //
+        // ⚠️ Which one actually fires was MEASURED here, not inherited, and it
+        // is not the one that was recommended. Brace balance was proposed as
+        // sufficient on the reading that a truncated remainder is unbalanced.
+        // Against THIS corpus it is not: running the remainder mutation, the
+        // balance assertion **passed** and the over-reach assertion is what
+        // caught it. The corpus is complete files joined, so a span running to
+        // the end of it can balance perfectly well — the missing closers are
+        // only the ones before the span started.
+        //
+        //   * NO OTHER VERB'S DEFINITION — the one that fired. Over-extraction
+        //     of any distance swallows a neighbouring `fn`, whether or not the
+        //     braces happen to come out even. Derived from the verb list, so it
+        //     is not a hand-written set.
+        //   * BALANCE — kept, because it catches a truncation that stops
+        //     mid-body, which the other cannot see, and because "one function
+        //     body" balancing is what the extractor's contract MEANS. It is the
+        //     cheaper check and it is not the load-bearing one here.
+        //
+        // Both stay: they catch different break shapes, and this round is the
+        // evidence that assuming which one covers you is how a control gets
+        // written that cannot fire.
         let click_bodies = fn_bodies(&scanned, "click");
         assert!(
             !click_bodies.is_empty(),
