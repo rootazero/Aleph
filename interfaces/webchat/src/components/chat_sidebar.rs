@@ -362,7 +362,7 @@ pub(crate) fn last_run_notice(
         |m: usize| td_string!(locale, narration.last_run_parked, parked = m as i64).to_string();
     let with_parked = |base: String, m: usize| {
         if m > 0 {
-            format!("{base} {}", parked_line(m))
+            format!("{base}; {}", parked_line(m))
         } else {
             base
         }
@@ -2176,7 +2176,7 @@ mod rehydrate_tests {
 #[cfg(test)]
 mod last_run_face_tests {
     use super::{last_run_notice, run_badge, RunBadge, SessionEntry};
-    use crate::i18n::Locale;
+    use crate::i18n::{td_string, Locale};
     use aleph_protocol::{DanglingCallView, LastRunState, RunProgressView};
 
     /// `n` calls that crossed the dispatch line and never came back.
@@ -2297,10 +2297,11 @@ mod last_run_face_tests {
         let mut lr = interrupted();
         lr.dangling[0].parked = Some("approval".into());
         let notice = last_run_notice(&lr, Locale::default()).expect("news");
-        assert!(
-            notice.contains("2/5") && notice.contains('1') && !notice.contains('3'),
-            "2 unknown, 1 never completed — not 3 unknown: {notice}"
-        );
+        // The digits in the order the sentence says them — 2/5 landed, 2
+        // unknown, 1 never completed. Locale-independent, and a swapped split
+        // would read "…1…2" rather than merely "contains a 1".
+        let digits: String = notice.chars().filter(char::is_ascii_digit).collect();
+        assert_eq!(digits, "2521", "{notice}");
         assert_ne!(
             notice,
             last_run_notice(&interrupted(), Locale::default()).unwrap(),
@@ -2321,7 +2322,14 @@ mod last_run_face_tests {
         };
         let n = last_run_notice(&all_parked, Locale::default())
             .expect("never-completed calls are news too");
-        assert!(n.contains('3') && !n.contains('0'), "{n}");
+        // Exactly the standalone parked line, rendered through the same key
+        // the notice uses — a swapped split would print the "no receipt"
+        // sentence for 3 instead, which also carries a lone '3'.
+        assert_eq!(
+            n,
+            td_string!(Locale::default(), narration.last_run_parked, parked = 3_i64).to_string(),
+            "only-parked calls get the parked line alone"
+        );
     }
 
     /// The list face fills the word and nothing else, and that is enough to

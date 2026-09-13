@@ -575,10 +575,9 @@ pub struct DanglingCallView {
     /// started.
     #[serde(default)]
     pub denied: bool,
-    /// Why the call was parked at a gate when the log ends (`"approval"` /
-    /// `"clarification"` / `"pre_hook"`, the core's `ParkReason` words): it
-    /// never completed. Absent = not parked, or an older core; neither is
-    /// "never completed".
+    /// Why the call was parked at a gate when the log ends (the core's
+    /// `ParkReason` serde words, e.g. `"approval"`): it never completed.
+    /// Absent = not parked, or an older core; neither is "never completed".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked: Option<String>,
 }

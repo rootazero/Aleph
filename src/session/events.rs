@@ -84,7 +84,7 @@ pub enum ParkReason {
 }
 
 impl ParkReason {
-    /// Every variant, for the two tests that walk them and for a wire face
+    /// Every variant, for the tests that walk them and for a wire face
     /// that wants to enumerate. Pinned complete by
     /// `tests::park_reason_all_lists_every_variant_once` (an exhaustive
     /// match, so a new variant does not compile until it is added here).

@@ -1081,11 +1081,12 @@ fn last_run_notice(last_run: &LastRunState) -> Option<String> {
         .dangling()
         .zip(last_run.never_completed_count())
         .map(|(d, never_completed)| (d.len() - never_completed, never_completed));
-    let parked_line =
-        |m: usize| format!("其中 {m} 次工具调用未完成 — 服务停止时还在等审批 / 等回答，或已被拒绝");
+    let parked_line = |m: usize| {
+        format!("上一轮有 {m} 次工具调用未完成 — 服务停止时它们还在等审批 / 等回答，或已被拒绝")
+    };
     let with_parked = |base: String, m: usize| {
         if m > 0 {
-            format!("{base} {}", parked_line(m))
+            format!("{base}；{}", parked_line(m))
         } else {
             base
         }
