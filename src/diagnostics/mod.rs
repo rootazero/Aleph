@@ -102,7 +102,7 @@ impl DiagnosticEngine {
         // a config nothing is using.
         let config_path = crate::config::Config::effective_path();
 
-        let checks: Vec<Arc<dyn HealthCheck>> = vec![
+        let mut checks: Vec<Arc<dyn HealthCheck>> = vec![
             Arc::new(checks::DataDirCheck::new(data_dir.clone())),
             Arc::new(checks::LoopGraphCheck::new(data_dir.clone())),
             Arc::new(checks::CacheHealthCheck::new(data_dir.clone())),
@@ -114,15 +114,24 @@ impl DiagnosticEngine {
             Arc::new(checks::VaultCheck::from_default_path()),
             Arc::new(checks::HooksConsentCheck::from_default_path()),
             Arc::new(checks::BrowserRuntimeCheck::new()),
-            Arc::new(checks::EngineMissingCheck::for_engine(
-                crate::browser::engine::Engine::Chromium,
-            )),
-            Arc::new(checks::EngineMissingCheck::for_engine(
-                crate::browser::engine::Engine::Obscura,
-            )),
             Arc::new(checks::MediaCodecsCheck::new()),
             Arc::new(checks::DuplicateInstanceCheck::new()),
         ];
+        // Derived from `Engine::ALL`, not hand-listed. A third engine is a
+        // compile error at `EngineMissingCheck::id_for` and at
+        // `runtime_manage`'s `locate_all` — but a hand-written pair here
+        // compiles cleanly, so the new engine would silently get no doctor
+        // check while `both_engine_checks_are_registered_in_the_default_
+        // _registry` (which asserted two string literals) stayed green. That is
+        // the shape commit `95cbdefd5` removed from the sibling; this is the
+        // twin getting the same fix rather than rediscovering it (判据 §16).
+        checks.extend(
+            crate::browser::engine::Engine::ALL
+                .into_iter()
+                .map(|engine| {
+                    Arc::new(checks::EngineMissingCheck::for_engine(engine)) as Arc<dyn HealthCheck>
+                }),
+        );
         Ok(Self::new(checks))
     }
 

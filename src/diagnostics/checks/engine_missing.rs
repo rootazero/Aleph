@@ -531,7 +531,7 @@ mod tests {
     /// If any one of them moves, this test names which invariant broke instead
     /// of leaving an unreachable arm and an amber doctor to be discovered.
     #[test]
-    fn the_check_answers_before_the_engine_abandons_it() {
+    fn the_three_timeouts_stay_strictly_nested_so_this_checks_own_arm_is_reachable() {
         assert!(
             crate::browser::chromium_resolve::DRY_RUN_TIMEOUT < RESOLVE_TIMEOUT,
             "the inner probe must finish before this check's own deadline"
@@ -609,7 +609,7 @@ mod tests {
     /// name a door that opens (判据 §14) — and here the door is the other
     /// engine, not an install that cannot succeed.
     #[test]
-    fn a_platform_with_no_release_asset_says_so_instead_of_offering_an_install() {
+    fn the_unavailable_platform_finding_says_so_instead_of_offering_an_install() {
         let f = unavailable_platform_finding(Engine::Obscura, "windows", "aarch64");
         assert_eq!(f.check_id, "browser/obscura-missing");
         assert!(f.detail.contains("aarch64"), "{}", f.detail);
@@ -628,11 +628,29 @@ mod tests {
     /// Registered, not merely defined. `default_registry` is what the offline
     /// `aleph-server doctor` builds; a check absent from it never runs and
     /// nothing else in the tree notices (判据 §7 — both ends present, no wire).
+    ///
+    /// **Derived from `Engine::ALL`, not two literals.** The two-literal
+    /// version could not see a third engine arriving without a check: the
+    /// compiler forces a new arm into `id_for` and into `locate_all`, but the
+    /// registration list compiled fine, so the engine silently got no doctor
+    /// check and this test stayed green. `ALL` is itself emitted by
+    /// `declare_engines!` from the enum's own variant list, so iterating it is
+    /// iterating the declared set rather than a second copy of it.
     #[test]
-    fn both_engine_checks_are_registered_in_the_default_registry() {
+    fn every_engine_gets_a_registered_check_in_the_default_registry() {
         let engine = crate::diagnostics::DiagnosticEngine::default_registry()
             .expect("the default registry must build");
         let ids = engine.check_ids();
+        for e in Engine::ALL {
+            assert!(
+                ids.contains(&id_for(e)),
+                "{} has no registered doctor check: {ids:?}",
+                e.as_str()
+            );
+        }
+        // The two ids are also user-facing wire values (`doctor --only`, the
+        // Part 4 settlement), so they are pinned as literals as well —
+        // renaming a file may not rename these.
         assert!(ids.contains(&"browser/chromium-missing"), "{ids:?}");
         assert!(ids.contains(&"browser/obscura-missing"), "{ids:?}");
     }
