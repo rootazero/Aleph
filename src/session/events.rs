@@ -470,19 +470,30 @@ pub enum SessionEvent {
         usage: Option<crate::orchestrator::dispatch::TokenBreakdown>,
         at: Timestamp,
     },
-    /// Stamped after the run. Carries what the usage fold
+    /// Stamped after every completed run. Carries what the usage fold
     /// (`session::usage_fold`) cannot derive: the run_id join, context-window
     /// occupancy, the priced cost and the serving model. Token counters were
     /// removed 2026-09-12 — they are folded from `AssistantMessage.usage`
     /// (`session::usage_fold::run_usage_totals`) when the projector lands this
     /// stamp; rows written before then still carry `input_tokens` /
     /// `output_tokens`, which serde ignores on the way in.
+    ///
+    /// The three gauge fields are `None` when the run resolved no occupancy —
+    /// a provider that reported no usage, a hook that stopped the run before
+    /// its first Think. The meta is still emitted so the run_id join lands on
+    /// the row the run did produce; the projector stamps the gauge only when
+    /// all three are `Some`, and a missing key reads as absent, never as 0.
+    /// Rows written before 2026-09-13 always carried the three as numbers and
+    /// decode as `Some`.
     AssistantRunMeta {
         turn_id: TurnId,
         run_id: String,
-        context_tokens: u32,
-        context_window: u32,
-        total_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_window: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_tokens: Option<u64>,
         /// This run's cost in USD, or `None` when it could not be priced.
         /// `None` ≠ 0.0 — an unpriced run must not silently understate the
         /// session total.
@@ -835,9 +846,9 @@ pub(crate) mod fixtures {
                 SessionEvent::AssistantRunMeta {
                     turn_id: t,
                     run_id: "r".into(),
-                    context_tokens: 0,
-                    context_window: 0,
-                    total_tokens: 0,
+                    context_tokens: Some(0),
+                    context_window: Some(0),
+                    total_tokens: Some(0),
                     cost_usd: None,
                     model: None,
                     model_provider: None,
@@ -1284,7 +1295,8 @@ mod tests {
     /// on the meta. The enum has no `deny_unknown_fields`, so they decode to
     /// the trimmed variant with the counters dropped on the floor — the fold
     /// re-derives them from the run's `AssistantMessage.usage`. Pinned so the
-    /// counters are ignored rather than refused, by name.
+    /// counters are ignored rather than refused, by name. The same old row
+    /// carries the three gauge numbers bare; they decode as `Some`.
     #[test]
     fn an_old_run_meta_with_token_counters_still_decodes() {
         let old = r#"{"type":"assistant_run_meta","turn_id":"11111111-1111-4111-8111-111111111111","run_id":"r-old","context_tokens":1234,"context_window":200000,"total_tokens":70,"input_tokens":45,"output_tokens":25,"cost_usd":0.12,"model":"claude","model_provider":"anthropic","at":3}"#;
@@ -1292,15 +1304,60 @@ mod tests {
             SessionEvent::AssistantRunMeta {
                 run_id,
                 context_tokens,
+                context_window,
                 total_tokens,
                 cost_usd,
                 model,
                 ..
             } => {
                 assert_eq!(run_id, "r-old");
-                assert_eq!((context_tokens, total_tokens), (1234, 70));
+                assert_eq!(
+                    (context_tokens, context_window, total_tokens),
+                    (Some(1234), Some(200_000), Some(70))
+                );
                 assert_eq!(cost_usd, Some(0.12));
                 assert_eq!(model.as_deref(), Some("claude"));
+            }
+            other => panic!("expected a run meta, got {other:?}"),
+        }
+    }
+
+    /// A meta whose run resolved no gauge carries no gauge keys on the wire
+    /// (`skip_serializing_if`), and a row without them decodes as `None` —
+    /// absent, not zero, on both sides of the store.
+    #[test]
+    fn a_run_meta_without_a_gauge_keeps_the_keys_off_the_wire_and_decodes_as_none() {
+        let meta = SessionEvent::AssistantRunMeta {
+            turn_id: uuid::Uuid::new_v4(),
+            run_id: "r-no-gauge".into(),
+            context_tokens: None,
+            context_window: None,
+            total_tokens: None,
+            cost_usd: None,
+            model: None,
+            model_provider: None,
+            at: 3,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        for key in ["context_tokens", "context_window", "total_tokens"] {
+            assert!(
+                !json.contains(key),
+                "{key} must be absent, not null: {json}"
+            );
+        }
+        match serde_json::from_str::<SessionEvent>(&json).unwrap() {
+            SessionEvent::AssistantRunMeta {
+                run_id,
+                context_tokens,
+                context_window,
+                total_tokens,
+                ..
+            } => {
+                assert_eq!(run_id, "r-no-gauge");
+                assert_eq!(
+                    (context_tokens, context_window, total_tokens),
+                    (None, None, None)
+                );
             }
             other => panic!("expected a run meta, got {other:?}"),
         }

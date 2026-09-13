@@ -1090,9 +1090,9 @@ mod tests {
         SessionEvent::AssistantRunMeta {
             turn_id: TurnId::new_v4(),
             run_id: run.to_string(),
-            context_tokens: 1,
-            context_window: 2,
-            total_tokens: 3,
+            context_tokens: Some(1),
+            context_window: Some(2),
+            total_tokens: Some(3),
             cost_usd: None,
             model: None,
             model_provider: None,

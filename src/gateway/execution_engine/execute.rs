@@ -964,9 +964,10 @@ where
                 // `_response` (the projector writes that row). Emit run_id + occupancy so
                 // the projector stamps them onto that row — preserving the Panel context
                 // gauge + workspace trace across a session reload — and bills the
-                // session from the run's own messages. A run that produced no
-                // assistant message (`None`) has no row to stamp and emits nothing;
-                // the arms are in `stamp_run_meta`'s doc.
+                // session from the run's own messages. `None` here means no gauge
+                // was resolved (no usage reported, no window known), not "no
+                // assistant row": the meta still goes out, gauge-less, so the
+                // run_id join lands — the arms are in `stamp_run_meta`'s doc.
                 let svc = crate::session::service::global_session_service();
                 super::helpers::stamp_run_meta(
                     svc.as_deref(),

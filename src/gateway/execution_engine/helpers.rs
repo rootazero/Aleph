@@ -85,37 +85,47 @@ pub struct RunContextOccupancy {
 /// landed is a run the session row under-counts, and that has to be visible
 /// somewhere.
 ///
-/// `None` occupancy means the run produced no assistant message — a hook that
-/// prevented the run, a loop that returned before its first Think. There is
-/// no row for a stamp to land on, so nothing is emitted. An all-zeros meta
-/// here used to send the projector after a row it could never find:
-/// `NoRowInRange` ⇒ `Retry` with nothing to re-arm it, and a heal whose
-/// `up_to_date` stayed false for the life of the session.
+/// Emitted for EVERY completed run. `None` occupancy means the run resolved
+/// no gauge: no usage was reported and no window was known — a provider that
+/// reports no usage, a hook that stopped the run before its first Think, a
+/// loop that returned before it. The assistant row may well exist (the
+/// usage-less provider wrote one), so the meta still goes out with the three
+/// gauge fields `None` and the run_id join lands on whatever row the run
+/// produced; the projector stamps the gauge only when it is there, and a
+/// meta for a run with no row at all is finalised there, not retried. The
+/// all-zeros meta that used to stand in for `None` is gone: a fabricated 0
+/// read as a measurement on the Panel gauge.
 pub(super) async fn stamp_run_meta(
     svc: Option<&dyn crate::session::service::SessionService>,
     session_key: &crate::routing::session_key::SessionKey,
     run_id: &str,
     occupancy: Option<RunContextOccupancy>,
 ) {
-    let Some(occ) = occupancy else {
-        tracing::debug!(
-            session_key = %session_key.to_key_string(),
-            run_id,
-            "run produced no assistant message; no row to stamp, run meta not emitted"
-        );
-        return;
-    };
     let Some(svc) = svc else {
-        // Degraded, not missing: the harness already emitted the
-        // AssistantMessage row (see the doc above), so no content is lost —
+        // Degraded, not missing: the harness holds its own service handle and
+        // already emitted the AssistantMessage row, so no content is lost —
         // only this stamp (Panel context gauge + workspace trace + this run's
-        // bill) is.
-        tracing::debug!(
+        // bill) is. Same condition, same level as the hook-stop journal
+        // (`run_loop::journal_hook_stop_with`).
+        warn!(
             session_key = %session_key.to_key_string(),
             run_id,
             "session/service capability absent; skipped run_id/occupancy stamp — see `aleph doctor`"
         );
         return;
+    };
+    let (gauge, cost_usd, model, model_provider) = match occupancy {
+        Some(occ) => (
+            (
+                Some(occ.context_tokens),
+                Some(occ.context_window),
+                Some(occ.total_tokens),
+            ),
+            occ.cost_usd,
+            occ.model,
+            occ.model_provider,
+        ),
+        None => ((None, None, None), None, None, None),
     };
     if let Err(e) = svc
         .emit_event(
@@ -123,12 +133,12 @@ pub(super) async fn stamp_run_meta(
             crate::session::events::SessionEvent::AssistantRunMeta {
                 turn_id: uuid::Uuid::new_v4(),
                 run_id: run_id.to_string(),
-                context_tokens: occ.context_tokens,
-                context_window: occ.context_window,
-                total_tokens: occ.total_tokens,
-                cost_usd: occ.cost_usd,
-                model: occ.model,
-                model_provider: occ.model_provider,
+                context_tokens: gauge.0,
+                context_window: gauge.1,
+                total_tokens: gauge.2,
+                cost_usd,
+                model,
+                model_provider,
                 at: crate::session::events::now_ms(),
             },
         )
@@ -1207,7 +1217,7 @@ mod stamp_run_meta_tests {
                 ..
             } => {
                 assert_eq!(run_id, "run-7");
-                assert_eq!(*context_tokens, 10);
+                assert_eq!(*context_tokens, Some(10));
                 assert_eq!(*cost_usd, Some(0.5));
                 assert_eq!(model.as_deref(), Some("claude"));
             }
@@ -1215,12 +1225,13 @@ mod stamp_run_meta_tests {
         }
     }
 
-    /// T9 carry: a run that produced no assistant message has no row for a
-    /// stamp to land on, so NOTHING is emitted — not an all-zeros meta, which
-    /// the projector could never place (`NoRowInRange` ⇒ `Retry`, never
-    /// re-armed). The log is read back, so an emit of any shape is red.
+    /// A run that resolved no gauge (no usage reported, no window known) still
+    /// emits its meta — the run_id join must reach whatever row the run wrote
+    /// — but with the three gauge fields ABSENT, not 0: a fabricated 0 reads
+    /// as a measurement on the Panel gauge. The log is read back, so both an
+    /// all-zeros emit and no emit at all are red.
     #[tokio::test]
-    async fn a_run_without_occupancy_emits_nothing() {
+    async fn a_run_without_occupancy_emits_a_meta_with_no_gauge() {
         let svc = crate::session::in_process::install_test_session_service();
         let key = SessionKey::ephemeral("stamp-none");
         stamp_run_meta(Some(&*svc), &key, "run-8", None).await;
@@ -1229,10 +1240,32 @@ mod stamp_run_meta_tests {
             .get_events(&key, None, None)
             .await
             .expect("the log reads back");
-        assert!(
-            records.is_empty(),
-            "a run with no assistant row must not emit a meta; got {records:?}"
-        );
+        let tags: Vec<&'static str> = records.iter().map(|r| event_type_tag(&r.event)).collect();
+        assert_eq!(tags, ["assistant_run_meta"], "one meta, gauge or not");
+        match &records[0].event {
+            crate::session::events::SessionEvent::AssistantRunMeta {
+                run_id,
+                context_tokens,
+                context_window,
+                total_tokens,
+                cost_usd,
+                model,
+                model_provider,
+                ..
+            } => {
+                assert_eq!(run_id, "run-8");
+                assert_eq!(
+                    (*context_tokens, *context_window, *total_tokens),
+                    (None, None, None),
+                    "no gauge was resolved, so none may be stamped — not even 0"
+                );
+                assert_eq!(
+                    (*cost_usd, model.as_deref(), model_provider.as_deref()),
+                    (None, None, None)
+                );
+            }
+            other => panic!("expected the run meta, got {other:?}"),
+        }
     }
 
     /// Best-effort as behaviour: a refused append and an absent service both

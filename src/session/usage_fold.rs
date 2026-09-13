@@ -44,9 +44,11 @@ impl UsageTotals {
 }
 
 /// Totals of every assistant message in `log`, in log order. The whole-session
-/// fold; [`run_usage_totals`] is this same fold over one run's tail.
+/// fold; [`run_usage_totals`] is this same fold over one run's tail and, so
+/// far, its only caller — widen the visibility when a whole-session reader
+/// appears, not before.
 #[must_use]
-pub fn session_usage_totals(log: &[SessionEventRecord]) -> UsageTotals {
+fn session_usage_totals(log: &[SessionEventRecord]) -> UsageTotals {
     log.iter()
         .fold(UsageTotals::default(), |acc, r| acc.fold(&r.event))
 }

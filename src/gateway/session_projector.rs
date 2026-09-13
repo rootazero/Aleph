@@ -693,8 +693,8 @@ pub(crate) enum Projected {
     /// An `AssistantRunMeta` stamp landed on a row that had none. `billed` says
     /// whether the run's spend was accumulated in the same step.
     Stamped { billed: bool },
-    /// Nothing to do: not row-producing, already present, already stamped, or
-    /// deliberately retired.
+    /// Nothing to do: not row-producing, already present, already stamped,
+    /// deliberately retired, or a stamp with no row in its run's range.
     Nothing,
     /// This seq must be tried again — its retirement state is unknown, a write
     /// failed, or the row a stamp needs is not in the projection yet.
@@ -780,18 +780,25 @@ pub(crate) async fn project_event(
             model_provider,
             ..
         } => {
-            let occupancy = crate::gateway::execution_engine::helpers::RunContextOccupancy {
-                context_tokens: *context_tokens,
-                context_window: *context_window,
-                total_tokens: *total_tokens,
-                cost_usd: *cost_usd,
-                model: model.clone(),
-                model_provider: model_provider.clone(),
+            // The gauge is stamped only when the run resolved one. A meta
+            // whose three gauge fields are `None` stamps the run_id alone;
+            // the Panel reads the missing keys as absent, never as 0.
+            let occupancy = match (context_tokens, context_window, total_tokens) {
+                (Some(context_tokens), Some(context_window), Some(total_tokens)) => Some(
+                    crate::gateway::execution_engine::helpers::RunContextOccupancy {
+                        context_tokens: *context_tokens,
+                        context_window: *context_window,
+                        total_tokens: *total_tokens,
+                        cost_usd: *cost_usd,
+                        model: model.clone(),
+                        model_provider: model_provider.clone(),
+                    },
+                ),
+                _ => None,
             };
-            let Some(meta) = crate::gateway::agent_instance::build_message_metadata(
-                Some(run_id),
-                Some(occupancy),
-            ) else {
+            let Some(meta) =
+                crate::gateway::agent_instance::build_message_metadata(Some(run_id), occupancy)
+            else {
                 return Projected::Nothing;
             };
             // The row this run's numbers belong to is the last assistant row
@@ -805,17 +812,26 @@ pub(crate) async fn project_event(
             {
                 Ok(StampOutcome::AlreadyStamped) => Projected::Nothing,
                 Ok(StampOutcome::NoRowInRange) => {
-                    // The assistant row this stamp belongs to is not in the
-                    // projection yet — a dropped row, or a heal that has not
-                    // reached it. Billing here would charge a session for a run
-                    // whose stamp will be applied (and billed) again later.
+                    // No assistant row in this run's range: the run produced
+                    // none (a hook stopped it before its first Think), or the
+                    // row was dropped by the drain and is still a hole. Both
+                    // finalise here. The hole case needs no retry of its own:
+                    // a heal re-reads from the lowest missed seq to the end
+                    // of the log, and a meta always sits above its row, so the
+                    // pass that fills the row reaches this meta and stamps it
+                    // (`a_meta_whose_row_was_dropped_finalises_and_the_heal_bills_it`).
+                    // Retrying instead kept the seq in `missed` forever for a
+                    // run with no row — every later event on the session
+                    // re-ran a heal, and `up_to_date` never came true. Not
+                    // billed here: the stamp is the bill's idempotence guard
+                    // and it has not landed — the pass that lands it bills.
                     tracing::debug!(
                         session = ?id,
                         seq = rec.seq,
                         run_id = %run_id,
-                        "projector: run-meta has no assistant row in range; deferring"
+                        "projector: run-meta has no assistant row in range; nothing to stamp"
                     );
-                    Projected::Retry
+                    Projected::Nothing
                 }
                 Ok(StampOutcome::Stamped) => {
                     // Accumulate this run's spend onto the session row, exactly
@@ -898,10 +914,12 @@ pub(crate) async fn project_event(
 /// cost and model are the meta's own.
 ///
 /// `false` = nothing was accumulated — either it could not be told (no log
-/// installed, an unreadable slice, no `RunStarted` to anchor on: each such
-/// path warns) or there was nothing to add (a run whose messages carried no
-/// usage and whose meta carries no price: no warn). The heal counts it as
-/// "not rebilled" either way; the distinction lives in the log line.
+/// installed, an unreadable slice, no `RunStarted` to anchor on, a refused
+/// `update_session_usage`: each such path warns) or there was nothing to add
+/// (a run whose messages carried no usage and whose meta carries no price: no
+/// warn). The heal counts it as "not rebilled" either way; the distinction
+/// lives in the log line. A run with messages that carried no usage bills a
+/// FLOOR (`UsageTotals::without_usage`), said at `debug!` on the way through.
 ///
 /// `ctx.run_start == 0` ⇒ the slice starts at the log head and the fold
 /// anchors on the last `RunStarted` it finds — the restarted-drain case, where
@@ -937,6 +955,15 @@ async fn bill_run_from_fold(
         );
         return false;
     };
+    if totals.without_usage > 0 {
+        tracing::debug!(
+            session = ?id,
+            run_id,
+            with_usage = totals.with_usage,
+            without_usage = totals.without_usage,
+            "projector: run bill is a floor; some assistant messages carried no usage"
+        );
+    }
     if totals.input == 0 && totals.output == 0 && cost_usd.is_none() {
         return false;
     }
@@ -1240,12 +1267,28 @@ mod tests {
         SessionEvent::AssistantRunMeta {
             turn_id: tid,
             run_id: run.into(),
-            context_tokens: 1234,
-            context_window: 200_000,
-            total_tokens: 70,
+            context_tokens: Some(1234),
+            context_window: Some(200_000),
+            total_tokens: Some(70),
             cost_usd: Some(0.12),
             model: Some("claude".into()),
             model_provider: Some("anthropic".into()),
+            at: 3,
+        }
+    }
+
+    /// The stamp of a run that resolved no gauge and priced nothing — a
+    /// usage-less provider, or a run with no Think at all.
+    fn run_meta_without_gauge(tid: TurnId, run: &str) -> SessionEvent {
+        SessionEvent::AssistantRunMeta {
+            turn_id: tid,
+            run_id: run.into(),
+            context_tokens: None,
+            context_window: None,
+            total_tokens: None,
+            cost_usd: None,
+            model: None,
+            model_provider: None,
             at: 3,
         }
     }
@@ -1632,18 +1675,20 @@ mod tests {
         );
     }
 
-    /// A run whose assistant row never made it into the projection must not be
-    /// billed: the stamp has nowhere to land, so the meta is kept for a later
-    /// heal instead of being spent.
+    /// The dropped-row race, end to end. The drain dropped the assistant row
+    /// (`missed` holds its seq) and then reached the meta: the meta finalises
+    /// (`Nothing`) and bills nothing — the fold WOULD find (45, 25), the
+    /// unlanded stamp is what stops it. The heal that fills the hole re-reads
+    /// from the lowest missed seq to the end of the log, so it reaches the
+    /// meta above the row, stamps it and bills — which is why the meta needs
+    /// no retry of its own, and why finalising it is safe.
     #[tokio::test]
-    async fn a_run_meta_with_no_row_in_range_defers_and_does_not_bill() {
+    async fn a_meta_whose_row_was_dropped_finalises_and_the_heal_bills_it() {
         let temp = tempdir().unwrap();
         let store = sqlite_store(temp.path(), "norow.db");
         let id = SessionId::ephemeral("norow");
         store.get_or_create(&id).await.unwrap();
 
-        // The log holds the priced message; the projection does not hold its
-        // row. The fold WOULD find (45, 25) — the stamp is what must stop it.
         let tid = uuid::Uuid::new_v4();
         let events = one_billed_run(tid, "run_a");
         let log = own_event_log(&id, &events).await;
@@ -1656,13 +1701,155 @@ mod tests {
             bus: None,
         };
         let out = project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await;
-        assert_eq!(out, Projected::Retry);
+        assert_eq!(
+            out,
+            Projected::Nothing,
+            "no row in range finalises the meta"
+        );
         let meta = store.get_metadata(&id).await.unwrap().unwrap();
         assert_eq!(
             (meta.input_tokens, meta.output_tokens),
             (0, 0),
             "a stamp with no row must not bill the session"
         );
+
+        // The row's seq is the hole the drain recorded; the heal starts there.
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        lock_missed(&missed).record(&id, 2);
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log.clone());
+        let mut run_start = HashMap::from([(id.clone(), 1)]);
+        let report = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::KnownGaps,
+        )
+        .await;
+        assert_eq!(
+            (
+                report.holes_filled,
+                report.stamps_reapplied,
+                report.usage_rebilled
+            ),
+            (1, 1, 1),
+            "the heal fills the row, then reaches the meta above it: {report:?}"
+        );
+        assert!(!report.errored, "{report:?}");
+        assert!(
+            !lock_missed(&missed).is_dirty(&id),
+            "the hole is filled and the meta was not deferred: nothing stays in `missed`"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!(
+            (meta.input_tokens, meta.output_tokens),
+            (45, 25),
+            "the heal that landed the stamp billed the run"
+        );
+    }
+
+    /// T9's real defect, fixed at the executor: a run that produced no
+    /// assistant row at all (a hook stopped it before its first Think) still
+    /// emits a meta, and that meta has nowhere to land. It must finalise —
+    /// not sit in `missed` re-running a heal on every later event with
+    /// `up_to_date` never coming true.
+    #[tokio::test]
+    async fn a_meta_for_a_run_with_no_assistant_row_finalises() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "no_think.db");
+        let id = SessionId::ephemeral("no-think");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("run_a")),
+            (2, run_finished("run_a")),
+            (3, run_meta_without_gauge(tid, "run_a")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        assert_eq!(
+            project_event(&id, &rec(3, run_meta_without_gauge(tid, "run_a")), &ctx).await,
+            Projected::Nothing
+        );
+
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log.clone());
+        let mut run_start = HashMap::new();
+        let report = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::WholeSession,
+        )
+        .await;
+        assert!(
+            report.up_to_date,
+            "a run with no row is whole, not permanently deferred: {report:?}"
+        );
+        assert!(
+            !lock_missed(&missed).is_dirty(&id),
+            "nothing may stay in `missed`"
+        );
+        assert!(store.get_history(&id, None).await.unwrap().is_empty());
+    }
+
+    /// A gauge-less meta stamps the run_id alone: the gauge keys are absent
+    /// from the row's metadata, so the Panel reads "unknown", never 0.
+    #[tokio::test]
+    async fn a_meta_without_a_gauge_stamps_the_run_id_alone() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "no_gauge.db");
+        let id = SessionId::ephemeral("no-gauge");
+        store.get_or_create(&id).await.unwrap();
+        append_assistant_row(&store, &id, 2).await;
+
+        let tid = uuid::Uuid::new_v4();
+        let events = vec![
+            (1, run_started("run_a")),
+            (2, assistant_msg(tid)),
+            (3, run_finished("run_a")),
+            (4, run_meta_without_gauge(tid, "run_a")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 1,
+            bus: None,
+        };
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta_without_gauge(tid, "run_a")), &ctx).await,
+            Projected::Stamped { billed: false },
+            "no usage, no price: stamped, nothing to bill"
+        );
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("the row is there");
+        let meta = row.metadata.as_ref().expect("the run_id stamp landed");
+        assert_eq!(meta.get("run_id").and_then(|v| v.as_str()), Some("run_a"));
+        for key in ["context_tokens", "context_window", "total_tokens"] {
+            assert!(
+                meta.get(key).is_none(),
+                "{key} must be absent, not 0: {meta}"
+            );
+        }
     }
 
     /// The assistant row the tests below stamp, appended straight to the
