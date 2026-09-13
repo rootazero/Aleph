@@ -198,7 +198,7 @@ pub async fn apply_budget_directive(
                             tracing::warn!(
                                 ?session_id,
                                 %e,
-                                "session split failed; falling back to compact-to-fit",
+                                "session split refused or failed; falling back to compact-to-fit",
                             );
                             None
                         }

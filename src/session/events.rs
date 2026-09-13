@@ -253,8 +253,8 @@ pub enum RunOutcome {
 /// client-facing `SessionSnapshot` share one vocabulary rather than three
 /// enums that have to be kept convertible. The key set is pinned by a census
 /// test against [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`]
-/// ∪ [`RUN_ENVELOPE_FACT_KEYS`]: a new field has to be filed as a knob there
-/// or as a fact here, or that test fails.
+/// ∪ [`crate::gateway::resume_coordinator::RUN_ENVELOPE_FACT_KEYS`]: a new
+/// field has to be filed as a knob or as a fact, or that test fails.
 ///
 /// `model` / `model_provider` are the pair the run was **actually bound to**
 /// after provider validation — not the pin that was asked for. A resume that
@@ -312,25 +312,6 @@ pub struct RunEnvelopeSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub btw: Option<String>,
 }
-
-/// The per-run FACTS the envelope freezes alongside the knobs — the marker's
-/// own field names, spelled so the two facts cannot drift from the metadata
-/// keys they are copied from and replayed to: the `/btw` stamp's field IS the
-/// stamp's key (`btw::BTW_METADATA_KEY`), and the skill scope is named
-/// literally because its request-metadata spelling belongs to
-/// `slash_skill_scope` (`SLASH_SKILL_ALLOWED_TOOLS_KEY`) and is deliberately
-/// not the marker's word.
-///
-/// Not knobs: no `custom` twin, no session / global rung, so `plan_resume`
-/// replays them from the snapshot or not at all. That is also why this array
-/// lives here and not next to
-/// [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`]:
-/// `session_snapshot.rs` is the knob decoder, and `btw` must never appear in
-/// it (`btw::guard_tests::btw_is_not_filed_with_the_five_session_knobs` reads
-/// that file for the word). The census in this module's tests asserts the
-/// envelope's key set == KNOB ∪ FACT.
-pub const RUN_ENVELOPE_FACT_KEYS: [&str; 2] =
-    ["allowed_tools", crate::gateway::btw::BTW_METADATA_KEY];
 
 impl RunEnvelopeSnapshot {
     /// The knob half of a snapshot, spelled once.
@@ -1134,11 +1115,13 @@ mod tests {
 
     /// Census: the envelope's key set IS the knob vocabulary
     /// `session_snapshot` publishes PLUS the per-run facts
-    /// [`RUN_ENVELOPE_FACT_KEYS`] names. A field added to the struct and filed
-    /// with neither list fails here — which is the whole reason both arrays
-    /// exist: the author has to say which kind the new field is.
+    /// `resume_coordinator::RUN_ENVELOPE_FACT_KEYS` names. A field added to
+    /// the struct and filed with neither list fails here — which is the whole
+    /// reason both arrays exist: the author has to say which kind the new
+    /// field is.
     #[test]
     fn the_envelope_carries_exactly_the_published_knob_keys() {
+        use crate::gateway::resume_coordinator::RUN_ENVELOPE_FACT_KEYS;
         let all = RunEnvelopeSnapshot {
             exec_tier: Some("a".into()),
             session_mode: Some("b".into()),

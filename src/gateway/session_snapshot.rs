@@ -47,9 +47,9 @@ pub const PROJECT_ROOT_SESSION_KEY: &str = "project_root";
 ///
 /// It exists so the two shapes cannot drift: a census test in
 /// [`crate::session::events`] asserts this array plus
-/// [`crate::session::events::RUN_ENVELOPE_FACT_KEYS`] (the envelope's two
-/// per-run facts, which are not knobs and are deliberately not filed here)
-/// equals [`crate::session::events::RunEnvelopeSnapshot`]'s serialised key
+/// [`crate::gateway::resume_coordinator::RUN_ENVELOPE_FACT_KEYS`] (the
+/// envelope's two per-run facts, which are not knobs and are deliberately not
+/// filed here) equals [`crate::session::events::RunEnvelopeSnapshot`]'s key
 /// set. A new envelope field therefore has to be filed as a knob here or as a
 /// fact there before the build is green.
 ///

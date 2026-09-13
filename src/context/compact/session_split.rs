@@ -623,6 +623,48 @@ mod tests {
         }
     }
 
+    /// A summarizer that only counts. The refusal test asserts it was never
+    /// paid for; its positive control asserts the same double IS paid for on
+    /// a successful split, so the zero is a measurement and not a provider
+    /// nobody could reach.
+    #[derive(Default)]
+    struct CountingSummarizer {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingSummarizer {
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl crate::providers::AiProvider for CountingSummarizer {
+        fn process(
+            &self,
+            _payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async {
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    "S".to_string(),
+                ))
+            })
+        }
+        fn name(&self) -> &str {
+            "counting"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
     /// The envelope the parent's open run carries in every fixture below —
     /// distinctive values so the child-opener test can tell "inherited" from
     /// "defaulted".
@@ -662,10 +704,14 @@ mod tests {
         }
     }
 
-    /// A parent log the harness bridge would have produced: the run's opener
-    /// first, then the user messages. Every fixture that expects the split to
-    /// SUCCEED starts from this — the child inherits the opener's envelope,
-    /// so a parent without one is refused, not seeded blind.
+    /// A parent log with the run's opener placed BEFORE the messages, so the
+    /// summarised half owns it and the copied tail is messages only. That is
+    /// not the bridge's real order — production seeds the turn first and the
+    /// bridge emits `RunStarted` after it (message-then-opener), which
+    /// `a_parents_opener_copied_inside_the_tail_still_yields_the_split_opener_last`
+    /// exercises. Every other fixture that expects the split to SUCCEED
+    /// starts from this — the child inherits the opener's envelope, so a
+    /// parent without one is refused, not seeded blind.
     fn parent_log(messages: &[&str]) -> Vec<SessionEventRecord> {
         std::iter::once(run_started_record(1, "run-parent"))
             .chain(
@@ -961,10 +1007,12 @@ mod tests {
     }
 
     /// No open `RunStarted` in the parent log ⇒ nothing to inherit ⇒ the split
-    /// is REFUSED before either batch is written: the parent keeps its log,
-    /// routing never learns a child, and the caller falls back to
-    /// compact-to-fit. Two shapes of "no open run": no marker at all, and a
-    /// run the log already closed.
+    /// is REFUSED before the summarizer is paid for and before either batch
+    /// is written: the parent keeps its log, routing never learns a child,
+    /// and the caller falls back to compact-to-fit. Two shapes of "no open
+    /// run": no marker at all, and a run the log already closed. The positive
+    /// control at the end proves the counting summarizer IS reached by a
+    /// split that succeeds, so its zero above is a measurement.
     #[tokio::test]
     async fn a_parent_without_an_open_run_is_refused_before_any_batch() {
         let parent = SessionKey::Main {
@@ -985,8 +1033,9 @@ mod tests {
         ] {
             let session = RecordingSessionService::new();
             let registrar = RecordingRegistrar::new();
+            let summarizer = AlephArc::new(CountingSummarizer::default());
             let compactor = ContextCompactor::new(
-                AlephArc::new(MockProvider::new("S")),
+                summarizer.clone() as AlephArc<dyn crate::providers::AiProvider>,
                 CompactorConfig::default(),
             );
 
@@ -1004,6 +1053,11 @@ mod tests {
                 matches!(result, Err(SplitError::NoOpenRun)),
                 "{label}: expected NoOpenRun, got {result:?}"
             );
+            assert_eq!(
+                summarizer.calls(),
+                0,
+                "{label}: a refused split must not pay for the summarizer"
+            );
             assert!(
                 session.batches().await.is_empty(),
                 "{label}: a refused split must write nothing — not even the parent closer"
@@ -1013,6 +1067,120 @@ mod tests {
                 "{label}: routing must never learn a child"
             );
         }
+
+        // Positive control: the same double, a parent WITH an open run, one
+        // message to summarise ⇒ exactly one summarizer call.
+        let summarizer = AlephArc::new(CountingSummarizer::default());
+        let compactor = ContextCompactor::new(
+            summarizer.clone() as AlephArc<dyn crate::providers::AiProvider>,
+            CompactorConfig::default(),
+        );
+        perform_session_split(
+            RecordingSessionService::new().as_ref(),
+            RecordingRegistrar::new().as_ref(),
+            &compactor,
+            &parent,
+            &parent_log(&["pre-tail", "fresh tail"]),
+            2,
+        )
+        .await
+        .expect("a parent with an open run splits");
+        assert_eq!(
+            summarizer.calls(),
+            1,
+            "the control must reach the summarizer, or the zero above proves nothing"
+        );
+    }
+
+    /// The bridge's real order — the turn is seeded, THEN `RunStarted` is
+    /// emitted — puts the parent's own opener inside the copied tail whenever
+    /// the split fires before the run's first assistant message. The child
+    /// then holds that copied opener AND the split's own; `reduce_run` reads
+    /// the LAST `RunStarted` as the open one, so the split opener must come
+    /// last and must carry the parent's envelope and project root — which is
+    /// what makes the two answers agree instead of the copied one winning by
+    /// position. Read back through the service, in emission order.
+    #[tokio::test]
+    async fn a_parents_opener_copied_inside_the_tail_still_yields_the_split_opener_last() {
+        let parent = SessionKey::Main {
+            agent_id: "agent-a".into(),
+            main_key: "main".into(),
+            epoch: 0,
+        };
+        // Production order: an earlier answered turn, then this turn's
+        // message, then its opener. `tail_start` is "after the last
+        // AssistantMessage", so the tail is [UserMessage, RunStarted].
+        let events = vec![
+            user_record(1, "earlier question"),
+            SessionEventRecord {
+                seq: 2,
+                event: SessionEvent::AssistantMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: MessageContent {
+                        text: "earlier answer".to_string(),
+                        blocks: vec![],
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    usage: None,
+                    at: now_ms(),
+                },
+                created_at_ms: now_ms(),
+            },
+            user_record(3, "this turn"),
+            run_started_record(4, "run-parent"),
+        ];
+        let session = RecordingSessionService::new();
+        let registrar = RecordingRegistrar::new();
+        let compactor = ContextCompactor::new(
+            AlephArc::new(MockProvider::new("S")),
+            CompactorConfig::default(),
+        );
+
+        perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            2,
+        )
+        .await
+        .expect("split should succeed");
+
+        let child = parent.with_next_epoch();
+        let openers: Vec<(String, Option<String>, Option<RunEnvelopeSnapshot>)> = session
+            .emitted()
+            .await
+            .into_iter()
+            .filter(|(target, _)| *target == child)
+            .filter_map(|(_, event)| match event {
+                SessionEvent::RunStarted {
+                    run_id,
+                    project_root,
+                    envelope,
+                    ..
+                } => Some((run_id, project_root, envelope)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            openers.len(),
+            2,
+            "the copied parent opener and the split opener, got {openers:?}"
+        );
+        assert_eq!(
+            openers[0].0, "run-parent",
+            "the tail is copied verbatim, parent opener first"
+        );
+        let (split_run_id, split_root, split_envelope) = &openers[1];
+        assert_ne!(split_run_id, "run-parent", "the split mints its own run id");
+        assert_eq!(
+            (split_root.as_deref(), split_envelope.as_ref()),
+            (Some(PARENT_ROOT), Some(&parent_envelope())),
+            "the LAST opener — the one `reduce_run` treats as open — is the split's \
+             and carries the parent's envelope and project root"
+        );
     }
 
     // -------------------------------------------------------------------------

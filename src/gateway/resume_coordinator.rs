@@ -455,6 +455,27 @@ pub(crate) struct ResumePlan {
     pub(crate) unsnapshotted: bool,
 }
 
+/// The per-run FACTS a `RunStarted` envelope freezes alongside the knobs —
+/// the marker's own field names, spelled so the two facts cannot drift from
+/// the metadata keys they are copied from and replayed to: the `/btw` stamp's
+/// field IS the stamp's key (`btw::BTW_METADATA_KEY`), and the skill scope is
+/// named literally because its request-metadata spelling belongs to
+/// `slash_skill_scope` (`SLASH_SKILL_ALLOWED_TOOLS_KEY`) and is deliberately
+/// not the marker's word.
+///
+/// Not knobs: no `custom` twin, no session / global rung, so [`plan_resume`]
+/// below — their only production reader — replays them from the snapshot or
+/// not at all. That is why the array lives here rather than beside
+/// [`crate::gateway::session_snapshot::RUN_ENVELOPE_KNOB_KEYS`]:
+/// `session_snapshot.rs` is the knob decoder, and `btw` must never appear in
+/// it in any spelling (`btw::guard_tests::btw_is_not_filed_with_the_five_session_knobs`
+/// reads that file for the word). And not in `session::events` beside the
+/// struct, so `session` keeps depending on nothing in `gateway`. The census
+/// `session::events::tests::the_envelope_carries_exactly_the_published_knob_keys`
+/// asserts the envelope's key set == KNOB ∪ FACT.
+pub const RUN_ENVELOPE_FACT_KEYS: [&str; 2] =
+    ["allowed_tools", crate::gateway::btw::BTW_METADATA_KEY];
+
 /// Derive the plan above.
 ///
 /// `dir_exists` is injected so the project-root arm is testable without
@@ -529,9 +550,13 @@ pub(crate) fn plan_resume(
     }
     match env.btw.as_deref() {
         Some(stamp) if stamp == crate::gateway::btw::PROMOTE_STAMP => {
-            // A promote is served before `admit_run` and is not a run; a
-            // marker carrying its sentinel is a writer-side oddity, and
-            // replaying it would route the resume into the promote arm.
+            // A promote is served before `admit_run` and is not a run, so a
+            // marker carrying its sentinel is a writer-side oddity. Replaying
+            // it would NOT reach the promote arm — that arm is gated on a
+            // redirect from a MAIN key, and every stamped marker sits on the
+            // side session the resume is addressed to — it would run a full
+            // side-session turn under the read-only ceiling with `promote`
+            // in its metadata: pointless, and not what the sentinel means.
             tracing::warn!(
                 run_id = %facts.run_id,
                 "resume: marker carries a promote stamp; a promote is not a run and is not replayed"
@@ -625,19 +650,26 @@ fn degrade_note(sentences: Vec<String>) -> Option<crate::session::boundary_repai
 /// re-delivered side answer must not land on the origin conversation unmarked
 /// (`btw::format_side_answer`'s doc carries the census of fan-out sites).
 ///
+/// `route` is a future, not a value, so the origin-route lookup is only paid
+/// when it can matter: a stamped resume and a boot with no channel registry
+/// (a Panel-only server) return before polling it.
+///
 /// A free function so the choice is testable with a registry and a route in
 /// hand; `retrigger` is the only production caller.
-fn retrigger_emitter(
+async fn retrigger_emitter(
     base: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
     registry: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
-    route: Option<(String, String)>,
+    route: impl std::future::Future<Output = Option<(String, String)>>,
     is_side_question: bool,
 ) -> Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> {
     if is_side_question {
         return base;
     }
-    match (registry, route) {
-        (Some(reg), Some((channel, conversation))) => Arc::new(
+    let Some(reg) = registry else {
+        return base;
+    };
+    match route.await {
+        Some((channel, conversation)) => Arc::new(
             crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
                 base,
                 reg,
@@ -645,7 +677,7 @@ fn retrigger_emitter(
                 conversation,
             ),
         ),
-        _ => base,
+        None => base,
     }
 }
 
@@ -1774,9 +1806,10 @@ impl ResumeCoordinator {
         let emitter = retrigger_emitter(
             base,
             crate::gateway::event_emitter::origin_fanout::channel_registry(),
-            agent.origin_route(session_id).await,
+            agent.origin_route(session_id),
             is_side_question,
-        );
+        )
+        .await;
 
         tracing::info!(session = ?session_id, agent_id, "resume: re-triggering interrupted run");
 
@@ -2238,8 +2271,10 @@ mod tests {
 
     /// The `/btw` stamp is replayed verbatim so the resumed side question
     /// keeps its read-only ceiling — except the promote sentinel: a promote
-    /// is not a run, and replaying it would send the resume into the promote
-    /// arm instead of a turn.
+    /// is not a run. A replayed sentinel would not reach the promote arm
+    /// (the resume is addressed to the side session, and that arm only
+    /// serves a redirect from a main key); it would run a pointless
+    /// side-session turn, so it is refused instead.
     #[test]
     fn a_btw_question_is_replayed_but_a_promote_sentinel_is_not() {
         use crate::gateway::btw::{BTW_METADATA_KEY, PROMOTE_STAMP};
@@ -2264,7 +2299,8 @@ mod tests {
         assert_eq!(
             plan.knobs.get(BTW_METADATA_KEY),
             None,
-            "a promote is not a run; replaying it would hit the promote arm"
+            "a promote is not a run; replayed on the side session it would be a \
+             pointless read-only turn, never the promote arm"
         );
     }
 
@@ -2272,8 +2308,9 @@ mod tests {
     /// carries the side-question stamp rides the bus alone. With a channel
     /// registry AND a bound origin route in hand, the stamped run's final
     /// reply must still reach no channel — a re-delivered side answer must
-    /// not land on the origin conversation unmarked — while the unstamped
-    /// twin, same registry, same route, fans out.
+    /// not land on the origin conversation unmarked — and the route lookup
+    /// is never even polled for it; the unstamped twin, same registry, same
+    /// route, fans out.
     #[tokio::test]
     async fn a_stamped_resume_skips_the_origin_fan_out_and_an_unstamped_one_takes_it() {
         use crate::gateway::channel::{
@@ -2327,7 +2364,13 @@ mod tests {
                 seen: seen.clone(),
             }))
             .await;
-        let route = Some(("origin".to_string(), "conv-1".to_string()));
+        // The route lookup, instrumented: `looked_up` flips only if the
+        // future is polled, which is the cost a stamped resume must not pay.
+        let looked_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let route = |flag: Arc<std::sync::atomic::AtomicBool>| async move {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Some(("origin".to_string(), "conv-1".to_string()))
+        };
 
         let reply = |text: &str| StreamEvent::RunComplete {
             run_id: "r".to_string(),
@@ -2340,10 +2383,16 @@ mod tests {
         };
 
         let bus = Arc::new(CollectingEventEmitter::new());
-        retrigger_emitter(bus.clone(), Some(registry.clone()), route.clone(), true)
-            .emit(reply("side answer"))
-            .await
-            .unwrap();
+        retrigger_emitter(
+            bus.clone(),
+            Some(registry.clone()),
+            route(looked_up.clone()),
+            true,
+        )
+        .await
+        .emit(reply("side answer"))
+        .await
+        .unwrap();
         assert_eq!(
             bus.events().await.len(),
             1,
@@ -2353,11 +2402,20 @@ mod tests {
             seen.lock().await.is_empty(),
             "a stamped resume must not fan its answer out to the origin channel"
         );
+        assert!(
+            !looked_up.load(std::sync::atomic::Ordering::SeqCst),
+            "a stamped resume must not pay for the origin-route lookup"
+        );
 
-        retrigger_emitter(bus, Some(registry), route, false)
+        retrigger_emitter(bus, Some(registry), route(looked_up.clone()), false)
+            .await
             .emit(reply("ordinary answer"))
             .await
             .unwrap();
+        assert!(
+            looked_up.load(std::sync::atomic::Ordering::SeqCst),
+            "the unstamped twin looks the route up"
+        );
         assert_eq!(
             seen.lock().await.as_slice(),
             ["ordinary answer".to_string()],

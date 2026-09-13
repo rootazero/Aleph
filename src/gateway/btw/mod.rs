@@ -66,14 +66,15 @@ pub(crate) const PROMOTE_STAMP: &str = "promote";
 ///
 /// The one reader that *interprets* the stamp's value. The `contains_key`
 /// readers ([`execution_session`], `resolve_turn_permissions`'s read-only
-/// ceiling, `steering::carries_more_than_text`, `retrigger_emitter`'s fan-out
-/// opt-out) are right to ask only that — a promote is still a side turn for
-/// the purpose of which lane it uses, what tier it runs at, and whether it may
-/// be folded into a running sibling. The two envelope writers (`run_loop`'s
-/// `TurnEnvelope`, the slash fast path) copy the value verbatim without
-/// reading it; `plan_resume` compares it against [`PROMOTE_STAMP`] only to
-/// refuse replaying a promote. It is only the *dispatch* that differs, and
-/// only this predicate decides it.
+/// ceiling, `steering::carries_more_than_text`, and
+/// `ResumeCoordinator::retrigger` deciding its fan-out opt-out) are right to
+/// ask only that — a promote is still a side turn for the purpose of which
+/// lane it uses, what tier it runs at, and whether it may be folded into a
+/// running sibling. The two envelope writers (`run_loop`'s `TurnEnvelope`,
+/// the slash fast path) copy the value verbatim without reading it;
+/// `plan_resume` compares it against [`PROMOTE_STAMP`] only to refuse
+/// replaying a promote. It is only the *dispatch* that differs, and only
+/// this predicate decides it.
 ///
 /// False for an unstamped request by construction, so a surface that forgot to
 /// stamp gets an ordinary turn rather than an unasked-for crossing.
@@ -330,7 +331,8 @@ pub fn side_key_for(main: &SessionKey) -> SessionKey {
 /// * `resume_coordinator.rs` — `input` is `String::new()` (`FlowInput::Resume`
 ///   ignores it) and `resume_metadata` never writes `BTW_METADATA_KEY`, but
 ///   the stamp is replayed from the crashed run's `RunStarted` envelope
-///   (§6.3, `plan_resume`), and `retrigger_emitter` reads that replayed key.
+///   (§6.3, `plan_resume`); `retrigger` reads the replayed key and hands the
+///   answer to `retrigger_emitter`, which then skips the fan-out.
 ///
 /// A new fan-out site owes the same question before it inherits either
 /// answer; `origin_fanout`'s census of construction sites is what asks it.
