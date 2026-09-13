@@ -151,7 +151,7 @@ mod tests {
     async fn test_profile_get_state_existing() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
-        let tool = BrowserProfileTool::new(manager);
+        let tool = BrowserProfileTool::new(Arc::clone(&manager));
 
         let result = tool
             .call(BrowserProfileArgs {
@@ -164,7 +164,20 @@ mod tests {
 
         assert!(result.success);
         // "default" has never been used → idle (with driver info attached).
-        assert_eq!(result.state.as_deref(), Some("idle (driver: Managed)"));
+        //
+        // The driver word is DERIVED from the manager rather than spelled here:
+        // this test is about the `idle (driver: …)` shape, not about which
+        // driver a fresh install gets, and a literal made it go red at the
+        // dual-engine default flip for a reason that has nothing to do with
+        // what it asserts (判据 §1 — one fact, one author).
+        let driver = manager.get_driver("default").expect("default profile");
+        assert_eq!(
+            result.state.as_deref(),
+            Some(format!("idle (driver: {driver:?})").as_str())
+        );
+        // …and the shape really does carry a driver, so the assertion above
+        // cannot be satisfied by two empty strings.
+        assert_eq!(driver, crate::browser::profile::BrowserDriver::Cdp);
     }
 
     #[tokio::test]

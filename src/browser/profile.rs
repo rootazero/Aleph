@@ -30,13 +30,25 @@ pub enum BrowserType {
 pub enum BrowserDriver {
     /// Aleph launches a dedicated Chromium and drives it through
     /// `playwright-cli attach --cdp`.
-    #[default]
     Managed,
     /// Attach to the user's running Chrome via the Chrome `DevTools` MCP
     /// server.
     ExistingSession,
     /// Aleph's own CDP client drives the engine directly — the only driver
     /// obscura has, and the one Chromium gains as the escape hatch.
+    ///
+    /// **The default since the dual-engine round.** It is the only driver that
+    /// can speak to obscura, and obscura is `default_engine`; leaving the
+    /// default on `Managed` would have made the engine default unreachable
+    /// without a config edit, because `resolved_engine` pins a legacy driver to
+    /// Chromium.
+    ///
+    /// The flip lives HERE, on the type, and not at either of
+    /// `ProfileManager::new`'s two auto-injection sites — a driver named
+    /// explicitly at one site and defaulted at the other is how those two
+    /// could disagree about it, which is 判据 §1 with the two authors one
+    /// screen apart.
+    #[default]
     Cdp,
 }
 
@@ -845,16 +857,22 @@ download_host = "   "
         assert!(config.playwright_cli.headless);
     }
 
+    /// Renamed rather than re-pointed: a test called `…_is_managed` that
+    /// asserts `Cdp` is a name contradicting its own body, and the next reader
+    /// believes the name.
     #[test]
-    fn test_browser_driver_default_is_managed() {
+    fn test_browser_driver_default_is_cdp() {
         let driver = BrowserDriver::default();
-        assert_eq!(driver, BrowserDriver::Managed);
+        assert_eq!(driver, BrowserDriver::Cdp);
     }
 
+    /// The wire spellings are frozen config compatibility. Driven from
+    /// `BrowserDriver::ALL` rather than a hand-written vector: the previous
+    /// version listed two of three drivers, so `Cdp`'s serde name shipped
+    /// unexercised — and a list beside an enum is the list that rots (判据 §5).
     #[test]
     fn test_browser_driver_serde_roundtrip() {
-        let drivers = vec![BrowserDriver::Managed, BrowserDriver::ExistingSession];
-        for d in drivers {
+        for d in BrowserDriver::ALL {
             let json = serde_json::to_string(&d).unwrap();
             let deserialized: BrowserDriver = serde_json::from_str(&json).unwrap();
             assert_eq!(d, deserialized);
@@ -867,12 +885,63 @@ download_host = "   "
             serde_json::to_string(&BrowserDriver::ExistingSession).unwrap(),
             "\"existing_session\""
         );
+        assert_eq!(
+            serde_json::to_string(&BrowserDriver::Cdp).unwrap(),
+            "\"cdp\""
+        );
+        // serde's spelling and `as_wire`'s must be the same string: the Panel
+        // reads and writes through `as_wire`/`from_wire` while the config file
+        // goes through serde, so two spellings would be one profile that two
+        // front doors disagree about.
+        for d in BrowserDriver::ALL {
+            assert_eq!(
+                serde_json::to_string(&d).unwrap(),
+                format!("\"{}\"", d.as_wire()),
+                "{d:?}"
+            );
+        }
+    }
+
+    /// **The flip, from the config side.** A legacy config that names a driver
+    /// keeps it: the default changes what happens when nothing was said, never
+    /// what an operator wrote down.
+    #[test]
+    fn an_explicit_legacy_driver_survives_the_default_flip() {
+        let cfg: BrowserSystemConfig = toml::from_str("[profiles.legacy]\ndriver = \"managed\"\n")
+            .expect("legacy config must parse");
+        let p = &cfg.profiles["legacy"];
+        assert_eq!(p.driver, BrowserDriver::Managed);
+        // A legacy driver pins the engine, so the global default_engine flip
+        // must not drag this profile onto obscura.
+        assert_eq!(p.resolved_engine(Engine::Obscura), Engine::Chromium);
+
+        // …and a profile that says nothing follows the new default.
+        let silent: BrowserSystemConfig =
+            toml::from_str("[profiles.fresh]\n").expect("empty profile must parse");
+        let f = &silent.profiles["fresh"];
+        assert_eq!(f.driver, BrowserDriver::Cdp);
+        assert_eq!(f.resolved_engine(Engine::Obscura), Engine::Obscura);
     }
 
     #[test]
-    fn test_profile_config_driver_defaults_to_managed() {
+    fn the_global_default_engine_is_obscura() {
+        assert_eq!(
+            BrowserSystemConfig::default().default_engine,
+            Engine::Obscura
+        );
+    }
+
+    #[test]
+    fn test_profile_config_driver_defaults_to_cdp() {
         let config = ProfileConfig::default();
-        assert_eq!(config.driver, BrowserDriver::Managed);
+        assert_eq!(config.driver, BrowserDriver::Cdp);
+        // And `engine: None` means "follow `default_engine`", which is what
+        // makes obscura the engine a fresh install actually runs.
+        assert_eq!(config.engine, None);
+        assert_eq!(
+            config.resolved_engine(BrowserSystemConfig::default().default_engine),
+            Engine::Obscura
+        );
     }
 
     #[test]

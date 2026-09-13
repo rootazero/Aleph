@@ -303,14 +303,21 @@ mod tests {
     }
 
     /// `double: true` with coordinates is a call **this profile's driver**
-    /// cannot serve — `ProfileConfig::default()` is `driver = "managed"`, whose
-    /// `dblclick` takes a ref only — so it must be refused with the contract,
-    /// and refused before the approval gate, since a rejected-by-construction
-    /// call must not spend a user approval.
+    /// cannot serve — the managed driver's `dblclick` takes a ref only — so it
+    /// must be refused with the contract, and refused before the approval gate,
+    /// since a rejected-by-construction call must not spend a user approval.
     ///
     /// The condition narrowed when the CDP backend gained a real coordinate
     /// double-click: the refusal is no longer universal, so the fixture's
-    /// driver is now load-bearing and is named in the assertion below.
+    /// driver is load-bearing and is named in the assertion below.
+    ///
+    /// ⚠️ The fixture **configures `managed` explicitly** rather than taking
+    /// `ProfileConfig::default()`. It used to take the default, which was
+    /// `managed`; the dual-engine flip made the default `cdp`, i.e. the one
+    /// driver for which this call is legal. The precondition assertion its
+    /// author installed is what caught that — a fixture that silently became
+    /// the opposite of the subject would otherwise have passed this test for
+    /// the opposite reason.
     #[tokio::test]
     async fn double_click_by_coordinates_is_refused_before_the_approval_gate() {
         use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
@@ -327,8 +334,16 @@ mod tests {
             async fn record(&self, _req: &ActionRequest, _dec: &ApprovalDecision) {}
         }
 
-        let manager = Arc::new(ProfileManager::new(BrowserSystemConfig::default()));
-        // The premise the refusal now rests on, asserted rather than assumed:
+        let mut config = BrowserSystemConfig::default();
+        config.profiles.insert(
+            "default".into(),
+            crate::browser::profile::ProfileConfig {
+                driver: BrowserDriver::Managed,
+                ..crate::browser::profile::ProfileConfig::default()
+            },
+        );
+        let manager = Arc::new(ProfileManager::new(config));
+        // The premise the refusal rests on, asserted rather than assumed:
         // with a `cdp` profile this call is legal, so a fixture that had
         // drifted to one would make this test pass for the opposite reason.
         assert_eq!(

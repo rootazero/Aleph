@@ -134,7 +134,10 @@ impl ProfileManager {
         let mut profiles = HashMap::new();
 
         if config.profiles.is_empty() {
-            // Create default profile with Managed driver if none configured.
+            // The `default` profile, from the type's own defaults: driver =
+            // Cdp, engine = None (i.e. follow `default_engine`, which is
+            // Obscura). Named nowhere here on purpose — see the sibling
+            // injection below.
             profiles.insert(
                 "default".into(),
                 ManagedProfile {
@@ -154,15 +157,25 @@ impl ProfileManager {
             }
         }
 
-        // Auto-inject "default" profile with Managed driver if not already present.
+        // Auto-inject "default" if the operator's config did not name one.
+        //
+        // `ProfileConfig::default()` outright, with no `driver:` override. The
+        // override used to say `Managed` here while the empty-config branch
+        // above took the type's default — two sites answering one question,
+        // and the only way to see them disagree was to run with an empty
+        // config (判据 §1, §6).
+        //
+        // There is a THIRD writer and it is not in this file: the Panel's PUT
+        // handler maps `update.default_driver` and writes it into this profile
+        // on every save. It goes through `BrowserDriver::from_wire` and refuses
+        // what it does not recognise (`gateway::handlers::browser_config`), so
+        // a Panel save no longer coerces this profile back off `Cdp` — that
+        // fix is a precondition of this flip, not a consequence of it.
         if !profiles.contains_key("default") {
             profiles.insert(
                 "default".into(),
                 ManagedProfile {
-                    config: ProfileConfig {
-                        driver: BrowserDriver::Managed,
-                        ..Default::default()
-                    },
+                    config: ProfileConfig::default(),
                     last_activity: std::time::Instant::now(),
                 },
             );
@@ -742,16 +755,26 @@ impl ProfileManager {
     /// user's own tabs and are neither tracked nor reaped (R5: don't disturb
     /// the user).
     ///
-    /// ⚠️ **A `Cdp` entry recorded here has no idle SWEEPER yet.**
-    /// [`Self::reap_idle_tabs`] and [`Self::idle_managed_profiles`] both filter
-    /// on `driver == Managed`, and widening THEM is not this task's to do: they
-    /// judge liveness through `playwright_cli_driver.chromium_alive`, which
-    /// knows nothing about engines, so a `Cdp` profile would be selected and
-    /// then judged by a predicate that cannot answer for it. So a CDP tab is
-    /// recorded and retained rather than reclaimed on an idle timer. This is a
-    /// writer whose reader is one task away, not a reader that was forgotten.
-    /// The QA's `reap` scenario refuses `ALEPH_QA_DRIVER=cdp` for the same
-    /// reason.
+    /// ⚠️ **Half of this was fixed at the default flip, and the reason the
+    /// other half is not is narrower than this doc used to claim.**
+    /// [`Self::reap_idle_tabs`] now covers `Managed | Cdp` — it needed no
+    /// liveness predicate, only `list_tabs`, so the `chromium_alive` argument
+    /// below never applied to it. That sentence stood while `Cdp` was opt-in
+    /// and would have become a false one the day the default profile was a Cdp
+    /// profile with dead `max_tabs_per_profile` and `tab_idle_timeout_secs`
+    /// settings (判据 §1 — the comment was the lying half).
+    ///
+    /// What is still deferred is the SESSION-level sweep:
+    /// [`Self::idle_managed_profiles`] filters on `driver == Managed` and
+    /// judges through `playwright_cli_driver.chromium_alive`, which knows
+    /// nothing about engines — a `Cdp` profile selected there would be judged
+    /// by a predicate that cannot answer for it, and there is no per-profile
+    /// engine shutdown for it to call anyway (`EngineRegistry` exposes
+    /// `shutdown_all`, nothing narrower). **So an idle CDP engine is not torn
+    /// down until the daemon exits**, which after the flip is the default
+    /// profile's behaviour and is named here rather than discovered from a
+    /// long-lived obscura. The QA's `reap` scenario refuses
+    /// `ALEPH_QA_DRIVER=cdp` for the same reason.
     ///
     /// It does **not** mean nothing ever removes an entry. [`Self::forget_tab`]
     /// is called when a tab is closed, for every driver — the cheap half, and
@@ -768,21 +791,40 @@ impl ProfileManager {
         }
     }
 
-    /// Sweep idle / over-cap tabs for every Managed profile with tracked tabs.
+    /// Sweep idle / over-cap tabs for every profile whose browser Aleph owns
+    /// and that has tracked tabs.
     ///
     /// Reconciles the registry against each profile's live `list_tabs` output,
     /// then closes the selected victims (idle beyond `tab_idle_timeout_secs`, or
     /// LRU overflow beyond `max_tabs_per_profile`). The active (most-recently-
     /// used) tab is always protected. Best-effort: any backend error skips that
     /// profile. Returns the number of tabs closed.
+    ///
+    /// **`Managed | Cdp`, and the set is the same one [`Self::touch_tab`]
+    /// writes.** It filtered on `Managed` alone until the default flip, which
+    /// was affordable while `Cdp` was opt-in and became a silent regression the
+    /// moment `Cdp` was what a fresh install got: `touch_tab` records a Cdp
+    /// profile's tabs, nothing ever selected them, and `max_tabs_per_profile`
+    /// and `tab_idle_timeout_secs` were dead settings on the default profile —
+    /// a writer with no reader (判据 §7), arrived at by a membership list that
+    /// only covered the world of the day it was written (判据 §5).
+    ///
+    /// Widening this needs no new liveness predicate, which is why it is here
+    /// and [`Self::reap_idle`]'s session-level sweep is not: this function asks
+    /// the backend (`list_tabs`, through `EngineLaunch::Refuse`, so a sweep can
+    /// never LAUNCH a browser) and reads an error as "the browser is gone,
+    /// stop re-probing". `idle_managed_profiles` instead judges through
+    /// `playwright_cli_driver.chromium_alive`, which cannot answer for a Cdp
+    /// profile at all — see [`Self::touch_tab`].
     pub async fn reap_idle_tabs(&self) -> usize {
-        // Candidates: Managed profiles whose browser was actually used.
+        // Candidates: profiles whose browser Aleph launched and that were used.
         let candidates: Vec<String> = {
             let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
             profiles
                 .iter()
                 .filter(|(name, p)| {
-                    p.config.driver == BrowserDriver::Managed && self.tab_registry.has_tabs(name)
+                    matches!(p.config.driver, BrowserDriver::Managed | BrowserDriver::Cdp)
+                        && self.tab_registry.has_tabs(name)
                 })
                 .map(|(name, _)| name.clone())
                 .collect()
@@ -1407,11 +1449,79 @@ mod tests {
         assert_eq!(user_config.driver, BrowserDriver::ExistingSession);
     }
 
+    /// **The flip, from both injection sites.**
+    ///
+    /// `ProfileManager::new` creates the `default` profile in TWO places — the
+    /// empty-config branch and the "the operator named other profiles but not
+    /// this one" branch — and for most of this file's life one of them named
+    /// `Managed` explicitly while the other took the type's default. Changing
+    /// only one leaves the other on the old driver, and the difference is
+    /// invisible until somebody runs with an empty config (判据 §6: count the
+    /// writers, and the count is always short by one).
+    ///
+    /// Driving both branches in one test rather than trusting that they agree
+    /// is the whole point; a single-branch assertion would stay green with the
+    /// other site reverted.
+    #[test]
+    fn the_default_profile_is_obscura_over_cdp_from_both_injection_sites() {
+        let default_engine = BrowserSystemConfig::default().default_engine;
+
+        // Empty config → the first branch.
+        let empty = ProfileManager::new(BrowserSystemConfig::default());
+        let d = empty.get_config("default").expect("default profile");
+        assert_eq!(d.driver, BrowserDriver::Cdp, "empty-config branch");
+        assert_eq!(d.resolved_engine(default_engine), Engine::Obscura);
+
+        // A config naming SOME OTHER profile → the second branch.
+        let mut cfg = BrowserSystemConfig::default();
+        cfg.profiles
+            .insert("other".into(), ProfileConfig::default());
+        let seeded = ProfileManager::new(cfg);
+        let d = seeded.get_config("default").expect("default profile");
+        assert_eq!(d.driver, BrowserDriver::Cdp, "auto-inject branch");
+        assert_eq!(d.resolved_engine(default_engine), Engine::Obscura);
+
+        // The `user` profile is untouched: it attaches to the operator's own
+        // Chrome and has nothing to do with the engine choice. Without this the
+        // test above is satisfied by "every profile is Cdp now".
+        let u = seeded.get_config("user").expect("user profile");
+        assert_eq!(u.driver, BrowserDriver::ExistingSession);
+        assert_eq!(u.resolved_engine(default_engine), Engine::Chromium);
+    }
+
+    /// An operator who wrote `driver` down keeps it, through the same
+    /// constructor that injects the new default for everyone else.
+    #[test]
+    fn an_explicitly_configured_default_profile_is_not_flipped() {
+        let mut cfg = BrowserSystemConfig::default();
+        cfg.profiles.insert(
+            "default".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Managed,
+                ..ProfileConfig::default()
+            },
+        );
+        let manager = ProfileManager::new(cfg);
+        let d = manager.get_config("default").expect("default profile");
+        assert_eq!(
+            d.driver,
+            BrowserDriver::Managed,
+            "the flip must change what happens when nothing was said, never \
+             what an operator wrote down"
+        );
+        assert_eq!(
+            d.resolved_engine(Engine::Obscura),
+            Engine::Chromium,
+            "a legacy driver pins the engine; the global default must not drag \
+             it onto obscura"
+        );
+    }
+
     #[test]
     fn test_get_driver() {
         let config = BrowserSystemConfig::default();
         let manager = ProfileManager::new(config);
-        assert_eq!(manager.get_driver("default"), Some(BrowserDriver::Managed));
+        assert_eq!(manager.get_driver("default"), Some(BrowserDriver::Cdp));
         assert_eq!(
             manager.get_driver("user"),
             Some(BrowserDriver::ExistingSession)
@@ -1458,6 +1568,15 @@ mod tests {
                 ..Default::default()
             },
         );
+        // The Managed control, named explicitly. `default` used to serve as
+        // one and cannot any more.
+        config.profiles.insert(
+            "managed".into(),
+            ProfileConfig {
+                driver: BrowserDriver::Managed,
+                ..Default::default()
+            },
+        );
         let manager = ProfileManager::new(config);
 
         let backend = manager
@@ -1481,7 +1600,12 @@ mod tests {
         // fourth one nobody meant to route to — so the assertion would have
         // been weaker than the sentence beside it claimed, which is the same
         // gap `is_ok()` left in the first arm.
-        let managed = manager.get_backend("default").expect("default routes");
+        // The Managed control is an EXPLICITLY managed profile, not `default`.
+        // It used to be `default`, which stopped being a control the moment the
+        // dual-engine flip made the default driver `Cdp` — a control that
+        // silently becomes a copy of the thing it is controlling for
+        // (判据 §3: the guard's green only covers the shape it enumerates).
+        let managed = manager.get_backend("managed").expect("managed routes");
         assert!(
             managed
                 .as_ref()
@@ -1580,6 +1704,56 @@ mod tests {
         manager.touch_tab("default", "1");
         assert_eq!(manager.reap_idle_tabs().await, 0);
         assert!(!manager.has_tracked_tabs("default"));
+    }
+
+    /// **The tab sweeper reaches every driver `touch_tab` writes for.**
+    ///
+    /// `touch_tab` records `Managed | Cdp`; `reap_idle_tabs` selected `Managed`
+    /// alone until the default flip. That mismatch is a writer with no reader
+    /// (判据 §7), and it was invisible while `Cdp` was opt-in — the day the
+    /// default profile became a Cdp profile it turned into "the default
+    /// profile's `max_tabs_per_profile` and `tab_idle_timeout_secs` do
+    /// nothing".
+    ///
+    /// Both sets are derived from `BrowserDriver::ALL` rather than listed, so a
+    /// fourth driver has to be given an answer here instead of quietly
+    /// inheriting one (判据 §5).
+    #[tokio::test]
+    async fn the_tab_sweeper_selects_exactly_the_drivers_touch_tab_records() {
+        for driver in BrowserDriver::ALL {
+            let mut config = BrowserSystemConfig::default();
+            config.profiles.insert(
+                "p".into(),
+                ProfileConfig {
+                    driver,
+                    ..ProfileConfig::default()
+                },
+            );
+            let manager = ProfileManager::new(config);
+
+            manager.touch_tab("p", "T1");
+            let recorded = manager.has_tracked_tabs("p");
+            assert_eq!(
+                recorded,
+                driver != BrowserDriver::ExistingSession,
+                "{driver:?}: touch_tab's own rule is 'the browsers Aleph owns'"
+            );
+            if !recorded {
+                continue;
+            }
+
+            // No browser is running, so `list_tabs` fails and the sweeper's job
+            // is to stop re-probing this profile. That the entry is GONE is the
+            // effect proving the profile was selected at all — a sweeper that
+            // skipped it would leave the entry in place and still return 0, so
+            // the return value alone cannot tell the two apart (判据 §4).
+            assert_eq!(manager.reap_idle_tabs().await, 0);
+            assert!(
+                !manager.has_tracked_tabs("p"),
+                "{driver:?}: the sweeper never looked at this profile, so its \
+                 tab entries are kept forever and its tab settings are dead"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1760,8 +1934,8 @@ mod tests {
         let _home_guard = AlephHomeEnvGuard::acquire_and_set(home.path());
         let manager = ProfileManager::new(BrowserSystemConfig::default());
         // Both auto-injected profiles exist (`ProfileManager::new`): `default`
-        // is Managed, `user` is ExistingSession.
-        assert_eq!(manager.get_driver("default"), Some(BrowserDriver::Managed));
+        // is Cdp since the dual-engine flip, `user` is ExistingSession.
+        assert_eq!(manager.get_driver("default"), Some(BrowserDriver::Cdp));
         assert_eq!(
             manager.get_driver("user"),
             Some(BrowserDriver::ExistingSession),
