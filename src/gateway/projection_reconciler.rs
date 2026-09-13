@@ -642,6 +642,23 @@ mod tests {
         }
     }
 
+    /// `append_all` dated at `now`. The projected row carries the record's
+    /// `created_at_ms`, and `sessions.last_active_at` follows the row — so a
+    /// log dated at `seq` (1970) drops its session out of the activity window
+    /// the moment the first pass writes a row, and a second
+    /// `reconcile_candidates` scans nothing. A test whose second pass must
+    /// reach the projector dates its log here.
+    async fn append_all_now(
+        store: &Arc<dyn SessionEventStore>,
+        id: &SessionId,
+        evs: &[(u64, SessionEvent)],
+    ) {
+        let now = crate::session::events::now_ms();
+        for (seq, ev) in evs {
+            store.append(id, *seq, ev, now).await.unwrap();
+        }
+    }
+
     /// A reconciler with NO epoch registrar — the file backend's shape. The
     /// heal tests below build their own so they can hand in the SQLite
     /// `SessionManager` as both store and registrar.
@@ -1348,7 +1365,7 @@ mod tests {
         let id = SessionKey::ephemeral("nometa");
         session_store.get_or_create(&id).await.unwrap();
         let tid = uuid::Uuid::new_v4();
-        append_all(
+        append_all_now(
             &event_store,
             &id,
             &finished_run_without_meta(tid, assistant(tid, 300, 40, 3)),
@@ -1381,6 +1398,9 @@ mod tests {
         let again = reconciler(&event_store, &session_store)
             .reconcile_candidates()
             .await;
+        // The second pass must have ASKED: with no candidate, the counters
+        // below are zero for the wrong reason and prove nothing.
+        assert_eq!(again.scanned, 1, "{again:?}");
         assert_eq!(
             (again.stamps_synthesized, again.usage_rebilled),
             (0, 0),
@@ -1407,7 +1427,7 @@ mod tests {
         let id = SessionKey::ephemeral("nousage");
         session_store.get_or_create(&id).await.unwrap();
         let tid = uuid::Uuid::new_v4();
-        append_all(
+        append_all_now(
             &event_store,
             &id,
             &finished_run_without_meta(tid, assistant_unpriced(tid, 3)),
