@@ -30,21 +30,76 @@ use super::error::BrowserError;
 
 pub use capability::{capabilities, supported_by, Cap, EngineCapabilities, CAP_FIELDS};
 
-/// Which browser process backs a profile.
+/// Declares the [`Engine`] variants **once** and emits both the enum and its
+/// [`Engine::ALL`].
 ///
-/// The wire spelling is frozen the day it ships: it is a config value
-/// (`[general.browser.profiles.<name>] engine = "obscura"`), a
-/// `runtime_manage{capability}` value, and a field in every sidecar record on
-/// disk. `snake_case` matches `BrowserDriver`'s existing serde
-/// (`super::profile::BrowserDriver`, `profile.rs:22-30`).
+/// Without this, `ALL` was a hand-written array beside a hand-written enum —
+/// two facts claiming to enumerate one set, with the array's own doc asserting
+/// an invariant nothing checked (判据 §1, and the comment was the lying half).
+/// It was measured rather than argued: adding a third variant produced **13
+/// compile errors** and `ALL` was not one of them, so the natural repair (add
+/// the variant, fix the 13 matches, green build) left five consumers iterating
+/// two engines out of three — `locate_all` among them, returning 2 rows under
+/// a doc claiming the count *is* the variant count, with no dead-code warning
+/// because the compiler cannot know `ALL` excludes it.
 ///
-/// **Deliberately not a variant of `BrowserType`** (`profile.rs:13-19`): that
-/// enum answers "which member of the Chromium family", and obscura is not one
-/// (spec §6.3). Folding them would make `browser = "obscura"` parse into a
-/// value `discovery::find_chromium_preferred` would then hunt for on disk.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Engine {
+/// **A test cannot be the fix.** Stable Rust cannot enumerate variants, so any
+/// completeness guard needs a second hand-written list — the same defect again
+/// — and a guard that iterates `ALL` cannot see `ALL` being short; it just
+/// tests fewer things (判据 §3, §2's 恒绿 face). The macro removes the need for
+/// a guard instead of adding one.
+///
+/// Each variant name is on its own line on purpose: a macro that hid `Obscura`
+/// from `grep -n 'Obscura' src/browser/engine/mod.rs` would trade one silent
+/// failure for another. The idiom is already in this subsystem — `obscura_tag!`
+/// in `runtimes/specs.rs` exists for exactly this reason — so it adds no
+/// dependency and no new pattern.
+macro_rules! declare_engines {
+    (
+        $(
+            $(#[$vmeta:meta])*
+            $variant:ident
+        ),+ $(,)?
+    ) => {
+        /// Which browser process backs a profile.
+        ///
+        /// The wire spelling is frozen the day it ships: it is a config value
+        /// (`[general.browser.profiles.<name>] engine = "obscura"`), a
+        /// `runtime_manage{capability}` value, and a field in every sidecar
+        /// record on disk. `snake_case` matches `BrowserDriver`'s existing
+        /// serde (`super::profile::BrowserDriver`, `profile.rs:22-30`).
+        ///
+        /// **Deliberately not a variant of `BrowserType`** (`profile.rs:13-19`):
+        /// that enum answers "which member of the Chromium family", and obscura
+        /// is not one (spec §6.3). Folding them would make `browser = "obscura"`
+        /// parse into a value `discovery::find_chromium_preferred` would then
+        /// hunt for on disk.
+        #[derive(
+            Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
+        )]
+        #[serde(rename_all = "snake_case")]
+        pub enum Engine {
+            $(
+                $(#[$vmeta])*
+                $variant,
+            )+
+        }
+
+        impl Engine {
+            /// Every engine, in the order tables and doctor rows render them.
+            ///
+            /// **Emitted by `declare_engines!` from the same variant list as
+            /// the enum**, so a third engine reaches every enumerator by being
+            /// declared, not by being remembered here as well (判据 §5). That
+            /// sentence used to be a claim; the construct above it is now what
+            /// makes it true, and deleting the macro is how you falsify it.
+            pub const ALL: [Self; { [$(stringify!($variant)),+].len() }] =
+                [$(Self::$variant),+];
+        }
+    };
+}
+
+declare_engines! {
     /// The default engine (spec §0): a small, Aleph-shaped browser installed
     /// from the runtime ledger.
     #[default]
@@ -54,13 +109,6 @@ pub enum Engine {
 }
 
 impl Engine {
-    /// Every engine, in the order tables and doctor rows render them.
-    ///
-    /// A named array rather than a hand-written list at each call site: a
-    /// third engine must reach every enumerator by adding one entry here, not
-    /// by being remembered in N places (判据 §5).
-    pub const ALL: [Self; 2] = [Self::Obscura, Self::Chromium];
-
     /// The wire spelling — the SAME string serde writes, derived from one
     /// place so a `#[serde(rename_all)]` change cannot leave the two
     /// disagreeing.
