@@ -66,9 +66,16 @@ pub enum ErrorKind {
 #[serde(rename_all = "snake_case")]
 pub enum ParkReason {
     /// A confirmation / operator card
-    /// (`tools::scoped::dispatch::confirm_with_memory`).
+    /// (`tools::scoped::dispatch::confirm_with_memory`), or the sandbox's
+    /// capability-elevation card raised inside a shell tool's own `execute`
+    /// (`sandbox::workspace`) — the set of stamped park sites is derived by
+    /// `tools::scoped::tests::every_production_approval_park_is_stamped_or_named_exempt`,
+    /// not listed here.
     Approval,
-    /// `ask_user` waiting for the person's answer (`clarification::ask`).
+    /// A question delivered to the person and waiting for the answer
+    /// (`clarification::ask` — reached by `ask_user` and by the scratchpad
+    /// plan gate). Written only once delivery is proven, so the question WAS
+    /// shown: the call did not "never run", the answer is what is missing.
     Clarification,
     /// A card a `BeforeToolCall` hook's `Ask` raised. NOT "the hook script
     /// was running": a crash inside a hook script stays OUTCOME UNKNOWN,
@@ -77,6 +84,12 @@ pub enum ParkReason {
 }
 
 impl ParkReason {
+    /// Every variant, for the two tests that walk them and for a wire face
+    /// that wants to enumerate. Pinned complete by
+    /// `tests::park_reason_all_lists_every_variant_once` (an exhaustive
+    /// match, so a new variant does not compile until it is added here).
+    pub const ALL: [ParkReason; 3] = [Self::Approval, Self::Clarification, Self::PreHook];
+
     /// The serde word, for a caller that wants the wire spelling without a
     /// serializer round-trip.
     #[must_use]
@@ -1167,11 +1180,7 @@ mod tests {
     /// is not a sentence — and the event must round-trip under its own tag.
     #[test]
     fn park_reason_wire_word_is_the_serde_name_and_display_is_the_clause() {
-        for r in [
-            ParkReason::Approval,
-            ParkReason::Clarification,
-            ParkReason::PreHook,
-        ] {
+        for r in ParkReason::ALL {
             assert_eq!(
                 serde_json::to_value(r).unwrap(),
                 serde_json::json!(r.as_str())
@@ -1190,6 +1199,26 @@ mod tests {
             "{json}"
         );
         let _: SessionEvent = serde_json::from_str(&json).unwrap();
+    }
+
+    /// `ParkReason::ALL` is a hand-written list, so the compiler does not
+    /// force a new variant into it. This exhaustive match does: a new variant
+    /// fails to compile here until it has an index, and the `seen` array then
+    /// fails until `ALL` carries it exactly once.
+    #[test]
+    fn park_reason_all_lists_every_variant_once() {
+        fn index(r: ParkReason) -> usize {
+            match r {
+                ParkReason::Approval => 0,
+                ParkReason::Clarification => 1,
+                ParkReason::PreHook => 2,
+            }
+        }
+        let mut seen = [0usize; ParkReason::ALL.len()];
+        for r in ParkReason::ALL {
+            seen[index(r)] += 1;
+        }
+        assert!(seen.iter().all(|n| *n == 1), "{seen:?}");
     }
 
     // -----------------------------------------------------------------------

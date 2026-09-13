@@ -330,6 +330,27 @@ impl Sandbox for WorkspaceSandbox {
                     cmd.cwd.as_deref(),
                     &reason,
                 );
+                // §6.1: the park is a fact BEFORE the park. Same writer and
+                // same anchor as the tool-confirm gate: this card is raised
+                // inside the shell tool's own `execute`, after its
+                // `ToolCallRequested`, under the `CallIdentity` the harness
+                // scoped around that call (`bash_exec::spawn_background`
+                // re-enters it for a detached job, whose card then lands after
+                // the spawning call's receipt — the reducer reads that shape
+                // as nothing to mark). Awaited to the store before the
+                // requester is entered; the park proceeds without its stamp
+                // (a lost stamp reads "outcome unknown", U3's safe direction).
+                crate::session::call_log::emit_for_ambient_call(
+                    &cmd.session_id,
+                    &cmd.tool_name,
+                    "capability elevation park",
+                    |turn_id, call_id| crate::session::events::SessionEvent::ToolCallParked {
+                        turn_id,
+                        call_id,
+                        reason: crate::session::events::ParkReason::Approval,
+                    },
+                )
+                .await;
                 // From here the call is parked on a person: the card can sit on
                 // a screen for minutes, and everything the earlier cwd check
                 // observed goes stale the moment we yield.
@@ -1322,6 +1343,88 @@ mod tests {
             .await
             .expect("the workspace root must survive the re-check");
         assert_eq!(*driver.run_count.read().await, 2);
+    }
+
+    /// A requester that signals "the card is up" and then never answers —
+    /// the park, frozen at the instant the test wants to look at the log.
+    struct NeverAnswers {
+        asked: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalRequester for NeverAnswers {
+        async fn request_approval(
+            &self,
+            _action: &crate::sandbox::exec_approval::ApprovalAction,
+        ) -> crate::sandbox::exec_approval::ApprovalResponse {
+            self.asked.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    /// §6.1 at the capability card: the `ToolCallParked { Approval }` row is
+    /// readable through the real actor service at the instant the requester
+    /// is entered — before anyone could answer, and before any command could
+    /// spawn. Twin of `tests/parked_gate_integration.rs` for the confirm gate.
+    /// `sid()` is ephemeral, so the shared test service's other users cannot
+    /// interleave rows here.
+    #[tokio::test]
+    async fn the_capability_card_is_in_the_log_before_the_requester_is_reached() {
+        use crate::session::events::{ParkReason, SessionEvent, TurnId};
+        use crate::session::service::SessionService as _;
+        let sessions = crate::session::in_process::install_test_session_service();
+        let tmp = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let asked = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::new(ApprovalGate::new(Some(Arc::new(NeverAnswers {
+            asked: asked.clone(),
+        }))));
+        let sandbox = build_sandbox(&tmp, driver, gate, SandboxHooks::new());
+        let session = sid();
+        let cmd = SandboxCommand {
+            session_id: session.clone(),
+            tool_name: "bash".into(),
+            program: "curl".into(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: SandboxCapabilities {
+                network: NetworkPolicy::AllowAll,
+                ..SandboxCapabilities::strict()
+            },
+            timeout: None,
+        };
+        let identity = crate::approval::CallIdentity {
+            turn_id: TurnId::new_v4(),
+            call_id: "toolu_elevated".into(),
+        };
+        let run = tokio::spawn(crate::approval::with_call_identity(
+            Some(identity),
+            async move { sandbox.execute(cmd).await },
+        ));
+
+        asked.notified().await;
+        let rows = sessions.get_events(&session, None, None).await.unwrap();
+        let parks = rows
+            .iter()
+            .filter(|r| {
+                matches!(
+                    &r.event,
+                    SessionEvent::ToolCallParked {
+                        call_id,
+                        reason: ParkReason::Approval,
+                        ..
+                    } if call_id == "toolu_elevated"
+                )
+            })
+            .count();
+        assert_eq!(
+            (parks, rows.len()),
+            (1, 1),
+            "one park row and nothing else, landed before the card was raised: {rows:?}"
+        );
+        run.abort();
     }
 
     #[test]

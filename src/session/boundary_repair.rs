@@ -77,16 +77,21 @@ const VERIFY_CLOSE: &str = "Verify the current state before deciding whether to 
 /// to redo?" from a tool name and its arguments is exactly the reasoning R7
 /// reserves for the model. State the fact; let it judge.
 ///
-/// Four arms because there are four true sentences. The third one is the
-/// reason `denied` is a field on [`crate::session::reduction::DanglingCall`]
-/// rather than a detail of the approval path: a call the approval gate refused
-/// **did not run**, so telling it "this may have completed and its side effects
-/// have already landed" is a fabrication, and the model's most likely reaction
-/// to that fabrication is to go looking for state that does not exist. The
+/// Four arms because there are four true sentences (the parked and the
+/// unknown arms each carry two provenance leads). The third one is the reason
+/// `denied` is a field on [`crate::session::reduction::DanglingCall`] rather
+/// than a detail of the approval path: a call the approval gate refused **did
+/// not run**, so telling it "this may have completed and its side effects have
+/// already landed" is a fabrication, and the model's most likely reaction to
+/// that fabrication is to go looking for state that does not exist. The
 /// fourth (§6.1) is the same fact from the other side of the gate: a call the
-/// log shows still **parked** — waiting for approval, for an answer, for a
-/// hook's card — never ran either, and it says what it was waiting for. It is
-/// told, not redelivered (U4): the model decides whether to ask again.
+/// log shows still **parked** — on a confirm card, on the sandbox's
+/// capability card, on a hook's card — never ran either, and it says what it
+/// was waiting for. A [`ParkReason::Clarification`] park is the one exception
+/// inside that arm: the stamp is written only after the question was
+/// delivered, so the call did run as far as showing the question — what is
+/// missing is the answer, and the sentence says that instead. Told, not
+/// redelivered (U4): the model decides whether to ask again.
 ///
 /// `denied` wins over `parked` — the reducer never sets both, and if a log
 /// ever did the denied sentence is the one that names a decision a person
@@ -110,20 +115,28 @@ pub fn boundary_repair_text(
         // Provenance still decides the lead, as it does for the unknown-outcome
         // arms: an older parked dangle was left by a run that ended, not by
         // this restart, and the sentence must not say otherwise.
-        let lead = match provenance {
-            DanglingProvenance::ThisRestart => {
-                format!("when the server restarted it was still waiting for {reason}")
-            }
-            DanglingProvenance::EarlierRun => format!(
-                "an earlier run in this session ended while it was still waiting for {reason}"
-            ),
+        let ended = match provenance {
+            DanglingProvenance::ThisRestart => "the server restarted",
+            DanglingProvenance::EarlierRun => "an earlier run in this session ended",
         };
-        format!(
-            "NOT EXECUTED — this `{tool}` call never ran: {lead}. Nothing it would have done \
-             has happened: no file writes, no commands, no network calls, no change to \
-             external state. If you still need it, call it again — it will go through the \
-             gate again. {VERIFY_CLOSE}"
-        )
+        match reason {
+            // The question reached the person (the stamp is written after
+            // delivery is proven); the answer is what never landed. "Never
+            // ran", "nothing it would have done has happened" and "the gate"
+            // would all be false here.
+            ParkReason::Clarification => format!(
+                "NOT ANSWERED — this `{tool}` call delivered its question, but no answer was \
+                 recorded before {ended}; {reason} is still missing. If you still need the \
+                 answer, ask again. {VERIFY_CLOSE}"
+            ),
+            ParkReason::Approval | ParkReason::PreHook => format!(
+                "NOT EXECUTED — this `{tool}` call never ran: {ended} while it was still \
+                 waiting for {reason}. Nothing it would have done has happened: no file \
+                 writes, no commands, no network calls, no change to external state. If you \
+                 still need it, call it again — it will go through the gate again. \
+                 {VERIFY_CLOSE}"
+            ),
+        }
     } else {
         let lead = match provenance {
             DanglingProvenance::ThisRestart => format!(
@@ -429,7 +442,7 @@ mod tests {
         // The fourth arm (§6.1): a call parked at a gate never ran. Like the
         // denied arm it must deny the side effects outright, and it must name
         // what the call was waiting for — that clause is `ParkReason`'s
-        // `Display`, so the three reasons read as three different waits.
+        // `Display`, so the reasons read as different waits.
         let parked = boundary_repair_text(
             "bash_exec",
             DanglingProvenance::ThisRestart,
@@ -450,12 +463,47 @@ mod tests {
             !parked.contains("OUTCOME UNKNOWN"),
             "a parked call's outcome is known — it never ran: {parked}"
         );
-        assert!(parked != denied && parked != restart && parked != earlier);
-        for (reason, clause) in [
-            (ParkReason::Approval, "operator approval"),
-            (ParkReason::Clarification, "the answer to your question"),
-            (ParkReason::PreHook, "a pre-tool hook"),
+        // The clarification wait is the exception inside the arm: the question
+        // was delivered, so "never ran" would be false; the answer is missing.
+        let unanswered = boundary_repair_text(
+            "ask_user",
+            DanglingProvenance::ThisRestart,
+            false,
+            Some(ParkReason::Clarification),
+            None,
+        );
+        assert_shared_points(&unanswered, "ask_user");
+        assert!(
+            unanswered.contains("delivered its question")
+                && unanswered.contains("no answer was recorded")
+                && unanswered.contains("ask again"),
+            "{unanswered}"
+        );
+        for false_claim in [
+            "never ran",
+            "Nothing it would have done",
+            "the gate",
+            "OUTCOME UNKNOWN",
         ] {
+            assert!(
+                !unanswered.contains(false_claim),
+                "a delivered question must not be told `{false_claim}`: {unanswered}"
+            );
+        }
+        // Distinct sentences, arm by arm (and the two parked bodies apart).
+        for (a, b) in [
+            (&parked, &denied),
+            (&parked, &restart),
+            (&parked, &earlier),
+            (&unanswered, &parked),
+            (&unanswered, &denied),
+            (&unanswered, &restart),
+        ] {
+            assert_ne!(a, b);
+        }
+        // Every reason reads its own clause; only the two "never ran" reasons
+        // say so; no `EarlierRun` parked dangle is blamed on this restart.
+        for reason in ParkReason::ALL {
             let text = boundary_repair_text(
                 "t",
                 DanglingProvenance::EarlierRun,
@@ -463,7 +511,12 @@ mod tests {
                 Some(reason),
                 None,
             );
-            assert!(text.contains(clause), "{reason:?}: {text}");
+            assert!(text.contains(&reason.to_string()), "{reason:?}: {text}");
+            assert_eq!(
+                text.contains("never ran"),
+                !matches!(reason, ParkReason::Clarification),
+                "{reason:?}: {text}"
+            );
             assert!(
                 !text.contains("the server restarted"),
                 "an older parked dangle must not be blamed on this restart: {text}"

@@ -8,10 +8,12 @@
 //! service and the real store.
 //!
 //! In `tests/` because `set_global_session_service` is a process-wide slot
-//! (`session/service.rs`): an integration binary is one process, so it can
-//! install the service the gate resolves and then read back what the gate
-//! wrote. The unit tests in `src/tools/scoped/` run with no service installed
-//! and can only see the returned error.
+//! (`session/service.rs`) that honours the first install only: an integration
+//! binary is one process, so this test can install a fresh in-memory service
+//! of its own and know exactly what it reads back. The lib binary's slot is
+//! shared by whoever installs first (`install_test_session_service`), so the
+//! in-crate twin — `tools::scoped::tests::an_answered_gate_leaves_park_then_decision_in_the_session_log`
+//! — reads through that shared service under an ephemeral key instead.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -60,7 +62,9 @@ fn chat_tier_turn(agent: &str) -> TurnContext {
         run_id: String::new(),
         channel_id: String::new(),
         conversation_id: String::new(),
-        // Not an operator: what makes the config gate applicable at all.
+        // The confirm gate fires on `requires_confirmation() == true` above,
+        // not on the caller's role; a non-operator role only keeps the
+        // fixture identical to `agent_ledger_gate_refusals.rs`.
         caller_role: Some("guest".to_string()),
         channel_tool_permissions: None,
         unattended: false,

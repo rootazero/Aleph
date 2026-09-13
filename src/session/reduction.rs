@@ -116,9 +116,12 @@ pub enum LogContradiction {
     /// `Clean` regardless. This report is what tells the operator the stamp
     /// named nothing at the moment it was written.
     ResumeWithoutTarget { seq: EventSeq },
-    /// A `ToolCallParked` with no unanswered dispatch of its `call_id` before
-    /// it. Reading: ignored — it names nothing the log can pair it with, so
-    /// no dangling call is marked parked by it.
+    /// A `ToolCallParked` with no open dispatch of its `call_id` to pair
+    /// with: none was ever dispatched, or the only unanswered one was already
+    /// denied. Reading: ignored — it names nothing the log can pair it with,
+    /// so no dangling call is marked parked by it. A park written AFTER its
+    /// call's receipt (a detached job's card) is not this — see the arm in
+    /// [`reduce_run`]; it is read like an approval after a receipt: silently.
     ParkedWithoutRequest { seq: EventSeq, call_id: String },
 }
 
@@ -268,11 +271,13 @@ pub struct DanglingCall {
     /// landed". Always paired with a
     /// [`LogContradiction::DanglingDeniedCall`] in `contradictions`.
     pub denied: bool,
-    /// Parked at a gate when the log ends and nothing answered the gate: it
-    /// never ran (§6.1), and the repair says what it was waiting for. Cleared
-    /// by a later `ToolCallApproved` (it went on to run — unknown again) or
-    /// `ToolCallDenied` (the denied arm speaks instead). Never `Some` together
-    /// with `denied`.
+    /// Parked at a gate when the log ends and nothing answered the gate (§6.1):
+    /// the repair says what it was waiting for. Cleared by a later
+    /// `ToolCallApproved` (it went on to run — unknown again) or
+    /// `ToolCallDenied` (the denied arm speaks instead), and a park stamped
+    /// after a denial is not paired at all
+    /// ([`LogContradiction::ParkedWithoutRequest`]) — so this is never `Some`
+    /// on a call whose `denied` is set.
     pub parked: Option<ParkReason>,
 }
 
@@ -593,19 +598,32 @@ pub fn reduce_run(events: &[SessionEventRecord]) -> Result<RunReduction, LogCont
                     parked: None,
                 });
             }
-            // The gate's intent stamp (§6.1): the nearest unanswered dispatch
-            // of its id is parked from here until the gate is answered. With
-            // no such dispatch it names nothing — reported, not acted on.
+            // The gate's intent stamp (§6.1): the nearest open dispatch of its
+            // id — unanswered and not already denied — is parked from here
+            // until the gate is answered. Three other shapes:
+            // * a dispatch of this id exists but every one is answered: a card
+            //   raised AFTER the receipt. A detached (background) shell job's
+            //   capability card lands after the call that spawned it has
+            //   already returned its job id (`bash_exec::spawn_background`
+            //   re-enters the call identity on purpose). Nothing to mark and
+            //   nothing to report — the same after-receipt reading the
+            //   `ToolCallApproved` / `ToolCallDenied` arms give;
+            // * the nearest unanswered dispatch was already denied: the gate
+            //   has spoken, a park after its answer names nothing;
+            // * no dispatch of this id at all.
+            // The last two are `ParkedWithoutRequest` — reported, not acted on.
             SessionEvent::ToolCallParked {
                 call_id, reason, ..
             } => {
+                let any_of_id = dispatches.iter().any(|d| d.call_id == call_id);
                 match dispatches
                     .iter_mut()
                     .rev()
                     .find(|d| d.call_id == call_id && d.answered.is_none())
                 {
-                    Some(d) => d.parked = Some(*reason),
-                    None => contradictions.push(LogContradiction::ParkedWithoutRequest {
+                    Some(d) if !d.denied => d.parked = Some(*reason),
+                    None if any_of_id => {}
+                    _ => contradictions.push(LogContradiction::ParkedWithoutRequest {
                         seq: record.seq,
                         call_id: call_id.clone(),
                     }),
@@ -1404,6 +1422,49 @@ mod tests {
         assert_eq!(tags(&r), vec!["session-log-parked-without-request"]);
     }
 
+    /// A park stamped after the gate already denied the call names nothing:
+    /// the denial is kept (the denied arm speaks), `parked` stays `None`, and
+    /// the stray stamp is reported. Production cannot write this order (both
+    /// deny exits return before the stamp), so it is a malformed log — read
+    /// the fail-closed way, not the confident one.
+    #[test]
+    fn a_park_after_a_denial_is_reported_and_the_denial_kept() {
+        let r = reduced(&[
+            rec(1, started("a")),
+            rec(2, requested("c1")),
+            rec(3, denied("c1")),
+            rec(4, parked("c1", ParkReason::Approval)),
+        ]);
+        assert_eq!(r.dangling.len(), 1);
+        assert!(r.dangling[0].denied && r.dangling[0].parked.is_none());
+        assert_eq!(
+            tags(&r),
+            vec![
+                "session-log-parked-without-request",
+                "session-log-dangling-denied-call",
+            ]
+        );
+    }
+
+    /// A park stamped AFTER its call's receipt is a detached job's card: a
+    /// background shell command asks for a capability after the `bash` call
+    /// that spawned it has already returned its job id. The call is answered,
+    /// so nothing dangles; and it is not a contradiction — the log is exactly
+    /// what that path writes by design. The same reading an approval after a
+    /// receipt gets.
+    #[test]
+    fn a_park_after_the_receipt_marks_nothing_and_reports_nothing() {
+        let r = reduced(&[
+            rec(1, started("a")),
+            rec(2, requested("c1")),
+            rec(3, result_for("c1")),
+            rec(4, parked("c1", ParkReason::Approval)),
+        ]);
+        assert!(r.dangling.is_empty());
+        assert!(tags(&r).is_empty(), "{:?}", tags(&r));
+        assert_eq!(r.progress.tool_calls_answered, 1);
+    }
+
     #[test]
     fn a_clock_anomaly_is_reported_once_per_log() {
         let zero = vec![
@@ -1753,6 +1814,26 @@ mod tests {
                     parked("c1", ParkReason::Approval),
                     approved("c1"),
                     result_for("c1"),
+                    assistant("done"),
+                    finished("r1"),
+                    run_meta("r1"),
+                ]),
+                allowed: &[],
+            },
+            LegalShape {
+                // A background shell job asks for a capability after the
+                // `bash` call that spawned it already returned its job id
+                // (`bash_exec::spawn_background` re-enters the call identity),
+                // so its park and its approval land AFTER the receipt.
+                name: "background job's capability card after the spawn call returned",
+                events: seq_log(vec![
+                    turn_started(),
+                    user("hi"),
+                    started("r1"),
+                    requested("c1"),
+                    result_for("c1"),
+                    parked("c1", ParkReason::Approval),
+                    approved("c1"),
                     assistant("done"),
                     finished("r1"),
                     run_meta("r1"),

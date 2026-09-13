@@ -4041,6 +4041,12 @@ fn a_side_question_refusal_names_itself_not_the_plan_handoff() {
 /// counted, logged anomaly rather than an expected shape (spec §6.2). Equality
 /// on the originator set, derived from the source: a new originator must scope
 /// an identity around its dispatch, or not reach the gate.
+///
+/// What it does not see: a 2-arg `ToolService::execute(name, input)`
+/// originator — `.execute(` is too common a name to census textually (it is
+/// also every `LoopTool`, every `rusqlite` statement, every probe executor).
+/// Today the only production 2-arg `.execute(` on a `ToolService` is the
+/// `AllowlistToolService` forwarder; that is a measurement, not a pin.
 #[test]
 fn every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity() {
     use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
@@ -4066,6 +4072,83 @@ fn every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity()
     assert_eq!(
         calls, scoped,
         "every dispatch in act.rs is wrapped by exactly one identity scope"
+    );
+}
+
+/// Every production site that parks a call on a human — awaits an
+/// `ApprovalRequester` — either stamps `ToolCallParked` first (§6.1) or is
+/// named here with the reason it cannot. Derived from the source, equality on
+/// the set of originating files: a fourth site turns this red until it is
+/// classified.
+///
+/// A file that DEFINES `fn request_approval(` / `fn request_approval_for_action(`
+/// implements or forwards the requester face (`ApprovalGate`, the guardian /
+/// adapter / operator requesters) and is not an originator. One unrelated
+/// method of the same name — `scratchpad.rs::request_approval`, the plan
+/// gate, which parks through `clarification::ask` and is stamped THERE — is
+/// excluded by the same rule; stated so nobody reads that exclusion as a
+/// classification. The blind spot is the same one the dispatch census has: an
+/// originator that also defines a method of that name is invisible here.
+///
+/// "Stamped first" is measured as a stamp call within `WINDOW_LINES` lines
+/// above the await with no `fn ` header in between (same function). The two
+/// real distances are 5 lines (`dispatch.rs`, `record_parked` → the await)
+/// and 17 (`workspace/mod.rs`, the multi-line `emit_for_ambient_call` → the
+/// await); the window is those plus slack, not a hand-tuned exact.
+#[test]
+fn every_production_approval_park_is_stamped_or_named_exempt() {
+    use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+    const AWAITS: [&str; 2] = [".request_approval(", ".request_approval_for_action("];
+    const STAMPS: [&str; 2] = ["record_parked(", "emit_for_ambient_call("];
+    const WINDOW_LINES: usize = 20;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    // file -> [(1-based line of the await, stamped within the window)]
+    let mut sites: std::collections::BTreeMap<String, Vec<(usize, bool)>> = Default::default();
+    for (rel, src) in rust_sources_under(&root) {
+        let code = code_text(&production_text(std::path::Path::new(&rel), &src));
+        if code.contains("fn request_approval(") || code.contains("fn request_approval_for_action(")
+        {
+            continue;
+        }
+        let lines: Vec<&str> = code.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !AWAITS.iter().any(|needle| line.contains(needle)) {
+                continue;
+            }
+            let window = &lines[i.saturating_sub(WINDOW_LINES)..i];
+            let same_fn = !window.iter().any(|l| l.contains("fn "));
+            let stamped = same_fn && window.iter().any(|l| STAMPS.iter().any(|s| l.contains(s)));
+            sites.entry(rel.clone()).or_default().push((i + 1, stamped));
+        }
+    }
+    const STAMPED: [&str; 2] = [
+        "src/sandbox/workspace/mod.rs",
+        "src/tools/scoped/dispatch.rs",
+    ];
+    // The borrow-cloud card (`escalation_allowed`) is a THINK-phase park: it
+    // gates a provider route, not a tool call, so there is no `call_id` for a
+    // `ToolCallParked` to name — out of the event's scope by construction.
+    const EXEMPT: &str = "src/providers/failover/provider.rs";
+    assert_eq!(
+        sites.keys().map(String::as_str).collect::<Vec<_>>(),
+        [EXEMPT, STAMPED[0], STAMPED[1]],
+        "a new site that parks a call on a human must stamp `ToolCallParked` first, or be \
+         named exempt here with its reason: {sites:?}"
+    );
+    for file in STAMPED {
+        for (line, stamped) in &sites[file] {
+            assert!(
+                stamped,
+                "{file}:{line} awaits a requester with no `ToolCallParked` stamp within \
+                 {WINDOW_LINES} lines of the same function"
+            );
+        }
+    }
+    assert!(
+        sites[EXEMPT].iter().all(|(_, stamped)| !stamped),
+        "the borrow-cloud card has no call_id; a `ToolCallParked` there would always be \
+         dropped for a missing identity — classify it, do not stamp it: {:?}",
+        sites[EXEMPT]
     );
 }
 

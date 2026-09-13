@@ -1,17 +1,18 @@
 //! The one writer for "a session-log row about the call being dispatched
 //! right now" — the approval decision and the park (§6.1) both ride it.
 //!
-//! Two sites used to resolve the ambient [`CallIdentity`] and the global
-//! [`SessionService`](crate::session::service::SessionService) on their own,
-//! and a third (`clarification::ask`) was about to become a copy of the same
-//! twenty lines. One writer means one answer to "what happens when the
-//! identity or the service is missing" — and one place a reviewer reads it.
+//! One site used to resolve the ambient [`CallIdentity`] and the global
+//! [`SessionService`](crate::session::service::SessionService) on its own
+//! (`tools::scoped::dispatch::record_approval_decision`); the park would have
+//! been two more copies of the same twenty lines. One writer means one answer
+//! to "what happens when the identity or the service is missing" — and one
+//! place a reviewer reads it.
 //!
-//! Best-effort by contract: the return value says whether the row was
-//! written, and no caller may let its own control flow depend on it. The park
-//! goes ahead without its stamp (a missing stamp reads "outcome unknown" —
-//! U3's safe direction), and an approval decision the human made is not
-//! overturned by a failed audit write.
+//! Best-effort as a type: the function returns `()`, so no caller can let its
+//! own control flow depend on whether the row landed. The park goes ahead
+//! without its stamp (a missing stamp reads "outcome unknown" — U3's safe
+//! direction), and an approval decision the human made is not overturned by a
+//! failed audit write. Why is logged at `warn` for every drop.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -20,12 +21,12 @@ use crate::session::events::{SessionEvent, TurnId};
 use crate::session::service::{global_session_service, SessionId};
 
 /// How many rows were dropped because no [`CallIdentity`] was in scope.
-/// Reported on the warning line below, which is the count's reader: the first
-/// time it speaks, the number it reports is the true size of the class.
+/// Reported on the warning line below, which is the count's reader: a reader
+/// of the log can tell a flood (some dispatch path nobody scoped) from a
+/// one-off without counting lines.
 static DROPPED_FOR_MISSING_IDENTITY: AtomicU64 = AtomicU64::new(0);
 
-/// Emit `make(turn_id, call_id)` for the ambient call; `false` = not written
-/// (why is logged).
+/// Emit `make(turn_id, call_id)` for the ambient call, or log why not.
 ///
 /// The identity comes from the task-local the harness Act phase scopes around
 /// every dispatch (`with_call_identity`), so it is exact per call — immune to
@@ -38,44 +39,41 @@ static DROPPED_FOR_MISSING_IDENTITY: AtomicU64 = AtomicU64::new(0);
 /// binary as tests that install the global service, so a `debug_assert!`
 /// would be a panic whose firing depends on thread interleaving.
 ///
-/// `tool` and `what` are log context only — the event carries no tool name
-/// (the dispatch it pairs with owns it).
+/// `site` and `what` are log context only — the event carries no tool name
+/// (the dispatch it pairs with owns it). `site` is the tool name where the
+/// caller knows it and the parking function's path where it does not.
 pub async fn emit_for_ambient_call(
     session: &SessionId,
-    tool: &str,
+    site: &str,
     what: &'static str,
     make: impl FnOnce(TurnId, String) -> SessionEvent,
-) -> bool {
+) {
     let Some(svc) = global_session_service() else {
         tracing::warn!(
-            tool = %tool,
+            site = %site,
             session = %session,
             what,
             "session/service capability absent; not persisted — see `aleph doctor`"
         );
-        return false;
+        return;
     };
     let Some(CallIdentity { turn_id, call_id }) = current_call_identity() else {
         let dropped = DROPPED_FOR_MISSING_IDENTITY.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::warn!(
-            tool = %tool,
+            site = %site,
             what,
             dropped_so_far = dropped,
             "no ambient call identity at the gate; not persisted — every production \
              dispatch is scoped by the harness Act phase (spec §6.2)"
         );
-        return false;
+        return;
     };
-    match svc.emit_event(session, make(turn_id, call_id)).await {
-        Ok(_) => true,
-        Err(e) => {
-            tracing::warn!(
-                tool = %tool,
-                what,
-                error = ?e,
-                "failed to persist to the session log"
-            );
-            false
-        }
+    if let Err(e) = svc.emit_event(session, make(turn_id, call_id)).await {
+        tracing::warn!(
+            site = %site,
+            what,
+            error = ?e,
+            "failed to persist to the session log"
+        );
     }
 }
