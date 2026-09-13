@@ -3008,6 +3008,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 agent_result.execution_adapter.clone(),
                 agent_result.agent_registry.clone(),
             );
+            // The `agent_tasks` table, so the scan can adjudicate the rows
+            // whose seed never reached the log (§8.2(b)). `None` on a
+            // deployment without the resilience database — then no such row
+            // exists and the coordinator's pass is a no-op.
+            let state_db_for_resume = agent_result.state_db.clone();
             // The resumed run's owner/scope comes off this store's persisted
             // session row — see `ResumeCoordinator::stamp_persisted_scope`.
             let sessions_for_resume = session_store_for_reconcile.clone();
@@ -3037,15 +3042,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     let reinject_registry = registry.clone();
                     let reinject_bus = bus_for_resume.clone();
                     let auto_scan = resume_cfg.enabled;
-                    let coordinator =
-                        std::sync::Arc::new(alephcore::gateway::ResumeCoordinator::new(
-                            event_store,
-                            resume_cfg,
-                            exec_adapter,
-                            registry,
-                            sessions_for_resume,
-                            bus_for_resume,
-                        ));
+                    let coordinator = alephcore::gateway::ResumeCoordinator::new(
+                        event_store,
+                        resume_cfg,
+                        exec_adapter,
+                        registry,
+                        sessions_for_resume,
+                        bus_for_resume,
+                    );
+                    let coordinator = std::sync::Arc::new(match state_db_for_resume {
+                        Some(db) => coordinator.with_state_database(db),
+                        None => coordinator,
+                    });
                     // Published unconditionally, on purpose. `[resume] enabled`
                     // governs the automatic scan below; `agent.resume` /
                     // `aleph-server resume` are explicit operator requests and
@@ -3104,7 +3112,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                                 resumed = report.resumed,
                                 abandoned = report.abandoned,
                                 skipped = report.skipped,
-                                // T16 adds `notified = report.notified`.
+                                notified = report.notified,
                                 "ResumeCoordinator boot scan finished"
                             ),
                             Ok(_) => tracing::debug!(

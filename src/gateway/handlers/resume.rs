@@ -430,6 +430,7 @@ mod tests {
             contradictions: 0,
             degraded: 0,
             unsnapshotted: 0,
+            notified: 0,
         }
     }
 
@@ -525,6 +526,7 @@ mod tests {
             contradictions: 8,
             degraded: 9,
             unsnapshotted: 10,
+            notified: 11,
             refused: vec![(
                 crate::routing::session_key::SessionKey::ephemeral("wire"),
                 ResumeRefusal::AgentMissing,
@@ -562,6 +564,13 @@ mod tests {
 
     /// …and each counter carries the report's value, not a default that
     /// happens to look plausible.
+    ///
+    /// One counter is bound here and deliberately NOT compared: `notified`.
+    /// This receipt is built only from `resume_session` — one session, on
+    /// demand — while the lost-input adjudication that produces `notified`
+    /// runs only in the boot scan's `settle`. A wire field this route can
+    /// never set would read on every receipt as "checked, none found"; its
+    /// renderer is the boot log line (criterion #17).
     #[test]
     fn every_counter_the_report_carries_reaches_the_wire_with_its_value() {
         let report = every_counter_report();
@@ -578,8 +587,13 @@ mod tests {
             contradictions,
             degraded,
             unsnapshotted,
+            notified: _,
             refused,
         } = &report;
+        assert!(
+            !ResumeReceipt::WIRE_FIELDS.contains(&"notified"),
+            "`notified` reached the wire; the route that builds this receipt cannot set it"
+        );
 
         let receipt = receipt_from_report(
             ResumeReceipt::DELEGATED,

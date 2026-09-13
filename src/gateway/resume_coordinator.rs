@@ -15,6 +15,10 @@
 //! that shape, so the scan reads the message tail of every Clean candidate
 //! and of every marker-less session in the activity window, stamps the
 //! message and re-triggers it with no boundary repair (nothing dangled).
+//! A message is **lost** (§8.2(b)) iff the engine's `agent_tasks` row for it
+//! exists and its session log holds no `UserMessage` since — the crash
+//! landed before the seed itself. Nothing can be re-run; the user is told
+//! once, in-band, to re-send it ([`ResumeCoordinator::adjudicate_orphaned_tasks`]).
 //!
 //! R10-safe: `src/harness/` is untouched. The harness already replays the
 //! event log on every `run()`; resume only re-triggers it.
@@ -169,6 +173,14 @@ pub struct ResumeReport {
     /// backlog, and a "no-op that reports success" is exactly what a silent 0
     /// here would be.
     pub unsnapshotted: usize,
+    /// §8.2(b): lost-input notices written this pass — one per interrupted
+    /// Main-lane task row whose seed never reached its session log, so the
+    /// user was told to re-send. Rendered by the boot log line only: the
+    /// adjudication runs in the boot scan's [`ResumeLaunch::settle`], never
+    /// on the per-session `agent.resume` face, whose receipt therefore does
+    /// not carry it — a wire field that is 0 on every receipt that route can
+    /// produce would read as "checked, none found".
+    pub notified: usize,
 }
 
 impl ResumeReport {
@@ -191,6 +203,7 @@ impl ResumeReport {
             contradictions,
             degraded,
             unsnapshotted,
+            notified,
         } = other;
         self.scanned += scanned;
         self.resumed += resumed;
@@ -203,7 +216,7 @@ impl ResumeReport {
         self.contradictions += contradictions;
         self.degraded += degraded;
         self.unsnapshotted += unsnapshotted;
-        // T16 adds `self.notified += notified;` when it adds the field.
+        self.notified += notified;
     }
 }
 
@@ -233,11 +246,16 @@ pub struct ResumeLaunch {
     /// Which session each task is deciding, by task id, so a task that did
     /// not complete can be named — its return value (and ordinal) is gone.
     sessions: HashMap<tokio::task::Id, SessionId>,
+    /// The coordinator that launched this scan, for the pass `settle` runs
+    /// after every candidate has been decided (see
+    /// [`ResumeCoordinator::adjudicate_orphaned_tasks`]).
+    me: Arc<ResumeCoordinator>,
     report: ResumeReport,
 }
 
 impl ResumeLaunch {
-    /// Wait for every candidate task and fold its part into one report.
+    /// Wait for every candidate task and fold its part into one report, then
+    /// adjudicate the task rows the scan could not see (§8.2(b)).
     pub async fn settle(mut self) -> ResumeReport {
         let mut parts = Vec::new();
         while let Some(joined) = self.tasks.join_next().await {
@@ -260,8 +278,12 @@ impl ResumeLaunch {
         for (_, part) in parts {
             self.report.absorb(part);
         }
-        // T16 adds a `me: Arc<ResumeCoordinator>` field and inserts
-        // `self.me.adjudicate_orphaned_tasks(&mut self.report).await;` HERE.
+        // After every candidate, on purpose: a row whose session the scan
+        // just resumed or abandoned reads as "open" or "seeded" here, so the
+        // resume arm's verdict is the one the user hears and this pass only
+        // stamps the row. Not gated on `walked` — this pass reads each row's
+        // own log, not the marker slice the scan may have failed to load.
+        self.me.adjudicate_orphaned_tasks(&mut self.report).await;
         if self.walked {
             tracing::info!(
                 scanned = self.report.scanned,
@@ -275,6 +297,7 @@ impl ResumeLaunch {
                 // `in_flight` exists to make harmless and which is worth
                 // seeing in the log rather than inferring.
                 busy = self.report.busy,
+                notified = self.report.notified,
                 "resume scan complete"
             );
         }
@@ -745,6 +768,18 @@ fn degrade_note(sentences: Vec<String>) -> Option<crate::session::boundary_repai
         .then(|| crate::session::boundary_repair::DegradeNote::new(sentences.join(" ")))
 }
 
+/// The §8.2(b) sentence: a message the engine accepted (its task row was
+/// written at `created_at_secs`) but never recorded, so the only honest
+/// answer is to ask for it again. Quotes the head of the prompt so the user
+/// can tell which message — by `char`, not byte, so a multibyte prompt cannot
+/// split a code point (P7).
+fn lost_input_notice(created_at_secs: i64, prompt: &str) -> String {
+    let when = chrono::DateTime::from_timestamp(created_at_secs, 0)
+        .map_or_else(|| created_at_secs.to_string(), |t| t.to_rfc3339());
+    let head: String = prompt.chars().take(80).collect();
+    format!("A message you sent at {when} was lost before it was recorded: «{head}». Please re-send it.")
+}
+
 /// The emitter a re-triggered run reports through.
 ///
 /// Live frames go on the bus (`base`). The final reply additionally fans out
@@ -922,6 +957,12 @@ pub struct ResumeCoordinator {
     /// slot itself is an RAII guard so an early return or a panic mid-resume
     /// cannot leave a session permanently unresumable.
     in_flight: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// The `agent_tasks` table, for the §8.2(b) pass: a Main-lane row the
+    /// engine wrote before it seeded the session is the only trace of a
+    /// message that died between the two writes. `None` on a deployment
+    /// without the resilience database — then no such row exists to
+    /// adjudicate, and the pass is a no-op for the honest reason.
+    state_database: Option<Arc<crate::resilience::StateDatabase>>,
 }
 
 /// RAII claim on one session's resume slot.
@@ -961,7 +1002,16 @@ impl ResumeCoordinator {
             event_bus,
             semaphore: Arc::new(Semaphore::new(permits)),
             in_flight: std::sync::Mutex::new(std::collections::HashSet::new()),
+            state_database: None,
         }
+    }
+
+    /// Hand the coordinator the `agent_tasks` table so the boot scan can
+    /// adjudicate the rows whose seed never reached the log (§8.2(b)).
+    #[must_use]
+    pub fn with_state_database(mut self, db: Arc<crate::resilience::StateDatabase>) -> Self {
+        self.state_database = Some(db);
+        self
     }
 
     /// Take this session's resume slot, or `None` if a resume is already in
@@ -1019,6 +1069,7 @@ impl ResumeCoordinator {
             walked: false,
             tasks: tokio::task::JoinSet::new(),
             sessions: HashMap::new(),
+            me: Arc::clone(self),
             report: ResumeReport::default(),
         };
 
@@ -1798,9 +1849,10 @@ impl ResumeCoordinator {
     /// Abandoned }` so the run is not re-scanned on the next boot, block any
     /// active goal in the session (its crash recovery hangs ENTIRELY on this
     /// coordinator's retrigger→post_run chain — abandoning severs it, so an
-    /// Active goal would otherwise lie in `goal(list)` forever), and drop a
-    /// one-line notice on the origin channel. Every step is best-effort and
-    /// independent — a failed marker append must not silence the user notice.
+    /// Active goal would otherwise lie in `goal(list)` forever), and say so
+    /// to the user — in-band, after the closer, and on the origin channel.
+    /// Every step is best-effort and independent — a failed marker append
+    /// must not silence the channel notice.
     ///
     /// Deliberately does NOT touch loop state: loops are process-memory and
     /// the registry is empty at boot; "stopping" one here could only misfire
@@ -1814,23 +1866,26 @@ impl ResumeCoordinator {
             outcome: RunOutcome::Abandoned,
             at: now_ms(),
         };
-        match self.next_seq(session_id).await {
-            Ok(seq) => {
-                if let Err(e) = self
-                    .event_store
-                    .append(session_id, seq, &ev, now_ms())
-                    .await
-                {
+        let closed = match self.next_seq(session_id).await {
+            Ok(seq) => match self
+                .event_store
+                .append(session_id, seq, &ev, now_ms())
+                .await
+            {
+                Ok(()) => true,
+                Err(e) => {
                     tracing::warn!(session = ?session_id, error = %e, "resume: abandon marker append failed");
+                    false
                 }
-            }
+            },
             Err(e) => {
                 // Don't fabricate seq 1 on a read error — that would append the
                 // abandon marker at the head and overwrite the genuine first
                 // event. Skip the best-effort marker; the next boot re-abandons.
                 tracing::warn!(session = ?session_id, error = %e, "resume: abandon seq allocation failed; skipping marker");
+                false
             }
-        }
+        };
 
         // Scope the block to goals whose recovery actually hung on THIS
         // crashed run: Active-pursuit, not parked on a task barrier (those are
@@ -1842,17 +1897,29 @@ impl ResumeCoordinator {
             &what.goal_note(reason),
         );
 
+        // One sentence, derived once, for both faces it reaches.
+        let mut text = what.notice(reason);
+        if goal_blocked {
+            text.push_str(" Its standing goal was blocked — re-set it to continue.");
+        }
+
+        // In-band, and only behind a closer that landed: the note must read
+        // AFTER the verdict it is about, and a note written without its
+        // closer would be written again by the next boot's re-abandon.
+        if closed {
+            if let Err(e) = self.system_note(session_id, text.clone()).await {
+                tracing::warn!(session = ?session_id, error = %e, "resume: abandon note append failed");
+            }
+        }
+
         // One-line origin notice, mirroring `retrigger`'s fanout resolution.
         // Panel-only sessions (`gui:chat`) have no origin route and rely on
-        // the stored blocked note; a missing agent cannot be routed for at
-        // all (same documented limitation as the engine's agent-miss branch).
+        // the in-band note and the stored blocked note; a missing agent cannot
+        // be routed for at all (same documented limitation as the engine's
+        // agent-miss branch).
         if let Some(reg) = crate::gateway::event_emitter::origin_fanout::channel_registry() {
             if let Some(agent) = self.agent_registry.get(session_id.agent_id()).await {
                 if let Some((channel, conversation)) = agent.origin_route(session_id).await {
-                    let mut text = what.notice(reason);
-                    if goal_blocked {
-                        text.push_str(" Its standing goal was blocked — re-set it to continue.");
-                    }
                     let msg = crate::gateway::channel::OutboundMessage::text(conversation, text);
                     if let Err(e) = reg
                         .send(&crate::gateway::channel::ChannelId::new(channel), msg)
@@ -1913,25 +1980,128 @@ impl ResumeCoordinator {
         session_id: &SessionId,
         note: &crate::session::boundary_repair::DegradeNote,
     ) {
+        if let Err(e) = self.system_note(session_id, note.sentence.clone()).await {
+            tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice append failed");
+        }
+    }
+
+    /// The one way this coordinator says something in-band: a `SystemMessage`
+    /// appended at the head of the session's log, then the projector asked to
+    /// paint it now rather than at the next boot's reconcile. Never a direct
+    /// write into `messages` — that table has one writer, the projector, and
+    /// a second one is how a boot notice used to reach the transcript without
+    /// ever reaching the log.
+    ///
+    /// A fresh turn id: whatever turn was open when the process died is over,
+    /// and this sentence is about what happens next, not about that turn.
+    ///
+    /// `Err` means the event did not land — the caller decides what that
+    /// costs. A repaint that could not be delivered is only logged: the event
+    /// is durable, and the transcript catches up at the next reconcile.
+    async fn system_note(
+        &self,
+        session_id: &SessionId,
+        content: String,
+    ) -> Result<(), SessionError> {
+        let seq = self.next_seq(session_id).await?;
         let ev = SessionEvent::SystemMessage {
-            // A fresh turn id: the crashed turn is over, and this sentence is
-            // about the run that is starting, not about that one.
             turn_id: crate::session::events::TurnId::new_v4(),
-            content: note.sentence.clone(),
+            content,
             at: now_ms(),
         };
-        match self.next_seq(session_id).await {
-            Ok(seq) => {
-                if let Err(e) = self
-                    .event_store
-                    .append(session_id, seq, &ev, now_ms())
+        self.event_store
+            .append(session_id, seq, &ev, now_ms())
+            .await?;
+        if let Some(projector) = crate::gateway::session_projector::global_message_projector() {
+            let repaint = projector.request_repair(session_id).await;
+            if repaint.errored || repaint.legacy {
+                tracing::warn!(
+                    session = ?session_id,
+                    seq,
+                    errored = repaint.errored,
+                    legacy = repaint.legacy,
+                    "resume: system note appended but not painted into the transcript yet"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// §8.2(b): examine every Main-lane task row the engine wrote before a
+    /// seed that may never have reached the log, and stamp each one so it is
+    /// examined exactly once.
+    ///
+    /// The row's `id` is the gateway `run_id`, which is NOT the `RunStarted`
+    /// run id, so "no events for this task" is derived by TIME: a
+    /// `UserMessage` recorded at or after the row's `created_at` means the
+    /// seed landed. Three arms, one stamp:
+    ///
+    /// * the session has an open run, or the seed landed — the resume arm
+    ///   owns it; nothing to say;
+    /// * neither, and the row carries a prompt — the message is gone, and the
+    ///   user is told to re-send it, once;
+    /// * neither, and the prompt is empty — a resume re-trigger's own row
+    ///   (`retrigger` sends `input: ""`); there is no message to re-send.
+    ///
+    /// A log this build cannot read or the reducer refuses is NOT stamped:
+    /// the doctor is its exit, and the age window bounds how often it is
+    /// re-asked.
+    async fn adjudicate_orphaned_tasks(&self, report: &mut ResumeReport) {
+        let Some(db) = self.state_database.as_ref() else {
+            return;
+        };
+        let window = i64::try_from(self.config.max_age_secs).unwrap_or(i64::MAX);
+        let since = (now_ms() / 1000).saturating_sub(window);
+        let rows = match db.unadjudicated_interrupted_tasks(since).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "resume: orphaned task rows unreadable");
+                return;
+            }
+        };
+        for task in rows {
+            let Some(key) = SessionId::from_key_string(&task.parent_session_id) else {
+                tracing::warn!(
+                    task_id = %task.id,
+                    session = %task.parent_session_id,
+                    "resume: orphaned task has an unparseable session key"
+                );
+                continue;
+            };
+            let Ok(events) = self.event_store.load_all_events(&key).await else {
+                continue;
+            };
+            let Ok(reduction) = reduce_run(&events) else {
+                continue;
+            };
+            let open = !matches!(reduction.disposition, RunDisposition::Clean);
+            let seed_floor_ms = task.created_at.saturating_mul(1000);
+            let seeded = events.iter().any(|r| {
+                matches!(r.event, SessionEvent::UserMessage { .. })
+                    && r.created_at_ms >= seed_floor_ms
+            });
+            if !open && !seeded && !task.task_prompt.trim().is_empty() {
+                match self
+                    .system_note(&key, lost_input_notice(task.created_at, &task.task_prompt))
                     .await
                 {
-                    tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice append failed");
+                    Ok(()) => {
+                        tracing::info!(
+                            task_id = %task.id,
+                            session = ?key,
+                            "resume: a message was lost before it was recorded; the user was asked to re-send it"
+                        );
+                        report.notified += 1;
+                    }
+                    Err(e) => {
+                        // Not stamped: the next boot tries again, within the window.
+                        tracing::warn!(task_id = %task.id, session = ?key, error = %e, "resume: lost-input notice append failed");
+                        continue;
+                    }
                 }
             }
-            Err(e) => {
-                tracing::warn!(session = ?session_id, error = %e, "resume: degrade notice seq allocation failed");
+            if let Err(e) = db.mark_task_adjudicated(&task.id, now_ms()).await {
+                tracing::warn!(task_id = %task.id, error = %e, "resume: adjudicated stamp failed");
             }
         }
     }
@@ -2138,6 +2308,7 @@ mod tests {
             contradictions: 1,
             degraded: 1,
             unsnapshotted: 1,
+            notified: 1,
         };
         let mut total = ResumeReport::default();
         total.absorb(one.clone());
@@ -2156,6 +2327,7 @@ mod tests {
             contradictions,
             degraded,
             unsnapshotted,
+            notified,
         } = total;
         assert_eq!(
             [
@@ -2169,11 +2341,30 @@ mod tests {
                 contradictions,
                 degraded,
                 unsnapshotted,
+                notified,
             ],
-            [2; 10],
+            [2; 11],
             "every counter is a sum, not the last part's value"
         );
         assert_eq!(refused, [one.refused[0].clone(), one.refused[0].clone()]);
+    }
+
+    /// The notice quotes the head of the prompt by `char`, so a multibyte
+    /// prompt longer than the head is cut between code points, not inside
+    /// one — and it dates the loss from the row, not from now.
+    #[test]
+    fn the_lost_input_notice_quotes_a_char_bounded_head_and_the_rows_time() {
+        let prompt: String = "买".repeat(100);
+        let note = lost_input_notice(1_700_000_000, &prompt);
+        let quoted = note
+            .split('«')
+            .nth(1)
+            .and_then(|s| s.split('»').next())
+            .expect("the quoted head");
+        assert_eq!(quoted.chars().count(), 80);
+        assert!(quoted.chars().all(|c| c == '买'), "{quoted}");
+        assert!(note.contains("2023-11-14T22:13:20+00:00"), "{note}");
+        assert!(note.contains("lost before it was recorded") && note.contains("re-send"));
     }
 
     fn rec(seq: u64, event: SessionEvent, created_at_ms: i64) -> SessionEventRecord {

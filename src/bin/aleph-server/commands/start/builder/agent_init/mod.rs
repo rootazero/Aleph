@@ -1342,7 +1342,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Reconcile agent tasks orphaned by a previous crash: a row still
         // marked `running` means the prior process died mid-flight. Mark them
         // interrupted and report each one. This runs before the engine accepts
-        // any request, so no live task can be misclassified.
+        // any request, so no live task can be misclassified. What the user is
+        // told about each row is decided later, by the resume scan
+        // (`ResumeCoordinator::adjudicate_orphaned_tasks`), which can read the
+        // session log and tell a run it resumed from a message that was lost.
         if let Some(ref state_db) = resilience_db {
             match state_db.reconcile_orphaned_tasks().await {
                 Ok(orphans) => {
@@ -1356,19 +1359,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         );
                     }
                     if !orphans.is_empty() {
-                        // Leave the user a durable receipt in each orphaned
-                        // task's session so a mid-run restart no longer ends
-                        // their conversation silently.
-                        let notified = alephcore::gateway::orphan_notice::notify_interrupted_tasks(
-                            session_store.as_ref(),
-                            &orphans,
-                        )
-                        .await;
-                        tracing::info!(
-                            count = orphans.len(),
-                            notified,
-                            "Reconciled orphaned agent tasks"
-                        );
+                        tracing::info!(count = orphans.len(), "Reconciled orphaned agent tasks");
                     }
                 }
                 Err(error) => {

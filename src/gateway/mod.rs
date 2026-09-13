@@ -39,7 +39,6 @@ pub mod memory_monitor;
 pub mod middleware;
 pub mod model_override;
 pub mod origin_policy;
-pub mod orphan_notice;
 pub mod process_announce;
 pub mod protocol;
 pub mod pty;

@@ -21,6 +21,7 @@ use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus
 use alephcore::gateway::session_store::file_backend::{FileSessionStore, FileSessionStoreConfig};
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::ResumeCoordinator;
+use alephcore::resilience::{AgentTask, Lane, RiskLevel, StateDatabase, TaskStatus};
 use alephcore::routing::session_key::SessionKey;
 use alephcore::session::events::{
     now_ms, Durability, EventSeq, Retire, RunOutcome, SessionEvent, TurnId,
@@ -1859,16 +1860,27 @@ async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
         "capped: nothing re-triggered"
     );
     let all = store.load_all_events(&sid).await.unwrap();
+    // The closer is the last MARKER: after every stamp, and nothing but the
+    // coordinator's own note about it follows (the note's position is pinned
+    // by `an_abandoned_run_gets_a_system_note_after_its_closer`).
+    let closer = all
+        .iter()
+        .rposition(|r| {
+            matches!(
+                r.event,
+                SessionEvent::RunFinished {
+                    outcome: RunOutcome::Abandoned,
+                    ..
+                }
+            )
+        })
+        .unwrap_or_else(|| panic!("the abandon closer landed: {all:?}"));
     assert!(
-        matches!(
-            all.last().map(|r| &r.event),
-            Some(SessionEvent::RunFinished {
-                outcome: RunOutcome::Abandoned,
-                ..
-            })
-        ),
-        "the abandon closer lands last: {:?}",
-        all.last()
+        all[closer + 1..]
+            .iter()
+            .all(|r| matches!(r.event, SessionEvent::SystemMessage { .. })),
+        "nothing but the note follows the closer: {:?}",
+        &all[closer + 1..]
     );
 }
 
@@ -2251,4 +2263,259 @@ async fn three_interrupted_sessions_resume_two_at_a_time_and_the_slow_one_does_n
         "the whole scan took {elapsed:?}; serial would be ≥ 2 s + everything else"
     );
     assert_eq!(adapter.max_in_flight(), 2, "the cap bounds the burst");
+}
+
+// ---------------------------------------------------------------------------
+// §8.2(b): a queued task whose seed never reached the log
+// ---------------------------------------------------------------------------
+
+/// The `agent_tasks` row the engine writes BEFORE it seeds the session:
+/// Main-lane, `running`, `task_prompt` = the user's input, `created_at` in
+/// unix SECONDS. Left `running` so `reconcile_orphaned_tasks` — the boot step
+/// that runs before the scan — flips it to `interrupted` the way a real crash
+/// leaves it. `created_at` is moved one second back so a seed appended in the
+/// same second as the row still reads as "after the row".
+async fn orphan_task_row(db: &StateDatabase, sid: &SessionKey, prompt: &str) {
+    let mut task = AgentTask::new(
+        "run-orphan",
+        sid.to_key_string(),
+        sid.agent_id(),
+        prompt,
+        RiskLevel::Low,
+    );
+    task.lane = Lane::Main;
+    task.created_at -= 1;
+    db.insert_agent_task(&task).await.unwrap();
+    db.update_task_status(&task.id, TaskStatus::Running)
+        .await
+        .unwrap();
+}
+
+/// A session whose task row promised a run that never seeded: the log holds
+/// only the `SessionWoken` the engine writes on wake — no `UserMessage`, no
+/// `RunStarted` — and the row carries `prompt`.
+async fn orphan_fixture(
+    prompt: &str,
+) -> (Arc<dyn SessionEventStore>, Arc<StateDatabase>, SessionKey) {
+    let store = store();
+    let sid = SessionKey::main("orphan");
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    orphan_task_row(&db, &sid, prompt).await;
+    let at = now_ms();
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::SessionWoken { at, prior_head: 0 },
+            at,
+        )
+        .await
+        .unwrap();
+    (store, db, sid)
+}
+
+/// Every `SystemMessage` in the session's log, in seq order.
+async fn system_notes(store: &Arc<dyn SessionEventStore>, sid: &SessionKey) -> Vec<String> {
+    store
+        .load_all_events(sid)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| match r.event {
+            SessionEvent::SystemMessage { content, .. } => Some(content),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The user typed something, the engine wrote its task row, and the process
+/// died before the seed reached the log. The message is gone; the only honest
+/// thing is to say so, ONCE — the row is stamped, so a second boot writes
+/// nothing more — and never to re-run anything (R7: no run is chosen for the
+/// user here).
+#[tokio::test]
+async fn a_task_whose_seed_never_landed_gets_exactly_one_resend_notice_across_two_boots() {
+    let (store, db, sid) = orphan_fixture("buy milk").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let registry = registry_with_agent(sid.agent_id()).await;
+    let boot = || {
+        Arc::new(
+            ResumeCoordinator::new(
+                store.clone(),
+                ResumeConfig::default(),
+                adapter.clone() as Arc<dyn ExecutionAdapter>,
+                registry.clone(),
+                sessions(),
+                test_bus(),
+            )
+            .with_state_database(db.clone()),
+        )
+    };
+    assert_eq!(boot().resume_interrupted_runs().await.notified, 1);
+    assert_eq!(
+        boot().resume_interrupted_runs().await.notified,
+        0,
+        "idempotent across boots"
+    );
+    let notes = system_notes(&store, &sid).await;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains("lost before it was recorded")
+            && notes[0].contains("buy milk")
+            && notes[0].contains("re-send"),
+        "{}",
+        notes[0]
+    );
+    assert!(
+        calls.lock().await.is_empty(),
+        "a lost-input notice never re-triggers a run"
+    );
+}
+
+/// The row's session has an open run: the seed DID land and the resume arm
+/// owns the session. The notice arm must neither speak nor leave the row for
+/// the next boot to re-ask — the question is closed, so the row is stamped.
+#[tokio::test]
+async fn a_task_whose_session_has_an_open_run_is_left_to_the_resume_arm() {
+    let store = store();
+    let sid = SessionKey::main("orphan-open-run");
+    seed_interrupted_run(&store, &sid).await;
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    orphan_task_row(&db, &sid, "do a long task").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let coordinator = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            adapter as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!((report.resumed, report.notified), (1, 0), "{report:?}");
+    assert_eq!(
+        calls.lock().await.len(),
+        1,
+        "the resume arm re-triggered it"
+    );
+    assert!(
+        system_notes(&store, &sid).await.is_empty(),
+        "no notice for a session the resume arm owns"
+    );
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the row IS stamped: closed by the resume arm, not left for the next boot"
+    );
+}
+
+/// An abandoned run gets its in-band note AFTER the `RunFinished { Abandoned }`
+/// closer, so a reader of the log sees the verdict before the sentence about
+/// it, and the note is a `SystemMessage` event — the one voice the coordinator
+/// has, never a direct write into the `messages` projection.
+#[tokio::test]
+async fn an_abandoned_run_gets_a_system_note_after_its_closer() {
+    let store = store();
+    let sid = SessionKey::main("orphan-abandoned");
+    // A few seconds old: with `max_age_secs: 0` the age is strictly positive
+    // whatever millisecond the scan runs in.
+    let old_at = now_ms() - 5_000;
+    store
+        .append(
+            &sid,
+            1,
+            &SessionEvent::RunStarted {
+                run_id: "r-old".into(),
+                at: old_at,
+                project_root: None,
+                envelope: None,
+            },
+            old_at,
+        )
+        .await
+        .unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store.clone(),
+        ResumeConfig {
+            max_age_secs: 0,
+            ..ResumeConfig::default()
+        },
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(sid.agent_id()).await,
+        sessions(),
+        test_bus(),
+    ));
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(report.abandoned, 1, "{report:?}");
+    assert!(
+        calls.lock().await.is_empty(),
+        "abandoned must not re-trigger"
+    );
+
+    let all = store.load_all_events(&sid).await.unwrap();
+    let [closer, note] = &all[all.len() - 2..] else {
+        panic!("expected a closer and a note at the tail: {all:?}");
+    };
+    assert!(
+        matches!(
+            closer.event,
+            SessionEvent::RunFinished {
+                outcome: RunOutcome::Abandoned,
+                ..
+            }
+        ),
+        "the closer comes first: {:?}",
+        closer.event
+    );
+    match &note.event {
+        SessionEvent::SystemMessage { content, .. } => {
+            assert!(content.contains("abandoned"), "{content}");
+        }
+        other => panic!("the note follows its closer, got {other:?}"),
+    }
+}
+
+/// A resume re-trigger writes a task row with `task_prompt = ""` (`retrigger`
+/// sends `input: String::new()`), and the crash-loop ratchet leaves such a row
+/// with no events of its own every boot. There is no message to re-send, so
+/// the row is adjudicated silently — stamped, never announced.
+#[tokio::test]
+async fn a_resume_retrigger_row_with_an_empty_prompt_is_adjudicated_without_a_notice() {
+    // empty prompt = the retrigger's shape
+    let (store, db, sid) = orphan_fixture("").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let boot = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    assert_eq!(boot.resume_interrupted_runs().await.notified, 0);
+    assert!(
+        system_notes(&store, &sid).await.is_empty(),
+        "an empty prompt is never a lost message"
+    );
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "stamped, so it is not re-examined every boot"
+    );
 }
