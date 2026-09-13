@@ -58,14 +58,20 @@ pub enum ReleaseError {
     Digest { asset: String, detail: String },
     #[error(
         "sha256 mismatch: the release metadata says {expected}, the {bytes} downloaded bytes \
-         hash to {actual}. The download was deleted and nothing was installed. If a \
-         download_host mirror is configured for this runtime, it is serving different bytes \
-         than the release it claims to mirror."
+         hash to {actual}. The download was deleted and nothing was installed. If {mirror} is \
+         set, it is serving different bytes than the release it claims to mirror."
     )]
     DigestMismatch {
         expected: String,
         actual: String,
         bytes: usize,
+        /// The operator-facing name of the knob to suspect first, built by
+        /// [`mirror_clause`] from the same `match` that decides which key is
+        /// actually read. A generic "a download_host mirror" here would send
+        /// an operator hunting for a key this runtime does not have, and
+        /// naming the Chromium one would send them to a key that exists and
+        /// does nothing for this download (判据 §17: 错的标签比缺的贵).
+        mirror: String,
     },
     #[error("archive {archive}: {detail}")]
     Archive { archive: String, detail: String },
@@ -171,7 +177,11 @@ pub fn digest_for_asset(release: &serde_json::Value, asset: &str) -> Result<Stri
 /// Hash `bytes` and compare. The error names BOTH hashes: an operator has to
 /// be able to tell "my mirror is stale" from "the pinned tag moved" without
 /// re-running anything.
-pub fn verify_sha256(bytes: &[u8], expect_hex: &str) -> Result<(), ReleaseError> {
+/// `mirror` is the clause [`mirror_clause`] built for the runtime being
+/// installed, so the refusal names the knob an operator can actually turn. It
+/// is a parameter rather than a lookup inside because this function is the
+/// pure hash compare and knows nothing about runtimes or config sections.
+pub fn verify_sha256(bytes: &[u8], expect_hex: &str, mirror: &str) -> Result<(), ReleaseError> {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let actual = hex::encode(hasher.finalize());
@@ -182,6 +192,7 @@ pub fn verify_sha256(bytes: &[u8], expect_hex: &str) -> Result<(), ReleaseError>
         expected: expect_hex.to_ascii_lowercase(),
         actual,
         bytes: bytes.len(),
+        mirror: mirror.to_string(),
     })
 }
 
@@ -335,11 +346,11 @@ fn make_executable(path: &Path) -> Result<(), ReleaseError> {
 /// becoming a default nobody chose.
 #[must_use]
 pub fn configured_host(runtime: &str) -> String {
-    let Some(read) = mirror_key_for(runtime) else {
+    let Some(key) = mirror_key_for(runtime) else {
         return DEFAULT_DOWNLOAD_HOST.to_string();
     };
     match crate::config::Config::load() {
-        Ok(cfg) => read(&cfg).unwrap_or_else(|| DEFAULT_DOWNLOAD_HOST.to_string()),
+        Ok(cfg) => (key.read)(&cfg).unwrap_or_else(|| DEFAULT_DOWNLOAD_HOST.to_string()),
         Err(e) => {
             warn!("cannot read config for the {runtime} release download host: {e}");
             DEFAULT_DOWNLOAD_HOST.to_string()
@@ -347,24 +358,57 @@ pub fn configured_host(runtime: &str) -> String {
     }
 }
 
+/// A runtime's download mirror: how to READ it, and what to CALL it.
+///
+/// Both halves in one value because they are one fact with two faces (判据 §9)
+/// — the key `configured_host` consults and the key a refusal tells the
+/// operator to check must never be different keys. Splitting them into a
+/// lookup and a message literal is how a remedy ends up naming a knob the code
+/// does not read.
+struct MirrorKey {
+    /// The operator-facing spelling, exactly as it appears in `config.toml`.
+    path: &'static str,
+    /// How to read it out of the loaded config. A `fn` rather than a dotted
+    /// string because the config is a typed tree and the accessor is what
+    /// already applies the blank-is-unset rule
+    /// ([`crate::browser::profile::ObscuraRuntimeConfig::download_host`]).
+    read: fn(&crate::config::Config) -> Option<String>,
+}
+
 /// Which config key supplies a release-installed runtime's mirror.
 ///
-/// A `fn` per runtime rather than a `&str` key path, because the config is a
-/// typed tree and the accessor is what already applies the blank-is-unset rule
-/// ([`crate::browser::profile::ObscuraRuntimeConfig::download_host`]).
-/// Returning `None` means "this runtime has no mirror key" — a stated answer,
-/// not a fallback onto somebody else's.
-fn mirror_key_for(runtime: &str) -> Option<fn(&crate::config::Config) -> Option<String>> {
+/// `None` means "this runtime has no mirror key" — a stated answer, not a
+/// fallback onto somebody else's. `every_release_installed_runtime_has_a
+/// _mirror_key` is what stops a future `GithubRelease` spec from taking that
+/// answer silently.
+fn mirror_key_for(runtime: &str) -> Option<MirrorKey> {
     match runtime {
-        super::specs::OBSCURA_RUNTIME => Some(|cfg| {
-            cfg.general
-                .browser
-                .obscura
-                .download_host()
-                .map(str::to_string)
+        super::specs::OBSCURA_RUNTIME => Some(MirrorKey {
+            path: "[general.browser.obscura] download_host",
+            read: |cfg| {
+                cfg.general
+                    .browser
+                    .obscura
+                    .download_host()
+                    .map(str::to_string)
+            },
         }),
         _ => None,
     }
+}
+
+/// What a refusal calls the mirror for `runtime`, as a clause that reads
+/// correctly whether or not the runtime has a key of its own.
+///
+/// Derived from [`mirror_key_for`], never written out beside it: a message
+/// naming one key while the code reads another is 判据 §1 with the expensive
+/// copy in an operator's config file.
+#[must_use]
+pub fn mirror_clause(runtime: &str) -> String {
+    mirror_key_for(runtime).map_or_else(
+        || "a download_host mirror".to_string(),
+        |k| format!("the {} mirror", k.path),
+    )
 }
 
 /// Fetch, verify, extract. Returns the absolute path of the installed binary.
@@ -451,7 +495,7 @@ pub async fn install_release(
             path: part.display().to_string(),
             source: e,
         })?;
-    if let Err(e) = verify_sha256(&bytes, &expect) {
+    if let Err(e) = verify_sha256(&bytes, &expect, &mirror_clause(runtime)) {
         // Deleted before returning: leaving the bad archive behind invites the
         // next reader to "just extract it manually".
         let _ = tokio::fs::remove_file(&part).await;
@@ -589,11 +633,33 @@ mod tests {
     fn verify_sha256_names_both_hashes_when_they_differ() {
         let bytes = b"hello";
         let good = sha256_hex(bytes);
-        verify_sha256(bytes, &good).expect("a matching digest must verify");
+        verify_sha256(bytes, &good, &mirror_clause("obscura"))
+            .expect("a matching digest must verify");
         let bad = "f".repeat(64);
-        let err = verify_sha256(bytes, &bad).unwrap_err().to_string();
+        let err = verify_sha256(bytes, &bad, &mirror_clause("obscura"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains(&good), "must name what we measured: {err}");
         assert!(err.contains(&bad), "must name what was expected: {err}");
+    }
+
+    /// The refusal must name the knob this runtime's installer actually reads.
+    /// A generic "a download_host mirror" sends an operator hunting; naming
+    /// `[general.browser.runtime]` sends them to a key that exists, is read by
+    /// something else, and does nothing for this download (判据 §17).
+    #[test]
+    fn the_mirror_clause_names_the_key_configured_host_reads() {
+        assert_eq!(
+            mirror_clause("obscura"),
+            "the [general.browser.obscura] download_host mirror"
+        );
+        assert!(
+            !mirror_clause("obscura").contains("[general.browser.runtime]"),
+            "the Playwright CDN key cannot serve a GitHub release"
+        );
+        // A runtime with no key of its own says so generically rather than
+        // borrowing obscura's.
+        assert_eq!(mirror_clause("node"), "a download_host mirror");
     }
 
     #[test]
@@ -947,6 +1013,16 @@ mod tests {
         .to_string();
         assert!(err.contains(&claimed), "names the expected digest: {err}");
         assert!(err.contains("sha256"), "{err}");
+        // …and the knob to check first, which must be obscura's own key and
+        // not the Playwright CDN one next door.
+        assert!(
+            err.contains("[general.browser.obscura] download_host"),
+            "the refusal must name the mirror this installer reads: {err}"
+        );
+        assert!(
+            !err.contains("[general.browser.runtime]"),
+            "the Playwright CDN key cannot serve a GitHub release: {err}"
+        );
         let dir = install_dir("obscura", "v0.2.2").unwrap();
         assert!(!dir.join("obscura").exists(), "no binary may be laid down");
         assert!(
