@@ -566,4 +566,32 @@ mod tests {
             "the window bounds it"
         );
     }
+
+    /// The lane filter discriminates: a subagent-lane orphan has no user
+    /// conversation to write into, so it never reaches the coordinator's
+    /// list — only the Main-lane row does. (The pin the deleted
+    /// `orphan_notice` module carried, moved to the query that replaced it.)
+    #[tokio::test]
+    async fn a_subagent_lane_orphan_is_never_listed_for_adjudication() {
+        let db = StateDatabase::in_memory().unwrap();
+        // `task()` builds lane Subagent; only `main-1` is flipped.
+        insert_with_status(&db, "sub-1", TaskStatus::Running).await;
+        insert_with_status(&db, "main-1", TaskStatus::Running).await;
+        db.reconcile_orphaned_tasks().await.unwrap();
+        db.with_conn(|c| {
+            c.execute("UPDATE agent_tasks SET lane='main' WHERE id='main-1'", [])
+                .map(|_| ())
+                .map_err(|e| AlephError::config(e.to_string()))
+        })
+        .await
+        .unwrap();
+        let ids: Vec<String> = db
+            .unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["main-1"]);
+    }
 }

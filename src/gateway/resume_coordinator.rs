@@ -450,7 +450,9 @@ enum Abandoned {
 }
 
 impl Abandoned {
-    /// The one-line origin-channel notice.
+    /// The one-line sentence the user reads on BOTH faces — the in-band
+    /// `SystemMessage` note and the origin-channel notice — derived once in
+    /// [`ResumeCoordinator::abandon`].
     fn notice(self, reason: &str) -> String {
         match self {
             Self::InterruptedRun => format!(
@@ -1059,10 +1061,12 @@ impl ResumeCoordinator {
     /// cap bounds runs in flight, not just dispatches.
     ///
     /// Best-effort: any failure is logged and skipped; never panics, never
-    /// blocks boot. A no-op when `config.enabled` is false — this self-guard
-    /// is what makes the disabled path directly testable (the boot wiring
-    /// also skips the scan, so the two guards are defensive duplicates, both
-    /// cheap).
+    /// blocks boot. When `config.enabled` is false the scan itself is
+    /// skipped — no candidate is visited, `walked` stays false — but the
+    /// launch is still returned, because [`ResumeLaunch::settle`] has one
+    /// job that flag does not govern: a message lost before it was recorded
+    /// (§8.2(b)) is not a run to resume, so boot settles a disabled launch
+    /// too.
     pub async fn launch_resume(self: &Arc<Self>) -> ResumeLaunch {
         let mut launch = ResumeLaunch {
             pending: std::collections::HashSet::new(),
@@ -1851,8 +1855,9 @@ impl ResumeCoordinator {
     /// coordinator's retrigger→post_run chain — abandoning severs it, so an
     /// Active goal would otherwise lie in `goal(list)` forever), and say so
     /// to the user — in-band, after the closer, and on the origin channel.
-    /// Every step is best-effort and independent — a failed marker append
-    /// must not silence the channel notice.
+    /// Every step is best-effort and independent — except the in-band note,
+    /// which waits for its closer (below); a failed marker append must not
+    /// silence the channel notice.
     ///
     /// Deliberately does NOT touch loop state: loops are process-memory and
     /// the registry is empty at boot; "stopping" one here could only misfire
@@ -2060,6 +2065,10 @@ impl ResumeCoordinator {
             }
         };
         for task in rows {
+            // `from_key_string`, not `parse`: this is a key somebody else
+            // PERSISTED, so it must accept every spelling the store ever
+            // wrote — `parse` alone rejects the legacy form, and the oldest
+            // conversations are exactly the ones that carry it.
             let Some(key) = SessionId::from_key_string(&task.parent_session_id) else {
                 tracing::warn!(
                     task_id = %task.id,

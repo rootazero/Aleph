@@ -2271,20 +2271,32 @@ async fn three_interrupted_sessions_resume_two_at_a_time_and_the_slow_one_does_n
 
 /// The `agent_tasks` row the engine writes BEFORE it seeds the session:
 /// Main-lane, `running`, `task_prompt` = the user's input, `created_at` in
-/// unix SECONDS. Left `running` so `reconcile_orphaned_tasks` — the boot step
-/// that runs before the scan — flips it to `interrupted` the way a real crash
-/// leaves it. `created_at` is moved one second back so a seed appended in the
-/// same second as the row still reads as "after the row".
+/// unix SECONDS (floored, so a seed appended in the same second already reads
+/// as "at or after the row" — every test below writes the row first, the
+/// production order). Left `running` so `reconcile_orphaned_tasks` — the boot
+/// step that runs before the scan — flips it to `interrupted` the way a real
+/// crash leaves it.
 async fn orphan_task_row(db: &StateDatabase, sid: &SessionKey, prompt: &str) {
+    orphan_task_row_keyed(db, &sid.to_key_string(), sid.agent_id(), prompt).await;
+}
+
+/// The same row with `parent_session_id` spelled by the caller: the store has
+/// written more than one spelling of a session key over its life, and a row
+/// carries whichever one it was given.
+async fn orphan_task_row_keyed(
+    db: &StateDatabase,
+    parent_session_id: &str,
+    agent_id: &str,
+    prompt: &str,
+) {
     let mut task = AgentTask::new(
         "run-orphan",
-        sid.to_key_string(),
-        sid.agent_id(),
+        parent_session_id,
+        agent_id,
         prompt,
         RiskLevel::Low,
     );
     task.lane = Lane::Main;
-    task.created_at -= 1;
     db.insert_agent_task(&task).await.unwrap();
     db.update_task_status(&task.id, TaskStatus::Running)
         .await
@@ -2381,9 +2393,10 @@ async fn a_task_whose_seed_never_landed_gets_exactly_one_resend_notice_across_tw
 async fn a_task_whose_session_has_an_open_run_is_left_to_the_resume_arm() {
     let store = store();
     let sid = SessionKey::main("orphan-open-run");
-    seed_interrupted_run(&store, &sid).await;
     let db = Arc::new(StateDatabase::in_memory().unwrap());
+    // Row first, then the seed — the engine's order.
     orphan_task_row(&db, &sid, "do a long task").await;
+    seed_interrupted_run(&store, &sid).await;
     db.reconcile_orphaned_tasks().await.unwrap();
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
@@ -2518,4 +2531,157 @@ async fn a_resume_retrigger_row_with_an_empty_prompt_is_adjudicated_without_a_no
             .is_empty(),
         "stamped, so it is not re-examined every boot"
     );
+}
+
+/// The seed landed and its run closed before the process died: the shape
+/// every row on an upgraded database has on its first boot, and the one a
+/// crash between `RunFinished` and the row's status update leaves behind.
+/// Nothing was lost, so a notice here would tell the user to re-send a
+/// message that was answered. Mutation partner: `let seeded = false;` turns
+/// this red (the lost-seed test cannot — it has no `UserMessage` to detect).
+#[tokio::test]
+async fn a_task_whose_seed_landed_and_whose_run_closed_is_stamped_without_a_notice() {
+    let store = store();
+    let sid = SessionKey::main("orphan-landed");
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    // Row first, then the seed and its whole run — the engine's order.
+    orphan_task_row(&db, &sid, "buy milk").await;
+    let tid = TurnId::new_v4();
+    let at = now_ms();
+    let events = [
+        seeded_user(tid, "buy milk", at),
+        SessionEvent::RunStarted {
+            run_id: "r-landed".into(),
+            at: at + 1,
+            project_root: None,
+            envelope: None,
+        },
+        SessionEvent::RunFinished {
+            run_id: "r-landed".into(),
+            outcome: RunOutcome::Completed,
+            at: at + 2,
+        },
+    ];
+    for (i, ev) in events.into_iter().enumerate() {
+        store
+            .append(&sid, (i as u64) + 1, &ev, at + i as i64)
+            .await
+            .unwrap();
+    }
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let coordinator = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    let report = coordinator.resume_interrupted_runs().await;
+    assert_eq!(
+        (report.resumed, report.abandoned, report.notified),
+        (0, 0, 0),
+        "{report:?}"
+    );
+    assert!(
+        system_notes(&store, &sid).await.is_empty(),
+        "the seed landed: there is nothing to re-send"
+    );
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "stamped: the question is closed"
+    );
+}
+
+/// `[resume] enabled = false` turns off run resumption, not the lost-input
+/// notice: a message that never reached the log is not a run to resume. A
+/// disabled launch visits no candidate and walks no marker log, and its
+/// `settle` still adjudicates the task rows — the boot wiring settles it
+/// for exactly this reason.
+#[tokio::test]
+async fn a_disabled_resume_scan_still_writes_the_lost_input_notice() {
+    let (store, db, sid) = orphan_fixture("buy milk").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let boot = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig {
+                enabled: false,
+                ..ResumeConfig::default()
+            },
+            adapter as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(sid.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    let report = boot.resume_interrupted_runs().await;
+    assert_eq!(
+        (report.scanned, report.notified),
+        (0, 1),
+        "nothing scanned, one notice: {report:?}"
+    );
+    assert!(
+        calls.lock().await.is_empty(),
+        "disabled: nothing re-triggered"
+    );
+    let notes = system_notes(&store, &sid).await;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("buy milk"), "{}", notes[0]);
+    assert!(
+        db.unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "stamped even with the scan off"
+    );
+}
+
+/// A row whose `parent_session_id` is spelled the LEGACY way still gets its
+/// notice. The coordinator reads a key string somebody else PERSISTED, so it
+/// must accept every spelling the store ever wrote — `from_key_string`
+/// (= `parse().or_else(from_legacy)`), never `parse` alone. Derived from the
+/// parser pair rather than from a hand-written key: the fixture asserts the
+/// string is legacy-only before relying on it. (The pin the deleted
+/// `orphan_notice` module carried, moved to the arm that replaced it.)
+#[tokio::test]
+async fn a_legacy_spelled_session_key_still_gets_its_lost_input_notice() {
+    let legacy = "agent:legacyorphan:peer:telegram:99";
+    assert!(
+        SessionKey::parse(legacy).is_none() && SessionKey::from_key_string(legacy).is_some(),
+        "fixture no longer exercises the legacy-only branch"
+    );
+    let key = SessionKey::from_key_string(legacy).unwrap();
+    let store = store();
+    let db = Arc::new(StateDatabase::in_memory().unwrap());
+    orphan_task_row_keyed(&db, legacy, key.agent_id(), "buy milk").await;
+    db.reconcile_orphaned_tasks().await.unwrap();
+    let boot = Arc::new(
+        ResumeCoordinator::new(
+            store.clone(),
+            ResumeConfig::default(),
+            Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
+            registry_with_agent(key.agent_id()).await,
+            sessions(),
+            test_bus(),
+        )
+        .with_state_database(db.clone()),
+    );
+    assert_eq!(
+        boot.resume_interrupted_runs().await.notified,
+        1,
+        "a legacy-spelled key got no lost-input notice at all"
+    );
+    let notes = system_notes(&store, &key).await;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("buy milk"), "{}", notes[0]);
 }

@@ -3145,6 +3145,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             "Resume coordinator: auto-scan disabled ([resume] enabled = false); \
                              on-demand resume still available"
                         );
+                        // Not gated by `[resume] enabled` either, for the same
+                        // reason as the survivors: a message that was lost
+                        // before it was recorded (§8.2(b)) is not a run to
+                        // resume. A disabled launch visits no candidate and
+                        // walks no marker log; its `settle` still adjudicates
+                        // the task rows and writes the lost-input notices.
+                        let report = coordinator.launch_resume().await.settle().await;
+                        if report.notified > 0 {
+                            tracing::info!(
+                                notified = report.notified,
+                                "resume scan disabled; lost-input notices written"
+                            );
+                        } else {
+                            tracing::debug!("resume scan disabled; no lost-input notice to write");
+                        }
                         alephcore::gateway::busy_queue::durable::reinject_survivors(
                             reinject_adapter,
                             reinject_registry,
