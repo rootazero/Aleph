@@ -2082,17 +2082,21 @@ async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_stamps_and_retrigg
     assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
 }
 
-/// An adapter whose `execute` takes real time for ONE session. The boot
-/// scan's fan-out is only observable through a run that outlives its
-/// siblings: this wraps [`RecordingAdapter`] and records, per call, when it
-/// entered and left, plus the high-water mark of calls in flight at once.
+/// An adapter whose `execute` takes real time: every session at least `floor`,
+/// ONE session `slow_delay`. The boot scan's fan-out is only observable
+/// through runs that overlap: this wraps [`RecordingAdapter`] and records, per
+/// call, when it entered and left, plus the high-water mark of calls in
+/// flight at once. The floor is what makes the high-water mark a fact about
+/// the cap rather than about spawn order — whichever two candidates hold the
+/// permits first, both are still inside `execute` after `floor`.
 ///
 /// The slow session is matched by its WHOLE key string, never by substring:
 /// `agent:a:main` and `agent:b:main` share most of their bytes.
 struct SlowAdapter {
     inner: RecordingAdapter,
     slow_key: String,
-    delay: Duration,
+    slow_delay: Duration,
+    floor: Duration,
     in_flight: AtomicUsize,
     max_in_flight: AtomicUsize,
     entries: Mutex<Vec<(String, Instant)>>,
@@ -2100,11 +2104,12 @@ struct SlowAdapter {
 }
 
 impl SlowAdapter {
-    fn new(slow: &SessionKey, delay: Duration) -> Self {
+    fn new(slow: &SessionKey, slow_delay: Duration, floor: Duration) -> Self {
         Self {
             inner: RecordingAdapter::new(),
             slow_key: slow.to_key_string(),
-            delay,
+            slow_delay,
+            floor,
             in_flight: AtomicUsize::new(0),
             max_in_flight: AtomicUsize::new(0),
             entries: Mutex::new(Vec::new()),
@@ -2140,9 +2145,12 @@ impl ExecutionAdapter for SlowAdapter {
             .lock()
             .await
             .push((key.clone(), Instant::now()));
-        if key == self.slow_key {
-            tokio::time::sleep(self.delay).await;
-        }
+        let delay = if key == self.slow_key {
+            self.slow_delay
+        } else {
+            self.floor
+        };
+        tokio::time::sleep(delay).await;
         let result = self.inner.execute(request, agent, emitter).await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
         self.exits.lock().await.push((key, Instant::now()));
@@ -2165,15 +2173,21 @@ impl ExecutionAdapter for SlowAdapter {
 /// §8.1: the boot scan walks its candidates `[resume] max_concurrent` at a
 /// time, so one slow resume does not hold every later candidate behind it.
 ///
-/// Three interrupted sessions, one of which (`b`) takes 2 s to resume, under
-/// a cap of 2. The discriminating assertion is `max_in_flight == 2`: a serial
-/// walk never has two runs in flight, and an unbounded fan-out would reach 3.
-/// The ordering assertions say the same thing from the other side — the two
-/// fast sessions finish while the slow one is still running — and the wall
-/// clock bound is a sanity ceiling on the whole scan (with only ONE slow
-/// session the serial walk and the fan-out both take ~2 s, so the bound
-/// alone cannot tell the shapes apart, which is why it is not the only guard
-/// here).
+/// Three interrupted sessions under a cap of 2: every resume takes at least
+/// 300 ms and one (`b`) takes 2 s. The discriminating assertion is
+/// `max_in_flight == 2`: a serial walk never has two runs in flight, an
+/// unbounded fan-out reaches 3, and the 300 ms floor makes the 2 hold by
+/// construction — whichever two candidates take the permits first (the store
+/// orders groups by session id, but the test must not lean on that), both
+/// are still running 300 ms later. The ordering assertions say the same
+/// thing from the other side — the two fast sessions finish while the slow
+/// one is still running — and the wall clock bound is a sanity ceiling on
+/// the whole scan: measured on this host, fan-out 2.06–2.09 s (a and c
+/// overlap b), serial 2.70 s (0.3 + 2 + 0.3 with `Semaphore::new(1)`), so
+/// the bound alone cannot tell the shapes apart, which is why it is not the
+/// only guard here. Under that same cap-1 mutation the permit order followed
+/// the scheduler rather than the spawn order (c ran before b), and only
+/// `max_in_flight` went red — the ordering assertions are the weaker pair.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_interrupted_sessions_resume_two_at_a_time_and_the_slow_one_does_not_block_the_rest()
 {
@@ -2182,7 +2196,11 @@ async fn three_interrupted_sessions_resume_two_at_a_time_and_the_slow_one_does_n
     for k in &keys {
         seed_interrupted_run(&store, k).await;
     }
-    let adapter = Arc::new(SlowAdapter::new(&keys[1], Duration::from_secs(2)));
+    let adapter = Arc::new(SlowAdapter::new(
+        &keys[1],
+        Duration::from_secs(2),
+        Duration::from_millis(300),
+    ));
     let registry = registry_with_agents(&["a", "b", "c"]).await;
     let cfg = ResumeConfig {
         max_concurrent: 2,

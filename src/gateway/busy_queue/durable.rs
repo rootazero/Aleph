@@ -387,25 +387,22 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 /// until the scan settles is what the split is for. Returns how many messages
 /// this call re-queued.
 ///
-/// Per survivor:
-///
-/// 1. **Skip `has_own_scheduler` sessions** — cron / heartbeat / loop / goal /
-///    team units re-spawn on their own schedulers; re-delivering their queued
-///    input here would double-drive them.
-/// 2. **Skip what `select` declines** — left journaled exactly as found, for
-///    the next call. The predicate sees the parsed key; compare it whole
-///    (`to_key_string() ==`, set membership), never by substring.
-/// 3. Rebuild the `RunRequest` from the journaled payload (`pending_media`
-///    starts empty, `sandbox_override` is `None` — neither is set by the two
-///    lane surfaces; see the module doc).
-/// 4. Emit through the gateway bus, plus the origin-channel fanout when the
-///    session has a bound route — the same two-arm shape as
-///    `ResumeCoordinator::retrigger`, so a channel user's re-delivered message
-///    still answers back to the channel.
-/// 5. Re-enter the lane via [`super::register_run`] + the shared
-///    [`super::deliver_with_ticket`] loop. The fresh ticket's fresh
-///    `enqueued_at` is *why* the burst/interrupt predicates need no special
-///    casing (module doc, "Reinjection preserves the lane invariants").
+/// Per survivor, in this order: a `has_own_scheduler` session is skipped for
+/// good — cron / heartbeat / loop / goal / team units re-spawn on their own
+/// schedulers, and re-delivering their queued input here would double-drive
+/// them; then a survivor `select` declines is left journaled exactly as
+/// found, for the next call (the predicate sees the parsed key — compare it
+/// whole, `to_key_string() ==` or set membership, never by substring). What
+/// remains has its `RunRequest` rebuilt from the journaled payload
+/// (`pending_media` starts empty, `sandbox_override` is `None` — neither is
+/// set by the two lane surfaces; see the module doc), emits through the
+/// gateway bus plus the origin-channel fanout when the session has a bound
+/// route (the same two-arm shape as `ResumeCoordinator::retrigger`, so a
+/// channel user's re-delivered message still answers back to the channel),
+/// and re-enters the lane via [`super::register_run`] + the shared
+/// [`super::deliver_with_ticket`] loop — the fresh ticket's fresh
+/// `enqueued_at` is *why* the burst/interrupt predicates need no special
+/// casing (module doc, "Reinjection preserves the lane invariants").
 ///
 /// A survivor whose session key no longer parses, or whose agent is gone, is
 /// logged and left in the journal (a later boot with the agent restored can
@@ -431,14 +428,14 @@ pub async fn reinject_survivors(
                 "busy-queue reinject: unparsable session key; leaving record queued");
             continue;
         };
-        if !select(&session_key) {
-            tracing::debug!(run_id = %run_id,
-                "busy-queue reinject: not selected by this pass; leaving record queued");
-            continue;
-        }
         if crate::gateway::resume_coordinator::has_own_scheduler(&session_key) {
             tracing::debug!(run_id = %run_id,
                 "busy-queue reinject: session has its own scheduler; skipping");
+            continue;
+        }
+        if !select(&session_key) {
+            tracing::debug!(run_id = %run_id,
+                "busy-queue reinject: not selected by this pass; leaving record queued");
             continue;
         }
         let Some(agent) = registry.get(session_key.agent_id()).await else {

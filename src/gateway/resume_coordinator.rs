@@ -218,17 +218,22 @@ impl ResumeReport {
 /// bounded tail inside the task), so a narrower set would release a survivor
 /// into a session the scan is about to act on. Scheduler-owned sessions are
 /// left out — their queued input is never re-delivered by the boot path.
+#[must_use = "dropping a ResumeLaunch aborts every resume it launched; call settle()"]
 pub struct ResumeLaunch {
     pub pending: std::collections::HashSet<String>,
+    /// Whether the marker scan was actually walked. `false` when resume is
+    /// disabled or the marker load failed — then neither `settle` nor the
+    /// caller may report a completion, because a "scan finished, scanned = 0"
+    /// line after a "scan failed" line reads the failure as an empty result.
+    /// Read it BEFORE `settle` consumes the launch.
+    pub walked: bool,
     /// One task per candidate, tagged with its candidate ordinal so the
     /// settled report reads in scan order whatever order the tasks finish in.
     tasks: tokio::task::JoinSet<(usize, ResumeReport)>,
+    /// Which session each task is deciding, by task id, so a task that did
+    /// not complete can be named — its return value (and ordinal) is gone.
+    sessions: HashMap<tokio::task::Id, SessionId>,
     report: ResumeReport,
-    /// Whether the marker scan was actually walked. `false` when resume is
-    /// disabled or the marker load failed — `settle` then reports no
-    /// completion, because a "scan complete, scanned = 0" line after a
-    /// "scan failed" line would read the failure as an empty result.
-    walked: bool,
 }
 
 impl ResumeLaunch {
@@ -238,12 +243,16 @@ impl ResumeLaunch {
         while let Some(joined) = self.tasks.join_next().await {
             match joined {
                 Ok(part) => parts.push(part),
-                // A candidate whose task panicked has an UNKNOWN verdict: its
-                // session is left exactly as the crash left it, and it is
-                // counted nowhere — the report has no arm for "the scan itself
-                // failed on this one", and inventing a count here would read
-                // the panic as a decision.
-                Err(e) => tracing::warn!(error = %e, "resume: candidate task panicked"),
+                // A candidate whose task panicked (or was cancelled) has an
+                // UNKNOWN verdict: its session is left exactly as the crash
+                // left it, and it is counted nowhere — the report has no arm
+                // for "the scan itself failed on this one", and inventing a
+                // count here would read the panic as a decision.
+                Err(e) => tracing::warn!(
+                    session = ?self.sessions.get(&e.id()),
+                    error = %e,
+                    "resume: candidate task did not complete; its verdict is unknown"
+                ),
             }
         }
         // Candidate order, so `refused` reads like the scan walked.
@@ -900,8 +909,9 @@ pub struct ResumeCoordinator {
     /// One permit spans a candidate's whole resume — boundary repair AND
     /// re-trigger — and is taken by those two entry points only. `retrigger`
     /// takes none of its own: nested inside a held permit, a second acquire
-    /// deadlocks the moment `max_concurrent = 1` (the caller holds the only
-    /// permit and waits on itself).
+    /// deadlocks as soon as `max_concurrent` candidates each hold a permit
+    /// and wait for a second one (three candidates under a cap of 2 is
+    /// enough; a cap of 1 is only the smallest case).
     semaphore: Arc<Semaphore>,
     /// Session keys with a resume in flight, so one session is never resumed
     /// twice at once. See [`ResumeReport::busy`] for what the second winner
@@ -1006,9 +1016,10 @@ impl ResumeCoordinator {
     pub async fn launch_resume(self: &Arc<Self>) -> ResumeLaunch {
         let mut launch = ResumeLaunch {
             pending: std::collections::HashSet::new(),
-            tasks: tokio::task::JoinSet::new(),
-            report: ResumeReport::default(),
             walked: false,
+            tasks: tokio::task::JoinSet::new(),
+            sessions: HashMap::new(),
+            report: ResumeReport::default(),
         };
 
         if !self.config.enabled {
@@ -1039,7 +1050,8 @@ impl ResumeCoordinator {
             }
             let me = Arc::clone(self);
             let semaphore = Arc::clone(&self.semaphore);
-            launch.tasks.spawn(async move {
+            let named = session_id.clone();
+            let task = launch.tasks.spawn(async move {
                 let mut part = ResumeReport::default();
                 match semaphore.acquire_owned().await {
                     Ok(_permit) => {
@@ -1052,6 +1064,7 @@ impl ResumeCoordinator {
                 }
                 (ordinal, part)
             });
+            launch.sessions.insert(task.id(), named);
         }
 
         // §5.2: a session that crashed between its seed and its first
@@ -1099,7 +1112,8 @@ impl ResumeCoordinator {
                     // After every marker group, so the settled report lists
                     // marker candidates first and window candidates after.
                     let ordinal = group_count + offset;
-                    launch.tasks.spawn(async move {
+                    let named = id.clone();
+                    let task = launch.tasks.spawn(async move {
                         let mut part = ResumeReport::default();
                         match semaphore.acquire_owned().await {
                             Ok(_permit) => {
@@ -1120,6 +1134,7 @@ impl ResumeCoordinator {
                         }
                         (ordinal, part)
                     });
+                    launch.sessions.insert(task.id(), named);
                 }
             }
             Err(e) => tracing::warn!(
@@ -1929,7 +1944,8 @@ impl ResumeCoordinator {
     ///
     /// Takes no `max_concurrent` permit of its own: the caller already holds
     /// one for the whole resume (see `semaphore`), and a nested acquire here
-    /// deadlocks at `max_concurrent = 1`.
+    /// deadlocks as soon as `max_concurrent` candidates each hold a permit
+    /// and wait for a second.
     async fn retrigger(
         &self,
         session_id: &SessionId,

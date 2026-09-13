@@ -3082,6 +3082,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         .await;
                         let launch = coordinator.launch_resume().await;
                         let pending = launch.pending.clone();
+                        // Read before `settle` consumes the launch: a scan
+                        // that never walked (resume disabled, or the marker
+                        // load failed — the coordinator has already logged
+                        // which) settles to an EMPTY report, and a "finished
+                        // scanned = 0" line for it would read that failure as
+                        // an empty result.
+                        let walked = launch.walked;
                         let scan = tokio::spawn(launch.settle());
                         let early = alephcore::gateway::busy_queue::durable::reinject_survivors(
                             reinject_adapter.clone(),
@@ -3092,12 +3099,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         )
                         .await;
                         match scan.await {
-                            Ok(report) => tracing::info!(
+                            Ok(report) if walked => tracing::info!(
                                 scanned = report.scanned,
                                 resumed = report.resumed,
                                 abandoned = report.abandoned,
                                 skipped = report.skipped,
+                                // T16 adds `notified = report.notified`.
                                 "ResumeCoordinator boot scan finished"
+                            ),
+                            Ok(_) => tracing::debug!(
+                                "ResumeCoordinator boot scan did not walk the marker log; \
+                                 no report to print"
                             ),
                             // A scan task that did not settle has an UNKNOWN
                             // outcome — never an empty one: no `scanned = 0`
