@@ -625,12 +625,24 @@ pub async fn handle_history(
             // read failed — because both mean "we did not find out". Neither
             // may decay to a clean answer: a list that renders absence as
             // "fine" hides exactly the sessions this field exists to surface
-            // (criterion #8).
+            // (criterion #8). A row this build cannot decode is not an
+            // absence: the log was opened and refused, and the refusal is
+            // named under its own tag, as the list face and the doctor name it.
             session_snapshot.last_run = match crate::session::store::global_session_event_store() {
                 Some(events_store) => match events_store.load_all_events(&session_key).await {
                     Ok(events) => Some(crate::gateway::session_snapshot::last_run_from_events(
                         &events,
                     )),
+                    Err(crate::session::service::SessionError::UndecodableRecord(u)) => {
+                        tracing::warn!(
+                            session = %canonical,
+                            record = %u,
+                            "this session's event log holds a record this build cannot read"
+                        );
+                        Some(crate::gateway::session_snapshot::last_run_refused(
+                            &crate::session::reduction::LogContradiction::from(&u),
+                        ))
+                    }
                     Err(e) => {
                         tracing::warn!(
                             session = %canonical,
