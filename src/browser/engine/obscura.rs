@@ -1038,21 +1038,59 @@ mod tests {
         );
     }
 
-    /// Two launches must not be handed the same port. `reserve_port` binds,
-    /// reads and drops — so the port is free for obscura to take — and the
-    /// ONLY thing that makes that safe is that a loser gets a clean bind error
-    /// rather than silently sharing (measured on the real binary: exit 1,
-    /// `Error: bind 127.0.0.1:<p>: Address already in use (os error 48)`).
+    /// `reserve_port` owes exactly two things, and this asserts those two.
+    ///
+    /// **It reads the port off the SOCKET, not off the request.** `bind(:0)`
+    /// returning `0` would be the whole function failing silently — obscura
+    /// would then be launched on port 0, announce `ws://127.0.0.1:0/…`, and
+    /// nothing would ever connect. That is deterministic and is the first
+    /// assertion.
+    ///
+    /// **It does not keep the port bound.** Checked by re-binding, with
+    /// retries, and the retries are the point rather than tidiness: a bind that
+    /// fails because `reserve_port` forgot its `drop` fails EVERY time, while
+    /// one that fails because another thread in this same test binary grabbed
+    /// the port in the window fails once. Distinguishing those two is what the
+    /// loop buys.
+    ///
+    /// ⚠️ **This test previously also asserted `a != b`, and that assertion was
+    /// removed after it went red once in a full-suite run and never again in
+    /// four repeats.** Two consecutive calls getting different ports is a
+    /// property of the kernel's ephemeral allocator under whatever else is
+    /// binding at that moment — it is not something this function promises, and
+    /// asserting it made a guard that can go red without the code changing. A
+    /// guard that cries wolf is more expensive than a missing one, because the
+    /// next reader spends it as evidence (判据 §3).
+    ///
+    /// It also misstated where the safety comes from. Two launches CAN race for
+    /// one port; nothing here prevents that. What makes it safe is on the far
+    /// side: the loser gets a clean, immediate, non-zero exit with a named
+    /// reason — measured on the real v0.2.2 binary, `exit 1` and
+    /// `Error: bind 127.0.0.1:<p>: Address already in use (os error 48)` on
+    /// stderr — which `wait_for_endpoint` reports as
+    /// `LaunchFailed{stage: "obscura-exit"}` carrying that text.
     #[test]
-    fn reserve_port_yields_a_free_loopback_port_and_two_calls_differ() {
+    fn reserve_port_reads_the_socket_and_does_not_keep_it_bound() {
         let a = reserve_port().expect("a loopback ephemeral port must be reservable");
-        let b = reserve_port().expect("and a second one");
-        assert_ne!(a, 0);
-        assert_ne!(b, 0);
-        assert_ne!(a, b);
-        // Free again: we dropped the listener, so a bind must succeed.
-        std::net::TcpListener::bind(("127.0.0.1", a))
-            .expect("reserve_port must not keep the port bound");
+        assert_ne!(
+            a, 0,
+            "reserve_port echoed the requested port instead of reading the socket"
+        );
+
+        let mut last = None;
+        for _ in 0..10 {
+            match std::net::TcpListener::bind(("127.0.0.1", a)) {
+                Ok(_) => return,
+                Err(e) => {
+                    last = Some(e);
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+        panic!(
+            "127.0.0.1:{a} was unbindable on all 10 attempts, so reserve_port is \
+             holding its listener rather than dropping it: {last:?}"
+        );
     }
 
     /// The sidecar is written from the pid, BEFORE the endpoint is known — the
