@@ -1252,39 +1252,65 @@ mod tests {
         (main, child)
     }
 
-    /// The body of a `fn <name>(` in `text`, braces balanced, or `None`.
+    /// **Every** `fn <name>(` body in `text`, each brace-balanced.
     ///
     /// Shared by the census and its own controls, so a control cannot pass
     /// against a different extractor from the one the census uses (判据 §1).
-    fn fn_body(text: &str, name: &str) -> Option<String> {
+    ///
+    /// ⚠️ **All of them, not the first.** A verb is defined twice in this
+    /// backend — once in `mod.rs`'s `impl BrowserBackend`, which only delegates,
+    /// and once in `actions.rs`, which does the work. `rust_sources_under`
+    /// walks `read_dir`, whose order is the filesystem's, so "the first
+    /// definition" is whichever file that walk happened to yield first. On this
+    /// machine `actions.rs` comes first and the census was right by luck; the
+    /// day it did not, `click` would have resolved to a delegating body with no
+    /// marker. The question the census actually asks is "does ANY definition of
+    /// this verb reach the gate", so that is what this returns.
+    fn fn_bodies(text: &str, name: &str) -> Vec<String> {
         let needle = format!("fn {name}(");
-        let start = text.find(&needle)?;
-        let mut depth = 0usize;
-        let mut started = false;
-        for (i, c) in text[start..].char_indices() {
-            match c {
-                '{' => {
-                    depth += 1;
-                    started = true;
-                }
-                '}' => {
-                    depth -= 1;
-                    if started && depth == 0 {
-                        return Some(text[start..=start + i].to_string());
+        let mut out = Vec::new();
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(&needle) {
+            let start = from + rel;
+            let mut depth = 0usize;
+            let mut started = false;
+            let mut end = None;
+            for (i, c) in text[start..].char_indices() {
+                match c {
+                    '{' => {
+                        depth += 1;
+                        started = true;
                     }
+                    '}' => {
+                        depth -= 1;
+                        if started && depth == 0 {
+                            end = Some(start + i);
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+            match end {
+                Some(e) => {
+                    out.push(text[start..=e].to_string());
+                    from = e + 1;
+                }
+                None => break,
             }
         }
-        None
+        out
     }
 
     /// Does this text define `verb` with a body that reaches the ref gate?
     ///
     /// `prepare` is the shared preamble (it calls `resolve_target`); a few verbs
-    /// call `resolve_target` directly. Either counts.
+    /// call `resolve_target` directly. Either counts, in ANY of the verb's
+    /// definitions.
     fn reaches_the_gate(text: &str, verb: &str) -> bool {
-        fn_body(text, verb).is_some_and(|b| b.contains("prepare(") || b.contains("resolve_target("))
+        fn_bodies(text, verb)
+            .iter()
+            .any(|b| b.contains("prepare(") || b.contains("resolve_target("))
     }
 
     /// **Every ref-taking verb resolves through the gate, or is exempt AND
@@ -1322,6 +1348,11 @@ mod tests {
     ///   would go red — a false positive, and deliberately the fail-loud
     ///   direction: a human looks, rather than a gate quietly not covering
     ///   something.
+    /// * Its own recognisers are constrained by four controls, and the fourth
+    ///   exists because the first three could not see an unbounded extractor:
+    ///   a positive control is SATISFIED by over-extraction, and a synthetic
+    ///   negative cannot exercise bounding at all. A control has to run on the
+    ///   real corpus to constrain how the real corpus is read.
     ///
     /// The whole `cdp_backend/` DIRECTORY is scanned, not `actions.rs` and
     /// `mod.rs` by name: a verb implemented in a third file would otherwise
@@ -1405,6 +1436,54 @@ mod tests {
              reaching — it would report everything as reaching"
         );
 
+        // CONTROL 4 — **the extractor is BOUNDED**, exercised on the REAL
+        // corpus. The three controls above cannot make this claim, which is why
+        // the guard was 恒绿 under the one break that matters:
+        //   * control 1 is SATISFIED by over-extraction — if a "body" runs to
+        //     the end of the corpus it contains `prepare(`, so a verb that
+        //     reaches is still seen reaching. The control passes BECAUSE the
+        //     extractor is broken in that direction.
+        //   * control 2 is a one-line synthetic input, where bounding cannot
+        //     matter, so it cannot see the difference.
+        // Measured: make the extractor return the remainder instead of the
+        // balanced span and the whole guard stayed green (`1 passed`) while
+        // reporting every verb as reaching. That is 判据 §2 landing on the
+        // instrument, which is this branch's most repeated lesson.
+        //
+        // Two assertions because the two break shapes are different, and
+        // neither needs a magic number — a byte count would be a fixture that
+        // rots:
+        //   * BALANCE catches "return the rest of the corpus" (measured at
+        //     992 open / 988 close, unbalanced).
+        //   * NO OTHER VERB'S DEFINITION catches "return the whole corpus",
+        //     which IS balanced, since the corpus is complete files joined.
+        //     Derived from the verb list, so it is not a hand-written set.
+        let click_bodies = fn_bodies(&scanned, "click");
+        assert!(
+            !click_bodies.is_empty(),
+            "the extractor found no `click` body in the real corpus, so the \
+             assertions below would be vacuous"
+        );
+        for body in &click_bodies {
+            let (opens, closes) = (body.matches('{').count(), body.matches('}').count());
+            assert_eq!(
+                opens, closes,
+                "the extractor returned an UNBALANCED span for `click` \
+                 ({opens} open, {closes} close) — it is not bounding the body, \
+                 so every verb's 'body' trails into the rest of the corpus and \
+                 every verb reports as reaching the gate"
+            );
+            for other in verbs.iter().filter(|v| *v != "click") {
+                assert!(
+                    !body.contains(&format!("fn {other}(")),
+                    "`click`'s extracted body contains the definition of \
+                     `{other}` — the extractor is over-reaching, and a body \
+                     that spans other functions makes every verb look like it \
+                     reaches the gate"
+                );
+            }
+        }
+
         // ---- exemptions: each must be genuinely ABSENT from this backend ---
         // Keyed by verb, valued by why it is exempt, so the reason is read at
         // the same moment as the exemption.
@@ -1421,7 +1500,7 @@ mod tests {
             }
             match exempt.iter().find(|(v, _)| v == verb) {
                 Some((_, why)) => assert!(
-                    fn_body(&scanned, verb).is_none(),
+                    fn_bodies(&scanned, verb).is_empty(),
                     "`{verb}` is exempt from the ref gate because {why} — but \
                      this backend now DEFINES it, so that reason is false and \
                      the exemption no longer holds. Either route it through \
