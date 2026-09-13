@@ -975,17 +975,15 @@ CREATE TABLE messages (
 ### `messages` is a projection, not a source
 
 The SSOT is `session_events` ([SESSION_SERVICE.md](SESSION_SERVICE.md)).
-`MessageProjector` (`src/gateway/session_projector.rs`) is the **only** writer
-of the rows projected from it — the ones carrying a `source_seq` — and it is
-asynchronous: an append lands in the log first and reaches the transcript on a
-per-session drain. It is **not** the table's only writer: two production paths
-append straight to `messages` and leave `source_seq` NULL —
-`AgentInstance::add_message` (`src/gateway/agent_instance.rs`) and the boot
-orphan notice (`src/gateway/orphan_notice.rs`) — the 「另两个生产者」
-FEATURE_LOCATOR §6.9 names; `map_message_row`
-(`src/gateway/session_manager/ops/crud.rs`) reads that NULL back as "not
-event-sourced, leave it alone", which is what keeps those rows out of the
-projection's seq-set arithmetic.
+`MessageProjector` (`src/gateway/session_projector.rs`) is, since 2026-09-13,
+the table's **only production writer** — pinned by
+`session_projector::tests::the_projector_is_the_only_production_writer_of_the_messages_table`
+— and it is asynchronous: an append lands in the log first and reaches the
+transcript on a per-session drain. The two direct writers that used to bypass
+the log (`AgentInstance::add_message`, the boot orphan notice) are gone (T17,
+T16); rows they left carry a NULL `source_seq`, which `map_message_row`
+(`src/gateway/session_manager/ops/crud.rs`) reads back as "not event-sourced,
+leave it alone", keeping them out of the projection's seq-set arithmetic.
 
 The projection is **self-healing, never lossy**. Back-pressure or a stopped
 drain records the event's `seq` in `missed` (the payload is already durable in

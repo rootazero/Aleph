@@ -324,15 +324,18 @@ pub(super) async fn initialize_session_store(
 /// Build a `SessionService` backed by the same `SQLite` file that the
 /// `SessionManager` uses.
 ///
-/// Phase 1 dual-write wiring: opens a **dedicated** connection to the
-/// sessions DB, runs the `session_events` migration, and returns an
-/// `InProcessActorSessionService` around a `SqliteEventStore`. Uses a
-/// separate connection (not the one owned by `SessionManager`) because
-/// `SessionManager` and `SqliteEventStore` use different `Mutex` types.
-/// Reconciling them is out of scope for Task 9 and will be revisited in Phase 6.
+/// Opens a **dedicated** connection to the sessions DB, runs the
+/// `session_events` migration, and returns an `InProcessActorSessionService`
+/// around a `SqliteEventStore`. Uses a separate connection (not the one owned
+/// by `SessionManager`) because `SessionManager` and `SqliteEventStore` use
+/// different `Mutex` types.
 ///
-/// Returns `None` on any failure (non-fatal — dual-write simply stays
-/// off for this run; the legacy `messages` table remains authoritative).
+/// Returns `None` on any failure — then no event log exists for this run:
+/// `decline_global_session_service` / `decline_global_session_event_store`
+/// say so on the capability roster, every reader of the two handles takes its
+/// own `None` arm (`SESSION_SERVICE_READERS` / `SESSION_EVENT_STORE_READERS`
+/// name each one), and the `messages` projection has nothing to project from.
+/// Nothing writes the transcript in the log's place.
 pub(super) fn build_sqlite_session_service(
     db_path: &std::path::Path,
     observer: Option<Arc<dyn alephcore::session::observer::SessionEventObserver>>,
@@ -346,8 +349,7 @@ pub(super) fn build_sqlite_session_service(
             tracing::warn!(
                 path = ?db_path,
                 error = %e,
-                "Phase 1 dual-write: failed to open session_events connection; \
-                 mirroring disabled"
+                "failed to open the session_events connection; no event log this run"
             );
             return None;
         }
@@ -355,7 +357,7 @@ pub(super) fn build_sqlite_session_service(
     if let Err(e) = alephcore::session::store::migrate_add_session_events(&conn) {
         tracing::warn!(
             error = %e,
-            "Phase 1 dual-write: session_events migration failed; mirroring disabled"
+            "session_events migration failed; no event log this run"
         );
         return None;
     }

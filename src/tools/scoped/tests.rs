@@ -4094,7 +4094,13 @@ fn every_production_dispatch_into_the_scoped_gate_is_scoped_by_a_call_identity()
 /// above the await with no `fn ` header in between (same function). The two
 /// real distances are 5 lines (`dispatch.rs`, `record_parked` → the await)
 /// and 17 (`workspace/mod.rs`, the multi-line `emit_for_ambient_call` → the
-/// await); the window is those plus slack, not a hand-tuned exact.
+/// await); the window is those plus slack, not a hand-tuned exact. The
+/// window is textual, not structural: a stamp in a SIBLING branch of the same
+/// function — one the await's own path never executes — would satisfy it if
+/// it fell within the lines. Both real sites are straight-line code, and the
+/// stamp firing on the executed path is what the behavioural tests beside
+/// this one (and the mutation that removed each stamp) prove; this census
+/// only proves the stamp is in the function.
 #[test]
 fn every_production_approval_park_is_stamped_or_named_exempt() {
     use crate::utils::source_scan::{code_text, production_text, rust_sources_under};

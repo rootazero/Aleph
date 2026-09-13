@@ -28,8 +28,11 @@
 //!   the failure condition is "the projection has a gap", and the two are not
 //!   the same set.
 //! * sessions that emit no run markers at all — background sub-agent sessions
-//!   (`sub-bg-*`), cron and heartbeat sessions. They never appeared in
-//!   `load_run_markers`, so no amount of marker reduction could reach them.
+//!   (`sub-bg-*`). They never appear in `load_run_markers`, so no amount of
+//!   marker reduction could reach them. (Cron and heartbeat sessions DO emit
+//!   markers: the bridge writes `RunStarted` unconditionally,
+//!   `harness_bridge/runner_impl.rs`, and `resume_coordinator::has_own_scheduler`
+//!   is what closes theirs on the way out of the resume pass.)
 //!
 //! The candidate set is therefore **the activity window** (`[resume]
 //! max_age_secs`, the same horizon resume uses) UNION **every session whose
@@ -274,10 +277,16 @@ impl ProjectionReconciler {
     /// Detection reads the marker groups because the child's seed always ends
     /// in a `RunStarted` marker, so every forked child is in
     /// `load_run_markers`; `SessionForked` itself is not a marker and is read
-    /// with one targeted range read of seq 1. Only sessions inside the
-    /// activity window are considered — the same horizon the resume pass
-    /// applies, since a split older than that is not going to be resumed
-    /// either.
+    /// with one targeted range read of seq 1. A child whose seq 1 has since
+    /// been retired reads as "not `SessionForked`" — unhealable, counted in
+    /// `errored` and named in the warn — rather than guessed at. Only sessions
+    /// inside the activity window are considered: the same `max_age_secs` the
+    /// resume pass uses, but dated differently — here by the LAST marker's
+    /// `created_at_ms`, `ResumeAttempted` stamps included, where resume dates a
+    /// run by `last_alive_at` (its opening marker or in-run activity, stamps
+    /// excluded). A split whose only recent marker is a resume stamp is
+    /// therefore in scope here and out of scope there; sharing the predicate
+    /// would need the full `RunReduction` this loop does not build.
     ///
     /// Runs BEFORE the disposition loop so the resume pass (which follows this
     /// scan in the same boot task) sees routing and log agree.

@@ -487,8 +487,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             "the session_events SQLite service could not be built, so there is \
              no actor pipeline to publish: opening or migrating \
              `<data_dir>/sessions.db` failed \
-             (`build_sqlite_session_service` logs which of the two). Edge-path \
-             callers fall back to writing the transcript directly.",
+             (`build_sqlite_session_service` logs which of the two). Every \
+             reader takes its own `None` arm — the edge paths warn and drop \
+             what they would have journaled; nothing writes the transcript in \
+             the log's place.",
         );
     }
 
