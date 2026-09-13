@@ -2788,15 +2788,18 @@ mod tests {
     /// 判据 §5, a 列举法 that was complete only at立法 time. The obligation is
     /// stated by what you did, not by who you are.
     ///
-    /// 2026-09-13 (browser dual-engine, task 15): 114_448 -> 114_538 B.
-    /// **Both endpoints are readings**, each taken with this ceiling
-    /// temporarily set to `1` so the guard prints its own total, and the ONLY
-    /// difference between the two runs is `runtime_manage`'s DESCRIPTION:
-    ///   with the edit    114_538 B (94_942 catalog + 16_613 registry-only +
+    /// 2026-09-13 (browser dual-engine, task 15): 114_525 -> 114_538 B, +13.
+    /// **Both endpoints are readings taken in this round**, each with this
+    /// ceiling temporarily set to `1` so the guard prints its own total, and
+    /// the ONLY difference between the two runs is `runtime_manage`'s
+    /// DESCRIPTION:
+    ///   without the edit 114_525 B (94_929 catalog + 16_613 registry-only +
     ///                    1_039 injected + 1_944 bridge)
-    ///   without it       (see the task-15 report's mutation M11 reading)
-    /// The `114_448` starting point above is the previous entry's own reading,
-    /// not a subtraction. Measured on macOS (aarch64-apple-darwin); the
+    ///   with the edit    114_538 B (94_942 catalog + the same three)
+    /// Only the catalog component moved. The 114_525 endpoint independently
+    /// reproduces the previous entry's own reading at this branch's BASE, so
+    /// the +13 is a subtraction of two readings and not a count of a diff.
+    /// Measured on macOS (aarch64-apple-darwin); the
     /// guard's "Largest" line printed `bash` at 4_740, which is the **Unix**
     /// assembly, so the +30 Windows gap recorded in the entries above is
     /// carried forward unchanged — this round does not touch `bash`, and does
