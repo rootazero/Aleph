@@ -28,16 +28,20 @@ impl PageState {
         if let Some(main) = raw.frames.first() {
             refs.reset_for_document(&main.loader_id);
         }
-        // Which frames the driver must NOT resolve against the page's session.
-        // Set from every capture, including the single-renderer one where it is
-        // empty — a capture that left a previous page's set in place would go on
-        // refusing frames that are no longer out of process.
-        refs.set_cross_renderer_frames(
-            raw.frames
-                .iter()
-                .filter(|f| f.separate_renderer)
-                .map(|f| f.frame_id.clone()),
-        );
+        // Every document this capture saw, and which renderer it was in. ALL of
+        // them, not just the out-of-process ones: the driver has to tell "this
+        // document was in the page's renderer" from "this capture never saw this
+        // document", and a set of only the cross-renderer frames collapses those
+        // two into one absence.
+        refs.set_captured_documents(raw.frames.iter().map(|f| {
+            (
+                super::FrameKey {
+                    frame_id: f.frame_id.clone(),
+                    loader_id: f.loader_id.clone(),
+                },
+                f.separate_renderer,
+            )
+        }));
 
         let mut nodes: Vec<StateNode> = Vec::new();
         for frame in &raw.frames {
@@ -410,30 +414,41 @@ fn states_of(node: &RawNode, role: Role, live: bool) -> NodeStates {
 
 #[cfg(test)]
 mod tests {
-    /// `cdp_backend::actions::resolve_target` refuses a ref whose frame
-    /// `RefTable::is_cross_renderer` reports, so `build` has to populate that
-    /// set from every capture — and populate it with the RIGHT frames.
+    /// A `RefKey` for `(frame, loader)` with a node id that does not matter
+    /// here — every assertion below is about which DOCUMENT the key names.
+    fn key_in(frame_id: &str, loader_id: &str) -> RefKey {
+        RefKey {
+            frame_id: frame_id.into(),
+            loader_id: loader_id.into(),
+            backend_node_id: 1,
+        }
+    }
+
+    /// `cdp_backend::actions::resolve_target` asks `RefTable::renderer_of`
+    /// before it resolves anything, so `build` has to record every document
+    /// this capture saw — and classify them correctly.
     ///
     /// **Both directions, because the wrong predicate was green in one of
-    /// them.** The first version of that gate asked "is this the main frame",
-    /// which refused a same-origin child — a `frameId` of its own inside the
-    /// page's own renderer, whose `backendNodeId`s resolve correctly and which
-    /// worked before the gate arrived. The thirteen-node fixture has exactly
-    /// that shape (`F-main` + a same-renderer `F-child`), so the positive case
-    /// is asserted on the fixture the rest of this file already trusts.
+    /// them.** An earlier gate asked "is this the main frame", which refused a
+    /// same-origin child — a `frameId` of its own inside the page's own
+    /// renderer, whose `backendNodeId`s resolve correctly and which worked
+    /// before the gate arrived. The thirteen-node fixture has exactly that
+    /// shape (`F-main` + a same-renderer `F-child`), so the positive case is
+    /// asserted on the fixture the rest of this file already trusts.
     #[test]
-    fn build_records_which_frames_are_in_another_renderer_and_no_others() {
+    fn build_records_which_documents_are_in_another_renderer_and_no_others() {
         let raw = fixture();
         let mut refs = RefTable::new();
-        assert!(
-            !refs.is_cross_renderer("F-main") && !refs.is_cross_renderer("F-child"),
+        assert_eq!(
+            refs.renderer_of(&key_in("F-main", "L-main")),
+            FrameVerdict::Unseen,
             "precondition: nothing is recorded before a capture"
         );
 
         let _ = build_once(&mut refs);
 
         // The precondition that makes the next assertion mean anything: this
-        // fixture really does have a CHILD frame, so "no frame is cross-renderer"
+        // fixture really does have a CHILD frame, so "nothing is cross-renderer"
         // is not vacuously true of a single-document page.
         assert!(
             raw.frames.len() > 1 && raw.frames.iter().all(|f| !f.separate_renderer),
@@ -444,8 +459,9 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         for f in &raw.frames {
-            assert!(
-                !refs.is_cross_renderer(&f.frame_id),
+            assert_eq!(
+                refs.renderer_of(&key_in(&f.frame_id, &f.loader_id)),
+                FrameVerdict::PageRenderer,
                 "{} came out of the page's own capture, so its ids resolve \
                  against the page session — gating it takes away a capability \
                  that works",
@@ -453,8 +469,8 @@ mod tests {
             );
         }
 
-        // The other direction: a frame captured through its own session IS
-        // recorded, or the gate never fires and H2 is back.
+        // The other direction: a document captured through its own session IS
+        // recorded, or the gate never fires and the wrong-element click is back.
         let mut oopif = fixture();
         oopif.frames[1].separate_renderer = true;
         let mut refs2 = RefTable::new();
@@ -466,25 +482,115 @@ mod tests {
             "Hacker News",
             Duration::from_millis(142),
         );
-        assert!(
-            refs2.is_cross_renderer(&oopif.frames[1].frame_id),
-            "an out-of-process frame must be recorded"
+        assert_eq!(
+            refs2.renderer_of(&key_in(
+                &oopif.frames[1].frame_id,
+                &oopif.frames[1].loader_id
+            )),
+            FrameVerdict::OtherRenderer,
+            "an out-of-process document must be recorded"
         );
-        assert!(
-            !refs2.is_cross_renderer(&oopif.frames[0].frame_id),
-            "…and the page's own frame must not be"
+        assert_eq!(
+            refs2.renderer_of(&key_in(
+                &oopif.frames[0].frame_id,
+                &oopif.frames[0].loader_id
+            )),
+            FrameVerdict::PageRenderer,
+            "…and the page's own document must not be"
         );
 
-        // And the set is REPLACED, not merged: a frame that stops being out of
+        // And the map is REPLACED, not merged: a frame that stops being out of
         // process must stop being refused.
         let _ = build_once(&mut refs2);
-        assert!(
-            !refs2.is_cross_renderer(&oopif.frames[1].frame_id),
+        assert_eq!(
+            refs2.renderer_of(&key_in(
+                &oopif.frames[1].frame_id,
+                &oopif.frames[1].loader_id
+            )),
+            FrameVerdict::PageRenderer,
             "a stale entry here is a capability that never comes back"
         );
     }
 
-    use super::super::{render_text, to_json, RefTable, StaleReason};
+    /// **A ref outlives its capture, and the classification must not follow the
+    /// frame across a document change.**
+    ///
+    /// The hole this closes: `reset_for_document` clears `by_id` only when the
+    /// MAIN loader changes, so a SUBFRAME navigation clears nothing and a ref
+    /// minted while that subframe was out-of-process still resolves. If the
+    /// classification were keyed by frame alone, the next capture — in which
+    /// the frame is same-site and in-process — would reclassify that old ref as
+    /// `PageRenderer`, and a renderer-2 `backendNodeId` would be resolved
+    /// against the page's session. That is the wrong-element click that reports
+    /// `success: true`, measured on a real browser.
+    ///
+    /// Keyed by `(frame_id, loader_id)` the old document is simply not in the
+    /// latest capture, so it answers `Unseen` — which the driver spends as
+    /// staleness, not as permission.
+    ///
+    /// **This is the falsifier for the key.** Key on `frame_id` alone and the
+    /// first assertion below goes red by name.
+    #[test]
+    fn a_ref_from_a_frames_previous_document_is_unseen_not_reclassified() {
+        // Capture 1: the child frame is out of process, on loader L-old.
+        let mut before = fixture();
+        before.frames[1].separate_renderer = true;
+        before.frames[1].loader_id = "L-old".into();
+        let child = before.frames[1].frame_id.clone();
+
+        let mut refs = RefTable::new();
+        let _ = PageState::build(
+            &before,
+            &mut refs,
+            1,
+            "https://example.test/hn",
+            "Hacker News",
+            Duration::from_millis(1),
+        );
+        assert_eq!(
+            refs.renderer_of(&key_in(&child, "L-old")),
+            FrameVerdict::OtherRenderer,
+            "precondition: the ref was minted while that document was out of process"
+        );
+
+        // Capture 2: the SAME frame, a NEW document, now in the page's renderer.
+        // The main frame's loader is unchanged, which is exactly why the old
+        // refs are still resolvable and why this hole existed.
+        let mut after = fixture();
+        after.frames[1].separate_renderer = false;
+        after.frames[1].loader_id = "L-new".into();
+        assert_eq!(
+            after.frames[0].loader_id, before.frames[0].loader_id,
+            "precondition: the MAIN loader did not change, so nothing cleared \
+             the ref table — without this the hole cannot occur and this test \
+             would be about a different situation"
+        );
+        let _ = PageState::build(
+            &after,
+            &mut refs,
+            2,
+            "https://example.test/hn",
+            "Hacker News",
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(
+            refs.renderer_of(&key_in(&child, "L-old")),
+            FrameVerdict::Unseen,
+            "the ref names a document this capture did not see; keyed by frame \
+             alone it would read as PageRenderer and its renderer-2 node id \
+             would be resolved against the page session"
+        );
+        assert_eq!(
+            refs.renderer_of(&key_in(&child, "L-new")),
+            FrameVerdict::PageRenderer,
+            "…while the frame's CURRENT document is in the page's renderer and \
+             must stay actionable — the fix must not cost the capability H3 \
+             restored"
+        );
+    }
+
+    use super::super::{render_text, to_json, FrameVerdict, RefTable, StaleReason};
     use super::*;
     use std::time::Duration;
 

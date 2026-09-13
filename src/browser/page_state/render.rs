@@ -1405,7 +1405,7 @@ mod tests {
                     frame_id: "F".into(),
                     loader_id: "L".into(),
                     separate_renderer: false,
-            live_properties_observed: false,
+                    live_properties_observed: false,
                     offset: (0, 0),
                     nodes,
                 }],

@@ -104,6 +104,11 @@ static CHROMIUM: EngineCapabilities = EngineCapabilities {
     file_upload: Cap::Supported,
     pdf: Cap::Supported,
     insert_text: Cap::Supported,
+    // Provenance, not a freshness stamp: this row records the build the
+    // capabilities were measured on. Re-confirmed unchanged on Chrome
+    // 153.0.8010.36 (2026-09-13) — recorded here rather than by editing the
+    // value above, because a re-confirmation is not a re-measurement and the
+    // field must keep naming the build the reading was taken under (判据 §18).
     measured_on: "Chrome 152.0.7977.76",
 };
 

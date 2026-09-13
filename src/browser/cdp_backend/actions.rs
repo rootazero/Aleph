@@ -222,17 +222,15 @@ async fn resolve_target(
                      and use the ref printed beside the element you want."
                 )));
             }
-            let (resolved, in_another_renderer) = {
+            let (resolved, verdict) = {
                 let tabs = handle.tabs.lock().await;
                 let tab = tabs
                     .entries
                     .get(tab_id)
                     .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))?;
                 let resolved = tab.refs.resolve(&RefId(ref_id.clone()));
-                let cross = resolved
-                    .as_ref()
-                    .is_ok_and(|e| tab.refs.is_cross_renderer(&e.key.frame_id));
-                (resolved, cross)
+                let verdict = resolved.as_ref().ok().map(|e| tab.refs.renderer_of(&e.key));
+                (resolved, verdict)
             };
             let entry = resolved.map_err(|reason| BrowserError::StaleRef {
                 ref_id: ref_id.clone(),
@@ -276,7 +274,26 @@ async fn resolve_target(
             // chain walk). It is its own task. Until then the model is told
             // where the capability does live, which is the point of having two
             // drivers at all.
-            if in_another_renderer {
+            // `Unseen` is the staleness half, and it is NOT a conservative
+            // extra: a ref outlives its capture. `reset_for_document` clears
+            // `by_id` only when the MAIN loader changes, so a subframe that
+            // navigates leaves its refs resolvable — and if that subframe was
+            // out-of-process and has just become in-process, a frame-keyed
+            // check would call it safe and hand a renderer-2 id to the page's
+            // session. Keyed by document, its old `(frame, loader)` is simply
+            // not in the latest capture, and "I did not see this" is answered
+            // as "I do not know" rather than as permission (判据 §8).
+            //
+            // Reported through the ref vocabulary the model already has: the
+            // remedy for a document that is no longer there IS a fresh
+            // snapshot.
+            if verdict == Some(crate::browser::page_state::FrameVerdict::Unseen) {
+                return Err(BrowserError::StaleRef {
+                    ref_id: ref_id.clone(),
+                    reason: StaleReason::Unknown,
+                });
+            }
+            if verdict == Some(crate::browser::page_state::FrameVerdict::OtherRenderer) {
                 return Err(BrowserError::ActionFailed(format!(
                     "ref {ref_id} is inside an <iframe> from a different site, \
                      which this browser runs in a separate process. The cdp \
@@ -571,7 +588,8 @@ pub(super) async fn tab_ready(
             // permanent one.
             // ⚠️ This used to continue "…and the engine will not answer any
             // other command until it is closed." **That general claim is
-            // false**, measured on Chrome 152.0.7977.76 with a dialog provably
+            // false**, measured on Chrome 152.0.7977.76 (re-confirmed on
+            // 153.0.8010.36) with a dialog provably
             // up (a gated verb refused at that moment):
             // `browser_navigate{refresh}` answered successfully in 0.5 s.
             // Scope of that measurement: ONE of the verbs this gate does not
@@ -722,7 +740,8 @@ const SCROLL_SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis
 ///
 /// **Why a verb waits at all.** `Input.dispatchMouseEvent` returns as soon as
 /// the event is queued; the scroll lands a frame or more later. Measured on
-/// Chrome 152.0.7977.76 through the real tool: `window.scrollY` read
+/// Chrome 152.0.7977.76 (re-confirmed on 153.0.8010.36) through the real
+/// tool: `window.scrollY` read
 /// immediately after a successful `browser_scroll` was **0**, and **400** one
 /// and a half seconds later. So the verb reported success for an effect that had
 /// not happened, and a model doing the obvious thing — scroll, then snapshot —
@@ -1094,6 +1113,16 @@ mod tests {
         let mut tabs = handle.tabs.lock().await;
         let entry = tabs.entries.get_mut(tab).expect("tab entry");
         entry.refs.reset_for_document("L1");
+        // A ref only exists because a capture minted it, so the seeder has to
+        // describe that capture too — otherwise the document is `Unseen` and
+        // every verb here is refused as stale, which is the gate working.
+        entry.refs.set_captured_documents([(
+            crate::browser::page_state::FrameKey {
+                frame_id: "F1".into(),
+                loader_id: "L1".into(),
+            },
+            false,
+        )]);
         entry
             .refs
             .mint(
@@ -1179,9 +1208,22 @@ mod tests {
         let mut tabs = handle.tabs.lock().await;
         let entry = tabs.entries.get_mut(tab).expect("tab entry");
         entry.refs.reset_for_document("L1");
-        entry
-            .refs
-            .set_cross_renderer_frames(["F-child".to_string()]);
+        entry.refs.set_captured_documents([
+            (
+                crate::browser::page_state::FrameKey {
+                    frame_id: "F-main".into(),
+                    loader_id: "L1".into(),
+                },
+                false,
+            ),
+            (
+                crate::browser::page_state::FrameKey {
+                    frame_id: "F-child".into(),
+                    loader_id: "L1".into(),
+                },
+                true,
+            ),
+        ]);
         let main = entry
             .refs
             .mint(
@@ -1208,6 +1250,83 @@ mod tests {
             )
             .0;
         (main, child)
+    }
+
+    /// A ref whose document the latest capture did not see is refused as
+    /// STALE — at the verb, and distinguishably from the cross-renderer case.
+    ///
+    /// The hole: a subframe navigation clears nothing (`reset_for_document`
+    /// only fires on the MAIN loader), so refs minted against the subframe's
+    /// previous document stay resolvable. Classify by frame alone and the next
+    /// capture — where that frame is in-process — calls such a ref safe, and a
+    /// renderer-2 `backendNodeId` goes to the page's session. That is the
+    /// wrong-element click that reports `success: true`, observed on a real
+    /// browser when the colliding node was not a `Text`.
+    ///
+    /// The two refusals must not be spelled the same: "your ref expired" and
+    /// "this driver cannot act there" send the model to different next moves
+    /// (re-snapshot vs switch profile), and this asserts they are told apart.
+    #[tokio::test]
+    async fn a_ref_whose_document_the_last_capture_did_not_see_is_refused_as_stale() {
+        use crate::browser::page_state::FrameKey;
+
+        let server = FakeCdpServer::start(FakeCdpServer::scripted(vec![])).await;
+        wire_session(&server, "S1");
+        let (_reg, backend) = backend_with(&server, Engine::Chromium, open_guard()).await;
+        let handle = backend.handle().await.expect("handle");
+        let (main_ref, _frame_ref) = seed_main_and_frame_refs(&handle, "T1").await;
+
+        // The main-frame ref works while its document is the one on record —
+        // this is the precondition, and without it the refusal below could be
+        // "everything is refused".
+        let served = backend
+            .click(
+                "T1",
+                ActionTarget::Ref {
+                    ref_id: main_ref.clone(),
+                },
+            )
+            .await
+            .expect_err("the fake resolves no real node");
+        assert!(
+            !served.to_string().contains("is stale"),
+            "precondition: this ref is NOT stale yet: {served}"
+        );
+
+        // Now the page is re-captured and that document is gone from it — the
+        // frame navigated. Nothing clears `by_id`, so the ref still resolves.
+        {
+            let mut tabs = handle.tabs.lock().await;
+            let entry = tabs.entries.get_mut("T1").expect("tab entry");
+            entry.refs.set_captured_documents([(
+                FrameKey {
+                    frame_id: "F-main".into(),
+                    loader_id: "L2".into(),
+                },
+                false,
+            )]);
+        }
+
+        let err = backend
+            .click("T1", ActionTarget::Ref { ref_id: main_ref })
+            .await
+            .expect_err("a ref naming a document the capture did not see");
+        let text = err.to_string();
+        assert!(
+            text.contains("is stale"),
+            "an unseen document is STALE, and the remedy is a fresh snapshot: {text}"
+        );
+        assert!(
+            !text.contains("separate process"),
+            "…and must NOT be dressed as the cross-renderer refusal, whose \
+             remedy is a different profile: {text}"
+        );
+        // Nothing was spent on the page discovering it.
+        assert!(
+            !methods(&server).iter().any(|m| m.starts_with("Input.")),
+            "the refusal is ahead of the wire: {:?}",
+            methods(&server)
+        );
     }
 
     /// A ref inside another frame is REFUSED, and the refusal names a door that
@@ -1778,6 +1897,7 @@ mod tests {
             // The assumption was: these reach the wire on a tab whose engine
             // will not answer, so they spend their whole budget and then report
             // their own verb as having failed. Measured on Chrome 152.0.7977.76
+            // (re-confirmed on 153.0.8010.36)
             // with a dialog provably pending (a GATED verb refused at that same
             // moment, which is what establishes the precondition):
             // `browser_navigate{refresh}` answered **successfully in 0.5 s**.

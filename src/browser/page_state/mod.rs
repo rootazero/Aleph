@@ -19,7 +19,7 @@ pub use fetch_chromium::{
 pub use raw::{
     attr_of, Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, UnreachedFrame, Viewport,
 };
-pub use refs::{FrameKey, RefEntry, RefId, RefKey, RefTable, StaleReason};
+pub use refs::{FrameKey, FrameVerdict, RefEntry, RefId, RefKey, RefTable, StaleReason};
 pub use render::{quote, render_text, rendered_indices, to_json, TEXT_MAX_CHARS};
 pub use roles::{is_interactive, role_for, role_from_aria};
 

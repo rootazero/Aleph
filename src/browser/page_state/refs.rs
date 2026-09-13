@@ -49,7 +49,7 @@ pub struct RefKey {
 
 /// The document half of a [`RefKey`], carried on every state node so the
 /// driver knows which session to resolve against.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FrameKey {
     pub frame_id: String,
     pub loader_id: String,
@@ -65,6 +65,31 @@ pub struct FrameKey {
 /// that drifts is always the copy nobody is converting through (判据 §1).
 pub use crate::browser::error::StaleReason;
 
+/// Which renderer a ref's document was in when it was last seen — or that it
+/// was not seen at all.
+///
+/// Three states, not two, because "the last capture did not describe this
+/// document" is a different fact from "it was in the page's renderer", and
+/// reading the first as the second is how a stale ref becomes a click on
+/// whatever now carries its `backendNodeId` (判据 §8: an unknown may only say
+/// "I do not know").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameVerdict {
+    /// The page's own renderer. Its ids resolve against the page's session.
+    PageRenderer,
+    /// A renderer of its own. Its ids are meaningless to the page's session.
+    OtherRenderer,
+    /// The last capture did not contain this document.
+    ///
+    /// Stale by construction: refs are only minted from a capture, so a ref
+    /// whose document the latest capture did not see is one whose frame has
+    /// navigated or gone. Deliberately NOT split into "navigated" and "gone" —
+    /// the two are distinguishable with another lookup, and the model's move is
+    /// the same either way, so the distinction would be a label with no
+    /// consumer.
+    Unseen,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefEntry {
     pub key: RefKey,
@@ -75,21 +100,30 @@ pub struct RefEntry {
 pub struct RefTable {
     /// The main frame's loader id — which document these refs belong to.
     document: Option<String>,
-    /// Frames whose documents live in a renderer of their OWN, as of the last
-    /// capture.
+    /// Every DOCUMENT the last capture saw — keyed by `(frame_id, loader_id)`,
+    /// valued by whether it was in a renderer of its own.
     ///
-    /// ⚠️ This replaced a `main_frame_id`, and the replacement is the fix for a
-    /// capability regression rather than a tidy-up. "Is this ref in the main
-    /// frame" is a WIDER predicate than the hazard it was guarding: a
-    /// `backendNodeId` is scoped to a RENDERER, not to a frame, so ids from a
-    /// same-origin `<iframe>`, a `srcdoc` or an `about:blank` — all separate
+    /// ⚠️ Keyed by the document, not by the frame, and that is the fix for a
+    /// staleness hole rather than a tidy-up. A ref outlives its capture: a
+    /// subframe navigation clears nothing (`reset_for_document` only fires when
+    /// the MAIN loader changes), so a ref minted while frame `F` was
+    /// out-of-process still resolves after `F` navigates same-site and becomes
+    /// in-process. Keyed by frame alone, `F` would then look safe and a
+    /// renderer-2 `backendNodeId` would be resolved against the page's session
+    /// — the wrong-element click that reports success. The ref carries the
+    /// loader it was minted against (`RefKey::loader_id`), so the pair is the
+    /// discriminator and it was already in hand.
+    ///
+    /// ⚠️ It also replaced a `main_frame_id`, which was a WIDER predicate than
+    /// the hazard: a `backendNodeId` is scoped to a RENDERER, not a frame, so a
+    /// same-origin `<iframe>`, a `srcdoc` or an `about:blank` — separate
     /// `frameId`s inside the page's own renderer — resolve perfectly well
     /// against the page's session, and refusing them took away something that
     /// worked (判据 §5).
     ///
-    /// Empty is the honest default: before any capture, and for every
-    /// single-renderer page, nothing here is out of process.
-    cross_renderer_frames: std::collections::HashSet<String>,
+    /// Empty before the first capture, which [`FrameVerdict::Unseen`] reads as
+    /// "I do not know", never as permission.
+    captured_documents: std::collections::HashMap<FrameKey, bool>,
     /// Next number to hand out. **Monotonic for the life of the tab**, across
     /// navigations: that is what makes "never reissued" true.
     next: u64,
@@ -105,7 +139,7 @@ impl RefTable {
     pub fn new() -> Self {
         Self {
             document: None,
-            cross_renderer_frames: std::collections::HashSet::new(),
+            captured_documents: std::collections::HashMap::new(),
             next: 1,
             retired_below: 1,
             by_key: HashMap::new(),
@@ -174,30 +208,40 @@ impl RefTable {
         self.document.as_deref()
     }
 
-    /// Record which frames were captured through a session of their own.
+    /// Record every document this capture saw and which renderer it was in.
     /// Called by `PageState::build` on every capture, from
     /// [`RawFrame::separate_renderer`].
     ///
     /// **Replaced wholesale, not merged.** A frame that stopped being
-    /// out-of-process between two captures must stop being refused, and a set
-    /// that only ever grew would keep refusing it — a stale entry here is a
-    /// capability that never comes back (判据 §5: a list only describes the
-    /// world on the day it was written).
-    pub fn set_cross_renderer_frames<I: IntoIterator<Item = String>>(&mut self, frames: I) {
-        self.cross_renderer_frames = frames.into_iter().collect();
+    /// out-of-process must stop being refused, and a map that only ever grew
+    /// would keep refusing it — a stale entry here is a capability that never
+    /// comes back (判据 §5). Wholesale replacement is also what turns a
+    /// navigated subframe's old document into an [`FrameVerdict::Unseen`]
+    /// rather than leaving it looking current.
+    pub fn set_captured_documents<I: IntoIterator<Item = (FrameKey, bool)>>(&mut self, docs: I) {
+        self.captured_documents = docs.into_iter().collect();
     }
 
-    /// Is this frame's document in a renderer other than the page's?
+    /// Which renderer this ref's document was in, as of the last capture.
     ///
-    /// The question a driver must ask before resolving one of its
-    /// `backendNodeId`s against the page's session: a renderer is one node
-    /// space, so ids from any frame the page's own capture produced are
-    /// meaningful there and ids from another renderer collide silently
-    /// (measured: the page session answers such an id with a DIFFERENT node,
-    /// and the geometry call then succeeds on that one).
+    /// The question a driver must ask before resolving a `backendNodeId`
+    /// against the page's session: a renderer is one node space, so ids from
+    /// any document the page's own capture produced are meaningful there, and
+    /// ids from another renderer collide silently — measured, the page session
+    /// answers such an id with a DIFFERENT node and the geometry call then
+    /// succeeds on that one, so "the call worked" can never stand in for a
+    /// node-space check.
     #[must_use]
-    pub fn is_cross_renderer(&self, frame_id: &str) -> bool {
-        self.cross_renderer_frames.contains(frame_id)
+    pub fn renderer_of(&self, key: &RefKey) -> FrameVerdict {
+        let doc = FrameKey {
+            frame_id: key.frame_id.clone(),
+            loader_id: key.loader_id.clone(),
+        };
+        match self.captured_documents.get(&doc) {
+            Some(false) => FrameVerdict::PageRenderer,
+            Some(true) => FrameVerdict::OtherRenderer,
+            None => FrameVerdict::Unseen,
+        }
     }
 
     #[must_use]

@@ -262,7 +262,11 @@ PARENT_ORIGIN="http://127.0.0.1:$PAGE_PORT"
 # return and never executes one line of the OOPIF stack (判据 §2: the scenario
 # could not go red for the reason it named).
 #
-# Measured on Chrome 152.0.7977.76 with this fixture's own files and Aleph's own
+# Measured on Chrome 152.0.7977.76, and re-confirmed unchanged on 153.0.8010.36
+# (the pinned path moved between rounds; the reading is recorded under the build
+# it was taken on, because the browser build is part of a measurement's
+# predicate exactly as the commit is — 判据 §18).
+# With this fixture's own files and Aleph's own
 # argv, both directions:
 #   child on 127.0.0.1:  iframe targets 0 · parent childFrames 1 · documents 2
 #   child on localhost:  iframe targets 1 · parent childFrames 0 · documents 1

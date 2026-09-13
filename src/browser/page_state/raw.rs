@@ -265,12 +265,26 @@ pub struct RawFrame {
     pub loader_id: String,
     /// Where this document's origin sits in page coordinates.
     pub offset: (i32, i32),
-    /// **Is this document in a renderer of its own?**
+    /// **Is this document in a renderer other than THE PAGE'S?**
+    ///
+    /// The reference frame is in the summary line on purpose: rustdoc shows
+    /// only that line, and "a renderer of its own" cold-reads as "relative to
+    /// its parent", which is a different question and has a different answer
+    /// for a same-origin grandchild inside an OOPIF. `frames_of` runs once per
+    /// capture, so every document of a child capture is marked `true` —
+    /// including one that shares its parent's renderer. That is correct for
+    /// the only consumer there is (the page session is the only session any
+    /// verb resolves against) and would be wrong for a consumer that resolved
+    /// against the child's session, which is why the name has to say which.
+    /// [`RefTable::renderer_of`]'s summary already got this right; this
+    /// is the third time on this branch a missing reference frame has cost
+    /// something — `port != site`, `frame != renderer`, and now the name of the
+    /// bit that fixed `frame != renderer`.
     ///
     /// `false` for every frame that came out of the PAGE's capture — the main
     /// document and any same-renderer `<iframe>` (same-site, `srcdoc`,
-    /// `about:blank`). `true` only for a frame captured through its own CDP
-    /// session, i.e. an out-of-process one.
+    /// `about:blank`). `true` for a frame captured through its own CDP
+    /// session, i.e. an out-of-process one, and for anything nested inside it.
     ///
     /// **This, not "is it the main frame", is what decides whether a
     /// `backendNodeId` from this document means anything to the page's
