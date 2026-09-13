@@ -1252,213 +1252,96 @@ mod tests {
         (main, child)
     }
 
-    /// **Every** `fn <name>(` body in `text`, each brace-balanced.
+    /// **`CdpBackend` must not override `fill_form`.** That is the whole test,
+    /// and it is what is left of a ref-gate census that was cut.
     ///
-    /// Shared by the census and its own controls, so a control cannot pass
-    /// against a different extractor from the one the census uses (判据 §1).
+    /// # The clause
     ///
-    /// ⚠️ **All of them, not the first.** **Every** ref-taking verb is defined
-    /// twice in this backend, in exactly the same shape — once in `mod.rs`'s
-    /// `impl BrowserBackend`, which only delegates, and once in `actions.rs`,
-    /// which does the work. Read as one verb's special case, `any` looks like a
-    /// small tolerance; it is the universal shape here, which is what makes
-    /// `any` load-bearing and what CONTROL 5 has to compensate for. `rust_sources_under`
-    /// walks `read_dir`, whose order is the filesystem's, so "the first
-    /// definition" is whichever file that walk happened to yield first. On this
-    /// machine `actions.rs` comes first and the census was right by luck; the
-    /// day it did not, `click` would have resolved to a delegating body with no
-    /// marker. The question the census actually asks is "does ANY definition of
-    /// this verb reach the gate", so that is what this returns.
-    fn fn_bodies(text: &str, name: &str) -> Vec<String> {
-        let needle = format!("fn {name}(");
-        let mut out = Vec::new();
-        let mut from = 0usize;
-        while let Some(rel) = text[from..].find(&needle) {
-            let start = from + rel;
-            let mut depth = 0usize;
-            let mut started = false;
-            let mut end = None;
-            for (i, c) in text[start..].char_indices() {
-                match c {
-                    '{' => {
-                        depth += 1;
-                        started = true;
-                    }
-                    '}' => {
-                        depth -= 1;
-                        if started && depth == 0 {
-                            end = Some(start + i);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            match end {
-                Some(e) => {
-                    out.push(text[start..=e].to_string());
-                    from = e + 1;
-                }
-                None => break,
-            }
-        }
-        out
-    }
-
-    /// Does this text define `verb` with a body that reaches the ref gate?
-    ///
-    /// `prepare` is the shared preamble (it calls `resolve_target`); a few verbs
-    /// call `resolve_target` directly. Either counts, in ANY of the verb's
-    /// definitions.
-    fn reaches_the_gate(text: &str, verb: &str) -> bool {
-        fn_bodies(text, verb)
-            .iter()
-            .any(|b| b.contains("prepare(") || b.contains("resolve_target("))
-    }
-
-    /// **Every ref-taking verb resolves through the gate, or is exempt AND
-    /// genuinely not implemented here.**
-    ///
-    /// The gate is [`resolve_target`]'s renderer/staleness check. It lives in
-    /// the shared preamble, so by construction it covers every verb that goes
-    /// through it — but "by construction" was only ever *measured* on `click`,
-    /// and the risk is not the gate. It is a verb that does not go through it.
-    ///
-    /// # The exemption clause is the whole value
-    ///
-    /// `fill_form` reaches the gate **transitively**: it has no override here,
-    /// so `BrowserBackend::fill_form`'s shared default runs and loops
-    /// `self.fill(..)` per field, and `fill` does go through `prepare`. A
-    /// source scan cannot follow that, so instead of asserting something it
-    /// cannot see, the exemption asserts the condition that MAKES it true:
-    /// **`CdpBackend` must not define `fill_form` at all.**
+    /// `fill_form` reaches the gate **transitively**: with no override here,
+    /// `BrowserBackend::fill_form`'s shared default runs and loops
+    /// `self.fill(..)` per field, and `fill` goes through `prepare`, which is
+    /// `resolve_target`'s renderer/staleness check. A source scan cannot follow
+    /// that, so rather than assert something it cannot see, this asserts the
+    /// condition that MAKES it true: the override must not exist.
     ///
     /// That converts "I cannot follow this" into a checkable fact with an
-    /// expiry — the same device as the `dead_code` permit above. The trigger is
-    /// live rather than hypothetical: `backend.rs`'s own doc says *"the MCP
-    /// backend overrides it with its native `fill_form`"*, so the override
-    /// pattern already exists in this trait on a sibling backend. The day one
-    /// is added here, the exemption's precondition is false and this reddens by
-    /// name.
+    /// expiry. The trigger is live rather than hypothetical — `backend.rs`'s own
+    /// doc says *"the MCP backend overrides it with its native `fill_form`"*, so
+    /// the override pattern already exists in this trait on a sibling backend.
+    /// The day one is added here, the exemption's precondition is false and this
+    /// reddens by name.
     ///
-    /// # Two limits, written down rather than left to be discovered
+    /// # Why the census that surrounded it is gone
     ///
-    /// * It does not follow trait defaults. Acceptable ONLY because of the
-    ///   exemption clause above; without it this would be an unstated
-    ///   assumption rather than a checked one.
-    /// * It matches a verb to a `fn <verb>(` body. A verb whose impl delegated
-    ///   to a differently-named helper would read as not reaching and this
-    ///   would go red — a false positive, and deliberately the fail-loud
-    ///   direction: a human looks, rather than a gate quietly not covering
-    ///   something.
-    /// * Its own recognisers are constrained by controls, each named at the
-    ///   assertion rather than counted here — a count in a comment is one more
-    ///   thing to leave behind (判据 §1). They exist because the obvious two
-    ///   could not see an unbounded extractor: a positive control is SATISFIED
-    ///   by over-extraction, and a synthetic negative cannot exercise bounding
-    ///   at all. A control has to run on the real corpus to constrain how the
-    ///   real corpus is read.
+    /// It asserted that EVERY ref-taking verb reaches the gate, over a verb list
+    /// derived from `backend.rs` by searching for the literal token
+    /// `ActionTarget`. Three rounds of review hardened how it read the corpus —
+    /// all definitions rather than the first, every verb rather than a sample, a
+    /// structural over-reach rule, a residue check on the derivation itself —
+    /// and then a reviewer with no history on it got it green on the first
+    /// attempt without touching any of that:
     ///
-    /// The whole `cdp_backend/` DIRECTORY is scanned, not `actions.rs` and
-    /// `mod.rs` by name: a verb implemented in a third file would otherwise
-    /// read as absent, fall into the exemption path, and pass **wrongly**. It
-    /// is also one fewer hand-written list (判据 §5).
+    /// * `actions::hover` given a real, compiling gate bypass — it dispatches
+    ///   `Input.dispatchMouseEvent` at a fixed point and never calls
+    ///   `prepare`/`resolve_target` → **red**, naming `hover`. Correct.
+    /// * the **byte-identical** `actions.rs` plus two lines in `backend.rs`
+    ///   (`pub type HoverTarget = ActionTarget;` above the trait, and `hover`'s
+    ///   parameter retyped to it) → **`ok. 1 passed`**.
+    ///
+    /// Every control iterated the derived list, so one missed derivation
+    /// disarmed all five at once; and the residue check that guarded the
+    /// derivation exempted the region above the trait declaration — which is
+    /// exactly where a `use … as …`, a `pub type`, or (by Rust's
+    /// textual-before-use rule) a method-generating `macro_rules!` is REQUIRED
+    /// to sit. The subject is "a method that takes a page-element reference";
+    /// the key was a byte string. Nothing textual reconciles those, and a sixth
+    /// text rule about a file whose text is free to change would only move the
+    /// seam (判据 §3 — a guard's green covers the shapes it recognises).
+    ///
+    /// **Do not reconstruct it.** What replaces it is a compiler guarantee: the
+    /// dispatch helpers (`mouse` / `send_mouse` / `press_and_release`, and the
+    /// `dom::*` calls that take a `backend_node_id`) accept bare values today —
+    /// which is why that bypass compiled at all — and giving them a gate-minted
+    /// token with a private constructor makes a verb that skips the gate stop
+    /// compiling. That is Task 16's material, not another guard.
+    ///
+    /// # Why this clause stands alone
+    ///
+    /// It is an absence check on a **named** method, not on a derived set.
+    /// Aliasing or renaming a type cannot hide `fill_form` from it, because it
+    /// never reads a type. The whole `cdp_backend/` DIRECTORY is scanned rather
+    /// than two files by name, so an override added in a third file is still
+    /// seen (判据 §5).
     #[test]
-    fn every_ref_taking_verb_reaches_the_gate_or_is_exempt_and_absent() {
+    fn fill_forms_exemption_holds_because_this_backend_does_not_override_it() {
         use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
 
-        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-
-        // BOTH sides of the census go through the SAME two filters. The corpus
-        // side ran `production_text` and the derivation side read raw, so the
-        // derivation would have picked up a `#[cfg(test)]` mock's method and
-        // then demanded it of the backend — and neither side stripped comments,
-        // which is worse: a `// … goes through prepare(…)` inside a delegating
-        // body makes that body "reach", the fail-OPEN direction. `code_text` is
-        // lexer-based and also blanks literal payloads, so a `'{'` char literal
-        // or a brace inside a string cannot shift the brace walk either.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/browser/cdp_backend");
+        // `production_text` drops `#[cfg(test)]` items, so this test's own
+        // mention of the name cannot answer the question about it; `code_text`
+        // is lexer-based and additionally removes comment text and literal
+        // payloads, so prose about `fill_form` is not read as an override.
         let read = |path: &std::path::Path, text: &str| code_text(&production_text(path, text));
+        let defines = |text: &str, name: &str| text.contains(&format!("fn {name}("));
 
-        // ---- the verb list, DERIVED from the trait ------------------------
-        // Every `BrowserBackend` method whose signature mentions `ActionTarget`.
-        // Typed out here it would only describe the day it was written.
-        let backend_path = src_root.join("browser/backend.rs");
-        let backend_src = read(
-            &backend_path,
-            &std::fs::read_to_string(&backend_path).expect("the trait's own source is readable"),
-        );
-        let mut verbs: Vec<String> = Vec::new();
-        // Each accepted signature's `[start, end)` in `backend_src`, kept for
-        // the residue check below rather than recomputed there (判据 §1).
-        let mut spans: Vec<(usize, usize)> = Vec::new();
-        for (i, _) in backend_src.match_indices("async fn ") {
-            let base = i + "async fn ".len();
-            let rest = &backend_src[base..];
-            let Some(paren) = rest.find('(') else {
-                continue;
-            };
-            let name = rest[..paren].trim();
-            if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                continue;
-            }
-            // The signature ends at the first `;` (required method) or `{`
-            // (defaulted one), whichever comes first.
-            let end = rest
-                .find(';')
-                .into_iter()
-                .chain(rest.find('{'))
-                .min()
-                .unwrap_or(rest.len());
-            if rest[..end].contains("ActionTarget") {
-                verbs.push(name.to_string());
-                spans.push((base, base + end));
-            }
-        }
-
-        // CONTROL 3 — the derivation self-check. An empty list would make every
-        // assertion below vacuously true, which is the face M1's guard learned.
+        // The two controls differ by exactly two characters — `// ` — and they
+        // run the same input through the same pipeline as the corpus below.
+        let probe = dir.join("actions.rs");
+        let decl = "pub(super) async fn fill_form(be: &CdpBackend) {}\n";
         assert!(
-            !verbs.is_empty(),
-            "no ref-taking verbs were derived from backend.rs — the loop below \
-             would then prove nothing"
+            defines(&read(&probe, decl), "fill_form"),
+            "the recogniser does not see a definition it is looking straight \
+             at, so the green below would only mean the recogniser is broken"
         );
+        // This one is what makes the filter's presence a checked fact rather
+        // than prophylaxis indistinguishable from its absence: drop `code_text`
+        // from `read` and this reddens (判据 §2).
         assert!(
-            verbs.iter().any(|v| v == "click"),
-            "the derivation does not contain `click`, so it is reading \
-             something other than the trait: {verbs:?}"
+            !defines(&read(&probe, &format!("// {decl}")), "fill_form"),
+            "a `fn fill_form(` written in a COMMENT is being read as a \
+             definition, so this guard reports on prose"
         );
 
-        // CONTROL 3b — **residue**: every `ActionTarget` the trait mentions is
-        // accounted for by a signature this derivation attributed.
-        //
-        // "Non-empty and contains `click`" is satisfied by a parser that
-        // silently returned ONLY `click`, which shrinks the census to one verb
-        // and stays green. This one is not: the other ten signatures' tokens
-        // then belong to no span and it reddens naming their line numbers.
-        // There is no count and no name list here, so there is nothing to rot
-        // (判据 §5) — the single exemption is structural, everything above the
-        // trait declaration being the import block.
-        let trait_at = backend_src
-            .find("pub trait BrowserBackend")
-            .expect("backend.rs declares the trait this census is about");
-        let orphans: Vec<usize> = backend_src
-            .match_indices("ActionTarget")
-            .map(|(i, _)| i)
-            .filter(|i| *i >= trait_at)
-            .filter(|i| !spans.iter().any(|(s, e)| i >= s && i < e))
-            .map(|i| backend_src[..i].lines().count())
-            .collect();
-        assert!(
-            orphans.is_empty(),
-            "these `ActionTarget` occurrences in backend.rs fall inside no \
-             signature the derivation attributed, so it did not read all of the \
-             trait and the census below is over a subset — backend.rs lines \
-             {orphans:?}, against {} attributed signature(s)",
-            spans.len()
-        );
-
-        // ---- the backend's own production source, whole directory ---------
-        let dir = src_root.join("browser/cdp_backend");
         let scanned: String = rust_sources_under(&dir)
             .into_iter()
             .map(|(rel, text)| read(std::path::Path::new(&rel), &text))
@@ -1471,169 +1354,15 @@ mod tests {
             dir.display()
         );
 
-        // CONTROL 1 — positive: a verb known to reach IS detected as reaching.
         assert!(
-            reaches_the_gate(&scanned, "click"),
-            "the recogniser cannot see `click` reaching the gate, so a green \
-             below would mean nothing"
-        );
-        // CONTROL 2 — negative: a body with neither marker is NOT detected.
-        assert!(
-            !reaches_the_gate(
-                "pub(super) async fn ghost(be: &CdpBackend) -> Result<(), BrowserError> { \
-                 let handle = be.handle().await?; Ok(()) }",
-                "ghost"
-            ),
-            "the recogniser reports a body containing neither marker as \
-             reaching — it would report everything as reaching"
-        );
-
-        // CONTROL 4 — **the extractor is BOUNDED**, exercised on the REAL
-        // corpus, over EVERY verb and EVERY one of its bodies. The controls
-        // above cannot make this claim: control 1 is SATISFIED by
-        // over-extraction (a "body" running to the end of the corpus contains
-        // `prepare(`), and control 2 is a one-line synthetic where bounding
-        // cannot matter. Measured: an unbounded extractor left the whole guard
-        // green while reporting every verb as reaching — 判据 §2 landing on the
-        // instrument rather than on the code.
-        //
-        // ⚠️ The earlier version of this control sampled ONE verb and asked
-        // whether its body contained another derived verb's `fn`. That was
-        // right by accident: `click` happens to be the one verb both of whose
-        // definitions are followed by another derived verb, and the same
-        // over-reach sampled at `upload` measured `1 passed`. The rule below is
-        // STRUCTURAL — no item line may follow the body's first — so it does
-        // not depend on what the swallowed text happens to contain, and it runs
-        // over all of them so it does not depend on which one was sampled
-        // (判据 §3, §12).
-        //
-        // BOTH assertions are load-bearing, for disjoint shapes, and this is
-        // the third attempt at saying which — the previous two each named the
-        // wrong one:
-        //   * a TRUNCATED span (stops mid-body) → balance only; over-reach
-        //     cannot see it.
-        //   * a BOUNDED over-reach (swallows exactly one whole following
-        //     function) → over-reach only; a whole function is brace-balanced,
-        //     so two of them concatenated are too.
-        //   * the REMAINDER break (runs to the end of the corpus) → **both**.
-        //     Over-reach merely reports first, because it fires on `click`'s
-        //     body in `actions.rs` before the loop reaches the one in `mod.rs`.
-        //     That ordering is the whole reason an earlier note here concluded
-        //     balance "does not fire against this corpus": balance was never
-        //     evaluated on the body that fails it. Measured with over-reach
-        //     neutralised, it fires at `61 open, 62 close` — an EXTRA CLOSER
-        //     carried INSIDE the span (`mod.rs`'s `impl` block closing without
-        //     its `{`, because that body starts inside the block), which is the
-        //     opposite of that note's stated mechanism.
-        for verb in &verbs {
-            for body in fn_bodies(&scanned, verb) {
-                let (opens, closes) = (body.matches('{').count(), body.matches('}').count());
-                assert_eq!(
-                    opens, closes,
-                    "the extractor did not return one balanced body for \
-                     `{verb}` ({opens} open, {closes} close) — it either \
-                     truncated the body or ran past its end, and both make the \
-                     census's answer for `{verb}` meaningless"
-                );
-                for line in body.lines().skip(1) {
-                    let mut item = line.trim_start();
-                    for prefix in [
-                        "pub(super) ",
-                        "pub(crate) ",
-                        "pub ",
-                        "async ",
-                        "unsafe ",
-                        "const ",
-                    ] {
-                        if let Some(rest) = item.strip_prefix(prefix) {
-                            item = rest;
-                        }
-                    }
-                    assert!(
-                        !item.starts_with("fn "),
-                        "`{verb}`'s extracted body contains a second item — \
-                         `{}` — so the extractor is running past the end of it \
-                         and everything this census reports about `{verb}` is \
-                         about somebody else's code too",
-                        line.trim()
-                    );
-                }
-            }
-        }
-
-        // …and it returns EVERY definition, not the first. Without this, half
-        // of that fix is a claim rather than a checked fact: reverting the walk
-        // to stop after the first definition leaves the guard green and puts
-        // the census back on `read_dir` order.
-        let click_bodies = fn_bodies(&scanned, "click");
-        assert!(
-            click_bodies.len() >= 2,
-            "`click` resolves to only {} definition — this backend defines \
-             every ref-taking verb twice (a delegating body in mod.rs's impl, \
-             the real one in actions.rs), so the extractor is returning one of \
-             them and the census is back to depending on read_dir order",
-            click_bodies.len()
-        );
-
-        // CONTROL 5 — every DEFINITION either reaches the gate itself or
-        // delegates to a function of the SAME NAME.
-        //
-        // The census asks `any`, and `any` is the right question: nine of the
-        // eighteen definitions are `mod.rs`'s delegating bodies and reach in
-        // zero cases, so `all` would redden everything. But `any` alone lets a
-        // verb's answer come from a definition nothing dispatches to —
-        // measured, rewiring `mod.rs`'s `click` to call `actions::hover` left
-        // the census passing. This is the wire between the two halves (判据 §7).
-        //
-        // Kept as its own assertion rather than folded into `reaches_the_gate`:
-        // folded in, CONTROL 1 is what fires, and it says "the recogniser
-        // cannot see `click` reaching the gate" — a complaint about the
-        // instrument for a defect in the code. Separate, the red names the verb.
-        for verb in &verbs {
-            for body in fn_bodies(&scanned, verb) {
-                assert!(
-                    body.contains("prepare(")
-                        || body.contains("resolve_target(")
-                        || body.contains(&format!("::{verb}(")),
-                    "a definition of `{verb}` neither reaches the gate nor \
-                     delegates to a function of the same name, so whatever the \
-                     census answers for `{verb}` may come from a definition \
-                     nothing dispatches to"
-                );
-            }
-        }
-
-        // ---- exemptions: each must be genuinely ABSENT from this backend ---
-        // Keyed by verb, valued by why it is exempt, so the reason is read at
-        // the same moment as the exemption.
-        let exempt: &[(&str, &str)] = &[(
-            "fill_form",
-            "no override here, so BrowserBackend's shared default loops \
-             self.fill(..) per field and each of those goes through `prepare`",
-        )];
-
-        let mut unreached: Vec<String> = Vec::new();
-        for verb in &verbs {
-            if reaches_the_gate(&scanned, verb) {
-                continue;
-            }
-            match exempt.iter().find(|(v, _)| v == verb) {
-                Some((_, why)) => assert!(
-                    fn_bodies(&scanned, verb).is_empty(),
-                    "`{verb}` is exempt from the ref gate because {why} — but \
-                     this backend now DEFINES it, so that reason is false and \
-                     the exemption no longer holds. Either route it through \
-                     `prepare`/`resolve_target`, or delete the exemption and \
-                     say what replaced it."
-                ),
-                None => unreached.push(verb.clone()),
-            }
-        }
-        assert!(
-            unreached.is_empty(),
-            "these ref-taking verbs do not reach the renderer/staleness gate in \
-             this backend, so they resolve a `backendNodeId` without checking \
-             which node space it belongs to: {unreached:?}"
+            !defines(&scanned, "fill_form"),
+            "`CdpBackend` now DEFINES `fill_form`, so the reason it was exempt \
+             from the ref gate is FALSE: with an override here, \
+             `BrowserBackend::fill_form`'s shared default no longer runs, and \
+             the per-field `self.fill(..)` calls that each went through \
+             `prepare` no longer happen. Route the new override through \
+             `prepare`/`resolve_target`, or delete this test and say what \
+             replaced it."
         );
     }
 
