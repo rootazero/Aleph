@@ -171,6 +171,108 @@ pub struct ResumeReport {
     pub unsnapshotted: usize,
 }
 
+impl ResumeReport {
+    /// Fold one candidate's part into this total — the boot scan runs its
+    /// candidates as separate tasks and sums their reports here.
+    ///
+    /// Exhaustive destructure, no `..`: a counter added to the report is a
+    /// compile error on this line rather than a silent undercount on the boot
+    /// log line. `refused` is appended, not summed — it names sessions.
+    pub fn absorb(&mut self, other: Self) {
+        let Self {
+            scanned,
+            resumed,
+            abandoned,
+            skipped,
+            delegated,
+            busy,
+            refused,
+            skipped_unknown_age,
+            contradictions,
+            degraded,
+            unsnapshotted,
+        } = other;
+        self.scanned += scanned;
+        self.resumed += resumed;
+        self.abandoned += abandoned;
+        self.skipped += skipped;
+        self.delegated += delegated;
+        self.busy += busy;
+        self.refused.extend(refused);
+        self.skipped_unknown_age += skipped_unknown_age;
+        self.contradictions += contradictions;
+        self.degraded += degraded;
+        self.unsnapshotted += unsnapshotted;
+        // T16 adds `self.notified += notified;` when it adds the field.
+    }
+}
+
+/// A launched boot scan — see [`ResumeCoordinator::launch_resume`].
+///
+/// `pending` is every session the scan will VISIT (a marker group, or an
+/// activity-window row asked the §5.2 question), so a caller can hold that
+/// session's queued input back until [`settle`](Self::settle); everything
+/// else is safe to re-deliver at once. Deliberately OVER-inclusive rather
+/// than "the ones a marker-only slice already calls Interrupted": an
+/// `Unanswered` verdict is invisible to a marker slice (it is read from a
+/// bounded tail inside the task), so a narrower set would release a survivor
+/// into a session the scan is about to act on. Scheduler-owned sessions are
+/// left out — their queued input is never re-delivered by the boot path.
+pub struct ResumeLaunch {
+    pub pending: std::collections::HashSet<String>,
+    /// One task per candidate, tagged with its candidate ordinal so the
+    /// settled report reads in scan order whatever order the tasks finish in.
+    tasks: tokio::task::JoinSet<(usize, ResumeReport)>,
+    report: ResumeReport,
+    /// Whether the marker scan was actually walked. `false` when resume is
+    /// disabled or the marker load failed — `settle` then reports no
+    /// completion, because a "scan complete, scanned = 0" line after a
+    /// "scan failed" line would read the failure as an empty result.
+    walked: bool,
+}
+
+impl ResumeLaunch {
+    /// Wait for every candidate task and fold its part into one report.
+    pub async fn settle(mut self) -> ResumeReport {
+        let mut parts = Vec::new();
+        while let Some(joined) = self.tasks.join_next().await {
+            match joined {
+                Ok(part) => parts.push(part),
+                // A candidate whose task panicked has an UNKNOWN verdict: its
+                // session is left exactly as the crash left it, and it is
+                // counted nowhere — the report has no arm for "the scan itself
+                // failed on this one", and inventing a count here would read
+                // the panic as a decision.
+                Err(e) => tracing::warn!(error = %e, "resume: candidate task panicked"),
+            }
+        }
+        // Candidate order, so `refused` reads like the scan walked.
+        parts.sort_by_key(|(ordinal, _)| *ordinal);
+        for (_, part) in parts {
+            self.report.absorb(part);
+        }
+        // T16 adds a `me: Arc<ResumeCoordinator>` field and inserts
+        // `self.me.adjudicate_orphaned_tasks(&mut self.report).await;` HERE.
+        if self.walked {
+            tracing::info!(
+                scanned = self.report.scanned,
+                resumed = self.report.resumed,
+                abandoned = self.report.abandoned,
+                skipped = self.report.skipped,
+                delegated = self.report.delegated,
+                // The scan fans out but claims one slot per session, so two
+                // candidates never collide; a non-zero value is an on-demand
+                // `agent.resume` racing the boot scan, which is the collision
+                // `in_flight` exists to make harmless and which is worth
+                // seeing in the log rather than inferring.
+                busy = self.report.busy,
+                "resume scan complete"
+            );
+        }
+        self.report
+    }
+}
+
 /// Why one candidate was not resumed.
 ///
 /// Every arm is a refusal the coordinator *made*, not a state it found: a
@@ -791,7 +893,15 @@ pub struct ResumeCoordinator {
     /// only key `chat.abort` and `agent.cancel` accept. See
     /// [`ResumeCoordinator::retrigger`].
     event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-    /// Bounds the boot resume burst. `max_concurrent` permits.
+    /// Bounds resumes in flight: `[resume] max_concurrent` permits, shared by
+    /// the boot scan's fan-out ([`launch_resume`](Self::launch_resume)) and
+    /// on-demand resumes ([`resume_session`](Self::resume_session)).
+    ///
+    /// One permit spans a candidate's whole resume — boundary repair AND
+    /// re-trigger — and is taken by those two entry points only. `retrigger`
+    /// takes none of its own: nested inside a held permit, a second acquire
+    /// deadlocks the moment `max_concurrent = 1` (the caller holds the only
+    /// permit and waits on itself).
     semaphore: Arc<Semaphore>,
     /// Session keys with a resume in flight, so one session is never resumed
     /// twice at once. See [`ResumeReport::busy`] for what the second winner
@@ -875,42 +985,83 @@ impl ResumeCoordinator {
         })
     }
 
-    /// Scan for interrupted runs and re-trigger each. Best-effort: any
-    /// failure is logged and skipped; never panics, never blocks boot.
-    /// A no-op when `config.enabled` is false — this self-guard is what
-    /// makes the disabled path directly testable (the boot wiring also
-    /// skips spawning the coordinator, so the two guards are defensive
-    /// duplicates, both cheap).
-    pub async fn resume_interrupted_runs(&self) -> ResumeReport {
-        let mut report = ResumeReport::default();
+    /// Start the boot scan: classify every candidate and act on it in its own
+    /// task, `[resume] max_concurrent` at a time, without waiting for any of
+    /// them. The caller reads [`ResumeLaunch::pending`] to hold back queued
+    /// input for the sessions the scan will visit, then
+    /// [`ResumeLaunch::settle`]s for the report — or calls
+    /// [`resume_interrupted_runs`](Self::resume_interrupted_runs) for both at
+    /// once.
+    ///
+    /// Fanned out because one slow candidate (a resumed run's `execute` is the
+    /// whole run) used to hold every later candidate behind it. Each task
+    /// holds one permit across its candidate's repair AND re-trigger, so the
+    /// cap bounds runs in flight, not just dispatches.
+    ///
+    /// Best-effort: any failure is logged and skipped; never panics, never
+    /// blocks boot. A no-op when `config.enabled` is false — this self-guard
+    /// is what makes the disabled path directly testable (the boot wiring
+    /// also skips the scan, so the two guards are defensive duplicates, both
+    /// cheap).
+    pub async fn launch_resume(self: &Arc<Self>) -> ResumeLaunch {
+        let mut launch = ResumeLaunch {
+            pending: std::collections::HashSet::new(),
+            tasks: tokio::task::JoinSet::new(),
+            report: ResumeReport::default(),
+            walked: false,
+        };
 
         if !self.config.enabled {
             tracing::debug!("resume disabled ([resume] enabled = false); skipping scan");
-            return report;
+            return launch;
         }
 
         let marker_groups = match self.event_store.load_run_markers().await {
             Ok(g) => g,
             Err(e) => {
                 tracing::warn!(error = %e, "resume scan failed; skipping resume");
-                return report;
+                return launch;
             }
         };
+        launch.walked = true;
 
+        // `pending` is deliberately OVER-inclusive: every session the scan will
+        // VISIT (not only the ones a marker-only slice already calls
+        // Interrupted). An `Unanswered` verdict is invisible to a marker slice
+        // (the task reads it from a bounded tail), so a narrower set would
+        // release a survivor into a session the scan is about to act on.
         let mut seen: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
-        for (session_id, slice) in marker_groups {
-            self.resume_from_markers(&session_id, &slice, &mut report)
-                .await;
-            seen.insert(session_id);
+        let group_count = marker_groups.len();
+        for (ordinal, (session_id, slice)) in marker_groups.into_iter().enumerate() {
+            seen.insert(session_id.clone());
+            if !has_own_scheduler(&session_id) {
+                launch.pending.insert(session_id.to_key_string());
+            }
+            let me = Arc::clone(self);
+            let semaphore = Arc::clone(&self.semaphore);
+            launch.tasks.spawn(async move {
+                let mut part = ResumeReport::default();
+                match semaphore.acquire_owned().await {
+                    Ok(_permit) => {
+                        me.resume_from_markers(&session_id, &slice, &mut part).await;
+                    }
+                    Err(e) => part.refused.push((
+                        session_id,
+                        ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}")),
+                    )),
+                }
+                (ordinal, part)
+            });
         }
 
         // §5.2: a session that crashed between its seed and its first
-        // `RunStarted` has NO marker, so the scan above never visits it. The
+        // `RunStarted` has NO marker, so the tasks above never visit it. The
         // activity window (the same one `ProjectionReconciler::candidates`
         // walks) is where such a session shows up: `execute()` stamps the row's
         // `last_active_at` before seeding. Sessions the marker scan already
-        // visited are skipped — their Clean arm asked this question itself.
-        // (T15 moves this loop into `launch_resume`; the body stays.)
+        // visited are skipped — their Clean arm asks this question itself —
+        // and so are sessions the Unanswered arm may never retrigger, so
+        // `pending` does not hold their queued input for nothing.
         //
         // Round UP so a sub-minute horizon still admits something: the filter
         // is minute-granular and `0` would mean "nothing is recent".
@@ -925,7 +1076,7 @@ impl ResumeCoordinator {
             .await
         {
             Ok(rows) => {
-                for meta in rows {
+                for (offset, meta) in rows.into_iter().enumerate() {
                     let Some(id) = SessionId::from_key_string(&meta.key) else {
                         // A stored key this process cannot parse is a session
                         // nothing can be asked of — say so rather than dropping
@@ -939,16 +1090,36 @@ impl ResumeCoordinator {
                         );
                         continue;
                     };
-                    if seen.contains(&id) {
+                    if seen.contains(&id) || !unanswered_eligible(&id) {
                         continue;
                     }
-                    let Some(_slot) = self.try_claim_resume(&id) else {
-                        report.busy += 1;
-                        continue;
-                    };
-                    if self.check_unanswered(&id, &[], &mut report).await {
-                        report.scanned += 1;
-                    }
+                    launch.pending.insert(id.to_key_string());
+                    let me = Arc::clone(self);
+                    let semaphore = Arc::clone(&self.semaphore);
+                    // After every marker group, so the settled report lists
+                    // marker candidates first and window candidates after.
+                    let ordinal = group_count + offset;
+                    launch.tasks.spawn(async move {
+                        let mut part = ResumeReport::default();
+                        match semaphore.acquire_owned().await {
+                            Ok(_permit) => {
+                                let Some(_slot) = me.try_claim_resume(&id) else {
+                                    part.busy += 1;
+                                    return (ordinal, part);
+                                };
+                                if me.check_unanswered(&id, &[], &mut part).await {
+                                    part.scanned += 1;
+                                }
+                            }
+                            Err(e) => part.refused.push((
+                                id,
+                                ResumeRefusal::RetriggerFailed(format!(
+                                    "resume semaphore closed: {e}"
+                                )),
+                            )),
+                        }
+                        (ordinal, part)
+                    });
                 }
             }
             Err(e) => tracing::warn!(
@@ -957,20 +1128,13 @@ impl ResumeCoordinator {
             ),
         }
 
-        tracing::info!(
-            scanned = report.scanned,
-            resumed = report.resumed,
-            abandoned = report.abandoned,
-            skipped = report.skipped,
-            delegated = report.delegated,
-            // Expected to be 0 here — the scan is sequential. A non-zero value
-            // means an on-demand `agent.resume` raced the boot scan, which is
-            // the collision `in_flight` exists to make harmless and which is
-            // worth seeing in the log rather than inferring.
-            busy = report.busy,
-            "resume scan complete"
-        );
-        report
+        launch
+    }
+
+    /// Scan for interrupted runs and re-trigger each, waiting for all of them:
+    /// [`launch_resume`](Self::launch_resume) + [`ResumeLaunch::settle`].
+    pub async fn resume_interrupted_runs(self: &Arc<Self>) -> ResumeReport {
+        self.launch_resume().await.settle().await
     }
 
     /// Hand a session back to the scheduler that owns it: answer the calls its
@@ -1029,10 +1193,10 @@ impl ResumeCoordinator {
         // two `ToolError`s. `harness::agent::prompt` downgrades the second one
         // to a plain user note rather than sending an invalid pair, so the cost
         // is duplicated prose the model must reconcile, not an API rejection.
-        // The boot scan never exposed this (it walks sessions in a sequential
-        // loop); the on-demand face does, including against the boot scan
-        // itself, which is spawned while the gateway is already accepting
-        // requests.
+        // The boot scan fans out but claims one slot per session, so two of
+        // its candidates never collide; `busy` still counts an on-demand
+        // resume racing the scan, which is spawned while the gateway is
+        // already accepting requests.
         let Some(_slot) = self.try_claim_resume(session_id) else {
             tracing::info!(
                 session = ?session_id,
@@ -1179,6 +1343,15 @@ impl ResumeCoordinator {
     ) -> Result<ResumeReport, crate::session::service::SessionError> {
         let mut report = ResumeReport::default();
         let groups = self.event_store.load_run_markers().await?;
+        // The same `max_concurrent` permit the boot scan's tasks hold, taken
+        // here for the same span: repair + re-trigger, on either arm below.
+        // `retrigger` takes none of its own (see `semaphore`).
+        let _permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| SessionError::Other(format!("resume semaphore closed: {e}")))?;
         let Some((_, slice)) = groups.into_iter().find(|(sid, _)| sid == session_id) else {
             let Some(_slot) = self.try_claim_resume(session_id) else {
                 report.busy += 1;
@@ -1752,18 +1925,17 @@ impl ResumeCoordinator {
     /// key, builds a `RunRequest` with `metadata["resume"] = "true"` (the
     /// engine→orchestrator boundary converts that into `FlowInput::Resume`,
     /// which skips re-seeding), and dispatches it through the same
-    /// `ExecutionAdapter` cron / heartbeat use. A `max_concurrent`
-    /// semaphore bounds the boot burst.
+    /// `ExecutionAdapter` cron / heartbeat use.
+    ///
+    /// Takes no `max_concurrent` permit of its own: the caller already holds
+    /// one for the whole resume (see `semaphore`), and a nested acquire here
+    /// deadlocks at `max_concurrent = 1`.
     async fn retrigger(
         &self,
         session_id: &SessionId,
         plan: &ResumePlan,
     ) -> Result<(), ResumeRefusal> {
         let workspace_override = plan.workspace.clone();
-        let permit =
-            self.semaphore.clone().acquire_owned().await.map_err(|e| {
-                ResumeRefusal::RetriggerFailed(format!("resume semaphore closed: {e}"))
-            })?;
 
         let agent_id = session_id.agent_id().to_string();
         // A missing agent is its own refusal, not a generic failure: the run
@@ -1836,14 +2008,10 @@ impl ResumeCoordinator {
 
         tracing::info!(session = ?session_id, agent_id, "resume: re-triggering interrupted run");
 
-        let result = self
-            .execution_adapter
+        self.execution_adapter
             .execute(request, agent, emitter)
             .await
-            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")));
-
-        drop(permit);
-        result
+            .map_err(|e| ResumeRefusal::RetriggerFailed(format!("resume execute failed: {e}")))
     }
 
     /// The resumed session's durable row, or `None` when it cannot be read.
@@ -1932,6 +2100,64 @@ mod tests {
         let slot = global_resume_coordinator_slot();
         assert_eq!(slot.id(), "gateway/resume-coordinator");
         assert!(matches!(slot.missing(), MissingSemantics::FailsClosed));
+    }
+
+    /// Every counter the report carries is SUMMED by `absorb`, and `refused`
+    /// is appended — a counter it forgot would undercount the boot line for
+    /// every fanned-out scan and nothing else would notice (criterion #6).
+    ///
+    /// Every field is 1 so a forgotten one reads 0, not a default that
+    /// happens to match; the second absorb tells a sum from an overwrite.
+    #[test]
+    fn absorb_sums_every_counter_and_appends_every_refusal() {
+        let one = ResumeReport {
+            scanned: 1,
+            resumed: 1,
+            abandoned: 1,
+            skipped: 1,
+            delegated: 1,
+            busy: 1,
+            refused: vec![(SessionId::main("absorbed"), ResumeRefusal::AgentMissing)],
+            skipped_unknown_age: 1,
+            contradictions: 1,
+            degraded: 1,
+            unsnapshotted: 1,
+        };
+        let mut total = ResumeReport::default();
+        total.absorb(one.clone());
+        assert_eq!(total, one, "absorbing into an empty report yields the part");
+        total.absorb(one.clone());
+        // Exhaustive destructure (no `..`): a new counter must be asserted here.
+        let ResumeReport {
+            scanned,
+            resumed,
+            abandoned,
+            skipped,
+            delegated,
+            busy,
+            refused,
+            skipped_unknown_age,
+            contradictions,
+            degraded,
+            unsnapshotted,
+        } = total;
+        assert_eq!(
+            [
+                scanned,
+                resumed,
+                abandoned,
+                skipped,
+                delegated,
+                busy,
+                skipped_unknown_age,
+                contradictions,
+                degraded,
+                unsnapshotted,
+            ],
+            [2; 10],
+            "every counter is a sum, not the last part's value"
+        );
+        assert_eq!(refused, [one.refused[0].clone(), one.refused[0].clone()]);
     }
 
     fn rec(seq: u64, event: SessionEvent, created_at_ms: i64) -> SessionEventRecord {

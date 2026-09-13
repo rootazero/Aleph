@@ -6,7 +6,9 @@
 #![allow(clippy::type_complexity)]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -87,6 +89,12 @@ impl ExecutionAdapter for RecordingAdapter {
 /// `SessionKey` under test, so `retrigger`'s `registry.get(agent_id)`
 /// resolves.
 async fn registry_with_agent(agent_id: &str) -> Arc<AgentRegistry> {
+    registry_with_agents(&[agent_id]).await
+}
+
+/// The same registry with one agent per id, all sharing one session manager
+/// — for scans that walk several sessions of different agents at once.
+async fn registry_with_agents(agent_ids: &[&str]) -> Arc<AgentRegistry> {
     use alephcore::gateway::agent_instance::AgentInstanceConfig;
     use alephcore::gateway::session_manager::{SessionManager, SessionManagerConfig};
 
@@ -98,18 +106,20 @@ async fn registry_with_agent(agent_id: &str) -> Arc<AgentRegistry> {
         })
         .expect("session manager"),
     );
-    let cfg = AgentInstanceConfig {
-        agent_id: agent_id.to_string(),
-        workspace: temp.path().join("ws"),
-        agent_dir: temp.path().join("agents").join(agent_id),
-        ..Default::default()
-    };
-    // `AgentRegistry::register` takes `AgentInstance` BY VALUE (not `Arc`)
-    // and is `async` (verified: agent_instance.rs:551). `get` then returns
-    // `Arc<AgentInstance>`.
-    let agent = AgentInstance::new(cfg, sm).unwrap();
     let registry = Arc::new(AgentRegistry::new());
-    registry.register(agent).await;
+    for agent_id in agent_ids {
+        let cfg = AgentInstanceConfig {
+            agent_id: (*agent_id).to_string(),
+            workspace: temp.path().join("ws"),
+            agent_dir: temp.path().join("agents").join(agent_id),
+            ..Default::default()
+        };
+        // `AgentRegistry::register` takes `AgentInstance` BY VALUE (not `Arc`)
+        // and is `async` (verified: agent_instance.rs:551). `get` then returns
+        // `Arc<AgentInstance>`.
+        let agent = AgentInstance::new(cfg, sm.clone()).unwrap();
+        registry.register(agent).await;
+    }
     // The dirs must outlive the registry, which outlives this frame. Registered
     // for removal at process exit instead of abandoned: this helper is called
     // once per test, so `mem::forget` here left 14 trees behind every run.
@@ -262,14 +272,14 @@ async fn a_resumed_room_run_reaches_the_engine_with_the_rooms_scope() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions,
         test_bus(),
-    );
+    ));
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
     let calls = calls.lock().await;
@@ -296,14 +306,14 @@ async fn interrupted_run_is_repaired_and_retriggered() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report.scanned, 1);
@@ -392,14 +402,14 @@ async fn a_resume_replays_the_crashed_runs_envelope_on_carriers_that_cannot_rais
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
     assert_eq!(
@@ -503,8 +513,9 @@ async fn on_demand_resume_repairs_and_retriggers_the_named_session() {
 /// `repair_boundary` is a read-then-append, so two winners append the same
 /// synthetic `ToolError` twice and the session ends up with one `call_id`
 /// answered by two `tool_result`s — which the provider rejects on every
-/// subsequent turn. The boot scan never exposed this (sequential loop); the
-/// on-demand face does, including against the boot scan itself.
+/// subsequent turn. The boot scan claims one slot per session, so its own
+/// candidates never collide; the on-demand face does, including against the
+/// boot scan itself.
 ///
 /// The assertion is the invariant, not the lock: **exactly one** repair event,
 /// whichever way the two futures interleave. If they serialize instead of
@@ -641,7 +652,7 @@ async fn on_demand_resume_works_when_the_boot_scan_is_disabled() {
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig {
             enabled: false,
@@ -651,7 +662,7 @@ async fn on_demand_resume_works_when_the_boot_scan_is_disabled() {
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
 
     // The scan stays off...
     assert_eq!(
@@ -682,14 +693,14 @@ async fn disabled_config_never_triggers_execute() {
         enabled: false,
         ..ResumeConfig::default()
     };
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         cfg,
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report, alephcore::gateway::ResumeReport::default());
@@ -760,14 +771,14 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report.scanned, 1);
@@ -820,14 +831,14 @@ async fn crash_loop_cap_abandons_instead_of_retriggering() {
         Arc::new(SqliteEventStore::new(conn))
     };
     seed_crash_looped_run(&passive_store, &passive_sid, 3).await;
-    let coordinator2 = ResumeCoordinator::new(
+    let coordinator2 = Arc::new(ResumeCoordinator::new(
         passive_store.clone(),
         ResumeConfig::default(),
         Arc::new(RecordingAdapter::new()) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(passive_sid.agent_id()).await,
         sessions(),
         test_bus(),
-    );
+    ));
     coordinator2.resume_interrupted_runs().await;
     assert_eq!(
         goals
@@ -859,14 +870,14 @@ async fn a_retrigger_that_never_starts_is_capped_by_the_intent_stamp() {
     // Each boot is a fresh coordinator over the SAME log. The coordinator is
     // built outside the future so the future owns it outright.
     let boot = || {
-        let c = ResumeCoordinator::new(
+        let c = Arc::new(ResumeCoordinator::new(
             store.clone(),
             cfg.clone(),
             adapter.clone() as Arc<dyn ExecutionAdapter>,
             registry.clone(),
             sessions(),
             test_bus(),
-        );
+        ));
         async move { c.resume_interrupted_runs().await }
     };
     let r1 = boot().await;
@@ -966,14 +977,14 @@ async fn the_intent_stamp_is_durable_before_the_engine_is_handed_the_run() {
     });
     let registry = registry_with_agent(sid.agent_id()).await;
     for _ in 0..2 {
-        let c = ResumeCoordinator::new(
+        let c = Arc::new(ResumeCoordinator::new(
             store.clone(),
             ResumeConfig::default(),
             adapter.clone() as Arc<dyn ExecutionAdapter>,
             registry.clone(),
             sessions(),
             test_bus(),
-        );
+        ));
         let r = c.resume_interrupted_runs().await;
         assert_eq!(r.resumed, 1);
     }
@@ -1017,14 +1028,14 @@ async fn too_old_candidate_abandons_and_blocks_the_goal() {
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(report.abandoned, 1);
@@ -1084,14 +1095,14 @@ async fn a_fresh_stamp_does_not_resurrect_a_run_interrupted_too_long_ago() {
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!((report.abandoned, report.resumed), (1, 0));
@@ -1211,14 +1222,14 @@ async fn a_stamp_that_does_not_land_refuses_the_resume_without_retriggering() {
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store,
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
 
     assert_eq!(
@@ -1318,14 +1329,14 @@ async fn resumed_channel_run_reinherits_the_channels_guest_clamp_and_deny_layer(
     );
     set_channel_config_snapshot(channel_configs);
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     let report = coordinator.resume_interrupted_runs().await;
     assert_eq!(report.resumed, 1);
 
@@ -1372,14 +1383,14 @@ async fn resumed_run_with_no_routable_origin_is_marked_unattended() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    );
+    ));
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
     let calls = calls.lock().await;
@@ -1456,14 +1467,14 @@ async fn a_resumed_run_reaches_the_gateway_bus() {
     let bus = Arc::new(alephcore::gateway::event_bus::GatewayEventBus::new());
     let mut rx = bus.subscribe_typed();
 
-    let coordinator = ResumeCoordinator::new(
+    let coordinator = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         Arc::new(EmittingAdapter) as Arc<dyn ExecutionAdapter>,
         registry_with_agent(sid.agent_id()).await,
         sessions(),
         bus,
-    );
+    ));
     assert_eq!(coordinator.resume_interrupted_runs().await.resumed, 1);
 
     let mut saw_accepted = None;
@@ -1564,14 +1575,14 @@ async fn a_delegated_session_is_repaired_and_its_own_marker_closed() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let report = ResumeCoordinator::new(
+    let report = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    )
+    ))
     .resume_interrupted_runs()
     .await;
 
@@ -1612,14 +1623,14 @@ async fn a_delegated_session_the_engine_is_running_is_left_alone() {
     });
     let registry = registry_with_agent(sid.agent_id()).await;
 
-    let report = ResumeCoordinator::new(
+    let report = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry,
         sessions(),
         test_bus(),
-    )
+    ))
     .resume_interrupted_runs()
     .await;
 
@@ -1704,14 +1715,14 @@ async fn an_unanswered_seed_is_stamped_and_retriggered_without_repair() {
     sessions.get_or_create(&sid).await.unwrap();
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
-    let c = ResumeCoordinator::new(
+    let c = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry_with_agent(sid.agent_id()).await,
         sessions,
         test_bus(),
-    );
+    ));
     let r = c.resume_interrupted_runs().await;
     assert_eq!(
         (r.scanned, r.resumed, r.unsnapshotted),
@@ -1779,14 +1790,14 @@ async fn an_unanswered_seed_behind_its_own_stamp_is_seen_on_the_next_boot() {
     let calls = adapter.calls.clone();
     let registry = registry_with_agent(sid.agent_id()).await;
     let boot = || {
-        ResumeCoordinator::new(
+        Arc::new(ResumeCoordinator::new(
             store.clone(),
             ResumeConfig::default(),
             adapter.clone() as Arc<dyn ExecutionAdapter>,
             registry.clone(),
             sessions.clone(),
             test_bus(),
-        )
+        ))
     };
 
     let first = boot().resume_interrupted_runs().await;
@@ -1832,14 +1843,14 @@ async fn an_unanswered_seed_is_capped_by_its_own_stamps() {
     sessions.get_or_create(&sid).await.unwrap();
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
-    let r = ResumeCoordinator::new(
+    let r = Arc::new(ResumeCoordinator::new(
         store.clone(),
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry_with_agent(sid.agent_id()).await,
         sessions,
         test_bus(),
-    )
+    ))
     .resume_interrupted_runs()
     .await;
     assert_eq!((r.scanned, r.resumed, r.abandoned), (1, 0, 1), "{r:?}");
@@ -1896,14 +1907,14 @@ async fn a_tail_that_cannot_be_read_refuses_without_stamping_or_retriggering() {
     sessions.get_or_create(&sid).await.unwrap();
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
-    let report = ResumeCoordinator::new(
+    let report = Arc::new(ResumeCoordinator::new(
         store,
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry_with_agent(sid.agent_id()).await,
         sessions,
         test_bus(),
-    )
+    ))
     .resume_interrupted_runs()
     .await;
 
@@ -1976,14 +1987,14 @@ async fn an_undecodable_marker_row_refuses_only_its_own_session_at_the_resume_fa
     }
     let adapter = Arc::new(RecordingAdapter::new());
     let calls = adapter.calls.clone();
-    let report = ResumeCoordinator::new(
+    let report = Arc::new(ResumeCoordinator::new(
         store,
         ResumeConfig::default(),
         adapter as Arc<dyn ExecutionAdapter>,
         registry_with_agent(good.agent_id()).await,
         sessions,
         test_bus(),
-    )
+    ))
     .resume_interrupted_runs()
     .await;
 
@@ -2069,4 +2080,157 @@ async fn an_on_demand_resume_of_a_marker_less_unanswered_seed_stamps_and_retrigg
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, sid.to_key_string());
     assert_eq!(calls[0].1.get("resume").map(String::as_str), Some("true"));
+}
+
+/// An adapter whose `execute` takes real time for ONE session. The boot
+/// scan's fan-out is only observable through a run that outlives its
+/// siblings: this wraps [`RecordingAdapter`] and records, per call, when it
+/// entered and left, plus the high-water mark of calls in flight at once.
+///
+/// The slow session is matched by its WHOLE key string, never by substring:
+/// `agent:a:main` and `agent:b:main` share most of their bytes.
+struct SlowAdapter {
+    inner: RecordingAdapter,
+    slow_key: String,
+    delay: Duration,
+    in_flight: AtomicUsize,
+    max_in_flight: AtomicUsize,
+    entries: Mutex<Vec<(String, Instant)>>,
+    exits: Mutex<Vec<(String, Instant)>>,
+}
+
+impl SlowAdapter {
+    fn new(slow: &SessionKey, delay: Duration) -> Self {
+        Self {
+            inner: RecordingAdapter::new(),
+            slow_key: slow.to_key_string(),
+            delay,
+            in_flight: AtomicUsize::new(0),
+            max_in_flight: AtomicUsize::new(0),
+            entries: Mutex::new(Vec::new()),
+            exits: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn entries(&self) -> Vec<(String, Instant)> {
+        self.entries.lock().await.clone()
+    }
+
+    async fn exits(&self) -> Vec<(String, Instant)> {
+        self.exits.lock().await.clone()
+    }
+
+    fn max_in_flight(&self) -> usize {
+        self.max_in_flight.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl ExecutionAdapter for SlowAdapter {
+    async fn execute(
+        &self,
+        request: RunRequest,
+        agent: Arc<AgentInstance>,
+        emitter: Arc<dyn EventEmitter + Send + Sync>,
+    ) -> Result<(), ExecutionError> {
+        let key = request.session_key.to_key_string();
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(now, Ordering::SeqCst);
+        self.entries
+            .lock()
+            .await
+            .push((key.clone(), Instant::now()));
+        if key == self.slow_key {
+            tokio::time::sleep(self.delay).await;
+        }
+        let result = self.inner.execute(request, agent, emitter).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        self.exits.lock().await.push((key, Instant::now()));
+        result
+    }
+
+    async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+        self.inner.cancel(run_id).await
+    }
+
+    async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
+        self.inner.get_status(run_id).await
+    }
+
+    async fn active_run_count(&self) -> usize {
+        self.inner.active_run_count().await
+    }
+}
+
+/// §8.1: the boot scan walks its candidates `[resume] max_concurrent` at a
+/// time, so one slow resume does not hold every later candidate behind it.
+///
+/// Three interrupted sessions, one of which (`b`) takes 2 s to resume, under
+/// a cap of 2. The discriminating assertion is `max_in_flight == 2`: a serial
+/// walk never has two runs in flight, and an unbounded fan-out would reach 3.
+/// The ordering assertions say the same thing from the other side — the two
+/// fast sessions finish while the slow one is still running — and the wall
+/// clock bound is a sanity ceiling on the whole scan (with only ONE slow
+/// session the serial walk and the fan-out both take ~2 s, so the bound
+/// alone cannot tell the shapes apart, which is why it is not the only guard
+/// here).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_interrupted_sessions_resume_two_at_a_time_and_the_slow_one_does_not_block_the_rest()
+{
+    let store = store();
+    let keys = ["a", "b", "c"].map(SessionKey::main);
+    for k in &keys {
+        seed_interrupted_run(&store, k).await;
+    }
+    let adapter = Arc::new(SlowAdapter::new(&keys[1], Duration::from_secs(2)));
+    let registry = registry_with_agents(&["a", "b", "c"]).await;
+    let cfg = ResumeConfig {
+        max_concurrent: 2,
+        ..ResumeConfig::default()
+    };
+    let coordinator = Arc::new(ResumeCoordinator::new(
+        store,
+        cfg,
+        adapter.clone() as Arc<dyn ExecutionAdapter>,
+        registry,
+        sessions(),
+        test_bus(),
+    ));
+
+    let t0 = Instant::now();
+    let report = coordinator.resume_interrupted_runs().await;
+    let elapsed = t0.elapsed();
+    assert_eq!((report.scanned, report.resumed), (3, 3), "{report:?}");
+
+    let key = |k: &str| SessionKey::main(k).to_key_string();
+    let entered = adapter.entries().await;
+    let exited = adapter.exits().await;
+    let entered_at = |k: &str| {
+        entered
+            .iter()
+            .find(|(s, _)| *s == key(k))
+            .unwrap_or_else(|| panic!("{k} never reached the adapter: {entered:?}"))
+            .1
+    };
+    let exited_at = |k: &str| {
+        exited
+            .iter()
+            .find(|(s, _)| *s == key(k))
+            .unwrap_or_else(|| panic!("{k} never left the adapter: {exited:?}"))
+            .1
+    };
+    assert!(
+        exited_at("a") < exited_at("b") && exited_at("c") < exited_at("b"),
+        "a and c must finish before the 2 s session: {exited:?}"
+    );
+    assert!(
+        entered_at("c") < exited_at("b"),
+        "c must START while b is still running — a serial walk starts it after: \
+         entries {entered:?} / exits {exited:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(3500),
+        "the whole scan took {elapsed:?}; serial would be ≥ 2 s + everything else"
+    );
+    assert_eq!(adapter.max_in_flight(), 2, "the cap bounds the burst");
 }
