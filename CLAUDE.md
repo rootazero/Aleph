@@ -239,3 +239,21 @@ cargo clippy --workspace --all-targets    # 先 just _stage-shell-placeholders�
 
 - **长期记忆**：走全局 `~/.claude/projects/.../memory/`（跨会话、Git 不追踪）。**不在项目内另造 MEMORY.md**——避免与全局记忆双源冲突。
 - **质量门 (Hooks)**：当前**未挂** `.claude/hooks/`。本文件的规则目前靠模型遵守；未来如需强制执行层（如 PostToolUse → `cargo fmt`），在 `.claude/hooks/` 配置即可。
+
+---
+## Agent skills
+
+> 本段由 `/setup-matt-pocock-skills` 生成，**只放指针**；详情在 `docs/agents/`（Tier 2）。
+> **消费者**＝ `mattpocock-skills` plugin（`/to-issues` `/triage` `/to-prd` `/diagnose` `/tdd` `/grill-with-docs` `/code-review` 等）。它**不随本仓库分发**——代码装在各机器的 `~/.claude/plugins/`，启用声明在仓库的 `.claude/settings.json` → `enabledPlugins`。**新机器若未安装，下面三份配置零消费者、静默不生效**（判据 §7），跑 `/plugin` 装上即可。
+
+### Issue tracker
+
+Issues 在 GitHub（`rootazero/Aleph`），经 `gh` CLI 读写。见 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md)。
+
+### Triage labels
+
+五个规范角色直接用同名标签字符串（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`）；除 `wontfix` 外远端尚未创建，首次用到时 `gh label create`。见 [`docs/agents/triage-labels.md`](docs/agents/triage-labels.md)。
+
+### Domain docs
+
+Single-context 布局。领域真源是 `docs/reference/GLOSSARY.md` + `FEATURE_LOCATOR.md`；`CONTEXT.md` 与 `docs/adr/` **尚未创建且这是预期状态**，由 `/grill-with-docs` 懒创建。见 [`docs/agents/domain.md`](docs/agents/domain.md)。
