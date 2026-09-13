@@ -276,7 +276,7 @@ pub struct RawFrame {
     /// the only consumer there is (the page session is the only session any
     /// verb resolves against) and would be wrong for a consumer that resolved
     /// against the child's session, which is why the name has to say which.
-    /// [`RefTable::renderer_of`]'s summary already got this right; this
+    /// [`super::RefTable::renderer_of`]'s summary already got this right; this
     /// is the third time on this branch a missing reference frame has cost
     /// something — `port != site`, `frame != renderer`, and now the name of the
     /// bit that fixed `frame != renderer`.

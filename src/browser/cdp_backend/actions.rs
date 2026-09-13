@@ -1252,6 +1252,193 @@ mod tests {
         (main, child)
     }
 
+    /// The body of a `fn <name>(` in `text`, braces balanced, or `None`.
+    ///
+    /// Shared by the census and its own controls, so a control cannot pass
+    /// against a different extractor from the one the census uses (判据 §1).
+    fn fn_body(text: &str, name: &str) -> Option<String> {
+        let needle = format!("fn {name}(");
+        let start = text.find(&needle)?;
+        let mut depth = 0usize;
+        let mut started = false;
+        for (i, c) in text[start..].char_indices() {
+            match c {
+                '{' => {
+                    depth += 1;
+                    started = true;
+                }
+                '}' => {
+                    depth -= 1;
+                    if started && depth == 0 {
+                        return Some(text[start..=start + i].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Does this text define `verb` with a body that reaches the ref gate?
+    ///
+    /// `prepare` is the shared preamble (it calls `resolve_target`); a few verbs
+    /// call `resolve_target` directly. Either counts.
+    fn reaches_the_gate(text: &str, verb: &str) -> bool {
+        fn_body(text, verb).is_some_and(|b| b.contains("prepare(") || b.contains("resolve_target("))
+    }
+
+    /// **Every ref-taking verb resolves through the gate, or is exempt AND
+    /// genuinely not implemented here.**
+    ///
+    /// The gate is [`resolve_target`]'s renderer/staleness check. It lives in
+    /// the shared preamble, so by construction it covers every verb that goes
+    /// through it — but "by construction" was only ever *measured* on `click`,
+    /// and the risk is not the gate. It is a verb that does not go through it.
+    ///
+    /// # The exemption clause is the whole value
+    ///
+    /// `fill_form` reaches the gate **transitively**: it has no override here,
+    /// so `BrowserBackend::fill_form`'s shared default runs and loops
+    /// `self.fill(..)` per field, and `fill` does go through `prepare`. A
+    /// source scan cannot follow that, so instead of asserting something it
+    /// cannot see, the exemption asserts the condition that MAKES it true:
+    /// **`CdpBackend` must not define `fill_form` at all.**
+    ///
+    /// That converts "I cannot follow this" into a checkable fact with an
+    /// expiry — the same device as the `dead_code` permit above. The trigger is
+    /// live rather than hypothetical: `backend.rs`'s own doc says *"the MCP
+    /// backend overrides it with its native `fill_form`"*, so the override
+    /// pattern already exists in this trait on a sibling backend. The day one
+    /// is added here, the exemption's precondition is false and this reddens by
+    /// name.
+    ///
+    /// # Two limits, written down rather than left to be discovered
+    ///
+    /// * It does not follow trait defaults. Acceptable ONLY because of the
+    ///   exemption clause above; without it this would be an unstated
+    ///   assumption rather than a checked one.
+    /// * It matches a verb to a `fn <verb>(` body. A verb whose impl delegated
+    ///   to a differently-named helper would read as not reaching and this
+    ///   would go red — a false positive, and deliberately the fail-loud
+    ///   direction: a human looks, rather than a gate quietly not covering
+    ///   something.
+    ///
+    /// The whole `cdp_backend/` DIRECTORY is scanned, not `actions.rs` and
+    /// `mod.rs` by name: a verb implemented in a third file would otherwise
+    /// read as absent, fall into the exemption path, and pass **wrongly**. It
+    /// is also one fewer hand-written list (判据 §5).
+    #[test]
+    fn every_ref_taking_verb_reaches_the_gate_or_is_exempt_and_absent() {
+        use crate::utils::source_scan::{production_text, rust_sources_under};
+
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        // ---- the verb list, DERIVED from the trait ------------------------
+        // Every `BrowserBackend` method whose signature mentions `ActionTarget`.
+        // Typed out here it would only describe the day it was written.
+        let backend_src = std::fs::read_to_string(src_root.join("browser/backend.rs"))
+            .expect("the trait's own source is readable");
+        let mut verbs: Vec<String> = Vec::new();
+        for (i, _) in backend_src.match_indices("async fn ") {
+            let rest = &backend_src[i + "async fn ".len()..];
+            let Some(paren) = rest.find('(') else {
+                continue;
+            };
+            let name = rest[..paren].trim();
+            if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            // The signature ends at the first `;` (required method) or `{`
+            // (defaulted one), whichever comes first.
+            let end = rest
+                .find(';')
+                .into_iter()
+                .chain(rest.find('{'))
+                .min()
+                .unwrap_or(rest.len());
+            if rest[..end].contains("ActionTarget") {
+                verbs.push(name.to_string());
+            }
+        }
+
+        // CONTROL 3 — the derivation self-check. An empty list would make every
+        // assertion below vacuously true, which is the face M1's guard learned.
+        assert!(
+            !verbs.is_empty(),
+            "no ref-taking verbs were derived from backend.rs — the loop below \
+             would then prove nothing"
+        );
+        assert!(
+            verbs.iter().any(|v| v == "click"),
+            "the derivation does not contain `click`, so it is reading \
+             something other than the trait: {verbs:?}"
+        );
+
+        // ---- the backend's own production source, whole directory ---------
+        let dir = src_root.join("browser/cdp_backend");
+        let scanned: String = rust_sources_under(&dir)
+            .into_iter()
+            .map(|(rel, text)| production_text(std::path::Path::new(&rel), &text))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            scanned.contains("impl BrowserBackend for CdpBackend {"),
+            "the scan is reading the wrong tree — it found no CdpBackend impl \
+             under {}",
+            dir.display()
+        );
+
+        // CONTROL 1 — positive: a verb known to reach IS detected as reaching.
+        assert!(
+            reaches_the_gate(&scanned, "click"),
+            "the recogniser cannot see `click` reaching the gate, so a green \
+             below would mean nothing"
+        );
+        // CONTROL 2 — negative: a body with neither marker is NOT detected.
+        assert!(
+            !reaches_the_gate(
+                "pub(super) async fn ghost(be: &CdpBackend) -> Result<(), BrowserError> { \
+                 let handle = be.handle().await?; Ok(()) }",
+                "ghost"
+            ),
+            "the recogniser reports a body containing neither marker as \
+             reaching — it would report everything as reaching"
+        );
+
+        // ---- exemptions: each must be genuinely ABSENT from this backend ---
+        // Keyed by verb, valued by why it is exempt, so the reason is read at
+        // the same moment as the exemption.
+        let exempt: &[(&str, &str)] = &[(
+            "fill_form",
+            "no override here, so BrowserBackend's shared default loops \
+             self.fill(..) per field and each of those goes through `prepare`",
+        )];
+
+        let mut unreached: Vec<String> = Vec::new();
+        for verb in &verbs {
+            if reaches_the_gate(&scanned, verb) {
+                continue;
+            }
+            match exempt.iter().find(|(v, _)| v == verb) {
+                Some((_, why)) => assert!(
+                    fn_body(&scanned, verb).is_none(),
+                    "`{verb}` is exempt from the ref gate because {why} — but \
+                     this backend now DEFINES it, so that reason is false and \
+                     the exemption no longer holds. Either route it through \
+                     `prepare`/`resolve_target`, or delete the exemption and \
+                     say what replaced it."
+                ),
+                None => unreached.push(verb.clone()),
+            }
+        }
+        assert!(
+            unreached.is_empty(),
+            "these ref-taking verbs do not reach the renderer/staleness gate in \
+             this backend, so they resolve a `backendNodeId` without checking \
+             which node space it belongs to: {unreached:?}"
+        );
+    }
+
     /// A ref whose document the latest capture did not see is refused as
     /// STALE — at the verb, and distinguishably from the cross-renderer case.
     ///

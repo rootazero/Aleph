@@ -210,7 +210,7 @@ impl RefTable {
 
     /// Record every document this capture saw and which renderer it was in.
     /// Called by `PageState::build` on every capture, from
-    /// [`RawFrame::separate_renderer`].
+    /// [`super::RawFrame::separate_renderer`].
     ///
     /// **Replaced wholesale, not merged.** A frame that stopped being
     /// out-of-process must stop being refused, and a map that only ever grew
