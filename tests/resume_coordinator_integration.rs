@@ -1933,6 +1933,11 @@ async fn a_tail_that_cannot_be_read_refuses_without_stamping_or_retriggering() {
         "an unanswerable question must not be dispatched"
     );
     assert!(stamps(&inner, &sid).await.is_empty(), "nothing was stamped");
+    assert_eq!(
+        inner.load_all_events(&sid).await.unwrap().len(),
+        2,
+        "not one append on a log nobody could read"
+    );
 }
 
 /// Criterion #8 at the resume face, with the real store: a session whose
@@ -2008,11 +2013,6 @@ async fn an_undecodable_marker_row_refuses_only_its_own_session_at_the_resume_fa
         dispatched,
         vec![good.to_key_string()],
         "the neighbour resumed; the refused session was never dispatched"
-    );
-    assert_eq!(
-        inner.load_all_events(&sid).await.unwrap().len(),
-        2,
-        "not one append on a log nobody could read"
     );
 }
 
