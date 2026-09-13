@@ -3056,7 +3056,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     // symptom is a rejection that reads like a missing feature.
                     alephcore::gateway::set_global_resume_coordinator(coordinator.clone());
 
-                    if auto_scan {
+                    // Re-delivery of the messages that were parked in the
+                    // busy-input lane when the previous process died. Not
+                    // gated by `[resume] enabled`: that flag governs *run*
+                    // resumption, while these are user-typed messages that
+                    // never became runs. Split around the scan below: a
+                    // survivor for a session the scan will visit re-enters the
+                    // lane only after the scan has settled, because the
+                    // engine's admission gate cannot see a resume still waiting
+                    // on its `max_concurrent` permit and would admit the
+                    // survivor first (`reinject_survivors` says what that
+                    // costs); every other survivor re-enters at once.
+                    let busy_queue_cfg =
+                        alephcore::gateway::busy_queue::BusyQueueConfig::from_execution(
+                            &busy_queue_execution_cfg,
+                        );
+                    let reinjected = if auto_scan {
                         // This scan is spawned before `initialize_inbound_router`
                         // publishes the channel-config snapshot; park until it is
                         // ready so `stamp_origin_identity` sees the per-channel deny
@@ -3065,37 +3080,60 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                             std::time::Duration::from_secs(30),
                         )
                         .await;
-                        let report = coordinator.resume_interrupted_runs().await;
-                        tracing::info!(
-                            scanned = report.scanned,
-                            resumed = report.resumed,
-                            abandoned = report.abandoned,
-                            skipped = report.skipped,
-                            "ResumeCoordinator boot scan finished"
-                        );
+                        let launch = coordinator.launch_resume().await;
+                        let pending = launch.pending.clone();
+                        let scan = tokio::spawn(launch.settle());
+                        let early = alephcore::gateway::busy_queue::durable::reinject_survivors(
+                            reinject_adapter.clone(),
+                            reinject_registry.clone(),
+                            reinject_bus.clone(),
+                            busy_queue_cfg,
+                            &|k| !pending.contains(&k.to_key_string()),
+                        )
+                        .await;
+                        match scan.await {
+                            Ok(report) => tracing::info!(
+                                scanned = report.scanned,
+                                resumed = report.resumed,
+                                abandoned = report.abandoned,
+                                skipped = report.skipped,
+                                "ResumeCoordinator boot scan finished"
+                            ),
+                            // A scan task that did not settle has an UNKNOWN
+                            // outcome — never an empty one: no `scanned = 0`
+                            // line may stand in for it. The held-back
+                            // survivors are still re-delivered below; dropping
+                            // them would lose user messages, and a race with a
+                            // resume still running is exactly what the
+                            // busy-queue lane exists to absorb.
+                            Err(e) => tracing::error!(
+                                error = %e,
+                                "ResumeCoordinator boot scan task did not settle; its report is unknown"
+                            ),
+                        }
+                        let late = alephcore::gateway::busy_queue::durable::reinject_survivors(
+                            reinject_adapter,
+                            reinject_registry,
+                            reinject_bus,
+                            busy_queue_cfg,
+                            &|k| pending.contains(&k.to_key_string()),
+                        )
+                        .await;
+                        early + late
                     } else {
                         tracing::debug!(
                             "Resume coordinator: auto-scan disabled ([resume] enabled = false); \
                              on-demand resume still available"
                         );
-                    }
-
-                    // Re-deliver messages that were parked in the busy-input
-                    // lane when the previous process died. Not gated by
-                    // `[resume] enabled`: that flag governs *run* resumption,
-                    // while these are user-typed messages that never became
-                    // runs. Runs after the scan (above) so an interrupted run
-                    // reclaims its session slot before its queued follow-ups
-                    // re-enter the lane.
-                    let reinjected = alephcore::gateway::busy_queue::durable::reinject_survivors(
-                        reinject_adapter,
-                        reinject_registry,
-                        reinject_bus,
-                        alephcore::gateway::busy_queue::BusyQueueConfig::from_execution(
-                            &busy_queue_execution_cfg,
-                        ),
-                    )
-                    .await;
+                        alephcore::gateway::busy_queue::durable::reinject_survivors(
+                            reinject_adapter,
+                            reinject_registry,
+                            reinject_bus,
+                            busy_queue_cfg,
+                            &|_| true,
+                        )
+                        .await
+                    };
                     if reinjected > 0 {
                         tracing::info!(
                             reinjected,

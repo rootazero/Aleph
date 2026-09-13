@@ -371,26 +371,38 @@ pub fn survivors() -> Vec<QueuedRunPayload> {
 // Boot reinjection
 // ============================================================================
 
-/// Re-deliver every journaled survivor through the ordinary arrival path.
+/// Re-deliver the journaled survivors `select` admits through the ordinary
+/// arrival path; the rest stay journaled for a later call.
 ///
-/// Called once at gateway boot, after the event bus exists and beside the
-/// `ResumeCoordinator` scan (the two never overlap: a survivor is by
-/// construction a message that never became a run, and a resumable run was
-/// tombstoned here at admission). Returns how many messages were re-queued.
+/// Called at gateway boot, after the event bus exists, around the
+/// `ResumeCoordinator` scan: once right after the scan is launched, for every
+/// survivor whose session the scan will not visit, and once after it settles,
+/// for the survivors of the sessions it did (`ResumeLaunch::pending`). A
+/// survivor is by construction a message that never became a run, so it is
+/// never the run being resumed — but a survivor for the SAME session as a
+/// resume candidate collides at admission: `ExecutionEngine::admit_run` knows
+/// nothing about a resume still waiting on its `max_concurrent` permit, so it
+/// would admit the survivor first and the later resume would append its
+/// boundary repair into a live run and be refused. Holding those survivors
+/// until the scan settles is what the split is for. Returns how many messages
+/// this call re-queued.
 ///
 /// Per survivor:
 ///
 /// 1. **Skip `has_own_scheduler` sessions** — cron / heartbeat / loop / goal /
 ///    team units re-spawn on their own schedulers; re-delivering their queued
 ///    input here would double-drive them.
-/// 2. Rebuild the `RunRequest` from the journaled payload (`pending_media`
+/// 2. **Skip what `select` declines** — left journaled exactly as found, for
+///    the next call. The predicate sees the parsed key; compare it whole
+///    (`to_key_string() ==`, set membership), never by substring.
+/// 3. Rebuild the `RunRequest` from the journaled payload (`pending_media`
 ///    starts empty, `sandbox_override` is `None` — neither is set by the two
 ///    lane surfaces; see the module doc).
-/// 3. Emit through the gateway bus, plus the origin-channel fanout when the
+/// 4. Emit through the gateway bus, plus the origin-channel fanout when the
 ///    session has a bound route — the same two-arm shape as
 ///    `ResumeCoordinator::retrigger`, so a channel user's re-delivered message
 ///    still answers back to the channel.
-/// 4. Re-enter the lane via [`super::register_run`] + the shared
+/// 5. Re-enter the lane via [`super::register_run`] + the shared
 ///    [`super::deliver_with_ticket`] loop. The fresh ticket's fresh
 ///    `enqueued_at` is *why* the burst/interrupt predicates need no special
 ///    casing (module doc, "Reinjection preserves the lane invariants").
@@ -403,6 +415,7 @@ pub async fn reinject_survivors(
     registry: std::sync::Arc<crate::gateway::agent_instance::AgentRegistry>,
     bus: std::sync::Arc<crate::gateway::event_bus::GatewayEventBus>,
     cfg: super::BusyQueueConfig,
+    select: &(dyn Fn(&crate::routing::session_key::SessionKey) -> bool + Sync),
 ) -> usize {
     let survivors = survivors();
     if survivors.is_empty() {
@@ -418,6 +431,11 @@ pub async fn reinject_survivors(
                 "busy-queue reinject: unparsable session key; leaving record queued");
             continue;
         };
+        if !select(&session_key) {
+            tracing::debug!(run_id = %run_id,
+                "busy-queue reinject: not selected by this pass; leaving record queued");
+            continue;
+        }
         if crate::gateway::resume_coordinator::has_own_scheduler(&session_key) {
             tracing::debug!(run_id = %run_id,
                 "busy-queue reinject: session has its own scheduler; skipping");
@@ -684,5 +702,139 @@ mod tests {
                 "{arm} must tombstone the journal ({reason})"
             );
         }
+    }
+
+    /// An adapter that records which session each re-delivered run reached.
+    struct RecordingAdapter {
+        ran: std::sync::Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::gateway::execution_adapter::ExecutionAdapter for RecordingAdapter {
+        async fn execute(
+            &self,
+            request: crate::gateway::execution_engine::RunRequest,
+            _agent: std::sync::Arc<crate::gateway::agent_instance::AgentInstance>,
+            _emitter: std::sync::Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+        ) -> Result<(), crate::gateway::execution_engine::ExecutionError> {
+            self.ran
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(request.session_key.to_key_string());
+            Ok(())
+        }
+
+        async fn cancel(
+            &self,
+            run_id: &str,
+        ) -> Result<(), crate::gateway::execution_engine::ExecutionError> {
+            Err(crate::gateway::execution_engine::ExecutionError::RunNotFound(run_id.to_string()))
+        }
+
+        async fn get_status(
+            &self,
+            _run_id: &str,
+        ) -> Option<crate::gateway::execution_engine::RunStatus> {
+            None
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
+    /// A registry holding one agent per id, so `reinject_survivors` gets past
+    /// its "agent gone" arm for the sessions under test. The returned dir
+    /// must outlive the registry.
+    async fn registry_with_agents(
+        agent_ids: &[&str],
+    ) -> (
+        std::sync::Arc<crate::gateway::agent_instance::AgentRegistry>,
+        tempfile::TempDir,
+    ) {
+        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
+        use crate::gateway::session_manager::{SessionManager, SessionManagerConfig};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sm = std::sync::Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: dir.path().join("sessions.db"),
+                ..Default::default()
+            })
+            .expect("session manager"),
+        );
+        let registry = std::sync::Arc::new(AgentRegistry::new());
+        for agent_id in agent_ids {
+            let cfg = AgentInstanceConfig {
+                agent_id: (*agent_id).to_string(),
+                workspace: dir.path().join("ws"),
+                agent_dir: dir.path().join("agents").join(agent_id),
+                ..Default::default()
+            };
+            registry
+                .register(AgentInstance::new(cfg, sm.clone()).expect("agent"))
+                .await;
+        }
+        (registry, dir)
+    }
+
+    /// `select` decides which survivors THIS call re-delivers; the rest stay
+    /// journaled, untouched, for a later call — boot calls twice around the
+    /// resume scan. The declined key is compared whole, never by substring.
+    #[tokio::test]
+    async fn a_deselected_survivor_stays_journaled_while_the_rest_are_re_delivered() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _g = arm(tmp.path());
+        let keys = ["bq-sel-a", "bq-sel-b", "bq-sel-c"]
+            .map(|a| crate::routing::session_key::SessionKey::main(a).to_key_string());
+        for (i, key) in keys.iter().enumerate() {
+            let mut p = payload(&format!("sel-{i}"));
+            p.lane_key = key.clone();
+            p.addressed_session_key = key.clone();
+            p.enqueued_at_ms = i as i64 + 1;
+            assert!(record_enqueued(p));
+        }
+        let (registry, _dir) = registry_with_agents(&["bq-sel-a", "bq-sel-b", "bq-sel-c"]).await;
+        let ran = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let adapter: std::sync::Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter> =
+            std::sync::Arc::new(RecordingAdapter { ran: ran.clone() });
+        let bus = std::sync::Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let held = keys[1].clone();
+
+        let reinjected = reinject_survivors(
+            adapter,
+            registry,
+            bus,
+            crate::gateway::busy_queue::BusyQueueConfig::default(),
+            &|k| k.to_key_string() != held,
+        )
+        .await;
+        assert_eq!(
+            reinjected, 2,
+            "the two selected survivors re-entered the lane"
+        );
+
+        // The re-delivered pair settles its records from spawned tasks; wait
+        // for both tombstones rather than racing them.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while survivors().len() > 1 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let left: Vec<String> = survivors()
+            .into_iter()
+            .map(|p| p.addressed_session_key)
+            .collect();
+        assert_eq!(
+            left,
+            vec![held.clone()],
+            "only the deselected survivor is still journaled"
+        );
+        let mut ran = ran.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        ran.sort();
+        assert_eq!(
+            ran,
+            vec![keys[0].clone(), keys[2].clone()],
+            "the selected pair reached the engine; the held one did not"
+        );
     }
 }
