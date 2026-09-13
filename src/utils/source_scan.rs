@@ -965,6 +965,46 @@ pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)
         .collect()
 }
 
+/// Every file under `root` whose production code READS `needle` — the walk
+/// the two capability-handle reader censuses share
+/// (`session::service::SESSION_SERVICE_READERS`,
+/// `session::store::SESSION_EVENT_STORE_READERS`), so "who reads this
+/// handle" has one derivation and not one per handle.
+///
+/// # What "production code" means here, stated so a census's doc can quote it
+///
+/// [`production_text`] (a file its ancestors declare under `#[cfg(test)]`
+/// contributes nothing; each `#[cfg(test)]`-attributed item is removed) and
+/// then [`code_text`] (comment text and every literal payload removed — a
+/// warn message or a doc line that names the needle is not a read). The
+/// scan recognises the literal `#[cfg(test)]` attribute ONLY: code gated by
+/// `#[cfg(any(test, feature = "test-helpers"))]` or by a feature alone is
+/// scanned as production, and a reader under such a gate would be listed
+/// here as one. None of the listed readers is; a census that starts to see
+/// one must say so in its own doc rather than list it as shipped.
+///
+/// A line that DEFINES the needle (`fn <needle>`) is not a read, so the
+/// defining file is not excluded wholesale: `session/store.rs` defines
+/// `global_session_event_store()` AND reads it in `retire_live_events`, and
+/// excluding the file would have hidden that reader — the blind spot a
+/// hand-written exclusion list would have carried.
+#[cfg(test)]
+pub(crate) fn files_whose_production_code_contains(
+    root: &std::path::Path,
+    needle: &str,
+) -> std::collections::BTreeSet<String> {
+    let definition = format!("fn {needle}");
+    rust_sources_under(root)
+        .into_iter()
+        .filter(|(rel, text)| {
+            code_text(&production_text(std::path::Path::new(rel), text))
+                .lines()
+                .any(|line| line.contains(needle) && !line.contains(&definition))
+        })
+        .map(|(rel, _)| rel)
+        .collect()
+}
+
 /// One `#[test]` / `#[tokio::test]` function found by [`scan_test_bodies`].
 #[cfg(test)]
 pub(crate) struct TestBody {
@@ -2094,6 +2134,50 @@ pub fn after() {}
                 "{rel}: production_text must return its code"
             );
         }
+    }
+
+    /// [`files_whose_production_code_contains`] on a fixture tree: a call is
+    /// a hit; the definition line, a comment, a string literal and a call
+    /// inside a `#[cfg(test)]` item are not. Then one line on the real tree
+    /// for the claim the doc makes about WHY definitions are skipped per
+    /// line rather than per file: `session/store.rs` both defines and reads
+    /// `global_session_event_store()`, and must be seen as a reader.
+    #[test]
+    fn files_whose_production_code_contains_counts_reads_and_not_definitions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, text: &str| std::fs::write(dir.path().join(name), text).unwrap();
+        write(
+            "defines.rs",
+            "pub fn handle() -> Option<u8> {\n    None\n}\n",
+        );
+        write("reads.rs", "fn go() {\n    let _ = crate::handle();\n}\n");
+        write(
+            "mentions.rs",
+            "// handle() is discussed here\nconst S: &str = \"handle()\";\nfn go() {}\n",
+        );
+        write(
+            "tests_only.rs",
+            "fn go() {}\n#[cfg(test)]\nmod tests {\n    fn t() {\n        let _ = crate::handle();\n    }\n}\n",
+        );
+        let found = files_whose_production_code_contains(dir.path(), "handle()");
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(names, vec!["reads.rs".to_string()], "found: {found:?}");
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let store_readers =
+            files_whose_production_code_contains(&root, "global_session_event_store()");
+        assert!(
+            store_readers.contains("src/session/store.rs"),
+            "the defining file's own reader (`retire_live_events`) must be seen: {store_readers:?}"
+        );
     }
 
     /// Every `.rs` file under `src/`, as `(repo-relative path, text)` — shared

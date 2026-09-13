@@ -1143,26 +1143,79 @@ fn cap_chars(s: &str, max: usize) -> String {
 // Process-wide accessor
 // ---------------------------------------------------------------------------
 
+/// Every production reader of [`global_session_event_store`], and what an
+/// uninstalled handle reads as THERE — one row per file, the second column
+/// taken from the code at that site.
+///
+/// Not a hand-list: the table this replaces named four readers (one of them,
+/// `session_projector.rs`, never read the handle at all — it holds its own
+/// store) while the tree held more than twice that many files that do, this
+/// one included. The first column is
+/// pinned to the tree by `the_event_store_reader_census_matches_the_tree`,
+/// through the same walk `session::service::SESSION_SERVICE_READERS` uses —
+/// its scope is stated on
+/// [`crate::utils::source_scan::files_whose_production_code_contains`]. The
+/// second column is prose and is NOT pinned; whoever changes a site's `None`
+/// arm owes this table the new sentence.
+///
+/// `#[cfg(test)]` because the census is its only reader: the table is
+/// documentation the tree can contradict, not runtime data.
+#[cfg(test)]
+pub(crate) const SESSION_EVENT_STORE_READERS: &[(&str, &str)] = &[
+    (
+        "src/builtin_tools/recall_events.rs",
+        "`Ok(empty)` plus a note to the model (\"not available in this deployment\")",
+    ),
+    (
+        "src/diagnostics/mod.rs",
+        "`core/projection-holes` and `core/session-log` are registered with `None` and report \
+         UNKNOWN (two builder sites)",
+    ),
+    (
+        "src/gateway/execution_engine/run_loop/inner.rs",
+        "the legacy `messages`→`session_events` backfill is skipped in silence (the read is \
+         paired with the service handle; no `else` arm)",
+    ),
+    (
+        "src/gateway/handlers/chat.rs",
+        "`chat.history`'s snapshot carries `last_run: None` — \"we did not find out\", never a \
+         clean answer",
+    ),
+    (
+        "src/gateway/handlers/session/db_handlers/query.rs",
+        "`sessions.list` leaves every row's `last_run` at `None` — \"we did not find out\"",
+    ),
+    (
+        "src/gateway/handlers/tool_output.rs",
+        "`trace.tool_output` answers `SERVICE_UNAVAILABLE` (\"session event log not available\")",
+    ),
+    (
+        "src/gateway/handlers/trace_replay.rs",
+        "`trace.by_runs` replays with an empty presentation map — holes show nothing, never \
+         \"no diff\"",
+    ),
+    (
+        "src/session/store.rs",
+        "`retire_live_events` answers `Ok(0)` — \"retired nothing\", indistinguishable from \
+         nothing to retire",
+    ),
+    (
+        "src/teams/dispatcher/schedule/reclaim.rs",
+        "the crashed attempt's member-session repair is skipped with no log line; the reclaim \
+         to `Pending` itself still happens",
+    ),
+];
+
 /// `ConsumerDecides`, and this handle is the sharper case of the pair in this
 /// batch: the production reads produce *different* answers, some of which
-/// are reported to the caller as success.
-///
-/// | reader | an uninstalled read becomes |
-/// |---|---|
-/// | `builtin_tools/recall_events.rs` | `Ok(empty)` plus a note to the model |
-/// | [`retire_live_events`] | `Ok(0)` — "retired nothing", indistinguishable from "there was nothing to retire" |
-/// | `gateway/session_projector.rs` | reads `is_retired` on its own store handle (no process-wide accessor needed) |
-/// | `gateway/execution_engine/run_loop/inner.rs` | the legacy backfill is skipped in silence |
-///
-/// (`builtin_tools/sessions/compact_tool.rs` left this table on 2026-09-12:
-/// `/compact` now writes through the session service's `emit_batch` and reads
-/// no store handle of its own.)
+/// are reported to the caller as success — see `SESSION_EVENT_STORE_READERS`
+/// (above; `#[cfg(test)]`, because the tree is its reader) for each one's
+/// reading, and for how that list is kept honest.
 ///
 /// Each arm is individually defensible (all doc-comment their reasoning),
 /// which is exactly why no `IndistinguishableDefault { reads_as }` sentence
 /// could be written for this slot: there is no single thing a missing handle
-/// reads as. Task 15 adjudicates the arms; this variant records that there is
-/// more than one of them — recount rather than inherit a number.
+/// reads as. This variant records that there is more than one of them.
 static GLOBAL_EVENT_STORE: CapabilitySlot<Arc<dyn SessionEventStore>> =
     CapabilitySlot::new("session/event-store", MissingSemantics::ConsumerDecides);
 
@@ -1179,12 +1232,13 @@ pub fn set_global_session_event_store(store: Arc<dyn SessionEventStore>) {
 /// Record that boot reached this slot and had nothing to install.
 ///
 /// The `else` half of [`set_global_session_event_store`]: boot's install is
-/// conditional, and without this the five consumers named on the static above
-/// cannot tell "this deployment has no session-event log" from "boot died
-/// before it reached `build_sqlite_session_service`'s call site in
-/// `start_server`". Named rather than numbered on purpose — a line coordinate
-/// in this file would be a carried number for a file that has no reason to
-/// track `start/mod.rs`. `because` is quoted verbatim to an operator.
+/// conditional, and without this the readers named in
+/// `SESSION_EVENT_STORE_READERS` cannot tell "this deployment has no
+/// session-event log" from "boot died before it reached
+/// `build_sqlite_session_service`'s call site in `start_server`". Named rather
+/// than numbered on purpose — a line coordinate in this file would be a
+/// carried number for a file that has no reason to track `start/mod.rs`.
+/// `because` is quoted verbatim to an operator.
 #[inline]
 pub fn decline_global_session_event_store(because: &'static str) {
     GLOBAL_EVENT_STORE.decline(because);
@@ -2707,6 +2761,36 @@ mod tests {
         assert!(
             !src.contains("user_version"),
             "a schema gate is fail-dead (spec 7.4)"
+        );
+    }
+
+    /// [`SESSION_EVENT_STORE_READERS`]'s first column equals the set of files
+    /// whose production code reads the handle — equality, both directions,
+    /// derived from the tree by the walk the table's doc names. This file is
+    /// in the set on its own merits (`retire_live_events`), not by exclusion.
+    /// Mutation (T17): comment out one row ⇒ red naming that file.
+    #[test]
+    fn the_event_store_reader_census_matches_the_tree() {
+        use crate::utils::source_scan::files_whose_production_code_contains;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let found = files_whose_production_code_contains(&root, "global_session_event_store()");
+        let listed: std::collections::BTreeSet<String> = SESSION_EVENT_STORE_READERS
+            .iter()
+            .map(|(file, _)| (*file).to_string())
+            .collect();
+        assert_eq!(
+            SESSION_EVENT_STORE_READERS.len(),
+            listed.len(),
+            "a file is listed twice in SESSION_EVENT_STORE_READERS"
+        );
+        assert!(
+            !found.is_empty(),
+            "self-protection: the walk found no reader at all — blind, not clean"
+        );
+        assert_eq!(
+            found, listed,
+            "a reader of the session-event-store handle appeared or vanished; update \
+             SESSION_EVENT_STORE_READERS with what a missing handle reads as there"
         );
     }
 }
