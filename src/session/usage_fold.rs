@@ -6,8 +6,10 @@
 //!
 //! The `sessions` row's `input_tokens` / `output_tokens` columns are a
 //! materialisation of this fold, accumulated one run at a time by the
-//! projector when the run's meta lands (`session_projector::bill_run_from_fold`)
-//! — the row is a face, not a second derivation.
+//! projector when the run's meta lands, or when a whole-session heal
+//! synthesizes the stamp of a finished run whose meta never did
+//! (`session_projector::bill_run_from_fold`, its one biller for both) — the
+//! row is a face, not a second derivation.
 use crate::session::events::{SessionEvent, SessionEventRecord};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

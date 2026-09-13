@@ -3028,6 +3028,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     scanned = rr.scanned,
                     holes_filled = rr.holes_filled,
                     stamps_reapplied = rr.stamps_reapplied,
+                    stamps_synthesized = rr.stamps_synthesized,
                     usage_rebilled = rr.usage_rebilled,
                     skipped_up_to_date = rr.skipped_up_to_date,
                     skipped_legacy = rr.skipped_legacy,

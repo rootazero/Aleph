@@ -6,7 +6,9 @@
 //! `AssistantMessage` per Think step, so calls and rows are 1:1. The session
 //! row's counters are the fold of those same events (`session::usage_fold`),
 //! accumulated once per run when its `AssistantRunMeta` lands — see
-//! [`bill_run_from_fold`].
+//! [`bill_run_from_fold`] — or, for a run that finished but whose meta never
+//! reached the log, when a whole-session heal synthesizes that stamp
+//! ([`synthesize_missing_stamps`]).
 //!
 //! The observer itself is **non-blocking**: `on_appended` enqueues the event
 //! onto an mpsc channel and returns immediately.
@@ -122,11 +124,18 @@ pub struct RepairReport {
     pub holes_filled: usize,
     /// `AssistantRunMeta` stamps that landed on a row that had none.
     pub stamps_reapplied: usize,
-    /// Of those stamps, how many also accumulated the run's spend. A stamp
-    /// that found the row already carrying this run's id bills nothing —
-    /// that is what makes a replay non-double-billing.
+    /// Stamps this pass wrote for a finished run whose `AssistantRunMeta`
+    /// never reached the log — the process died between `RunFinished` and the
+    /// meta. Carries the `run_id` alone (the gauge is unknown and is never
+    /// written as zeros). Only a [`HealScope::WholeSession`] pass writes
+    /// these — see [`synthesize_missing_stamps`].
+    pub stamps_synthesized: usize,
+    /// Of the stamps above (re-applied or synthesized), how many also
+    /// accumulated the run's spend. A stamp that found the row already
+    /// carrying this run's id bills nothing — that is what makes a replay,
+    /// and a second heal, non-double-billing.
     pub usage_rebilled: usize,
-    /// Nothing was missing, nothing was re-stamped, and nothing was deferred.
+    /// Nothing was missing, nothing was stamped, and nothing was deferred.
     ///
     /// The last clause is the one that is easy to drop: a seq the pass could
     /// not resolve sets no counter at all, so a heal that wrote nothing
@@ -466,6 +475,12 @@ enum HealScope {
     /// holes such a caller is asking about were left by ANOTHER process, and
     /// `missed` holding one recent seq would start the pass above every one of
     /// them and report "filled 0" for a session the caller measured as holed.
+    ///
+    /// Also the only scope that synthesizes the stamp for a finished run whose
+    /// `AssistantRunMeta` never landed ([`synthesize_missing_stamps`]): a
+    /// drain-triggered pass cannot tell a meta that is MISSING from one that
+    /// is still queued behind it, and stamping ahead of a queued meta would
+    /// cost that meta its gauge and its price.
     WholeSession,
 }
 
@@ -559,11 +574,27 @@ async fn heal_session(
     }
     let deferred = retry.len();
     lock_missed(missed).restore(id, retry);
+    // After the walk, so every row a finished run produced is in the
+    // transcript before its stamp is looked for. Whole-session only: this
+    // pass has read the log from seq 1, so a run with no meta below the head
+    // has no meta at all — a drain-triggered pass cannot say that (the meta
+    // may simply be queued behind the event that triggered it).
+    if scope == HealScope::WholeSession {
+        synthesize_missing_stamps(
+            store,
+            id,
+            &event_store,
+            &present,
+            &collect_run_spans(&events),
+            &mut report,
+        )
+        .await;
+    }
     // `retry` is part of this answer. Every failure inside the loop — an append
     // that would not write, a stamp that would not land, a retirement flag that
     // would not read — comes back as `Projected::Retry` and sets none of the
-    // three counters, so without this clause a heal that wrote nothing BECAUSE
-    // it could not returns `up_to_date: true`, and the reconciler counts the
+    // counters, so without this clause a heal that wrote nothing BECAUSE it
+    // could not returns `up_to_date: true`, and the reconciler counts the
     // session as whole in the boot line.
     //
     // Deliberately not folded into `errored`: a `NoRowInRange` deferral is
@@ -572,9 +603,165 @@ async fn heal_session(
     // is the honest middle — the pass did not find out.
     report.up_to_date = report.holes_filled == 0
         && report.stamps_reapplied == 0
+        && report.stamps_synthesized == 0
         && !report.errored
         && deferred == 0;
     report
+}
+
+/// One run's extent in the log, as a heal pass sees it: where it opened,
+/// where (if anywhere) it closed, how many assistant messages it produced,
+/// and whether its `AssistantRunMeta` is in the log.
+struct RunSpan {
+    run_id: String,
+    /// Seq of the `RunStarted` that opened it.
+    start: EventSeq,
+    /// Seq of the `RunFinished` that closed it; `None` while it is open.
+    end: Option<EventSeq>,
+    /// `AssistantMessage` events between `start` and `end` — after the walk in
+    /// [`heal_session`], each is a transcript row or a deferred seq.
+    assistant_messages: usize,
+    meta: bool,
+}
+
+impl RunSpan {
+    /// The seq to stamp up to when this run needs a synthesized stamp — it
+    /// finished, produced at least one assistant message, and no meta for it
+    /// is in the log. `None` for every other shape, each for its own reason:
+    /// an open run's meta may still come; a run with no assistant message has
+    /// no row to stamp; and a run WITH a meta keeps its own stamp — landed or
+    /// deferred, that meta carries the gauge and the price, which a
+    /// synthesized stamp cannot.
+    fn synthesis_end(&self) -> Option<EventSeq> {
+        if self.assistant_messages == 0 || self.meta {
+            return None;
+        }
+        self.end
+    }
+}
+
+/// Fold the log into run spans. Pure, so the shape a stamp is synthesized
+/// for is unit-testable without a store.
+///
+/// Every `RunStarted` opens a new span and a `RunFinished` closes the NEWEST
+/// one (the same "last marker wins" reading as `reduction::reduce_run`), so
+/// no span holds a second `RunStarted` between its `start` and its `end`.
+/// That is what lets the stamp range and the usage fold agree by
+/// construction: the fold anchors on the last `RunStarted` in the slice it
+/// is given, and over `[start, end)` that is `start`. A split child's log
+/// carries the parent's opener copied inside the tail and the child's own
+/// opener last (`session_split`); the copied one opens a span that is never
+/// closed, and so is never synthesized. Assistant messages count into the
+/// newest span only while it is open; a meta marks the span that names its
+/// run, wherever that span sits.
+fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
+    let mut spans: Vec<RunSpan> = Vec::new();
+    for rec in events {
+        match &rec.event {
+            SessionEvent::RunStarted { run_id, .. } => spans.push(RunSpan {
+                run_id: run_id.clone(),
+                start: rec.seq,
+                end: None,
+                assistant_messages: 0,
+                meta: false,
+            }),
+            SessionEvent::AssistantMessage { .. } => {
+                if let Some(span) = spans.last_mut().filter(|s| s.end.is_none()) {
+                    span.assistant_messages += 1;
+                }
+            }
+            SessionEvent::RunFinished { .. } => {
+                if let Some(span) = spans.last_mut() {
+                    span.end.get_or_insert(rec.seq);
+                }
+            }
+            SessionEvent::AssistantRunMeta { run_id, .. } => {
+                if let Some(span) = spans.iter_mut().rev().find(|s| &s.run_id == run_id) {
+                    span.meta = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+/// Stamp and bill every finished run whose `AssistantRunMeta` never reached
+/// the log (#11: the process died between `RunFinished` and the meta, so the
+/// run's rows never got their `run_id` join and its spend never reached the
+/// session row).
+///
+/// The stamp carries the `run_id` alone — `build_message_metadata` with no
+/// occupancy — because the gauge is unknown here and a zero would read as a
+/// measurement on the Panel. It goes through the same
+/// `stamp_assistant_metadata_in_range` as a real meta, over the same shape of
+/// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
+/// rows strictly between), so a later heal — or a meta that does arrive —
+/// reads `AlreadyStamped` and bills nothing: the stamp is the idempotence
+/// guard, exactly as on the live path. The bill is [`bill_run_from_fold`]
+/// with `run_start = start` and the fold read up to `end`; the cost and model
+/// are `None` because there is no meta to take them from, so a synthesized
+/// bill adds tokens and never dollars. A run whose provider reported no usage
+/// is stamped (the join is still owed) and not billed — nothing to add, and
+/// `bill_run_from_fold` says nothing about it.
+///
+/// `NoRowInRange` here means the run's row is a hole this pass could not
+/// fill — it is in `retry`, `up_to_date` is already false, and the pass that
+/// fills it synthesizes. A refused stamp sets `errored`: unlike a deferred
+/// meta there is no seq to retry, and the next whole-session pass finds the
+/// stamp still missing.
+///
+/// The boot reconciler runs before any run is live, so it cannot race a meta
+/// that is about to be appended. A `request_repair` on a live session (the
+/// doctor's repair) can, in the window between a run's `RunFinished` and its
+/// meta: the synthesized stamp lands first and that meta then reads
+/// `AlreadyStamped`, so its gauge and price are not applied.
+async fn synthesize_missing_stamps(
+    store: &Arc<dyn SessionStore>,
+    id: &SessionId,
+    event_store: &Arc<dyn SessionEventStore>,
+    present: &(dyn Fn(EventSeq) -> bool + Send + Sync),
+    spans: &[RunSpan],
+    report: &mut RepairReport,
+) {
+    for span in spans {
+        let Some(end) = span.synthesis_end() else {
+            continue;
+        };
+        let Some(meta) =
+            crate::gateway::agent_instance::build_message_metadata(Some(&span.run_id), None)
+        else {
+            continue;
+        };
+        match store
+            .stamp_assistant_metadata_in_range(id, span.start, end, &meta)
+            .await
+        {
+            Ok(StampOutcome::Stamped) => {
+                report.stamps_synthesized += 1;
+                let ctx = ProjectionCtx {
+                    store,
+                    events: Some(event_store),
+                    present,
+                    run_start: span.start,
+                    bus: None,
+                };
+                if bill_run_from_fold(id, end, &ctx, &span.run_id, None, None, None).await {
+                    report.usage_rebilled += 1;
+                }
+            }
+            Ok(StampOutcome::AlreadyStamped | StampOutcome::NoRowInRange) => {}
+            Err(e) => {
+                tracing::warn!(
+                    session = ?id,
+                    run_id = %span.run_id,
+                    error = %e,
+                    "heal: synthesized stamp failed"
+                );
+                report.errored = true;
+            }
+        }
+    }
 }
 
 /// The live peer-echo frame for a row that is about to be appended, or `None`
@@ -911,7 +1098,9 @@ pub(crate) async fn project_event(
 /// exactly once, guarded by the stamp that just landed. The tokens are
 /// [`crate::session::usage_fold::run_usage_totals`] over the log slice
 /// `[ctx.run_start, meta_seq)`, anchored on the last `RunStarted` in it; the
-/// cost and model are the meta's own.
+/// cost and model are the meta's own — `None` from
+/// [`synthesize_missing_stamps`], which has no meta and passes the run's
+/// `RunFinished` seq as `meta_seq`.
 ///
 /// `false` = nothing was accumulated — either it could not be told (no log
 /// installed, an unreadable slice, no `RunStarted` to anchor on, a refused
@@ -1979,6 +2168,136 @@ mod tests {
             (0, 0),
             "an unanchored fold must not bill the session"
         );
+    }
+
+    /// The shape a stamp is synthesized for, clause by clause, on the pure
+    /// fold — a store-level fixture cannot reach the "has a meta" clause,
+    /// because a meta in the log is projected by the same walk and the
+    /// synthesized stamp then reads `AlreadyStamped` whatever the clause says.
+    #[test]
+    fn a_stamp_is_synthesized_only_for_a_finished_run_with_rows_and_no_meta() {
+        let tid = uuid::Uuid::new_v4();
+        let ends = |events: &[(EventSeq, SessionEvent)]| -> Vec<Option<EventSeq>> {
+            let log: Vec<SessionEventRecord> =
+                events.iter().map(|(s, e)| rec(*s, e.clone())).collect();
+            collect_run_spans(&log)
+                .iter()
+                .map(RunSpan::synthesis_end)
+                .collect()
+        };
+        assert_eq!(
+            ends(&[
+                (1, run_started("a")),
+                (2, assistant_msg(tid)),
+                (3, run_finished("a")),
+            ]),
+            vec![Some(3)],
+            "finished, one row, no meta: stamp up to the RunFinished"
+        );
+        assert_eq!(
+            ends(&one_billed_run(tid, "a")),
+            vec![None],
+            "its meta is in the log: that meta owns the stamp, landed or deferred"
+        );
+        assert_eq!(
+            ends(&[(1, run_started("a")), (2, assistant_msg(tid))]),
+            vec![None],
+            "still open: the meta may still come"
+        );
+        assert_eq!(
+            ends(&[(1, run_started("a")), (2, run_finished("a"))]),
+            vec![None],
+            "no assistant message: no row to stamp"
+        );
+        assert_eq!(
+            ends(&[
+                (1, run_started("a")),
+                (2, assistant_msg(tid)),
+                (3, run_started("b")),
+                (4, assistant_msg(tid)),
+                (5, run_finished("b")),
+            ]),
+            vec![None, Some(5)],
+            "the closer closes the newest opener, so a span never holds a \
+             second RunStarted — the fold's anchor is the span's own start"
+        );
+    }
+
+    /// Same log, two scopes: a drain-triggered pass fills the row and leaves
+    /// the finished run unstamped and unbilled — it cannot know the meta is
+    /// missing rather than queued — and the whole-session pass that follows
+    /// synthesizes the stamp and bills the run from its own messages.
+    #[tokio::test]
+    async fn a_known_gaps_heal_synthesizes_nothing_and_a_whole_session_heal_does() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "nometa_scope.db");
+        let id = SessionId::ephemeral("nometa-scope");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let log = own_event_log(
+            &id,
+            &[
+                (1, run_started("r1")),
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (3, run_finished("r1")),
+            ],
+        )
+        .await;
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log.clone());
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        let mut run_start = HashMap::new();
+
+        // Nothing recorded, so the floor is 1: this pass reads exactly the log
+        // the whole-session pass below reads. The scope is the only difference.
+        let known = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::KnownGaps,
+        )
+        .await;
+        assert_eq!(
+            (
+                known.holes_filled,
+                known.stamps_synthesized,
+                known.usage_rebilled
+            ),
+            (1, 0, 0),
+            "the row is filled, the stamp is not synthesized: {known:?}"
+        );
+        assert_eq!(
+            store.get_metadata(&id).await.unwrap().unwrap().input_tokens,
+            0,
+            "a drain-triggered pass bills nothing for a run with no meta"
+        );
+
+        let whole = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::WholeSession,
+        )
+        .await;
+        assert_eq!(
+            (
+                whole.holes_filled,
+                whole.stamps_synthesized,
+                whole.usage_rebilled
+            ),
+            (0, 1, 1),
+            "{whole:?}"
+        );
+        assert!(
+            !whole.up_to_date,
+            "a pass that wrote a stamp did not find the session whole: {whole:?}"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (45, 25));
     }
 
     #[tokio::test]

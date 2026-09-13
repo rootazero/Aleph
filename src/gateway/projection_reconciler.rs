@@ -79,7 +79,13 @@ pub struct ReconcileReport {
     pub holes_filled: usize,
     /// `AssistantRunMeta` stamps re-applied to a row that had none.
     pub stamps_reapplied: usize,
-    /// Of those stamps, how many also accumulated the run's spend.
+    /// Stamps synthesized for a finished run whose `AssistantRunMeta` never
+    /// reached the log (a crash between `RunFinished` and the meta): the
+    /// `run_id` join alone, billed from the run's own messages. Idempotent
+    /// through the stamp, like a re-applied one.
+    pub stamps_synthesized: usize,
+    /// Of the stamps above (re-applied or synthesized), how many also
+    /// accumulated the run's spend.
     pub usage_rebilled: usize,
     /// Candidates that turned out to be whole.
     pub skipped_up_to_date: usize,
@@ -149,6 +155,7 @@ impl ProjectionReconciler {
             let repair = self.projector.request_repair(&id).await;
             report.holes_filled += repair.holes_filled;
             report.stamps_reapplied += repair.stamps_reapplied;
+            report.stamps_synthesized += repair.stamps_synthesized;
             report.usage_rebilled += repair.usage_rebilled;
             if repair.errored {
                 report.errored += 1;
@@ -163,6 +170,7 @@ impl ProjectionReconciler {
             scanned = report.scanned,
             holes_filled = report.holes_filled,
             stamps_reapplied = report.stamps_reapplied,
+            stamps_synthesized = report.stamps_synthesized,
             usage_rebilled = report.usage_rebilled,
             skipped_up_to_date = report.skipped_up_to_date,
             skipped_legacy = report.skipped_legacy,
@@ -527,6 +535,66 @@ mod tests {
             }),
             at,
         }
+    }
+
+    /// An assistant message whose provider reported no usage — absent, not
+    /// zero.
+    fn assistant_unpriced(tid: TurnId, at: i64) -> SessionEvent {
+        SessionEvent::AssistantMessage {
+            turn_id: tid,
+            content: mc("hello"),
+            usage: None,
+            at,
+        }
+    }
+
+    /// A finished run — `RunStarted`, one turn, the given assistant message,
+    /// `RunFinished` — and NO `AssistantRunMeta`: the log a crash between the
+    /// closer and the meta leaves behind.
+    fn finished_run_without_meta(
+        tid: TurnId,
+        assistant_message: SessionEvent,
+    ) -> Vec<(u64, SessionEvent)> {
+        vec![
+            (
+                1,
+                SessionEvent::RunStarted {
+                    run_id: "r1".into(),
+                    at: 1,
+                    project_root: None,
+                    envelope: None,
+                },
+            ),
+            (
+                2,
+                SessionEvent::TurnStarted {
+                    turn_id: tid,
+                    trigger: TurnTrigger::UserMessage,
+                    at: 2,
+                },
+            ),
+            (3, assistant_message),
+            (
+                4,
+                SessionEvent::RunFinished {
+                    run_id: "r1".into(),
+                    outcome: RunOutcome::Completed,
+                    at: 4,
+                },
+            ),
+        ]
+    }
+
+    /// The SQLite backend as the projection target — the one whose
+    /// `stamp_assistant_metadata_in_range` is a `source_seq`-ranged query.
+    fn temp_sqlite_store(name: &str) -> (Arc<dyn SessionStore>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SessionManager::new(SessionManagerConfig {
+            db_path: dir.path().join(name),
+            ..Default::default()
+        })
+        .unwrap();
+        (Arc::new(manager), dir)
     }
 
     /// A minimal interrupted-run log: TurnStarted, UserMessage, RunStarted,
@@ -1255,9 +1323,13 @@ mod tests {
         session_store.get_or_create(&id).await.unwrap();
         append_all(&event_store, &id, &two_call_turn(uuid::Uuid::new_v4())).await;
 
-        reconciler(&event_store, &session_store)
+        let report = reconciler(&event_store, &session_store)
             .reconcile_candidates()
             .await;
+        assert_eq!(
+            report.stamps_synthesized, 0,
+            "the run is still open (no RunFinished): its meta may still come"
+        );
 
         let hist = session_store.get_history(&id, None).await.unwrap();
         assert_eq!(hist.len(), 5, "user + assistant + 2 tool rows + assistant");
@@ -1265,6 +1337,106 @@ mod tests {
         assert_eq!(asst.len(), 2, "one row per LLM call");
         assert_eq!((asst[0].input_tokens, asst[0].output_tokens), (10, 20));
         assert_eq!((asst[1].input_tokens, asst[1].output_tokens), (5, 7));
+    }
+
+    /// #11: the run finished, the process died before `AssistantRunMeta` — the
+    /// session's counters under-counted forever. Boot folds the run's own messages.
+    #[tokio::test]
+    async fn a_finished_run_with_no_meta_is_billed_from_its_messages_at_boot() {
+        let event_store = own_event_store();
+        let (session_store, _dir) = temp_sqlite_store("nometa.db");
+        let id = SessionKey::ephemeral("nometa");
+        session_store.get_or_create(&id).await.unwrap();
+        let tid = uuid::Uuid::new_v4();
+        append_all(
+            &event_store,
+            &id,
+            &finished_run_without_meta(tid, assistant(tid, 300, 40, 3)),
+        )
+        .await;
+        let r = reconciler(&event_store, &session_store)
+            .reconcile_candidates()
+            .await;
+        assert_eq!((r.stamps_synthesized, r.usage_rebilled), (1, 1), "{r:?}");
+        let meta = session_store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (300, 40));
+        let row = session_store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .unwrap();
+        let stamp = row.metadata.unwrap();
+        assert_eq!(
+            stamp.get("run_id").and_then(|v| v.as_str()),
+            Some("r1"),
+            "the run_id join is what the crash cost the row"
+        );
+        assert_eq!(
+            stamp.as_object().map(serde_json::Map::len),
+            Some(1),
+            "the run_id alone: the gauge is unknown and must not be written as zeros"
+        );
+        let again = reconciler(&event_store, &session_store)
+            .reconcile_candidates()
+            .await;
+        assert_eq!(
+            (again.stamps_synthesized, again.usage_rebilled),
+            (0, 0),
+            "the stamp is the idempotence guard"
+        );
+        assert_eq!(
+            session_store
+                .get_metadata(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .input_tokens,
+            300
+        );
+    }
+
+    /// The same crash on a run whose provider reported no usage: the row's
+    /// `run_id` join is still owed, but there is nothing to bill — `usage: None`
+    /// is absent, not zero, and the fold gives `input == output == 0`.
+    #[tokio::test]
+    async fn a_finished_run_with_no_usage_is_stamped_but_not_billed() {
+        let event_store = own_event_store();
+        let (session_store, _dir) = temp_sqlite_store("nousage.db");
+        let id = SessionKey::ephemeral("nousage");
+        session_store.get_or_create(&id).await.unwrap();
+        let tid = uuid::Uuid::new_v4();
+        append_all(
+            &event_store,
+            &id,
+            &finished_run_without_meta(tid, assistant_unpriced(tid, 3)),
+        )
+        .await;
+        let r = reconciler(&event_store, &session_store)
+            .reconcile_candidates()
+            .await;
+        assert_eq!(
+            (r.stamps_synthesized, r.usage_rebilled, r.errored),
+            (1, 0, 0),
+            "stamped, not billed, not an error: {r:?}"
+        );
+        let meta = session_store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!((meta.input_tokens, meta.output_tokens), (0, 0));
+        let row = session_store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .unwrap();
+        assert_eq!(
+            row.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("r1")
+        );
     }
 
     #[tokio::test]
