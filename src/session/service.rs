@@ -99,8 +99,9 @@ pub trait SessionService: Send + Sync + 'static {
 /// first column is pinned to the tree by
 /// `the_reader_census_matches_the_tree_in_both_directions`: a reader that
 /// appears or vanishes is a red test, not a stale sentence. Its scope — what
-/// "production code" means to that walk — is stated on
-/// [`crate::utils::source_scan::files_whose_production_code_contains`].
+/// "production code" means to that walk, and which spellings of a read it
+/// sees — is stated on
+/// [`crate::utils::source_scan::files_whose_production_code_reads`].
 ///
 /// The second column is prose and is NOT pinned; it is true of the code on
 /// the commit that wrote it, and the reader who changes a site's `None` arm
@@ -235,9 +236,9 @@ mod tests {
     /// row goes. Mutation (T17): comment out one row ⇒ red naming that file.
     #[test]
     fn the_reader_census_matches_the_tree_in_both_directions() {
-        use crate::utils::source_scan::files_whose_production_code_contains;
+        use crate::utils::source_scan::files_whose_production_code_reads;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let found = files_whose_production_code_contains(&root, "global_session_service()");
+        let found = files_whose_production_code_reads(&root, "global_session_service");
         let listed: std::collections::BTreeSet<String> = SESSION_SERVICE_READERS
             .iter()
             .map(|(file, _)| (*file).to_string())

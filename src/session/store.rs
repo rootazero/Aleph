@@ -1147,16 +1147,22 @@ fn cap_chars(s: &str, max: usize) -> String {
 /// uninstalled handle reads as THERE — one row per file, the second column
 /// taken from the code at that site.
 ///
-/// Not a hand-list: the table this replaces named four readers (one of them,
-/// `session_projector.rs`, never read the handle at all — it holds its own
-/// store) while the tree held more than twice that many files that do, this
-/// one included. The first column is
-/// pinned to the tree by `the_event_store_reader_census_matches_the_tree`,
-/// through the same walk `session::service::SESSION_SERVICE_READERS` uses —
-/// its scope is stated on
-/// [`crate::utils::source_scan::files_whose_production_code_contains`]. The
+/// Not a hand-list: the table this replaces named four readers while the
+/// tree held more than twice that many files that do, this one included.
+/// The first column is pinned to the tree by
+/// `the_event_store_reader_census_matches_the_tree`, through the same walk
+/// `session::service::SESSION_SERVICE_READERS` uses — its scope, and which
+/// spellings of a read it sees, are stated on
+/// [`crate::utils::source_scan::files_whose_production_code_reads`]. The
 /// second column is prose and is NOT pinned; whoever changes a site's `None`
 /// arm owes this table the new sentence.
+///
+/// The census's first version saw only the CALL spelling, and the first
+/// version of this doc restated its verdict as a fact — "`session_projector.rs`
+/// never read the handle at all". It does: `resolve_events` falls back to it
+/// as a function POINTER (`.or_else(global_session_event_store)`), the
+/// spelling that census could not see. The row is below; the sentence was
+/// the instrument's blind spot written down as the tree's shape (判据 §3).
 ///
 /// `#[cfg(test)]` because the census is its only reader: the table is
 /// documentation the tree can contradict, not runtime data.
@@ -1193,6 +1199,12 @@ pub(crate) const SESSION_EVENT_STORE_READERS: &[(&str, &str)] = &[
         "src/gateway/handlers/trace_replay.rs",
         "`trace.by_runs` replays with an empty presentation map — holes show nothing, never \
          \"no diff\"",
+    ),
+    (
+        "src/gateway/session_projector.rs",
+        "`resolve_events` falls back to the handle as a fn pointer when no store is pinned, at \
+         two sites: the drain treats every seq as live (`event_retired` → `Ok(false)`, so a \
+         retired row still projects); a heal pass puts its claim back and reports `errored`",
     ),
     (
         "src/session/store.rs",
@@ -2771,9 +2783,9 @@ mod tests {
     /// Mutation (T17): comment out one row ⇒ red naming that file.
     #[test]
     fn the_event_store_reader_census_matches_the_tree() {
-        use crate::utils::source_scan::files_whose_production_code_contains;
+        use crate::utils::source_scan::files_whose_production_code_reads;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let found = files_whose_production_code_contains(&root, "global_session_event_store()");
+        let found = files_whose_production_code_reads(&root, "global_session_event_store");
         let listed: std::collections::BTreeSet<String> = SESSION_EVENT_STORE_READERS
             .iter()
             .map(|(file, _)| (*file).to_string())

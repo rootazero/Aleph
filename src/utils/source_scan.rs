@@ -312,7 +312,16 @@ fn module_file_declares_under_cfg_test(dir: &std::path::Path, line: &str) -> boo
 /// are skipped. A one-line `#[cfg(test)] mod x;` is NOT a shape: the
 /// partition this reads takes the line AFTER the attribute as the item, so
 /// such a line would already be mis-cut there, and the tree has none.
-pub(crate) fn cfg_test_item_heads(src: &str) -> Vec<String> {
+///
+/// Two more head shapes the equality compare in
+/// [`module_file_declares_under_cfg_test`] does not see, both absent from
+/// the tree (grep, 2026-09-13) and stated so the count of recognised shapes
+/// reads as "five", not "all": a head with a trailing comment (`mod tests {
+/// // …`) is returned with the comment still on it, and a `#[cfg(test)]
+/// mod tests { mod y; }` nested inside a PRODUCTION inline `mod foo { … }`
+/// declares `foo::tests::y` in a directory `foo/` that has no `mod.rs` or
+/// `foo.rs` to ask, so the climb finds no declarer for it.
+fn cfg_test_item_heads(src: &str) -> Vec<String> {
     let portion = cfg_test_portion(src);
     let lines: Vec<&str> = portion.lines().collect();
     let mut heads = Vec::new();
@@ -346,9 +355,16 @@ pub(crate) fn cfg_test_item_heads(src: &str) -> Vec<String> {
 /// `#[cfg(test)]` — as a file module (`#[cfg(test)] mod tests;` resolving to
 /// `tests/mod.rs`, whose children carry no attribute of their own) or as an
 /// inline block (`#[cfg(test)] mod tests { mod act; … }`, whose children live
-/// in `tests/` with no `mod.rs` at all). Climbs one directory at a time and
-/// stops at the crate's `src/`, so a production file is never reclassified by
-/// something above the crate root; a directory with no parent answers `false`.
+/// in `tests/` with no `mod.rs` at all). Climbs one directory at a time.
+///
+/// The stop is `dir == <CARGO_MANIFEST_DIR>/src`, which every path
+/// [`declared_as_a_test_module`] hands in reaches because that caller
+/// absolutises relative paths under the manifest dir first. A path OUTSIDE
+/// the crate (an absolute tempdir, as in the fixture tests) never equals it:
+/// the climb then asks for a `mod.rs` / `<name>.rs` at every ancestor up to
+/// the filesystem root — each read fails, each answer is `false` — and ends
+/// when `parent()` is `None`. Harmless, but the crate boundary is this
+/// function's caller's fact, not its own.
 fn directory_is_a_test_module(dir: &std::path::Path) -> bool {
     let crate_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut dir = dir;
@@ -965,8 +981,8 @@ pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)
         .collect()
 }
 
-/// Every file under `root` whose production code READS `needle` — the walk
-/// the two capability-handle reader censuses share
+/// Every file under `root` whose production code READS the identifier
+/// `ident` — the walk the two capability-handle reader censuses share
 /// (`session::service::SESSION_SERVICE_READERS`,
 /// `session::store::SESSION_EVENT_STORE_READERS`), so "who reads this
 /// handle" has one derivation and not one per handle.
@@ -976,33 +992,81 @@ pub(crate) fn rust_sources_under(root: &std::path::Path) -> Vec<(String, String)
 /// [`production_text`] (a file its ancestors declare under `#[cfg(test)]`
 /// contributes nothing; each `#[cfg(test)]`-attributed item is removed) and
 /// then [`code_text`] (comment text and every literal payload removed — a
-/// warn message or a doc line that names the needle is not a read). The
+/// warn message or a doc line that names the identifier is not a read). The
 /// scan recognises the literal `#[cfg(test)]` attribute ONLY: code gated by
 /// `#[cfg(any(test, feature = "test-helpers"))]` or by a feature alone is
 /// scanned as production, and a reader under such a gate would be listed
 /// here as one. None of the listed readers is; a census that starts to see
 /// one must say so in its own doc rather than list it as shipped.
 ///
-/// A line that DEFINES the needle (`fn <needle>`) is not a read, so the
-/// defining file is not excluded wholesale: `session/store.rs` defines
-/// `global_session_event_store()` AND reads it in `retire_live_events`, and
+/// # Which spellings of a read it sees
+///
+/// The bare identifier at word boundaries — the character before and after
+/// it is not `[A-Za-z0-9_]` — on a line that is neither its definition
+/// (`fn <ident>`) nor an import (`use …;`, including the continuation lines
+/// of a multi-line `use {…};`). So `crate::x::handle()`, a bare `handle()`
+/// after an import, and a function POINTER `.or_else(crate::x::handle)` are
+/// all reads; `set_handle(`, `handle_slot()`, `decline_handle(` are not.
+///
+/// The first version matched the literal `"<ident>()"` — the CALL spelling
+/// only — and was green with `gateway/session_projector.rs` absent from the
+/// store table: `resolve_events` reads the handle as a pointer, no `()`, so
+/// the census could not see it while the table's doc restated the census's
+/// verdict as a fact about the tree (判据 §3, §9: one verb, several faces).
+/// Pinned by the `pointer.rs` case of
+/// `files_whose_production_code_reads_counts_every_spelling_of_a_read`.
+///
+/// A definition line is skipped rather than the defining file excluded, so
+/// the defining file is not excluded wholesale: `session/store.rs` defines
+/// `global_session_event_store` AND reads it in `retire_live_events`, and
 /// excluding the file would have hidden that reader — the blind spot a
 /// hand-written exclusion list would have carried.
 #[cfg(test)]
-pub(crate) fn files_whose_production_code_contains(
+pub(crate) fn files_whose_production_code_reads(
     root: &std::path::Path,
-    needle: &str,
+    ident: &str,
 ) -> std::collections::BTreeSet<String> {
-    let definition = format!("fn {needle}");
+    let definition = format!("fn {ident}");
     rust_sources_under(root)
         .into_iter()
         .filter(|(rel, text)| {
-            code_text(&production_text(std::path::Path::new(rel), text))
-                .lines()
-                .any(|line| line.contains(needle) && !line.contains(&definition))
+            let code = code_text(&production_text(std::path::Path::new(rel), text));
+            let mut inside_use = false;
+            code.lines().any(|line| {
+                let line = strip_visibility(line.trim());
+                if inside_use {
+                    inside_use = !line.contains(';');
+                    return false;
+                }
+                if line.starts_with("use ") {
+                    inside_use = !line.contains(';');
+                    return false;
+                }
+                !line.contains(&definition) && mentions_identifier(line, ident)
+            })
         })
         .map(|(rel, _)| rel)
         .collect()
+}
+
+/// Whether `line` contains `ident` as a whole word: not preceded and not
+/// followed by an identifier character. `find` returns char-boundary byte
+/// offsets, and `ident` is ASCII, so the `get` slices cannot split a char.
+#[cfg(test)]
+fn mentions_identifier(line: &str, ident: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut from = 0usize;
+    while let Some(at) = line.get(from..).and_then(|rest| rest.find(ident)) {
+        let start = from + at;
+        let end = start + ident.len();
+        let before = line.get(..start).and_then(|s| s.chars().next_back());
+        let after = line.get(end..).and_then(|s| s.chars().next());
+        if !before.is_some_and(is_ident) && !after.is_some_and(is_ident) {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 /// One `#[test]` / `#[tokio::test]` function found by [`scan_test_bodies`].
@@ -2020,6 +2084,11 @@ pub fn after() {}
     /// on purpose — it says the shape is still present in the tree, not how
     /// many files have it — and the count is printed with its commit so the
     /// next reader re-measures instead of inheriting `44`.
+    ///
+    /// Every positive example is ancestor-declared; a directly declared
+    /// `tests/mod.rs` would also pass the assertions (through the first
+    /// three shapes) but would say nothing about the climb, which is why
+    /// none is listed.
     #[test]
     fn ancestor_declared_test_modules_are_recognised() {
         for rel in [
@@ -2027,7 +2096,7 @@ pub fn after() {}
             "src/harness/tests/task10_wiring/extras.rs",
             "src/guardrails/tests/input.rs",
             "src/config/tests/basic.rs",
-            "src/orchestrator/tests/mod.rs",
+            "src/orchestrator/tests/loader.rs",
         ] {
             let path = std::path::Path::new(rel);
             assert!(
@@ -2136,14 +2205,19 @@ pub fn after() {}
         }
     }
 
-    /// [`files_whose_production_code_contains`] on a fixture tree: a call is
-    /// a hit; the definition line, a comment, a string literal and a call
-    /// inside a `#[cfg(test)]` item are not. Then one line on the real tree
-    /// for the claim the doc makes about WHY definitions are skipped per
-    /// line rather than per file: `session/store.rs` both defines and reads
-    /// `global_session_event_store()`, and must be seen as a reader.
+    /// [`files_whose_production_code_reads`] on a fixture tree: a call and a
+    /// function POINTER are hits; the definition line, a one-line and a
+    /// multi-line import, a comment, a string literal, a call inside a
+    /// `#[cfg(test)]` item, and the identifier as a prefix / suffix of a
+    /// longer one (`set_handle(`, `handle_slot()`) are not. The pointer case
+    /// is the one the first version missed on the real tree
+    /// (`gateway/session_projector.rs::resolve_events`). Then two lines on
+    /// the real tree: `session/store.rs` both defines and reads
+    /// `global_session_event_store` and must be seen as a reader (why
+    /// definitions are skipped per line, not per file), and the projector's
+    /// pointer read must be seen.
     #[test]
-    fn files_whose_production_code_contains_counts_reads_and_not_definitions() {
+    fn files_whose_production_code_reads_counts_every_spelling_of_a_read() {
         let dir = tempfile::tempdir().expect("tempdir");
         let write = |name: &str, text: &str| std::fs::write(dir.path().join(name), text).unwrap();
         write(
@@ -2152,6 +2226,19 @@ pub fn after() {}
         );
         write("reads.rs", "fn go() {\n    let _ = crate::handle();\n}\n");
         write(
+            "pointer.rs",
+            "fn go() {\n    let _ = None::<u8>.or_else(crate::handle);\n}\n",
+        );
+        write("imports.rs", "use crate::handle;\nfn go() {}\n");
+        write(
+            "multiline_import.rs",
+            "pub use crate::{\n    handle,\n    other,\n};\nfn go() {}\n",
+        );
+        write(
+            "siblings.rs",
+            "fn go() {\n    set_handle(1);\n    let _ = handle_slot();\n    handles();\n}\n",
+        );
+        write(
             "mentions.rs",
             "// handle() is discussed here\nconst S: &str = \"handle()\";\nfn go() {}\n",
         );
@@ -2159,7 +2246,7 @@ pub fn after() {}
             "tests_only.rs",
             "fn go() {}\n#[cfg(test)]\nmod tests {\n    fn t() {\n        let _ = crate::handle();\n    }\n}\n",
         );
-        let found = files_whose_production_code_contains(dir.path(), "handle()");
+        let found = files_whose_production_code_reads(dir.path(), "handle");
         let names: Vec<String> = found
             .iter()
             .map(|p| {
@@ -2169,14 +2256,21 @@ pub fn after() {}
                     .unwrap_or_default()
             })
             .collect();
-        assert_eq!(names, vec!["reads.rs".to_string()], "found: {found:?}");
+        assert_eq!(
+            names,
+            vec!["pointer.rs".to_string(), "reads.rs".to_string()],
+            "found: {found:?}"
+        );
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let store_readers =
-            files_whose_production_code_contains(&root, "global_session_event_store()");
+        let store_readers = files_whose_production_code_reads(&root, "global_session_event_store");
         assert!(
             store_readers.contains("src/session/store.rs"),
             "the defining file's own reader (`retire_live_events`) must be seen: {store_readers:?}"
+        );
+        assert!(
+            store_readers.contains("src/gateway/session_projector.rs"),
+            "the projector's fn-pointer read (`resolve_events`) must be seen: {store_readers:?}"
         );
     }
 

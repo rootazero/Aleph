@@ -158,10 +158,14 @@ pub struct AgentInstance {
     /// instance it builds, and read by NOTHING on this type: the one reader was
     /// the transcript capture inside `add_message_with_run_id`, deleted
     /// 2026-09-13 with zero production callers (the projector is the sole
-    /// `messages` writer, and it holds no L0 writer). Whether L0 transcript
-    /// capture is reconnected at the projector or this plumbing is cut is an
-    /// open decision (T17 report); until then this field carries a handle to
-    /// no effect, and a doc that claimed otherwise would be the lie.
+    /// `messages` writer, and it holds no L0 writer). A SEVERED FEATURE
+    /// (criterion #7): per-turn L0 capture today is only the compactor's
+    /// residue (`post_turn_compress`), and the `SessionEnd` row goes through
+    /// the `SessionManager`'s own writer (`session_manager/ops/emit.rs`) —
+    /// this handle is on neither path. CUT or CONNECT at the projector is a
+    /// pending product decision (T17 report, FOLLOW-UP); until then this
+    /// field carries a handle to no effect, and a doc that claimed otherwise
+    /// would be the lie.
     raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
@@ -615,8 +619,10 @@ impl RemovedAgent {
 pub struct AgentRegistry {
     agents: Arc<RwLock<HashMap<String, AgentEntry>>>,
     default_agent: String,
-    /// Optional L0 writer applied to every lazily-instantiated agent so
-    /// gateway-mediated turns reach `raw_memories`. Set once at startup.
+    /// Optional L0 writer carried onto every agent this registry
+    /// instantiates. Set once at startup. Nothing on [`AgentInstance`] reads
+    /// it any more — see that type's field doc: the wire is a severed
+    /// feature awaiting CUT or CONNECT, not a capture path.
     raw_memory_writer:
         Arc<RwLock<Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>>>,
 }
@@ -644,8 +650,10 @@ impl AgentRegistry {
 
     /// Register an already-instantiated agent (for tests and dynamic creation).
     /// If a raw-memory writer has been set on the registry and the instance
-    /// does not already carry one, attach it here so dynamically-created agents
-    /// also fill `raw_memories`.
+    /// does not already carry one, it is attached here — the same carry the
+    /// lazy path does, so both construction paths hold the same handle. It
+    /// fills nothing: no method on `AgentInstance` reads it (see its field
+    /// doc).
     pub async fn register(&self, instance: AgentInstance) {
         let id = instance.id().to_string();
         let instance = if instance.raw_memory_writer.is_none() {

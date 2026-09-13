@@ -410,10 +410,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Create agent registry before tool config so agent management tools can use it
         let agent_registry = Arc::new(AgentRegistry::new());
 
-        // Wire L0 raw-memory writer so every gateway-mediated agent turn is
-        // captured into raw_memories. Without this, only session-compaction
-        // residue and SessionEnd writes reach L0; short conversations under
-        // the WS path never persist and the L1 pipeline starves.
+        // L0 raw-memory writer, carried onto every instance the registry
+        // builds. Nothing on the per-turn path consumes it: its one reader
+        // was `AgentInstance::add_message_with_run_id`'s transcript capture,
+        // deleted 2026-09-13 with zero production callers, so this is a
+        // SEVERED FEATURE (criterion #7), not a wire that captures turns.
+        // What reaches L0 today: per-turn, only the compactor's residue
+        // (`post_turn_compress`); on disconnect, the `SessionEnd` row the
+        // `SessionManager`'s own writer emits (`session_manager/ops/emit.rs`).
+        // CUT or CONNECT-at-the-projector is a pending product decision — see
+        // the T17 report's FOLLOW-UP; do not read this call as capture.
         agent_registry
             .set_raw_memory_writer(memory_db.clone()
                 as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>)

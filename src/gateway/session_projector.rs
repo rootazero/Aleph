@@ -2088,6 +2088,16 @@ mod tests {
     /// method and originates no row, so it is out of scope by construction.
     /// Mutation (T17): restore `orphan_notice.rs` from `5e85060b8` and its
     /// `pub mod` line ⇒ red naming the file.
+    ///
+    /// One spelling only: `.append_message(`. The verb has two other faces —
+    /// `SessionManager::add_message` / `add_message_full`
+    /// (`session_manager/ops/crud.rs`), which the sqlite `append_message`
+    /// forwards into — and this census does not look for them. Grep
+    /// (2026-09-13): zero production callers of `.add_message(`, and
+    /// `.add_message_full(`'s only callers are `add_message` itself and the
+    /// sqlite `append_message` impl, so the SSOT claim holds through them
+    /// too; a production caller of either would be a second writer this
+    /// test cannot see.
     #[test]
     fn the_projector_is_the_only_production_writer_of_the_messages_table() {
         use crate::utils::source_scan::{production_text, rust_sources_under, strip_comment_lines};
