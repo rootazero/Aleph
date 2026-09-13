@@ -1273,7 +1273,7 @@ mod tests {
         }
         async fn load_run_markers(
             &self,
-        ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+        ) -> Result<Vec<(SessionId, crate::session::store::MarkerSlice)>, SessionError> {
             Ok(Vec::new())
         }
     }

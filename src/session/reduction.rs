@@ -20,14 +20,17 @@
 //! compaction, backfill, the L0 fast path — each appending under its own seq,
 //! so "the log is exactly what one protocol can produce" is not a rule this
 //! reducer can enforce without refusing Aleph's own designed shapes. The
-//! closed set [`LogContradiction`] therefore splits in two: two **REJECT**
+//! closed set [`LogContradiction`] therefore splits in two: the **REJECT**
 //! kinds, where the slice cannot be reduced at all and the caller gets `Err`
 //! (which may only ever mean "I do not know" — never `Clean`), and the
 //! **REPORT** kinds, each reduced under a *corrected reading* the tests pin
 //! per kind. A report that changed no reading would be a no-op that reports
-//! success, so every REPORT variant names what it changes. (The count of
-//! REPORT kinds is deliberately not written here — `tests::kind_index` is
-//! the census, and a number in prose is a list that rots.)
+//! success, so every REPORT variant names what it changes. (The counts are
+//! deliberately not written here — `tests::kind_index` is the census, and a
+//! number in prose is a list that rots.) One REJECT kind is raised before a
+//! slice exists at all: [`LogContradiction::UndecodableRecord`], for a row
+//! the store could not decode, which [`reduce_marker_slice`] lifts into the
+//! same `Err`.
 //!
 //! Deliberately NOT in `src/harness/`: this is a read face over durable facts,
 //! not Think→Act turn scheduling. R10's 12-file lock and `budget.rs::CEILING`
@@ -40,6 +43,7 @@ use serde::Serialize;
 use crate::session::events::{
     EventSeq, ParkReason, RunEnvelopeSnapshot, SessionEvent, SessionEventRecord, Timestamp, TurnId,
 };
+use crate::session::store::{MarkerSlice, UndecodableRecord};
 
 /// One thing a session log says that it must not say.
 ///
@@ -123,6 +127,11 @@ pub enum LogContradiction {
     /// call's receipt (a detached job's card) is not this — see the arm in
     /// [`reduce_run`]; it is read like an approval after a receipt: silently.
     ParkedWithoutRequest { seq: EventSeq, call_id: String },
+    /// A row of this slice did not decode on this build. REJECT — the reducer
+    /// never saw the record, so no reading exists; the store names it
+    /// ([`UndecodableRecord`]) and this is that name on the contradiction
+    /// face, via [`From`].
+    UndecodableRecord { seq: EventSeq },
 }
 
 impl LogContradiction {
@@ -131,7 +140,9 @@ impl LogContradiction {
     pub fn rejects(&self) -> bool {
         matches!(
             self,
-            Self::OutOfOrderSlice { .. } | Self::NonMarkerInMarkerSlice { .. }
+            Self::OutOfOrderSlice { .. }
+                | Self::NonMarkerInMarkerSlice { .. }
+                | Self::UndecodableRecord { .. }
         )
     }
 
@@ -151,7 +162,14 @@ impl LogContradiction {
             Self::ClockAnomaly { .. } => "session-log-clock-anomaly",
             Self::ResumeWithoutTarget { .. } => "session-log-resume-without-target",
             Self::ParkedWithoutRequest { .. } => "session-log-parked-without-request",
+            Self::UndecodableRecord { .. } => "session-log-undecodable-record",
         }
+    }
+}
+
+impl From<&UndecodableRecord> for LogContradiction {
+    fn from(u: &UndecodableRecord) -> Self {
+        Self::UndecodableRecord { seq: u.seq }
     }
 }
 
@@ -195,6 +213,11 @@ impl fmt::Display for LogContradiction {
             Self::ParkedWithoutRequest { seq, call_id } => write!(
                 f,
                 "park for call_id `{call_id}` at seq {seq} names no unanswered dispatch"
+            ),
+            Self::UndecodableRecord { seq } => write!(
+                f,
+                "the record at seq {seq} could not be decoded by this build; run the doctor \
+                 (`core/session-log`, fix=true) to retire that one record"
             ),
         }
     }
@@ -381,10 +404,11 @@ pub(crate) fn is_disposition_bearing(event: &SessionEvent) -> bool {
 /// subsequence of a full log (which is what [`reduce_run`] hands it, so the
 /// faces can never drift).
 ///
-/// Both REJECT kinds are checked here, over the whole slice: a stray event
-/// anywhere is refused, not just one that happens to sit past the trailing
-/// `RunFinished`. These used to be `debug_assert`s, which read as `Clean`
-/// in release.
+/// The two REJECT kinds a decoded slice can carry are checked here, over the
+/// whole slice: a stray event anywhere is refused, not just one that happens
+/// to sit past the trailing `RunFinished`. These used to be `debug_assert`s,
+/// which read as `Clean` in release. (The third, `UndecodableRecord`, never
+/// reaches a reducer — see [`reduce_marker_slice`].)
 ///
 /// The tail after the last `RunFinished` is interrupted iff it holds a
 /// `RunStarted`; `attempts` is the number of `ResumeAttempted` stamps in that
@@ -443,6 +467,18 @@ pub fn reduce_disposition(
             })
         }
         _ => Ok(RunDisposition::Clean),
+    }
+}
+
+/// [`reduce_disposition`] over what `SessionEventStore::load_run_markers`
+/// hands back per session: a decoded slice reduces as usual; a slice the
+/// store could not decode is refused under
+/// [`LogContradiction::UndecodableRecord`] — "I do not know what this session
+/// holds", never "it holds no markers" (criterion #8).
+pub fn reduce_marker_slice(slice: &MarkerSlice) -> Result<RunDisposition, LogContradiction> {
+    match slice {
+        Ok(markers) => reduce_disposition(markers),
+        Err(undecodable) => Err(LogContradiction::from(undecodable)),
     }
 }
 
@@ -813,7 +849,7 @@ mod tests {
     /// (which looks forward from a call) can never contain them.
     const SWALLOWS: [&str; 2] = ["unwrap_or", ".ok()"];
     const WINDOW_LINES: usize = 5;
-    const CALLS: [&str; 2] = ["reduce_run(", "reduce_disposition("];
+    const CALLS: [&str; 3] = ["reduce_run(", "reduce_disposition(", "reduce_marker_slice("];
 
     fn rec(seq: EventSeq, event: SessionEvent) -> SessionEventRecord {
         SessionEventRecord {
@@ -1032,9 +1068,10 @@ mod tests {
             LogContradiction::ClockAnomaly { .. } => 8,
             LogContradiction::ResumeWithoutTarget { .. } => 9,
             LogContradiction::ParkedWithoutRequest { .. } => 10,
+            LogContradiction::UndecodableRecord { .. } => 11,
         }
     }
-    const KIND_COUNT: usize = 11;
+    const KIND_COUNT: usize = 12;
 
     fn one_of_each() -> Vec<LogContradiction> {
         let all = vec![
@@ -1067,6 +1104,7 @@ mod tests {
                 seq: 1,
                 call_id: "c".into(),
             },
+            LogContradiction::UndecodableRecord { seq: 1 },
         ];
         let mut seen = vec![false; KIND_COUNT];
         for c in &all {
@@ -1077,11 +1115,32 @@ mod tests {
     }
 
     #[test]
-    fn the_two_reject_kinds_are_exactly_out_of_order_and_non_marker() {
+    fn the_three_reject_kinds_are_exactly_out_of_order_non_marker_and_undecodable() {
         for c in one_of_each() {
-            let expected = matches!(kind_index(&c), 0 | 1);
+            let expected = matches!(kind_index(&c), 0 | 1 | 11);
             assert_eq!(c.rejects(), expected, "{c:?}");
         }
+    }
+
+    /// The one REJECT kind the reducer does not raise itself: a slice whose
+    /// row did not decode never reaches `reduce_disposition`, so
+    /// `reduce_marker_slice` refuses it under its own kind — and passes a
+    /// decoded slice through to the same verdict the reducer gives directly.
+    #[test]
+    fn a_marker_slice_that_did_not_decode_is_refused_under_its_own_kind() {
+        let slice: MarkerSlice = Err(UndecodableRecord {
+            seq: 4,
+            kind_tag: None,
+            error: "x".into(),
+        });
+        assert_eq!(
+            reduce_marker_slice(&slice),
+            Err(LogContradiction::UndecodableRecord { seq: 4 })
+        );
+        assert_eq!(
+            reduce_marker_slice(&Ok(vec![rec(1, started("a"))])),
+            Ok(RunDisposition::Interrupted { attempts: 0 })
+        );
     }
 
     /// `tag()` and the serde `kind` are two spellings of one fact; this pins

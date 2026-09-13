@@ -36,8 +36,8 @@ use crate::session::events::{
 use crate::session::reduction::{
     is_disposition_bearing, reduce_disposition, reduce_run, LogContradiction, RunDisposition,
 };
-use crate::session::service::SessionId;
-use crate::session::store::SessionEventStore;
+use crate::session::service::{SessionError, SessionId};
+use crate::session::store::{MarkerSlice, SessionEventStore};
 
 /// `FailsClosed`: `handlers/resume.rs` turns a missing handle into
 /// `ResumeOutcome::Unavailable`. Nothing resumes and nothing is harmed — but
@@ -178,8 +178,10 @@ pub struct ResumeReport {
 /// only the cases where something was wrong enough to stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResumeRefusal {
-    /// The reducer refused the log ([`LogContradiction::rejects`]). "I do not
-    /// know what state this run is in" — never read as clean.
+    /// The log was refused ([`LogContradiction::rejects`]) — by the reducer,
+    /// or by the store's decoder before the reducer ever saw it
+    /// (`UndecodableRecord`). "I do not know what state this run is in" —
+    /// never read as clean.
     LogInconsistent(LogContradiction),
     /// The session's agent is not in the registry, so there is nothing to
     /// re-trigger the run on.
@@ -896,8 +898,8 @@ impl ResumeCoordinator {
         };
 
         let mut seen: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
-        for (session_id, markers) in marker_groups {
-            self.resume_from_markers(&session_id, &markers, &mut report)
+        for (session_id, slice) in marker_groups {
+            self.resume_from_markers(&session_id, &slice, &mut report)
                 .await;
             seen.insert(session_id);
         }
@@ -1018,7 +1020,7 @@ impl ResumeCoordinator {
     async fn resume_from_markers(
         &self,
         session_id: &SessionId,
-        markers: &[SessionEventRecord],
+        slice: &MarkerSlice,
         report: &mut ResumeReport,
     ) {
         // Claimed before anything reads the log. `repair_boundary` is a
@@ -1040,6 +1042,17 @@ impl ResumeCoordinator {
             return;
         };
         report.scanned += 1;
+        // The slice before the markers: one the store could not decode is
+        // refused here, under its own kind, BEFORE any arm reads it as a
+        // list. `Err` is "I do not know what this session holds" — never
+        // "it holds no markers" (criterion #8).
+        let markers = match slice {
+            Ok(markers) => markers,
+            Err(undecodable) => {
+                self.refuse_log(session_id, LogContradiction::from(undecodable), report);
+                return;
+            }
+        };
         match reduce_disposition(markers) {
             // No run is open. The markers cannot say whether the LAST user
             // message was ever answered — that lives in the message tail
@@ -1102,22 +1115,33 @@ impl ResumeCoordinator {
             Ok(RunDisposition::Interrupted { attempts }) => {
                 self.handle_interrupted(session_id, attempts, report).await;
             }
-            // A refused slice is "I do not know", not "clean": it is
-            // deliberately NOT counted as `skipped` (which `status_of` renders
-            // `already_finished`). It goes in the `refused` bucket, which
-            // `status_of` reads BEFORE every counter that could be mistaken
-            // for a verdict.
-            Err(c) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    contradiction = %c,
-                    "resume: session log refused by the reducer; not resuming"
-                );
-                report
-                    .refused
-                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
-            }
+            Err(c) => self.refuse_log(session_id, c, report),
         }
+    }
+
+    /// File a session under `refused` for a log the reducer (or the store's
+    /// decoder) would not read.
+    ///
+    /// A refused log is "I do not know", not "clean": it is deliberately NOT
+    /// counted as `skipped` (which `status_of` renders `already_finished`).
+    /// It goes in the `refused` bucket, which `status_of` reads BEFORE every
+    /// counter that could be mistaken for a verdict.
+    fn refuse_log(
+        &self,
+        session_id: &SessionId,
+        contradiction: LogContradiction,
+        report: &mut ResumeReport,
+    ) {
+        tracing::warn!(
+            session = ?session_id,
+            kind = contradiction.tag(),
+            contradiction = %contradiction,
+            "resume: session log refused; not resuming"
+        );
+        report.refused.push((
+            session_id.clone(),
+            ResumeRefusal::LogInconsistent(contradiction),
+        ));
     }
 
     /// Resume one session on demand.
@@ -1155,7 +1179,7 @@ impl ResumeCoordinator {
     ) -> Result<ResumeReport, crate::session::service::SessionError> {
         let mut report = ResumeReport::default();
         let groups = self.event_store.load_run_markers().await?;
-        let Some((_, markers)) = groups.into_iter().find(|(sid, _)| sid == session_id) else {
+        let Some((_, slice)) = groups.into_iter().find(|(sid, _)| sid == session_id) else {
             let Some(_slot) = self.try_claim_resume(session_id) else {
                 report.busy += 1;
                 return Ok(report);
@@ -1165,7 +1189,7 @@ impl ResumeCoordinator {
             }
             return Ok(report);
         };
-        self.resume_from_markers(session_id, &markers, &mut report)
+        self.resume_from_markers(session_id, &slice, &mut report)
             .await;
         tracing::info!(
             session = ?session_id,
@@ -1200,6 +1224,13 @@ impl ResumeCoordinator {
     ) {
         let events = match self.event_store.load_all_events(session_id).await {
             Ok(events) => events,
+            // A row this build cannot decode is the log refusing to be read,
+            // under the same kind the marker scan names — not a failed repair,
+            // which is what the arm below says.
+            Err(SessionError::UndecodableRecord(u)) => {
+                self.refuse_log(session_id, LogContradiction::from(&u), report);
+                return;
+            }
             Err(e) => {
                 tracing::warn!(
                     session = ?session_id,
@@ -1216,14 +1247,7 @@ impl ResumeCoordinator {
         let reduction = match reduce_run(&events) {
             Ok(reduction) => reduction,
             Err(c) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    contradiction = %c,
-                    "resume: candidate log refused by the reducer; not resuming"
-                );
-                report
-                    .refused
-                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
+                self.refuse_log(session_id, c, report);
                 return;
             }
         };
@@ -1431,6 +1455,12 @@ impl ResumeCoordinator {
             .await
         {
             Ok(tail) => tail,
+            // A row this build cannot decode: the log refused to be read,
+            // under the same kind every other face names for it.
+            Err(SessionError::UndecodableRecord(u)) => {
+                self.refuse_log(session_id, LogContradiction::from(&u), report);
+                return true;
+            }
             // Not `BoundaryRepairFailed`: no repair was attempted. The answer
             // is "I cannot tell whether the last message was answered", and
             // the refusal says exactly that.
@@ -1486,14 +1516,7 @@ impl ResumeCoordinator {
                 false
             }
             Err(c) => {
-                tracing::warn!(
-                    session = ?session_id,
-                    contradiction = %c,
-                    "resume: message tail refused by the reducer; not resuming"
-                );
-                report
-                    .refused
-                    .push((session_id.clone(), ResumeRefusal::LogInconsistent(c)));
+                self.refuse_log(session_id, c, report);
                 true
             }
         }

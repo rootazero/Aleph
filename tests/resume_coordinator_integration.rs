@@ -1175,8 +1175,21 @@ impl SessionEventStore for FaultingStore {
     }
     async fn load_run_markers(
         &self,
-    ) -> Result<Vec<(SessionKey, Vec<alephcore::session::SessionEventRecord>)>, SessionError> {
+    ) -> Result<Vec<(SessionKey, alephcore::session::store::MarkerSlice)>, SessionError> {
         self.inner.load_run_markers().await
+    }
+    async fn load_rows(
+        &self,
+        session_id: &SessionKey,
+    ) -> Result<Vec<alephcore::session::store::DecodedRow>, SessionError> {
+        self.inner.load_rows(session_id).await
+    }
+    async fn retire_record(
+        &self,
+        session_id: &SessionKey,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        self.inner.retire_record(session_id, seq).await
     }
 }
 
@@ -1920,6 +1933,82 @@ async fn a_tail_that_cannot_be_read_refuses_without_stamping_or_retriggering() {
         "an unanswerable question must not be dispatched"
     );
     assert!(stamps(&inner, &sid).await.is_empty(), "nothing was stamped");
+}
+
+/// Criterion #8 at the resume face, with the real store: a session whose
+/// marker row this build cannot decode is refused under its own kind — filed
+/// as `log_inconsistent` with the undecodable-record contradiction, never
+/// read as "no markers" and never as clean — while its neighbour, interrupted
+/// and decodable, is resumed exactly as before. The whole scan used to fail
+/// on the first such row, refusing every session at once.
+#[tokio::test]
+async fn an_undecodable_marker_row_refuses_only_its_own_session_at_the_resume_face() {
+    use alephcore::session::reduction::LogContradiction;
+
+    // File-backed so a second connection can write the row RAW — past
+    // `encode_row`, exactly as another build would have left it on disk.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.db");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    migrate_add_session_events(&conn).unwrap();
+    let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+    let bad = SessionKey::main("undecodable-marker-agent");
+    let good = SessionKey::main("decodable-neighbour-agent");
+    seed_interrupted_run(&store, &bad).await;
+    seed_interrupted_run(&store, &good).await;
+    // A marker row with an outcome word this build's `RunOutcome` does not
+    // know: a `run_finished` written by a newer build.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO session_events (session_id, seq, event_type, payload_json, created_at) \
+             VALUES (?1, 99, 'run_finished', ?2, 1)",
+            rusqlite::params![
+                serde_json::to_string(&bad).unwrap(),
+                r#"{"type":"run_finished","run_id":"run-1","outcome":"from_the_future","at":1}"#
+            ],
+        )
+        .unwrap();
+
+    let sessions = sessions();
+    for sid in [&bad, &good] {
+        sessions.get_or_create(sid).await.unwrap();
+    }
+    let adapter = Arc::new(RecordingAdapter::new());
+    let calls = adapter.calls.clone();
+    let report = ResumeCoordinator::new(
+        store,
+        ResumeConfig::default(),
+        adapter as Arc<dyn ExecutionAdapter>,
+        registry_with_agent(good.agent_id()).await,
+        sessions,
+        test_bus(),
+    )
+    .resume_interrupted_runs()
+    .await;
+
+    assert_eq!(
+        (report.scanned, report.resumed, report.skipped),
+        (2, 1, 0),
+        "{report:?}"
+    );
+    assert_eq!(
+        report.refused,
+        vec![(
+            bad.clone(),
+            alephcore::gateway::ResumeRefusal::LogInconsistent(
+                LogContradiction::UndecodableRecord { seq: 99 }
+            )
+        )],
+        "refused under its own kind, naming the row"
+    );
+    assert_eq!(report.refused[0].1.reason(), "log_inconsistent");
+    let dispatched: Vec<String> = calls.lock().await.iter().map(|c| c.0.clone()).collect();
+    assert_eq!(
+        dispatched,
+        vec![good.to_key_string()],
+        "the neighbour resumed; the refused session was never dispatched"
+    );
     assert_eq!(
         inner.load_all_events(&sid).await.unwrap().len(),
         2,

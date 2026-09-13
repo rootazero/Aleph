@@ -675,9 +675,11 @@ pub fn batch_durability<'a>(events: impl Iterator<Item = &'a SessionEvent>) -> D
         .unwrap_or(Durability::Normal)
 }
 
-/// Second column of the same table (§7.3): may an old binary skip this row
-/// unread? Nothing declares it this round; the column exists so the envelope
-/// writer (group C) has one place to ask.
+/// Second column of the same table (§7.3): may an older binary skip this row
+/// unread? Nothing declares it this round. Its one consumer is
+/// [`crate::session::store::encode_row`], which writes `"ignorable": true`
+/// on the row so a build that does not know the variant can skip it
+/// (`decode_row` → `DecodedRow::Skipped`) instead of refusing the session.
 pub const fn ignorable(event: &SessionEvent) -> bool {
     let _ = event;
     false
@@ -1174,6 +1176,16 @@ mod tests {
             (None, None, None, None)
         );
         assert!(RunEnvelopeSnapshot::from_knobs(None, None, None, None).is_empty());
+    }
+
+    /// `{}` parses iff every field is `#[serde(default)]`: an envelope written
+    /// by a build that had fewer fields must still decode on this one, or the
+    /// row that carries it turns undecodable and refuses its whole session. A
+    /// field added without the attribute turns this red.
+    #[test]
+    fn every_envelope_field_is_defaultable() {
+        let e: RunEnvelopeSnapshot = serde_json::from_str("{}").unwrap();
+        assert!(e.is_empty());
     }
 
     /// The four `custom`-bag names in that array are the ones the session

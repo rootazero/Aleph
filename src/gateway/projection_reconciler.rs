@@ -61,10 +61,10 @@ use crate::gateway::session_projector::MessageProjector;
 use crate::gateway::session_store::types::SessionFilter;
 use crate::gateway::session_store::SessionStore;
 use crate::session::epoch_registrar::SessionEpochRegistrar;
-use crate::session::events::{SessionEvent, SessionEventRecord};
-use crate::session::reduction::{reduce_disposition, RunDisposition};
+use crate::session::events::SessionEvent;
+use crate::session::reduction::{reduce_marker_slice, RunDisposition};
 use crate::session::service::SessionId;
-use crate::session::store::SessionEventStore;
+use crate::session::store::{MarkerSlice, SessionEventStore};
 use crate::sync_primitives::Arc;
 
 /// Summary of one boot pass — for the boot log and tests.
@@ -184,8 +184,8 @@ impl ProjectionReconciler {
                 // anything reads its `Interrupted` as the run to resume —
                 // the resume pass follows this scan in the same boot task.
                 self.heal_split_epochs(&groups, report).await;
-                for (session_id, markers) in groups {
-                    match reduce_disposition(&markers) {
+                for (session_id, slice) in groups {
+                    match reduce_marker_slice(&slice) {
                         // A seed no run answered is a candidate too: its
                         // projection may be a hole exactly like an interrupted
                         // run's (unreachable from a marker slice today, but a
@@ -195,16 +195,17 @@ impl ProjectionReconciler {
                         ) => {}
                         Ok(RunDisposition::Clean) => continue,
                         Err(c) => {
-                            // A refused slice is "I cannot tell you whether this
-                            // session was interrupted" — which is not "it was
-                            // fine". Repairing it is idempotent, so ask anyway,
-                            // and count the refusal so the boot log does not
-                            // read as a clean scan.
+                            // A refused slice — the reducer's, or a marker row
+                            // this build could not decode — is "I cannot tell
+                            // you whether this session was interrupted", which
+                            // is not "it was fine". Repairing it is idempotent,
+                            // so ask anyway, and count the refusal so the boot
+                            // log does not read as a clean scan.
                             tracing::warn!(
                                 session = ?session_id,
+                                kind = c.tag(),
                                 contradiction = %c,
-                                "projection reconcile: reducer refused the marker slice; \
-                                 repairing anyway"
+                                "projection reconcile: marker slice refused; repairing anyway"
                             );
                             report.errored += 1;
                         }
@@ -282,13 +283,19 @@ impl ProjectionReconciler {
     /// scan in the same boot task) sees routing and log agree.
     async fn heal_split_epochs(
         &self,
-        groups: &[(SessionId, Vec<SessionEventRecord>)],
+        groups: &[(SessionId, MarkerSlice)],
         report: &mut ReconcileReport,
     ) {
         let horizon = crate::session::events::now_ms().saturating_sub(
             i64::try_from(self.max_age_secs.saturating_mul(1000)).unwrap_or(i64::MAX),
         );
-        for (id, markers) in groups {
+        for (id, slice) in groups {
+            // A slice this build could not decode is not "no markers": no
+            // heal is derived from it. The caller's disposition loop, which
+            // walks these same groups next, is where it is counted and named.
+            let Ok(markers) = slice else {
+                continue;
+            };
             // Epoch 0 is never a fork; a fork whose last marker is older than
             // the window is out of scope, as it is for resume.
             if id.epoch() == 0 || !markers.last().is_some_and(|m| m.created_at_ms >= horizon) {
@@ -683,6 +690,73 @@ mod tests {
         assert_eq!(again.epoch_heal_skipped, 0, "{again:?}");
     }
 
+    /// The same torn split, plus a marker row of the child's that this build
+    /// cannot decode. The child's slice is then `Err`, and `Err` is "I cannot
+    /// tell you what this session's markers say" — so no epoch is healed from
+    /// it (a heal derived from an unreadable slice would register a routing
+    /// change nobody can vouch for), it is NOT read as a session with no
+    /// markers (which would fall silently out of the scan), and the boot
+    /// report counts it under `errored` by name.
+    #[tokio::test]
+    async fn a_child_whose_marker_slice_did_not_decode_gets_no_epoch_heal_and_is_counted() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let concrete = Arc::new(SqliteEventStore::new(conn));
+        let event_store: Arc<dyn SessionEventStore> = concrete.clone();
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(
+            SessionManager::new(SessionManagerConfig {
+                db_path: temp.path().join("heal-undecodable.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let parent = SessionKey::Main {
+            agent_id: "a".into(),
+            main_key: "k".into(),
+            epoch: 0,
+        };
+        manager.get_or_create(&parent).await.unwrap();
+        let child = seed_unregistered_fork(&event_store, &parent).await;
+        concrete
+            .insert_raw_row_for_test(
+                &child,
+                4,
+                "run_finished",
+                r#"{"type":"run_finished","run_id":"split","outcome":"from_the_future","at":1}"#,
+            )
+            .await;
+        let session_store: Arc<dyn SessionStore> = manager.clone();
+
+        let reconciler = ProjectionReconciler::new(
+            event_store.clone(),
+            session_store.clone(),
+            MessageProjector::with_event_store(
+                session_store.clone(),
+                None,
+                Some(event_store.clone()),
+            ),
+            86_400,
+            Some(manager.clone() as Arc<dyn SessionEpochRegistrar>),
+        );
+
+        let report = reconciler.reconcile_candidates().await;
+        assert_eq!(
+            (report.epochs_healed, report.epoch_heal_skipped),
+            (0, 0),
+            "no heal is derived from a slice this build could not read: {report:?}"
+        );
+        assert!(report.errored >= 1, "counted, not dropped: {report:?}");
+        assert_eq!(
+            session_store
+                .get_current_epoch(&parent.base_key_pattern())
+                .await
+                .unwrap(),
+            0,
+            "routing was left exactly as it was"
+        );
+    }
+
     /// The heal is the boot-side replay of the split's step 5, so it must do
     /// both halves the in-process split does after a registration:
     ///
@@ -977,7 +1051,7 @@ mod tests {
         append_all(&event_store, &id, &evs).await;
         assert!(
             matches!(
-                reduce_disposition(
+                reduce_marker_slice(
                     &event_store
                         .load_run_markers()
                         .await

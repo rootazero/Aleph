@@ -25,6 +25,11 @@ pub enum SessionError {
     Storage(String),
     #[error("serialization: {0}")]
     Serialization(#[from] serde_json::Error),
+    /// A live `session_events` row this build cannot decode. The read that
+    /// met it is refused — for THIS session only — and the record is named,
+    /// so every face can say which row and the doctor can retire exactly it.
+    #[error("undecodable session record: {0}")]
+    UndecodableRecord(crate::session::store::UndecodableRecord),
     #[error("{0}")]
     Other(String),
 }

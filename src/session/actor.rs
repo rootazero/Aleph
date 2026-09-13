@@ -212,12 +212,14 @@ impl SessionActor {
         }
     }
 
-    /// Replays all persisted events and rebuilds `head_seq`.
+    /// Rebuilds `head_seq` from the store's own allocation counter.
+    ///
+    /// `load_head_seq` never decodes a payload, so the actor still boots on a
+    /// session whose log holds a row this build cannot read — which is what
+    /// lets the doctor's retire reach that log at all. It also counts retired
+    /// rows, as the seq allocator must (a retired seq is still taken).
     async fn replay(&mut self) -> Result<(), SessionError> {
-        let records = self.store.load_all_events(&self.id).await?;
-        for record in &records {
-            self.head_seq = record.seq;
-        }
+        self.head_seq = self.store.load_head_seq(&self.id).await?;
         Ok(())
     }
 
@@ -541,7 +543,7 @@ mod tests {
 
         async fn load_run_markers(
             &self,
-        ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+        ) -> Result<Vec<(SessionId, crate::session::store::MarkerSlice)>, SessionError> {
             Ok(vec![])
         }
 

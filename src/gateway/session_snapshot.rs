@@ -30,6 +30,7 @@ use crate::session::events::SessionEventRecord;
 use crate::session::reduction::{
     reduce_run, DanglingProvenance, LogContradiction, RunDisposition, RunProgress,
 };
+use crate::session::store::UndecodableRecord;
 
 /// `identity_meta.custom` key holding a session's user-chosen working
 /// directory. Written by `sessions.set_project_root` and by
@@ -141,14 +142,7 @@ pub fn snapshot_from_metadata(meta: &SessionMetadata) -> SessionSnapshot {
 pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
     let reduction = match reduce_run(events) {
         Ok(r) => r,
-        Err(contradiction) => {
-            return LastRunState {
-                disposition: LastRunState::LOG_INCONSISTENT.to_string(),
-                contradictions: vec![contradiction.tag().to_string()],
-                inspected: true,
-                ..LastRunState::default()
-            }
-        }
+        Err(contradiction) => return last_run_refused(&contradiction),
     };
 
     // "This session has never run anything" is not the same answer as "its
@@ -191,23 +185,49 @@ pub fn last_run_from_events(events: &[SessionEventRecord]) -> LastRunState {
     }
 }
 
+/// The attach face's refusal: the log was opened and would not be read.
+///
+/// [`LastRunState::LOG_INCONSISTENT`] carrying the contradiction's tag,
+/// `inspected: true` — this face looked, and what it found is that it cannot
+/// say. Shared by [`last_run_from_events`] (the reducer refused) and the
+/// `chat.history` handler (the store refused to decode a row), so one refusal
+/// has one shape on the wire.
+#[must_use]
+pub fn last_run_refused(contradiction: &LogContradiction) -> LastRunState {
+    LastRunState {
+        disposition: LastRunState::LOG_INCONSISTENT.to_string(),
+        contradictions: vec![contradiction.tag().to_string()],
+        inspected: true,
+        ..LastRunState::default()
+    }
+}
+
 /// The list face's answer, from one session's run markers alone.
 ///
 /// Cheap enough to run for every row of `sessions.list`, and it can answer
 /// exactly one question: the disposition word plus the two facts markers carry.
 /// [`LastRunState::inspected`] is `false`, so a reader cannot mistake the empty
 /// `dangling` list for "no tool calls were lost".
+///
+/// `markers` is what `load_run_markers` said for this session: `Ok(&[])` is a
+/// session with no markers (`never_ran`); `Err` is a marker row this build
+/// could not decode, which lists as `log_inconsistent` under the
+/// undecodable-record tag — never as `never_ran` (criterion #8).
 #[must_use]
-pub fn last_run_from_markers(markers: &[SessionEventRecord]) -> LastRunState {
-    if markers.is_empty() {
-        return LastRunState::from_markers(LastRunState::NEVER_RAN, None, 0);
-    }
+pub fn last_run_from_markers(
+    markers: Result<&[SessionEventRecord], &UndecodableRecord>,
+) -> LastRunState {
     // `reduce_run` over a marker slice is the same derivation the attach face
     // uses, so the two faces cannot disagree about the word. It is fed markers
     // rather than a full log on purpose: `load_run_markers` is one indexed
     // query for every session, and reducing every session's whole log to paint
     // a list would be a different kind of wrong.
-    let reduction = match reduce_run(markers) {
+    let verdict = match markers {
+        Ok([]) => return LastRunState::from_markers(LastRunState::NEVER_RAN, None, 0),
+        Ok(markers) => reduce_run(markers),
+        Err(undecodable) => Err(LogContradiction::from(undecodable)),
+    };
+    let reduction = match verdict {
         Ok(r) => r,
         Err(contradiction) => {
             let mut state = LastRunState::from_markers(LastRunState::LOG_INCONSISTENT, None, 0);
@@ -530,7 +550,7 @@ mod last_run_tests {
             rec(2, finished("run-a")),
             rec(3, started("run-b")),
         ];
-        let listed = last_run_from_markers(&markers);
+        let listed = last_run_from_markers(Ok(&markers));
         assert_eq!(listed.disposition(), LastRunDisposition::Interrupted);
         assert_eq!(listed.run_id.as_deref(), Some("run-b"));
         assert_eq!(listed.trailing_starts, 0, "no ResumeAttempted stamp yet");
@@ -543,9 +563,37 @@ mod last_run_tests {
     /// `never_ran` — not `clean`, and not an absent answer.
     #[test]
     fn a_session_with_no_markers_lists_as_never_ran() {
-        let listed = last_run_from_markers(&[]);
+        let listed = last_run_from_markers(Ok(&[]));
         assert_eq!(listed.disposition(), LastRunDisposition::NeverRan);
         assert!(!listed.inspected);
+    }
+
+    /// A session whose marker slice did not decode is the list face's refusal:
+    /// `log_inconsistent` under the undecodable-record tag. Not `never_ran` —
+    /// which is what reading `Err` as "no markers" would have painted — and
+    /// still `inspected: false`, because this face looked at markers alone.
+    #[test]
+    fn an_undecodable_marker_slice_lists_as_log_inconsistent_not_never_ran() {
+        let bad = UndecodableRecord {
+            seq: 4,
+            kind_tag: Some("run_finished".into()),
+            error: "unknown variant".into(),
+        };
+        let listed = last_run_from_markers(Err(&bad));
+        assert_eq!(listed.disposition(), LastRunDisposition::LogInconsistent);
+        assert_eq!(
+            listed.contradictions,
+            vec![LogContradiction::UndecodableRecord { seq: 4 }
+                .tag()
+                .to_string()]
+        );
+        assert!(!listed.inspected);
+        // And the attach face's refusal for the same row carries the same tag,
+        // with `inspected: true` — it opened the log.
+        let attached = last_run_refused(&LogContradiction::from(&bad));
+        assert_eq!(attached.disposition(), LastRunDisposition::LogInconsistent);
+        assert_eq!(attached.contradictions, listed.contradictions);
+        assert!(attached.inspected);
     }
 
     /// Both faces reduce through the same function, so they cannot disagree
@@ -565,7 +613,7 @@ mod last_run_tests {
         ] {
             assert_eq!(
                 last_run_from_events(&log).disposition(),
-                last_run_from_markers(&markers).disposition(),
+                last_run_from_markers(Ok(&markers)).disposition(),
                 "the attach face and the list face gave one session two words"
             );
         }

@@ -15,6 +15,16 @@
 //!
 //! See `docs/superpowers/specs/2026-04-18-session-service-actor-design.md` §7.
 //!
+//! # Payload envelope
+//!
+//! `payload_json` is the event's own serde object plus two keys the store
+//! adds: `v`, the [`SESSION_EVENT_SCHEMA_VERSION`] the row was written under,
+//! and `ignorable: true` on the rows [`crate::session::events::ignorable`]
+//! says an older build may skip unread. [`encode_row`] is the one writer of
+//! that envelope and [`decode_row`] the one reader: a row this build cannot
+//! turn into a [`SessionEvent`] is a [`DecodedRow::Undecodable`] value, so it
+//! refuses the session that holds it and no other.
+//!
 //! # Async model
 //!
 //! Consistent with sibling stores in `src/teams/`, `src/gateway/`, etc. the
@@ -115,8 +125,9 @@ pub trait SessionEventStore: Send + Sync + 'static {
     ///
     /// Soft delete: the rows survive, so the append-only log stays intact and
     /// seq allocation is unaffected. All readers of the live conversation
-    /// (`load_all_events`, `load_events_range`, `load_run_markers`,
-    /// `search_events`) skip retired events, so the model stops replaying them.
+    /// (`load_all_events`, `load_events_range`, `load_rows`,
+    /// `load_run_markers`, `search_events`) skip retired events, so the model
+    /// stops replaying them.
     /// The BM25 mirror rows for the range are deleted too — see
     /// [`Retire::From`] for why the two sides differ.
     ///
@@ -154,9 +165,52 @@ pub trait SessionEventStore: Send + Sync + 'static {
     /// pinned equal to the reducer's `is_marker` — in `seq` order.
     /// Sessions with no run markers are omitted. Served by the existing
     /// `(session_id, event_type)` index.
-    async fn load_run_markers(
+    ///
+    /// Decoded per session: a marker row this build cannot read makes THAT
+    /// session's slice `Err` ([`MarkerSlice`]) and leaves every other
+    /// session's slice whole. The outer `Err` is the query itself failing.
+    async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError>;
+
+    /// Every live row of one session, decoded one at a time, in `seq` order.
+    ///
+    /// The doctor's read: a row this build cannot decode is a
+    /// [`DecodedRow::Undecodable`] VALUE here, not the read's failure, so the
+    /// rows around it can still be named and the bad one retired
+    /// ([`retire_record`](Self::retire_record)). The model-facing readers
+    /// (`load_all_events`, `load_events_range`) fold the same rows strictly
+    /// and refuse the session instead.
+    ///
+    /// Default is a refusal: a store that cannot expose its rows must say so
+    /// rather than answer "no rows".
+    async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
+        let _ = session_id;
+        Err(SessionError::Storage(
+            "this event store cannot expose raw rows".into(),
+        ))
+    }
+
+    /// Retire exactly the row at `seq` — the doctor's `fix=true` exit for an
+    /// undecodable record. Soft delete like [`retire_from`](Self::retire_from):
+    /// the row survives, seq allocation is unaffected, every live-conversation
+    /// reader skips it from now on. The BM25 mirror row, if the writing build
+    /// indexed one, is left where it is — the record is one this build cannot
+    /// read, and its snippet is text that build rendered.
+    ///
+    /// `Ok(true)` when this call retired it; `Ok(false)` when it was already
+    /// retired or no such row exists — idempotent, and the two cases are
+    /// deliberately one answer: the caller has just read the row it names.
+    ///
+    /// Default is a refusal, for the same reason as [`load_rows`](Self::load_rows).
+    async fn retire_record(
         &self,
-    ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError>;
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let _ = (session_id, seq);
+        Err(SessionError::Storage(
+            "this event store cannot retire a single record".into(),
+        ))
+    }
 
     /// BM25 search over this session's content-bearing events (messages, tool
     /// calls / results / errors). Returns up to `limit` hits, most relevant
@@ -314,6 +368,28 @@ impl SqliteEventStore {
             conn: Arc::new(Mutex::new(conn)),
         }
     }
+
+    /// Insert one `session_events` row exactly as another build would have
+    /// written it — past [`encode_row`], which is the point: a reader must
+    /// cope with what is on disk, not with what this build would have put
+    /// there. The fixture for every "a row this build cannot read" test,
+    /// here because `conn` is private.
+    #[cfg(test)]
+    pub(crate) async fn insert_raw_row_for_test(
+        &self,
+        sid: &SessionId,
+        seq: i64,
+        event_type: &str,
+        json: &str,
+    ) {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO session_events (session_id, seq, event_type, payload_json, created_at) \
+             VALUES (?1, ?2, ?3, ?4, 1)",
+            params![session_id_to_string(sid).unwrap(), seq, event_type, json],
+        )
+        .unwrap();
+    }
 }
 
 /// One `session_events` row, shaped and encoded before the connection lock is
@@ -327,10 +403,121 @@ struct EncodedRow {
     fts_body: Option<String>,
 }
 
-/// The ONE payload encoder for `payload_json`. Private seam: the envelope
-/// writer replaces it with a `pub encode_row` and deletes this.
-fn encode_payload(event: &SessionEvent) -> Result<String, SessionError> {
-    Ok(serde_json::to_string(event)?)
+/// The schema version stamped on every row as `"v"`. Bumped when the payload
+/// envelope itself changes shape — not when a variant is added, which the
+/// `type` tag already names.
+pub const SESSION_EVENT_SCHEMA_VERSION: u16 = 1;
+
+/// The prefix of serde's rendered message for a `type` tag this build's
+/// [`SessionEvent`] does not know. Serde's wording, not ours — pinned by
+/// `tests::the_unknown_variant_guard_keys_on_serdes_own_wording`.
+const UNKNOWN_VARIANT_PREFIX: &str = "unknown variant";
+
+/// A `session_events` row this build could not turn into a [`SessionEvent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndecodableRecord {
+    pub seq: EventSeq,
+    /// The row's `type` tag, when the payload was at least JSON.
+    pub kind_tag: Option<String>,
+    /// serde's rendered reason.
+    pub error: String,
+}
+
+impl std::fmt::Display for UndecodableRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "seq {} (type `{}`) could not be decoded by this build: {}",
+            self.seq,
+            self.kind_tag.as_deref().unwrap_or("?"),
+            self.error
+        )
+    }
+}
+
+/// One row, as [`decode_row`] read it.
+#[derive(Debug, Clone)]
+pub enum DecodedRow {
+    Event(SessionEventRecord),
+    /// A `type` this build does not know, on a row whose writer — a build that
+    /// does know it — marked `ignorable: true`: skipped unread, by that
+    /// writer's own policy.
+    Skipped {
+        seq: EventSeq,
+        kind_tag: String,
+    },
+    Undecodable(UndecodableRecord),
+}
+
+/// One session's run markers as [`SessionEventStore::load_run_markers`]
+/// hands them over: the decoded slice, or the first row of it this build
+/// could not decode.
+pub type MarkerSlice = Result<Vec<SessionEventRecord>, UndecodableRecord>;
+
+/// The one encoder: `v` on every row, `ignorable` only when the policy table
+/// says so (absent otherwise — never a literal `false`).
+pub fn encode_row(event: &SessionEvent) -> Result<String, SessionError> {
+    let mut v = serde_json::to_value(event)?;
+    let serde_json::Value::Object(m) = &mut v else {
+        return Err(SessionError::Storage(
+            "event did not serialize to an object".into(),
+        ));
+    };
+    m.insert("v".into(), SESSION_EVENT_SCHEMA_VERSION.into());
+    if crate::session::events::ignorable(event) {
+        m.insert("ignorable".into(), true.into());
+    }
+    Ok(v.to_string())
+}
+
+/// The one decoder. A `type` this build does not know AND `"ignorable": true`
+/// on the row ⇒ [`DecodedRow::Skipped`]; a missing key reads as false; a known
+/// `type` whose body will not parse is corruption, not skippable; anything
+/// else ⇒ [`DecodedRow::Undecodable`].
+pub fn decode_row(seq: EventSeq, created_at_ms: i64, json: &str) -> DecodedRow {
+    let err = match serde_json::from_str::<SessionEvent>(json) {
+        Ok(event) => {
+            return DecodedRow::Event(SessionEventRecord {
+                seq,
+                event,
+                created_at_ms,
+            })
+        }
+        Err(e) => e,
+    };
+    let raw: Option<serde_json::Value> = serde_json::from_str(json).ok();
+    let kind_tag = raw
+        .as_ref()
+        .and_then(|v| v["type"].as_str())
+        .map(str::to_string);
+    let unknown_variant = err.to_string().starts_with(UNKNOWN_VARIANT_PREFIX);
+    let ignorable = raw
+        .as_ref()
+        .is_some_and(|v| v["ignorable"] == serde_json::Value::Bool(true));
+    match kind_tag {
+        Some(kind_tag) if unknown_variant && ignorable => DecodedRow::Skipped { seq, kind_tag },
+        kind_tag => DecodedRow::Undecodable(UndecodableRecord {
+            seq,
+            kind_tag,
+            error: err.to_string(),
+        }),
+    }
+}
+
+/// The strict fold for the model-facing readers: `Skipped` rows are dropped
+/// (debug-traced), and the first `Undecodable` refuses the whole slice.
+pub fn fold_strict(rows: Vec<DecodedRow>) -> Result<Vec<SessionEventRecord>, UndecodableRecord> {
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        match row {
+            DecodedRow::Event(r) => out.push(r),
+            DecodedRow::Skipped { seq, kind_tag } => {
+                tracing::debug!(seq, kind_tag, "session_events: ignorable row skipped");
+            }
+            DecodedRow::Undecodable(u) => return Err(u),
+        }
+    }
+    Ok(out)
 }
 
 /// Retire a range inside an already-open transaction. Returns how many rows
@@ -479,7 +666,7 @@ impl SessionEventStore for SqliteEventStore {
                 seq,
                 turn_id: extract_turn_id(event).map(|u| u.to_string()),
                 event_type: event_type_tag(event),
-                payload: encode_payload(event)?,
+                payload: encode_row(event)?,
                 created_at: *at,
                 fts_body: render_event_text(event),
             });
@@ -546,39 +733,37 @@ impl SessionEventStore for SqliteEventStore {
         let to_val = to.and_then(|v| i64::try_from(v).ok()).unwrap_or(i64::MAX);
 
         let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare(
-                "SELECT seq, payload_json, created_at
-                 FROM session_events
-                 WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3
-                   AND retired_at IS NULL
-                 ORDER BY seq ASC",
+        fold_strict(query_rows(&conn, &session_key, from_val, to_val)?)
+            .map_err(SessionError::UndecodableRecord)
+    }
+
+    async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let conn = self.conn.lock().await;
+        query_rows(&conn, &session_key, 0, i64::MAX)
+    }
+
+    async fn retire_record(
+        &self,
+        session_id: &SessionId,
+        seq: EventSeq,
+    ) -> Result<bool, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        let seq_i64 = i64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("seq {seq} exceeds i64::MAX")))?;
+        let at = crate::session::events::now_ms();
+
+        let conn = self.conn.lock().await;
+        // `retired_at IS NULL` is what makes a second call answer `false`
+        // instead of re-stamping the row.
+        let changed = conn
+            .execute(
+                "UPDATE session_events SET retired_at = ?1
+                 WHERE session_id = ?2 AND seq = ?3 AND retired_at IS NULL",
+                params![at, session_key, seq_i64],
             )
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-
-        let rows = stmt
-            .query_map(params![session_key, from_val, to_val], |row| {
-                let seq: i64 = row.get(0)?;
-                let payload: String = row.get(1)?;
-                let created_at: i64 = row.get(2)?;
-                Ok((seq, payload, created_at))
-            })
-            .map_err(|e| SessionError::Storage(e.to_string()))?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            let (seq, payload, created_at) =
-                row.map_err(|e| SessionError::Storage(e.to_string()))?;
-            let event: SessionEvent = serde_json::from_str(&payload)?;
-            let seq = u64::try_from(seq)
-                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
-            out.push(SessionEventRecord {
-                seq,
-                event,
-                created_at_ms: created_at,
-            });
-        }
-        Ok(out)
+            .map_err(|e| SessionError::Storage(format!("retire_record failed: {e}")))?;
+        Ok(changed == 1)
     }
 
     async fn load_head_seq(&self, session_id: &SessionId) -> Result<EventSeq, SessionError> {
@@ -652,9 +837,7 @@ impl SessionEventStore for SqliteEventStore {
         Ok(retired.unwrap_or(false))
     }
 
-    async fn load_run_markers(
-        &self,
-    ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+    async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError> {
         let conn = self.conn.lock().await;
         // The IN-list is rendered from `MARKER_EVENT_TYPES`, never spelled
         // inline: the tags are `event_type_tag` literals this module owns (no
@@ -688,28 +871,28 @@ impl SessionEventStore for SqliteEventStore {
 
         // Group consecutive rows by session_id. The SQL `ORDER BY
         // session_id, seq` guarantees all of one session's markers are
-        // contiguous, so a running group key is enough — no HashMap.
-        let mut grouped: Vec<(SessionId, Vec<SessionEventRecord>)> = Vec::new();
+        // contiguous, so a running group key is enough — no HashMap. Rows
+        // are grouped DECODED-PER-ROW and folded per group, so a marker this
+        // build cannot read refuses its own session's slice and no other's.
+        let mut grouped: Vec<(SessionId, Vec<DecodedRow>)> = Vec::new();
         for row in rows {
             let (session_id_str, seq, payload, created_at) =
                 row.map_err(|e| SessionError::Storage(e.to_string()))?;
             let session_id: SessionId = serde_json::from_str(&session_id_str)?;
-            let event: SessionEvent = serde_json::from_str(&payload)?;
             let seq = u64::try_from(seq)
                 .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
-            let record = SessionEventRecord {
-                seq,
-                event,
-                created_at_ms: created_at,
-            };
+            let decoded = decode_row(seq, created_at, &payload);
             match grouped.last_mut() {
                 Some((sid, records)) if *sid == session_id => {
-                    records.push(record);
+                    records.push(decoded);
                 }
-                _ => grouped.push((session_id, vec![record])),
+                _ => grouped.push((session_id, vec![decoded])),
             }
         }
-        Ok(grouped)
+        Ok(grouped
+            .into_iter()
+            .map(|(sid, rows)| (sid, fold_strict(rows)))
+            .collect())
     }
 
     async fn search_events(
@@ -767,6 +950,45 @@ impl SessionEventStore for SqliteEventStore {
 // ---------------------------------------------------------------------------
 // Row-shaping helpers
 // ---------------------------------------------------------------------------
+
+/// One session's live rows with `seq` in `[from, to)`, each through
+/// [`decode_row`]. The one SELECT behind `load_events_range`, `load_rows` and
+/// (via `load_all_events`) every model-facing read; the callers differ only
+/// in what they do with a row that did not decode.
+fn query_rows(
+    conn: &Connection,
+    session_key: &str,
+    from: i64,
+    to: i64,
+) -> Result<Vec<DecodedRow>, SessionError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT seq, payload_json, created_at
+             FROM session_events
+             WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3
+               AND retired_at IS NULL
+             ORDER BY seq ASC",
+        )
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+    let rows = stmt
+        .query_map(params![session_key, from, to], |row| {
+            let seq: i64 = row.get(0)?;
+            let payload: String = row.get(1)?;
+            let created_at: i64 = row.get(2)?;
+            Ok((seq, payload, created_at))
+        })
+        .map_err(|e| SessionError::Storage(e.to_string()))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (seq, payload, created_at) = row.map_err(|e| SessionError::Storage(e.to_string()))?;
+        let seq = u64::try_from(seq)
+            .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+        out.push(decode_row(seq, created_at, &payload));
+    }
+    Ok(out)
+}
 
 /// Canonical string form of a `SessionId` for the `session_id` column.
 ///
@@ -1106,10 +1328,20 @@ pub(crate) mod test_support {
             self.inner.is_retired(session_id, seq).await
         }
 
-        async fn load_run_markers(
-            &self,
-        ) -> Result<Vec<(SessionId, Vec<SessionEventRecord>)>, SessionError> {
+        async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError> {
             self.inner.load_run_markers().await
+        }
+
+        async fn load_rows(&self, session_id: &SessionId) -> Result<Vec<DecodedRow>, SessionError> {
+            self.inner.load_rows(session_id).await
+        }
+
+        async fn retire_record(
+            &self,
+            session_id: &SessionId,
+            seq: EventSeq,
+        ) -> Result<bool, SessionError> {
+            self.inner.retire_record(session_id, seq).await
         }
 
         async fn search_events(
@@ -1394,8 +1626,9 @@ mod tests {
 
         let markers = store.load_run_markers().await.unwrap();
         assert_eq!(markers.len(), 1, "exactly one session has markers");
-        let (got_sid, records) = &markers[0];
+        let (got_sid, slice) = &markers[0];
         assert_eq!(*got_sid, sid);
+        let records = slice.as_ref().unwrap();
         assert_eq!(records.len(), 3, "3 markers, non-marker excluded");
         assert_eq!(records[0].seq, 1);
         assert_eq!(records[1].seq, 3);
@@ -1461,10 +1694,11 @@ mod tests {
             .await
             .unwrap();
         let groups = store.load_run_markers().await.unwrap();
-        let seqs: Vec<u64> = groups[0].1.iter().map(|r| r.seq).collect();
+        let markers = groups[0].1.as_ref().unwrap();
+        let seqs: Vec<u64> = markers.iter().map(|r| r.seq).collect();
         assert_eq!(seqs, vec![1, 2]);
         assert!(matches!(
-            groups[0].1[1].event,
+            markers[1].event,
             SessionEvent::ResumeAttempted {
                 target: 1,
                 attempt: 1
@@ -2175,7 +2409,7 @@ mod tests {
             seq: 1,
             turn_id: None,
             event_type: event_type_tag(&run_started("r", at)),
-            payload: encode_payload(&run_started("r", at)).unwrap(),
+            payload: encode_row(&run_started("r", at)).unwrap(),
             created_at: at,
             fts_body: None,
         }];
@@ -2257,5 +2491,178 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SessionError::Other(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-row decode: the envelope, the three row verdicts, and the isolation
+    // of one bad row to the session that holds it
+    // -----------------------------------------------------------------------
+
+    /// A row exactly as another build would have written it — see
+    /// [`SqliteEventStore::insert_raw_row_for_test`].
+    async fn raw_insert(
+        store: &SqliteEventStore,
+        sid: &SessionId,
+        seq: i64,
+        event_type: &str,
+        json: &str,
+    ) {
+        store
+            .insert_raw_row_for_test(sid, seq, event_type, json)
+            .await;
+    }
+
+    #[test]
+    fn every_row_carries_the_schema_version_and_omits_ignorable_when_false() {
+        let json = encode_row(&user_message(uuid::Uuid::new_v4(), "hi", 1)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["v"], SESSION_EVENT_SCHEMA_VERSION);
+        assert!(
+            v.get("ignorable").is_none(),
+            "absent, never `false`: {json}"
+        );
+        assert!(matches!(decode_row(1, 1, &json), DecodedRow::Event(_)));
+    }
+
+    #[test]
+    fn an_unknown_variant_is_undecodable_unless_the_row_says_ignorable() {
+        assert!(matches!(
+            decode_row(7, 1, r#"{"type":"from_the_future","v":9}"#),
+            DecodedRow::Undecodable(UndecodableRecord { seq: 7, kind_tag: Some(t), .. }) if t == "from_the_future"
+        ));
+        assert!(matches!(
+            decode_row(8, 1, r#"{"type":"from_the_future","ignorable":true}"#),
+            DecodedRow::Skipped { seq: 8, kind_tag } if kind_tag == "from_the_future"
+        ));
+        // A missing key reads as false; a KNOWN variant that will not parse is
+        // corruption, not skippable.
+        assert!(matches!(
+            decode_row(9, 1, r#"{"type":"from_the_future","ignorable":"yes"}"#),
+            DecodedRow::Undecodable(_)
+        ));
+        assert!(matches!(
+            decode_row(10, 1, r#"{"type":"tool_call_requested","ignorable":true}"#),
+            DecodedRow::Undecodable(_)
+        ));
+        assert!(matches!(
+            decode_row(11, 1, "{not json"),
+            DecodedRow::Undecodable(UndecodableRecord { kind_tag: None, .. })
+        ));
+    }
+
+    /// `decode_row` tells "a variant this build does not know" from "a variant
+    /// it knows whose body will not parse" by serde's rendered wording. That
+    /// wording is serde's, not ours, so the prefix the guard keys on is pinned
+    /// against a REAL unknown-variant error: a serde release that rewords it
+    /// turns this red, instead of silently turning every row a newer build
+    /// marked ignorable into corruption.
+    #[test]
+    fn the_unknown_variant_guard_keys_on_serdes_own_wording() {
+        let unknown =
+            serde_json::from_str::<SessionEvent>(r#"{"type":"from_the_future"}"#).unwrap_err();
+        assert!(
+            unknown.to_string().starts_with(UNKNOWN_VARIANT_PREFIX),
+            "serde no longer says `{UNKNOWN_VARIANT_PREFIX}`: {unknown}"
+        );
+        let known =
+            serde_json::from_str::<SessionEvent>(r#"{"type":"tool_call_requested"}"#).unwrap_err();
+        assert!(
+            !known.to_string().starts_with(UNKNOWN_VARIANT_PREFIX),
+            "a known variant with a broken body must not read as unknown: {known}"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_bad_row_refuses_only_its_own_session() {
+        let store = make_store();
+        let (a, b) = (SessionKey::main("a"), SessionKey::main("b"));
+        for sid in [&a, &b] {
+            store.append(sid, 1, &run_started("r", 1), 1).await.unwrap();
+        }
+        raw_insert(
+            &store,
+            &a,
+            2,
+            "from_the_future",
+            r#"{"type":"from_the_future"}"#,
+        )
+        .await;
+        let err = store.load_all_events(&a).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionError::UndecodableRecord(UndecodableRecord { seq: 2, .. })
+            ),
+            "{err}"
+        );
+        assert_eq!(store.load_all_events(&b).await.unwrap().len(), 1);
+        // The marker scan: a bad MARKER row refuses only that session's slice.
+        raw_insert(
+            &store,
+            &a,
+            3,
+            "run_finished",
+            r#"{"type":"run_finished","outcome":"???"}"#,
+        )
+        .await;
+        let groups = store.load_run_markers().await.unwrap();
+        assert!(matches!(
+            &groups.iter().find(|(s, _)| *s == a).unwrap().1,
+            Err(u) if u.seq == 3
+        ));
+        assert!(matches!(
+            &groups.iter().find(|(s, _)| *s == b).unwrap().1,
+            Ok(m) if m.len() == 1
+        ));
+        // `retire_record` is the single-record exit doctor --fix takes.
+        assert!(store.retire_record(&a, 2).await.unwrap());
+        assert!(!store.retire_record(&a, 2).await.unwrap(), "idempotent");
+    }
+
+    #[tokio::test]
+    async fn an_ignorable_row_is_skipped_by_readers_and_counted_by_load_rows() {
+        let store = make_store();
+        let sid = sample_session_id();
+        store
+            .append(&sid, 1, &run_started("r", 1), 1)
+            .await
+            .unwrap();
+        raw_insert(
+            &store,
+            &sid,
+            2,
+            "from_the_future",
+            r#"{"type":"from_the_future","ignorable":true}"#,
+        )
+        .await;
+        assert_eq!(store.load_all_events(&sid).await.unwrap().len(), 1);
+        let rows = store.load_rows(&sid).await.unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, DecodedRow::Skipped { .. }))
+                .count(),
+            1
+        );
+    }
+
+    /// The schema evolves by adding columns and never by gating on a version
+    /// number: a gate that refuses to open an older or newer file is fail-dead
+    /// for every session at once, while an added column reads as NULL on the
+    /// rows written before it (spec 7.4).
+    #[test]
+    fn the_event_table_migration_only_ever_adds_columns() {
+        let src = crate::utils::source_scan::production_code_lines(include_str!("store.rs"));
+        let alters: Vec<&str> = src
+            .lines()
+            .filter(|l| l.contains("ALTER TABLE session_events"))
+            .collect();
+        assert!(
+            !alters.is_empty() && alters.iter().all(|l| l.contains("ADD COLUMN")),
+            "{alters:?}"
+        );
+        assert!(
+            !src.contains("user_version"),
+            "a schema gate is fail-dead (spec 7.4)"
+        );
     }
 }
