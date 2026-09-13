@@ -133,8 +133,11 @@ impl AlephTool for DoctorTool {
     // 4 bytes UNDER the previous text — by dropping prose the model can get
     // from the tool's own output (the findings enumerate every check id) and
     // keeping only what it cannot: that `only`/`skip` exist, and that
-    // `providers/connectivity` is the expensive one.
-    const DESCRIPTION: &'static str = "Self-diagnose Aleph runtime health: paths, disk space, instance lock, duplicate daemons, SQLite store integrity, config.toml parse, secret vault, hook consent, browser prerequisites, LLM provider reachability. Structured findings with fix hints. fix=true applies safe mechanical repairs (missing data dir, stale lock) and re-verifies them. only=/skip=[check ids] narrow it; skip=[\"providers/connectivity\"] avoids a network probe per provider. Read-only by default — also use it to VERIFY a repair after a credential or config fix.";
+    // `providers/connectivity` is the expensive one. 2026-09-13: the
+    // parenthetical naming WHAT fix=true repairs was cut for the same reason —
+    // each finding carries `repairable` and its own fix hint, and the list had
+    // already missed two registered checks.
+    const DESCRIPTION: &'static str = "Self-diagnose Aleph runtime health: paths, disk space, instance lock, duplicate daemons, SQLite store integrity, config.toml parse, secret vault, hook consent, browser prerequisites, LLM provider reachability. Structured findings with fix hints. fix=true applies safe mechanical repairs and re-verifies them. only=/skip=[check ids] narrow it; skip=[\"providers/connectivity\"] avoids a network probe per provider. Read-only by default — also use it to VERIFY a repair after a credential or config fix.";
 
     type Args = DoctorArgs;
     type Output = DoctorOutput;

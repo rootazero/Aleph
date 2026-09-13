@@ -63,8 +63,10 @@ const ID: &str = "core/session-log";
 /// Noun phrase the "unknown" finding is titled with — `"Session log unknown"`.
 const SUBJECT: &str = "Session log";
 
-/// How many contradicting sessions to name in the detail. The counts stay
-/// exact; only the roll-call is capped.
+/// How many plain contradicting sessions to name in the detail. The counts
+/// stay exact; only that roll-call is capped. A session with an undecodable
+/// row is never subject to it — it is part of the repair set, and the repair
+/// hint promises to have named every one.
 const NAMED_LIMIT: usize = 10;
 
 pub struct SessionLogCheck {
@@ -132,6 +134,35 @@ fn walk_rows(rows: Vec<DecodedRow>, skipped: &mut usize) -> RowsVerdict {
     } else {
         RowsVerdict::Undecodable(undecodable)
     }
+}
+
+/// One roll-call entry: `key [refused: tag, tag (seq N type `T`, …)]`. An
+/// undecodable entry names each row by seq and `type`, so the operator can
+/// find it in the transcript before retiring it.
+fn name_entry(b: &Contradicting) -> String {
+    let rows: String = b
+        .undecodable
+        .iter()
+        .map(|u| {
+            format!(
+                "seq {} type `{}`",
+                u.seq,
+                u.kind_tag.as_deref().unwrap_or("?")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{} [{}{}{}]",
+        b.key,
+        if b.refused { "refused: " } else { "" },
+        b.tags.join(", "),
+        if rows.is_empty() {
+            String::new()
+        } else {
+            format!(" ({rows})")
+        }
+    )
 }
 
 /// `; N ignorable row(s) skipped` when any were, for both the OK finding and
@@ -291,39 +322,19 @@ impl HealthCheck for SessionLogCheck {
         }
 
         let refused = bad.iter().filter(|b| b.refused).count();
-        let named: Vec<String> = bad
+        // The roll-call: every entry with an undecodable row first and
+        // UNCAPPED — they are exactly the set `fix=true` touches, and a hint
+        // that says "the records named above" must be able to mean it — then
+        // the plain contradicting sessions, capped.
+        let (with_undecodable, plain): (Vec<&Contradicting>, Vec<&Contradicting>) =
+            bad.iter().partition(|b| !b.undecodable.is_empty());
+        let named: Vec<String> = with_undecodable
             .iter()
-            .take(NAMED_LIMIT)
-            .map(|b| {
-                // An undecodable entry names each row by seq and `type`, so the
-                // operator can find it in the transcript before retiring it.
-                let rows: String = b
-                    .undecodable
-                    .iter()
-                    .map(|u| {
-                        format!(
-                            "seq {} type `{}`",
-                            u.seq,
-                            u.kind_tag.as_deref().unwrap_or("?")
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!(
-                    "{} [{}{}{}]",
-                    b.key,
-                    if b.refused { "refused: " } else { "" },
-                    b.tags.join(", "),
-                    if rows.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" ({rows})")
-                    }
-                )
-            })
+            .chain(plain.iter().take(NAMED_LIMIT))
+            .map(|b| name_entry(b))
             .chain(
-                (bad.len() > NAMED_LIMIT)
-                    .then(|| format!("… and {} more", bad.len() - NAMED_LIMIT)),
+                (plain.len() > NAMED_LIMIT)
+                    .then(|| format!("… and {} more", plain.len() - NAMED_LIMIT)),
             )
             .collect();
         let undecodable_total: usize = bad.iter().map(|b| b.undecodable.len()).sum();
@@ -366,13 +377,14 @@ impl HealthCheck for SessionLogCheck {
         }
 
         finding = finding
-            .with_fix_hint(
-                "`fix=true` retires ONLY the undecodable record(s) named above — rows this \
-                 build cannot read at all, so there is nothing to decide between; the rest \
-                 of each log stays live. Contradictions stay report-only: resolving one means \
-                 deciding which of two disagreeing records is true, which this check cannot \
-                 do for you.",
-            )
+            .with_fix_hint(format!(
+                "`fix=true` retires ONLY the {undecodable_total} undecodable record(s) named \
+                 above (every one is listed; the cap applies to the other sessions) — rows \
+                 this build cannot read at all, so there is nothing to decide between; the \
+                 rest of each log stays live. Contradictions stay report-only: resolving one \
+                 means deciding which of two disagreeing records is true, which this check \
+                 cannot do for you."
+            ))
             .repairable();
         if posture.allows_repair() {
             finding = finding.with_repair(retire_undecodable(events.as_ref(), &bad).await);
@@ -461,15 +473,16 @@ mod tests {
     /// spelled here. Goes red the day a `LogContradiction` variant is added
     /// whose tag stops being `session-log-`-prefixed, which is the moment the
     /// check's detail line would start naming something the operator cannot
-    /// grep for.
+    /// grep for. Walks the reducer's own one-per-kind list rather than a
+    /// hand-picked few, so every kind — including the next one — is asked.
     #[test]
     fn every_contradiction_tag_belongs_to_this_checks_namespace() {
-        use LogContradiction as C;
-        let all = [
-            C::OutOfOrderSlice { at_seq: 1 },
-            C::NonMarkerInMarkerSlice { seq: 1 },
-            C::UndecodableRecord { seq: 1 },
-        ];
+        let all = crate::session::reduction::fixtures::one_of_each_kind();
+        assert_eq!(
+            all.len(),
+            crate::session::reduction::fixtures::KIND_COUNT,
+            "the census must see the whole closed set"
+        );
         for c in all {
             assert!(
                 c.tag().starts_with("session-log-"),
@@ -549,5 +562,53 @@ mod tests {
         // Retired, the row is out of the live log: the next run reads clean.
         let f = &check.run(Posture::Inspect).await[0];
         assert!(!f.is_problem(), "{}", f.detail);
+    }
+
+    /// The hint says `fix=true` retires the undecodable records "named
+    /// above", so they must be named whatever the roll-call cap does: eleven
+    /// plain contradicting sessions (each a `RunFinished` closing no run —
+    /// `FinishWithoutStart`) sort BEFORE one undecodable session, which is
+    /// therefore past `NAMED_LIMIT` — and is still named, with its seq, and
+    /// counted in the hint.
+    #[tokio::test]
+    async fn an_undecodable_entry_is_named_past_the_roll_call_cap_and_counted() {
+        let (store, sid) = seeded_store_with_bad_row(7).await;
+        assert!(
+            SessionKey::main("a-plain-00").to_key_string() < sid.to_key_string(),
+            "the premise: the plain keys sort before the undecodable one"
+        );
+        for i in 0..=NAMED_LIMIT {
+            store
+                .append(
+                    &SessionKey::main(format!("a-plain-{i:02}")),
+                    1,
+                    &SessionEvent::RunFinished {
+                        run_id: "orphan".into(),
+                        outcome: crate::session::events::RunOutcome::Completed,
+                        at: 1,
+                    },
+                    1,
+                )
+                .await
+                .unwrap();
+        }
+        let check = SessionLogCheck::new(None, Some(store.clone() as Arc<dyn SessionEventStore>));
+        let f = &check.run(Posture::Inspect).await[0];
+        assert!(f.repairable, "{}", f.detail);
+        assert!(
+            f.detail.contains(&sid.to_key_string()) && f.detail.contains("seq 7"),
+            "the undecodable session is named past the cap: {}",
+            f.detail
+        );
+        assert!(
+            f.detail.contains("… and 1 more"),
+            "the cap still applies to the plain sessions: {}",
+            f.detail
+        );
+        let hint = f.fix_hint.as_deref().unwrap_or_default();
+        assert!(
+            hint.contains("the 1 undecodable record(s) named above"),
+            "the hint carries the count of what the repair touches: {hint}"
+        );
     }
 }

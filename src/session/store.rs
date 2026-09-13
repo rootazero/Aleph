@@ -23,7 +23,11 @@
 //! says an older build may skip unread. [`encode_row`] is the one writer of
 //! that envelope and [`decode_row`] the one reader: a row this build cannot
 //! turn into a [`SessionEvent`] is a [`DecodedRow::Undecodable`] value, so it
-//! refuses the session that holds it and no other.
+//! refuses the session that holds it and no other. The envelope goes through
+//! `serde_json::Value` (no `preserve_order` in this workspace), so a row's
+//! keys are written in alphabetical order — `"at", …, "type", "v"` — where
+//! the pre-envelope rows led with `"type"`; decoding is order-independent
+//! and no SQL reads `payload_json` textually, so the two shapes coexist.
 //!
 //! # Async model
 //!
@@ -372,10 +376,11 @@ impl SqliteEventStore {
     /// Insert one `session_events` row exactly as another build would have
     /// written it — past [`encode_row`], which is the point: a reader must
     /// cope with what is on disk, not with what this build would have put
-    /// there. The fixture for every "a row this build cannot read" test,
-    /// here because `conn` is private.
-    #[cfg(test)]
-    pub(crate) async fn insert_raw_row_for_test(
+    /// there. The ONE fixture for every "a row this build cannot read" test,
+    /// in-crate and in `tests/` (`test-helpers`), here because `conn` is
+    /// private.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub async fn insert_raw_row_for_test(
         &self,
         sid: &SessionId,
         seq: i64,
@@ -408,10 +413,22 @@ struct EncodedRow {
 /// `type` tag already names.
 pub const SESSION_EVENT_SCHEMA_VERSION: u16 = 1;
 
-/// The prefix of serde's rendered message for a `type` tag this build's
-/// [`SessionEvent`] does not know. Serde's wording, not ours — pinned by
+/// The prefix of serde's rendered message for an unknown variant of ANY enum
+/// at any depth — an unknown `type` tag and an unknown word inside a known
+/// event's body render the same way. [`names_unknown_outer_variant`] appends
+/// the row's own tag, which is what tells the two apart. Serde's wording,
+/// not ours — pinned by
 /// `tests::the_unknown_variant_guard_keys_on_serdes_own_wording`.
 const UNKNOWN_VARIANT_PREFIX: &str = "unknown variant";
+
+/// True iff serde's message says the row's `type` tag ITSELF is the unknown
+/// variant: `unknown variant `<kind_tag>``. A known `type` whose body holds an
+/// unknown inner word (`"outcome":"from_the_future"`) renders `unknown
+/// variant `from_the_future`` and does not match — it is corruption to this
+/// build, never a row a newer build could have marked skippable.
+fn names_unknown_outer_variant(err: &str, kind_tag: &str) -> bool {
+    err.starts_with(&format!("{UNKNOWN_VARIANT_PREFIX} `{kind_tag}`"))
+}
 
 /// A `session_events` row this build could not turn into a [`SessionEvent`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -490,16 +507,18 @@ pub fn decode_row(seq: EventSeq, created_at_ms: i64, json: &str) -> DecodedRow {
         .as_ref()
         .and_then(|v| v["type"].as_str())
         .map(str::to_string);
-    let unknown_variant = err.to_string().starts_with(UNKNOWN_VARIANT_PREFIX);
+    let error = err.to_string();
     let ignorable = raw
         .as_ref()
         .is_some_and(|v| v["ignorable"] == serde_json::Value::Bool(true));
     match kind_tag {
-        Some(kind_tag) if unknown_variant && ignorable => DecodedRow::Skipped { seq, kind_tag },
+        Some(kind_tag) if ignorable && names_unknown_outer_variant(&error, &kind_tag) => {
+            DecodedRow::Skipped { seq, kind_tag }
+        }
         kind_tag => DecodedRow::Undecodable(UndecodableRecord {
             seq,
             kind_tag,
-            error: err.to_string(),
+            error,
         }),
     }
 }
@@ -2548,27 +2567,52 @@ mod tests {
             decode_row(11, 1, "{not json"),
             DecodedRow::Undecodable(UndecodableRecord { kind_tag: None, .. })
         ));
+        // A KNOWN type whose body holds an unknown word of an INNER enum:
+        // serde says `unknown variant` for that too, but the row's own tag is
+        // not the unknown one — corruption, never skippable.
+        assert!(matches!(
+            decode_row(
+                12,
+                1,
+                r#"{"type":"run_finished","run_id":"r","outcome":"from_the_future","at":1,"ignorable":true}"#
+            ),
+            DecodedRow::Undecodable(UndecodableRecord { seq: 12, kind_tag: Some(t), .. }) if t == "run_finished"
+        ));
     }
 
-    /// `decode_row` tells "a variant this build does not know" from "a variant
-    /// it knows whose body will not parse" by serde's rendered wording. That
-    /// wording is serde's, not ours, so the prefix the guard keys on is pinned
-    /// against a REAL unknown-variant error: a serde release that rewords it
-    /// turns this red, instead of silently turning every row a newer build
-    /// marked ignorable into corruption.
+    /// `decode_row` tells "a `type` this build does not know" from "a `type` it
+    /// knows whose body will not parse" by serde's rendered wording. That
+    /// wording is serde's, not ours, so the shape the guard keys on —
+    /// `unknown variant `<the row's own tag>`` — is pinned against REAL
+    /// errors: a serde release that rewords it turns this red, instead of
+    /// silently turning every row a newer build marked ignorable into
+    /// corruption. The inner-enum case is the one the prefix alone cannot
+    /// tell apart: it carries the same prefix with a different name after it.
     #[test]
     fn the_unknown_variant_guard_keys_on_serdes_own_wording() {
         let unknown =
             serde_json::from_str::<SessionEvent>(r#"{"type":"from_the_future"}"#).unwrap_err();
         assert!(
-            unknown.to_string().starts_with(UNKNOWN_VARIANT_PREFIX),
-            "serde no longer says `{UNKNOWN_VARIANT_PREFIX}`: {unknown}"
+            names_unknown_outer_variant(&unknown.to_string(), "from_the_future"),
+            "serde no longer says `{UNKNOWN_VARIANT_PREFIX} `<tag>``: {unknown}"
         );
         let known =
             serde_json::from_str::<SessionEvent>(r#"{"type":"tool_call_requested"}"#).unwrap_err();
         assert!(
             !known.to_string().starts_with(UNKNOWN_VARIANT_PREFIX),
             "a known variant with a broken body must not read as unknown: {known}"
+        );
+        let inner = serde_json::from_str::<SessionEvent>(
+            r#"{"type":"run_finished","run_id":"r","outcome":"from_the_future","at":1}"#,
+        )
+        .unwrap_err();
+        assert!(
+            inner.to_string().starts_with(UNKNOWN_VARIANT_PREFIX),
+            "the premise: an inner unknown word renders the same prefix: {inner}"
+        );
+        assert!(
+            !names_unknown_outer_variant(&inner.to_string(), "run_finished"),
+            "the guard must not read the inner word as the row's own tag: {inner}"
         );
     }
 

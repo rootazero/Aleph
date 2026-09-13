@@ -469,6 +469,89 @@ mod tests {
         assert_eq!(seqs, vec![4]);
     }
 
+    /// The point of `replay` reading the seq counter and not the log: an
+    /// actor still BOOTS on a session whose log holds a row this build cannot
+    /// read, so the doctor's retire and a new append can reach that log. A
+    /// boot that decoded the log would terminate the actor instead, and every
+    /// command's reply channel would drop. Pinned at the effect: an `Emit`
+    /// lands PAST the bad row (the counter saw it), and `GetEvents` answers
+    /// the store's own refusal — `Err(UndecodableRecord)`, not
+    /// `ActorShutdown`.
+    #[tokio::test]
+    async fn the_actor_boots_on_a_log_with_a_row_it_cannot_read() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).unwrap();
+        let store = Arc::new(SqliteEventStore::new(conn));
+        let id = sample_id();
+        let at = now_ms();
+        store
+            .append(
+                &id,
+                1,
+                &SessionEvent::TurnStarted {
+                    turn_id: uuid::Uuid::new_v4(),
+                    trigger: TurnTrigger::UserMessage,
+                    at,
+                },
+                at,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_raw_row_for_test(&id, 2, "from_the_future", r#"{"type":"from_the_future"}"#)
+            .await;
+
+        let (tx, rx) = mpsc::channel(8);
+        let (bcast, _) = broadcast::channel(16);
+        let actor = SessionActor::new(
+            id.clone(),
+            store as Arc<dyn SessionEventStore>,
+            rx,
+            bcast,
+            None,
+            DEFAULT_IDLE_TIMEOUT,
+        );
+        tokio::spawn(actor.run());
+
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(ActorCommand::EmitBatch {
+            events: vec![SessionEvent::TurnStarted {
+                turn_id: uuid::Uuid::new_v4(),
+                trigger: TurnTrigger::UserMessage,
+                at,
+            }],
+            retire: None,
+            reply: rtx,
+        })
+        .await
+        .unwrap();
+        let seqs = rrx
+            .await
+            .expect("the actor is alive: its reply channel was not dropped")
+            .unwrap();
+        assert_eq!(seqs, vec![3], "the append lands past the bad row");
+
+        let (gtx, grx) = oneshot::channel();
+        tx.send(ActorCommand::GetEvents {
+            from: None,
+            to: None,
+            reply: gtx,
+        })
+        .await
+        .unwrap();
+        let err = grx.await.unwrap().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SessionError::UndecodableRecord(crate::session::store::UndecodableRecord {
+                    seq: 2,
+                    ..
+                })
+            ),
+            "the read is the store's refusal, naming the row: {err}"
+        );
+    }
+
     /// A store double for the actor's write path. `append_batch` records every
     /// call as `(first_seq, rows)`, fails the first `fail_first` calls with a
     /// numbered `Storage` error — each failure also advances `head` by one,

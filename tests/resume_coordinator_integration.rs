@@ -1950,30 +1950,25 @@ async fn a_tail_that_cannot_be_read_refuses_without_stamping_or_retriggering() {
 async fn an_undecodable_marker_row_refuses_only_its_own_session_at_the_resume_face() {
     use alephcore::session::reduction::LogContradiction;
 
-    // File-backed so a second connection can write the row RAW — past
-    // `encode_row`, exactly as another build would have left it on disk.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("events.db");
-    let conn = rusqlite::Connection::open(&path).unwrap();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
     migrate_add_session_events(&conn).unwrap();
-    let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+    let concrete = Arc::new(SqliteEventStore::new(conn));
+    let store: Arc<dyn SessionEventStore> = concrete.clone();
     let bad = SessionKey::main("undecodable-marker-agent");
     let good = SessionKey::main("decodable-neighbour-agent");
     seed_interrupted_run(&store, &bad).await;
     seed_interrupted_run(&store, &good).await;
     // A marker row with an outcome word this build's `RunOutcome` does not
-    // know: a `run_finished` written by a newer build.
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
-            "INSERT INTO session_events (session_id, seq, event_type, payload_json, created_at) \
-             VALUES (?1, 99, 'run_finished', ?2, 1)",
-            rusqlite::params![
-                serde_json::to_string(&bad).unwrap(),
-                r#"{"type":"run_finished","run_id":"run-1","outcome":"from_the_future","at":1}"#
-            ],
+    // know: a `run_finished` written by a newer build, inserted RAW — past
+    // `encode_row`, exactly as it would sit on disk.
+    concrete
+        .insert_raw_row_for_test(
+            &bad,
+            99,
+            "run_finished",
+            r#"{"type":"run_finished","run_id":"run-1","outcome":"from_the_future","at":1}"#,
         )
-        .unwrap();
+        .await;
 
     let sessions = sessions();
     for sid in [&bad, &good] {

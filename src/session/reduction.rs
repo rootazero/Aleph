@@ -839,8 +839,80 @@ pub fn own_work_start(events: &[SessionEventRecord]) -> usize {
         .map_or(events.len(), |i| after + i)
 }
 
+/// The closed set [`LogContradiction`], walked as a list — for every census
+/// over it, in this module and in `diagnostics::checks::session_log`, so a
+/// kind that is added shows up in all of them from one place.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use super::LogContradiction;
+
+    /// `kind_index` is an exhaustive match, so a new variant does not
+    /// compile until it is filed here too — that is the "remember to update
+    /// the other list" that cannot be forgotten.
+    pub(crate) fn kind_index(c: &LogContradiction) -> usize {
+        match c {
+            LogContradiction::OutOfOrderSlice { .. } => 0,
+            LogContradiction::NonMarkerInMarkerSlice { .. } => 1,
+            LogContradiction::UnmarkedActivity { .. } => 2,
+            LogContradiction::FinishWithoutStart { .. } => 3,
+            LogContradiction::DuplicateDispatch { .. } => 4,
+            LogContradiction::ReceiptWithoutDispatch { .. } => 5,
+            LogContradiction::DuplicateReceipt { .. } => 6,
+            LogContradiction::DanglingDeniedCall { .. } => 7,
+            LogContradiction::ClockAnomaly { .. } => 8,
+            LogContradiction::ResumeWithoutTarget { .. } => 9,
+            LogContradiction::ParkedWithoutRequest { .. } => 10,
+            LogContradiction::UndecodableRecord { .. } => 11,
+        }
+    }
+    pub(crate) const KIND_COUNT: usize = 12;
+
+    /// One sample per variant, asserted complete against `kind_index`.
+    pub(crate) fn one_of_each_kind() -> Vec<LogContradiction> {
+        let all = vec![
+            LogContradiction::OutOfOrderSlice { at_seq: 1 },
+            LogContradiction::NonMarkerInMarkerSlice { seq: 1 },
+            LogContradiction::UnmarkedActivity { first_seq: 1 },
+            LogContradiction::FinishWithoutStart {
+                seq: 1,
+                run_id: "r".into(),
+            },
+            LogContradiction::DuplicateDispatch {
+                call_id: "c".into(),
+                seqs: vec![1, 2],
+            },
+            LogContradiction::ReceiptWithoutDispatch {
+                call_id: "c".into(),
+                seq: 1,
+            },
+            LogContradiction::DuplicateReceipt {
+                call_id: "c".into(),
+                seqs: vec![1, 2],
+            },
+            LogContradiction::DanglingDeniedCall {
+                call_id: "c".into(),
+                seq: 1,
+            },
+            LogContradiction::ClockAnomaly { seq: 1 },
+            LogContradiction::ResumeWithoutTarget { seq: 1 },
+            LogContradiction::ParkedWithoutRequest {
+                seq: 1,
+                call_id: "c".into(),
+            },
+            LogContradiction::UndecodableRecord { seq: 1 },
+        ];
+        let mut seen = vec![false; KIND_COUNT];
+        for c in &all {
+            seen[kind_index(c)] = true;
+        }
+        assert!(seen.iter().all(|s| *s), "one sample per variant");
+        all
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::fixtures::{kind_index, one_of_each_kind};
     use super::*;
     use crate::session::events::{MessageContent, ParkReason, RunOutcome, TurnTrigger};
 
@@ -1051,72 +1123,12 @@ mod tests {
     }
 
     // ---- the closed set -------------------------------------------------
-
-    /// One sample per variant. `kind_index` is an exhaustive match, so a new
-    /// variant does not compile until it is added here too — that is the
-    /// "remember to update the other list" that cannot be forgotten.
-    fn kind_index(c: &LogContradiction) -> usize {
-        match c {
-            LogContradiction::OutOfOrderSlice { .. } => 0,
-            LogContradiction::NonMarkerInMarkerSlice { .. } => 1,
-            LogContradiction::UnmarkedActivity { .. } => 2,
-            LogContradiction::FinishWithoutStart { .. } => 3,
-            LogContradiction::DuplicateDispatch { .. } => 4,
-            LogContradiction::ReceiptWithoutDispatch { .. } => 5,
-            LogContradiction::DuplicateReceipt { .. } => 6,
-            LogContradiction::DanglingDeniedCall { .. } => 7,
-            LogContradiction::ClockAnomaly { .. } => 8,
-            LogContradiction::ResumeWithoutTarget { .. } => 9,
-            LogContradiction::ParkedWithoutRequest { .. } => 10,
-            LogContradiction::UndecodableRecord { .. } => 11,
-        }
-    }
-    const KIND_COUNT: usize = 12;
-
-    fn one_of_each() -> Vec<LogContradiction> {
-        let all = vec![
-            LogContradiction::OutOfOrderSlice { at_seq: 1 },
-            LogContradiction::NonMarkerInMarkerSlice { seq: 1 },
-            LogContradiction::UnmarkedActivity { first_seq: 1 },
-            LogContradiction::FinishWithoutStart {
-                seq: 1,
-                run_id: "r".into(),
-            },
-            LogContradiction::DuplicateDispatch {
-                call_id: "c".into(),
-                seqs: vec![1, 2],
-            },
-            LogContradiction::ReceiptWithoutDispatch {
-                call_id: "c".into(),
-                seq: 1,
-            },
-            LogContradiction::DuplicateReceipt {
-                call_id: "c".into(),
-                seqs: vec![1, 2],
-            },
-            LogContradiction::DanglingDeniedCall {
-                call_id: "c".into(),
-                seq: 1,
-            },
-            LogContradiction::ClockAnomaly { seq: 1 },
-            LogContradiction::ResumeWithoutTarget { seq: 1 },
-            LogContradiction::ParkedWithoutRequest {
-                seq: 1,
-                call_id: "c".into(),
-            },
-            LogContradiction::UndecodableRecord { seq: 1 },
-        ];
-        let mut seen = vec![false; KIND_COUNT];
-        for c in &all {
-            seen[kind_index(c)] = true;
-        }
-        assert!(seen.iter().all(|s| *s), "one sample per variant");
-        all
-    }
+    // The samples live in `super::fixtures` so every census over the set
+    // (here and `diagnostics::checks::session_log`) walks ONE list.
 
     #[test]
     fn the_three_reject_kinds_are_exactly_out_of_order_non_marker_and_undecodable() {
-        for c in one_of_each() {
+        for c in one_of_each_kind() {
             let expected = matches!(kind_index(&c), 0 | 1 | 11);
             assert_eq!(c.rejects(), expected, "{c:?}");
         }
@@ -1148,7 +1160,7 @@ mod tests {
     /// wire does not.
     #[test]
     fn tags_are_derived_from_the_serde_kind() {
-        for c in one_of_each() {
+        for c in one_of_each_kind() {
             let v = serde_json::to_value(&c).unwrap();
             let kind = v["kind"].as_str().expect("internally tagged");
             assert_eq!(c.tag(), format!("session-log-{}", kind.replace('_', "-")));
