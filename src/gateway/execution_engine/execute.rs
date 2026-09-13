@@ -963,50 +963,18 @@ where
                 // SSOT: the harness already emitted SessionEvent::AssistantMessage for
                 // `_response` (the projector writes that row). Emit run_id + occupancy so
                 // the projector stamps them onto that row — preserving the Panel context
-                // gauge + workspace trace across a session reload.
-                if let Some(svc) = crate::session::service::global_session_service() {
-                    let occ = match occupancy {
-                        Some(o) => o,
-                        None => super::helpers::RunContextOccupancy {
-                            context_tokens: 0,
-                            context_window: 0,
-                            total_tokens: 0,
-                            input_tokens: 0,
-                            output_tokens: 0,
-                            cost_usd: None,
-                            model: None,
-                            model_provider: None,
-                        },
-                    };
-                    let _ = svc
-                        .emit_event(
-                            &request.session_key,
-                            crate::session::events::SessionEvent::AssistantRunMeta {
-                                turn_id: uuid::Uuid::new_v4(),
-                                run_id: run_id.clone(),
-                                context_tokens: occ.context_tokens,
-                                context_window: occ.context_window,
-                                total_tokens: occ.total_tokens,
-                                input_tokens: occ.input_tokens,
-                                output_tokens: occ.output_tokens,
-                                cost_usd: occ.cost_usd,
-                                model: occ.model,
-                                model_provider: occ.model_provider,
-                                at: crate::session::events::now_ms(),
-                            },
-                        )
-                        .await;
-                } else {
-                    // Degraded, not missing: the harness already emitted the
-                    // AssistantMessage row (see the SSOT comment above), so no
-                    // content is lost — only this stamp (Panel context gauge
-                    // + workspace trace) is, and the next turn restamps it.
-                    tracing::debug!(
-                        session_key = %request.session_key.to_key_string(),
-                        run_id = %run_id,
-                        "session/service capability absent; skipped run_id/occupancy stamp — see `aleph doctor`"
-                    );
-                }
+                // gauge + workspace trace across a session reload — and bills the
+                // session from the run's own messages. A run that produced no
+                // assistant message (`None`) has no row to stamp and emits nothing;
+                // the arms are in `stamp_run_meta`'s doc.
+                let svc = crate::session::service::global_session_service();
+                super::helpers::stamp_run_meta(
+                    svc.as_deref(),
+                    &request.session_key,
+                    &run_id,
+                    occupancy,
+                )
+                .await;
 
                 // Notify UI that the session was updated (global bus, so
                 // channel-originated runs reach the Panel too). RunComplete

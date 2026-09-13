@@ -470,29 +470,19 @@ pub enum SessionEvent {
         usage: Option<crate::orchestrator::dispatch::TokenBreakdown>,
         at: Timestamp,
     },
-    /// Stamped after the assistant message row is written; carries the
-    /// `run_id` and context-window occupancy so the projector can persist
-    /// them onto the message metadata without coupling the hot path to storage.
+    /// Stamped after the run. Carries what the usage fold
+    /// (`session::usage_fold`) cannot derive: the run_id join, context-window
+    /// occupancy, the priced cost and the serving model. Token counters were
+    /// removed 2026-09-12 — they are folded from `AssistantMessage.usage`
+    /// (`session::usage_fold::run_usage_totals`) when the projector lands this
+    /// stamp; rows written before then still carry `input_tokens` /
+    /// `output_tokens`, which serde ignores on the way in.
     AssistantRunMeta {
         turn_id: TurnId,
         run_id: String,
         context_tokens: u32,
         context_window: u32,
         total_tokens: u64,
-        /// Prompt tokens this run spent — the whole run, including the calls a
-        /// retry discarded before they ever became a message. Accumulated onto
-        /// the session row, which is why the session total is a superset of the
-        /// sum of its message rows rather than equal to it.
-        ///
-        /// This event is the run's one authoritative billing report, so the
-        /// session-level counters ride here and NOWHERE else: `add_message_full`
-        /// used to also add each row's tokens onto the same three session
-        /// columns, which was harmless only because those tokens were always 0.
-        #[serde(default)]
-        input_tokens: u32,
-        /// Completion tokens this run spent. Same story as `input_tokens`.
-        #[serde(default)]
-        output_tokens: u32,
         /// This run's cost in USD, or `None` when it could not be priced.
         /// `None` ≠ 0.0 — an unpriced run must not silently understate the
         /// session total.
@@ -848,8 +838,6 @@ pub(crate) mod fixtures {
                     context_tokens: 0,
                     context_window: 0,
                     total_tokens: 0,
-                    input_tokens: 0,
-                    output_tokens: 0,
                     cost_usd: None,
                     model: None,
                     model_provider: None,
@@ -1289,6 +1277,32 @@ mod tests {
                 assert_eq!(content.text, "hi");
             }
             other => panic!("expected a user message, got {other:?}"),
+        }
+    }
+
+    /// Rows written before 2026-09-12 carry `input_tokens` / `output_tokens`
+    /// on the meta. The enum has no `deny_unknown_fields`, so they decode to
+    /// the trimmed variant with the counters dropped on the floor — the fold
+    /// re-derives them from the run's `AssistantMessage.usage`. Pinned so the
+    /// counters are ignored rather than refused, by name.
+    #[test]
+    fn an_old_run_meta_with_token_counters_still_decodes() {
+        let old = r#"{"type":"assistant_run_meta","turn_id":"11111111-1111-4111-8111-111111111111","run_id":"r-old","context_tokens":1234,"context_window":200000,"total_tokens":70,"input_tokens":45,"output_tokens":25,"cost_usd":0.12,"model":"claude","model_provider":"anthropic","at":3}"#;
+        match serde_json::from_str::<SessionEvent>(old).unwrap() {
+            SessionEvent::AssistantRunMeta {
+                run_id,
+                context_tokens,
+                total_tokens,
+                cost_usd,
+                model,
+                ..
+            } => {
+                assert_eq!(run_id, "r-old");
+                assert_eq!((context_tokens, total_tokens), (1234, 70));
+                assert_eq!(cost_usd, Some(0.12));
+                assert_eq!(model.as_deref(), Some("claude"));
+            }
+            other => panic!("expected a run meta, got {other:?}"),
         }
     }
 

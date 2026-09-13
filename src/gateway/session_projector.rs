@@ -3,7 +3,10 @@
 //!
 //! Each assistant row carries the tokens of the single LLM call that produced
 //! it, read straight off `AssistantMessage.usage` — the harness emits one
-//! `AssistantMessage` per Think step, so calls and rows are 1:1.
+//! `AssistantMessage` per Think step, so calls and rows are 1:1. The session
+//! row's counters are the fold of those same events (`session::usage_fold`),
+//! accumulated once per run when its `AssistantRunMeta` lands — see
+//! [`bill_run_from_fold`].
 //!
 //! The observer itself is **non-blocking**: `on_appended` enqueues the event
 //! onto an mpsc channel and returns immediately.
@@ -772,8 +775,6 @@ pub(crate) async fn project_event(
             context_tokens,
             context_window,
             total_tokens,
-            input_tokens,
-            output_tokens,
             cost_usd,
             model,
             model_provider,
@@ -783,8 +784,6 @@ pub(crate) async fn project_event(
                 context_tokens: *context_tokens,
                 context_window: *context_window,
                 total_tokens: *total_tokens,
-                input_tokens: *input_tokens,
-                output_tokens: *output_tokens,
                 cost_usd: *cost_usd,
                 model: model.clone(),
                 model_provider: model_provider.clone(),
@@ -824,32 +823,22 @@ pub(crate) async fn project_event(
                     // replay of the same meta returns `AlreadyStamped` and never
                     // reaches this arm.
                     //
-                    // THE run's report, not A report: `add_message_full` does not
-                    // add each message row's tokens onto these same three
-                    // columns. It did, silently, for as long as the rows carried
-                    // zeros; the moment the rows became real that stopped being a
-                    // harmless no-op and started double-billing the session.
-                    let mut billed = false;
-                    if *input_tokens > 0 || *output_tokens > 0 || cost_usd.is_some() {
-                        match ctx
-                            .store
-                            .update_session_usage(
-                                id,
-                                i64::from(*input_tokens),
-                                i64::from(*output_tokens),
-                                cost_usd.unwrap_or(0.0),
-                                model.as_deref(),
-                                model_provider.as_deref(),
-                            )
-                            .await
-                        {
-                            Ok(()) => billed = true,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "projector: session usage accumulation failed");
-                            }
-                        }
+                    // The tokens come from the run's own messages (the usage
+                    // fold), the cost and model from this meta. `add_message_full`
+                    // does not add each row's tokens onto the same columns — it
+                    // did, silently, for as long as the rows carried zeros.
+                    Projected::Stamped {
+                        billed: bill_run_from_fold(
+                            id,
+                            rec.seq,
+                            ctx,
+                            run_id,
+                            *cost_usd,
+                            model.as_deref(),
+                            model_provider.as_deref(),
+                        )
+                        .await,
                     }
-                    Projected::Stamped { billed }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "projector: stamp run-meta failed");
@@ -898,6 +887,75 @@ pub(crate) async fn project_event(
                 let _ = bus.publish_frame(&frame);
             }
             Projected::Row
+        }
+    }
+}
+
+/// Accumulate the run's spend onto the session row from the usage fold —
+/// exactly once, guarded by the stamp that just landed. The tokens are
+/// [`crate::session::usage_fold::run_usage_totals`] over the log slice
+/// `[ctx.run_start, meta_seq)`, anchored on the last `RunStarted` in it; the
+/// cost and model are the meta's own.
+///
+/// `false` = nothing was accumulated — either it could not be told (no log
+/// installed, an unreadable slice, no `RunStarted` to anchor on: each such
+/// path warns) or there was nothing to add (a run whose messages carried no
+/// usage and whose meta carries no price: no warn). The heal counts it as
+/// "not rebilled" either way; the distinction lives in the log line.
+///
+/// `ctx.run_start == 0` ⇒ the slice starts at the log head and the fold
+/// anchors on the last `RunStarted` it finds — the restarted-drain case, where
+/// this process never saw the marker go by.
+async fn bill_run_from_fold(
+    id: &SessionId,
+    meta_seq: EventSeq,
+    ctx: &ProjectionCtx<'_>,
+    run_id: &str,
+    cost_usd: Option<f64>,
+    model: Option<&str>,
+    provider: Option<&str>,
+) -> bool {
+    let Some(events) = ctx.events else {
+        tracing::warn!(session = ?id, run_id, "projector: no event log; run spend not accumulated");
+        return false;
+    };
+    let slice = match events
+        .load_events_range(id, Some(ctx.run_start), Some(meta_seq))
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(session = ?id, run_id, error = %e, "projector: usage fold read failed");
+            return false;
+        }
+    };
+    let Some(totals) = crate::session::usage_fold::run_usage_totals(&slice) else {
+        tracing::warn!(
+            session = ?id,
+            run_id,
+            "projector: run meta with no RunStarted before it; spend not accumulated"
+        );
+        return false;
+    };
+    if totals.input == 0 && totals.output == 0 && cost_usd.is_none() {
+        return false;
+    }
+    match ctx
+        .store
+        .update_session_usage(
+            id,
+            i64::try_from(totals.input).unwrap_or(i64::MAX),
+            i64::try_from(totals.output).unwrap_or(i64::MAX),
+            cost_usd.unwrap_or(0.0),
+            model,
+            provider,
+        )
+        .await
+    {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(session = ?id, run_id, error = %e, "projector: session usage accumulation failed");
+            false
         }
     }
 }
@@ -1176,20 +1234,66 @@ mod tests {
         }
     }
 
-    fn run_meta(tid: TurnId, run: &str, input: u32, output: u32) -> SessionEvent {
+    /// The post-run stamp: no token counters — those are folded from the run's
+    /// `AssistantMessage.usage` in the log the test pins.
+    fn run_meta(tid: TurnId, run: &str) -> SessionEvent {
         SessionEvent::AssistantRunMeta {
             turn_id: tid,
             run_id: run.into(),
             context_tokens: 1234,
             context_window: 200_000,
-            total_tokens: u64::from(input + output),
-            input_tokens: input,
-            output_tokens: output,
+            total_tokens: 70,
             cost_usd: Some(0.12),
             model: Some("claude".into()),
             model_provider: Some("anthropic".into()),
             at: 3,
         }
+    }
+
+    fn run_started(run: &str) -> SessionEvent {
+        SessionEvent::RunStarted {
+            run_id: run.into(),
+            at: 1,
+            project_root: None,
+            envelope: None,
+        }
+    }
+
+    fn run_finished(run: &str) -> SessionEvent {
+        SessionEvent::RunFinished {
+            run_id: run.into(),
+            outcome: crate::session::events::RunOutcome::Completed,
+            at: 2,
+        }
+    }
+
+    /// An event log this test owns, seeded with `events` — not the process-wide
+    /// slot, which installs once per process and would let one test's fold read
+    /// another's messages. The projector bills from THIS log, so a test that
+    /// wants a bill must put the run's priced messages here.
+    async fn own_event_log(
+        id: &SessionId,
+        events: &[(EventSeq, SessionEvent)],
+    ) -> Arc<dyn SessionEventStore> {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::session::store::migrate_add_session_events(&conn).unwrap();
+        let log: Arc<dyn SessionEventStore> =
+            Arc::new(crate::session::store::SqliteEventStore::new(conn));
+        for (seq, ev) in events {
+            log.append(id, *seq, ev, 0).await.unwrap();
+        }
+        log
+    }
+
+    /// One run, one priced message, its meta after `RunFinished` — the shape
+    /// every billing test below reads. `(45, 25)` is what the fold must find.
+    fn one_billed_run(tid: TurnId, run: &str) -> Vec<(EventSeq, SessionEvent)> {
+        vec![
+            (1, run_started(run)),
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (3, run_finished(run)),
+            (4, run_meta(tid, run)),
+        ]
     }
 
     fn tool_req(tid: TurnId) -> SessionEvent {
@@ -1427,15 +1531,12 @@ mod tests {
         let store = sqlite_store(temp.path(), "proj_meta.db");
         let id = SessionId::ephemeral("proj_meta");
         store.get_or_create(&id).await.unwrap();
-        let projector = MessageProjector::new(store.clone(), None);
 
         let tid = uuid::Uuid::new_v4();
-        let events: &[(EventSeq, SessionEvent)] = &[
-            (1, user_msg(tid)),
-            (2, assistant_msg_billed(tid, 100, 50)),
-            (3, run_meta(tid, "run_xyz", 4000, 1678)),
-        ];
-        for (seq, ev) in events {
+        let events = one_billed_run(tid, "run_xyz");
+        let log = own_event_log(&id, &events).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log));
+        for (seq, ev) in &events {
             projector.on_appended(&id, &rec(*seq, ev.clone()));
         }
         projector.flush(Duration::from_secs(5)).await.unwrap();
@@ -1497,7 +1598,9 @@ mod tests {
                 .unwrap();
         }
 
-        // Run A opened at seq 1, its meta at seq 3 → row seq 2.
+        // Run A opened at seq 1, its meta at seq 3 → row seq 2. No log is
+        // pinned: this test is about WHERE the stamp lands, and without a log
+        // the fold has nothing to bill from, which the outcome says.
         let never = |_: EventSeq| false;
         let ctx_a = ProjectionCtx {
             store: &store,
@@ -1507,8 +1610,8 @@ mod tests {
             bus: None,
         };
         assert_eq!(
-            project_event(&id, &rec(3, run_meta(tid, "run_a", 10, 5)), &ctx_a).await,
-            Projected::Stamped { billed: true }
+            project_event(&id, &rec(3, run_meta(tid, "run_a")), &ctx_a).await,
+            Projected::Stamped { billed: false }
         );
 
         let rows = store.get_history(&id, None).await.unwrap();
@@ -1539,20 +1642,20 @@ mod tests {
         let id = SessionId::ephemeral("norow");
         store.get_or_create(&id).await.unwrap();
 
+        // The log holds the priced message; the projection does not hold its
+        // row. The fold WOULD find (45, 25) — the stamp is what must stop it.
+        let tid = uuid::Uuid::new_v4();
+        let events = one_billed_run(tid, "run_a");
+        let log = own_event_log(&id, &events).await;
         let never = |_: EventSeq| false;
         let ctx = ProjectionCtx {
             store: &store,
-            events: None,
+            events: Some(&log),
             present: &never,
             run_start: 1,
             bus: None,
         };
-        let out = project_event(
-            &id,
-            &rec(3, run_meta(uuid::Uuid::new_v4(), "run_a", 40, 20)),
-            &ctx,
-        )
-        .await;
+        let out = project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await;
         assert_eq!(out, Projected::Retry);
         let meta = store.get_metadata(&id).await.unwrap().unwrap();
         assert_eq!(
@@ -1562,23 +1665,18 @@ mod tests {
         );
     }
 
-    /// Replay is the normal case now — a heal re-reads the whole range every
-    /// time. The stamp is the idempotence guard, so the second pass must find
-    /// the row already carrying this run's id and bill nothing.
-    #[tokio::test]
-    async fn replaying_one_run_meta_bills_once() {
-        let temp = tempdir().unwrap();
-        let store = sqlite_store(temp.path(), "rebill.db");
-        let id = SessionId::ephemeral("rebill");
-        store.get_or_create(&id).await.unwrap();
+    /// The assistant row the tests below stamp, appended straight to the
+    /// projection — the log and the projection are seeded independently so a
+    /// test can hold one without the other.
+    async fn append_assistant_row(store: &Arc<dyn SessionStore>, id: &SessionId, seq: EventSeq) {
         store
             .append_message(
-                &id,
+                id,
                 MessageRecord {
-                    id: row_id(&id.to_key_string(), 2),
+                    id: row_id(&id.to_key_string(), seq),
                     role: "assistant".into(),
                     content: "hello".into(),
-                    timestamp: 2,
+                    timestamp: seq as i64,
                     metadata: None,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -1588,17 +1686,33 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    /// Replay is the normal case now — a heal re-reads the whole range every
+    /// time. The stamp is the idempotence guard, so the second pass must find
+    /// the row already carrying this run's id and bill nothing. The bill itself
+    /// is the FOLD of the run's messages in the pinned log — the meta carries
+    /// no counters to bill from.
+    #[tokio::test]
+    async fn replaying_one_run_meta_bills_once() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "rebill.db");
+        let id = SessionId::ephemeral("rebill");
+        store.get_or_create(&id).await.unwrap();
+        append_assistant_row(&store, &id, 2).await;
 
         let tid = uuid::Uuid::new_v4();
+        let events = one_billed_run(tid, "run_a");
+        let log = own_event_log(&id, &events).await;
         let never = |_: EventSeq| false;
         let ctx = ProjectionCtx {
             store: &store,
-            events: None,
+            events: Some(&log),
             present: &never,
             run_start: 1,
             bus: None,
         };
-        let meta_rec = rec(3, run_meta(tid, "run_a", 45, 25));
+        let meta_rec = rec(4, run_meta(tid, "run_a"));
         assert_eq!(
             project_event(&id, &meta_rec, &ctx).await,
             Projected::Stamped { billed: true }
@@ -1615,6 +1729,69 @@ mod tests {
             (45, 25),
             "one run, one bill"
         );
+        assert_eq!(
+            meta.model.as_deref(),
+            Some("claude"),
+            "cost and model still ride the meta"
+        );
+    }
+
+    /// The fold is anchored on the run's `RunStarted`. When the slice
+    /// `[run_start, meta)` holds none — a log whose run marker was retired, or
+    /// a legacy log without one — the meta still stamps the row (the gauge is
+    /// the meta's own fact) but the session is NOT billed: an unanchored fold
+    /// would charge everything in the window to this one run. The counters are
+    /// read back from the store, not inferred from the outcome word.
+    #[tokio::test]
+    async fn an_unanchored_meta_stamps_but_does_not_bill() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "unanchored.db");
+        let id = SessionId::ephemeral("unanchored");
+        store.get_or_create(&id).await.unwrap();
+        append_assistant_row(&store, &id, 2).await;
+
+        let tid = uuid::Uuid::new_v4();
+        // The priced message is in the log; the RunStarted that would anchor it
+        // is not.
+        let events = vec![
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (4, run_meta(tid, "run_a")),
+        ];
+        let log = own_event_log(&id, &events).await;
+        let never = |_: EventSeq| false;
+        let ctx = ProjectionCtx {
+            store: &store,
+            events: Some(&log),
+            present: &never,
+            run_start: 0,
+            bus: None,
+        };
+        assert_eq!(
+            project_event(&id, &rec(4, run_meta(tid, "run_a")), &ctx).await,
+            Projected::Stamped { billed: false }
+        );
+
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("the row is there");
+        assert_eq!(
+            row.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("run_a"),
+            "the stamp lands regardless — it is the meta's own fact"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!(
+            (meta.input_tokens, meta.output_tokens),
+            (0, 0),
+            "an unanchored fold must not bill the session"
+        );
     }
 
     #[tokio::test]
@@ -1623,31 +1800,23 @@ mod tests {
         let store = sqlite_store(temp.path(), "proj.db");
         let id = SessionId::ephemeral("proj");
         store.get_or_create(&id).await.unwrap();
-        let projector = MessageProjector::new(store.clone(), None);
 
         // Two Think steps — two LLM calls, two assistant rows — then the run's
-        // one billing report.
+        // stamp. The session's bill is the FOLD of the two rows (40 / 25): a
+        // retry-discarded call is not in the log and is not counted here — that
+        // is the per-call `SpendLedger`'s fact, not this one's.
         let tid = uuid::Uuid::new_v4();
         let events: [(EventSeq, SessionEvent); 7] = [
-            (
-                1,
-                SessionEvent::RunStarted {
-                    run_id: "run_1".into(),
-                    at: 1,
-                    project_root: None,
-                    envelope: None,
-                },
-            ),
+            (1, run_started("run_1")),
             (2, user_msg(tid)),
             (3, assistant_msg_billed(tid, 10, 20)),
             (4, tool_req(tid)),
             (5, tool_res(tid)),
             (6, assistant_msg_billed(tid, 30, 5)),
-            // The run's billed total. Deliberately NOT 40/25 (the sum of the
-            // two rows): a retry-discarded call is billed but never becomes a
-            // message, so the session total is a superset of its rows.
-            (7, run_meta(tid, "run_1", 45, 25)),
+            (7, run_meta(tid, "run_1")),
         ];
+        let log = own_event_log(&id, &events).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log));
         for (seq, ev) in events {
             projector.on_appended(&id, &rec(seq, ev));
         }
@@ -1672,8 +1841,9 @@ mod tests {
             .await
             .unwrap()
             .expect("missing session metadata");
-        // The run's report is the session's ONLY token writer.
-        assert_eq!(meta.input_tokens, 45, "session input_tokens double-counted");
+        // The fold at the stamp is the session's ONLY token writer: the sum of
+        // the two rows, once — not the rows added again by `add_message_full`.
+        assert_eq!(meta.input_tokens, 40, "session input_tokens double-counted");
         assert_eq!(
             meta.output_tokens, 25,
             "session output_tokens double-counted"

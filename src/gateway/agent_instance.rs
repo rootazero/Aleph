@@ -938,8 +938,6 @@ mod tests {
                 context_tokens: 10,
                 context_window: 20,
                 total_tokens: 30,
-                input_tokens: 8,
-                output_tokens: 22,
                 cost_usd: None,
                 model: None,
                 model_provider: None,

@@ -1093,8 +1093,6 @@ mod tests {
             context_tokens: 1,
             context_window: 2,
             total_tokens: 3,
-            input_tokens: 1,
-            output_tokens: 1,
             cost_usd: None,
             model: None,
             model_provider: None,

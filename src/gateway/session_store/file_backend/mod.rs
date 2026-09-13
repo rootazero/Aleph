@@ -765,8 +765,9 @@ impl SessionStore for FileSessionStore {
             // nothing left for it to protect against.
             meta.last_active_at = at.timestamp();
             // The session's token/model columns are written by
-            // `update_session_usage` alone (the run's `AssistantRunMeta`) — see
-            // the twin comment in the SQLite backend's `add_message_full`.
+            // `update_session_usage` alone (the projector, once per run when its
+            // `AssistantRunMeta` lands, from the fold of the run's messages) —
+            // see the twin comment in the SQLite backend's `add_message_full`.
             // Accumulating them here as well would bill the session twice for
             // the same tokens now that message rows carry real ones.
             if meta.derived_title.is_none() && msg.role == "user" {

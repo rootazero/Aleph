@@ -21,6 +21,7 @@ pub mod service;
 pub mod steer_signal;
 pub mod store;
 pub mod tool_trace;
+pub mod usage_fold;
 
 pub use actor::{ActorCommand, SessionActor};
 pub use boundary_repair::{
