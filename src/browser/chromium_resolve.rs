@@ -56,12 +56,11 @@ use super::profile::{BrowserRuntimeConfig, BrowserType};
 /// sets for the WHOLE resolution, which must in turn stay under the
 /// diagnostics engine's own `DEFAULT_CHECK_TIMEOUT` of 20 s
 /// (`src/diagnostics/check.rs:27`) — past which the engine abandons the check
-/// and emits a `Warning` of its own. **That doctor check does not exist yet**
-/// (`diagnostics::checks::chromium_missing` is Task 7's work); asserting a
-/// specific bound for it here would state a relationship no code enforces.
-/// Task 7 owns choosing that deadline and asserting the nesting for real —
-/// this constant is `pub(crate)` so Task 7's test can read it rather than
-/// restate `6`.
+/// and emits a `Warning` of its own. That doctor check now exists and owns
+/// both halves: `diagnostics::checks::engine_missing::RESOLVE_TIMEOUT` is the
+/// middle budget, and `the_check_answers_before_the_engine_abandons_it`
+/// asserts the nesting rather than describing it. This constant stays
+/// `pub(crate)` so that test reads `6` from here instead of restating it.
 pub(crate) const DRY_RUN_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// The subcommand that installs Playwright's own Chromium — the SAME argv

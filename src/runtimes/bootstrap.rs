@@ -85,12 +85,37 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         }
     };
 
+    // A strategy selected for this OS can still have nothing to install on
+    // this ARCHITECTURE (a `GithubRelease` with no asset for the pair).
+    // Answered here, before anything is downloaded, so the refusal names the
+    // platform instead of 404-ing on a URL built from a `None`.
+    if !crate::runtimes::specs::strategy_supported_here(
+        &os_install.strategy,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    ) {
+        return Ok(BootstrapResult::Unsupported {
+            capability: name.into(),
+            reason: format!(
+                "no {name} release is published for {}-{}",
+                std::env::consts::ARCH,
+                std::env::consts::OS
+            ),
+        });
+    }
+
     // 1. Run the install command.
     let cmd_result = match &os_install.strategy {
         InstallStrategy::Shell(script) => run_shell(script).await?,
         InstallStrategy::PowerShell(script) => run_powershell(script).await?,
         InstallStrategy::Via { parent, subcommand } => run_via_parent(parent, subcommand).await?,
         InstallStrategy::NpmGlobal { package } => run_npm_global(package).await?,
+        InstallStrategy::GithubRelease {
+            repo,
+            tag,
+            asset,
+            binary_in_archive,
+        } => run_github_release(name, repo, tag, *asset, binary_in_archive).await,
     };
 
     if let CmdOutcome::Failed { stderr } = cmd_result {
@@ -114,6 +139,15 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
         // daemon's PATH need not contain it yet.
         InstallStrategy::NpmGlobal { .. } => {
             if let Some(dir) = npm_global::bin_dir() {
+                prepend_existing_dirs(vec![dir]);
+            }
+        }
+        InstallStrategy::GithubRelease { tag, .. } => {
+            // The binary lands in `~/.aleph/runtimes/<name>/<tag>/`, which is
+            // on nobody's PATH — the same reason `NpmGlobal` prepends its own
+            // prefix. Without this the install succeeds and the re-probe on the
+            // next line reports `PathNotFound`.
+            if let Ok(dir) = crate::runtimes::github_release::install_dir(name, tag) {
                 prepend_existing_dirs(vec![dir]);
             }
         }
@@ -387,6 +421,49 @@ async fn run_npm_global(package: &str) -> Result<CmdOutcome, BootstrapError> {
             run_cmd(Command::new(npm).args(&args)).await
         }
         other => other,
+    }
+}
+
+/// Run a `GithubRelease` install. Its failures are the operator's problem, so
+/// they arrive as `CmdOutcome::Failed { stderr }` and become
+/// `BootstrapResult::Failed` — the same channel a failed `curl … | sh` uses.
+async fn run_github_release(
+    name: &str,
+    repo: &str,
+    tag: &str,
+    asset: fn(&str, &str) -> Option<&'static str>,
+    binary_in_archive: &str,
+) -> CmdOutcome {
+    let Some(asset_name) = asset(std::env::consts::OS, std::env::consts::ARCH) else {
+        // Unreachable: `strategy_supported_here` answered this above. Written
+        // as a stated refusal rather than an `unwrap`, because those two
+        // predicates agreeing is a property of this file, not of the types.
+        return CmdOutcome::Failed {
+            stderr: format!(
+                "no {name} release asset for {}-{}",
+                std::env::consts::ARCH,
+                std::env::consts::OS
+            ),
+        };
+    };
+    let host = crate::runtimes::github_release::configured_host(name);
+    match crate::runtimes::github_release::install_release(
+        name,
+        repo,
+        tag,
+        asset_name,
+        binary_in_archive,
+        &host,
+    )
+    .await
+    {
+        Ok(path) => {
+            tracing::info!(runtime = name, tag, path = %path.display(), "release runtime installed");
+            CmdOutcome::Success
+        }
+        Err(e) => CmdOutcome::Failed {
+            stderr: format!("{name} {tag} from {host}: {e}"),
+        },
     }
 }
 

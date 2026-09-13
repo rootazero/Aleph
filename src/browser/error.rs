@@ -94,7 +94,7 @@ pub enum BrowserError {
         /// The raw "here is where I looked" sentence, kept beside the built
         /// hint rather than only interpolated into it.
         ///
-        /// The doctor's `missing_finding` (`chromium_missing.rs`) wraps its
+        /// The doctor's `missing_finding` (`engine_missing.rs`) wraps its
         /// argument in its OWN sentence and appends its OWN fix hint, so
         /// handing it `install_hint` would nest a full remedy inside a
         /// parenthetical and print the remedy twice from two authors — and

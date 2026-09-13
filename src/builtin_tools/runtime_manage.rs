@@ -104,28 +104,33 @@ fn installable_names() -> Vec<&'static str> {
         .collect()
 }
 
-/// Where the tool learns about Chromium.
+/// Where the tool learns about the browser ENGINES — plural since obscura.
 ///
-/// Injected because the production answer shells out to `playwright-cli
+/// Injected because the Chromium answer shells out to `playwright-cli
 /// install-browser --dry-run`, and `cargo test --lib` must not spawn node.
+///
+/// `locate_all` rather than one call per engine: `list` has to be able to
+/// assert "one row per name", and a per-engine call site is exactly how a
+/// second engine's row gets forgotten in one of the two places (判据 §6 —
+/// count the producers; the count is `Engine`'s variant count).
 #[async_trait]
-pub(crate) trait ChromiumLocator: Send + Sync {
-    async fn locate(&self) -> RuntimeRow;
+pub(crate) trait EngineLocator: Send + Sync {
+    async fn locate_all(&self) -> Vec<RuntimeRow>;
 }
 
-/// The production locator: the resolver the browser driver itself uses.
-pub(crate) struct RealChromiumLocator;
+/// The production locator: the resolvers the browser drivers themselves use.
+pub(crate) struct RealEngineLocator;
 
 #[async_trait]
-impl ChromiumLocator for RealChromiumLocator {
-    async fn locate(&self) -> RuntimeRow {
-        chromium_row().await
+impl EngineLocator for RealEngineLocator {
+    async fn locate_all(&self) -> Vec<RuntimeRow> {
+        vec![chromium_row().await, obscura_row().await]
     }
 }
 
 #[derive(Clone)]
 pub struct RuntimeManageTool {
-    locator: Arc<dyn ChromiumLocator>,
+    locator: Arc<dyn EngineLocator>,
     spawner: Arc<dyn InstallSpawner>,
 }
 
@@ -145,13 +150,13 @@ impl RuntimeManageTool {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            locator: Arc::new(RealChromiumLocator),
+            locator: Arc::new(RealEngineLocator),
             spawner: Arc::new(RegistrySpawner::new()),
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn with_locator(locator: Arc<dyn ChromiumLocator>) -> Self {
+    pub(crate) fn with_locator(locator: Arc<dyn EngineLocator>) -> Self {
         Self {
             locator,
             spawner: Arc::new(RegistrySpawner::new()),
@@ -162,7 +167,7 @@ impl RuntimeManageTool {
     /// register a real background job.
     #[cfg(test)]
     pub(crate) fn with_parts(
-        locator: Arc<dyn ChromiumLocator>,
+        locator: Arc<dyn EngineLocator>,
         spawner: Arc<dyn InstallSpawner>,
     ) -> Self {
         Self { locator, spawner }
@@ -178,7 +183,7 @@ impl RuntimeManageTool {
         Ok(Arc::new(tokio::sync::RwLock::new(ledger)))
     }
 
-    async fn list(locator: &Arc<dyn ChromiumLocator>) -> RuntimeManageOutput {
+    async fn list(locator: &Arc<dyn EngineLocator>) -> RuntimeManageOutput {
         let ledger = match Self::ledger().await {
             Ok(l) => l,
             Err(e) => {
@@ -190,8 +195,19 @@ impl RuntimeManageTool {
             }
         };
         let guard = ledger.read().await;
+        // The engine rows come from the drivers' own resolvers, which can see
+        // a config pin the ledger cannot. Claim their names FIRST so the
+        // ledger-derived pass does not also emit them: two rows with one name
+        // and disagreeing `status` is read by the model as "installed" or
+        // "missing" depending on iteration order (判据 §1). Chromium is not in
+        // the ledger at all (see the module doc); obscura IS, and that is
+        // exactly why the collision has to be resolved rather than avoided.
+        let engine_rows = locator.locate_all().await;
+        let claimed: std::collections::HashSet<&str> =
+            engine_rows.iter().map(|r| r.name.as_str()).collect();
         let mut runtimes: Vec<RuntimeRow> = SPECS
             .iter()
+            .filter(|spec| !claimed.contains(spec.name))
             .map(|spec| {
                 let entry = guard.entries.get(spec.name);
                 RuntimeRow {
@@ -211,11 +227,7 @@ impl RuntimeManageTool {
                 }
             })
             .collect();
-        // Chromium is not in the ledger (see the module doc), so its row is
-        // derived from the resolver the browser driver itself uses. A row that
-        // said "Missing" while a system Chrome sat in /Applications would be a
-        // lie the model would act on.
-        runtimes.push(locator.locate().await);
+        runtimes.extend(engine_rows);
         // An install this tool started is still running somewhere; `list` is
         // where a model looks next, so it says so rather than showing the
         // pre-install answer and letting the model conclude nothing happened.
@@ -252,7 +264,7 @@ impl RuntimeManageTool {
     async fn install(
         capability: Option<String>,
         spawner: &Arc<dyn InstallSpawner>,
-        locator: &Arc<dyn ChromiumLocator>,
+        locator: &Arc<dyn EngineLocator>,
     ) -> RuntimeManageOutput {
         let Some(name) = capability
             .as_deref()
@@ -350,7 +362,7 @@ fn running_install_jobs() -> Vec<(u64, String)> {
 /// second spelling would make the filter silently match nothing.
 const INSTALL_JOB_PREFIX: &str = "runtime_manage install ";
 
-/// How an install is started. Injected for the same reason [`ChromiumLocator`]
+/// How an install is started. Injected for the same reason [`EngineLocator`]
 /// is: a unit test must neither spawn node nor register a real background job.
 #[async_trait]
 pub(crate) trait InstallSpawner: Send + Sync {
@@ -362,7 +374,7 @@ pub(crate) trait InstallSpawner: Send + Sync {
 /// Where [`install_chromium`] finds the `playwright-cli` binary to run
 /// `install-browser chromium` with.
 ///
-/// Injected for the same reason [`ChromiumLocator`]/[`InstallSpawner`] are —
+/// Injected for the same reason [`EngineLocator`]/[`InstallSpawner`] are —
 /// and its absence was round 1's I2 finding wearing a second costume: the
 /// production answer (`probes::browser::managed_cli_path`) does a `which`
 /// PATH walk plus a ledger read, with no seam, so a test that wants to prove
@@ -586,6 +598,93 @@ async fn chromium_row() -> RuntimeRow {
     }
 }
 
+/// The obscura row, derived the way `browser/obscura-missing` derives its
+/// finding: pin first, then the prober. Not from the ledger entry alone — a
+/// row saying "Missing" while `[general.browser.obscura] binary_path` names a
+/// real binary is a lie the model would act on, which is the same argument
+/// `chromium_row` above already makes for its own engine (判据 §16).
+async fn obscura_row() -> RuntimeRow {
+    use crate::runtimes::{OBSCURA_RUNTIME, OBSCURA_TAG};
+    // The one derivation of "is there something to install here", shared with
+    // the `browser/obscura-missing` check and with every other row above.
+    // Composing `TargetOs::current` + `select_install` +
+    // `strategy_supported_here` here by hand would be a third author for it
+    // (判据 §1).
+    let supported = supported_on_current_os(OBSCURA_RUNTIME);
+    let pinned = match crate::config::Config::load() {
+        Ok(cfg) => cfg
+            .general
+            .browser
+            .obscura
+            .pinned_binary()
+            .map(PathBuf::from),
+        // The same reading `chromium_row` uses: a config we cannot read is not
+        // a config with no pin.
+        Err(e) => {
+            return RuntimeRow {
+                name: OBSCURA_RUNTIME.to_string(),
+                status: format!("Unknown (the config could not be read: {e})"),
+                path: None,
+                version: None,
+                purpose: Some(OBSCURA_PURPOSE.to_string()),
+                supported_here: supported,
+            }
+        }
+    };
+    let (status, path, version) = match pinned {
+        Some(p) if p.is_file() => (
+            "Ready (pinned by [general.browser.obscura] binary_path)".to_string(),
+            Some(p.display().to_string()),
+            None,
+        ),
+        Some(p) => (
+            format!(
+                "Missing (binary_path names {}, which is not a file)",
+                p.display()
+            ),
+            None,
+            None,
+        ),
+        None => {
+            let probe =
+                tokio::task::spawn_blocking(|| crate::runtimes::probe::probe(OBSCURA_RUNTIME))
+                    .await;
+            match probe {
+                Ok(r) if r.found => (
+                    format!("Ready (ledger {OBSCURA_TAG})"),
+                    r.bin_path.map(|p| p.display().to_string()),
+                    r.version,
+                ),
+                Ok(_) => (
+                    "Missing (no obscura on PATH or in the ledger)".to_string(),
+                    None,
+                    None,
+                ),
+                // A probe that did not run is not an absent binary.
+                Err(e) => (
+                    format!("Unknown (the probe did not complete: {e})"),
+                    None,
+                    None,
+                ),
+            }
+        }
+    };
+    RuntimeRow {
+        name: OBSCURA_RUNTIME.to_string(),
+        status,
+        path,
+        version,
+        purpose: Some(OBSCURA_PURPOSE.to_string()),
+        supported_here: supported,
+    }
+}
+
+/// One sentence, one author. A literal inside the struct literal above would
+/// sit two screens away from the engine it describes, in two places.
+const OBSCURA_PURPOSE: &str = "Aleph's default browser engine. Installed by \
+    `runtime_manage{action:\"install\", capability:\"obscura\"}` (a ~90 MB GitHub release \
+    asset, sha256-verified), or pinned with [general.browser.obscura] binary_path.";
+
 /// Run the same command the ledger's post-install action runs, with the same
 /// environment.
 async fn install_chromium(
@@ -755,15 +854,22 @@ impl crate::tools::AlephTool for RuntimeManageTool {
     // accepted. The action semantics ("list shows what's installed", "install
     // takes a capability") are already the `RuntimeAction` enum's own variant
     // docs, so restating them here was the same fact twice (判据 §1) — cut.
-    // What stays is what the enum cannot say: which runtimes exist, that
-    // `chromium` is the special non-ledger one, and — the one no schema can
-    // ever carry — that installs run detached and how to poll them.
+    // What stays is what the enum cannot say: which runtimes exist, which two
+    // are the browser engines, and — the one no schema can ever carry — that
+    // installs run detached and how to poll them.
+    //
+    // ⚠️ The name list is the ONE sentence that tells the model what this tool
+    // installs, and it is hand-written while `installable_names()` is derived
+    // from `SPECS`. It had already rotted once — `fnm` was installable and
+    // unnamed here from the day this tool shipped — so the list is no longer
+    // maintained by remembering: `every_installable_capability_is_named_in_the
+    // _description` goes red for the next capability that arrives without one.
     const DESCRIPTION: &'static str =
-        "List or install the external runtimes Aleph shells out to (node, uv, cargo, git, \
-         playwright-cli, chromium). `install` takes the `capability` a refusal named; \
-         `chromium` is the browser the managed driver launches. Installs run in the \
-         BACKGROUND, returning a job id at once — a download is minutes, not one call: \
-         poll with `bash{process_action:\"wait\", process_id:<id>}`, or `list` again.";
+        "List or install the external runtimes Aleph shells out to (fnm, node, uv, cargo, \
+         git, playwright-cli, obscura, chromium). `install` takes the `capability` a \
+         refusal named; `obscura` and `chromium` are the two browser engines. Installs \
+         run in the BACKGROUND, returning a job id at once — a download is minutes, not \
+         one call: poll with `bash{process_action:\"wait\", process_id:<id>}`, or `list` again.";
 
     type Args = RuntimeManageArgs;
     type Output = RuntimeManageOutput;
@@ -851,17 +957,17 @@ mod tests {
     struct DelayedStubLocator(std::time::Duration);
 
     #[async_trait]
-    impl ChromiumLocator for DelayedStubLocator {
-        async fn locate(&self) -> RuntimeRow {
+    impl EngineLocator for DelayedStubLocator {
+        async fn locate_all(&self) -> Vec<RuntimeRow> {
             tokio::time::sleep(self.0).await;
-            RuntimeRow {
+            vec![RuntimeRow {
                 name: "chromium".into(),
                 status: "Ready (stub)".into(),
                 path: None,
                 version: None,
                 purpose: None,
                 supported_here: true,
-            }
+            }]
         }
     }
 
@@ -1068,6 +1174,150 @@ mod tests {
         assert!(!is_installable("chrmium"));
     }
 
+    /// The doctor's obscura fix hint names `capability:"obscura"`. If this
+    /// tool refuses that name the hint is a door onto a wall.
+    #[test]
+    fn obscura_is_installable_through_this_tool() {
+        assert!(is_installable("obscura"));
+        assert!(installable_names().contains(&"obscura"));
+    }
+
+    /// Whether `hay` names `needle` as a whole token.
+    ///
+    /// `contains` is not enough for a name census: `"git"` also occurs inside
+    /// `"digit"`, and this is the exact substring trap that let
+    /// `grep -c 'name: "'` count `alias_name: "lts"` as a spec.
+    ///
+    /// Boundary = anything that is not alphanumeric, `_` **or `-`**. The dash
+    /// is in the word set because runtime names contain it: with `-` treated
+    /// as a boundary, `cli` "matched" inside `playwright-cli`, and a future
+    /// runtime called `cli` would then be certified as announced by a sentence
+    /// that never names it. Measured — the sibling test asserted the opposite
+    /// and went red on the first run.
+    fn names_as_word(hay: &str, needle: &str) -> bool {
+        let bytes = hay.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+        hay.match_indices(needle).any(|(i, _)| {
+            let before_ok = i == 0 || !is_word(bytes[i - 1]);
+            let after = i + needle.len();
+            let after_ok = after >= bytes.len() || !is_word(bytes[after]);
+            before_ok && after_ok
+        })
+    }
+
+    /// **Every installable capability must be named in the DESCRIPTION**, which
+    /// is the ONLY sentence that tells the model what this tool installs.
+    ///
+    /// `installable_names()` is derived from `SPECS`; the DESCRIPTION is a
+    /// hand-written literal. Two authors for one fact, and the honest one is
+    /// the refusal — which the model only reads AFTER it has already guessed
+    /// wrong (判据 §1, §9). Adding each new capability to the sentence by hand
+    /// is how it rots; this test is the derivation that makes the rot red.
+    ///
+    /// **It was falsified before anyone relied on it**: at BASE `c8597f415`,
+    /// with `obscura` not yet in `SPECS`, it goes red on `fnm` — a capability
+    /// that has been installable and unannounced since the tool shipped.
+    #[test]
+    fn every_installable_capability_is_named_in_the_description() {
+        let desc = <RuntimeManageTool as AlephTool>::DESCRIPTION;
+        let missing: Vec<&str> = installable_names()
+            .into_iter()
+            .filter(|n| !names_as_word(desc, n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these capabilities are installable and the model is never told they \
+             exist: {missing:?}\nDESCRIPTION: {desc}"
+        );
+        // A census over an empty set is not a census. If `installable_names()`
+        // ever answers nothing, this must fail loudly rather than certify the
+        // sentence (判据 §2's fourth face — 没装上).
+        assert!(
+            installable_names().len() >= 2,
+            "installable_names() answered {:?}; this guard measured nothing",
+            installable_names()
+        );
+    }
+
+    /// The substring trap, asserted on the instrument itself rather than
+    /// trusted. Without this, `names_as_word` could degrade to `contains` and
+    /// the census above would keep passing while measuring something weaker.
+    #[test]
+    fn the_description_census_matches_whole_words_not_substrings() {
+        assert!(names_as_word("node, uv, cargo, git.", "git"));
+        assert!(!names_as_word("a 6-digit code", "git"));
+        assert!(names_as_word(
+            "(node, uv, playwright-cli, chromium)",
+            "playwright-cli"
+        ));
+        assert!(!names_as_word("playwright-cli", "cli"));
+    }
+
+    /// obscura is BOTH a `SPECS` entry (so `list` derives a row from the
+    /// ledger) and an engine the locator answers for (so `list` derives a row
+    /// from the resolver). Emitting both gives two rows with one name and
+    /// disagreeing `status`, and the model reads whichever comes first. One
+    /// name, one row; the locator wins because it is the surface that can see
+    /// a `[general.browser.obscura] binary_path` pin the ledger cannot (判据 §1).
+    #[tokio::test]
+    async fn list_emits_exactly_one_row_per_runtime_name() {
+        // `Self::list` reads the real ledger before it consults the locator;
+        // point `$ALEPH_HOME` at a scratch dir so this test cannot become a
+        // property of the developer's own ledger, or of a concurrent test's.
+        let home = tempfile::tempdir().expect("tempdir");
+        let _home_guard = crate::utils::paths::AlephHomeEnvGuard::acquire_and_set(home.path());
+
+        struct TwoEngines;
+        #[async_trait]
+        impl EngineLocator for TwoEngines {
+            async fn locate_all(&self) -> Vec<RuntimeRow> {
+                vec![
+                    RuntimeRow {
+                        name: "chromium".into(),
+                        status: "Ready (stub)".into(),
+                        path: None,
+                        version: None,
+                        purpose: None,
+                        supported_here: true,
+                    },
+                    RuntimeRow {
+                        name: "obscura".into(),
+                        status: "Ready (stub)".into(),
+                        path: None,
+                        version: None,
+                        purpose: None,
+                        supported_here: true,
+                    },
+                ]
+            }
+        }
+        // The precondition that makes this fixture hostile, asserted so it
+        // cannot rot into a tidy input that could not collide: obscura must
+        // really be in `SPECS`, or the dedupe has nothing to dedupe.
+        assert!(
+            crate::runtimes::find_spec("obscura").is_some(),
+            "precondition: obscura must be a SPECS entry for the collision to exist"
+        );
+        let locator: Arc<dyn EngineLocator> = Arc::new(TwoEngines);
+        let out = RuntimeManageTool::list(&locator).await;
+        assert!(out.ok, "{}", out.message);
+        let mut names: Vec<String> = out.runtimes.iter().map(|r| r.name.clone()).collect();
+        names.sort();
+        let mut deduped = names.clone();
+        deduped.dedup();
+        assert_eq!(names, deduped, "duplicate runtime rows: {names:?}");
+        let obscura: Vec<&RuntimeRow> = out
+            .runtimes
+            .iter()
+            .filter(|r| r.name == "obscura")
+            .collect();
+        assert_eq!(obscura.len(), 1);
+        assert_eq!(
+            obscura[0].status, "Ready (stub)",
+            "the locator's answer must win over the ledger-derived one"
+        );
+    }
+
     /// A locator that answers from memory. The production one shells out to
     /// `playwright-cli install-browser --dry-run`, and a unit test that reached
     /// it would spawn a real node subprocess inside `cargo test --lib` — the
@@ -1079,16 +1329,16 @@ mod tests {
     struct StubLocator(&'static str);
 
     #[async_trait]
-    impl ChromiumLocator for StubLocator {
-        async fn locate(&self) -> RuntimeRow {
-            RuntimeRow {
+    impl EngineLocator for StubLocator {
+        async fn locate_all(&self) -> Vec<RuntimeRow> {
+            vec![RuntimeRow {
                 name: "chromium".into(),
                 status: self.0.into(),
                 path: None,
                 version: None,
                 purpose: None,
                 supported_here: true,
-            }
+            }]
         }
     }
 
@@ -1420,7 +1670,7 @@ mod tests {
     /// expensive copy in the text a human is told to act on (判据 §1).
     #[test]
     fn the_doctor_fix_hint_names_a_tool_that_actually_exists() {
-        let hint = crate::diagnostics::checks::chromium_missing::missing_finding_for_test()
+        let hint = crate::diagnostics::checks::engine_missing::missing_finding_for_test()
             .fix_hint
             .expect("the missing finding carries a fix hint");
         assert!(

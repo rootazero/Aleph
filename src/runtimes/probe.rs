@@ -252,6 +252,20 @@ fn install_dir_candidates() -> Vec<PathBuf> {
         dirs.extend(fnm_node_bin_dirs(&root));
         dirs.push(root);
     }
+    // Every runtime this crate installs from a GitHub release lands in a
+    // tag-named directory under `~/.aleph/runtimes/`, which no PATH contains.
+    // Derived from `SPECS`, never restated: bumping a pinned tag must move the
+    // installer and this search together, or the install succeeds and the
+    // probe keeps answering Missing (判据 §1).
+    for spec in super::specs::SPECS {
+        for oi in spec.install {
+            if let super::specs::InstallStrategy::GithubRelease { tag, .. } = &oi.strategy {
+                if let Ok(dir) = super::github_release::install_dir(spec.name, tag) {
+                    dirs.push(dir);
+                }
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         dirs.push(PathBuf::from("/opt/homebrew/bin"));

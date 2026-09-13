@@ -61,6 +61,21 @@ impl DiagnosticEngine {
         self.checks.len()
     }
 
+    /// The ids this engine will run. Exists so a registration test can assert
+    /// a check is REACHABLE rather than merely defined: a check that is
+    /// implemented, exported and never registered has tests on both ends and
+    /// no wire between them (判据 §7).
+    ///
+    /// `#[cfg(test)] pub(crate)` rather than `pub`, matching
+    /// [`Self::check_count`] beside it: the only reader today is a test, and a
+    /// public accessor with no production consumer is the abstraction P6 says
+    /// to cut. A later task that needs it from production flips these two
+    /// attributes.
+    #[cfg(test)]
+    pub(crate) fn check_ids(&self) -> Vec<&'static str> {
+        self.checks.iter().map(|c| c.id()).collect()
+    }
+
     /// Build the production registry against the real `~/.aleph` paths.
     ///
     /// **Offline and path-only.** This is the registry the cold
@@ -99,7 +114,12 @@ impl DiagnosticEngine {
             Arc::new(checks::VaultCheck::from_default_path()),
             Arc::new(checks::HooksConsentCheck::from_default_path()),
             Arc::new(checks::BrowserRuntimeCheck::new()),
-            Arc::new(checks::ChromiumMissingCheck::new()),
+            Arc::new(checks::EngineMissingCheck::for_engine(
+                crate::browser::engine::Engine::Chromium,
+            )),
+            Arc::new(checks::EngineMissingCheck::for_engine(
+                crate::browser::engine::Engine::Obscura,
+            )),
             Arc::new(checks::MediaCodecsCheck::new()),
             Arc::new(checks::DuplicateInstanceCheck::new()),
         ];

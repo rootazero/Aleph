@@ -471,7 +471,7 @@ mod tests {
     /// Pinned here rather than as a fresh string comparison (判据 §10 — that
     /// would only prove two literals agree with each other, not that either
     /// names something real): every bracketed, `browser`-mentioning path
-    /// found in these four files is deserialized as a real `Config` fragment
+    /// found in the files below is deserialized as a real `Config` fragment
     /// through THIS module's own dead-key scanner, the same one
     /// `core/config-parse` uses to answer "is this key actually read" for an
     /// operator's real file. A path that reaches no field reports itself as
@@ -482,8 +482,18 @@ mod tests {
         for rel in [
             "src/browser/error.rs",
             "src/browser/chromium_resolve.rs",
-            "src/diagnostics/checks/chromium_missing.rs",
+            "src/diagnostics/checks/engine_missing.rs",
             "src/builtin_tools/runtime_manage.rs",
+            // Added 2026-09-13: the obscura spec's `install_hint` is
+            // operator-facing text naming `[general.browser.obscura]
+            // binary_path`, so it belongs in the scan. A four-file list that
+            // stopped covering every producer is a 判据 §5 enumeration that
+            // quietly under-covers.
+            "src/runtimes/specs.rs",
+            // …and the module that reads the mirror key those sentences point
+            // an operator at. `configured_host` naming a section `Config` does
+            // not read would be a remedy onto a wall.
+            "src/runtimes/github_release.rs",
         ] {
             let text = std::fs::read_to_string(root.join(rel))
                 .unwrap_or_else(|e| panic!("read {rel}: {e}"));
@@ -521,20 +531,79 @@ mod tests {
         found
     }
 
+    /// One real key set per browser section a finding may name.
+    ///
+    /// A `match` rather than one shared body written into every candidate
+    /// section. The shared body named `binary_path` + `download_host`, which
+    /// the two `[…runtime]` / `[…obscura]` sections both happen to have — so
+    /// it worked, right up to the first section that has neither.
+    ///
+    /// **That section arrived in this round**, so this is measured rather than
+    /// anticipated: `browser/obscura-missing`'s "this platform has no obscura"
+    /// finding tells the operator to set `[general.browser] default_engine`,
+    /// and `[general.browser]` has no `binary_path` and no `download_host`. The
+    /// shared body would have reported BOTH keys dead and this guard would
+    /// have blamed the new sentence for the instrument's own mistake (判据 §18
+    /// — your own instrument gets suspected first). A section with no body here
+    /// now fails loudly and by name instead.
+    ///
+    /// Each body names every key its section really has, so the guard asserts
+    /// as much as it can rather than the least it can get away with.
+    fn probe_body(section: &str) -> Option<&'static str> {
+        match section {
+            "general.browser" => Some("default_engine = \"chromium\"\n"),
+            "general.browser.runtime" => Some(
+                "binary_path = \"/nonexistent\"\nprefer_system_browser = false\n\
+                 download_host = \"https://example.invalid\"\n",
+            ),
+            "general.browser.obscura" => Some(
+                "binary_path = \"/nonexistent\"\nvariant = \"default\"\n\
+                 download_host = \"https://example.invalid\"\n",
+            ),
+            _ => None,
+        }
+    }
+
+    /// A section this scan finds but has no probe body for is a FAILURE, not
+    /// a skip — see [`probe_body`] for why reusing another section's keys is
+    /// the instrument measuring itself.
+    #[test]
+    fn every_browser_section_named_in_operator_text_has_a_probe_body() {
+        for (rel, path) in browser_paths_named_in_operator_facing_text() {
+            assert!(
+                probe_body(&path).is_some(),
+                "{rel} names [{path}], which this test has no probe body for. Add \
+                 one naming a key that section really has — do NOT reuse another \
+                 section's keys, or this guard starts measuring the probe."
+            );
+        }
+    }
+
     #[test]
     fn every_operator_facing_browser_config_path_is_actually_read() {
         let found = browser_paths_named_in_operator_facing_text();
         assert!(
-            found.len() >= 7,
+            found.len() >= 34,
             "derived only {} operator-facing browser config paths across the \
-             four known sites; 7 were measured on 2026-09-06 (one file states \
-             the section twice). A scan that stopped matching makes this \
-             guard pass by finding nothing: {found:?}",
+             six scanned files; 34 were measured on 2026-09-13 (7 across four \
+             files on 2026-09-06, before `specs.rs` and `github_release.rs` \
+             joined the list and before the obscura engine gave three of them \
+             a second section to name). Flush against the measurement, like \
+             the 7 before it: a floor below the truth tolerates the scan \
+             losing sites, which is exactly the failure it exists to catch. A \
+             scan that stopped matching makes this guard pass by finding \
+             nothing: {found:?}",
             found.len()
         );
         let mut wrong: Vec<String> = Vec::new();
         for (rel, path) in &found {
-            let toml = format!("[{path}]\nbinary_path = \"/nonexistent\"\ndownload_host = \"https://example.invalid\"\n");
+            let Some(body) = probe_body(path) else {
+                wrong.push(format!(
+                    "{rel} says [{path}] — this test has no probe body for that section"
+                ));
+                continue;
+            };
+            let toml = format!("[{path}]\n{body}");
             let (_config, dead): (crate::config::Config, Vec<String>) =
                 deserialize_reporting_dead_keys(&toml).unwrap_or_else(|e| {
                     panic!("{rel} names {path:?}, which is not even valid TOML syntax: {e}")

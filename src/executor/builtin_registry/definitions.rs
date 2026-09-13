@@ -2777,11 +2777,54 @@ mod tests {
     /// a text-driver profile is told to switch rather than handed the text tree
     /// under a `json` label.
     ///
-    /// ⚠️ Tasks 16 and 19 raise this same scalar (`browser_session` gains the
-    /// capability sentence; `browser_open` gains `engine`). Whichever lands
-    /// last must RE-MEASURE and set the ceiling to what the guard prints —
-    /// never add its own delta to a number a sibling already moved.
-    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_525;
+    /// ⚠️ **Anyone who changes a description raises this same scalar, and more
+    /// than one of you is usually in flight.** Whoever lands must RE-MEASURE
+    /// and set the ceiling to what the guard prints — never add your own delta
+    /// to a number a sibling already moved.
+    ///
+    /// That sentence used to name "Tasks 16 and 19", which was a roster
+    /// written on the day the answer happened to be two tasks long. A third
+    /// (task 15, 2026-09-13) then had to raise it and was not on the list —
+    /// 判据 §5, a 列举法 that was complete only at立法 time. The obligation is
+    /// stated by what you did, not by who you are.
+    ///
+    /// 2026-09-13 (browser dual-engine, task 15): 114_448 -> 114_538 B.
+    /// **Both endpoints are readings**, each taken with this ceiling
+    /// temporarily set to `1` so the guard prints its own total, and the ONLY
+    /// difference between the two runs is `runtime_manage`'s DESCRIPTION:
+    ///   with the edit    114_538 B (94_942 catalog + 16_613 registry-only +
+    ///                    1_039 injected + 1_944 bridge)
+    ///   without it       (see the task-15 report's mutation M11 reading)
+    /// The `114_448` starting point above is the previous entry's own reading,
+    /// not a subtraction. Measured on macOS (aarch64-apple-darwin); the
+    /// guard's "Largest" line printed `bash` at 4_740, which is the **Unix**
+    /// assembly, so the +30 Windows gap recorded in the entries above is
+    /// carried forward unchanged — this round does not touch `bash`, and does
+    /// not widen or close that gap.
+    ///
+    /// What the bytes buy: `runtime_manage` installs 8 capabilities and its
+    /// DESCRIPTION named 6. `fnm` had been installable and unannounced since
+    /// the tool shipped, and `obscura` would have joined it this round — a
+    /// capability the doctor's fix hint tells the model to install through a
+    /// tool whose only self-description does not mention it (判据 §7: producer
+    /// and consumer both present, no edge to the model). The list is no longer
+    /// hand-maintained: `every_installable_capability_is_named_in_the
+    /// _description` derives it from `installable_names()` and goes red for
+    /// the next capability that arrives without a sentence.
+    ///
+    /// Against the three questions:
+    /// (1) A runtime fact no schema can carry. `capability` is a free-form
+    /// `Option<String>`, so the set of legal values exists nowhere in the
+    /// schema; and `runtime_manage` is not in `default_core_tools()`, so this
+    /// catalog line is the whole of what a model reads before deciding whether
+    /// to fetch the schema at all.
+    /// (2) A stronger model cannot infer it, and the failure is the silent
+    /// kind: told the tool installs six things, it does not try the seventh,
+    /// so nothing ever reports that the seventh was available.
+    /// (3) Nothing else owns the sentence — the honest face,
+    /// `installable_names().join(", ")` in the refusal, is only read AFTER the
+    /// model has already guessed wrong.
+    const CATALOG_DESCRIPTION_CEILING_BYTES: usize = 114_538;
     #[test]
     fn catalog_description_bytes_ratchet() {
         let catalog: usize = BUILTIN_TOOL_DEFINITIONS

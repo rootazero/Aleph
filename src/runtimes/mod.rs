@@ -19,6 +19,7 @@
 pub mod bootstrap;
 mod capability;
 pub mod ensure;
+pub mod github_release;
 pub mod ledger;
 pub mod npm_global;
 pub mod os;
@@ -35,8 +36,9 @@ pub use os::TargetOs;
 pub use post_install::PostInstallError;
 pub use probe::ProbeResult;
 pub use specs::{
-    find_spec, select_install, supported_on_current_os, InstallStrategy, OsInstall,
-    PostInstallAction, RuntimeSpec, SPECS,
+    find_spec, select_install, strategy_supported_here, supported_on, supported_on_current_os,
+    InstallStrategy, OsInstall, PostInstallAction, RuntimeSpec, OBSCURA_RUNTIME, OBSCURA_TAG,
+    SPECS,
 };
 
 use crate::error::Result;

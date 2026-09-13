@@ -42,6 +42,77 @@ pub enum InstallStrategy {
     NpmGlobal {
         package: &'static str,
     },
+    /// A checksummed binary pulled from a GitHub release asset.
+    ///
+    /// Its own variant rather than `Shell("curl -L … | tar xz")` for the same
+    /// reason `NpmGlobal` is not `Via`: the decision is per-`(os, arch)` and
+    /// therefore cannot live in a `&'static` argv. The `Shell` spelling would
+    /// also carry no digest — and an unverified ~90 MB binary that then gets
+    /// `chmod 755` and executed is a supply-chain hole with the checksum
+    /// sitting unread in the release metadata, one HTTP request away.
+    ///
+    /// `asset` returns `None` for a platform the upstream release matrix does
+    /// not build. That is a *stated* answer ("this platform has no obscura"),
+    /// never a fallback to some other asset.
+    GithubRelease {
+        /// `owner/name`.
+        repo: &'static str,
+        /// The pinned release tag. Bumping it is the whole upgrade: the
+        /// installer's target directory and [`super::probe`]'s search
+        /// directory both derive from this one string.
+        tag: &'static str,
+        /// Archive name for `(std::env::consts::OS, std::env::consts::ARCH)`.
+        asset: fn(os: &str, arch: &str) -> Option<&'static str>,
+        /// The single member to extract, compared against whole archive paths.
+        binary_in_archive: &'static str,
+    },
+}
+
+/// The ledger name of the obscura engine runtime. Spelled once so the doctor,
+/// `runtime_manage`, the probe's search directory and this table cannot drift.
+pub const OBSCURA_RUNTIME: &str = "obscura";
+
+/// The pinned obscura release, as a macro so that the ONE place it is spelled
+/// can also be pasted into a `concat!`.
+///
+/// A plain `const` would have been enough for every consumer but one: the
+/// spec's `install_hint` is operator-facing prose carrying a
+/// `…/releases/tag/<tag>` URL, and `&'static str` prose cannot interpolate a
+/// `const`. Written as a literal there, the tag would have TWO authors — and
+/// `the_obscura_tag_has_one_author` would still have passed, because the URL
+/// spells it without the surrounding quotes the first draft of that test
+/// looked for (判据 §3: a guard's green only covers the shape it recognises).
+macro_rules! obscura_tag {
+    () => {
+        "v0.2.2"
+    };
+}
+
+/// The pinned obscura release. Bump this — and only this — when the upstream
+/// `DOMSnapshot` layout fix lands (spec §6.1); everything else follows.
+pub const OBSCURA_TAG: &str = obscura_tag!();
+
+/// The five-platform release matrix: measured for `aarch64-macos`, inferred by
+/// symmetry for the other four (see this task's "before you start" check).
+///
+/// `aarch64-windows` is genuinely absent upstream (`release.yml:15-42`,
+/// `obscura-source-survey.md` §9), so it answers `None`.
+///
+/// The `default` archive is chosen deliberately: it is the one built with
+/// `--features render`. A `no-render` archive answers `DOM.getBoxModel` and
+/// `DOMSnapshot.captureSnapshot` with fabricated geometry and puts no marker
+/// on the wire (`obscura-source-survey.md` §3), so it would silently turn the
+/// page-state tree's rectangles into lies. `stealth` is a profile-level
+/// opt-in (`[general.browser.obscura] variant`), not a ledger decision.
+fn obscura_asset(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("macos", "aarch64") => Some("obscura-aarch64-macos.tar.gz"),
+        ("macos", "x86_64") => Some("obscura-x86_64-macos.tar.gz"),
+        ("linux", "aarch64") => Some("obscura-aarch64-linux.tar.gz"),
+        ("linux", "x86_64") => Some("obscura-x86_64-linux.tar.gz"),
+        ("windows", "x86_64") => Some("obscura-x86_64-windows.zip"),
+        _ => None,
+    }
 }
 
 /// A process-environment variable a post-install action needs, named by the
@@ -55,7 +126,17 @@ pub enum InstallStrategy {
 /// the other (判据 §9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvFromConfig {
-    /// `PLAYWRIGHT_DOWNLOAD_HOST` ← `[browser.runtime] download_host`.
+    /// `PLAYWRIGHT_DOWNLOAD_HOST` ← `[general.browser.runtime] download_host`.
+    ///
+    /// Until 2026-09-13 this line named the section `browser.runtime`, which
+    /// `Config` has never had (`GeneralConfig::browser` is not
+    /// `#[serde(flatten)]`, so there is no top-level `browser` table). It
+    /// survived because `dead_keys`'s census scanned four files and this was
+    /// not one of them; adding `specs.rs` to that list found it on the first
+    /// run (判据 §5 — a scan covers exactly what it enumerates). The wrong
+    /// spelling is deliberately not repeated in brackets here: this file is
+    /// now scanned, and a bracketed example would be indistinguishable from
+    /// the defect.
     PlaywrightDownloadHost,
 }
 
@@ -291,6 +372,49 @@ pub const SPECS: &[RuntimeSpec] = &[
              dnf / pacman / apk / zypper). Windows: `winget install Git.Git`.",
         ),
     },
+    // obscura — Aleph's default browser engine. An external runtime like every
+    // other entry here: Aleph spawns it and speaks CDP to it, never links it
+    // (R1/R3; spec §2.2 records that obscura's `Page` is not `Send`, which
+    // settles the crate-linking alternative on its own).
+    RuntimeSpec {
+        name: OBSCURA_RUNTIME,
+        binaries: &["obscura"],
+        version_flag: "--version",
+        // A source build reports `0.1.0` — its version string comes from
+        // `OBSCURA_VERSION` → the git tag ref → `CARGO_PKG_VERSION`, and the
+        // workspace version is frozen at 0.1.0 (`obscura-source-survey.md` §9).
+        // The ledger only ever installs a release archive, so the tag is what
+        // this regex sees; a developer's own build trips `min_version` and gets
+        // a `version_warning`, which is the correct answer for it.
+        version_regex: r"obscura (\d+\.\d+\.\d+)",
+        min_version: Some("0.2.2"),
+        deps: &[],
+        install: &[OsInstall {
+            os: TargetOs::AnyOs,
+            strategy: InstallStrategy::GithubRelease {
+                repo: "h4ckf0r0day/obscura",
+                tag: OBSCURA_TAG,
+                asset: obscura_asset,
+                binary_in_archive: "obscura",
+            },
+        }],
+        // `obscura-worker` is deliberately NOT installed: only `obscura scrape`
+        // uses it, Aleph drives `serve`, and it is another ~86 MB.
+        post_install: &[],
+        llm_hint: Some(
+            "Aleph's default browser engine. Launched by the browser subsystem \
+             as `obscura serve`; not something to run by hand.",
+        ),
+        // The tag comes from `obscura_tag!()`, not from a second literal: see
+        // that macro's doc for the guard this would otherwise have slipped past.
+        install_hint: Some(concat!(
+            "Ask Aleph to run `runtime_manage{action:\"install\", capability:\"obscura\"}`, ",
+            "or download the release archive for your platform from ",
+            "https://github.com/h4ckf0r0day/obscura/releases/tag/",
+            obscura_tag!(),
+            " and pin the extracted binary with [general.browser.obscura] binary_path.",
+        )),
+    },
 ];
 
 #[must_use]
@@ -305,9 +429,60 @@ pub fn select_install(installs: &[OsInstall], current: TargetOs) -> Option<&OsIn
 
 #[must_use]
 pub fn supported_on_current_os(name: &str) -> bool {
-    find_spec(name)
-        .and_then(|s| TargetOs::current().and_then(|os| select_install(s.install, os)))
-        .is_some()
+    let Some(os) = TargetOs::current() else {
+        return false;
+    };
+    supported_on(name, os, std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The whole "is there something to install here" predicate, with the platform
+/// as **parameters**.
+///
+/// [`supported_on_current_os`] is this function with the machine's own answers
+/// filled in. Separated for one reason: with the platform read from `consts`
+/// inside, the arch axis is unreachable from a test — on an aarch64 mac,
+/// obscura is supported whichever way the body is written, so restoring the
+/// old `select_install(..).is_some()` body would leave every test green
+/// (判据 §2 — a guard that cannot go red for the reason it names). With the
+/// platform as arguments, `("windows", "aarch64")` is one call away.
+///
+/// It is also the ONE derivation of this predicate. `runtime_manage`'s
+/// `obscura_row` and the `browser/obscura-missing` check both need the same
+/// answer, and both used to compose `TargetOs::current` + `select_install` +
+/// `strategy_supported_here` by hand — three authors for one fact (判据 §1).
+#[must_use]
+pub fn supported_on(name: &str, target: TargetOs, os: &str, arch: &str) -> bool {
+    let Some(spec) = find_spec(name) else {
+        return false;
+    };
+    let Some(oi) = select_install(spec.install, target) else {
+        return false;
+    };
+    strategy_supported_here(&oi.strategy, os, arch)
+}
+
+/// Whether a strategy selected for this OS actually has something to install
+/// on this **architecture**.
+///
+/// [`select_install`] answers a question about the OS arm only, and for the
+/// four original strategies that is the whole question. `GithubRelease` adds a
+/// second axis: `TargetOs::AnyOs` matches aarch64-windows, where the upstream
+/// release matrix has no asset. Folding that into `Some(..)` makes
+/// `runtime_manage{list}`'s `supported_here` a constant `true` on exactly the
+/// platform where it is false — and that column is what an operator reads
+/// before deciding to wait for a ~90 MB download (判据 §2).
+///
+/// `os` / `arch` are parameters rather than `consts` read inside, so the whole
+/// table can be exercised from one machine.
+#[must_use]
+pub fn strategy_supported_here(strategy: &InstallStrategy, os: &str, arch: &str) -> bool {
+    match strategy {
+        InstallStrategy::GithubRelease { asset, .. } => asset(os, arch).is_some(),
+        InstallStrategy::Shell(_)
+        | InstallStrategy::PowerShell(_)
+        | InstallStrategy::Via { .. }
+        | InstallStrategy::NpmGlobal { .. } => true,
+    }
 }
 
 #[cfg(test)]
@@ -357,6 +532,162 @@ mod tests {
     #[test]
     fn test_find_spec_unknown() {
         assert!(find_spec("does-not-exist").is_none());
+    }
+
+    /// The five-platform table, asserted per pair rather than by counting —
+    /// a count stays green if two rows swap their archives.
+    #[test]
+    fn the_obscura_asset_table_covers_five_platforms_and_admits_it_has_no_sixth() {
+        let spec = find_spec(OBSCURA_RUNTIME).expect("obscura spec must exist");
+        let InstallStrategy::GithubRelease {
+            asset,
+            repo,
+            tag,
+            binary_in_archive,
+        } = &spec.install[0].strategy
+        else {
+            panic!("obscura must install from a GitHub release, not a shell script");
+        };
+        assert_eq!(*repo, "h4ckf0r0day/obscura");
+        assert_eq!(*tag, OBSCURA_TAG);
+        assert_eq!(*binary_in_archive, "obscura");
+        for (os, arch, want) in [
+            ("macos", "aarch64", "obscura-aarch64-macos.tar.gz"),
+            ("macos", "x86_64", "obscura-x86_64-macos.tar.gz"),
+            ("linux", "aarch64", "obscura-aarch64-linux.tar.gz"),
+            ("linux", "x86_64", "obscura-x86_64-linux.tar.gz"),
+            ("windows", "x86_64", "obscura-x86_64-windows.zip"),
+        ] {
+            assert_eq!(asset(os, arch), Some(want), "{os}/{arch}");
+        }
+        // The one pair the upstream release matrix does not build. Every
+        // surface must say "this platform only has chromium" rather than
+        // offering an install that cannot happen.
+        assert_eq!(asset("windows", "aarch64"), None);
+        assert_eq!(asset("freebsd", "x86_64"), None);
+    }
+
+    /// The default archive carries the render engine. A `no-render` build
+    /// answers `DOM.getBoxModel` and `DOMSnapshot.captureSnapshot` with
+    /// fabricated geometry and puts no marker on the wire
+    /// (`obscura-source-survey.md` §3), so choosing one would silently turn
+    /// every rectangle in the page-state tree into a lie. `stealth` is a
+    /// profile-level opt-in, not a ledger decision.
+    ///
+    /// This is not hypothetical arithmetic: the v0.2.2 release really does
+    /// carry all four flavours of each platform (20 assets, verified), so the
+    /// wrong one is exactly one character away from the right one.
+    #[test]
+    fn no_obscura_asset_is_a_no_render_or_stealth_archive() {
+        let spec = find_spec(OBSCURA_RUNTIME).unwrap();
+        let InstallStrategy::GithubRelease { asset, .. } = &spec.install[0].strategy else {
+            panic!("shape checked by the sibling test");
+        };
+        for (os, arch) in [
+            ("macos", "aarch64"),
+            ("macos", "x86_64"),
+            ("linux", "aarch64"),
+            ("linux", "x86_64"),
+            ("windows", "x86_64"),
+        ] {
+            let name = asset(os, arch).unwrap();
+            assert!(
+                !name.contains("no-render"),
+                "{name} would give fabricated geometry"
+            );
+            assert!(
+                !name.contains("stealth"),
+                "{name}: stealth is a profile-level opt-in, not the ledger's archive"
+            );
+        }
+    }
+
+    /// `select_install` answering `Some` is not the same fact as "there is
+    /// something to install here". `TargetOs::AnyOs` matches aarch64-windows,
+    /// where the asset table has no row — and `supported_here: true` is the
+    /// column an operator reads before deciding to wait for a ~90 MB download
+    /// that will never start. 判据 §2's question ("when does this go red?")
+    /// has a concrete answer: aarch64-windows.
+    #[test]
+    fn supported_on_current_os_consults_the_asset_table_not_just_the_os_arm() {
+        let spec = find_spec(OBSCURA_RUNTIME).unwrap();
+        let oi = select_install(spec.install, TargetOs::Windows)
+            .expect("the windows arm exists — that is exactly the trap");
+        assert!(matches!(oi.strategy, InstallStrategy::GithubRelease { .. }));
+        assert!(
+            !strategy_supported_here(&oi.strategy, "windows", "aarch64"),
+            "no asset for aarch64-windows, so nothing is installable there"
+        );
+        assert!(strategy_supported_here(&oi.strategy, "windows", "x86_64"));
+        // Every other strategy is unconditional on arch.
+        let fnm = find_spec("fnm").unwrap();
+        assert!(strategy_supported_here(
+            &select_install(fnm.install, TargetOs::MacOs)
+                .unwrap()
+                .strategy,
+            "macos",
+            "aarch64",
+        ));
+
+        // And the composed predicate, which is what every caller actually
+        // reads. Restoring the old `select_install(..).is_some()` body turns
+        // the first of these red; on an aarch64 mac NOTHING else would, which
+        // is why `supported_on` takes the platform rather than reading it.
+        assert!(
+            !supported_on("obscura", TargetOs::Windows, "windows", "aarch64"),
+            "the windows OS arm matches, but there is no aarch64-windows asset"
+        );
+        assert!(supported_on(
+            "obscura",
+            TargetOs::Windows,
+            "windows",
+            "x86_64"
+        ));
+        assert!(supported_on("fnm", TargetOs::MacOs, "macos", "aarch64"));
+        assert!(!supported_on(
+            "does-not-exist",
+            TargetOs::MacOs,
+            "macos",
+            "aarch64"
+        ));
+    }
+
+    /// The pinned tag is spelled once. Two copies is how a bumped installer
+    /// and an unbumped probe end up looking in different directories, and the
+    /// symptom is "it installed and it is still Missing" (判据 §1).
+    ///
+    /// Counts the BARE spelling, not `"v0.2.2"` with quotes: the spec's
+    /// `install_hint` carries a `…/releases/tag/v0.2.2` URL, where the tag has
+    /// no surrounding quotes, so a quote-anchored count would have certified a
+    /// second author as one (判据 §3 — a guard only covers the shapes it
+    /// recognises). Falsified by hand: inlining the tag into that URL instead
+    /// of `obscura_tag!()` turns this red at 2.
+    #[test]
+    fn the_obscura_tag_has_one_author() {
+        let src = include_str!("specs.rs");
+        let occurrences = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains(OBSCURA_TAG))
+            .count();
+        assert_eq!(
+            occurrences, 1,
+            "the pinned obscura tag must be spelled once (obscura_tag!); every \
+             other site refers to the macro or to OBSCURA_TAG"
+        );
+    }
+
+    /// The ledger must not pull down `obscura-worker`: another ~86 MB, used
+    /// only by `obscura scrape`, which Aleph never runs (it drives `serve`).
+    #[test]
+    fn the_obscura_spec_installs_one_binary_and_runs_nothing_afterwards() {
+        let spec = find_spec(OBSCURA_RUNTIME).unwrap();
+        assert!(
+            spec.post_install.is_empty(),
+            "a post-install action here would be a second download"
+        );
+        assert_eq!(spec.binaries, &["obscura"]);
+        assert_eq!(spec.deps, &[] as &[&str]);
     }
 
     #[test]
