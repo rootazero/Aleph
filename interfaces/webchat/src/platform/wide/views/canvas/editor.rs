@@ -502,7 +502,7 @@ pub(super) fn CanvasEditor() -> impl IntoView {
     // The open text-edit session, if any (`text_edit.rs` owns its rules).
     // Scoped to the editor like the machine: it must not outlive the canvas.
     let text_editing: RwSignal<Option<TextEditState>> = RwSignal::new(None);
-    // Fullscreen deck playback: `Some(deck_id)` mounts `present::PresentOverlay`.
+    // Deck playback: `Some(deck_id)` mounts `present::PresentOverlay`.
     // Editor-scoped like the machine — a show must not outlive its canvas.
     // While it is `Some`, the window key/paste handlers below stand down
     // (the overlay owns the keyboard; an arrow key must page, not nudge).
@@ -1341,9 +1341,9 @@ pub(super) fn CanvasEditor() -> impl IntoView {
                     })
                 />
             </div>
-            // Fullscreen deck playback — `fixed`, so it covers the whole
-            // window regardless of where in the surface it mounts. Its root
-            // stops pointer/wheel propagation itself.
+            // Deck playback — `absolute inset-0` over this `relative`
+            // surface, which it measures for its fit (`present.rs`). Its
+            // root stops pointer/wheel propagation itself.
             {move || presenting.get().map(|deck_id| view! {
                 <present::PresentOverlay
                     deck_id=deck_id

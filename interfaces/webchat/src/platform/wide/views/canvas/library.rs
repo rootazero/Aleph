@@ -32,11 +32,16 @@
 //! title — one function, because the parts a copy would drop are the base
 //! revision resolution and the conflict retry, and a rename that silently
 //! did nothing on the second surface is exactly the failure this codebase
-//! keeps paying for.
+//! keeps paying for. The *ending* of an edit is shared too ([`end_rename`]):
+//! the header once carried its own copy, gated on "is a canvas open" instead
+//! of "is an edit in progress", and the `blur` an unmounting input fires
+//! turned Escape into a commit and Enter into two.
 
 use aleph_protocol::canvas::{check_title, CanvasDoc, CanvasOp, CanvasRow, TitleRejection};
+use leptos::ev::pointerdown;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
 
 use crate::api::canvas::{CanvasApi, CanvasApplyError};
@@ -317,6 +322,61 @@ pub(super) fn submit_title(
     }
 }
 
+/// End a rename edit — the one ending both surfaces (list row, header
+/// title) go through.
+///
+/// `editing` holds the id of the canvas being renamed, or `None` when no
+/// edit is in progress; `submit` is [`submit_title`] in production and is
+/// injected so the gate can be tested without a socket.
+///
+/// The gate is the editing state, **never** "is a canvas open": the input
+/// unmounts while focused when an edit ends (Enter, Escape), the browser
+/// fires `blur`, and the blur handler lands here again with the draft still
+/// set. Gated on the editing state that second call is a no-op because the
+/// first one cleared it below; gated on anything else it is a second
+/// `set_doc_meta` — which is how Escape used to commit the draft it was
+/// dropping and Enter used to send the same rename twice (the second
+/// conflicted, retried, and burned a second revision).
+///
+/// `keep_open_on_refusal` distinguishes the two ways an edit ends. Enter
+/// means "I mean it", so a refusal keeps the input up with the reason; blur
+/// means "I am leaving", and trapping someone in a red input they navigated
+/// away from is worse than dropping a title the gate would not have taken.
+///
+/// The reads are `try_` reads, and a disposed signal is read as "no edit in
+/// progress" — the same answer, not a swallowed error. The blur can arrive
+/// *after* the input's owner is gone: the picker popover dismisses on a
+/// window `pointerdown`, which unmounts [`CanvasList`] (these signals, and
+/// the row's `Callback` wrapping this, with it) before focus leaves the
+/// detached input, and the blur then runs this with a corpse. Every unwrap
+/// on that path is the crash overlay — the callback's `run` first (the one
+/// real-browser QA hit, `with_value`), then a plain `get_untracked` here.
+/// `disposed_reads.rs` is the census for the `spawn_local` half of that
+/// hazard; this is the same hazard reached through a DOM event.
+pub(super) fn end_rename(
+    editing: RwSignal<Option<String>>,
+    draft: RwSignal<String>,
+    error: RwSignal<Option<TitleRejection>>,
+    keep_open_on_refusal: bool,
+    submit: impl FnOnce(&str, &str) -> Result<(), TitleRejection>,
+) {
+    let Some(id) = editing.try_get_untracked().flatten() else {
+        return;
+    };
+    let Some(text) = draft.try_get_untracked() else {
+        return;
+    };
+    match submit(&id, &text) {
+        Err(why) if keep_open_on_refusal => {
+            error.set(Some(why));
+            return;
+        }
+        _ => {}
+    }
+    editing.set(None);
+    error.set(None);
+}
+
 /// Rename a canvas — the first human producer of [`CanvasOp::SetDocMeta`].
 ///
 /// The op, the server's applier and the model's `canvas` tool all shipped
@@ -407,6 +467,7 @@ pub(super) fn CanvasPicker() -> impl IntoView {
     let canvas = expect_context::<CanvasState>();
     let i18n = use_i18n();
     let open = RwSignal::new(false);
+    let root_ref = NodeRef::<leptos::html::Div>::new();
 
     // The open canvas's title, or the section name when nothing is open — the
     // trigger says where you are, not just what it opens.
@@ -417,8 +478,32 @@ pub(super) fn CanvasPicker() -> impl IntoView {
             .unwrap_or_else(|| t_string!(i18n, canvas.library).to_string())
     };
 
+    // Outside-click dismiss on the window, NOT the `fixed inset-0` catcher
+    // the other popovers use: this one lives inside the workspace pane, whose
+    // `glass` backdrop-filter makes the aside the containing block for
+    // `position: fixed`, so a catcher only ever covered the pane — a click on
+    // the chat column left the popover open (real-browser QA 2026-09-13).
+    // `pointerdown` reaches the window from anywhere in the document; the
+    // popover and its trigger are both under `root_ref`, so "inside" is one
+    // `contains`. The handle is removed on cleanup (`window_event_listener`
+    // registers none — `disposed_reads.rs`).
+    let outside = window_event_listener(pointerdown, move |ev: web_sys::PointerEvent| {
+        if open.try_get_untracked() != Some(true) {
+            return;
+        }
+        let inside = root_ref.get_untracked().is_some_and(|root| {
+            ev.target()
+                .and_then(|t| t.dyn_into::<web_sys::Node>().ok())
+                .is_some_and(|node| root.contains(Some(&node)))
+        });
+        if !inside {
+            let _ = open.try_set(false);
+        }
+    });
+    on_cleanup(move || outside.remove());
+
     view! {
-        <div class="relative shrink-0">
+        <div class="relative shrink-0" node_ref=root_ref>
             <button
                 class="flex items-center gap-1.5 px-2 py-1 rounded-md text-sm text-text-secondary
                        hover:text-text-primary hover:bg-surface-sunken transition-colors max-w-[12rem]"
@@ -434,9 +519,6 @@ pub(super) fn CanvasPicker() -> impl IntoView {
                 <span class="truncate">{label}</span>
             </button>
             <Show when=move || open.get()>
-                // Click-catcher behind the popover — the established dismiss
-                // idiom here (`theme_toggle.rs`, `team_participants.rs`).
-                <div class="fixed inset-0 z-40" on:click=move |_| open.set(false) />
                 <div class="absolute left-0 top-full mt-1 z-50 w-[19rem] max-h-[70vh] flex flex-col
                             rounded-lg border border-border bg-surface-overlay shadow-xl overflow-hidden">
                     <CanvasList on_pick=Callback::new(move |()| open.set(false)) />
@@ -516,24 +598,16 @@ pub(super) fn CanvasList(on_pick: Callback<()>) -> impl IntoView {
         });
     });
 
-    // `keep_open` distinguishes the two ways an edit ends. Enter means "I
-    // mean it", so a refusal keeps the input up with the reason; blur means
-    // "I am leaving", and trapping someone in a red input they navigated away
-    // from is worse than dropping a title the gate would not have taken.
+    // Both endings (Enter / blur) and the gate live in `end_rename`, shared
+    // with the header title.
     let commit_rename = Callback::new(move |keep_open_on_refusal: bool| {
-        let Some(id) = renaming.get_untracked() else {
-            return;
-        };
-        let draft = rename_text.get_untracked();
-        match submit_title(state, canvas, i18n, &id, &draft) {
-            Err(why) if keep_open_on_refusal => {
-                rename_error.set(Some(why));
-                return;
-            }
-            _ => {}
-        }
-        renaming.set(None);
-        rename_error.set(None);
+        end_rename(
+            renaming,
+            rename_text,
+            rename_error,
+            keep_open_on_refusal,
+            |id, draft| submit_title(state, canvas, i18n, id, draft),
+        );
     });
 
     view! {
@@ -719,10 +793,20 @@ fn LibraryRow(
                             rename_text.set(event_target_value(&ev));
                             rename_error.set(None);
                         }
-                        on:blur=move |_| commit_rename.run(false)
+                        // `try_run`, not `run`: the popover dismisses on a
+                        // window `pointerdown`, which unmounts this list —
+                        // and the callback's store with it — before focus
+                        // leaves the detached input. The blur then arrives
+                        // here with a disposed callback, and `run` unwraps
+                        // it (`end_rename` doc).
+                        on:blur=move |_| {
+                            let _ = commit_rename.try_run(false);
+                        }
                         on:keydown=move |ev: leptos::ev::KeyboardEvent| {
                             match ev.key().as_str() {
-                                "Enter" => commit_rename.run(true),
+                                "Enter" => {
+                                    let _ = commit_rename.try_run(true);
+                                }
                                 "Escape" => {
                                     renaming.set(None);
                                     rename_error.set(None);
@@ -931,6 +1015,203 @@ mod tests {
         assert_eq!(
             decide_title_edit(" Q3 plan ", "Roadmap"),
             TitleEdit::Send("Q3 plan".to_string())
+        );
+    }
+
+    /// A rename ends exactly once, however many times the handlers fire.
+    ///
+    /// The situation this pins (real-browser QA 2026-09-13, header surface):
+    /// the ending unmounts the focused input, the browser fires `blur`, and
+    /// the blur handler runs the commit again with the draft still set. The
+    /// gate has to be the editing state, cleared before that second call can
+    /// arrive — a gate on "is a canvas open" sent `set_doc_meta` twice on
+    /// Enter and once on Escape. Red when `end_rename` submits without an
+    /// edit in progress, or submits before clearing the editing state.
+    #[test]
+    fn a_rename_ends_once_and_a_second_commit_after_it_sends_nothing() {
+        let owner = Owner::new();
+        owner.set();
+        let editing = RwSignal::new(Some("cv-1".to_string()));
+        let draft = RwSignal::new("Renamed".to_string());
+        let error = RwSignal::new(Option::<TitleRejection>::None);
+        let sent = std::cell::Cell::new(0);
+
+        // Enter: one submit, state cleared.
+        end_rename(editing, draft, error, true, |id, text| {
+            assert_eq!((id, text), ("cv-1", "Renamed"));
+            sent.set(sent.get() + 1);
+            Ok(())
+        });
+        assert_eq!(sent.get(), 1);
+        assert_eq!(editing.get_untracked(), None);
+
+        // The blur the unmount fires: the draft is still set, nothing is sent.
+        end_rename(editing, draft, error, false, |_, _| {
+            sent.set(sent.get() + 1);
+            Ok(())
+        });
+        assert_eq!(sent.get(), 1, "the blur after Enter must not resend");
+
+        // Escape: the handler clears the state itself, then the blur arrives.
+        editing.set(Some("cv-1".to_string()));
+        draft.set("should not land".to_string());
+        editing.set(None);
+        end_rename(editing, draft, error, false, |_, _| {
+            sent.set(sent.get() + 1);
+            Ok(())
+        });
+        assert_eq!(
+            sent.get(),
+            1,
+            "the blur after Escape must not commit the draft"
+        );
+    }
+
+    /// A blur that lands after the input's owner is disposed commits nothing
+    /// and does not panic. The path (real-browser QA 2026-09-13, 2/2): the
+    /// picker popover dismisses on a window `pointerdown`, `<Show>` unmounts
+    /// `CanvasList` — its signals and the `commit_rename` callback's store —
+    /// focus then leaves the detached row input, and its `on:blur` runs the
+    /// callback against the dead scope. Two unwraps sit on that path and
+    /// both are the crash overlay: `Callback::run` (the one QA hit) and a
+    /// plain `get_untracked` inside `end_rename`. The first is pinned by
+    /// census (the handlers may only `try_run`), the second by running the
+    /// ending against disposed signals. Red when either goes back to the
+    /// unwrapping form.
+    #[test]
+    fn a_blur_after_the_edit_is_disposed_commits_nothing_and_does_not_panic() {
+        let owner = Owner::new();
+        owner.set();
+        let editing = RwSignal::new(Some("cv-1".to_string()));
+        let draft = RwSignal::new("mid-edit".to_string());
+        let error = RwSignal::new(Option::<TitleRejection>::None);
+        let commit = Callback::new(move |keep: bool| {
+            end_rename(editing, draft, error, keep, |_, _| {
+                panic!("a disposed edit has nothing to commit")
+            });
+        });
+        // The `<Show>` flipping false: the list's owner is cleaned up, and
+        // everything it arena-allocated goes with it.
+        owner.cleanup();
+        assert_eq!(
+            editing.try_get_untracked(),
+            None,
+            "the fixture must actually be disposed or this test proves nothing"
+        );
+        assert_eq!(
+            commit.try_run(false),
+            None,
+            "the callback is disposed with its owner — `run` would unwrap this"
+        );
+        end_rename(editing, draft, error, false, |_, _| {
+            panic!("a disposed edit has nothing to commit")
+        });
+
+        // …so the input's handlers may reach the callback only through
+        // `try_run`. Production lines: this test names `.run(` itself.
+        let production: String = crate::i18n_census::production_lines(include_str!("library.rs"))
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !production.contains("commit_rename.run("),
+            "`commit_rename.run(` unwraps a callback the dismiss may already have disposed"
+        );
+        assert!(
+            production.contains("commit_rename.try_run("),
+            "the handlers must still reach the callback at all"
+        );
+    }
+
+    /// Enter keeps a refused edit open with its reason; blur drops it — and
+    /// the close clears the refusal that had stayed visible.
+    #[test]
+    fn a_refusal_stays_open_on_enter_and_is_dropped_on_blur() {
+        let owner = Owner::new();
+        owner.set();
+        let editing = RwSignal::new(Some("cv-1".to_string()));
+        let draft = RwSignal::new(String::new());
+        let error = RwSignal::new(Option::<TitleRejection>::None);
+
+        end_rename(editing, draft, error, true, |_, _| {
+            Err(TitleRejection::Empty)
+        });
+        assert_eq!(editing.get_untracked().as_deref(), Some("cv-1"));
+        assert_eq!(error.get_untracked(), Some(TitleRejection::Empty));
+
+        end_rename(editing, draft, error, false, |_, _| {
+            Err(TitleRejection::Empty)
+        });
+        assert_eq!(editing.get_untracked(), None);
+        assert_eq!(error.get_untracked(), None);
+    }
+
+    /// The header title is the second rename surface and must route through
+    /// the same ending — a hand-written copy is what carried the wrong gate.
+    /// Every `submit_title(` the header module calls has to be the closure
+    /// handed to an `end_rename(`: one submit per shared ending, none before
+    /// the first. Production lines only, so prose naming the function does
+    /// not count.
+    #[test]
+    fn the_header_title_ends_its_rename_through_the_shared_gate() {
+        let production: String = crate::i18n_census::production_lines(include_str!("mod.rs"))
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let endings: Vec<&str> = production.split("library::end_rename(").collect();
+        assert!(
+            endings.len() >= 2,
+            "the header's commit must be `library::end_rename`"
+        );
+        assert!(
+            !endings[0].contains("submit_title("),
+            "a `submit_title` before any `end_rename` is a gate of the header's own"
+        );
+        for tail in &endings[1..] {
+            assert_eq!(
+                tail.matches("submit_title(").count(),
+                1,
+                "each shared ending submits exactly once"
+            );
+        }
+    }
+
+    /// Nothing under the canvas body may dismiss through a `fixed inset-0`
+    /// click-catcher: the body renders inside the workspace pane, whose
+    /// backdrop-filter makes the aside the containing block for `fixed`
+    /// descendants, so such a catcher covers the pane and nothing else — the
+    /// `CanvasPicker` shipped exactly that and a click on the chat column left
+    /// it open. The idiom is a one-line self-closing `<div class="fixed
+    /// inset-0 …" on:click=… />` (`team_participants.rs`,
+    /// `team_task_strip.rs`), which is the shape scanned for. Red when it is
+    /// pasted back into any file of this directory.
+    #[test]
+    fn no_canvas_popover_dismisses_through_a_fixed_catcher() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/platform/wide/views/canvas");
+        let mut scanned = 0;
+        for entry in std::fs::read_dir(&dir).expect("canvas dir") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read");
+            scanned += 1;
+            for (line, text) in crate::i18n_census::production_lines(&src) {
+                assert!(
+                    !(text.contains("fixed")
+                        && text.contains("inset-0")
+                        && text.contains("on:click")),
+                    "{}:{line}: a `fixed inset-0` click-catcher is clipped to the pane here",
+                    path.display()
+                );
+            }
+        }
+        assert!(
+            scanned >= 20,
+            "only {scanned} files scanned — wrong directory?"
         );
     }
 

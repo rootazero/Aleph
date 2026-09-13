@@ -20,7 +20,14 @@
 //!
 //! Every animation is delayed by `start_ms` with `animation-fill-mode: both`
 //! (hidden before its start, held after its end). [`PAUSED_CLASS`] on the
-//! same root freezes every animation in place.
+//! same root freezes every animation in place — through a custom property,
+//! not a descendant rule: the `animation` shorthand resets
+//! `animation-play-state`, and a per-shape shorthand rule (three classes
+//! deep) outranks any `.rv-play.rv-paused *` rule, so a pause written that
+//! way froze the fade groups and left every draw-on outline running. Each
+//! animated rule therefore ends with the longhand
+//! `animation-play-state: var(--rv-play-state, running)` and the paused root
+//! merely sets the variable ([`PLAY_STATE_VAR`]).
 //!
 //! # Restart
 //!
@@ -53,6 +60,17 @@ pub(super) const PAUSED_CLASS: &str = "rv-paused";
 pub(super) const OUTLINE_CLASS: &str = "rv-outline";
 /// Class of a shape's non-outline content (fades in after the outline).
 pub(super) const BODY_CLASS: &str = "rv-body";
+/// Custom property every animated rule reads its play state from; the
+/// paused root sets it to `paused`, everywhere else it falls back to
+/// `running` (module doc).
+const PLAY_STATE_VAR: &str = "--rv-play-state";
+
+/// The longhand that closes every animated declaration block. Written
+/// after the `animation` shorthand so it wins inside the same block, and
+/// once per block so no selector the module emits can miss it.
+fn play_state_decl() -> String {
+    format!(";animation-play-state:var({PLAY_STATE_VAR},running)")
+}
 
 /// The CSS class naming one shape's reveal group: a CSS-safe rendering of
 /// the id plus a hash of the original, so two ids that sanitise alike
@@ -96,6 +114,7 @@ pub(super) fn reveal_css(shape_id: &str, reveal: &Reveal, epoch: u32) -> String 
     let key = format!("k{epoch}-{class}");
     let ease = ease_css(reveal.ease);
     let start = reveal.start_ms;
+    let ps = play_state_decl();
     let mut css = String::new();
     match reveal.mode {
         RevealMode::Draw => {
@@ -110,16 +129,16 @@ pub(super) fn reveal_css(shape_id: &str, reveal: &Reveal, epoch: u32) -> String 
                  @keyframes {key}-in{{from{{opacity:0}}to{{opacity:1}}}}\
                  .{PLAY_CLASS} .{class} .{OUTLINE_CLASS}{{stroke-dasharray:1;\
                  animation:{key}-draw {outline_ms}ms {ease} {start}ms both,\
-                 {key}-fill {body_ms}ms {ease} {body_start}ms both}}\
+                 {key}-fill {body_ms}ms {ease} {body_start}ms both{ps}}}\
                  .{PLAY_CLASS} .{class} .{BODY_CLASS}{{\
-                 animation:{key}-in {body_ms}ms {ease} {body_start}ms both}}"
+                 animation:{key}-in {body_ms}ms {ease} {body_start}ms both{ps}}}"
             );
         }
         RevealMode::Fade => {
             let _ = write!(
                 css,
                 "@keyframes {key}-in{{from{{opacity:0}}to{{opacity:1}}}}\
-                 .{PLAY_CLASS} .{class}{{animation:{key}-in {}ms {ease} {start}ms both}}",
+                 .{PLAY_CLASS} .{class}{{animation:{key}-in {}ms {ease} {start}ms both{ps}}}",
                 reveal.duration_ms
             );
         }
@@ -127,7 +146,7 @@ pub(super) fn reveal_css(shape_id: &str, reveal: &Reveal, epoch: u32) -> String 
             let _ = write!(
                 css,
                 "@keyframes {key}-wipe{{from{{clip-path:inset(0 100% 0 0)}}to{{clip-path:inset(0)}}}}\
-                 .{PLAY_CLASS} .{class}{{animation:{key}-wipe {}ms {ease} {start}ms both}}",
+                 .{PLAY_CLASS} .{class}{{animation:{key}-wipe {}ms {ease} {start}ms both{ps}}}",
                 reveal.duration_ms
             );
         }
@@ -157,9 +176,12 @@ pub(super) fn playback_css_for(shapes: &[Shape], epoch: u32) -> String {
         }
     }
     if !css.is_empty() {
+        // The variable, not `animation-play-state` itself: a play-state rule
+        // here would lose to every per-shape `animation` shorthand above
+        // (module doc). The shapes' own longhands read this.
         let _ = write!(
             css,
-            ".{PLAY_CLASS}.{PAUSED_CLASS} *{{animation-play-state:paused}}"
+            ".{PLAY_CLASS}.{PAUSED_CLASS}{{{PLAY_STATE_VAR}:paused}}"
         );
     }
     css
@@ -401,7 +423,7 @@ mod tests {
         );
         assert!(
             css.contains(&format!(
-                ".rv-play .{class} .rv-outline{{stroke-dasharray:1;animation:k3-{class}-draw 600ms cubic-bezier(0.22, 1, 0.36, 1) 500ms both,k3-{class}-fill 300ms cubic-bezier(0.22, 1, 0.36, 1) 1100ms both}}"
+                ".rv-play .{class} .rv-outline{{stroke-dasharray:1;animation:k3-{class}-draw 600ms cubic-bezier(0.22, 1, 0.36, 1) 500ms both,k3-{class}-fill 300ms cubic-bezier(0.22, 1, 0.36, 1) 1100ms both;animation-play-state:var(--rv-play-state,running)}}"
             )),
             "{css}"
         );
@@ -468,8 +490,60 @@ mod tests {
         assert!(css.contains(&shape_class("a")));
         assert!(!css.contains(&shape_class("b")));
         assert!(
-            css.ends_with(".rv-play.rv-paused *{animation-play-state:paused}"),
+            css.ends_with(".rv-play.rv-paused{--rv-play-state:paused}"),
             "{css}"
+        );
+    }
+
+    /// Pause must reach every animated node, whatever selector carries the
+    /// animation. The cascade fact this pins: the `animation` shorthand
+    /// resets `animation-play-state`, and a per-shape shorthand rule outranks
+    /// any root-level `*` rule, so the ONLY play state that wins is a longhand
+    /// inside the same declaration block, written after the shorthand — and
+    /// it has to read the variable the paused root sets. Red when a new mode
+    /// or selector emits an `animation:` without that trailing longhand, when
+    /// the longhand precedes the shorthand, or when the root stops setting
+    /// the variable. (Real-browser QA 2026-09-13: draw-on outlines kept
+    /// running under `rv-paused`; only the fade groups froze.)
+    #[test]
+    fn every_animated_rule_reads_its_play_state_from_the_paused_root() {
+        let css = playback_css(
+            &doc(
+                vec![
+                    shape("d", Some(reveal(0, 300, RevealMode::Draw))),
+                    shape("f", Some(reveal(0, 300, RevealMode::Fade))),
+                    shape("w", Some(reveal(0, 300, RevealMode::Wipe))),
+                ],
+                None,
+            ),
+            1,
+        );
+        let longhand = play_state_decl();
+        let mut animated = 0;
+        // Declaration blocks: everything between a `{` and its `}`. Keyframe
+        // bodies nest one level; a plain split on `}` still yields each
+        // innermost block on its own, which is all this needs.
+        for block in css.split('}') {
+            let Some((selector, body)) = block.rsplit_once('{') else {
+                continue;
+            };
+            let Some(at) = body.find("animation:") else {
+                continue;
+            };
+            animated += 1;
+            let after = body.find(&longhand[1..]);
+            assert!(
+                after.is_some_and(|i| i > at),
+                "`{selector}` animates without a trailing play-state longhand: {body}"
+            );
+        }
+        assert_eq!(
+            animated, 4,
+            "draw emits two animated blocks, fade and wipe one each: {css}"
+        );
+        assert!(
+            css.contains(&format!(".rv-play.rv-paused{{{PLAY_STATE_VAR}:paused}}")),
+            "the paused root sets the variable the longhands read: {css}"
         );
     }
 

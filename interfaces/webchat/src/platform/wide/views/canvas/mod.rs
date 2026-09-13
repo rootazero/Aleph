@@ -273,8 +273,11 @@ fn WelcomePane() -> impl IntoView {
 /// The title here is the **second** rename surface, and it goes through
 /// `library::submit_title` exactly like the list row does: same gate, same
 /// no-op skip, same base-revision precedence, same one-retry conflict
-/// handling. Two surfaces, one function — a hand-written second copy is how
-/// one of them quietly stops working.
+/// handling — and through `library::end_rename` for the ending, so the edit
+/// state is the commit gate here too. Two surfaces, one function — a
+/// hand-written second copy is how one of them quietly stops working, and
+/// the copy this strip used to carry gated on "is a canvas open" and let the
+/// blur of the unmounting input commit on Escape and resend on Enter.
 #[component]
 fn CanvasHeader() -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -283,8 +286,10 @@ fn CanvasHeader() -> impl IntoView {
     let creating = RwSignal::new(false);
 
     // Title editing, local to this strip: an edit in progress is this visit's
-    // interaction state and must not survive closing the canvas.
-    let editing_title = RwSignal::new(false);
+    // interaction state and must not survive closing the canvas. The id of
+    // the canvas being renamed, like the list row's `renaming` — the same
+    // shape so the same ending can gate on it.
+    let editing_title = RwSignal::new(Option::<String>::None);
     let title_draft = RwSignal::new(String::new());
     // A `TitleRejection`, not an `Option<String>`: the type is what proves
     // this can never carry an unclassified server error, and it keeps the
@@ -305,7 +310,7 @@ fn CanvasHeader() -> impl IntoView {
     // created inside a nested reactive closure, so the `NodeRef` is not bound
     // when this effect first runs.
     Effect::new(move |_| {
-        if !editing_title.get() {
+        if editing_title.get().is_none() {
             return;
         }
         spawn_local(async move {
@@ -318,29 +323,23 @@ fn CanvasHeader() -> impl IntoView {
         });
     });
 
-    // Same two endings as the list row: Enter keeps a refusal visible, blur
-    // drops it rather than trapping the user in a red input.
+    // The list row's ending, verbatim: gate on the edit, not on the open
+    // canvas (`library::end_rename` says why).
     let commit_title = move |keep_open_on_refusal: bool| {
-        let Some(id) = canvas.open_canvas.get_untracked() else {
-            editing_title.set(false);
-            return;
-        };
-        let draft = title_draft.get_untracked();
-        if let Err(why) = library::submit_title(state, canvas, i18n, &id, &draft) {
-            if keep_open_on_refusal {
-                title_error.set(Some(why));
-                return;
-            }
-        }
-        editing_title.set(false);
-        title_error.set(None);
+        library::end_rename(
+            editing_title,
+            title_draft,
+            title_error,
+            keep_open_on_refusal,
+            |id, draft| library::submit_title(state, canvas, i18n, id, draft),
+        );
     };
 
     view! {
         <div class="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
             <library::CanvasPicker />
             <Show when=move || is_open.get()>
-                {move || if editing_title.get() {
+                {move || if editing_title.get().is_some() {
                     view! {
                         <input
                             node_ref=title_input
@@ -355,7 +354,7 @@ fn CanvasHeader() -> impl IntoView {
                                 match ev.key().as_str() {
                                     "Enter" => commit_title(true),
                                     "Escape" => {
-                                        editing_title.set(false);
+                                        editing_title.set(None);
                                         title_error.set(None);
                                     }
                                     _ => {}
@@ -373,7 +372,7 @@ fn CanvasHeader() -> impl IntoView {
                             on:click=move |_| {
                                 title_draft.set(title_now());
                                 title_error.set(None);
-                                editing_title.set(true);
+                                editing_title.set(canvas.open_canvas.get_untracked());
                             }
                         >
                             {title_now}

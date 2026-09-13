@@ -174,7 +174,8 @@ struct SlideDrag {
 pub(super) fn DecksDrawer(
     /// The editor's optimistic commit funnel — same channel as every gesture.
     on_commit: Callback<(Vec<CanvasOp>, Vec<CanvasOp>)>,
-    /// Starts fullscreen playback of the given deck id.
+    /// Starts playback of the given deck id on the editor's presentation
+    /// stage (`present.rs` — the stage is the canvas body, not the window).
     on_play: Callback<String>,
 ) -> impl IntoView {
     let canvas = expect_context::<CanvasState>();
