@@ -956,12 +956,12 @@ where
         // the meta — where the single drop used to sit, above this match —
         // a queued run's opener landed first; the projector then anchored the
         // meta on THAT opener, found no assistant row in the range, finalised
-        // it `NoRowInRange`, and this run was billed nowhere. The boot heal
-        // deliberately does not rescue a run whose meta is in the log
-        // (`session_projector::RunSpan::synthesis_end`). Holding across the
-        // stamp cannot deadlock: `stamp_run_meta` is one append through the
-        // session actor, and nothing on that path takes the claim or the
-        // permit.
+        // it `NoRowInRange`, and this run went unbilled until the next boot,
+        // where the heal synthesizes a stamp from the run's own messages —
+        // tokens only, never the meta's gauge, cost or model
+        // (`session_projector::collect_run_spans`). Holding across the stamp
+        // cannot deadlock: `stamp_run_meta` is one append through the session
+        // actor, and nothing on that path takes the claim or the permit.
         //
         // `Err` arm: there is no meta, so the release is the arm's first
         // statement — the same lifetime the old single drop gave it.

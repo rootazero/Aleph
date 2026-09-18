@@ -491,8 +491,9 @@ enum HealScope {
     /// routinely on live sessions, inside that window as a matter of course,
     /// and from a floor that can cut a run in half; this scope runs at boot
     /// before any run is live, or on a rare explicit request, and reads every
-    /// span from its opener. Stamping inside the window would cost the real
-    /// meta its gauge and its price.
+    /// span from its opener. Stamping inside the window bills the run twice:
+    /// the real meta carries a different id from the synthesized stamp and
+    /// overwrites it (`synthesize_missing_stamps`'s race note).
     WholeSession,
 }
 
@@ -627,8 +628,13 @@ async fn heal_session(
 
 /// One run's extent in the log, as a heal pass sees it: where it opened,
 /// where (if anywhere) it closed, how many assistant messages it produced,
-/// and whether its `AssistantRunMeta` is in the log.
+/// and whether an `AssistantRunMeta` landed on it.
 struct RunSpan {
+    /// The id its `RunStarted` carries — the harness-minted MARKER id
+    /// (`runner_impl.rs`), which is NOT the engine's `RunRequest.run_id` the
+    /// meta carries (ruling A5: the two are never joined). It is what a
+    /// synthesized stamp writes under the row's `run_id` key, and it names
+    /// this span in log lines; it is never compared to a meta's id.
     run_id: String,
     /// Seq of the `RunStarted` that opened it.
     start: EventSeq,
@@ -637,6 +643,8 @@ struct RunSpan {
     /// `AssistantMessage` events between `start` and `end` — after the walk in
     /// [`heal_session`], each is a transcript row or a deferred seq.
     assistant_messages: usize,
+    /// A meta was appended after this span opened and before the next one
+    /// did — see [`collect_run_spans`] for why that is the join.
     meta: bool,
 }
 
@@ -673,8 +681,31 @@ impl RunSpan {
 /// only), so every split parent inside the window is a finished-without-meta
 /// span — synthesized and billed for its pre-split calls at the next boot,
 /// which before this fold were billed nowhere. Assistant messages count into
-/// the newest span only while it is open; a meta marks the span that names
-/// its run, wherever that span sits.
+/// the newest span only while it is open.
+///
+/// A meta marks the NEWEST span — the join is POSITIONAL, not by id. The
+/// markers carry the harness-minted marker id and the meta carries the
+/// engine's run id, and the two are never equal on a live log (ruling A5),
+/// so an id join never matched: every finished run read as meta-less at
+/// boot, a stamp was synthesized and billed on EVERY boot, and the two
+/// stamps then overwrote each other's `run_id` so the next boot re-applied
+/// both — session totals doubled per restart (44 → 88 → 176 on the real
+/// machine). Position is the same derivation the projector's meta arm uses
+/// (`ctx.run_start` is the last `RunStarted` it walked past) and the usage
+/// fold anchors on (the last `RunStarted` in its slice), so the three cannot
+/// name three different runs. Two consequences: on a log written after
+/// `execute()` began holding the run slot through the meta append, the meta
+/// always precedes the next opener, so "newest span" is this run; on a
+/// historical log where a meta landed AFTER the next run's opener, it marks
+/// the next span — the same reading under which the projector anchored it
+/// on that opener and finalised it `NoRowInRange` — and the older span reads
+/// meta-less and is synthesized, billing that run's tokens once from its own
+/// messages. That is one bill for the older run, not two: its misanchored
+/// meta billed nothing (`NoRowInRange` never reaches the bill). What the
+/// historical shape still costs is on the projector's side, not this fold's
+/// — that meta can stamp and bill the NEXT run's first row under the older
+/// run's id if the next run had already produced one — and stays a T24
+/// known limit; the heal does not second-guess a landed meta.
 fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
     let mut spans: Vec<RunSpan> = Vec::new();
     for rec in events {
@@ -696,8 +727,8 @@ fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
                     span.end.get_or_insert(rec.seq);
                 }
             }
-            SessionEvent::AssistantRunMeta { run_id, .. } => {
-                if let Some(span) = spans.iter_mut().rev().find(|s| &s.run_id == run_id) {
+            SessionEvent::AssistantRunMeta { .. } => {
+                if let Some(span) = spans.last_mut() {
                     span.meta = true;
                 }
             }
@@ -718,9 +749,11 @@ fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
 /// measurement on the Panel. It goes through the same
 /// `stamp_assistant_metadata_in_range` as a real meta, over the same shape of
 /// range (`(start, end]`: the run's own `RunStarted` to its `RunFinished`, the
-/// rows strictly between), so a later heal — or a meta that does arrive —
-/// reads `AlreadyStamped` and bills nothing: the stamp is the idempotence
-/// guard, exactly as on the live path. The bill is [`bill_run_from_fold`]
+/// rows strictly between), so a later heal reads `AlreadyStamped` and bills
+/// nothing: the stamp is the idempotence guard, exactly as on the live path.
+/// Against a later heal only — the stamp carries the MARKER id, a real meta
+/// carries the engine id, and `already_stamped_by` reads a different id as a
+/// different run (see the race note below). The bill is [`bill_run_from_fold`]
 /// with `run_start = start` and the fold read up to `end`; the cost and model
 /// are `None` because there is no meta to take them from, so a synthesized
 /// bill adds tokens and never dollars. A run whose provider reported no usage
@@ -736,8 +769,12 @@ fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
 /// The boot reconciler runs before any run is live, so it cannot race a meta
 /// that is about to be appended. A `request_repair` on a live session (the
 /// doctor's repair) can, in the window between a run's `RunFinished` and its
-/// meta: the synthesized stamp lands first and that meta then reads
-/// `AlreadyStamped`, so its gauge and price are not applied.
+/// meta: the synthesized stamp lands first under the marker id, and the meta
+/// — carrying the engine id — then finds a row stamped by "a different run",
+/// overwrites the stamp and bills the run a second time. That window is one
+/// append wide and a T24 known limit; closing it needs the two ids joined
+/// (FOLLOW-UP "A5 join"), not a guess here about which id a stamp "really"
+/// names.
 async fn synthesize_missing_stamps(
     store: &Arc<dyn SessionStore>,
     id: &SessionId,
@@ -1539,13 +1576,24 @@ mod tests {
         log
     }
 
+    /// The marker id a live log carries on its `RunStarted` / `RunFinished`
+    /// for the run whose meta carries `run`: the harness mints its own
+    /// (`runner_impl.rs`), and it is never the engine id the meta carries.
+    /// Every fixture that pairs a marker with a meta derives the marker id
+    /// here, so no test can pass by an equality the production log never
+    /// satisfies.
+    fn marker_of(run: &str) -> String {
+        format!("marker-{run}")
+    }
+
     /// One run, one priced message, its meta after `RunFinished` — the shape
     /// every billing test below reads. `(45, 25)` is what the fold must find.
+    /// The markers carry [`marker_of`]`(run)`, the meta carries `run`.
     fn one_billed_run(tid: TurnId, run: &str) -> Vec<(EventSeq, SessionEvent)> {
         vec![
-            (1, run_started(run)),
+            (1, run_started(&marker_of(run))),
             (2, assistant_msg_billed(tid, 45, 25)),
-            (3, run_finished(run)),
+            (3, run_finished(&marker_of(run))),
             (4, run_meta(tid, run)),
         ]
     }
@@ -1974,8 +2022,8 @@ mod tests {
 
         let tid = uuid::Uuid::new_v4();
         let events = vec![
-            (1, run_started("run_a")),
-            (2, run_finished("run_a")),
+            (1, run_started(&marker_of("run_a"))),
+            (2, run_finished(&marker_of("run_a"))),
             (3, run_meta_without_gauge(tid, "run_a")),
         ];
         let log = own_event_log(&id, &events).await;
@@ -2027,9 +2075,9 @@ mod tests {
 
         let tid = uuid::Uuid::new_v4();
         let events = vec![
-            (1, run_started("run_a")),
+            (1, run_started(&marker_of("run_a"))),
             (2, assistant_msg(tid)),
-            (3, run_finished("run_a")),
+            (3, run_finished(&marker_of("run_a"))),
             (4, run_meta_without_gauge(tid, "run_a")),
         ];
         let log = own_event_log(&id, &events).await;
@@ -2192,26 +2240,27 @@ mod tests {
         );
     }
 
+    /// `synthesis_end` of every span in `events`, in log order.
+    fn synthesis_ends(events: &[(EventSeq, SessionEvent)]) -> Vec<Option<EventSeq>> {
+        let log: Vec<SessionEventRecord> = events.iter().map(|(s, e)| rec(*s, e.clone())).collect();
+        collect_run_spans(&log)
+            .iter()
+            .map(RunSpan::synthesis_end)
+            .collect()
+    }
+
     /// The shape a stamp is synthesized for, clause by clause, on the pure
-    /// fold. A meta whose own stamp landed makes the "has a meta" clause
-    /// unobservable at the store — the synthesized stamp reads
-    /// `AlreadyStamped` either way; the one store-level shape that reaches
-    /// the clause is a meta that finalised `NoRowInRange` because a later
-    /// opener moved `run_start`, pinned below in
-    /// `a_run_whose_meta_landed_in_the_next_runs_range_is_billed_nowhere`.
+    /// fold. The "has a meta" clause is pinned separately, on the production
+    /// id shape, by `a_meta_marks_the_span_it_follows_even_though_its_id_is_
+    /// not_the_markers` and its twin; a meta whose own stamp landed makes that
+    /// clause unobservable at the store (the synthesized stamp reads
+    /// `AlreadyStamped` either way), and the store-level pin of the same fact
+    /// is `a_live_run_with_its_meta_is_billed_once_and_two_repairs_add_nothing`.
     #[test]
     fn a_stamp_is_synthesized_only_for_a_finished_run_with_rows_and_no_meta() {
         let tid = uuid::Uuid::new_v4();
-        let ends = |events: &[(EventSeq, SessionEvent)]| -> Vec<Option<EventSeq>> {
-            let log: Vec<SessionEventRecord> =
-                events.iter().map(|(s, e)| rec(*s, e.clone())).collect();
-            collect_run_spans(&log)
-                .iter()
-                .map(RunSpan::synthesis_end)
-                .collect()
-        };
         assert_eq!(
-            ends(&[
+            synthesis_ends(&[
                 (1, run_started("a")),
                 (2, assistant_msg(tid)),
                 (3, run_finished("a")),
@@ -2220,22 +2269,22 @@ mod tests {
             "finished, one row, no meta: stamp up to the RunFinished"
         );
         assert_eq!(
-            ends(&one_billed_run(tid, "a")),
+            synthesis_ends(&one_billed_run(tid, "a")),
             vec![None],
             "its meta is in the log: that meta owns the stamp, landed or deferred"
         );
         assert_eq!(
-            ends(&[(1, run_started("a")), (2, assistant_msg(tid))]),
+            synthesis_ends(&[(1, run_started("a")), (2, assistant_msg(tid))]),
             vec![None],
             "still open: the meta may still come"
         );
         assert_eq!(
-            ends(&[(1, run_started("a")), (2, run_finished("a"))]),
+            synthesis_ends(&[(1, run_started("a")), (2, run_finished("a"))]),
             vec![None],
             "no assistant message: no row to stamp"
         );
         assert_eq!(
-            ends(&[
+            synthesis_ends(&[
                 (1, run_started("a")),
                 (2, assistant_msg(tid)),
                 (3, run_started("b")),
@@ -2248,26 +2297,63 @@ mod tests {
         );
     }
 
-    /// The one store-level shape that reaches `RunSpan::synthesis_end`'s
-    /// "has a meta" clause: the meta IS in the log, but it landed after a
-    /// later run's opener, so the walk anchored it on that opener, found no
-    /// assistant row in `(4, 5]`, and finalised it `NoRowInRange` — its stamp
-    /// never landed, and the clause is what keeps a synthesized stamp off the
-    /// row. Under the "a run WITH a meta keeps its own stamp" ruling the run
-    /// is therefore billed nowhere, and the next pass reads the session as
-    /// whole. A known limit, kept on purpose: the heal does not second-guess
-    /// a meta that is in the log.
-    ///
-    /// The live path no longer writes this shape — `execute()` holds the run
-    /// slot through the meta append, so a queued run on the session cannot
-    /// open ahead of it (pinned in `execution_engine::tests`) — but logs
-    /// written before that fix carry it, and this pass reads them. (The
-    /// doctor's repair racing a live run between its `RunFinished` and its
-    /// meta is a different shape: the synthesized stamp lands first and the
-    /// meta reads `AlreadyStamped`, costing it the gauge and the price, not
-    /// the bill.)
+    /// The production id shape, on the pure fold: the markers carry the
+    /// harness-minted marker id, the meta carries the engine's run id, and
+    /// the two are never equal (ruling A5). The meta must still mark the span
+    /// it follows — by position, the way the projector anchored it — or every
+    /// finished run reads meta-less at boot and is stamped and billed again
+    /// on every restart (the `holes` stage's 44 → 88 → 176). Reddens if the
+    /// join goes back to comparing ids.
+    #[test]
+    fn a_meta_marks_the_span_it_follows_even_though_its_id_is_not_the_markers() {
+        let tid = uuid::Uuid::new_v4();
+        assert_eq!(
+            synthesis_ends(&[
+                (1, run_started("marker-A")),
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (3, run_meta(tid, "engine-X")),
+                (4, run_finished("marker-A")),
+            ]),
+            vec![None],
+            "the meta names an id the markers never carry, and still marks \
+             the span it landed inside: nothing to synthesize"
+        );
+    }
+
+    /// The twin of the test above, same ids, meta absent: the span is
+    /// finished with a row and no meta, so it IS synthesized up to its
+    /// closer. Together the pair pins that the meta — and only the meta —
+    /// is what turns synthesis off.
+    #[test]
+    fn a_finished_span_with_no_meta_is_synthesized_whatever_its_marker_id() {
+        let tid = uuid::Uuid::new_v4();
+        assert_eq!(
+            synthesis_ends(&[
+                (1, run_started("marker-A")),
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (4, run_finished("marker-A")),
+            ]),
+            vec![Some(4)],
+            "no meta after the opener: stamp up to the RunFinished"
+        );
+    }
+
+    /// The historical shape: run a's meta landed AFTER run b's opener (the
+    /// live path no longer writes this — `execute()` holds the run slot
+    /// through the meta append, pinned in `execution_engine::tests` — but
+    /// logs written before that fix carry it). The walk anchors the meta on
+    /// b's opener, finds no assistant row in `(4, 5]`, finalises it
+    /// `NoRowInRange` and bills nothing; the positional fold reads the same
+    /// way — the meta marks span b — so span a is finished, has a row and no
+    /// meta, and IS synthesized: stamped with its marker id and billed ONCE
+    /// from its own messages. One bill for run a, none from its misanchored
+    /// meta, and a second pass adds nothing. (What the shape still costs is
+    /// the projector's, not the fold's: had run b already produced a row
+    /// before seq 5, a's meta would stamp and bill THAT row under a's id —
+    /// the T24 known limit; the heal does not second-guess a landed meta.)
     #[tokio::test]
-    async fn a_run_whose_meta_landed_in_the_next_runs_range_is_billed_nowhere() {
+    async fn a_historical_meta_that_landed_after_the_next_opener_leaves_the_older_run_synthesized()
+    {
         let temp = tempdir().unwrap();
         let store = sqlite_store(temp.path(), "meta_next_range.db");
         let id = SessionId::ephemeral("meta-next-range");
@@ -2277,10 +2363,10 @@ mod tests {
         let log = own_event_log(
             &id,
             &[
-                (1, run_started("a")),
+                (1, run_started(&marker_of("a"))),
                 (2, assistant_msg_billed(tid, 45, 25)),
-                (3, run_finished("a")),
-                (4, run_started("b")),
+                (3, run_finished(&marker_of("a"))),
+                (4, run_started(&marker_of("b"))),
                 (5, run_meta(tid, "a")),
             ],
         )
@@ -2305,9 +2391,9 @@ mod tests {
                 whole.stamps_synthesized,
                 whole.usage_rebilled,
             ),
-            (1, 0, 0, 0),
+            (1, 0, 1, 1),
             "the row is filled; the meta, anchored on run b's opener, stamps \
-             nothing; and span a — which has a meta — is not synthesized: {whole:?}"
+             nothing; span a reads meta-less and is synthesized and billed: {whole:?}"
         );
         let row = store
             .get_history(&id, None)
@@ -2317,16 +2403,19 @@ mod tests {
             .find(|m| m.role == "assistant")
             .expect("run a's row was projected");
         assert_eq!(
-            row.metadata.as_ref().and_then(|m| m.get("run_id")),
-            None,
-            "neither the meta nor a synthesized stamp reached run a's row"
+            row.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some(marker_of("a").as_str()),
+            "the synthesized stamp carries the marker id — the meta never \
+             reached this row"
         );
         let meta = store.get_metadata(&id).await.unwrap().unwrap();
         assert_eq!(
             (meta.input_tokens, meta.output_tokens),
-            (0, 0),
-            "run a is billed nowhere: its meta finalised NoRowInRange and its \
-             span is not synthesized"
+            (45, 25),
+            "run a is billed exactly once, from its own messages"
         );
 
         let again = heal_session(
@@ -2340,7 +2429,81 @@ mod tests {
         .await;
         assert!(
             again.up_to_date,
-            "and the session then reads as whole — the limit this test keeps: {again:?}"
+            "a second pass finds the stamp and adds nothing: {again:?}"
+        );
+        assert_eq!(
+            store.get_metadata(&id).await.unwrap().unwrap().input_tokens,
+            45,
+            "…and the totals are unchanged"
+        );
+    }
+
+    /// The shape `qa/resume_boundary` `holes` measures, at the store: a run
+    /// that finished normally on the LIVE path — markers with the marker id,
+    /// meta with the engine id, drained live so the meta's own stamp landed
+    /// and billed — is billed exactly once, and two whole-session repairs
+    /// (the boot reconciler's pass, twice, as two restarts would run it) add
+    /// nothing. With the fold joining meta to span by id equality this went
+    /// `(45, 25)` → `(90, 50)` → `(180, 100)`: every pass read the run as
+    /// meta-less, synthesized a stamp under the marker id, billed, and the
+    /// next pass found the meta's engine id "missing" from the row and
+    /// re-applied that too.
+    #[tokio::test]
+    async fn a_live_run_with_its_meta_is_billed_once_and_two_repairs_add_nothing() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "holes_once.db");
+        let id = SessionId::ephemeral("holes-once");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let events = one_billed_run(tid, "engine-x");
+        let log = own_event_log(&id, &events).await;
+        let projector = MessageProjector::with_event_store(store.clone(), None, Some(log));
+        for (seq, ev) in &events {
+            projector.on_appended(&id, &rec(*seq, ev.clone()));
+        }
+        projector.flush(Duration::from_secs(5)).await.unwrap();
+        let billed = |m: &crate::gateway::session_store::types::SessionMetadata| {
+            (m.input_tokens, m.output_tokens)
+        };
+        assert_eq!(
+            billed(&store.get_metadata(&id).await.unwrap().unwrap()),
+            (45, 25),
+            "the live drain billed the run once, from the meta"
+        );
+
+        for pass in 1..=2 {
+            let repair = projector.request_repair(&id).await;
+            assert_eq!(
+                (
+                    repair.stamps_reapplied,
+                    repair.stamps_synthesized,
+                    repair.usage_rebilled,
+                ),
+                (0, 0, 0),
+                "repair pass {pass} stamped nothing and billed nothing: {repair:?}"
+            );
+            assert!(repair.up_to_date, "repair pass {pass}: {repair:?}");
+            assert_eq!(
+                billed(&store.get_metadata(&id).await.unwrap().unwrap()),
+                (45, 25),
+                "repair pass {pass} added no tokens"
+            );
+        }
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("the row is there");
+        assert_eq!(
+            row.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .and_then(|v| v.as_str()),
+            Some("engine-x"),
+            "the row still carries the meta's id — no synthesized stamp overwrote it"
         );
     }
 
@@ -2435,7 +2598,7 @@ mod tests {
         // is the per-call `SpendLedger`'s fact, not this one's.
         let tid = uuid::Uuid::new_v4();
         let events: [(EventSeq, SessionEvent); 7] = [
-            (1, run_started("run_1")),
+            (1, run_started(&marker_of("run_1"))),
             (2, user_msg(tid)),
             (3, assistant_msg_billed(tid, 10, 20)),
             (4, tool_req(tid)),

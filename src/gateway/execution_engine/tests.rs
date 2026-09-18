@@ -2547,10 +2547,11 @@ fn execute_announces_the_turn_end_on_both_terminal_arms() {
 /// match, BEFORE `stamp_run_meta`. Releasing there let a queued run on the
 /// same session append its `RunStarted` ahead of this run's meta; the
 /// projector then anchored the meta on the NEXT run's opener, found no
-/// assistant row in that range and finalised it `NoRowInRange` — the run was
-/// billed nowhere, and the boot heal cannot rescue it because the meta IS in
-/// the log (`session_projector::tests::
-/// a_run_whose_meta_landed_in_the_next_runs_range_is_billed_nowhere`).
+/// assistant row in that range and finalised it `NoRowInRange` — the run went
+/// unbilled until the next boot, and what the boot heal can give it then is a
+/// token-only stamp from its own messages, never the meta's gauge, cost or
+/// model (`session_projector::tests::
+/// a_historical_meta_that_landed_after_the_next_opener_leaves_the_older_run_synthesized`).
 ///
 /// A source-ordering pin, for the same reason as
 /// `execute_announces_the_turn_end_on_both_terminal_arms`: the real `Ok` arm
@@ -2628,8 +2629,8 @@ fn execute_holds_the_run_slot_through_the_meta_stamp_and_releases_it_on_both_arm
         stamp < ok_release,
         "Ok arm: the run slot must be released AFTER `stamp_run_meta` — \
          released before it, a queued run on the same session can append its \
-         RunStarted ahead of this run's AssistantRunMeta, and the run is \
-         billed nowhere"
+         RunStarted ahead of this run's AssistantRunMeta, and the meta is \
+         finalised NoRowInRange against the wrong opener"
     );
     assert!(
         ok_release < continuation,
