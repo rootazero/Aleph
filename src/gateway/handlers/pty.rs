@@ -446,10 +446,13 @@ fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<(), JsonR
             if pty::owner_admits(Some(job.record.owner.as_str()), actor.as_deref()) {
                 if let Some(report) = crate::builtin_tools::process_journal::tombstone_report(&job)
                 {
+                    // `text_with_output`: an error message has no slot for
+                    // the recorded output, so the clause rides the prose —
+                    // the same composition the terminal tool renders.
                     return Err(JsonRpcResponse::error(
                         request.id.clone(),
                         INVALID_PARAMS,
-                        report.text,
+                        report.text_with_output(),
                     ));
                 }
             }
@@ -1450,12 +1453,28 @@ mod tests {
         };
         let msg = as_user("alice").await.unwrap_err().error.unwrap().message;
         assert!(
-            msg.contains("has EXITED") && msg.contains("Terminal t-2"),
+            msg.contains("has EXITED")
+                && msg.contains("Terminal t-2")
+                && msg.ends_with("no output was recorded before the restart"),
             "{msg}"
         );
         assert_eq!(
             as_user("bob").await.unwrap_err().error.unwrap().message,
             pty::no_such_session("t-2")
+        );
+        // An actor-less caller passes the live gate's unrestricted arm first
+        // (`SessionOwner::Unknown.admits(None)`), so the journal is never
+        // consulted for it and the tombstone never reaches an `Err` — the
+        // handler's own not-found answers next. Frozen here so the parity
+        // with the terminal face (which shows an actor-less caller nothing)
+        // cannot flip by reordering the two checks.
+        let actorless = crate::gateway::caller_identity::CALLER_USER
+            .scope(None, async { require_owned(&r, "t-2") })
+            .await;
+        assert!(
+            actorless.is_ok(),
+            "an actor-less caller must not receive the tombstone: {:?}",
+            actorless.err().and_then(|e| e.error).map(|e| e.message)
         );
         j::disable_for_test();
     }

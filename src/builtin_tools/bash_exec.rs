@@ -802,7 +802,8 @@ async fn handle_process_action(
                     let note = match (stop_command, job.map(|j| j.record.tombstone)) {
                         (Some(cmd), _) => format!(
                             "kill was NOT attempted: this process holds no handle for this job. \
-                             Its OS process is still running; to stop it run `{cmd}`."
+                             Its OS process was still running as of the last server start; to \
+                             stop it run `{cmd}`."
                         ),
                         (None, Some(Some(Tombstone::ExitedDuringRestart))) => {
                             "kill was NOT attempted: this process holds no handle for this job, \
@@ -980,8 +981,10 @@ fn no_output_reason(phase: JobPhase, outcome: Option<&str>) -> &'static str {
 /// writes what it learned onto the row as its `tombstone`, and
 /// [`process_journal::tombstone_report`] turns that into the one sentence
 /// every face gives for such a row — exited, still running (with the stop
-/// command; nothing here runs it), or not checked. That sentence has ONE
-/// owner, there, and is not spelled again here (criterion #1).
+/// command; nothing here runs it), or not answered. That sentence has ONE
+/// owner, there, and is not spelled again here (criterion #1). Only the
+/// report's `text` is rendered — its `output_clause` would repeat the bytes
+/// [`recovered_row`] already hands over under `recorded_output`.
 ///
 /// Takes the whole job rather than the phase for the same reason
 /// [`process_journal::settled_label`] takes the record: a terminal row is
@@ -2186,6 +2189,7 @@ mod tests {
                 process_journal::enable_for_test(tmp.path().to_path_buf());
                 process_journal::record_spawn(4244, "sleep 300", Some(&owner));
                 process_journal::record_child(4244, std::process::id());
+                process_journal::record_partial(4244, "[stdout]\nbuilt 3 crates\n");
                 process_journal::disable_for_test();
                 process_journal::init_and_reconcile_with_probe(
                     tmp.path().to_path_buf(),
@@ -2204,11 +2208,18 @@ mod tests {
                     ),
                     "{v}"
                 );
+                let advisory = v["advisory"].as_str().unwrap();
                 assert!(
-                    v["advisory"]
+                    advisory.contains(&format!("pid {}", std::process::id())),
+                    "{v}"
+                );
+                // The snapshot rides `recorded_output` once; the advisory
+                // must not carry the same bytes a second time.
+                assert!(
+                    v["recorded_output"]
                         .as_str()
-                        .unwrap()
-                        .contains(&format!("pid {}", std::process::id())),
+                        .is_some_and(|o| o.contains("built 3 crates"))
+                        && !advisory.contains("built 3 crates"),
                     "{v}"
                 );
                 let k: serde_json::Value = serde_json::from_str(

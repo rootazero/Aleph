@@ -520,8 +520,9 @@ pub struct TombstoneReport {
     /// The [`settled_label`] word for the row: `exited_during_restart` /
     /// `still_running_unattached` / `interrupted_by_restart_liveness_unknown`.
     pub kind: &'static str,
-    /// The whole sentence, self-contained: who started it, what the OS said,
-    /// what was recorded, and what the reader can do next.
+    /// The sentence about the process: who started it, what the OS said, and
+    /// what the reader can do next. Ends BEFORE the recorded output — see
+    /// [`Self::output_clause`].
     pub text: String,
     /// The OS pid the row carries, when it carries one.
     pub pid: Option<u32>,
@@ -529,6 +530,25 @@ pub struct TombstoneReport {
     /// still-running arm. Aleph does not run it — U5: the process is
     /// recorded, never signalled — the owner does, if they choose to.
     pub stop_command: Option<String>,
+    /// What was recorded of the process's output — the tail verbatim, or a
+    /// sentence saying there is none. Kept apart from [`Self::text`] because
+    /// the faces disagree about whether to spell it: the bash face already
+    /// hands the same bytes over structurally (`recorded_output`), so it
+    /// renders `text` alone and does not pay for the tail twice; the terminal
+    /// and `pty.*` faces carry no such key and render
+    /// [`Self::text_with_output`].
+    pub output_clause: String,
+}
+
+impl TombstoneReport {
+    /// `text`, then the output clause on its own line — the rendering for a
+    /// face whose envelope has no structured slot for the recorded output.
+    /// One composition, so the terminal tool and the `pty.*` error message
+    /// cannot join the two halves differently.
+    #[must_use]
+    pub fn text_with_output(&self) -> String {
+        format!("{}\n{}", self.text, self.output_clause)
+    }
 }
 
 /// The sentence a face gives for an id the previous server owned. Pure —
@@ -539,8 +559,9 @@ pub struct TombstoneReport {
 ///
 /// No arm spells "fail": a restart is a fact about the previous server
 /// process, never about the command (the module doc's first paragraph). The
-/// third arm keeps the "did NOT check" wording for a row with no pid or an
-/// unanswered probe — an unknown is never spelled as an exit.
+/// third arm says exactly which of the two things [`tombstone_for`] folds
+/// into `None` happened — no pid was recorded (nothing was asked), or the
+/// probe ran and could not answer — and neither is spelled as an exit.
 #[must_use]
 pub fn tombstone_report(job: &RecoveredJob) -> Option<TombstoneReport> {
     let r = &job.record;
@@ -551,13 +572,19 @@ pub fn tombstone_report(job: &RecoveredJob) -> Option<TombstoneReport> {
         (JournalKind::Pty, Some(sid)) => format!("Terminal {sid} (`{}`)", r.command),
         _ => format!("Job #{} (`{}`)", r.id, r.command),
     };
-    let head = format!(
-        "{subject} was started by a previous server process, which stopped before {} (unix \
-         ms); this server holds no handle to it and cannot re-attach.",
-        r.ended_ms.unwrap_or(0)
+    // `ended_ms` is always stamped by the boot that tombstones a row; a row
+    // without one was edited by hand, and the sentence says so rather than
+    // naming a time that never was.
+    let stopped = r.ended_ms.map_or_else(
+        || "at a time the row does not record".to_string(),
+        |t| format!("before {t} (unix ms)"),
     );
-    let output = if job.recorded_output.is_empty() {
-        "no output was recorded".to_string()
+    let head = format!(
+        "{subject} was started by a previous server process, which stopped {stopped}; this \
+         server holds no handle to it and cannot re-attach."
+    );
+    let output_clause = if job.recorded_output.is_empty() {
+        "no output was recorded before the restart".to_string()
     } else {
         format!(
             "last recorded output (as of {}{}): {}",
@@ -574,44 +601,55 @@ pub fn tombstone_report(job: &RecoveredJob) -> Option<TombstoneReport> {
         .process_created_at_ms
         .map_or(String::new(), |t| format!(", started {t}"));
     let pid_s = r.pid.map_or("?".to_string(), |p| p.to_string());
-    Some(match r.tombstone {
-        Some(Tombstone::ExitedDuringRestart) => TombstoneReport {
-            kind: settled_label(r),
-            text: format!(
-                "{head} Its OS process (pid {pid_s}{started}) has EXITED — exit code unknown. \
-                 {output}."
-            ),
-            pid: r.pid,
-            stop_command: None,
-        },
+    let (text, pid, stop_command) = match r.tombstone {
+        Some(Tombstone::ExitedDuringRestart) => (
+            format!("{head} Its OS process (pid {pid_s}{started}) has EXITED — exit code unknown."),
+            r.pid,
+            None,
+        ),
         Some(Tombstone::StillRunningUnattached { pid }) => {
             let cmd = if cfg!(windows) {
                 format!("taskkill /PID {pid} /T /F")
             } else {
                 format!("kill {pid}")
             };
-            TombstoneReport {
-                kind: settled_label(r),
-                text: format!(
+            (
+                format!(
                     "{head} Its OS process is STILL RUNNING (pid {pid}{started}) as of the last \
                      server start; kill was NOT attempted and will not be. To stop it run \
-                     `{cmd}`. {output}."
+                     `{cmd}`."
                 ),
-                pid: Some(pid),
-                stop_command: Some(cmd),
-            }
+                Some(pid),
+                Some(cmd),
+            )
         }
-        None => TombstoneReport {
-            kind: settled_label(r),
-            text: format!(
-                "{head} Aleph did NOT check whether the OS process is still alive — it may \
-                 still be running, finished, or have died with the server. Nothing about the \
-                 command was judged; check yourself (`ps` / `tasklist`) before re-running work \
-                 that may already be done. {output}."
-            ),
-            pid: r.pid,
-            stop_command: None,
-        },
+        None => {
+            let checked = match r.pid {
+                Some(pid) => format!(
+                    "The boot probe could not tell whether its OS process (pid {pid}{started}) \
+                     is still alive"
+                ),
+                None => {
+                    "No pid was recorded for its OS process, so nothing was checked".to_string()
+                }
+            };
+            (
+                format!(
+                    "{head} {checked} — it may still be running, finished, or have died with the \
+                     server. Nothing about the command was judged; check yourself (`ps` / \
+                     `tasklist`) before re-running work that may already be done."
+                ),
+                r.pid,
+                None,
+            )
+        }
+    };
+    Some(TombstoneReport {
+        kind: settled_label(r),
+        text,
+        pid,
+        stop_command,
+        output_clause,
     })
 }
 
@@ -2199,7 +2237,9 @@ mod tests {
 
     /// One report per tombstone arm, `None` for anything that is not
     /// `Interrupted`, and a PTY row is addressed as a terminal. No arm may
-    /// spell "fail": a restart is not a verdict on the command (U5).
+    /// spell "fail": a restart is not a verdict on the command (U5). The
+    /// recorded output lives in `output_clause`, never in `text` — the bash
+    /// face hands those bytes over structurally and must not pay twice.
     #[test]
     fn the_report_has_three_arms_and_none_for_a_live_row() {
         let exited = tombstone_report(&interrupted_job(
@@ -2214,12 +2254,22 @@ mod tests {
         for s in [
             "Job #12",
             "previous server process",
+            "stopped before 9000",
             "has EXITED",
             "exit code unknown",
-            "built 3 crates",
         ] {
             assert!(exited.text.contains(s), "{s}: {}", exited.text);
         }
+        assert!(
+            exited.output_clause.contains("built 3 crates")
+                && exited.output_clause.contains("mid-run snapshot")
+                && !exited.text.contains("built 3 crates"),
+            "the output rides the clause, not the sentence: {exited:?}"
+        );
+        assert_eq!(
+            exited.text_with_output(),
+            format!("{}\n{}", exited.text, exited.output_clause)
+        );
         let running = tombstone_report(&interrupted_job(
             Some(Tombstone::StillRunningUnattached { pid: 4321 }),
             "",
@@ -2238,20 +2288,49 @@ mod tests {
             "STILL RUNNING",
             "pid 4321",
             "cannot re-attach",
-            "no output was recorded",
             cmd.as_str(),
         ] {
             assert!(running.text.contains(s), "{s}: {}", running.text);
         }
-        let unknown = tombstone_report(&interrupted_job(None, "")).unwrap();
-        assert!(
-            unknown.text.contains("did NOT check")
-                && unknown.kind == "interrupted_by_restart_liveness_unknown",
-            "{}",
-            unknown.text
+        assert_eq!(
+            running.output_clause,
+            "no output was recorded before the restart"
         );
-        for r in [&exited, &running, &unknown] {
+        // The unanswered arm says which of its two causes happened: a pid the
+        // probe could not answer for, or no pid to ask about.
+        let probed = tombstone_report(&interrupted_job(None, "")).unwrap();
+        assert!(
+            probed
+                .text
+                .contains("could not tell whether its OS process (pid 4321")
+                && probed.kind == "interrupted_by_restart_liveness_unknown",
+            "{}",
+            probed.text
+        );
+        let mut pidless = interrupted_job(None, "");
+        pidless.record.pid = None;
+        pidless.record.process_created_at_ms = None;
+        let pidless = tombstone_report(&pidless).unwrap();
+        assert!(
+            pidless.text.contains("No pid was recorded")
+                && pidless.text.contains("nothing was checked")
+                && !pidless.text.contains("could not tell")
+                && pidless.pid.is_none(),
+            "{}",
+            pidless.text
+        );
+        let mut unrecorded = interrupted_job(None, "");
+        unrecorded.record.ended_ms = None;
+        assert!(
+            tombstone_report(&unrecorded)
+                .unwrap()
+                .text
+                .contains("stopped at a time the row does not record"),
+            "a missing `ended_ms` is said, not spelled as 0"
+        );
+        for r in [&exited, &running, &probed, &pidless] {
             assert!(!r.text.contains("fail"), "{}", r.text);
+            assert!(!r.output_clause.contains("fail"), "{}", r.output_clause);
         }
         let mut live = interrupted_job(None, "");
         live.record.phase = JobPhase::Running;

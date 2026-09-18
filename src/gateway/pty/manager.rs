@@ -624,11 +624,11 @@ impl PtyManager {
         }
     }
 
-    /// Terminate every live session, returning how many were killed. Two
-    /// callers: the terminal switch being turned off (a gate evaluated only
-    /// at admission leaves the shell that is already open still open), and
-    /// the daemon's graceful shutdown — both exit paths in
-    /// `aleph-server`'s `start` command, beside the bash registry's reaper
+    /// Terminate every live session, returning how many were killed. Called
+    /// wherever the whole set has to end at once: the terminal switch being
+    /// turned off (a gate evaluated only at admission leaves the shell that
+    /// is already open still open), and the daemon's exit paths in
+    /// `aleph-server`'s `start` command — beside the bash registry's reaper
     /// (`bash_exec::kill_all_running_background`), whose twin this is. Each
     /// session is journaled `killed` before its kill, as in [`Self::close`],
     /// which is what keeps a clean stop from leaving every open PTY row

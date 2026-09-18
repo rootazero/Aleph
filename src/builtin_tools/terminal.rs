@@ -319,24 +319,34 @@ impl AlephTool for TerminalTool {
                     lost_with_restart: false,
                 })
             }
-            // The session belonged to a previous server process. Not a
-            // success — nothing was read — but not `no such session` either:
-            // the report says what became of the shell, and the pid / stop
-            // command ride as data so the model need not parse the prose.
             Err(TerminalRefusal::LostWithRestart(report)) => {
-                notify_tool_result(Self::NAME, &report.text, false);
-                Ok(TerminalOutput {
-                    success: false,
-                    message: report.text,
-                    data: Some(serde_json::json!({
-                        "tombstone": report.kind,
-                        "pid": report.pid,
-                        "stop_command": report.stop_command,
-                    })),
-                    lost_with_restart: true,
-                })
+                let out = lost_with_restart_output(report);
+                notify_tool_result(Self::NAME, &out.message, false);
+                Ok(out)
             }
         }
+    }
+}
+
+/// The envelope for a session the previous server process owned. Not a
+/// success — nothing was read — but not `no such session` either: `message`
+/// is the report's sentence plus its output clause (this envelope has no
+/// structured slot for the recorded output, so it rides the prose here —
+/// the bash face, which has one, renders the sentence alone), and the pid /
+/// stop command ride as `data` so the model need not parse the prose.
+/// `lost_with_restart` is the flag a reader keys on.
+fn lost_with_restart_output(
+    report: crate::builtin_tools::process_journal::TombstoneReport,
+) -> TerminalOutput {
+    TerminalOutput {
+        success: false,
+        message: report.text_with_output(),
+        data: Some(serde_json::json!({
+            "tombstone": report.kind,
+            "pid": report.pid,
+            "stop_command": report.stop_command,
+        })),
+        lost_with_restart: true,
     }
 }
 

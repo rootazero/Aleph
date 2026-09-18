@@ -519,17 +519,6 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // is the case where orphans are most likely, not least. Idempotent
         // with the `start_server` call site.
         let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
-        // The bash reaper's twin (see the orderly site in `start/mod.rs` for
-        // why it is the journal, not the shell, that needs it): synchronous
-        // kills, journaled `killed` first, so a wedged stop is not read by
-        // the next boot as a crash that interrupted every open terminal.
-        let terminals = alephcore::gateway::pty::manager().close_all();
-        if terminals > 0 {
-            tracing::warn!(
-                count = terminals,
-                "closed terminal sessions before forced exit"
-            );
-        }
         // Another thing the skipped destructors would have done: `main`'s
         // `InstanceLock` removes its holder sidecar in `Drop`, and `Drop` is
         // exactly what `std::process::exit(0)` never runs. Without this the
@@ -538,13 +527,26 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // that was merely slow. Still holding the lock here — the OS releases
         // it at exit — so no successor can have written a record yet. One
         // `unlink`, the cheapest line in this block, so it goes before the
-        // browser stop by the same ordering-by-cost rule the next comment
-        // spells out.
+        // terminal and browser stops by the same ordering-by-cost rule the
+        // browser comment spells out.
         let records = alephcore::utils::instance_lock::remove_held_holder_records_before_exit();
         if records > 0 {
             tracing::warn!(
                 count = records,
                 "removed instance-lock holder record before forced exit"
+            );
+        }
+        // The bash reaper's twin (see the orderly site in `start/mod.rs` for
+        // why it is the journal, not the shell, that needs it): one journal
+        // write plus one synchronous kill per open terminal, so a wedged stop
+        // is not read by the next boot as a crash that interrupted every open
+        // terminal. After the unlink (cheaper), before the browser stop and
+        // the 2 s sleep (both dearer).
+        let terminals = alephcore::gateway::pty::manager().close_all();
+        if terminals > 0 {
+            tracing::warn!(
+                count = terminals,
+                "closed terminal sessions before forced exit"
             );
         }
         // The wedged path. `std::process::exit(0)` below skips the orderly
