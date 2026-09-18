@@ -3761,6 +3761,19 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if reaped > 0 {
         tracing::info!(count = reaped, "reaped background bash jobs on shutdown");
     }
+    // The bash reaper's twin for terminal sessions. A shell a person opened
+    // through the Panel is a child of this process too, and after the daemon
+    // is gone nothing can re-attach to it — but the reason this line exists
+    // is the journal: the bash reap above records `killed` on every job, and
+    // a clean stop that closed no terminal left every open PTY row `running`
+    // on disk, which the next boot tombstoned as a shell the restart had
+    // *interrupted*, and the terminal faces then told the person who merely
+    // restarted the server that their shell was lost. `close_all` records
+    // `killed` before each kill. Synchronous, no scheduler pass needed.
+    let terminals = alephcore::gateway::pty::manager().close_all();
+    if terminals > 0 {
+        tracing::info!(count = terminals, "closed terminal sessions on shutdown");
+    }
     // Same shape and the same reason as the background-bash reap above: the
     // browsers are OUR child processes, `Child` does not kill on drop, and
     // under `attach --cdp` playwright-cli was never their parent. Reached by

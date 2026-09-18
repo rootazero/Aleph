@@ -519,7 +519,18 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
         // is the case where orphans are most likely, not least. Idempotent
         // with the `start_server` call site.
         let reaped = alephcore::builtin_tools::bash_exec::kill_all_running_background();
-        // Third thing the skipped destructors would have done: `main`'s
+        // The bash reaper's twin (see the orderly site in `start/mod.rs` for
+        // why it is the journal, not the shell, that needs it): synchronous
+        // kills, journaled `killed` first, so a wedged stop is not read by
+        // the next boot as a crash that interrupted every open terminal.
+        let terminals = alephcore::gateway::pty::manager().close_all();
+        if terminals > 0 {
+            tracing::warn!(
+                count = terminals,
+                "closed terminal sessions before forced exit"
+            );
+        }
+        // Another thing the skipped destructors would have done: `main`'s
         // `InstanceLock` removes its holder sidecar in `Drop`, and `Drop` is
         // exactly what `std::process::exit(0)` never runs. Without this the
         // sidecar outlives the exit naming a dead PID and the next `aleph
@@ -686,9 +697,20 @@ mod tests {
     /// under `attach --cdp` playwright-cli was never the browser's parent, so
     /// a missing call leaks a Chromium — and leaks it on precisely the loaded
     /// shutdowns the failsafe exists for.
+    ///
+    /// The PTY reaper (`pty::manager().close_all()`) joined for the journal's
+    /// sake as much as the shell's: the bash reaper records `killed` on every
+    /// job it aborts, and a clean stop that closed no terminal left every open
+    /// PTY row `running` on disk — which the next boot tombstoned as a shell
+    /// the restart *interrupted*, and the terminal faces then rendered that
+    /// verdict to the person who had merely restarted the server.
     #[test]
     fn both_daemon_exit_paths_reap_background_jobs_and_browsers() {
-        for reaper in ["kill_all_running_background", "shutdown_browsers_global"] {
+        for reaper in [
+            "kill_all_running_background",
+            "shutdown_browsers_global",
+            "close_all",
+        ] {
             for (label, raw) in [
                 ("start/helpers.rs", include_str!("helpers.rs")),
                 ("start/mod.rs", include_str!("mod.rs")),
