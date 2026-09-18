@@ -1321,8 +1321,19 @@ async function cmdHolesSettle() {
  * The deferral is an OBSERVATION printed with its number, not a claim: a burst
  * that never filled the queue makes the "deferred" half vacuous, and a vacuous
  * green is what this repo keeps paying for.
+ *
+ * The number is read off the TRACING log (`serverLogText`, the daily file
+ * under `<ALEPH_HOME>/logs/`), because that is where the two lines live —
+ * `projector queue full` is a `tracing::warn!`, `projector drain task
+ * stopped` a `tracing::error!` (`session_projector.rs`). Until 2026-09-18 this
+ * read the file `run.sh` handed it, `$QA_ROOT/server.log`, which is the
+ * process's redirected STDOUT and holds no tracing line at all — so the
+ * "0 deferrals" it printed for two rounds was a count over a file that could
+ * not contain the line, i.e. a number without its predicate (判据 #18), and
+ * the README's "never fills at 40 and 900" was copied from it. The line it
+ * prints now names the file it counted.
  */
-async function cmdHoles(serverLog, phase = "before") {
+async function cmdHoles(phase = "before") {
   const key = readSession();
   const conn = new Conn("driver");
   await conn.open();
@@ -1419,19 +1430,16 @@ async function cmdHoles(serverLog, phase = "before") {
     );
   }
 
-  let full = 0;
-  let stopped = 0;
-  try {
-    const text = fs.readFileSync(serverLog, "utf8");
-    full = (text.match(/projector queue full/g) || []).length;
-    stopped = (text.match(/projector drain task stopped/g) || []).length;
-  } catch {
-    /* no log to read is not a claim either way */
-  }
+  const full = logLines("projector queue full").length;
+  const stopped = logLines("projector drain task stopped").length;
+  // An empty tracing directory is "not measured", not "0 deferrals" — the
+  // count above would read 0 either way, so the line says which it was.
+  const measured = fs.existsSync(LOG_DIR) && serverLogText().length > 0;
   log(
-    `OBSERVATION [${phase}] projector queue-full deferrals: ${full}, drain-restart deferrals: ${stopped}` +
-      (full === 0
-        ? " (the queue never filled — the deferral half of this stage is vacuous at this burst size)"
+    `OBSERVATION [${phase}] projector queue-full deferrals: ${full}, drain-restart deferrals: ${stopped} ` +
+      `(WARN/ERROR lines in the tracing log under ${LOG_DIR}${measured ? "" : " — which is EMPTY, so this is unmeasured"})` +
+      (measured && full === 0
+        ? " — the queue never filled; the deferral half of this stage is vacuous at this burst size"
         : ""),
   );
   conn.close();
@@ -2179,6 +2187,252 @@ async function cmdAttribute(sub = "texts", arg) {
 }
 
 // ---------------------------------------------------------------------------
+// Stage `tombstone` (U5): one background `bash` job outlives two server boots.
+//
+// The oracle for "what the model was TOLD" is, as everywhere in this file, the
+// mock's request log; the oracle for "what the journal recorded" is the row
+// itself — `<ALEPH_HOME>/data/background_processes/job-<id>/state.json`, the
+// `JobRecord` shape `process_journal.rs` writes (`phase`, `kind`, `pid`,
+// `process_created_at_ms`, and the boot probe's `tombstone` tagged by `kind`).
+// Nothing here asks the server whether the orphan is alive: the fixture asks
+// the OS (`process.kill(pid, 0)`), so "the server never killed it" is a fact
+// about a process, not a field.
+// ---------------------------------------------------------------------------
+
+const JOBS_DIR = path.join(ALEPH_HOME, "data", "background_processes");
+// The one job this stage spawns, as `{ id, pid }` — written by `bg`, read by
+// every later phase and by `run.sh`'s `cleanup` (which kills the pid so a
+// failed run leaves no `sleep 300` behind). `kill-sleep` adds
+// `killed_by_fixture: true` so the cleanup does not signal a pid the fixture
+// already ended — and that a later process may have been given.
+const JOB_FILE = path.join(QA_ROOT, "job.json");
+const readJob = (id) => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(JOBS_DIR, `job-${id}`, "state.json"), "utf8"));
+  } catch {
+    // Mid-rename on Windows, or not written yet: not a row, not a claim.
+    return null;
+  }
+};
+/** Does a process with this pid exist? `EPERM` is "exists, not ours" — alive. */
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+};
+const job = () => JSON.parse(fs.readFileSync(JOB_FILE, "utf8"));
+
+/**
+ * Peel every JSON-string layer off a value. A bash tool result reaches the
+ * request log as a STRING OF A STRING: the `CodeExecOutput` envelope is
+ * serialised, that text is the `tool_result` block's `content` (itself a JSON
+ * string literal in the body), and the mock then `JSON.stringify`s the body
+ * once more onto the line. Measured 2026-09-18 on a kept `holes` root:
+ * `"content":"\"{\\\"duration_ms\\\":3330,…\\\"stdout\\\":\\\"…\\\"}\""`. A
+ * regex over the line would have to spell the escaping depth of each layer
+ * (the brief's `\"process_id\":N` was one layer too shallow for the envelope
+ * and three too shallow for the payload inside `stdout`); parsing the layers
+ * off instead makes the assertions read the keys `recovered_row` wrote.
+ */
+const peel = (v) => {
+  for (let i = 0; i < 4 && typeof v === "string"; i += 1) {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      break;
+    }
+  }
+  return v;
+};
+/** The text of a `tool_result` block, whatever shape its `content` took. */
+const toolResultText = (block) => {
+  const c = block?.content;
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) return c.map((b) => (typeof b === "string" ? b : (b?.text ?? ""))).join("");
+  return c === undefined || c === null ? "" : JSON.stringify(c);
+};
+/**
+ * The bash `process_action` payload the model was handed for process `id`,
+ * in a tool result the mock logged AFTER request `mark` — `{ payload,
+ * envelope, raw }`, or `null`. Anchored on the mock's own tool_use ids
+ * (`toolu_<turn>_<i>`, `mock_r2.mjs`): every request re-sends the whole
+ * conversation, so the newest request also carries the PREVIOUS boot's poll
+ * of the same id, and "the latest tool result for #N" would answer with a
+ * stale row — the second boot's `still_running_unattached` read as the third
+ * boot's answer. A tool_use minted after the mark has a turn number above
+ * it; nothing older qualifies.
+ */
+const toolResultFor = (id, mark) => {
+  for (const r of requests().filter((q) => Number(q.turn) > mark).reverse()) {
+    for (const m of [...(r.body?.messages ?? [])].reverse()) {
+      if (m.role !== "user" || !Array.isArray(m.content)) continue;
+      for (const block of [...m.content].reverse()) {
+        if (block?.type !== "tool_result") continue;
+        const t = /^toolu_(\d+)_\d+$/.exec(String(block.tool_use_id ?? ""));
+        if (!t || Number(t[1]) <= mark) continue;
+        const raw = toolResultText(block);
+        const envelope = peel(raw);
+        const payload = envelope && typeof envelope === "object" ? peel(envelope.stdout) : null;
+        if (payload && typeof payload === "object" && payload.process_id === id) {
+          return { payload, envelope, raw };
+        }
+      }
+    }
+  }
+  return null;
+};
+/** Send a marker turn and return once the model's tool result for `id` is logged (or `null` after `budget`). */
+const askAbout = async (marker, id, budget = 120_000) => {
+  const key = readSession();
+  const mark = requests().length;
+  const finishedBefore = countKind(key, "run_finished");
+  const conn = new Conn("driver");
+  await conn.open();
+  await sendTurn(conn, marker, key);
+  const hit = await until(() => toolResultFor(id, mark), budget, 300);
+  // The turn has to END before the next command sends into this session, or
+  // that message queues behind it and every later budget is spent waiting.
+  const ended = await until(() => countKind(key, "run_finished") > finishedBefore, 60_000, 300);
+  conn.close();
+  return { hit, ended: Boolean(ended) };
+};
+// What the still-running arm hands the owner to run — `tombstone_report`'s
+// `cmd`: `taskkill /PID <pid> /T /F` on Windows, `kill <pid>` elsewhere.
+const STOP_COMMAND = /^(taskkill \/PID \d+ \/T \/F|kill \d+)$/;
+
+/**
+ * Boot 1: make the job. Every DISTINCT row the journal writes for it is
+ * collected at a 5 ms poll, so the order of the row's writes is observed,
+ * not inferred: the intent row (`running`, no pid) lands first, the pid
+ * arrives on a later write. Then the pre-flight `patch_r2.mjs` point 7
+ * describes: if the job has settled 2 s later, the shell cannot sleep on
+ * this host and the stage is exit 78 — instrument unavailable, never green.
+ */
+async function cmdBg() {
+  const prior = fs.existsSync(SESSION_FILE) ? readSession() : null;
+  const finishedBefore = prior ? countKind(prior, "run_finished") : 0;
+  const conn = new Conn("driver");
+  await conn.open();
+  const started = await sendTurn(conn, "qa-bg start the long job", prior);
+  fs.writeFileSync(SESSION_FILE, started.session_key);
+  const seen = [];
+  let id = null;
+  const end = Date.now() + 120_000;
+  while (Date.now() < end) {
+    const dirs = fs.existsSync(JOBS_DIR) ? fs.readdirSync(JOBS_DIR).filter((d) => d.startsWith("job-")) : [];
+    for (const d of dirs) {
+      const row = readJob(d.slice(4));
+      if (row && JSON.stringify(row) !== JSON.stringify(seen.at(-1))) {
+        seen.push(row);
+        id = row.id;
+      }
+    }
+    if (seen.at(-1)?.pid) break;
+    await sleep(5);
+  }
+  const first = seen[0];
+  const last = seen.at(-1);
+  check(first?.phase === "running" && first?.kind === "bash", "the intent row lands first, as a running bash row", show(first));
+  check(Boolean(first) && first.pid === undefined, "the FIRST row seen carries no pid (intent precedes the child)", show(seen));
+  check(typeof last?.pid === "number", "the pid arrives on the row", show(last));
+  check(typeof last?.process_created_at_ms === "number", "the creation time arrives beside it", show(last));
+  // The spawning turn must END before the shell kills the server: an open
+  // run at the kill would be a dangle for the next boot's scan to resume,
+  // and this stage is about the orphan, not about that.
+  const ended = await until(() => countKind(started.session_key, "run_finished") > finishedBefore, 60_000, 300);
+  conn.close();
+  check(Boolean(ended), "the spawning turn ended (the job is not what keeps the run open)", kinds(started.session_key).join(","));
+  await sleep(2_000);
+  const later = id === null ? null : readJob(id);
+  if (later?.phase !== "running") {
+    console.error(
+      `INSTRUMENT UNAVAILABLE: the job settled within 2 s (${show(later)}) — the shell cannot sleep here; ` +
+        "see patch_r2.mjs point 7 (and point 3 for the measurement it re-checks)",
+    );
+    process.exit(78);
+  }
+  check(typeof last?.pid === "number" && alive(last.pid), `the recorded pid ${last?.pid} is a live process`);
+  fs.writeFileSync(JOB_FILE, JSON.stringify({ id, pid: last?.pid ?? null }));
+}
+
+/** After a kill of the server: is the orphan (still) there? Asked of the OS. */
+function cmdBgAlive(expect) {
+  const { pid } = job();
+  check(alive(pid) === (expect === "yes"), `orphan ${pid} alive == ${expect}`);
+}
+
+/**
+ * After a boot: the row carries the tombstone the probe wrote, and a poll
+ * through the bash tool hands the model that arm — `still` (boot 2: the pid
+ * is alive, the sentence names it and the stop command) or `exited` (boot 3:
+ * the fixture killed it between boots, and the reconcile RE-ASKS a
+ * still-running row on every boot, so the answer changes without anything
+ * in the journal being deleted).
+ */
+async function cmdTomb(arm, tag) {
+  const { id, pid } = job();
+  const kind = arm === "still" ? "still_running_unattached" : "exited_during_restart";
+  const row = readJob(id);
+  check(
+    row?.phase === "interrupted" && row?.tombstone?.kind === kind && (arm !== "still" || row.tombstone.pid === pid),
+    `state.json carries the ${kind} tombstone`,
+    show(row),
+  );
+  const { hit, ended } = await askAbout(`qa-poll:${id}-${tag} what happened to it`, id);
+  const p = hit?.payload;
+  check(Boolean(hit), "the poll's tool result reached the model", "no request after the mark carried a tool result for this id");
+  check(p?.lost_with_restart === true, "lost_with_restart: true", show(p));
+  check(p?.status === kind, `status == ${kind}`, show(p));
+  check(p?.pid === pid, `the payload names pid ${pid}`, show(p));
+  if (arm === "still") {
+    check(
+      typeof p?.advisory === "string" &&
+        p.advisory.includes(`pid ${pid}`) &&
+        STOP_COMMAND.test(String(p.stop_command)) &&
+        p.advisory.includes(p.stop_command),
+      "the text names the pid and the stop command, and `stop_command` is that command",
+      show(p),
+    );
+  } else {
+    check(typeof p?.advisory === "string" && /has EXITED/.test(p.advisory), "the text says the process exited", show(p));
+    check(p !== null && p !== undefined && !("stop_command" in p), "…and offers no stop command for a dead process", show(p));
+  }
+  check(ended, "the poll turn ended", "run_finished never grew");
+}
+
+/** Boot 2: `kill` through the bash tool answers with the command, not a pretend kill (U5). */
+async function cmdKillTomb() {
+  const { id, pid } = job();
+  const { hit, ended } = await askAbout(`qa-kill:${id}-k stop it`, id);
+  const p = hit?.payload;
+  check(Boolean(hit), "the kill's tool result reached the model", "no request after the mark carried a tool result for this id");
+  check(
+    typeof p?.skipped === "string" && p.skipped.includes("kill was NOT attempted") && STOP_COMMAND.test(String(p.stop_command)) && p.skipped.includes(p.stop_command),
+    "kill answers with the command, not a pretend kill",
+    show(p),
+  );
+  check(p?.lost_with_restart === true && p?.status === "still_running_unattached", "…on the still-running row", show(p));
+  check(alive(pid), `U5: the orphan ${pid} was NOT killed by the server`);
+  check(ended, "the kill turn ended", "run_finished never grew");
+}
+
+/** Between boots 2 and 3: the FIXTURE ends the orphan — the only thing here that ever signals it. */
+async function cmdKillSleep() {
+  const { id, pid } = job();
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (e) {
+    console.log("kill:", e.message);
+  }
+  const gone = await until(() => (alive(pid) ? null : true), 20_000, 200);
+  check(gone === true, `the fixture killed ${pid}`);
+  if (gone === true) fs.writeFileSync(JOB_FILE, JSON.stringify({ id, pid, killed_by_fixture: true }));
+}
+
+// ---------------------------------------------------------------------------
 
 const main = async () => {
   switch (CMD) {
@@ -2216,7 +2470,7 @@ const main = async () => {
       await cmdHolesSettle();
       break;
     case "holes":
-      await cmdHoles(REST[0], REST[1] ?? "before");
+      await cmdHoles(REST[0] ?? "before");
       break;
     case "cost":
       await cmdCost();
@@ -2253,6 +2507,21 @@ const main = async () => {
       break;
     case "attribute":
       await cmdAttribute(REST[0] ?? "texts", REST[1]);
+      break;
+    case "bg":
+      await cmdBg();
+      break;
+    case "bg-alive":
+      cmdBgAlive(REST[0] ?? "yes");
+      break;
+    case "tomb":
+      await cmdTomb(REST[0] ?? "still", REST[1] ?? "a");
+      break;
+    case "kill-tomb":
+      await cmdKillTomb();
+      break;
+    case "kill-sleep":
+      await cmdKillSleep();
       break;
     default:
       console.error(`unknown command: ${CMD}`);

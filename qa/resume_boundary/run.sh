@@ -13,6 +13,7 @@
 #   ./qa/resume_boundary/run.sh parallel     # the boot scan fans out max_concurrent at a time
 #   ./qa/resume_boundary/run.sh undecodable  # an unreadable row refuses ITS session; ignorable is skipped
 #   ./qa/resume_boundary/run.sh attribute    # an EARLIER run's dangle is not blamed on this restart
+#   ./qa/resume_boundary/run.sh tombstone    # a background job outlives two boots: still-running, then exited
 #   KEEP=1 SKIP_BUILD=1 ./qa/resume_boundary/run.sh <stage>
 #
 # Why a real machine. `resume_coordinator.rs`'s unit tests and
@@ -58,8 +59,8 @@ GATEWAY_PORT="${GATEWAY_PORT:-18831}"
 MOCK_PORT="${MOCK_PORT:-18832}"
 
 case "$STAGE" in
-  claims|denied|rewind|knobs|holes|parked|unanswered|ratchet|parallel|undecodable|attribute) ;;
-  *) echo "unknown stage: $STAGE (claims|denied|rewind|knobs|holes|parked|unanswered|ratchet|parallel|undecodable|attribute)" >&2; exit 64 ;;
+  claims|denied|rewind|knobs|holes|parked|unanswered|ratchet|parallel|undecodable|attribute|tombstone) ;;
+  *) echo "unknown stage: $STAGE (claims|denied|rewind|knobs|holes|parked|unanswered|ratchet|parallel|undecodable|attribute|tombstone)" >&2; exit 64 ;;
 esac
 
 # Build BEFORE HOME is redirected: cargo's registry/git-cache/toolchain all
@@ -133,11 +134,28 @@ uninstall_hook() {
   node "$HERE/drive_r2.mjs" "$GATEWAY_PORT" "$QA_ROOT_M" hooks off >/dev/null 2>&1 || true
 }
 
+# The `tombstone` stage's orphan (`sleep 300` in the agent's shell) is NOT a
+# sleeper hook — `kill_sleepers` cannot see it — and the server never kills it
+# (U5). `drive bg` writes its pid to `job.json`; the green path ends it with
+# `drive kill-sleep`, which marks the file `killed_by_fixture`, and a run that
+# stopped before that point ends it here. Before `rm -rf "$QA_ROOT"`, since
+# the orphan's cwd is inside the root. Skipped once the fixture has killed it:
+# a pid the fixture already ended may belong to somebody else by now.
+kill_orphan_job() {
+  local f="${QA_ROOT_M:-$QA_ROOT}/job.json"
+  [ -f "$f" ] || return 0
+  node -e '
+    const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    if (!j.killed_by_fixture && j.pid) { try { process.kill(j.pid, "SIGKILL"); } catch {} }
+  ' "$f" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
   [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
   uninstall_hook
   kill_sleepers
+  kill_orphan_job
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
 trap cleanup EXIT
@@ -234,6 +252,9 @@ drive() {
 # `drive_r2.mjs::cmdForgeDenial`.
 BASH_POLICY="ask"
 [ "$STAGE" = "holes" ] && BASH_POLICY="allow"
+# `tombstone` wants the opposite of a dangle: a job that RUNS and outlives
+# the server. Its arm re-patches with the Windows sandbox primitives off.
+[ "$STAGE" = "tombstone" ] && BASH_POLICY="allow"
 BURST="${QA_BURST:-40}"
 
 say "patch config (node)"
@@ -267,6 +288,7 @@ case "$STAGE" in
   parallel)    FLOOR=30 ;;  # measured 2026-09-18 fix round 1: phase 1 cap 2/3 sessions (1 slots + 4 assert-dangling + 11: the fan-out, `max observed 2`) + phase 2 cap 1/2 sessions (1 + 3 + 10: the config wire, `max observed 1`, scanned=5 skipped=3)
   undecodable) FLOOR=30 ;;  # measured 2026-09-18 (3 assert-dangling, 2 forge, 13 refused, 2 mark-ignorable, 10 skipped)
   attribute)   FLOOR=27 ;;  # measured 2026-09-18 (5+5 in-flight, 1 assert-dangling, 16 texts)
+  tombstone)   FLOOR=28 ;;  # measured 2026-09-18 (6 bg, 1 bg-alive, 7 tomb still, 5 kill-tomb, 1 kill-sleep, 8 tomb exited)
   *)      FLOOR=0 ;;
 esac
 case "$STAGE" in
@@ -388,10 +410,14 @@ case "$STAGE" in
     # whose resume adds a turn's worth of usage — the "billed once"
     # comparison would then be red for a reason that is not the projector's.
     [ "$RC" = "0" ] && { drive holes-settle || RC=1; }
-    [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" before || RC=1; }
+    # The deferral count is read off the TRACING log under `$ALEPH_HOME/logs`
+    # (the driver knows that path) — NOT `$QA_ROOT/server.log`, which is the
+    # process's stdout and never held the `projector queue full` line: passing
+    # it here made the count 0 by construction for two rounds (2026-09-18).
+    [ "$RC" = "0" ] && { drive holes before || RC=1; }
     hard_kill_server
     [ "$RC" = "0" ] && { start_server || exit 1; }
-    [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" after || RC=1; }
+    [ "$RC" = "0" ] && { drive holes after || RC=1; }
     ;;
   unanswered)
     # §5.2: a crash between the seed (`UserMessage`) and `RunStarted` leaves
@@ -611,6 +637,40 @@ case "$STAGE" in
     [ "$RC" = "0" ] && { drive boot-mark || RC=1; }
     [ "$RC" = "0" ] && { start_server || exit 1; }
     [ "$RC" = "0" ] && { drive attribute texts || RC=1; }
+    ;;
+  tombstone)
+    # U5 / §9: a background `bash` job (`sleep 300`, `qa-bg`) is a real OS
+    # process. Boot 1 spawns it and the server is killed with `kill -9` —
+    # TerminateProcess, no reaper, the child survives. Boot 2's reconcile
+    # finds the `running` row, asks the OS about its pid (+ creation time,
+    # against pid reuse) and writes `still_running_unattached`; a poll hands
+    # the model that word, the pid and the stop command, and a `kill` runs
+    # NOTHING (the fixture asks the OS whether the orphan is alive — it is).
+    # The FIXTURE then kills the orphan, the server is killed again, and boot
+    # 3 RE-ASKS the still-running row (the reconcile does that on every boot)
+    # and turns it into `exited_during_restart` without deleting anything.
+    #
+    # `allow`: the job must actually run. Windows sandbox primitives off
+    # (`QA_WINDOWS_SANDBOX_OFF`, patch_r2.mjs point 7): with them on,
+    # `child.id()` is the `sandbox-init-windows` launcher and the server's
+    # death closes a KILL_ON_JOB_CLOSE job, so the "still running" arm is
+    # unreachable. `drive bg` re-measures whether the shell can sleep at all
+    # on this host; if the job settles within 2 s the stage is exit 78 —
+    # instrument unavailable, recorded as UNRUN, never as a pass.
+    QA_WINDOWS_SANDBOX_OFF=1 node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true allow >/dev/null || exit 1
+    start_server || exit 1
+    drive bg; rc=$?
+    [ "$rc" = "78" ] && exit 78
+    [ "$rc" = "0" ] || RC=1
+    hard_kill_server
+    [ "$RC" = "0" ] && { drive bg-alive yes || RC=1; }
+    [ "$RC" = "0" ] && { start_server || exit 1; }
+    [ "$RC" = "0" ] && { drive tomb still a || RC=1; }
+    [ "$RC" = "0" ] && { drive kill-tomb || RC=1; }
+    [ "$RC" = "0" ] && { drive kill-sleep || RC=1; }
+    hard_kill_server
+    [ "$RC" = "0" ] && { start_server || exit 1; }
+    [ "$RC" = "0" ] && { drive tomb exited b || RC=1; }
     ;;
 esac
 

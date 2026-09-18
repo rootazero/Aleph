@@ -26,6 +26,14 @@
 //                 as long as the child's request sits here.
 //   qa-child-slow (in the user side of a tool-surfaced request) -> the
 //                 child's turn: held $QA_CHILD_HOLD_MS (120 s), then end_turn
+//   qa-bg      -> tool_use bash{cmd:"sleep 300", background:true} — the
+//                 `tombstone` stage's orphan: a real OS process that outlives
+//                 the `kill -9` of the server that spawned it. `sleep` is one
+//                 spelling on both hosts (the bash tool's Windows shell is the
+//                 probed PowerShell, where `sleep` aliases `Start-Sleep`).
+//   qa-poll:<N>-<tag> -> bash{process_action:"poll", process_id:N}; the tag
+//                 makes each turn's marker unique, so every poll is answered
+//                 exactly once. `qa-kill:<N>-<tag>` is the same for `kill`.
 //   the repair text ("OUTCOME UNKNOWN" / "NOT EXECUTED") -> end_turn, so the
 //                 resumed run FINISHES and the session's own `last_run` face
 //                 can be observed settling to `clean`. When a marker's tag
@@ -82,7 +90,7 @@ const textOf = (content) => {
     .join(" ");
 };
 
-const MARKER = /qa-(dangle|burst|spawn)(?::([\w-]+))?/g;
+const MARKER = /qa-(dangle|burst|spawn|bg|poll|kill)(?::([\w-]+))?/g;
 
 // `async` because two arms wait: the `slow`-tagged end and the child hold.
 // One handler per request, so a held turn never blocks another session's.
@@ -129,9 +137,21 @@ const decide = async (body) => {
 
   const pending = hits.filter((h) => !answered.has(h[0]));
   if (pending.length === 0) return end("QA: nothing to do.");
-  const [whole, verb] = pending[pending.length - 1];
+  const [whole, verb, arg] = pending[pending.length - 1];
   answered.add(whole);
 
+  // `qa-poll:12-a` → process 12; the suffix after the id is only there to
+  // keep the marker unique per turn.
+  const pid = Number.parseInt(String(arg ?? ""), 10);
+  if (verb === "bg") {
+    return { kind: "tools", calls: [{ name: "bash", input: { cmd: "sleep 300", background: true } }] };
+  }
+  if (verb === "poll") {
+    return { kind: "tools", calls: [{ name: "bash", input: { process_action: "poll", process_id: pid } }] };
+  }
+  if (verb === "kill") {
+    return { kind: "tools", calls: [{ name: "bash", input: { process_action: "kill", process_id: pid } }] };
+  }
   if (verb === "spawn") {
     return {
       kind: "tools",

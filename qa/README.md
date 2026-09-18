@@ -218,15 +218,27 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # FINISH before the kill — `dangle` returns on the first
                                        # durable dispatch, and killing there would leave dangling
                                        # calls whose resume adds a turn's usage. Two measured
-                                       # bounds the stage prints rather than hides: the 4096
-                                       # projector queue never fills (0 deferrals at both 40 and
-                                       # 900 calls), and above the store's compaction bound the
-                                       # projection is trimmed ON PURPOSE — at `QA_BURST=900`,
-                                       # 1803 projectable events, history total 69,
-                                       # `compaction_count 34`. So the comparison is guarded by
-                                       # an explicit `compaction_count == 0` precondition:
-                                       # raising the burst turns THAT red, not the row count,
-                                       # which would otherwise read like data loss.
+                                       # bounds the stage prints rather than hides. (1) The
+                                       # projector's deferrals: `projector queue full` /
+                                       # `projector drain task stopped` WARN/ERROR lines in the
+                                       # TRACING log (`$ALEPH_HOME/logs/aleph-server.log.<date>`)
+                                       # — 0 of each at the default `QA_BURST=40` (83 projectable
+                                       # events; re-measured 2026-09-18 on the T22 tree, the
+                                       # `holes` phase printing the file it counted). Until then
+                                       # the driver counted those lines in `$QA_ROOT/server.log`,
+                                       # the process's STDOUT, which never holds a tracing line —
+                                       # so the "0 at 40 and 900" this paragraph used to claim was
+                                       # a count over a file that could not contain the line, and
+                                       # 900 has NOT been re-measured (a 40-call burst takes
+                                       # ~205 s here; at 900 the stage is red on the compaction
+                                       # precondition anyway). (2) Above the store's compaction
+                                       # bound the projection is trimmed ON PURPOSE — at
+                                       # `QA_BURST=900` (2026-09-03), 1803 projectable events,
+                                       # history total 69, `compaction_count 34`. So the
+                                       # comparison is guarded by an explicit
+                                       # `compaction_count == 0` precondition: raising the burst
+                                       # turns THAT red, not the row count, which would otherwise
+                                       # read like data loss.
 ./qa/resume_boundary/run.sh unanswered # a crash between the seed (`UserMessage`) and
                                        # `RunStarted` leaves a session with NO marker, and the
                                        # boot must still resume that message (§5.2): the wire
@@ -308,6 +320,33 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # whose child turn the mock holds 120 s, and `in-flight`
                                        # after each kill pins that the dangle is genuinely in
                                        # flight (names `subagent`, no `tool_call_parked` row).
+./qa/resume_boundary/run.sh tombstone  # U5: a background `bash` job (`sleep 300`) is a real OS
+                                       # process that outlives the server, and the model is told
+                                       # what became of it — never handed a pretend kill. Boot 1
+                                       # spawns it; the journal's INTENT row (`running`, no pid)
+                                       # is on disk before the child exists and the pid + OS
+                                       # creation time arrive on a later write (every distinct
+                                       # `state.json` is collected at 5 ms). `kill -9` of the
+                                       # server (TerminateProcess: no reaper) leaves the orphan
+                                       # alive — asked of the OS, not of the server. Boot 2's
+                                       # reconcile probes the pid and writes the
+                                       # `still_running_unattached` tombstone; the bash `poll`
+                                       # hands the model `lost_with_restart: true`, that status,
+                                       # the pid and the `stop_command` (`taskkill /PID N /T /F`
+                                       # here), and `kill` answers "kill was NOT attempted … run
+                                       # `<stop_command>`" while the orphan stays alive. The
+                                       # FIXTURE then kills it, the server is killed again, and
+                                       # boot 3 RE-ASKS the still-running row: `exited_during_
+                                       # restart`, "has EXITED", no stop command, nothing deleted
+                                       # (`ended_ms` is not re-stamped). Every tool result is read
+                                       # by peeling the JSON layers off the request log (the
+                                       # envelope is a string of a string there), not by a regex
+                                       # over the line, and anchored on the mock's tool_use ids
+                                       # so the previous boot's answer cannot stand in for this
+                                       # one's. Windows sandbox primitives are switched off for
+                                       # this stage only (`QA_WINDOWS_SANDBOX_OFF=1`, see
+                                       # `patch_r2.mjs` point 7); a job that settles within 2 s
+                                       # is exit 78 — instrument unavailable, UNRUN, never green.
 #
 # Two things hold the stages themselves honest, because a QA fixture is also
 # code that can stop working without saying so:

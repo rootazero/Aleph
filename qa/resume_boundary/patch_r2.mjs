@@ -48,6 +48,19 @@
 //     max_concurrent` for the `parallel` stage. Env rather than a 7th
 //     positional: argv[7] is `embed-stall`, and a stage that wants both would
 //     otherwise have to spell the one it does not want.
+//  7. **`QA_WINDOWS_SANDBOX_OFF=1`** (env) turns the three `[sandbox.windows]`
+//     primitives off (`use_restricted_token` / `use_app_container` /
+//     `use_job_object`) for the `tombstone` stage, and only that stage. Point
+//     3's measurement (every `bash` call dies in ~240 ms under the restricted
+//     token) predates the PowerShell-shell round, and that stage needs the
+//     opposite of what every other stage needs: a command that RUNS and
+//     OUTLIVES the server. With the primitives on, (a) `child.id()` — the pid
+//     the journal records — is the `sandbox-init-windows` launcher, not the
+//     shell, and (b) the job object is `KILL_ON_JOB_CLOSE`, so the server's
+//     death takes the child with it and the "still running" arm is
+//     unreachable by construction. The stage re-measures point 3 as a
+//     pre-flight (`drive bg`: a job that settles within 2 s is exit 78,
+//     never green). The sandbox itself stays `enabled = true`.
 //
 // usage: patch_r2.mjs <config.toml> <gateway-port> <mock-port> <resume:true|false> [bash-policy] [embed-stall]
 import fs from "node:fs";
@@ -158,6 +171,12 @@ if (process.env.QA_MAX_ATTEMPTS) {
 if (process.env.QA_MAX_CONCURRENT) {
   src = setKey(src, "resume", "max_concurrent", process.env.QA_MAX_CONCURRENT);
 }
+const windowsSandboxOff = process.env.QA_WINDOWS_SANDBOX_OFF === "1";
+if (windowsSandboxOff) {
+  for (const k of ["use_restricted_token", "use_app_container", "use_job_object"]) {
+    src = setKey(src, "sandbox.windows", k, "false");
+  }
+}
 if (embedStall) {
   src = setKey(src, "memory", "enabled", "true");
   src = setKey(src, "memory.embedding", "active_provider_id", '"qa-embed"');
@@ -233,5 +252,6 @@ console.log(
   `patched ${path}: gateway ${gatewayPort}, mock ${mockPort}, resume=${resumeEnabled}, bash=${bashPolicy}` +
     (embedStall ? ", memory=on (qa-embed via the mock)" : "") +
     (process.env.QA_MAX_ATTEMPTS ? `, max_attempts=${process.env.QA_MAX_ATTEMPTS}` : "") +
-    (process.env.QA_MAX_CONCURRENT ? `, max_concurrent=${process.env.QA_MAX_CONCURRENT}` : ""),
+    (process.env.QA_MAX_CONCURRENT ? `, max_concurrent=${process.env.QA_MAX_CONCURRENT}` : "") +
+    (windowsSandboxOff ? ", sandbox.windows primitives=off" : ""),
 );
