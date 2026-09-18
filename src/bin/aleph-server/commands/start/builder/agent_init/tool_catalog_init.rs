@@ -95,11 +95,19 @@ pub(super) async fn init_tool_catalog(
         use alephcore::tools::probes::browser::BrowserRuntimeProbe;
         use alephcore::tools::probes::generation::GenerationProbe;
 
-        // Browser: one shared probe (reuses `find_chromium`, with an `npx`
-        // fallback for the Playwright-managed backend) gates the whole
-        // `browser_*` family. Without any browser runtime the LLM no
-        // longer sees ~24 unusable browser tools.
-        let browser_probe = Arc::new(BrowserRuntimeProbe::new());
+        // Browser: one shared probe gates the whole `browser_*` family — it
+        // asks one prerequisite question per `BrowserDriver` (managed
+        // playwright-cli / Chromium+npx / an obscura-or-Chromium engine for
+        // the cdp driver, which is the auto-injected default). Without any
+        // browser runtime the LLM no longer sees ~24 unusable browser tools.
+        //
+        // The obscura runtime config is handed over rather than re-read,
+        // because the cdp question includes an operator's
+        // `[general.browser.obscura] binary_path` pin and a gate blind to the
+        // pin withholds 26 tools on a correctly-provisioned machine.
+        let browser_probe = Arc::new(BrowserRuntimeProbe::new(
+            app_config.general.browser.obscura.clone(),
+        ));
         for def in BUILTIN_TOOL_DEFINITIONS {
             if def.name.starts_with("browser_") {
                 tool_catalog.register_health_probe(def.name, browser_probe.clone());

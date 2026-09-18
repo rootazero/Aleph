@@ -1,10 +1,12 @@
 //! `browser/runtime` — the browser subsystem's external prerequisites.
 //!
-//! Aleph drives two browser backends and each has a distinct host dependency:
-//! the **existing-session** driver attaches to the user's real Chrome via
-//! `chrome-devtools-mcp` (needs a system Chromium *and* `npx`/Node), while the
-//! **managed** driver runs the ledger-provisioned `playwright-cli` (which
-//! brings its own Chromium, and only benefits from a headed display on Linux).
+//! Aleph drives three browser drivers. This check owns the host dependencies
+//! of two of them: the **existing-session** driver attaches to the user's real
+//! Chrome via `chrome-devtools-mcp` (needs a system Chromium *and* `npx`/Node),
+//! while the **managed** driver runs the ledger-provisioned `playwright-cli`
+//! (which brings its own Chromium, and only benefits from a headed display on
+//! Linux).
+//!
 //! When any of these is absent the failure surfaces either deep inside a tool
 //! call ("Chromium binary not found", "Failed to attach to browser") or as a
 //! `browser_*` family that is not offered at all — both with no up-front
@@ -24,12 +26,30 @@
 //! answers "is the managed driver provisioned?" with its own private lookup is
 //! how the family spent four rounds gated on `npx`, a binary the managed driver
 //! never runs.
+//!
+//! The third — the **cdp** driver, which `71d973920` made the auto-injected
+//! `default` profile's — is deliberately NOT probed here. Its prerequisite is
+//! per ENGINE, and `browser/obscura-missing` / `browser/chromium-missing`
+//! (`diagnostics::checks::engine_missing`) already answer it, per engine, with
+//! the install command in the fix hint. A second probe for the same fact here
+//! would be two authors for one question (判据 §1), and the one that matters
+//! is the one the operator can act on.
+//!
+//! What this file DOES owe the cdp driver is the sentence below about the tool
+//! gate. It used to tell an operator that "with neither driver runnable the
+//! `browser_*` tools are withheld" — a claim about `tools::probes::browser`
+//! written from memory, which stopped being true when that gate grew a third
+//! question. It now quotes the gate's own [`GATE_REQUIREMENTS`] and only makes
+//! the claim when the gate actually makes it (判据 §16 — the twin gets the fix
+//! carried over, not a private re-wording).
 
 use async_trait::async_trait;
 
 use crate::browser::{find_chromium, BrowserError};
 use crate::diagnostics::check::{settle_probe, unknown_finding, HealthCheck, Posture};
 use crate::diagnostics::finding::Finding;
+use crate::tool_metadata::{ProbeResult, ToolHealthProbe};
+use crate::tools::probes::browser::{BrowserRuntimeProbe, GATE_REQUIREMENTS};
 
 const ID: &str = "browser/runtime";
 
@@ -242,6 +262,43 @@ impl BrowserRuntimeCheck {
     /// none set Playwright silently falls back to headless. Returns `true` when
     /// a display server is reachable. Non-Linux platforms always have a native
     /// window server, so this is `true` there.
+    /// Ask the tool gate whether the `browser_*` family is offered right now.
+    ///
+    /// The gate is constructed with the live obscura config for the same
+    /// reason the boot site passes it: a pinned `[general.browser.obscura]
+    /// binary_path` is part of the cdp driver's prerequisite, and a doctor
+    /// blind to the pin would explain a withholding that is not happening.
+    /// A config that cannot be read leaves the pin unknown — the gate then
+    /// answers on PATH and ledger alone, which is the same fail-closed
+    /// direction `run_obscura` takes, and the worst case is the sentence
+    /// appearing when the family is in fact offered.
+    async fn gate_verdict() -> ProbeResult {
+        let obscura = crate::config::Config::load()
+            .map(|c| c.general.browser.obscura)
+            .unwrap_or_default();
+        BrowserRuntimeProbe::new(obscura).probe().await
+    }
+
+    /// What to tell the operator about the tool gate — nothing at all unless
+    /// the gate is really closed.
+    ///
+    /// Takes the verdict rather than fetching it, so BOTH arms are reachable
+    /// from a test on any host. Folded together with the probe, the only arm a
+    /// test could drive was the one this machine happens to be in, and a guard
+    /// that can only be exercised in one direction is the shape that lets the
+    /// other direction ship (判据 §2).
+    fn withholding_sentence(gate: &ProbeResult) -> String {
+        match gate {
+            ProbeResult::Healthy => String::new(),
+            ProbeResult::Unhealthy { .. } => format!(
+                " The `browser_*` tools are currently withheld from the model \
+                 entirely (`tools::probes::browser`): {GATE_REQUIREMENTS}. The \
+                 managed driver's bootstrap will therefore not be triggered by a \
+                 tool call."
+            ),
+        }
+    }
+
     fn has_display() -> bool {
         if cfg!(target_os = "linux") {
             std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty())
@@ -269,6 +326,19 @@ impl HealthCheck for BrowserRuntimeCheck {
             Self::probe_node(),
             Self::probe_managed()
         );
+
+        // Whether the `browser_*` family is actually withheld right now, ASKED
+        // rather than inferred.
+        //
+        // The sentence this replaces was unconditional and said "with neither
+        // driver runnable the tools are withheld" — a claim about another
+        // module's predicate, restated from memory, which the gate's third
+        // question falsified without telling this file. Asking the gate makes
+        // this file's explanation and the gate's decision one fact
+        // (判据 §1, §16); quoting `GATE_REQUIREMENTS` makes the prerequisite
+        // list one too, so a driver added to the gate reaches the operator's
+        // explanation with it.
+        let withheld = Self::withholding_sentence(&Self::gate_verdict().await);
 
         let mut findings = Vec::with_capacity(4);
 
@@ -340,17 +410,18 @@ impl HealthCheck for BrowserRuntimeCheck {
             Ok(ManagedProbe::Missing) => Finding::ok(
                 ID,
                 "Managed browser runtime not provisioned",
-                "No `playwright-cli` on PATH or marked Ready in the capability ledger \
-                 (~/.aleph/runtimes/ledger.json). Browsing is available only through \
-                 the existing-session driver until one is provisioned — and with \
-                 neither driver runnable the `browser_*` tools are withheld from the \
-                 model entirely (`tools::probes::browser`), so the bootstrap will not \
-                 be triggered by a tool call.",
+                format!(
+                    "No `playwright-cli` on PATH or marked Ready in the capability \
+                     ledger (~/.aleph/runtimes/ledger.json). Browsing is available \
+                     through the other two drivers until one is provisioned.{withheld}"
+                ),
             )
             .with_fix_hint(
                 "Install the managed runtime from the Panel's Runtimes page (Browser \
-                 settings links to it), or install Chrome + Node to use the \
-                 existing-session driver.",
+                 settings links to it), install Chrome + Node to use the \
+                 existing-session driver, or install obscura \
+                 (`runtime_manage{action:\"install\", capability:\"obscura\"}`) for the \
+                 default cdp driver.",
             ),
         });
 
@@ -406,6 +477,70 @@ mod tests {
             .iter()
             .any(|f| f.title == "Managed browser runtime provisioned");
         assert_eq!(reported, provisioned);
+    }
+
+    /// The doctor may claim the `browser_*` family is withheld only when the
+    /// gate is really withholding it.
+    ///
+    /// The shape this pins: this file used to state the claim
+    /// UNCONDITIONALLY, as prose about `tools::probes::browser`'s predicate
+    /// written from memory. The gate grew a third driver question and nothing
+    /// re-read the sentence — so on a machine with an engine installed and no
+    /// playwright-cli the doctor explained a withholding that was not
+    /// happening, naming two runtimes that are not the default's (判据 §1, §16).
+    ///
+    /// Derived from the gate itself in both directions, so it is red whether
+    /// the claim is over-stated or under-stated, and it cannot be satisfied by
+    /// restating today's host.
+    #[tokio::test]
+    async fn the_doctor_claims_a_withheld_family_only_when_the_gate_withholds_it() {
+        const MARKER: &str = "are currently withheld from the model";
+
+        // Both arms of the sentence, driven directly — neither depends on how
+        // this host happens to be provisioned.
+        assert!(
+            BrowserRuntimeCheck::withholding_sentence(&ProbeResult::Healthy).is_empty(),
+            "an OPEN gate must produce no sentence at all; explaining a \
+             withholding that is not happening sends the operator to provision a \
+             runtime they do not need"
+        );
+        let closed = BrowserRuntimeCheck::withholding_sentence(&ProbeResult::Unhealthy {
+            reason: crate::tool_metadata::HealthReason::DependencyDown(std::borrow::Cow::Borrowed(
+                GATE_REQUIREMENTS,
+            )),
+            retry_after: None,
+        });
+        assert!(closed.contains(MARKER), "{closed}");
+        assert!(
+            closed.contains(GATE_REQUIREMENTS),
+            "a CLOSED gate's sentence must quote the gate's own prerequisite \
+             list; a second wording is how this file came to explain the family \
+             with a sentence about `npx`: {closed}"
+        );
+
+        let gate_closed = matches!(
+            BrowserRuntimeCheck::gate_verdict().await,
+            ProbeResult::Unhealthy { .. }
+        );
+
+        let findings = BrowserRuntimeCheck::new().run(Posture::Inspect).await;
+        let claims = findings.iter().any(|f| f.detail.contains(MARKER));
+        // The claim rides on the managed-missing arm, so it can only be made
+        // when that arm is taken. Asserting the conjunction rather than the
+        // gate alone keeps this from being 恒红 on a provisioned host (判据 §2).
+        let managed_missing = findings
+            .iter()
+            .any(|f| f.title == "Managed browser runtime not provisioned");
+
+        assert_eq!(
+            claims,
+            gate_closed && managed_missing,
+            "the doctor's withholding claim ({claims}) disagrees with the gate \
+             ({gate_closed}, managed_missing={managed_missing}). A doctor that \
+             explains a withholding that is not happening sends the operator to \
+             provision a runtime they do not need; one that stays silent while \
+             the family IS withheld leaves them with no explanation at all."
+        );
     }
 
     #[tokio::test]

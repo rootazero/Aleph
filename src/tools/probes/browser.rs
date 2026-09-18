@@ -3,11 +3,8 @@
 //!
 //! `BrowserDriver` (`browser::profile`) has THREE variants and
 //! `browser::manager::get_backend` has three match arms, one per variant. All
-//! three now route to a real backend; this probe asks after the prerequisites
-//! of **two** of them
-//! ([`self::tests::a_cdp_profile_routes_to_a_backend_this_probe_never_asks_about`]
-//! pins that split, so a change on either side reddens this doc instead of
-//! leaving it quietly wrong):
+//! three route to a real backend and this probe now asks after the
+//! prerequisites of **all three**:
 //!   * `BrowserDriver::ExistingSession` → `ChromeMcpBackend`, which attaches to
 //!     a locally-installed Chromium by launching `npx chrome-devtools-mcp`. It
 //!     needs **both** a Chromium binary ([`find_chromium`]) **and** `npx`.
@@ -15,26 +12,48 @@
 //!     ledger-provisioned `playwright-cli` binary (`browser::playwright_cli`
 //!     resolves it through `runtimes::ensure_capability("playwright-cli", …)`)
 //!     and brings its own Chromium. It does **not** run `npx`.
-//!   * `BrowserDriver::Cdp` → `CdpBackend`, over Aleph's own CDP client
-//!     (Task 14). Its prerequisite is an obscura or Chromium binary this
-//!     process can launch and speak CDP to — a **third** question, which this
-//!     probe does not ask. No auto-injected profile uses this driver, so a
-//!     `cdp` profile exists only where an operator wrote one.
+//!   * `BrowserDriver::Cdp` → `CdpBackend`, over Aleph's own CDP client. Its
+//!     prerequisite is an engine binary this process can launch and speak CDP
+//!     to: obscura (through the launcher's own `resolve_obscura_binary`) or a
+//!     system Chromium. No `npx` — that is the existing-session driver's
+//!     launcher, not this one's.
 //!
-//! Both auto-injected profiles always exist — `ProfileManager::new` injects a
-//! `default` (managed) and a `user` (existing-session) profile — so the probe
-//! covers the two drivers those profiles can use, and reports `Healthy` when
-//! either one could actually run. **That is coverage of two drivers out of
-//! three, not of "every driver"**: a profile an operator hand-configures with
-//! `driver = "cdp"` has a runtime prerequisite (an obscura or Chromium binary
-//! reachable over CDP) that is not one of the two questions this probe asks.
-//! `Healthy` here says nothing about whether such a profile could run — a
-//! guard's green only covers the shapes it was written to recognise (判据
-//! §3). [`self::tests::covered_drivers_is_every_driver_except_cdp`] ties the
-//! two-out-of-three claim to `BrowserDriver::ALL`, so a fourth driver reddens
-//! this file instead of leaving this paragraph quietly wrong again. Extending
-//! the probe to the CDP driver's prerequisite is a task of its own; this file
-//! is not it.
+//! # Why the third question was added, and what it cost to not have it
+//!
+//! This file used to ask two of the three, on the stated ground that "no
+//! auto-injected profile uses `Cdp`, so a `cdp` profile exists only where an
+//! operator wrote one". That was **true when it was written and false from
+//! `71d973920`**, which flipped `ProfileManager::new`'s injected `default`
+//! profile to `driver = cdp` / `engine = obscura`. Nothing re-read the
+//! sentence, because it describes another module's behaviour and that module
+//! had no reason to tell this one (判据 §1, fourth form).
+//!
+//! What that cost, concretely: a machine provisioned exactly the way the
+//! dual-engine branch intends — obscura installed, no `playwright-cli`, no
+//! `npx` — ran the default profile perfectly and had all 26 `browser_*` tools
+//! withheld, refused with a sentence naming the two runtimes the branch exists
+//! to stop requiring (判据 §14 — a closed gate naming a door that is now the
+//! wrong door).
+//!
+//! # What `Healthy` here does and does not claim
+//!
+//! It is a DISJUNCTION over drivers: "some profile on this host could run", not
+//! "every profile could". The mirror case is real and deliberate — with
+//! `playwright-cli` provisioned and no obscura, this says `Healthy` while a
+//! default-profile call cannot launch an engine. Per-profile readiness is
+//! `browser/obscura-missing` and `browser/chromium-missing`'s question
+//! (`diagnostics::checks::engine_missing`), which answer per engine and name
+//! the install command; this gate only decides whether the family is worth
+//! offering at all.
+//!
+//! [`self::tests::every_auto_injected_profile_uses_a_driver_this_probe_asks_about`]
+//! is the guard that would have caught the flip: it derives its question from
+//! the profiles `ProfileManager::new` actually injects rather than from a
+//! remembered sentence, so the default moving into an uncovered set reddens
+//! this file. `covered_drivers_is_every_driver` ties the coverage claim to
+//! `BrowserDriver::ALL` — together they catch both "a fourth variant appeared"
+//! and "the default moved", which is the pair the previous guard could only
+//! half answer (判据 §3).
 //!
 //! # The question this used to ask, and why it was the wrong one
 //!
@@ -76,7 +95,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use crate::browser::engine::obscura::resolve_obscura_binary;
 use crate::browser::find_chromium;
+use crate::browser::profile::ObscuraRuntimeConfig;
 use crate::runtimes::{get_runtimes_dir, CapabilityLedger};
 use crate::tool_metadata::{HealthReason, ProbeResult, ToolHealthProbe};
 
@@ -125,15 +146,58 @@ pub(crate) fn existing_session_driver_ready() -> bool {
     find_chromium().is_ok() && which::which("npx").is_ok()
 }
 
-/// Reports whether *any* browser driver is reachable. Stateless — the shared
+/// Whether the CDP driver could launch an engine: obscura, or a system
+/// Chromium. A disjunction because `ProfileConfig::resolved_engine` picks per
+/// profile and this probe gates the family, not a profile.
+///
+/// The obscura half goes through the LAUNCHER's own resolver
+/// (`browser::engine::obscura::resolve_obscura_binary`) rather than through a
+/// second `which` written here — the rule `managed_cli_path`'s doc states, and
+/// the one the `npx` mistake broke. It is pure PATH/filesystem IO: a pin
+/// check, a `which`, a ledger read, no subprocess, matching this module's
+/// "blocking work" contract below.
+///
+/// The Chromium half is [`find_chromium`] — the pin plus the system browser —
+/// and deliberately NOT `chromium_resolve::resolve_binary`, which spawns
+/// `playwright-cli install-browser --dry-run`. A sensor that shells out on
+/// every 5-minute refresh to gate a tool list is the wrong trade; the Playwright
+/// route is already covered by `managed_driver_ready`, whose `Some` implies a
+/// CLI that brings its own Chromium.
+fn cdp_driver_ready(obscura: &ObscuraRuntimeConfig) -> bool {
+    resolve_obscura_binary(obscura).is_ok() || find_chromium().is_ok()
+}
+
+/// What a host needs for the `browser_*` family to be offered at all — one
+/// clause per `BrowserDriver`, in the order [`BrowserDriver::ALL`] declares
+/// them.
+///
+/// `pub(crate)` and quoted verbatim by the doctor twin
+/// (`diagnostics::checks::browser_runtime`) rather than re-worded there. The
+/// twin is what EXPLAINS a withheld family to the operator, and a twin that
+/// names its own set of prerequisites is how the family spent four rounds
+/// being explained by a sentence about `npx` (判据 §1, §16). One sentence, one
+/// author, and a driver added to the gate reaches the explanation with it.
+pub(crate) const GATE_REQUIREMENTS: &str = "no provisioned playwright-cli (managed driver), \
+     no Chromium + npx (existing-session driver), and no obscura or Chromium binary \
+     (cdp driver)";
+
+/// Reports whether *any* browser driver is reachable. The shared
 /// `Arc<BrowserRuntimeProbe>` is registered under every `browser_*` tool name.
+///
+/// Carries the obscura runtime config because the CDP driver's prerequisite is
+/// a pinned path an operator may have written (`[general.browser.obscura]
+/// binary_path`), and a sensor blind to the pin would withhold 26 tools on a
+/// machine that is correctly provisioned — the same failure this probe's third
+/// question exists to remove, one config key further in.
 #[derive(Default)]
-pub struct BrowserRuntimeProbe;
+pub struct BrowserRuntimeProbe {
+    obscura: ObscuraRuntimeConfig,
+}
 
 impl BrowserRuntimeProbe {
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub const fn new(obscura: ObscuraRuntimeConfig) -> Self {
+        Self { obscura }
     }
 }
 
@@ -143,8 +207,9 @@ impl ToolHealthProbe for BrowserRuntimeProbe {
         // A join error means the blocking pool could not answer; treat that as
         // "no runtime" rather than as health, for the same reason the doctor
         // twin does — an unknown must never be read as healthy.
-        let usable = tokio::task::spawn_blocking(|| {
-            managed_driver_ready() || existing_session_driver_ready()
+        let obscura = self.obscura.clone();
+        let usable = tokio::task::spawn_blocking(move || {
+            managed_driver_ready() || existing_session_driver_ready() || cdp_driver_ready(&obscura)
         })
         .await
         .unwrap_or(false);
@@ -153,10 +218,7 @@ impl ToolHealthProbe for BrowserRuntimeProbe {
             return ProbeResult::Healthy;
         }
         ProbeResult::Unhealthy {
-            reason: HealthReason::DependencyDown(Cow::Borrowed(
-                "no provisioned playwright-cli (managed driver) and no Chromium + npx \
-                 (existing-session driver)",
-            )),
+            reason: HealthReason::DependencyDown(Cow::Borrowed(GATE_REQUIREMENTS)),
             retry_after: None,
         }
     }
@@ -171,59 +233,103 @@ mod tests {
     use super::*;
     use crate::browser::profile::BrowserDriver;
 
-    /// The drivers this probe's verdict actually covers — exactly the ones an
-    /// auto-injected profile can use. `BrowserDriver::Cdp` is deliberately
-    /// absent: it has no auto-injected profile and no backend yet, and
-    /// `Healthy` here says nothing about whether a hand-configured `Cdp`
-    /// profile could run.
-    const COVERED_DRIVERS: [BrowserDriver; 2] =
-        [BrowserDriver::Managed, BrowserDriver::ExistingSession];
+    /// The drivers this probe's verdict covers — every one of them, since the
+    /// CDP question was added.
+    const COVERED_DRIVERS: [BrowserDriver; 3] = [
+        BrowserDriver::Managed,
+        BrowserDriver::ExistingSession,
+        BrowserDriver::Cdp,
+    ];
 
-    /// Ties the module doc's "two drivers out of three" claim to
-    /// `BrowserDriver::ALL`, so a fourth driver reddens this file instead of
-    /// leaving the doc quietly wrong again (the exact shape K4 fixed: the doc
-    /// said "two backends... total" against a three-armed `get_backend`).
+    /// Ties the module doc's coverage claim to `BrowserDriver::ALL`, so a
+    /// fourth driver reddens this file instead of leaving the doc quietly
+    /// wrong (the exact shape K4 fixed: the doc said "two backends... total"
+    /// against a three-armed `get_backend`).
+    ///
+    /// This catches ONE of the two ways the doc can rot — a variant appearing.
+    /// It is structurally blind to the other, "the default moved into a set
+    /// this probe does not ask about", which is what actually happened at
+    /// `71d973920`; that one is
+    /// [`every_auto_injected_profile_uses_a_driver_this_probe_asks_about`]'s
+    /// job. Two guards because they recognise two different shapes (判据 §3).
     #[test]
-    fn covered_drivers_is_every_driver_except_cdp() {
+    fn covered_drivers_is_every_driver() {
         assert_eq!(
             BrowserDriver::ALL.len(),
-            COVERED_DRIVERS.len() + 1,
+            COVERED_DRIVERS.len(),
             "BrowserDriver gained or lost a variant; re-check what this \
              probe covers and update COVERED_DRIVERS and the module doc \
              together"
         );
-        for d in COVERED_DRIVERS {
+        for d in BrowserDriver::ALL {
             assert!(
-                BrowserDriver::ALL.contains(&d),
-                "{d:?} is in COVERED_DRIVERS but not in BrowserDriver::ALL"
+                COVERED_DRIVERS.contains(&d),
+                "{d:?} is a driver this probe asks nothing about, so `Healthy` \
+                 says nothing about a profile using it"
             );
         }
-        assert!(
-            !COVERED_DRIVERS.contains(&BrowserDriver::Cdp),
-            "Cdp is the one driver this probe says nothing about"
-        );
     }
 
-    /// The premise pin for the module doc's split, and it has already done
-    /// its job once.
+    /// **The guard that would have caught the flip.**
     ///
-    /// It used to read `get_backend_still_refuses_cdp_by_name`, pinning the
-    /// sentence "`Cdp` has no backend in this build". Task 14 gave that arm a
-    /// real `CdpBackend`, this test went red exactly as its author intended,
-    /// and the doc was rewritten in that same commit. It is INVERTED rather
-    /// than deleted: the doc's live sentence is now "all three arms route, and
-    /// this probe asks after two of them", and a sentence with no guard is a
-    /// sentence that rots.
+    /// It does not ask "how many drivers are there" — it asks the profiles
+    /// `ProfileManager::new` actually injects which driver they use, and
+    /// requires each answer to be one this probe has a prerequisite question
+    /// for. A default profile moving to a driver this gate does not ask about
+    /// means every install ships a working browser and a withheld tool family,
+    /// which is exactly what `71d973920` produced and what nothing here was
+    /// able to see: the previous pair of guards recognised "a fourth variant
+    /// appeared" and "the split is still the split", and both stayed green
+    /// (判据 §3, §5).
     ///
-    /// `covered_drivers_is_every_driver_except_cdp` does not cover this. It
-    /// catches a FOURTH variant appearing and nothing else — reverting the
-    /// `Cdp` arm to a refusal would leave `BrowserDriver::ALL` and
-    /// `COVERED_DRIVERS` untouched, and it green.
-    ///
-    /// Not a `Cdp` health check: whether the engine could actually launch is
-    /// the third question this probe deliberately does not ask.
+    /// Derived from the injected profiles rather than from a list of names, so
+    /// it cannot be satisfied by re-stating today's answer.
     #[test]
-    fn a_cdp_profile_routes_to_a_backend_this_probe_never_asks_about() {
+    fn every_auto_injected_profile_uses_a_driver_this_probe_asks_about() {
+        use crate::browser::manager::ProfileManager;
+        use crate::browser::profile::BrowserSystemConfig;
+
+        let manager = ProfileManager::new(BrowserSystemConfig::default());
+        let injected: Vec<String> = manager
+            .list_profiles()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            !injected.is_empty(),
+            "ProfileManager::new injected nothing, so this census certifies \
+             the gate by looking at no profiles (判据 §2)"
+        );
+        for name in injected {
+            let driver = manager
+                .get_config(&name)
+                .unwrap_or_else(|| panic!("profile {name} vanished between two reads"))
+                .driver;
+            assert!(
+                COVERED_DRIVERS.contains(&driver),
+                "the auto-injected profile {name:?} uses driver {driver:?}, which \
+                 this probe asks no prerequisite question about — so on a machine \
+                 provisioned for it the family is withheld while it runs fine"
+            );
+        }
+    }
+
+    /// The premise pin for the module doc, inverted twice now.
+    ///
+    /// It first read `get_backend_still_refuses_cdp_by_name`, pinning "`Cdp`
+    /// has no backend in this build". Task 14 gave that arm a real
+    /// `CdpBackend` and it went red as intended. It then pinned "…and this
+    /// probe asks nothing about it" — a sentence that became a DEFECT rather
+    /// than a description at `71d973920`, at which point this guard was
+    /// actively holding the defect in place. It is inverted again rather than
+    /// deleted: a sentence with no guard is a sentence that rots.
+    ///
+    /// `covered_drivers_is_every_driver` does not cover this. It catches a
+    /// fourth variant appearing and nothing else — reverting the `Cdp` arm to
+    /// a refusal would leave `BrowserDriver::ALL` and `COVERED_DRIVERS`
+    /// untouched, and it green.
+    #[test]
+    fn a_cdp_profile_routes_to_a_backend_this_probe_asks_about() {
         use crate::browser::manager::ProfileManager;
         use crate::browser::profile::{BrowserSystemConfig, ProfileConfig};
 
@@ -252,13 +358,12 @@ mod tests {
             ),
         }
 
-        // …and the probe still says nothing about it: the driver it routes to
-        // is not one of the two this file asks prerequisites for. Both halves
-        // in one test on purpose — the doc's sentence is the CONJUNCTION, and
-        // either half alone can be true while the sentence is false.
+        // …and the probe asks after its prerequisite. Both halves in one test
+        // on purpose — the doc's sentence is the CONJUNCTION, and either half
+        // alone can be true while the sentence is false.
         assert!(
-            !COVERED_DRIVERS.contains(&BrowserDriver::Cdp),
-            "the doc says this probe asks nothing about the CDP driver; \
+            COVERED_DRIVERS.contains(&BrowserDriver::Cdp),
+            "the doc says this probe asks after the CDP driver's prerequisite; \
              COVERED_DRIVERS now claims otherwise"
         );
     }
@@ -270,18 +375,20 @@ mod tests {
         // verdict is derived from BOTH drivers' real prerequisites — a machine
         // with `npx` but no provisioned CLI and no Chromium must read unhealthy,
         // which is exactly the case the old `which("npx")` stage got wrong.
-        let runtime_present = managed_driver_ready() || existing_session_driver_ready();
-        match BrowserRuntimeProbe::new().probe().await {
+        let obscura = ObscuraRuntimeConfig::default();
+        let runtime_present =
+            managed_driver_ready() || existing_session_driver_ready() || cdp_driver_ready(&obscura);
+        match BrowserRuntimeProbe::new(obscura).probe().await {
             ProbeResult::Healthy => assert!(
                 runtime_present,
-                "probe said Healthy but neither driver's prerequisites were met"
+                "probe said Healthy but no driver's prerequisites were met"
             ),
             ProbeResult::Unhealthy { reason, .. } => {
                 assert!(
                     !runtime_present,
                     "probe said Unhealthy but a driver was runnable"
                 );
-                assert!(reason.short_label().contains("playwright-cli"));
+                assert_eq!(reason.short_label(), GATE_REQUIREMENTS);
             }
         }
     }
@@ -319,6 +426,9 @@ mod tests {
     fn ttl_is_longer_than_default() {
         // Default cache TTL is 30 s; a browser install rarely changes, so the
         // probe opts into a coarser refresh cadence.
-        assert!(BrowserRuntimeProbe::new().ttl() > Duration::from_secs(30));
+        assert!(
+            BrowserRuntimeProbe::new(ObscuraRuntimeConfig::default()).ttl()
+                > Duration::from_secs(30)
+        );
     }
 }
