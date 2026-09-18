@@ -577,7 +577,37 @@ async fn fetch_computed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aleph_cdp::methods::dom::{NO_BOX_CODE, NO_BOX_MESSAGE};
     use aleph_cdp::testkit::{scripted, scripted_slow, FakeCdpServer, Responder};
+
+    /// The reply obscura sends for a node it has no box for — spelled with
+    /// `aleph-cdp`'s own constants, because that crate TRANSLATES exactly this
+    /// `(code, message)` pair into `Ok(None)` and lets every other protocol
+    /// error through as `Err` (`dom.rs:165-169`). Two facts, one wire shape
+    /// apart; a literal here would let the two drift and this test module
+    /// silently stop covering one of them.
+    ///
+    /// It cost a mutation to find that out. The `Err`-tolerance test below was
+    /// first written with this same message and therefore never reached the
+    /// `Err` arm at all — it was exercising the translated `Ok(None)` while its
+    /// name said otherwise (判据 §18: a conclusion's scope is its method).
+    fn no_box_model() -> Responder {
+        Responder::Error {
+            code: NO_BOX_CODE,
+            message: NO_BOX_MESSAGE.into(),
+        }
+    }
+
+    /// A protocol error that is NOT the no-box one, so `get_box_model` hands
+    /// back a real `Err`. The code is deliberately different from
+    /// [`NO_BOX_CODE`]: this is the arm where the engine failed to answer at
+    /// all, which is a different fact from "this node has no box".
+    fn box_model_transport_error() -> Responder {
+        Responder::Error {
+            code: -32603,
+            message: "Internal error: the renderer went away".into(),
+        }
+    }
 
     /// **The engine's own bytes.** A frozen `DOM.getDocument` reply captured
     /// from the real obscura v0.2.2 binary on `probes/t0-page.html` during T0
@@ -766,10 +796,10 @@ mod tests {
                 let id = req["params"]["backendNodeId"].as_i64().unwrap_or(-1);
                 return match boxes.get(&id) {
                     Some(v) => Responder::Reply(v.clone()),
-                    None => Responder::Error {
-                        code: -32000,
-                        message: "Could not compute box model".into(),
-                    },
+                    // An id the table does not cover is a node the engine has
+                    // no box for — the ordinary case on a real page, and the
+                    // one `aleph-cdp` turns into `Ok(None)`.
+                    None => no_box_model(),
                 };
             }
             base(req)
@@ -1131,11 +1161,9 @@ mod tests {
         assert!(parse_computed_rows(&value, ELEMENT_COUNT, FIRST_TAG, LAST_TAG).is_none());
     }
 
-    /// A `getBoxModel` that ERRORS is not a hidden element — it is one whose
-    /// geometry we do not know. Same `rect: None`, and (crucially) the fetch
-    /// still succeeds: one node's missing box must not lose the whole page.
-    #[tokio::test]
-    async fn a_box_model_protocol_error_yields_rect_none_and_does_not_fail_the_fetch() {
+    /// Drive a whole fetch where EVERY `DOM.getBoxModel` answers the same way,
+    /// so the two arms below differ in exactly one thing: which reply.
+    async fn fetch_with_every_box_answered(reply: Responder) -> RawDom {
         let base = scripted(base_entries(
             measured_rows(),
             ELEMENT_COUNT,
@@ -1145,22 +1173,42 @@ mod tests {
         ));
         let server = FakeCdpServer::start(move |req| {
             if req["method"] == "DOM.getBoxModel" {
-                // Every box model is a PROTOCOL ERROR — a different fact from
-                // "no box model", and neither may lose the rest of the page.
-                return Responder::Error {
-                    code: -32000,
-                    message: "Could not compute box model".into(),
-                };
+                return reply.clone();
             }
             base(req)
         })
         .await;
         let (conn, session) = server.connect_and_attach().await;
-        let raw = fetch_obscura(&conn, &session, 4)
+        fetch_obscura(&conn, &session, 4)
             .await
-            .expect("one node's missing geometry must not lose the page");
+            .expect("one node's missing geometry must not lose the page")
+    }
+
+    /// `Ok(None)` — the engine says this node has no box. Not a hidden element:
+    /// one whose geometry there is none of. `rect: None`, page intact.
+    #[tokio::test]
+    async fn a_no_box_model_reply_yields_rect_none_and_does_not_fail_the_fetch() {
+        let raw = fetch_with_every_box_answered(no_box_model()).await;
         assert!(raw.frames[0].nodes.iter().all(|n| n.rect.is_none()));
         // The flags are untouched, so the page is still describable.
+        assert!(raw.frames[0].nodes.iter().any(|n| n.computed.is_some()));
+    }
+
+    /// `Err` — the engine failed to answer at all. A DIFFERENT fact from "no
+    /// box model", and the one this module's step 4 comment claims to handle
+    /// identically. Same `rect: None`, and (crucially) the fetch still
+    /// succeeds: one node's unanswered call must not lose the whole page.
+    ///
+    /// **This is the arm the first version of this test never reached.** It
+    /// sent `aleph-cdp`'s own no-box `(code, message)`, which that crate
+    /// translates to `Ok(None)` before this module ever sees it — so the test
+    /// passed, named a fact it did not cover, and the `Err` arm had no test at
+    /// all. Found by mutating `model.ok()` to `model.unwrap()` and reading
+    /// which names went red: this one stayed green.
+    #[tokio::test]
+    async fn a_box_model_protocol_error_yields_rect_none_and_does_not_fail_the_fetch() {
+        let raw = fetch_with_every_box_answered(box_model_transport_error()).await;
+        assert!(raw.frames[0].nodes.iter().all(|n| n.rect.is_none()));
         assert!(raw.frames[0].nodes.iter().any(|n| n.computed.is_some()));
     }
 
@@ -1189,11 +1237,14 @@ mod tests {
         let server = FakeCdpServer::start(move |req| {
             if req["method"] == "DOM.getBoxModel" {
                 let id = req["params"]["backendNodeId"].as_i64().unwrap_or(-1);
-                let reply = boxes
+                // The no-box reply for an uncovered id, not an empty object:
+                // this test is about elapsed time, and an empty object is a
+                // decode failure — a third behaviour it has no business
+                // depending on.
+                let inner = boxes
                     .get(&id)
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::json!({}));
-                return Responder::Delay(DELAY, Box::new(Responder::Reply(reply)));
+                    .map_or_else(no_box_model, |v| Responder::Reply(v.clone()));
+                return Responder::Delay(DELAY, Box::new(inner));
             }
             base(req)
         })
