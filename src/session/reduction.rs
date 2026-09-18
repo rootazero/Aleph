@@ -2561,9 +2561,7 @@ mod tests {
         .map(|(k, v)| (k.to_string(), v))
         .collect();
         assert!(
-            found
-                .get("orchestrator/harness_bridge/session_seed.rs")
-                .is_some(),
+            found.contains_key("orchestrator/harness_bridge/session_seed.rs"),
             "the scan found no seed — blind, not clean"
         );
         assert_eq!(

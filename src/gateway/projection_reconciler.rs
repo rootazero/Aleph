@@ -319,7 +319,7 @@ impl ProjectionReconciler {
             };
             // Epoch 0 is never a fork; a fork whose last marker is older than
             // the window is out of scope, as it is for resume.
-            if id.epoch() == 0 || !markers.last().is_some_and(|m| m.created_at_ms >= horizon) {
+            if id.epoch() == 0 || markers.last().is_none_or(|m| m.created_at_ms < horizon) {
                 continue;
             }
             let current = match self

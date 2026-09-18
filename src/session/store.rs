@@ -453,6 +453,9 @@ impl std::fmt::Display for UndecodableRecord {
 }
 
 /// One row, as [`decode_row`] read it.
+// Not boxed: `query_rows` / `load_run_markers` build one per row and `fold_strict`
+// moves it out at once; nearly every row is `Event`, so `Box` = one alloc per event.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum DecodedRow {
     Event(SessionEventRecord),
