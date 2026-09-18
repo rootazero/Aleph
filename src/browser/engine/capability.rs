@@ -846,14 +846,23 @@ mod tests {
                     );
                     // ...and this file must QUOTE that text, not paraphrase it.
                     //
-                    // F8's shape, exactly: obscura's dialog entry says "no
-                    // event within 4s (wait expired, not a measured absence)"
-                    // — the fixture going out of its way to say which fact it
-                    // is — and the prose beside it called that "a stated
-                    // absence". The value was still right; the reasoning
-                    // published beside it was not, and the comment is the half
-                    // that lies (判据 §1). A paraphrase is not a cheaper copy
-                    // of a measurement, it is a second one.
+                    // The shape: obscura's dialog entry says, in the fixture's
+                    // own words, that it records an expired wait and NOT a
+                    // measured absence — and the prose beside the row it feeds
+                    // called it a stated absence. The value was still right;
+                    // the reasoning published beside it was not, and the
+                    // comment is the half that lies (判据 §1). A paraphrase is
+                    // not a cheaper copy of a measurement, it is a second one.
+                    //
+                    // ⚠️ **This comment deliberately does not reproduce any of
+                    // the texts this rule checks.** It only has to say what the
+                    // rule is; quoting an example here would make the search
+                    // corpus contain its own needle and the guard 恒绿 for that
+                    // row — the same self-match `allow_file_access_appears_
+                    // nowhere_in_the_browser_subsystem` splits its needle with
+                    // `concat!` to avoid. The first draft of this guard did
+                    // exactly that and was caught by counting the copies before
+                    // mutating it (判据 §6).
                     //
                     // Comment markers are stripped and whitespace collapsed
                     // before comparing, because these texts are line-wrapped
