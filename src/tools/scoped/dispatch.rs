@@ -1008,12 +1008,9 @@ impl ScopedToolService {
             }
             // The trail says who refused, not just that something did: naming
             // the user on an `Unavailable` would put a decision they never made
-            // into a signed, non-repudiable ledger row.
-            let trail = if reason_kind.is_a_human_decision() {
-                format!("user did not approve ({outcome:?})")
-            } else {
-                format!("not authorized — nobody was asked ({outcome:?})")
-            };
+            // into a signed, non-repudiable ledger row. One sentence, shared
+            // with the sandbox elevation gate's `ToolCallDenied`.
+            let trail = reason_kind.refusal_trail(outcome);
             self.record_approval_decision(
                 name,
                 &fingerprint,

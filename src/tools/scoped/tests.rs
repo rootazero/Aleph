@@ -4127,21 +4127,17 @@ fn every_production_approval_park_is_stamped_or_named_exempt() {
             sites.entry(rel.clone()).or_default().push((i + 1, stamped));
         }
     }
-    const STAMPED: [&str; 2] = [
-        "src/sandbox/workspace/mod.rs",
-        "src/tools/scoped/dispatch.rs",
-    ];
     // The borrow-cloud card (`escalation_allowed`) is a THINK-phase park: it
     // gates a provider route, not a tool call, so there is no `call_id` for a
     // `ToolCallParked` to name — out of the event's scope by construction.
     const EXEMPT: &str = "src/providers/failover/provider.rs";
     assert_eq!(
         sites.keys().map(String::as_str).collect::<Vec<_>>(),
-        [EXEMPT, STAMPED[0], STAMPED[1]],
+        [EXEMPT, APPROVAL_PARK_FILES[0], APPROVAL_PARK_FILES[1]],
         "a new site that parks a call on a human must stamp `ToolCallParked` first, or be \
          named exempt here with its reason: {sites:?}"
     );
-    for file in STAMPED {
+    for file in APPROVAL_PARK_FILES {
         for (line, stamped) in &sites[file] {
             assert!(
                 stamped,
@@ -4155,6 +4151,71 @@ fn every_production_approval_park_is_stamped_or_named_exempt() {
         "the borrow-cloud card has no call_id; a `ToolCallParked` there would always be \
          dropped for a missing identity — classify it, do not stamp it: {:?}",
         sites[EXEMPT]
+    );
+}
+
+/// The production files that park a tool call on a human's approval — the
+/// expected value both censuses above and below compare their derivation to.
+const APPROVAL_PARK_FILES: [&str; 2] = [
+    "src/sandbox/workspace/mod.rs",
+    "src/tools/scoped/dispatch.rs",
+];
+
+/// A park is an entry fact; the gate that wrote it owes the exit fact
+/// (criterion #14 — final review C1). Every production file that writes
+/// `ToolCallParked` with an `Approval` / `PreHook` reason through the one
+/// writer (`session::call_log::emit_for_ambient_call`) must also write BOTH
+/// releases through it — `ToolCallApproved` and `ToolCallDenied` — or a crash
+/// after the human's yes reduces to "never ran … call it again" for a command
+/// that ran. Equality on the file sets, derived from the source: a park file
+/// with no release is red BY FILE NAME, and the park set is pinned to the
+/// requester census above so the two cannot drift apart.
+///
+/// Files that DEFINE the writer are not writers; `clarification::ask` parks
+/// with `Clarification`, whose release is the ask tool's own receipt, so the
+/// reason filter leaves it out by construction rather than by name. Textual,
+/// like its sibling: it proves each release is in the file, and the
+/// behavioural pins (`sandbox::workspace::tests::an_approved_capability_card_
+/// is_released_in_the_log_before_the_spawn`, `an_answered_gate_leaves_park_
+/// then_decision_in_the_session_log`) prove it fires on the executed path.
+#[test]
+fn every_file_that_parks_on_an_approval_also_writes_both_releases() {
+    use crate::utils::source_scan::{code_text, production_text, rust_sources_under};
+    const WRITER: &str = "emit_for_ambient_call(";
+    const REASONS: [&str; 2] = ["ParkReason::Approval", "ParkReason::PreHook"];
+    const RELEASES: [&str; 2] = ["ToolCallApproved {", "ToolCallDenied {"];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut parks: std::collections::BTreeSet<String> = Default::default();
+    let mut releases: std::collections::BTreeMap<String, Vec<&str>> = Default::default();
+    for (rel, src) in rust_sources_under(&root) {
+        let code = code_text(&production_text(std::path::Path::new(&rel), &src));
+        if code.contains(&format!("fn {WRITER}")) || !code.contains(WRITER) {
+            continue;
+        }
+        if REASONS.iter().any(|r| code.contains(r)) {
+            parks.insert(rel.clone());
+        }
+        let written: Vec<&str> = RELEASES
+            .iter()
+            .copied()
+            .filter(|needle| code.contains(needle))
+            .collect();
+        if written.len() == RELEASES.len() {
+            releases.insert(rel, written);
+        }
+    }
+    assert_eq!(
+        parks.iter().map(String::as_str).collect::<Vec<_>>(),
+        APPROVAL_PARK_FILES,
+        "self-protection: the park set is the requester census's, or the scan is reading \
+         the wrong thing: {parks:?}"
+    );
+    assert_eq!(
+        releases.keys().collect::<std::collections::BTreeSet<_>>(),
+        parks.iter().collect::<std::collections::BTreeSet<_>>(),
+        "a file that parks a call on an approval must write its release (`ToolCallApproved`) \
+         and its twin (`ToolCallDenied`) through the same writer — parks {parks:?}, \
+         releases {releases:?}"
     );
 }
 

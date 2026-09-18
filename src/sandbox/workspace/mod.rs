@@ -384,6 +384,33 @@ impl Sandbox for WorkspaceSandbox {
                         // counting refusals across an approval, which is the
                         // cumulative behaviour that made "consecutive" a lie.
                         denial_ledger::global().record_approval(&led_key);
+                        // §6.1, the release. The park above told the log
+                        // "this call never ran"; from here the command is
+                        // about to be spawned, so a crash after this point is
+                        // OUTCOME UNKNOWN again — the reducer clears `parked`
+                        // only on this row (or a `ToolCallDenied` / a receipt).
+                        // Without it an approved-and-executed elevation read
+                        // "NOT EXECUTED … call it again" after a restart: the
+                        // confident direction, inviting a second `git push`.
+                        // Same writer, same anchor and same best-effort rule as
+                        // the park: awaited before the spawn, never allowed to
+                        // overturn the human's yes. `User`, not `Trusted`: a
+                        // person answered this card (a standing elevation grant
+                        // never reaches this block — `already_granted` above).
+                        crate::session::call_log::emit_for_ambient_call(
+                            &cmd.session_id,
+                            &cmd.tool_name,
+                            "capability elevation approval",
+                            |turn_id, call_id| {
+                                crate::session::events::SessionEvent::ToolCallApproved {
+                                    turn_id,
+                                    call_id,
+                                    by: crate::session::events::ApprovalSource::User,
+                                    at: crate::session::events::now_ms(),
+                                }
+                            },
+                        )
+                        .await;
                     }
                     ApprovalOutcome::Denied
                     | ApprovalOutcome::Timeout
@@ -449,6 +476,28 @@ impl Sandbox for WorkspaceSandbox {
                         } else {
                             "elevated capability request was not authorized — nobody was asked."
                         };
+                        // The deny arm speaks too (the twin of the release
+                        // above): the `CapabilityDenied` below becomes the
+                        // call's `ToolError` receipt, but a crash between this
+                        // refusal and that receipt would otherwise still read
+                        // "parked" — a card nobody is looking at any more. The
+                        // trail is the confirm gate's sentence, not a second
+                        // spelling of it.
+                        let trail = reason_kind.refusal_trail(outcome);
+                        crate::session::call_log::emit_for_ambient_call(
+                            &cmd.session_id,
+                            &cmd.tool_name,
+                            "capability elevation refusal",
+                            |turn_id, call_id| {
+                                crate::session::events::SessionEvent::ToolCallDenied {
+                                    turn_id,
+                                    call_id,
+                                    reason: trail,
+                                    at: crate::session::events::now_ms(),
+                                }
+                            },
+                        )
+                        .await;
                         return Err(SandboxError::CapabilityDenied {
                             reason: format!("{lead}{user_reason} {}", reason_kind.agent_hint()),
                         });
@@ -1425,6 +1474,215 @@ mod tests {
             "one park row and nothing else, landed before the card was raised: {rows:?}"
         );
         run.abort();
+    }
+
+    /// A driver that reads this session's log at the instant the sandbox
+    /// hands it the command — the spawn, frozen where the test wants to look.
+    /// What it saw is the answer to "what does the log say about this call
+    /// while the command is running?", which is exactly what a crash during
+    /// the command would leave for the next boot.
+    struct LogReadingDriver {
+        sessions: Arc<crate::session::in_process::InProcessActorSessionService>,
+        session: SessionId,
+        seen_at_spawn: Mutex<Option<Vec<&'static str>>>,
+    }
+
+    impl LogReadingDriver {
+        fn seen(&self) -> Vec<&'static str> {
+            self.seen_at_spawn
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .expect("the driver was reached")
+        }
+    }
+
+    #[async_trait]
+    impl OsSandboxDriverTrait for LogReadingDriver {
+        fn platform(&self) -> &'static str {
+            "fake"
+        }
+
+        fn is_supported(&self) -> bool {
+            true
+        }
+
+        fn profile_for(
+            &self,
+            _capabilities: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
+            })
+        }
+
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            use crate::session::service::SessionService as _;
+            let rows = self
+                .sessions
+                .get_events(&self.session, None, None)
+                .await
+                .expect("the log is readable");
+            *self.seen_at_spawn.lock().unwrap_or_else(|e| e.into_inner()) = Some(
+                rows.iter()
+                    .map(|r| crate::session::store::event_type_tag(&r.event))
+                    .collect(),
+            );
+            Ok(SandboxOutput {
+                stdout: b"ok".to_vec(),
+                exit_code: Some(0),
+                duration_ms: 5,
+                ..Default::default()
+            })
+        }
+    }
+
+    /// One elevated command under one call identity, through a gate that
+    /// answers `outcome` at once, on a session of the test's own.
+    async fn run_elevated_through(
+        outcome: ApprovalOutcome,
+        call_id: &str,
+    ) -> (
+        Arc<LogReadingDriver>,
+        Result<SandboxOutput, SandboxError>,
+        Vec<&'static str>,
+    ) {
+        use crate::session::events::TurnId;
+        use crate::session::service::SessionService as _;
+        let sessions = crate::session::in_process::install_test_session_service();
+        let tmp = tempfile::tempdir().unwrap();
+        let session = sid();
+        let driver = Arc::new(LogReadingDriver {
+            sessions: sessions.clone(),
+            session: session.clone(),
+            seen_at_spawn: Mutex::new(None),
+        });
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
+        let sandbox = build_sandbox(
+            &tmp,
+            driver_trait,
+            build_gate_with(outcome),
+            SandboxHooks::new(),
+        );
+        let cmd = SandboxCommand {
+            session_id: session.clone(),
+            tool_name: "bash".into(),
+            program: "curl".into(),
+            args: vec![],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: SandboxCapabilities {
+                network: NetworkPolicy::AllowAll,
+                ..SandboxCapabilities::strict()
+            },
+            timeout: None,
+        };
+        let identity = crate::approval::CallIdentity {
+            turn_id: TurnId::new_v4(),
+            call_id: call_id.into(),
+        };
+        let result =
+            crate::approval::with_call_identity(Some(identity), sandbox.execute(cmd)).await;
+        let after: Vec<&'static str> = sessions
+            .get_events(&session, None, None)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| crate::session::store::event_type_tag(&r.event))
+            .collect();
+        (driver, result, after)
+    }
+
+    /// The park's RELEASE (final review C1). An approved capability card
+    /// leaves `ToolCallParked` and then `ToolCallApproved` in the log, and
+    /// both are there BEFORE the driver spawns the command — so a crash
+    /// while the command runs (or after it ran, before its receipt) reduces
+    /// to OUTCOME UNKNOWN, not to "never ran … call it again" on a `git push`
+    /// that already happened. Read from inside the driver, at the spawn: a
+    /// release written after the command returned would satisfy a read taken
+    /// after `execute` and still leave every crash inside the command
+    /// fail-open. Reddens if the approved arm stops emitting, or emits after
+    /// the spawn.
+    #[tokio::test]
+    async fn an_approved_capability_card_is_released_in_the_log_before_the_spawn() {
+        let (driver, result, after) =
+            run_elevated_through(ApprovalOutcome::Approved, "toolu_elevated_ok").await;
+        result.expect("an approved elevation runs the command");
+        assert_eq!(
+            driver.seen(),
+            ["tool_call_parked", "tool_call_approved"],
+            "park then release, both landed before the driver was handed the command"
+        );
+        assert_eq!(
+            after,
+            ["tool_call_parked", "tool_call_approved"],
+            "and the gate wrote nothing else after the spawn"
+        );
+    }
+
+    /// The deny arm speaks too (the twin the release must not be missing —
+    /// criterion #16): a refused card leaves `ToolCallParked` then
+    /// `ToolCallDenied`, and the driver is never reached. `Denied` names the
+    /// user; `Unavailable` (nobody was asked) does not — the same one
+    /// sentence the confirm gate writes, so a reader of the log cannot be
+    /// told "the user said no" by a transport failure.
+    #[tokio::test]
+    async fn a_refused_capability_card_leaves_park_then_denied_and_never_spawns() {
+        use crate::session::events::SessionEvent;
+        use crate::session::service::SessionService as _;
+        for (outcome, names_the_user) in [
+            (ApprovalOutcome::Denied, true),
+            (ApprovalOutcome::Unavailable, false),
+        ] {
+            let (driver, result, after) = run_elevated_through(outcome, "toolu_elevated_no").await;
+            assert!(
+                matches!(result, Err(SandboxError::CapabilityDenied { .. })),
+                "{outcome:?}: refused, got {result:?}"
+            );
+            assert!(
+                driver
+                    .seen_at_spawn
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_none(),
+                "{outcome:?}: the driver must not be reached"
+            );
+            assert_eq!(
+                after,
+                ["tool_call_parked", "tool_call_denied"],
+                "{outcome:?}"
+            );
+            let rows = crate::session::in_process::install_test_session_service()
+                .get_events(&driver.session, None, None)
+                .await
+                .unwrap();
+            let SessionEvent::ToolCallDenied { reason, .. } = &rows[1].event else {
+                panic!(
+                    "{outcome:?}: second row is the denial, got {:?}",
+                    rows[1].event
+                );
+            };
+            assert_eq!(
+                reason.starts_with("user did not approve"),
+                names_the_user,
+                "{outcome:?}: the trail names the user only for a human decision: {reason}"
+            );
+        }
     }
 
     #[test]

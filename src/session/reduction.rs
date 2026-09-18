@@ -1890,6 +1890,30 @@ mod tests {
                 allowed: &[],
             },
             LegalShape {
+                // The sandbox capability-elevation card is raised INSIDE the
+                // shell tool's own `execute`, after the confirm gate already
+                // asked and was answered: two park / release pairs on ONE
+                // call, then its receipt (`sandbox::workspace` since the final
+                // review's C1 — before it the second pair had no release, and
+                // a crash during the command read "never ran").
+                name: "elevation-parked call, approved, then result",
+                events: seq_log(vec![
+                    turn_started(),
+                    user("hi"),
+                    started("r1"),
+                    requested("c1"),
+                    parked("c1", ParkReason::Approval),
+                    approved("c1"),
+                    parked("c1", ParkReason::Approval),
+                    approved("c1"),
+                    result_for("c1"),
+                    assistant("done"),
+                    finished("r1"),
+                    run_meta("r1"),
+                ]),
+                allowed: &[],
+            },
+            LegalShape {
                 // A background shell job asks for a capability after the
                 // `bash` call that spawned it already returned its job id
                 // (`bash_exec::spawn_background` re-enters the call identity),
@@ -2023,6 +2047,53 @@ mod tests {
              does the closer of a seed no run ever answered; the abandoned / \
              delegated closers of an interrupted run pair with the open RunStarted"
         );
+    }
+
+    /// The elevation shape, read at the three moments a crash could land
+    /// (final review C1): with the card up it is "never ran" (`parked`); the
+    /// instant the release lands it is OUTCOME UNKNOWN again (`parked: None`,
+    /// still dangling — the command is running); at the receipt nothing
+    /// dangles. The prefix test above only says no prefix is a contradiction;
+    /// this says what each prefix READS as, which is the sentence the model
+    /// is handed after a restart.
+    #[test]
+    fn an_elevation_parked_call_reads_unknown_once_released_and_clean_at_its_receipt() {
+        let shape = legal_shapes()
+            .into_iter()
+            .find(|s| s.name == "elevation-parked call, approved, then result")
+            .expect("the shape is in the list");
+        let release = shape
+            .events
+            .iter()
+            .rposition(|r| matches!(r.event, SessionEvent::ToolCallApproved { .. }))
+            .expect("the shape carries the elevation gate's release");
+        assert!(
+            matches!(
+                shape.events[release - 1].event,
+                SessionEvent::ToolCallParked {
+                    reason: ParkReason::Approval,
+                    ..
+                }
+            ),
+            "the release follows the elevation gate's own park"
+        );
+
+        let card_up = reduced(&shape.events[..release]);
+        assert_eq!(
+            (card_up.dangling.len(), card_up.dangling[0].parked),
+            (1, Some(ParkReason::Approval)),
+            "with the card up the call never ran"
+        );
+        let released = reduced(&shape.events[..=release]);
+        assert_eq!(
+            (released.dangling.len(), released.dangling[0].parked),
+            (1, None),
+            "released ⇒ the command is running: unknown, not never-ran"
+        );
+        assert!(!released.dangling[0].denied);
+        let whole = reduced(&shape.events);
+        assert!(whole.dangling.is_empty() && tags(&whole).is_empty());
+        assert_eq!(whole.progress.tool_calls_answered, 1);
     }
 
     #[test]
