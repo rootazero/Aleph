@@ -97,9 +97,16 @@ pub(super) async fn init_tool_catalog(
 
         // Browser: one shared probe gates the whole `browser_*` family — it
         // asks one prerequisite question per `BrowserDriver` (managed
-        // playwright-cli / Chromium+npx / an obscura-or-Chromium engine for
-        // the cdp driver, which is the auto-injected default). Without any
-        // browser runtime the LLM no longer sees ~24 unusable browser tools.
+        // playwright-cli / Chromium+npx / an obscura binary for the cdp
+        // driver, which is the auto-injected default). Without any browser
+        // runtime the LLM no longer sees ~24 unusable browser tools.
+        //
+        // This comment said "an obscura-or-Chromium engine" until `84b189111`
+        // removed that second half from the gate: a `cdp` profile on
+        // `Engine::Chromium` still needs `playwright-cli`, so a system Chromium
+        // licenses nothing here. `probes::browser::GATE_REQUIREMENTS` is the
+        // one author of the operator-facing sentence; this is prose about it
+        // and has to be re-read when it moves.
         //
         // The obscura runtime config is handed over rather than re-read,
         // because the cdp question includes an operator's

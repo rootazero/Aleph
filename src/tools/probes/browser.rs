@@ -183,8 +183,15 @@ pub(crate) fn existing_session_driver_ready() -> bool {
 /// behind: **a disjunct may only name a prerequisite that is SUFFICIENT for
 /// some launch to be attempted.** A cheap discovery call that the launcher
 /// then ignores is not a prerequisite, it is a coincidence.
+///
 /// [`self::tests::the_cdp_question_never_licenses_a_launch_the_launcher_refuses`]
-/// pins both halves of that reading in-tree.
+/// pins two specific things, and **not** the rule above — say what a guard
+/// covers, not what it is for (判据 §17). It pins ① the launcher's precondition
+/// ORDERING in `chromium.rs`, so the premise cannot change without notifying
+/// this file, and ② the literal token `find_chromium()` appearing exactly once
+/// in this file's production code. ② is a SPELLING census: regrowing this arm
+/// as `|| which::which("chromium").is_ok()` is invisible to it. The rule itself
+/// has no mechanical guard; what it has is this paragraph and a reviewer.
 ///
 /// Chromium-under-cdp is therefore covered exactly once, by
 /// `managed_driver_ready` — which is the same fact, asked where the launcher
@@ -465,16 +472,32 @@ mod tests {
         );
 
         // (b) ---------------------------------------------------------------
-        let me = include_str!("browser.rs").replace('\r', "");
-        let me = production_prefix(&me);
+        //
+        // ⚠️ The corpus is production text with COMMENTS STRIPPED, and both
+        // assertions below read that one string. The first draft stripped
+        // comments only for the count and then sliced the *unstripped* text
+        // for the location — and the slice ran to the next `fn `, i.e. through
+        // the whole of `cdp_driver_ready`'s doc, which quotes
+        // `find_chromium().is_ok()` verbatim to explain why it is not called.
+        // The needle was in the corpus unconditionally, so no state of this
+        // file could fail that assertion: the third self-match in this task,
+        // and the second one inside a commit that fixed the previous one.
+        // Corpus discipline, not mutation discipline — count the copies and
+        // say why each one beyond the subject is allowed to satisfy the rule.
+        let whole = include_str!("browser.rs").replace('\r', "");
+        let production = production_prefix(&whole);
         assert!(
-            !me.is_empty() && me.len() < include_str!("browser.rs").len(),
+            !production.is_empty() && production.len() < whole.len(),
             "the #[cfg(test)] bound matched nothing — this census would be reading \
              its own source"
         );
-        let call_sites: Vec<&str> = me
+        let me: String = production
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let call_sites: Vec<&str> = me
+            .lines()
             .filter(|l| l.contains("find_chromium()"))
             .collect();
         assert_eq!(

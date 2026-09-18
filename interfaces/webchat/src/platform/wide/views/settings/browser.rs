@@ -585,22 +585,68 @@ mod tests {
     /// A source census rather than a render, because this crate compiles for
     /// WASM and has no DOM in `cargo test`: what it can check is that the line
     /// exists, which is exactly the claim.
+    ///
+    /// # The corpus is narrowed twice, and both narrowings are load-bearing
+    ///
+    /// **① to this section.** `value="managed"` occurs TWICE in this file —
+    /// here, and in `DevToolsSection`, where it is a value of
+    /// `devtools_profile`, an unrelated setting. A whole-file `contains` would
+    /// let one section's control satisfy an assertion about the other's.
+    ///
+    /// **② to the `<input>` element itself.** The first draft asserted the
+    /// `checked` comparison appeared anywhere in the file, and the enclosing
+    /// `<label class=…>` conditional satisfies the same needle — so breaking
+    /// ONLY the input's `checked=` (to `move || false`) left this green while
+    /// the radio rendered unselected on the very default it is named for:
+    /// F2's one-way door, verbatim, behind a guard whose failure message
+    /// claims to catch it. Measured: 1272 passed, 0 failed — the clean-HEAD
+    /// count.
+    ///
+    /// The rule both narrowings come from is about the CORPUS, not the
+    /// mutation: `grep -c` the needle, and for every copy beyond the one the
+    /// failure message is about, say why it is allowed to satisfy the rule.
+    /// Here neither extra copy is allowed to, so neither is in the corpus.
     #[test]
     fn the_default_mode_group_offers_every_driver_the_server_can_report() {
-        let src = include_str!("browser.rs");
+        let file = include_str!("browser.rs");
+        // ① this section only.
+        let at = file
+            .find("fn DefaultModeSection")
+            .expect("DefaultModeSection is gone; this census has no subject");
+        let rest = &file[at..];
+        let src = rest.split_once("\nfn ").map_or(rest, |(body, _)| body);
+        assert!(
+            src.len() < file.len(),
+            "the section bound matched the whole file — the corpus is then every \
+             radio in it, including DevToolsSection's, which answers a different \
+             question"
+        );
+
         for wire in aleph_protocol::browser::BROWSER_DRIVER_WIRE {
             let radio = format!("value=\"{wire}\"");
-            assert!(
-                src.contains(&radio),
-                "no radio renders {wire:?}: the server can report it as \
-                 default_driver and this section would show nothing selected, \
-                 with no control that writes it back"
-            );
+            let radio_at = src.find(&radio).unwrap_or_else(|| {
+                panic!(
+                    "no radio renders {wire:?}: the server can report it as \
+                     default_driver and this section would show nothing selected, \
+                     with no control that writes it back"
+                )
+            });
+            // ② this element only: from its `value=` to the `/>` that closes it.
+            let tail = &src[radio_at..];
+            let end = tail.find("/>").unwrap_or_else(|| {
+                panic!(
+                    "the {wire:?} radio is never closed; the corpus below would \
+                        run past it into the next control"
+                )
+            });
+            let element = &tail[..end];
             let checked = format!("default_driver == \"{wire}\"");
             assert!(
-                src.contains(&checked),
-                "the {wire:?} radio has no `checked` comparison, so it renders \
-                 unselected even when it IS the default"
+                element.contains(&checked),
+                "the {wire:?} radio's own `checked=` does not compare against \
+                 default_driver, so it renders unselected even when it IS the \
+                 default — the label's border may still light up, which is what \
+                 made this assertion green while the control was broken"
             );
         }
     }
