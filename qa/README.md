@@ -240,8 +240,44 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # an explicit `compaction_count == 0` precondition:
                                        # raising the burst turns THAT red, not the row count,
                                        # which would otherwise read like data loss.
+./qa/resume_boundary/run.sh unanswered # a crash between the seed (`UserMessage`) and
+                                       # `RunStarted` leaves a session with NO marker, and the
+                                       # boot must still resume that message (§5.2): the wire
+                                       # face reads `unanswered` with resume OFF, the resume-ON
+                                       # boot line says `resumed=1`, one `ResumeAttempted` stamp
+                                       # names the message, the original text reaches the mock,
+                                       # and the session settles `clean`. The window is ~30 ms
+                                       # wide on this host, so memory is switched ON with the
+                                       # mock as the embedding provider and `/v1/embeddings`
+                                       # stalls 10 s — the only remote call inside that window.
+                                       # Step 0 is an ASSERTION, not a thing to eyeball: the
+                                       # stalling embeddings request must fall between the
+                                       # `user_message` row and the kill, and the window must
+                                       # still be open 2 s after it was first seen; otherwise
+                                       # INSTRUMENT FAILURE, never a pass. The same stage carries
+                                       # the §8.2(b) twin on a SECOND session: a kill inside a
+                                       # `BeforeAgentStart` sleeper hook (after the engine's
+                                       # `agent_tasks` row, before the seed) leaves a message no
+                                       # log holds; the next boot writes ONE `SystemMessage`
+                                       # ("…was lost before it was recorded…", `notified=1`),
+                                       # stamps `adjudicated_at_ms`, and the boot after says
+                                       # nothing (`notified=0`, still one note).
+./qa/resume_boundary/run.sh ratchet    # `[resume] max_attempts = 2` counts every crash AFTER
+                                       # the `ResumeAttempted` stamp (§5.1): the stamp is written
+                                       # BEFORE the retrigger, so a crash inside the resumed run's
+                                       # `BeforeAgentStart` hook — admitted, no `RunStarted` yet —
+                                       # still moves the ratchet. Boot 1 → stamp #1, boot 2 →
+                                       # stamp #2, boot 3 → `abandoned=1` with a
+                                       # `RunFinished{abandoned}` closer and no third stamp,
+                                       # boot 4 → nothing. On boots 1–2 the boot-scan line can
+                                       # NOT print (`settle` joins the retrigger, which is inside
+                                       # the hook), so the kill is aimed at the engine's own
+                                       # `Agent execution started` line and the stage asserts the
+                                       # line's ABSENCE for those boots. Every settled boot also
+                                       # asserts `notified=0`: a resume proxy row (empty prompt)
+                                       # and a seeded turn are not lost messages (T16).
 #
-# Two things hold the five r2 stages themselves honest, because a QA fixture is
+# Two things hold the r2 stages themselves honest, because a QA fixture is
 # also code that can stop working without saying so:
 #
 #   * **Every stage has an assertion FLOOR** — the case block at

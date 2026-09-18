@@ -34,6 +34,7 @@
 // process it started. So the shell owns the process lifecycle and this file
 // owns every assertion; each command exits non-zero on its first failed
 // claim and prints the evidence it had.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -46,7 +47,19 @@ if (!PORT || !QA_ROOT) {
   process.exit(2);
 }
 
-const EVENTS_DB = path.join(QA_ROOT, "home", ".aleph", "data", "sessions.db");
+const ALEPH_HOME = path.join(QA_ROOT, "home", ".aleph");
+const EVENTS_DB = path.join(ALEPH_HOME, "data", "sessions.db");
+// The engine's task ledger (`agent_tasks`), a different file from the event
+// log: `persist_run_task_started` writes a row here at admission, BEFORE the
+// `BeforeAgentStart` hook and BEFORE the seed — which is why a kill inside
+// that hook leaves a task row and no `UserMessage` (the §8.2(b) shape).
+const STATE_DB = path.join(ALEPH_HOME, "data", "state.db");
+// Where `tracing` writes. NOT `$QA_ROOT/server.log` (that is the process's
+// stdout: the banner and the boot stamp); the boot-scan line every phase
+// below reads lives in the daily-rotated file under here (measured
+// 2026-09-13 on a kept run: `server.log` holds no INFO line at all).
+const LOG_DIR = path.join(ALEPH_HOME, "logs");
+const MOCK_LOG = path.join(QA_ROOT, "mock.log");
 const REQUEST_LOG = path.join(QA_ROOT, "requests.jsonl");
 const SESSION_FILE = path.join(QA_ROOT, "session_key.txt");
 const LOOPBACK = `ws://127.0.0.1:${PORT}/ws`;
@@ -275,6 +288,224 @@ const lastRunOf = async (conn, sessionKey) => {
   const session = r.result?.session ?? null;
   return { reply: r, session, lastRun: session?.last_run ?? null };
 };
+
+// ---------------------------------------------------------------------------
+// Session-scoped readers, for the stages that hold MORE than one conversation
+// in this ALEPH_HOME (`unanswered` mints a second session for its lost-input
+// sub-step). `eventsOf` above is the whole table on purpose and says so; this
+// is the "resolve the id instead" it asks for. The durable log keys rows by
+// the serialised `SessionId` (`{"type":"main","agent_id":…,"main_key":…,
+// "epoch":N}`, `#[serde(tag = "type")]`), the wire hands out
+// `SessionKey::to_key_string()` (`agent:<agent_id>:<main_key>[:s<epoch>]`,
+// the suffix only when epoch > 0). Matched field by field through
+// `json_extract` rather than by rebuilding the JSON string, so serde's field
+// order is not something this fixture has an opinion about. Main keys only —
+// every session this fixture mints is one, and a key of another shape is an
+// instrument failure, not a session with no events.
+// ---------------------------------------------------------------------------
+
+const MAIN_KEY = /^agent:([^:]+):([^:]+)(?::s(\d+))?$/;
+
+const sessionEvents = (wireKey) => {
+  const m = MAIN_KEY.exec(wireKey);
+  if (!m) {
+    console.error(`INSTRUMENT FAILURE: ${wireKey} is not a Main session key; cannot scope the log to it`);
+    process.exit(1);
+  }
+  return withEvents((db) => {
+    if (!db) return [];
+    return db
+      .prepare(
+        "SELECT seq, event_type, payload_json, retired_at, created_at FROM session_events \
+         WHERE json_extract(session_id, '$.type') = 'main' \
+           AND json_extract(session_id, '$.agent_id') = ? \
+           AND json_extract(session_id, '$.main_key') = ? \
+           AND json_extract(session_id, '$.epoch') = ? \
+         ORDER BY seq ASC",
+      )
+      .all(m[1], m[2], Number(m[3] ?? 0));
+  });
+};
+
+/** Live event types of ONE session, oldest first. */
+const kinds = (wireKey) => sessionEvents(wireKey).filter((r) => r.retired_at === null).map((r) => r.event_type);
+const countKind = (wireKey, k) => kinds(wireKey).filter((t) => t === k).length;
+/** Live rows of one kind, with their payload decoded (`{}` for a row we cannot read). */
+const rowsOfKind = (wireKey, k) =>
+  sessionEvents(wireKey)
+    .filter((r) => r.retired_at === null && r.event_type === k)
+    .map((r) => {
+      let p = {};
+      try {
+        p = JSON.parse(r.payload_json);
+      } catch {
+        /* a row we cannot read is not a claim we can make */
+      }
+      return { ...r, payload: p };
+    });
+const abandonedCount = (wireKey) =>
+  rowsOfKind(wireKey, "run_finished").filter((r) => r.payload.outcome === "abandoned").length;
+
+/** `agent_tasks` rows for one session, oldest first — `[]` when the ledger does not exist yet. */
+const taskRowsOf = (wireKey) => {
+  if (!fs.existsSync(STATE_DB)) return [];
+  const db = new DatabaseSync(STATE_DB, { readOnly: true });
+  try {
+    return db
+      .prepare(
+        "SELECT id, status, lane, task_prompt, created_at, adjudicated_at_ms, metadata_json \
+         FROM agent_tasks WHERE parent_session_id = ? ORDER BY created_at ASC, rowid ASC",
+      )
+      .all(wireKey);
+  } finally {
+    db.close();
+  }
+};
+
+/** Everything `tracing` wrote so far, every rotated file in name order. */
+const serverLogText = () => {
+  if (!fs.existsSync(LOG_DIR)) return "";
+  return fs
+    .readdirSync(LOG_DIR)
+    .filter((f) => f.startsWith("aleph-server.log"))
+    .sort()
+    .map((f) => fs.readFileSync(path.join(LOG_DIR, f), "utf8"))
+    .join("");
+};
+const logLines = (needle) => serverLogText().split("\n").filter((l) => l.includes(needle));
+
+// The one line per boot that reports the boot scan, in the form
+// `…: ResumeCoordinator boot scan finished, scanned=0, resumed=1, abandoned=0,
+// skipped=0, notified=0`. It prints only after `ResumeLaunch::settle`
+// returns, and `settle` JOINS every candidate task — including one whose
+// retrigger is blocked inside a `BeforeAgentStart` hook — so a boot killed
+// while that hook holds the resumed run leaves NO line (the `ratchet` stage
+// asserts exactly that on its first two boots). -1 for a counter the line
+// does not carry, never 0: an absent number is not a zero (判据 #8).
+const BOOT_LINE = "ResumeCoordinator boot scan finished";
+const bootLines = () =>
+  logLines(BOOT_LINE).map((raw) => {
+    const num = (k) => Number((raw.match(new RegExp(`\\b${k}=(\\d+)`)) || [])[1] ?? -1);
+    return {
+      scanned: num("scanned"),
+      resumed: num("resumed"),
+      abandoned: num("abandoned"),
+      skipped: num("skipped"),
+      notified: num("notified"),
+      raw: raw.trim(),
+    };
+  });
+// Which boot a line belongs to. EVERY resume-ON boot prints one — the first
+// boot over an empty log included (`load_run_markers` on nothing is a walked,
+// empty scan) — and a resume-OFF boot prints none, so "the n-th line" is a
+// count the shell would have to keep in step with the config it patched.
+// Instead the shell takes a MARK (`drive boot-mark`) right before the
+// `start_server` whose scan a phase wants, and the phase asks for the line
+// after it — or asserts that none arrived, which is the `ratchet` stage's
+// claim on its held boots.
+const BOOT_MARK = path.join(QA_ROOT, "boot_mark.json");
+const EXEC_STARTED_LINE = "Agent execution started";
+const cmdBootMark = () => {
+  const mark = bootLines().length;
+  const execStarted = logLines(EXEC_STARTED_LINE).length;
+  const requestsLogged = requests().length;
+  fs.writeFileSync(BOOT_MARK, JSON.stringify({ mark, execStarted, requestsLogged }));
+  log(
+    `boot mark: ${mark} boot-scan line(s), ${execStarted} '${EXEC_STARTED_LINE}' line(s), ` +
+      `${requestsLogged} provider request(s) so far`,
+  );
+};
+const readBootMark = () => {
+  try {
+    const m = JSON.parse(fs.readFileSync(BOOT_MARK, "utf8"));
+    return {
+      mark: Number(m.mark),
+      execStarted: Number(m.execStarted),
+      requestsLogged: Number(m.requestsLogged),
+    };
+  } catch {
+    console.error("INSTRUMENT FAILURE: no boot mark — the shell must `drive boot-mark` before the boot it asks about");
+    process.exit(1);
+  }
+};
+const bootMark = () => readBootMark().mark;
+/** The boot-scan line of the boot after the mark: waits for it, returns the newest line (or `null`). */
+const awaitBootLineAfterMark = async (budget = 120_000) => {
+  const mark = bootMark();
+  const lines = await until(() => (bootLines().length > mark ? bootLines() : null), budget, 500);
+  return lines ? lines[lines.length - 1] : null;
+};
+
+/**
+ * Install an approved `BeforeAgentStart` command hook that sleeps `ms`.
+ *
+ * Two files, both under `$ALEPH_HOME` (the loaders follow `get_config_dir`):
+ * `hooks.json` in the Claude-Code-shaped format `user_settings.rs` parses
+ * (global layer → `plugin_name = "user:global"`), and the shell-hook consent
+ * registry `shell-hooks-allowlist.json`, without which the hook is recorded
+ * `pending` and SKIPPED — a stage whose hook never ran would then be
+ * measuring a window that was never opened. The fingerprint is
+ * `ShellHookConsent::fingerprint`: `sha256(plugin_name ‖ 0x00 ‖ command)`,
+ * first 16 hex chars.
+ *
+ * The sleeper is a SCRIPT FILE beside `hooks.json`, run by a relative path
+ * with no quotes and no shell metacharacters — `node qa-resume-sleeper.mjs`
+ * — and that is measured, not fussy: the brief's `node -e "setTimeout(()=>
+ * {}, N)"` exited 1 on the spot (2026-09-18, `Hook command exited with
+ * status Some(1)`), because hooks run under `cmd /C` on Windows
+ * (`executor.rs`), Rust's argument quoting hands cmd
+ * `"node -e \"…(()=>{}…)\""`, and cmd's own quote toggling leaves the `>`
+ * outside any quote — a redirection. The relative path works because the
+ * hook's cwd IS `$ALEPH_HOME` (the `user:global` layer's `plugin_root` is the
+ * directory `hooks.json` was read from, `user_settings.rs::load_into`); on
+ * Windows that cwd is also what keeps the scratch root from being removed
+ * while an orphan sleeps, so the file name doubles as the marker `run.sh`
+ * kills them by. `timeout_secs` is clamped to `MAX_HOOK_TIMEOUT_SECS` (300)
+ * by the executor; the sleep is what bounds an orphan, not that.
+ */
+const SLEEPER_FILE = "qa-resume-sleeper.mjs";
+function cmdHooks(ms) {
+  fs.writeFileSync(path.join(ALEPH_HOME, SLEEPER_FILE), `setTimeout(() => {}, ${Number(ms)});\n`);
+  const command = `node ${SLEEPER_FILE}`;
+  fs.writeFileSync(
+    path.join(ALEPH_HOME, "hooks.json"),
+    JSON.stringify(
+      { hooks: { BeforeAgentStart: [{ hooks: [{ type: "command", command, timeout_secs: 300 }] }] } },
+      null,
+      2,
+    ),
+  );
+  const fingerprint = crypto
+    .createHash("sha256")
+    .update("user:global")
+    .update(Buffer.from([0]))
+    .update(command)
+    .digest("hex")
+    .slice(0, 16);
+  const now = Math.floor(Date.now() / 1000);
+  fs.writeFileSync(
+    path.join(ALEPH_HOME, "shell-hooks-allowlist.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        entries: [
+          {
+            fingerprint,
+            plugin_name: "user:global",
+            command,
+            event: "BeforeAgentStart",
+            status: "approved",
+            first_seen: now,
+            approved_at: now,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  log(`hook installed: ${command} (fp ${fingerprint})`);
+}
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -1154,6 +1385,309 @@ async function cmdCost() {
 }
 
 // ---------------------------------------------------------------------------
+// Stage `unanswered` (§5.2): a crash between the seed and `RunStarted`.
+// ---------------------------------------------------------------------------
+
+const iso = (ms) => new Date(ms).toISOString();
+
+/**
+ * Send a turn and return once the seed is durable but no `RunStarted` is —
+ * the window this stage kills in — and only after proving the window is
+ * being HELD, not merely glimpsed.
+ *
+ * Without the embedding stall the window is ~30 ms wide (measured, see
+ * `patch_r2.mjs` point 5), so a 100 ms poll that happened to land inside it
+ * would let the kill fall on a run that had already reached `RunStarted`,
+ * and the stage would then be measuring the `claims` shape. So: once the
+ * window is seen open, hold for `HOLD_MS` and require it to STILL be open.
+ * A window that closed during the hold means the stall is not on this path —
+ * `INSTRUMENT FAILURE`, exit 1, never a pass.
+ */
+const HOLD_MS = 2000;
+async function cmdWindow(marker = "qa-unanswered") {
+  const conn = new Conn("driver");
+  await conn.open();
+  const started = await sendTurn(conn, `${marker} hello, are you there`, null, null, null);
+  fs.writeFileSync(SESSION_FILE, started.session_key);
+  const key = started.session_key;
+  const open = () => countKind(key, "user_message") >= 1 && countKind(key, "run_started") === 0;
+  const opened = await until(open, 60_000, 100);
+  conn.close();
+  if (!opened) {
+    console.error("INSTRUMENT FAILURE: the seed→RunStarted window never opened (embedding stall not on the path?)");
+    console.error(`  event types: ${kinds(key).join(",") || "none"}`);
+    process.exit(1);
+  }
+  const seenAt = Date.now();
+  await sleep(HOLD_MS);
+  if (!open()) {
+    console.error(`INSTRUMENT FAILURE: the window closed within ${HOLD_MS}ms — nothing is holding the run before RunStarted`);
+    console.error(`  event types: ${kinds(key).join(",")}`);
+    process.exit(1);
+  }
+  const seed = rowsOfKind(key, "user_message")[0];
+  log(
+    `window open on ${key}: user_message seq ${seed.seq} at ${iso(seed.created_at)}, ` +
+      `no run_started ${HOLD_MS}ms after ${iso(seenAt)}`,
+  );
+}
+
+/** The `embeddings request at <iso>; stalling <ms>ms` lines the mock logged, as epoch ms. */
+const embedRequestsAt = () => {
+  if (!fs.existsSync(MOCK_LOG)) return [];
+  return [...fs.readFileSync(MOCK_LOG, "utf8").matchAll(/embeddings request at (\S+); stalling (\d+)ms/g)].map(
+    (m) => ({ at: Date.parse(m[1]), stall: Number(m[2]) }),
+  );
+};
+
+async function cmdUnanswered(phase) {
+  const key = readSession();
+  if (phase === "after-kill") {
+    check(
+      countKind(key, "user_message") === 1 && countKind(key, "run_started") === 0,
+      "kill landed inside the seed→RunStarted window (one user_message, no run_started)",
+      kinds(key).join(","),
+    );
+    // Step 0, as an assertion rather than a thing to eyeball: the stall was
+    // ON the path. The mock's embedding request must sit after the seed row
+    // and before now (the kill has already happened), and it must have been
+    // the stalling kind — a 0 ms stall that happened to be there proves the
+    // route, not the window.
+    const seed = rowsOfKind(key, "user_message")[0];
+    const now = Date.now();
+    const hits = embedRequestsAt();
+    const between = hits.filter((h) => seed && h.at >= seed.created_at && h.at <= now && h.stall > 0);
+    check(
+      between.length >= 1,
+      "Step 0: the mock logged a stalling embeddings request between the user_message row and the kill",
+      `user_message at ${seed ? iso(seed.created_at) : "?"}; embed requests ${show(hits.map((h) => `${iso(h.at)}/${h.stall}ms`))}; now ${iso(now)}`,
+    );
+    if (between.length >= 1) {
+      log(`Step 0 evidence: user_message ${iso(seed.created_at)} < embeddings request ${iso(between[0].at)} (stall ${between[0].stall}ms) < kill ≤ ${iso(now)}`);
+    }
+    return;
+  }
+  const conn = new Conn("driver");
+  await conn.open();
+  if (phase === "before-resume") {
+    const { lastRun } = await lastRunOf(conn, key);
+    check(lastRun?.disposition === "unanswered", "chat.history reads the session as `unanswered`", show(lastRun));
+    check(lastRun?.inspected === true, "and says it looked (inspected: true)", show(lastRun));
+    conn.close();
+    return;
+  }
+  // after-resume. The boot line prints only after the scan SETTLES, and the
+  // scan settles only after the resumed run finishes (the retrigger awaits
+  // `execute`), so wait for the line rather than reading it on arrival.
+  const b = await awaitBootLineAfterMark();
+  check(Boolean(b), "the resume-ON boot printed its boot-scan line", show(bootLines()));
+  check(b?.resumed === 1, "the boot scan resumed the unanswered message (resumed=1)", b?.raw);
+  check(b?.abandoned === 0, "and abandoned nothing", b?.raw);
+  check(b?.notified === 0, "and wrote no lost-input notice — the seed HAD landed (notified=0)", b?.raw);
+  check(countKind(key, "resume_attempted") === 1, "exactly one ResumeAttempted stamp", kinds(key).join(","));
+  check(countKind(key, "tool_error") === 0, "no boundary repair was written (nothing dangled)", kinds(key).join(","));
+  // The MARKER tail, not the last row: `AssistantRunMeta` rides after the
+  // `RunFinished` it bills (measured 2026-09-18: `…,run_finished,
+  // assistant_run_meta`), so "the last event is the closer" is the wrong
+  // shape. What settles the run is the last marker being its closer.
+  const MARKERS = new Set(["run_started", "run_finished", "resume_attempted"]);
+  const lastMarker = () => kinds(key).filter((t) => MARKERS.has(t)).at(-1);
+  const answered = await until(
+    () => countKind(key, "assistant_message") >= 1 && lastMarker() === "run_finished",
+    120_000,
+  );
+  check(Boolean(answered), "the transcript carries an assistant answer and its last marker is the RunFinished", kinds(key).join(","));
+  // A TOOL-SURFACED request logged AFTER the resume-ON boot: the turn itself.
+  // Not "any request carrying the text" — the strategy planner's side channel
+  // (`Task objective: …`, no tools) fires at run start, BEFORE the seed, so
+  // the crashed turn already left one such request behind; under the T7
+  // mutant (no resume at all) that predicate stayed green (measured
+  // 2026-09-18). The mock files no-tools requests as side channels for the
+  // same reason.
+  const since = readBootMark().requestsLogged;
+  const turns = requests()
+    .slice(since)
+    .filter((r) => Array.isArray(r.body?.tools) && r.body.tools.length > 0);
+  check(
+    turns.some((r) => userText(r.body).includes("hello, are you there")),
+    "the resumed run put the original message in front of the model (a tool-surfaced request after the boot)",
+    `${requests().length} requests logged, ${turns.length} tool-surfaced since the boot mark (${since})`,
+  );
+  const settled = await until(async () => {
+    const { lastRun: lr } = await lastRunOf(conn, key);
+    return lr?.disposition === "clean" ? lr : null;
+  }, 60_000, 1000);
+  check(Boolean(settled), "last_run settles to clean", show(settled));
+  const h = await conn.attempt("chat.history", { session_key: key });
+  const rows = h.result?.messages ?? [];
+  check(rows.at(-1)?.role === "assistant", "chat.history's last row is the assistant", show(rows.at(-1)));
+  conn.close();
+}
+
+/**
+ * The §8.2(b) twin, on a SECOND session in the same home: a kill inside the
+ * `BeforeAgentStart` hook, i.e. after `persist_run_task_started` wrote the
+ * engine's task row and BEFORE the orchestrator seeded — so the message is
+ * gone from every log the resume scan reads, and the only trace of it is
+ * that row. The boot must tell the user, once, and stamp the row so the
+ * next boot stays silent.
+ *
+ *   `send`        — send, wait for the task row (state.db), prove no seed.
+ *   `after-kill`  — the same two facts, now that the process is gone.
+ *   `first-boot`  — `notified=1`, ONE SystemMessage carrying the notice.
+ *   `second-boot` — `notified=0`, STILL one (`adjudicated_at_ms` holds).
+ */
+const LOST_INPUT_TEXT = "was lost before it was recorded";
+const NOTICE_PROMPT = "qa-notice this message will be lost before it is recorded";
+
+const lostInputNotes = (key) =>
+  rowsOfKind(key, "system_message").filter((r) => String(r.payload.content ?? "").includes(LOST_INPUT_TEXT));
+
+async function cmdNotice(phase) {
+  if (phase === "send") {
+    const conn = new Conn("driver");
+    await conn.open();
+    const started = await sendTurn(conn, NOTICE_PROMPT, null, null, null);
+    fs.writeFileSync(SESSION_FILE, started.session_key);
+    const key = started.session_key;
+    // The row is the instrument: without it there is nothing for the boot to
+    // adjudicate and `notified=0` would be green for the wrong reason.
+    const row = await until(() => taskRowsOf(key).find((t) => t.status === "running") || null, 30_000, 100);
+    conn.close();
+    if (!row) {
+      console.error("INSTRUMENT FAILURE: no running agent_tasks row for the held turn (persist_run_task_started did not run?)");
+      console.error(`  rows for ${key}: ${show(taskRowsOf(key))}`);
+      process.exit(1);
+    }
+    await sleep(1000);
+    if (countKind(key, "user_message") !== 0) {
+      console.error("INSTRUMENT FAILURE: a user_message landed while the hook should have been holding the run");
+      console.error(`  event types: ${kinds(key).join(",")}`);
+      process.exit(1);
+    }
+    log(`held on ${key}: task ${row.id} running since ${iso(row.created_at * 1000)}, no user_message after 1000ms`);
+    return;
+  }
+  const key = readSession();
+  if (phase === "after-kill") {
+    const rows = taskRowsOf(key);
+    check(countKind(key, "user_message") === 0, "no user_message ever landed for the held turn", kinds(key).join(",") || "(no events)");
+    check(countKind(key, "run_started") === 0, "and no run_started", kinds(key).join(",") || "(no events)");
+    check(
+      rows.length === 1 && rows[0].status === "running" && rows[0].task_prompt === NOTICE_PROMPT,
+      "exactly one agent_tasks row for that session, still `running`, carrying the prompt",
+      show(rows),
+    );
+    return;
+  }
+  const b = await awaitBootLineAfterMark();
+  check(Boolean(b), `${phase}: the boot scan printed its line`, show(bootLines()));
+  const notes = lostInputNotes(key);
+  if (phase === "first-boot") {
+    check(b?.notified === 1, "first boot: the scan wrote one lost-input notice (notified=1)", b?.raw);
+    check(b?.resumed === 0, "and resumed nothing — there was no seed to resume", b?.raw);
+    check(notes.length === 1, "exactly one SystemMessage on that session says the message was lost", show(kinds(key)));
+    check(
+      String(notes[0]?.payload.content ?? "").includes("«qa-notice this message"),
+      "and quotes the head of the lost prompt so the user knows which one",
+      show(notes[0]?.payload),
+    );
+    const row = taskRowsOf(key)[0];
+    check(
+      row?.status === "interrupted" && row?.adjudicated_at_ms !== null && row?.adjudicated_at_ms !== undefined,
+      "the task row now reads `interrupted` and carries adjudicated_at_ms",
+      show(row),
+    );
+    return;
+  }
+  // second-boot: idempotence.
+  check(b?.notified === 0, "second boot: no further notice (notified=0)", b?.raw);
+  check(notes.length === 1, "STILL exactly one lost-input SystemMessage on that session", show(kinds(key)));
+}
+
+// ---------------------------------------------------------------------------
+// Stage `ratchet` (§5.1): `[resume] max_attempts` counts every crash AFTER the
+// `ResumeAttempted` stamp, and abandons at the cap.
+// ---------------------------------------------------------------------------
+
+const RETRIGGER_LINE = "resume: re-triggering interrupted run";
+
+/**
+ * Wait until boot `n`'s resume is admitted and (by construction) held by the
+ * `BeforeAgentStart` sleeper, so the shell can kill there.
+ *
+ * The signal is the engine's own `Agent execution started` line — the one it
+ * logs right after `persist_run_task_started`, before the run loop reaches the
+ * hook — one more of them than the boot mark recorded. NOT the boot-scan
+ * line: `settle` joins the retrigger, the retrigger awaits the run, the run is
+ * inside the hook — that line cannot print before the kill (see `bootLines`).
+ * And deliberately NOT the stamp: waiting for the stamp here would turn the
+ * T6 mutation (stamp moved after the retrigger) into a hold timeout instead
+ * of the named red `cmdRatchet` carries for it. The grace covers the gap
+ * between that line and the hook's spawn; a kill inside it is still before
+ * `RunStarted` (a resume skips the seed, and the marker comes after the
+ * prompt build).
+ */
+async function cmdRatchetHold(boot) {
+  const n = Number(boot);
+  const before = readBootMark().execStarted;
+  const seen = await until(
+    () => (logLines(EXEC_STARTED_LINE).length > before ? logLines(EXEC_STARTED_LINE).length : null),
+    120_000,
+    300,
+  );
+  if (!seen) {
+    console.error(
+      `INSTRUMENT FAILURE: boot ${n}: the resumed run was never admitted (still ${before} '${EXEC_STARTED_LINE}' line(s))`,
+    );
+    console.error(`  boot lines: ${show(bootLines())}`);
+    process.exit(1);
+  }
+  await sleep(1500);
+  log(`boot ${n}: resumed run admitted (${before} -> ${seen} '${EXEC_STARTED_LINE}' lines); the hook holds it`);
+}
+
+async function cmdRatchet(boot) {
+  const key = readSession();
+  const n = Number(boot);
+  const stamps = countKind(key, "resume_attempted");
+  if (n <= 2) {
+    check(stamps === n, `boot ${n}: ${n} ResumeAttempted stamp(s) on the log — the ratchet moved BEFORE the retrigger`, kinds(key).join(","));
+    check(
+      logLines(RETRIGGER_LINE).length === n,
+      `boot ${n}: ${n} retrigger(s) actually launched (the stamp is followed by a real re-run)`,
+      show(logLines(RETRIGGER_LINE)),
+    );
+    check(countKind(key, "run_started") === 1, `boot ${n}: the resumed run never reached RunStarted (hook held it)`, kinds(key).join(","));
+    check(
+      bootLines().length === bootMark(),
+      `boot ${n}: no boot-scan line for this boot — the scan was still joined on the held retrigger when the kill landed`,
+      show(bootLines()),
+    );
+    check(abandonedCount(key) === 0, `boot ${n}: nothing abandoned yet`, kinds(key).join(","));
+    return;
+  }
+  // Boots 3 and 4 settle (nothing is held), so their line arrives.
+  const b = await awaitBootLineAfterMark();
+  check(Boolean(b), `boot ${n}: the boot scan printed its line`, show(bootLines()));
+  if (n === 3) {
+    check(b?.resumed === 0 && b?.abandoned === 1, "boot 3: attempts == max_attempts(2) → abandoned=1, resumed=0", b?.raw);
+    check(abandonedCount(key) === 1, "one RunFinished{abandoned} closer on the log", kinds(key).join(","));
+    check(stamps === 2, "no third stamp", kinds(key).join(","));
+    check(logLines(RETRIGGER_LINE).length === 2, "and no third retrigger", show(logLines(RETRIGGER_LINE)));
+  } else {
+    check(b?.resumed === 0 && b?.abandoned === 0, "boot 4: nothing to resume, nothing abandoned", b?.raw);
+    check(abandonedCount(key) === 1, "boot 4: the closer is still the only one", kinds(key).join(","));
+    check(stamps === 2, "boot 4: still two stamps", kinds(key).join(","));
+  }
+  // T16 on this log: every task row here is either the dangle turn (whose
+  // seed DID land) or a resume re-trigger (`task_prompt == ""`); neither is
+  // a lost message, so no notice may be written for them.
+  check(b?.notified === 0, `boot ${n}: no lost-input notice for a resume proxy or a seeded turn (notified=0)`, b?.raw);
+  check(lostInputNotes(key).length === 0, `boot ${n}: and no lost-input SystemMessage on the session`, show(kinds(key)));
+}
+
+// ---------------------------------------------------------------------------
 
 const main = async () => {
   switch (CMD) {
@@ -1195,6 +1729,27 @@ const main = async () => {
       break;
     case "cost":
       await cmdCost();
+      break;
+    case "hooks":
+      cmdHooks(REST[0] ?? 300_000);
+      break;
+    case "boot-mark":
+      cmdBootMark();
+      break;
+    case "window":
+      await cmdWindow(REST[0]);
+      break;
+    case "unanswered":
+      await cmdUnanswered(REST[0] ?? "after-kill");
+      break;
+    case "notice":
+      await cmdNotice(REST[0] ?? "send");
+      break;
+    case "ratchet-hold":
+      await cmdRatchetHold(REST[0]);
+      break;
+    case "ratchet":
+      await cmdRatchet(REST[0]);
       break;
     default:
       console.error(`unknown command: ${CMD}`);

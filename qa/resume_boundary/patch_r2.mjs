@@ -30,16 +30,36 @@
 //  4. **Memory / cron / heartbeat / mcp / acp / evolution / skills off.** None
 //     of them is under test, and each is a timer that can rewrite the log this
 //     fixture reads.
+//  5. **`embed-stall` (6th argument) turns memory back ON with the mock as the
+//     embedding provider.** The `unanswered` stage needs a crash between the
+//     seed (`UserMessage`) and `RunStarted`, and that window is ~30 ms wide
+//     on this host (measured 2026-09-13: seq 2 at …762, seq 3 at …790). The
+//     only remote call inside it is the memory recall's query embedding
+//     (`prompt_build.rs` → `build_memory_user_message` → `embedder.embed`), so
+//     a provider that stalls `/v1/embeddings` is what stretches the window to
+//     something a `kill -9` can be aimed into. No production failpoint.
+//     `preset = "ollama"` is load-bearing: `validate_api_base`
+//     (`src/memory/embedding_provider.rs`) refuses `http://` and loopback
+//     for every other preset, and the brief's `custom` would have made the
+//     provider fail to initialise — memory silently FTS-only, no embed call,
+//     no window, and a stage that "passes" by measuring nothing.
+//  6. **`QA_MAX_ATTEMPTS`** (env) sets `[resume] max_attempts` for the
+//     `ratchet` stage.
 //
-// usage: patch_r2.mjs <config.toml> <gateway-port> <mock-port> <resume:true|false> [bash-policy]
+// usage: patch_r2.mjs <config.toml> <gateway-port> <mock-port> <resume:true|false> [bash-policy] [embed-stall]
 import fs from "node:fs";
 
-const [path, gatewayPort, mockPort, resumeEnabled = "true", bashPolicy = "allow"] =
+const [path, gatewayPort, mockPort, resumeEnabled = "true", bashPolicy = "allow", mode = ""] =
   process.argv.slice(2);
 if (!path || !gatewayPort || !mockPort) {
-  console.error("usage: patch_r2.mjs <config.toml> <gateway-port> <mock-port> [resume] [bash-policy]");
+  console.error("usage: patch_r2.mjs <config.toml> <gateway-port> <mock-port> [resume] [bash-policy] [embed-stall]");
   process.exit(2);
 }
+if (mode !== "" && mode !== "embed-stall") {
+  console.error(`patch_r2: unknown 6th argument ${JSON.stringify(mode)} (only "embed-stall" is known)`);
+  process.exit(2);
+}
+const embedStall = mode === "embed-stall";
 
 let src = fs.readFileSync(path, "utf8");
 
@@ -69,6 +89,13 @@ const dropSections = (text, pred) => {
 };
 
 src = dropSections(src, (s) => /^(channels|providers|agents|policies\.tool_permissions\.overrides)/.test(s));
+// Every `[[memory.embedding.providers]]` table goes, the generated defaults
+// included: this file is re-run on the same config several times per stage,
+// so anything appended below has to be dropped here first or the second pass
+// leaves two tables with the same id. The defaults are not needed either — an
+// `auto` resolver that could fall back to one of them would give the stage a
+// provider that answers instead of stalling.
+if (embedStall) src = dropSections(src, (s) => s === "memory.embedding.providers");
 
 /** Set `key = value` inside `[section]`, creating the section if absent. */
 const setKey = (text, section, key, value) => {
@@ -94,6 +121,19 @@ const setKey = (text, section, key, value) => {
   return next;
 };
 
+/** Remove `key = …` from `[section]` (a no-op when either is absent). */
+const dropKey = (text, section, key) => {
+  const out = [];
+  let cur = null;
+  for (const line of text.split(/\r?\n/)) {
+    const h = headerName(line);
+    if (h !== null) cur = h;
+    else if (cur === section && keyName(line) === key) continue;
+    out.push(line);
+  }
+  return out.join("\n") + "\n";
+};
+
 for (const [section, key, value] of [
   ["gateway", "port", gatewayPort],
   ["resume", "enabled", resumeEnabled],
@@ -107,6 +147,31 @@ for (const [section, key, value] of [
   ["memory.dreaming", "enabled", "false"],
 ]) {
   src = setKey(src, section, key, value);
+}
+
+if (process.env.QA_MAX_ATTEMPTS) {
+  src = setKey(src, "resume", "max_attempts", process.env.QA_MAX_ATTEMPTS);
+}
+if (embedStall) {
+  src = setKey(src, "memory", "enabled", "true");
+  src = setKey(src, "memory.embedding", "active_provider_id", '"qa-embed"');
+  // The generated config spells the (empty) provider list INLINE —
+  // `providers = []` under `[memory.embedding]` (measured 2026-09-18) — and
+  // TOML refuses an array-of-tables header for a key that inline array
+  // already defines (`duplicate key providers in table memory.embedding`,
+  // and the server boots on defaults: memory OFF, no window, no stage).
+  src = dropKey(src, "memory.embedding", "providers");
+  src += `
+[[memory.embedding.providers]]
+id = "qa-embed"
+name = "QA embed (stalls)"
+preset = "ollama"
+api_base = "http://127.0.0.1:${mockPort}/v1"
+api_key = "qa-dummy"
+models = ["qa-embed"]
+dimensions = 8
+timeout_ms = 60000
+`;
 }
 
 src += `
@@ -159,5 +224,7 @@ if (dupes.length > 0) {
 }
 
 console.log(
-  `patched ${path}: gateway ${gatewayPort}, mock ${mockPort}, resume=${resumeEnabled}, bash=${bashPolicy}`,
+  `patched ${path}: gateway ${gatewayPort}, mock ${mockPort}, resume=${resumeEnabled}, bash=${bashPolicy}` +
+    (embedStall ? ", memory=on (qa-embed via the mock)" : "") +
+    (process.env.QA_MAX_ATTEMPTS ? `, max_attempts=${process.env.QA_MAX_ATTEMPTS}` : ""),
 );

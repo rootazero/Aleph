@@ -46,8 +46,8 @@ MOCK_PORT="${MOCK_PORT:-18832}"
 
 case "$STAGE" in
   crash|attribute) ;;
-  claims|denied|rewind|knobs|holes|parked) ;;
-  *) echo "unknown stage: $STAGE (crash|attribute|claims|denied|rewind|knobs|holes|parked)" >&2; exit 64 ;;
+  claims|denied|rewind|knobs|holes|parked|unanswered|ratchet) ;;
+  *) echo "unknown stage: $STAGE (crash|attribute|claims|denied|rewind|knobs|holes|parked|unanswered|ratchet)" >&2; exit 64 ;;
 esac
 
 # Build BEFORE HOME is redirected: cargo's registry/git-cache/toolchain all
@@ -108,9 +108,28 @@ hard_kill_server() {
   SERVER_PID=""
 }
 
+# The `BeforeAgentStart` sleepers `drive hooks` installs outlive a `kill -9`
+# of the server (nothing on Windows kills a dead process's children), and
+# their cwd is `$ALEPH_HOME` — the hook's `plugin_root` — so an orphan that is
+# still sleeping when `cleanup` runs keeps `rm -rf "$QA_ROOT"` from finishing.
+# They are found by the script name on their command line
+# (`drive_r2.mjs::cmdHooks` writes `qa-resume-sleeper.mjs`), never by image
+# name (that would take every `node` on the box, this fixture's own drivers
+# included).
+kill_sleepers() {
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -f qa-resume-sleeper 2>/dev/null || true
+  elif command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command \
+      "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*qa-resume-sleeper*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" \
+      >/dev/null 2>&1 || true
+  fi
+}
+
 cleanup() {
   [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
   [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
+  kill_sleepers
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
 trap cleanup EXIT
@@ -245,6 +264,8 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
     knobs)  FLOOR=10 ;;
     holes)  FLOOR=12 ;;
     parked) FLOOR=11 ;;
+    unanswered) FLOOR=26 ;;  # measured 2026-09-18 (2+2+10 main flow, 3+6+3 lost-input twin)
+    ratchet)    FLOOR=23 ;;  # measured 2026-09-18 (5+5 held boots, 7+6 settled boots)
     *)      FLOOR=0 ;;
   esac
   case "$STAGE" in
@@ -371,6 +392,93 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
       [ "$RC" = "0" ] && { start_server || exit 1; }
       [ "$RC" = "0" ] && { drive holes "$QA_ROOT/server.log" after || RC=1; }
       ;;
+    unanswered)
+      # §5.2: a crash between the seed (`UserMessage`) and `RunStarted` leaves
+      # a marker-less session, and the boot must resume the message anyway.
+      # The window is ~30 ms wide on this host; memory is switched ON with the
+      # mock as the embedding provider so the query embedding — the only
+      # remote call inside that window — stalls 10 s (patch_r2.mjs, point 5).
+      # Step 0 is the driver's own assertion, not a thing to eyeball: the
+      # stalling embeddings request must fall between the user_message row
+      # and the kill, or the stage is an INSTRUMENT FAILURE, never a pass.
+      node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true "$BASH_POLICY" embed-stall >/dev/null || exit 1
+      kill -9 "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null
+      QA_EMBED_STALL_MS="${QA_EMBED_STALL_MS:-10000}" node "$HERE/mock_r2.mjs" "$MOCK_PORT" "$R2_REQUESTS" >"$QA_ROOT/mock.log" 2>&1 &
+      MOCK_PID=$!; sleep 1
+      start_server || exit 1
+      drive window qa-unanswered || { echo "instrument failure: the seed→RunStarted window never opened" >&2; RC=1; }
+      hard_kill_server
+      [ "$RC" = "0" ] && { drive unanswered after-kill || RC=1; }
+      # The stall-phase mock log is the Step-0 evidence; keep it before the
+      # mock is restarted below (its log is truncated on restart).
+      cp "$QA_ROOT/mock.log" "$QA_ROOT/mock.stall.log" 2>/dev/null
+      # Boot with resume OFF first: the wire face must say `unanswered` on its
+      # own, before anything has repaired the session. The mock is restarted
+      # without a stall so that every later embedding request answers at once.
+      kill -9 "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null
+      QA_EMBED_STALL_MS=0 node "$HERE/mock_r2.mjs" "$MOCK_PORT" "$R2_REQUESTS" >"$QA_ROOT/mock.log" 2>&1 &
+      MOCK_PID=$!; sleep 1
+      node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" false "$BASH_POLICY" embed-stall >/dev/null || exit 1
+      [ "$RC" = "0" ] && { start_server || exit 1; drive unanswered before-resume || RC=1; hard_kill_server; }
+      # Resume ON: the boot scan must find the marker-less session through the
+      # activity window and re-run the message.
+      node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true "$BASH_POLICY" embed-stall >/dev/null || exit 1
+      [ "$RC" = "0" ] && { drive boot-mark || RC=1; }
+      [ "$RC" = "0" ] && { start_server || exit 1; drive unanswered after-resume || RC=1; hard_kill_server; }
+      # §8.2(b), the twin on a SECOND session: a kill inside the
+      # `BeforeAgentStart` hook — after the engine wrote its task row, before
+      # the orchestrator seeded — leaves a message NO log holds. The boot must
+      # tell the user once (a SystemMessage on that session, `notified=1`) and
+      # stamp the row (`adjudicated_at_ms`) so the next boot says nothing.
+      # The hook is installed with the server DOWN: hooks.json is read at boot.
+      [ "$RC" = "0" ] && { drive hooks 120000 || RC=1; }
+      [ "$RC" = "0" ] && { start_server || exit 1; drive notice send || RC=1; }
+      hard_kill_server
+      [ "$RC" = "0" ] && { drive notice after-kill || RC=1; }
+      [ "$RC" = "0" ] && { drive boot-mark || RC=1; }
+      [ "$RC" = "0" ] && { start_server || exit 1; drive notice first-boot || RC=1; hard_kill_server; }
+      [ "$RC" = "0" ] && { drive boot-mark || RC=1; }
+      [ "$RC" = "0" ] && { start_server || exit 1; drive notice second-boot || RC=1; }
+      kill_sleepers
+      ;;
+    ratchet)
+      # §5.1: `[resume] max_attempts = 2`. The stamp is written BEFORE the
+      # retrigger, so a crash anywhere before the resumed run's own RunStarted
+      # counts: boot 1 (0 stamps → stamp #1), boot 2 (1 → #2), boot 3 (2 ≥ 2 →
+      # abandon), boot 4 (clean, nothing to do). The crash is aimed with a
+      # `BeforeAgentStart` sleeper — the resumed run is admitted, its task row
+      # written, and then it waits in the hook until the kill lands.
+      #
+      # On boots 1 and 2 the boot-scan line can NOT appear: `settle` joins the
+      # retrigger, the retrigger awaits the run, the run is inside the hook. So
+      # the kill is aimed at the engine's `Agent execution started` line
+      # (`drive ratchet-hold`), and boots 1–2 assert the ABSENCE of a scan line
+      # for that boot; boots 3–4 wait for theirs.
+      QA_MAX_ATTEMPTS=2 node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true "$BASH_POLICY" >/dev/null || exit 1
+      start_server || exit 1
+      drive dangle qa-dangle || { echo "instrument failure: no dangle" >&2; RC=1; }
+      hard_kill_server
+      # Installed AFTER the first crash so the dangle turn itself was not held.
+      [ "$RC" = "0" ] && { drive hooks 300000 || RC=1; }
+      for n in 1 2 3 4; do
+        [ "$RC" = "0" ] || break
+        drive boot-mark || { RC=1; break; }
+        start_server || exit 1
+        if [ "$n" -le 2 ]; then
+          drive ratchet-hold "$n" || { echo "boot $n: the resumed run was never admitted" >&2; RC=1; }
+          hard_kill_server
+        else
+          # Nothing to hold: let the scan settle, assert, then stop cleanly.
+          drive ratchet "$n" || RC=1
+          hard_kill_server
+          continue
+        fi
+        [ "$RC" = "0" ] && { drive ratchet "$n" || RC=1; }
+      done
+      # Orphaned sleepers self-terminate (300 s); belt and braces, and it is
+      # what lets `rm -rf "$QA_ROOT"` finish on Windows (their cwd is inside).
+      kill_sleepers
+      ;;
   esac
 
   say "mock provider log"; tail -20 "$QA_ROOT/mock.log"
@@ -396,7 +504,7 @@ fi
 # nobody had checked which of the two it gets wrong.
 if [ "$(python3 -c 'print("py-ok")' 2>/dev/null)" != "py-ok" ]; then
   echo "stage '$STAGE' is Python and this host has no usable python3 (both python3 and python are the WindowsApps stub: no output, exit 49)." >&2
-  echo "The round-2 stages cover this tree and are Node: claims | denied | rewind | knobs | holes | parked" >&2
+  echo "The round-2 stages cover this tree and are Node: claims | denied | rewind | knobs | holes | parked | unanswered | ratchet" >&2
   exit 78
 fi
 

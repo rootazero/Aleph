@@ -25,6 +25,17 @@
 // the model", which is the question every producer-side unit test in
 // `session::boundary_repair` cannot answer.
 //
+// `POST /v1/embeddings` is the one route that is NOT a model turn: the
+// `unanswered` stage points the memory layer's embedding provider here
+// (`patch_r2.mjs embed-stall`) and this route waits `$QA_EMBED_STALL_MS`
+// before answering a valid 8-dim vector. The wait is the stage's instrument —
+// it stretches the seed→RunStarted window (~30 ms on this host) into
+// something a `kill -9` can be aimed into — so the line it logs carries a
+// wall-clock ISO stamp: the driver's Step-0 check reads it back and proves
+// the request fell between the `user_message` row and the kill. Deliberately
+// kept out of the request log and the turn counter: neither an embedding
+// request nor its answer was ever put in front of the model.
+//
 // usage: mock_r2.mjs <port> <request-log>
 import http from "node:http";
 import fs from "node:fs";
@@ -94,11 +105,34 @@ const decide = (body) => {
 
 const sse = (p) => Buffer.from(`event: ${p.type}\ndata: ${JSON.stringify(p)}\n\n`);
 
+const EMBED_STALL_MS = Number(process.env.QA_EMBED_STALL_MS || 0);
+
 const server = http.createServer((req, res) => {
   if (req.method !== "POST") {
     const raw = JSON.stringify({ data: [{ id: "qa-model-a", type: "model" }] });
     res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(raw) });
     res.end(raw);
+    return;
+  }
+  if (req.url.endsWith("/embeddings")) {
+    // Drain the body so the connection is reusable, but never log it: this
+    // is not a model turn (see the header).
+    req.on("data", () => {});
+    req.on("end", () => {
+      log(`embeddings request at ${new Date().toISOString()}; stalling ${EMBED_STALL_MS}ms`);
+      setTimeout(() => {
+        const raw = JSON.stringify({
+          object: "list",
+          data: [{ object: "embedding", index: 0, embedding: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] }],
+          model: "qa-embed",
+          usage: { prompt_tokens: 1, total_tokens: 1 },
+        });
+        res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(raw) });
+        res.end(raw);
+      }, EMBED_STALL_MS);
+    });
+    req.on("error", (e) => log("embeddings request stream error (server killed?):", e.message));
+    res.on("error", (e) => log("embeddings response stream error (server killed?):", e.message));
     return;
   }
   const chunks = [];
@@ -192,4 +226,6 @@ const server = http.createServer((req, res) => {
   res.on("error", (e) => log("response stream error (server killed?):", e.message));
 });
 
-server.listen(PORT, "127.0.0.1", () => log(`listening on 127.0.0.1:${PORT}, burst size ${BURST}`));
+server.listen(PORT, "127.0.0.1", () =>
+  log(`listening on 127.0.0.1:${PORT}, burst size ${BURST}, embedding stall ${EMBED_STALL_MS}ms`),
+);
