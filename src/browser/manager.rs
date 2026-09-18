@@ -765,16 +765,33 @@ impl ProfileManager {
     /// settings (判据 §1 — the comment was the lying half).
     ///
     /// What is still deferred is the SESSION-level sweep:
-    /// [`Self::idle_managed_profiles`] filters on `driver == Managed` and
-    /// judges through `playwright_cli_driver.chromium_alive`, which knows
-    /// nothing about engines — a `Cdp` profile selected there would be judged
-    /// by a predicate that cannot answer for it, and there is no per-profile
-    /// engine shutdown for it to call anyway (`EngineRegistry` exposes
-    /// `shutdown_all`, nothing narrower). **So an idle CDP engine is not torn
-    /// down until the daemon exits**, which after the flip is the default
-    /// profile's behaviour and is named here rather than discovered from a
-    /// long-lived obscura. The QA's `reap` scenario refuses
-    /// `ALEPH_QA_DRIVER=cdp` for the same reason.
+    /// [`Self::idle_managed_profiles`] filters on `driver == Managed`, so a
+    /// `Cdp` profile is never selected. **An idle CDP engine is therefore not
+    /// torn down until the daemon exits**, and after the flip that is every
+    /// install's `default` profile: its `idle_timeout_secs` is a setting with
+    /// a writer and no reader — the same shape [`Self::reap_idle_tabs`] was
+    /// widened to fix, one level up.
+    ///
+    /// ⚠️ **The reason this doc used to give for the deferral was false, and
+    /// it was cited.** It said the predicate could not answer for a `Cdp`
+    /// profile and that "there is no per-profile engine shutdown for it to
+    /// call anyway (`EngineRegistry` exposes `shutdown_all`, nothing
+    /// narrower)". Both halves are contradicted by modules it names:
+    ///
+    /// * `EngineRegistry::remove` (`engine/registry.rs:251`) takes one
+    ///   profile's handle out of the map — "the caller owns stopping it" —
+    ///   and `EngineHandle::shutdown` (`engine/mod.rs:603`) is a `pub async`
+    ///   per-handle stop. Together those ARE the per-profile shutdown the
+    ///   sentence said did not exist.
+    /// * The liveness half is answered forty lines above, in
+    ///   [`Self::session_active`], whose `Cdp` arm is `engines.is_live(name)`.
+    ///
+    /// So the gap is real but the deferral is a scheduling decision, not an
+    /// impossibility — carried as a task-level item rather than argued away
+    /// here. A written-down reason that does not survive reading the modules
+    /// it names is worse than no reason: it is load-bearing the moment
+    /// somebody cites it (判据 §1). The QA's `reap` scenario refuses
+    /// `ALEPH_QA_DRIVER=cdp` for the same underlying gap.
     ///
     /// It does **not** mean nothing ever removes an entry. [`Self::forget_tab`]
     /// is called when a tab is closed, for every driver — the cheap half, and
