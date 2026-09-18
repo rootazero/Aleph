@@ -224,7 +224,7 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # in the TRACING log files
                                        # (`$ALEPH_HOME/logs/aleph-server.log.<date>`) — 0 of each
                                        # at the default `QA_BURST=40` (83 projectable events;
-                                       # re-measured 2026-09-18 at commit T22_FIX1_SHA, the `holes`
+                                       # re-measured 2026-09-18 at commit `efe648878`, the `holes`
                                        # phase printing the file names it counted). Until then
                                        # the driver counted those lines in `$QA_ROOT/server.log`,
                                        # the process's STDOUT, which never holds a tracing line —
