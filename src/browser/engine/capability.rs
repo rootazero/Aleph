@@ -854,21 +854,36 @@ mod tests {
                     // comment is the half that lies (判据 §1). A paraphrase is
                     // not a cheaper copy of a measurement, it is a second one.
                     //
-                    // ⚠️ **This comment deliberately does not reproduce any of
-                    // the texts this rule checks.** It only has to say what the
-                    // rule is; quoting an example here would make the search
-                    // corpus contain its own needle and the guard 恒绿 for that
-                    // row — the same self-match `allow_file_access_appears_
-                    // nowhere_in_the_browser_subsystem` splits its needle with
-                    // `concat!` to avoid. The first draft of this guard did
-                    // exactly that and was caught by counting the copies before
-                    // mutating it (判据 §6).
+                    // ⚠️ **The corpus is the PRODUCTION prefix, and this
+                    // comment reproduces none of the texts the rule checks.**
+                    //
+                    // Two self-matches, found one at a time, which is the
+                    // lesson. The first draft quoted an example right here and
+                    // was caught by counting copies before mutating (判据 §6):
+                    // three, one of them the guard's own. Removing that left
+                    // TWO — and the second was `Judge::Effect`'s doc, ten lines
+                    // up, also inside `mod tests`. A guard that searches the
+                    // whole file finds the prose ABOUT the rule and certifies
+                    // the row on it, so paraphrasing the row itself stayed
+                    // green (measured by the re-review: 14 passed, 0 failed).
+                    // `production_prefix` is what makes the corpus the thing
+                    // the rule is about — the same scoping
+                    // `chromium.rs`'s `the_launch_source_still_names_the_
+                    // requests_own_browser_type` already uses.
                     //
                     // Comment markers are stripped and whitespace collapsed
                     // before comparing, because these texts are line-wrapped
                     // inside `//` blocks; without that this would be 恒红 on a
                     // correctly-quoted file (判据 §2's fourth face).
-                    let flat = flatten(include_str!("capability.rs"));
+                    let whole = include_str!("capability.rs");
+                    let production = crate::utils::source_scan::production_prefix(whole);
+                    assert!(
+                        !production.is_empty() && production.len() < whole.len(),
+                        "the #[cfg(test)] bound matched nothing or everything — the \
+                         corpus is then either this guard's own prose or empty, and \
+                         neither can falsify a paraphrase"
+                    );
+                    let flat = flatten(&production);
                     let needle = flatten(protocol);
                     assert!(
                         flat.contains(&needle),
