@@ -129,11 +129,13 @@ pub struct RepairReport {
     /// boot the routine ones outnumber the crash: an errored or cancelled run
     /// (the meta is emitted only on the engine's `Ok` arm), a slash-command
     /// fast-path turn (no model call, no meta), a run the resume coordinator
-    /// closed as `Abandoned` and then repainted, the parent side of a session
-    /// split (its closer is the split's, the run goes on in the child), and
-    /// the process dying between `RunFinished` and the meta. Carries the
-    /// `run_id` alone (the gauge is unknown and is never written as zeros).
-    /// Only a [`HealScope::WholeSession`] pass writes these — see
+    /// closed as `Abandoned` and then repainted, the CHILD side of a session
+    /// split (the meta lands on the parent — `execute()` stamps
+    /// `request.session_key` and never learns the adopted child — so the
+    /// child's post-split span is the meta-less one), and the process dying
+    /// between `RunFinished` and the meta. Carries the `run_id` alone (the
+    /// gauge is unknown and is never written as zeros). Only a
+    /// [`HealScope::WholeSession`] pass writes these — see
     /// [`synthesize_missing_stamps`].
     pub stamps_synthesized: usize,
     /// Of the stamps above (re-applied or synthesized), how many also
@@ -675,13 +677,17 @@ impl RunSpan {
 /// is given, and over `[start, end)` that is `start`. A split child's log
 /// carries the parent's opener copied inside the tail and the child's own
 /// opener last (`session_split`); the copied one opens a span that is never
-/// closed, and so is never synthesized. The parent side is the opposite: its
-/// log ends `RunStarted(p) … RunFinished { split_run_id }` and no meta ever
-/// follows (the run goes on in the child, whose meta bills the child's range
-/// only), so every split parent inside the window is a finished-without-meta
-/// span — synthesized and billed for its pre-split calls at the next boot,
-/// which before this fold were billed nowhere. Assistant messages count into
-/// the newest span only while it is open.
+/// closed, and so is never synthesized. The split's meta lands on the
+/// PARENT: `execute()` stamps `request.session_key` and never learns the
+/// adopted child (`final_session_id()` is read only by the harness bridge,
+/// for the `RunFinished`), so the parent's `RunStarted(p) … RunFinished {
+/// split_run_id } … AssistantRunMeta` is a span WITH a meta — billed live by
+/// the meta arm for its pre-split tokens plus the whole run's `cost_usd` and
+/// model. The CHILD's own span, `RunStarted { split_run_id } … RunFinished`,
+/// is the meta-less one: synthesized and billed (tokens only) at the next
+/// whole-session heal, so its tokens reach its session row no sooner than
+/// that (FOLLOW-UP F26). Assistant messages count into the newest span only
+/// while it is open.
 ///
 /// A meta marks the NEWEST span — the join is POSITIONAL, not by id. The
 /// markers carry the harness-minted marker id and the meta carries the
