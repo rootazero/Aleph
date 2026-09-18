@@ -433,7 +433,15 @@ mod tests {
 
         // (a) ---------------------------------------------------------------
         let launcher = include_str!("../../browser/engine/chromium.rs").replace('\r', "");
-        let launcher = production_prefix(&launcher);
+        // Comment lines OFF before looking. The doc block above the call
+        // mentions `managed_cli_path` by name, so an unstripped scan finds the
+        // prose and certifies the ordering on it — the comment standing in for
+        // the code it describes (判据 §1).
+        let launcher: String = production_prefix(&launcher)
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let launch_at = launcher
             .find("async fn launch(")
             .expect("ChromiumLauncher::launch is gone; re-derive the cdp arm's premise");
