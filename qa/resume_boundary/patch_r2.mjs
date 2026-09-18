@@ -44,7 +44,10 @@
 //     provider fail to initialise — memory silently FTS-only, no embed call,
 //     no window, and a stage that "passes" by measuring nothing.
 //  6. **`QA_MAX_ATTEMPTS`** (env) sets `[resume] max_attempts` for the
-//     `ratchet` stage.
+//     `ratchet` stage; **`QA_MAX_CONCURRENT`** (env) sets `[resume]
+//     max_concurrent` for the `parallel` stage. Env rather than a 7th
+//     positional: argv[7] is `embed-stall`, and a stage that wants both would
+//     otherwise have to spell the one it does not want.
 //
 // usage: patch_r2.mjs <config.toml> <gateway-port> <mock-port> <resume:true|false> [bash-policy] [embed-stall]
 import fs from "node:fs";
@@ -152,6 +155,9 @@ for (const [section, key, value] of [
 if (process.env.QA_MAX_ATTEMPTS) {
   src = setKey(src, "resume", "max_attempts", process.env.QA_MAX_ATTEMPTS);
 }
+if (process.env.QA_MAX_CONCURRENT) {
+  src = setKey(src, "resume", "max_concurrent", process.env.QA_MAX_CONCURRENT);
+}
 if (embedStall) {
   src = setKey(src, "memory", "enabled", "true");
   src = setKey(src, "memory.embedding", "active_provider_id", '"qa-embed"');
@@ -226,5 +232,6 @@ if (dupes.length > 0) {
 console.log(
   `patched ${path}: gateway ${gatewayPort}, mock ${mockPort}, resume=${resumeEnabled}, bash=${bashPolicy}` +
     (embedStall ? ", memory=on (qa-embed via the mock)" : "") +
-    (process.env.QA_MAX_ATTEMPTS ? `, max_attempts=${process.env.QA_MAX_ATTEMPTS}` : ""),
+    (process.env.QA_MAX_ATTEMPTS ? `, max_attempts=${process.env.QA_MAX_ATTEMPTS}` : "") +
+    (process.env.QA_MAX_CONCURRENT ? `, max_concurrent=${process.env.QA_MAX_CONCURRENT}` : ""),
 );

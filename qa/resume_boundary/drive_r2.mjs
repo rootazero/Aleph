@@ -1,5 +1,4 @@
-// Real-machine driver for crash-recovery round 2 onwards — the Node stages
-// `run.sh` adds on top of the round-1 `crash` / `attribute` pair (its `case`
+// Real-machine driver for the crash-recovery stages of `run.sh` (its `case`
 // list is the roster; this header deliberately does not count them).
 //
 //   drive_r2.mjs <gateway-port> <qa-root> <cmd> [args…]
@@ -9,9 +8,13 @@
 // `python` are both the Windows `WindowsApps` stub, which prints nothing and
 // exits 49 (measured 2026-09-03; this comment previously claimed it "exits 0
 // having done nothing", a mechanism nobody had checked) — and the gateway's
-// only client transport is a WebSocket. The round-1 stages stay Python; they
-// were measured on a host that had one, and `run.sh` now refuses them here by
-// name rather than letting them fail on an unexplained exit code.
+// only client transport is a WebSocket. The round-1 Python pair
+// (`drive_dangle.py` / `assert_repairs.py`) is gone since r3: `attribute` is
+// ported below (`cmdAttribute`, with `repairTexts` as the faithful port of
+// `assert_repairs.py::repair_texts`), and what `crash` proved — a dangling
+// call is answered "OUTCOME UNKNOWN" and that text reaches the model — is the
+// dangle → boundary-repair path every r2 stage walks (`claims` asserts the
+// wire and receipt faces of it, `denied` / `parked` the text the model gets).
 //
 // ## Every assertion is an effect
 //
@@ -200,24 +203,29 @@ const withEvents = (fn) => {
 };
 
 /**
- * Rows of `session_events`, oldest first.
+ * Rows of `session_events`, oldest first — ONE session's when a wire key is
+ * given, the whole table when it is not.
  *
- * NOT filtered by the wire `session_key`, and that is deliberate rather than
- * lazy: the durable log keys its rows by the SERIALISED `SessionId`
- * (`{"type":"main","agent_id":"main","main_key":"main","epoch":1}`), which is a
- * different string from the `agent:main:main:s1` a client sees — filtering on
- * the client's key silently answers "this session has no events" for every
- * session. This fixture's `ALEPH_HOME` is minted per run and holds exactly one
- * conversation, so the whole table IS this session; a fixture that grows a
- * second conversation must resolve the id instead of widening this.
+ * The durable log keys its rows by the SERIALISED `SessionId`
+ * (`{"type":"main","agent_id":"main","main_key":"main","epoch":1}`), a
+ * different string from the `agent:main:main:s1` a client sees, so a naive
+ * `WHERE session_id = <wire key>` silently answers "this session has no
+ * events" for every session. Until r3 this read the whole table regardless
+ * and said so: every home held exactly one conversation. `parallel` (three
+ * sessions) and `undecodable` (two) end that, so a key now scopes through
+ * `sessionEvents` — the `json_extract` resolver — and the keyless form keeps
+ * the whole-table reading for the instrument checks that want it
+ * (`parkedIds`, `cmdForgeDenial`, `cmdHolesSettle`).
  */
-const eventsOf = (_sessionKey) =>
-  withEvents((db) => {
+const eventsOf = (sessionKey) => {
+  if (typeof sessionKey === "string" && sessionKey.length > 0) return sessionEvents(sessionKey);
+  return withEvents((db) => {
     if (!db) return [];
     return db
       .prepare("SELECT seq, event_type, payload_json, retired_at FROM session_events ORDER BY seq ASC")
       .all();
   });
+};
 
 /** Dispatched-but-unanswered call ids, from the log alone. */
 const danglingIds = (sessionKey) => {
@@ -405,18 +413,33 @@ const bootLines = () =>
 // claim on its held boots.
 const BOOT_MARK = path.join(QA_ROOT, "boot_mark.json");
 const EXEC_STARTED_LINE = "Agent execution started";
+// Every sentence the coordinator writes when it files a candidate under
+// `refused` instead of acting on it (`resume_coordinator.rs`: `refuse_log` and
+// the `skipping candidate` arms of `handle_interrupted` / the tail read / the
+// retrigger). The boot-scan line carries NO `refused=` counter — that bucket
+// only reaches the CLI receipt — so "nothing was refused" is read off these.
+const REFUSAL_LINES = [
+  "resume: session log refused; not resuming",
+  "resume: candidate log unreadable; skipping candidate",
+  "resume: boundary repair failed; skipping candidate",
+  "resume: tail read failed",
+  "resume: intent stamp failed; not retriggering",
+  "resume: re-trigger failed; skipping candidate",
+];
+const refusalLines = () => REFUSAL_LINES.flatMap((needle) => logLines(needle));
 const cmdBootMark = () => {
   const mark = bootLines().length;
   const execStarted = logLines(EXEC_STARTED_LINE).length;
   const requestsLogged = requests().length;
+  const refused = refusalLines().length;
   // `at`: a durable stamp older than the mark was written by an EARLIER
   // boot — the way a phase says which boot did something, instead of
   // inferring it from a line that boot may not have printed.
   const at = Date.now();
-  fs.writeFileSync(BOOT_MARK, JSON.stringify({ mark, execStarted, requestsLogged, at }));
+  fs.writeFileSync(BOOT_MARK, JSON.stringify({ mark, execStarted, requestsLogged, refused, at }));
   log(
     `boot mark at ${iso(at)}: ${mark} boot-scan line(s), ${execStarted} '${EXEC_STARTED_LINE}' line(s), ` +
-      `${requestsLogged} provider request(s) so far`,
+      `${requestsLogged} provider request(s), ${refused} refusal line(s) so far`,
   );
 };
 const readBootMark = () => {
@@ -426,6 +449,7 @@ const readBootMark = () => {
       mark: Number(m.mark),
       execStarted: Number(m.execStarted),
       requestsLogged: Number(m.requestsLogged),
+      refused: Number(m.refused ?? 0),
       at: Number(m.at),
     };
   } catch {
@@ -557,32 +581,44 @@ const sendTurn = async (conn, text, sessionKey, model, tier) => {
 };
 
 /**
- * Send the marker that makes the mock dispatch `bash sleep 120`, then wait
- * until that dispatch is DURABLE — a row in `session_events`, not a frame.
+ * Send the marker that makes the mock dispatch a call that will not return
+ * (`bash sleep 120` at the `ask` gate; `subagent` with a held child for
+ * `qa-spawn`), then wait until that dispatch is DURABLE — a row in
+ * `session_events`, not a frame.
  *
  * A blind sleep here is the trap this whole fixture exists to avoid: too
  * short and every later assertion runs over an empty set, and an empty set
  * passes an "is there no X" question for the wrong reason.
+ *
+ * `key`, when given, is the session to send into — minted on first use, so
+ * `parallel` / `undecodable` can name their sessions up front instead of
+ * chaining epochs through `SESSION_FILE`.
  */
-async function cmdDangle(marker = "qa-dangle", model = null, tier = null) {
+async function cmdDangle(marker = "qa-dangle", model = null, tier = null, key = null) {
   const conn = new Conn("driver");
   await conn.open();
-  await dangleOn(conn, marker, model, tier);
+  await dangleOn(conn, marker, model, tier, key);
   conn.close();
 }
 
 /** The body of `cmdDangle`, on a connection the caller owns. */
-async function dangleOn(conn, marker, model = null, tier = null) {
-  const prior = fs.existsSync(SESSION_FILE) ? readSession() : null;
+async function dangleOn(conn, marker, model = null, tier = null, key = null) {
+  const prior = key || (fs.existsSync(SESSION_FILE) ? readSession() : null);
+  // Wait for a dispatch NEW relative to what the session already holds — the
+  // round-1 driver's `send` mode did this too. A second dangle in a session
+  // that already has one (`attribute`) would otherwise return on the OLD
+  // one, and the kill would land before its own dispatch was durable.
+  const before = new Set(prior ? danglingIds(prior) : []);
   const started = await sendTurn(conn, `${marker} please run the long command`, prior, model, tier);
   fs.writeFileSync(SESSION_FILE, started.session_key);
-  const landed = await until(() => danglingIds(started.session_key).length > 0, 180_000, 400);
+  const fresh = () => danglingIds(started.session_key).filter((id) => !before.has(id));
+  const landed = await until(() => (fresh().length > 0 ? fresh() : null), 180_000, 400);
   if (!landed) {
-    console.error("INSTRUMENT FAILURE: no dangling dispatch ever reached the durable log");
-    console.error(`  events for ${started.session_key}: ${eventsOf(started.session_key).length}`);
+    console.error("INSTRUMENT FAILURE: no NEW dangling dispatch ever reached the durable log");
+    console.error(`  events for ${started.session_key}: ${eventsOf(started.session_key).length}; dangling before: ${[...before].join(",") || "none"}`);
     process.exit(1);
   }
-  log(`dangling now: ${danglingIds(started.session_key).join(",")}`);
+  log(`dangling now on ${started.session_key}: ${danglingIds(started.session_key).join(",")} (new: ${landed.join(",")})`);
 }
 
 /** Dangling call ids that also have a `tool_call_parked` row — the park as a FACT, not a card. */
@@ -687,11 +723,24 @@ async function cmdParked(sub, receiptFile) {
   conn.close();
 }
 
-/** The instrument self-check the shell runs after the kill. */
-async function cmdAssertDangling(min) {
-  const key = readSession();
-  const ids = danglingIds(key);
-  check(ids.length >= Number(min), `at least ${min} dangling dispatch in the durable log`, ids.join(","));
+/**
+ * The instrument self-check the shell runs after the kill. With explicit
+ * keys (`parallel`) the count is summed per session AND every named session
+ * must hold at least one — three dangles in one session is not "three
+ * sessions to resume".
+ */
+async function cmdAssertDangling(min, ...keys) {
+  const named = keys.length > 0 ? keys : [readSession()];
+  const per = named.map((k) => ({ key: k, ids: danglingIds(k) }));
+  const total = per.reduce((n, p) => n + p.ids.length, 0);
+  check(
+    total >= Number(min),
+    `at least ${min} dangling dispatch in the durable log`,
+    per.map((p) => `${p.key}: ${p.ids.join(",") || "none"}`).join("\n"),
+  );
+  if (keys.length > 1) {
+    for (const p of per) check(p.ids.length >= 1, `…and ${p.key} holds one of them`, p.ids.join(",") || "none");
+  }
 }
 
 /**
@@ -1735,17 +1784,345 @@ async function cmdRatchet(boot) {
 }
 
 // ---------------------------------------------------------------------------
+// Stage `parallel` (§8.1): the boot scan fans its candidates out
+// `[resume] max_concurrent` at a time — bounded, and none of them lost.
+// ---------------------------------------------------------------------------
+
+/**
+ * `drive parallel <cap> <key…>` after the resume-ON boot (a `boot-mark`
+ * before it). Samples `gateway.metrics.run_concurrency` every 150 ms while
+ * the three sessions settle: the oracle for "in flight" is the run registry's
+ * own `running_sessions` — the set `chat.abort` and the sidebar read — not a
+ * log line. The mock holds each resumed run's END for `QA_SLOW_MS`, so two
+ * of them overlap for seconds, not milliseconds; a `maxInFlight` of 1 here is
+ * either the cap not being honoured (the T15 mutation) or the overlap window
+ * being shorter than the poll — widen `QA_SLOW_MS` before weakening the
+ * equality.
+ */
+async function cmdParallel(cap, ...keys) {
+  const want = Number(cap);
+  if (!(want >= 1) || keys.length <= want) {
+    console.error(`INSTRUMENT FAILURE: parallel needs a cap and MORE sessions than the cap (cap ${cap}, ${keys.length} keys)`);
+    process.exit(1);
+  }
+  const conn = new Conn("driver");
+  await conn.open();
+  let maxInFlight = 0;
+  let firstAtCap = null;
+  let engine = null;
+  const seen = new Set();
+  const settled = await until(
+    async () => {
+      const m = await conn.attempt("gateway.metrics.run_concurrency", {});
+      const running = m.result?.running_sessions ?? [];
+      engine ??= m.result?.run_concurrency ?? null;
+      if (running.length > maxInFlight) maxInFlight = running.length;
+      if (running.length >= want && firstAtCap === null) firstAtCap = Date.now();
+      for (const k of running) seen.add(k);
+      const states = await Promise.all(keys.map(async (k) => (await lastRunOf(conn, k)).lastRun?.disposition));
+      return states.every((d) => d === "clean");
+    },
+    180_000,
+    150,
+  );
+  conn.close();
+  check(Boolean(settled), `all ${keys.length} sessions settled to clean`, keys.join(","));
+  // The engine's own slots are printed so the reader can see they are ABOVE
+  // the cap under test: with `max_runs_per_agent` at or below it, a `2` here
+  // would be the engine's number, not the coordinator's.
+  log(
+    `OBSERVATION engine run slots: global_total ${show(engine?.global_total)}, per_agent_cap ${show(engine?.per_agent_cap)} ` +
+      `(both must exceed the [resume] cap of ${want} for the check below to be about the coordinator)`,
+  );
+  check(
+    maxInFlight === want,
+    `at most ${want} resumed runs in flight at once, and ${want} at least once (max observed ${maxInFlight})`,
+    firstAtCap ? `cap first reached at ${iso(firstAtCap)}` : "the cap was never reached",
+  );
+  for (const k of keys) check(seen.has(k), `resumed run observed running: ${k}`, [...seen].join(",") || "none seen");
+  // The scan line prints only after `settle` joins every candidate — i.e.
+  // after the slowest resumed run — which is why it is read here, last.
+  const b = await awaitBootLineAfterMark(60_000);
+  check(Boolean(b), "the resume-ON boot printed its boot-scan line", show(bootLines()));
+  check(b?.scanned === keys.length, `the scan visited all ${keys.length} candidates (scanned=${keys.length})`, b?.raw);
+  check(b?.resumed === keys.length, `and resumed every one of them (resumed=${keys.length})`, b?.raw);
+  const before = readBootMark().refused;
+  check(
+    refusalLines().length === before,
+    "no candidate was refused or skipped by this boot (no refusal line since the boot mark)",
+    refusalLines().slice(before).join("\n") || "(none)",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Stage `undecodable` (§4.5 / T14): a row this build cannot decode refuses
+// ITS session — under its own tag, on every face — and no other; a row its
+// writer marked `ignorable` is skipped, counted, and refuses nothing.
+// ---------------------------------------------------------------------------
+
+/**
+ * The stored `session_id` string and the head seq of one session, resolved
+ * through the same `json_extract` match `sessionEvents` uses. The string is
+ * reused VERBATIM for the forged row: rebuilding the JSON would make the
+ * fixture hold an opinion about serde's field order, and a string that
+ * differs by one byte files the row under a session nobody reads.
+ */
+const sessionIdRow = (wire) => {
+  const m = MAIN_KEY.exec(wire);
+  if (!m) {
+    console.error(`INSTRUMENT FAILURE: ${wire} is not a Main session key`);
+    process.exit(1);
+  }
+  const row = withEvents((db) =>
+    db
+      ? db
+          .prepare(
+            "SELECT session_id, MAX(seq) AS head FROM session_events \
+             WHERE json_extract(session_id, '$.type') = 'main' \
+               AND json_extract(session_id, '$.agent_id') = ? \
+               AND json_extract(session_id, '$.main_key') = ? \
+               AND json_extract(session_id, '$.epoch') = ?",
+          )
+          .get(m[1], m[2], Number(m[3] ?? 0))
+      : null,
+  );
+  if (!row?.session_id) {
+    console.error(`INSTRUMENT FAILURE: no session_events rows for ${wire}; nothing to append to`);
+    process.exit(1);
+  }
+  // `debugName`: how `tracing` renders this id (`session=Main { agent_id:
+  // "main", main_key: "main", epoch: 1 }` — the derive(Debug) field order of
+  // `SessionKey::Main`). Two stages hold two epochs of the same main key, so
+  // the epoch is part of the name, not decoration.
+  return {
+    sessionId: row.session_id,
+    head: Number(row.head),
+    debugName: `main_key: "${m[2]}", epoch: ${Number(m[3] ?? 0)}`,
+  };
+};
+
+/**
+ * Append one row a build from the future would have written: an outer
+ * `type` this build does not know (`from_the_future`, with `v: 99`). Only
+ * ever called with the server DOWN — the store is the one writer of this
+ * table while it runs, and a second one would race its seq.
+ */
+function forgeRow(wire, payload) {
+  const { sessionId, head } = sessionIdRow(wire);
+  const db = new DatabaseSync(EVENTS_DB);
+  try {
+    db.prepare(
+      "INSERT INTO session_events (session_id, seq, turn_id, event_type, payload_json, created_at) \
+       VALUES (?, ?, NULL, ?, ?, ?)",
+    ).run(sessionId, head + 1, payload.type, JSON.stringify(payload), Date.now());
+    return head + 1;
+  } finally {
+    db.close();
+  }
+}
+
+const FUTURE_TYPE = "from_the_future";
+const UNDECODABLE_TAG = "session-log-undecodable-record";
+/** The forged row as it now stands (`null` when there is none). */
+const futureRow = (wire) =>
+  sessionEvents(wire).find((r) => r.event_type === FUTURE_TYPE) ?? null;
+
+async function cmdUndecodable(sub, x, y) {
+  if (sub === "forge") {
+    const seq = forgeRow(x, { type: FUTURE_TYPE, v: 99 });
+    check(seq > 1, "future row appended after the dangle", `seq ${seq}`);
+    check(danglingIds(x).length >= 1, "and the session's dangling dispatch is still open — the forge touched nothing else", danglingIds(x).join(","));
+    return;
+  }
+  if (sub === "mark-ignorable") {
+    const { sessionId } = sessionIdRow(x);
+    const db = new DatabaseSync(EVENTS_DB);
+    let n = 0;
+    try {
+      n = db
+        .prepare(
+          "UPDATE session_events SET payload_json = json_set(payload_json, '$.ignorable', json('true')) \
+           WHERE event_type = ? AND session_id = ?",
+        )
+        .run(FUTURE_TYPE, sessionId).changes;
+    } finally {
+      db.close();
+    }
+    check(n === 1, "exactly one row marked ignorable", `${n} rows changed`);
+    // The effect, not the call: read the row back.
+    let payload = null;
+    try {
+      payload = JSON.parse(futureRow(x)?.payload_json ?? "null");
+    } catch {
+      /* asserted below */
+    }
+    check(payload?.ignorable === true && payload?.type === FUTURE_TYPE, "the stored row now reads `ignorable: true` on the same unknown type", show(payload));
+    return;
+  }
+  const conn = new Conn("driver");
+  await conn.open();
+  const forged = futureRow(x);
+  const xName = sessionIdRow(x).debugName;
+  const yClean = await until(async () => (await lastRunOf(conn, y)).lastRun?.disposition === "clean", 90_000);
+  check(Boolean(yClean), `the clean session ${y} was resumed (its face settled to clean)`, show((await lastRunOf(conn, y)).lastRun));
+  const b = await awaitBootLineAfterMark(60_000);
+  check(Boolean(b), "the resume-ON boot printed its boot-scan line", show(bootLines()));
+  check(b?.scanned === 2, "the scan visited both sessions (scanned=2)", b?.raw);
+  const xr = await lastRunOf(conn, x);
+  const doc = await conn.attempt("diagnostics.run", { only: ["core/session-log"] });
+  const detail = JSON.stringify(doc.result?.findings ?? doc.error ?? null);
+  log(`doctor core/session-log: ${detail.slice(0, 600)}`);
+  const sinceMark = refusalLines().slice(readBootMark().refused);
+  if (sub === "refused") {
+    check(b?.resumed === 1, "and resumed exactly one of them — the clean one (resumed=1)", b?.raw);
+    check(
+      xr.lastRun?.disposition === "log_inconsistent",
+      "attach face refuses the session with the bad row (`log_inconsistent`)",
+      show(xr.lastRun ?? xr.reply),
+    );
+    check((xr.lastRun?.contradictions ?? []).includes(UNDECODABLE_TAG), "…under its own tag", show(xr.lastRun?.contradictions));
+    check(xr.lastRun?.inspected === true, "…and says it looked (inspected: true)", show(xr.lastRun));
+    // Refused means NOT resumed: no stamp, no re-run on that session.
+    check(
+      countKind(x, "resume_attempted") === 0 && countKind(x, "run_started") === 1,
+      "the refused session was left exactly as found (no ResumeAttempted stamp, no second RunStarted)",
+      kinds(x).join(","),
+    );
+    const named = sinceMark.filter(
+      (l) => l.includes("session log refused") && l.includes(`kind=${UNDECODABLE_TAG}`) && l.includes(xName),
+    );
+    check(named.length === 1, "the coordinator logged ONE refusal for that session under the tag", sinceMark.join("\n") || "(no refusal line since the boot mark)");
+    check(detail.includes(UNDECODABLE_TAG), "doctor names the record's kind", detail.slice(0, 300));
+    check(
+      forged && detail.includes(`seq ${forged.seq}`) && detail.includes(`\`${FUTURE_TYPE}\``),
+      "doctor names the record (seq and type)",
+      `forged seq ${forged?.seq ?? "?"}; ${detail.slice(0, 300)}`,
+    );
+    check(detail.includes(x), "doctor names the session", detail.slice(0, 300));
+    check(!detail.includes(y), "and not the clean one", detail.slice(0, 300));
+  } else {
+    const xClean = await until(async () => (await lastRunOf(conn, x)).lastRun?.disposition === "clean", 90_000);
+    check(Boolean(xClean), "the ignorable row no longer refuses the session; it resumed and settled clean", show((await lastRunOf(conn, x)).lastRun));
+    check(b?.resumed === 1, "the boot resumed exactly one session — the one that was refused before (resumed=1)", b?.raw);
+    check(
+      countKind(x, "resume_attempted") === 1 && countKind(x, "run_started") === 2,
+      "that session carries one ResumeAttempted stamp and the re-run's own RunStarted",
+      kinds(x).join(","),
+    );
+    check(sinceMark.length === 0, "no refusal line on this boot", sinceMark.join("\n"));
+    check(forged !== null && forged.retired_at === null, "the ignorable row is still live — skipped, not retired (nobody ran fix=true)", show(forged));
+    check(!detail.includes("undecodable"), "doctor no longer names an undecodable record", detail.slice(0, 300));
+    check(/1 ignorable row\(s\) skipped/.test(detail), "doctor counts the skipped row", detail.slice(0, 300));
+  }
+  conn.close();
+}
+
+// ---------------------------------------------------------------------------
+// Stage `attribute` (§1.4): two dangles from two crashes in ONE session,
+// repaired by one boot, read two different sentences — the older one is not
+// blamed on this restart.
+// ---------------------------------------------------------------------------
+
+// The semantic points every "OUTCOME UNKNOWN" repair must carry once it is in
+// front of the model (`assert_repairs.py::FIVE_POINTS`). The tool name is
+// fixture-specific: this stage dispatches `subagent` (see `mock_r2.mjs`,
+// `qa-spawn`), where the round-1 stage dispatched `bash`.
+const FIVE = ["OUTCOME UNKNOWN", "NOT a report that the call failed", "side effects", "Verify the current state before deciding", "`subagent`"];
+const THIS_RESTART = "the server restarted";
+const EARLIER_RUN = "an earlier run in this session";
+
+/**
+ * Every content block of every logged request body that carries "OUTCOME
+ * UNKNOWN" — a raw substring scan over the stringified block, not a schema
+ * walk, so a tool_result whose content is a bare string and one whose
+ * content is a block list both count. Port of
+ * `assert_repairs.py::repair_texts`, duplicates and all: what reached the
+ * model twice is still what reached the model.
+ */
+const repairTexts = () => {
+  const out = [];
+  for (const r of requests()) {
+    for (const m of r.body?.messages ?? []) {
+      const content = m?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          const text = JSON.stringify(block);
+          if (text.includes("OUTCOME UNKNOWN")) out.push(text);
+        }
+      } else if (typeof content === "string" && content.includes("OUTCOME UNKNOWN")) {
+        out.push(content);
+      }
+    }
+  }
+  return out;
+};
+
+async function cmdAttribute(sub = "texts", arg) {
+  const key = readSession();
+  if (sub === "in-flight") {
+    // After kill #n: the instrument is a call that is GENUINELY in flight —
+    // dispatched, durable, not parked at any gate (a parked call takes the
+    // fourth arm, whose wording this stage does not assert), and the
+    // dispatch names the tool the repair text will name.
+    const n = Number(arg);
+    const ids = danglingIds(key);
+    check(ids.length === n, `${n} dangling dispatch(es) in the session after kill #${n}`, ids.join(",") || "none");
+    const dispatches = rowsOfKind(key, "tool_call_requested").filter((r) => ids.includes(r.payload.call_id));
+    check(
+      dispatches.length === n && dispatches.every((r) => r.payload.name === "subagent"),
+      "every dangling dispatch names `subagent`",
+      show(dispatches.map((r) => ({ seq: r.seq, name: r.payload.name, input: r.payload.input }))),
+    );
+    check(
+      dispatches.every((r) => String(r.payload.input?.task ?? "").includes("qa-child-slow")),
+      "…with the held child's task — the mock is what keeps it in flight",
+      show(dispatches.map((r) => r.payload.input)),
+    );
+    const parked = rowsOfKind(key, "tool_call_parked").filter((r) => ids.includes(r.payload.call_id));
+    check(parked.length === 0, "and none of them is parked at a gate (a parked call would take the NOT EXECUTED arm)", show(parked));
+    check(countKind(key, "run_started") === n, `${n} open RunStarted marker(s): one interrupted run per crash, in ONE session`, kinds(key).join(","));
+    return;
+  }
+  const b = await awaitBootLineAfterMark(120_000);
+  check(Boolean(b), "the resume-ON boot printed its boot-scan line", show(bootLines()));
+  check(b?.resumed === 1, "one session resumed (both dangles ride one re-run)", b?.raw);
+  const texts = await until(() => {
+    const t = repairTexts();
+    return t.length >= 2 ? t : null;
+  }, 120_000);
+  check(Boolean(texts), "two repair texts reached the model", `${repairTexts().length} text(s) carrying OUTCOME UNKNOWN in ${requests().length} request(s)`);
+  for (const [i, t] of (texts ?? []).entries()) {
+    for (const p of FIVE) check(t.includes(p), `repair text #${i + 1} carries ${JSON.stringify(p)}`, t.slice(0, 300));
+  }
+  check(
+    (texts ?? []).some((t) => t.includes(EARLIER_RUN)),
+    "the older dangle is attributed to an earlier run — not blamed on this restart (the pre-§1.4 defect)",
+    (texts ?? []).map((t) => t.slice(0, 160)).join("\n"),
+  );
+  check(
+    (texts ?? []).some((t) => t.includes(THIS_RESTART)),
+    "this run's own dangle is attributed to the restart",
+    (texts ?? []).map((t) => t.slice(0, 160)).join("\n"),
+  );
+  const conn = new Conn("driver");
+  await conn.open();
+  const settled = await until(async () => (await lastRunOf(conn, key)).lastRun?.disposition === "clean", 60_000);
+  check(Boolean(settled), "after the resume the session settles to clean", show((await lastRunOf(conn, key)).lastRun));
+  conn.close();
+}
+
+// ---------------------------------------------------------------------------
 
 const main = async () => {
   switch (CMD) {
     case "dangle":
-      await cmdDangle(REST[0], REST[1], REST[2]);
+      await cmdDangle(REST[0], REST[1], REST[2], REST[3]);
       break;
     case "dangle-parked":
       await cmdDangleParked(REST[0]);
       break;
     case "assert-dangling":
-      await cmdAssertDangling(REST[0] ?? 1);
+      await cmdAssertDangling(REST[0] ?? 1, ...REST.slice(1));
       break;
     case "claims-wire":
       await cmdClaimsWire();
@@ -1797,6 +2174,15 @@ const main = async () => {
       break;
     case "ratchet":
       await cmdRatchet(REST[0]);
+      break;
+    case "parallel":
+      await cmdParallel(REST[0], ...REST.slice(1));
+      break;
+    case "undecodable":
+      await cmdUndecodable(REST[0], REST[1], REST[2]);
+      break;
+    case "attribute":
+      await cmdAttribute(REST[0] ?? "texts", REST[1]);
       break;
     default:
       console.error(`unknown command: ${CMD}`);

@@ -15,9 +15,24 @@
 //   qa-burst   -> ONE assistant message with $QA_BURST tool_use blocks of
 //                 bash{cmd:"echo n"} — the projector queue is what is under
 //                 test, so the calls must be cheap and simultaneous
+//   qa-spawn   -> tool_use subagent{action:"run", task:"qa-child-slow: …"}.
+//                 The `attribute` stage needs a call that is GENUINELY in
+//                 flight when the server is killed: after §6.1 a call parked
+//                 at the `ask` gate is answered by the fourth arm ("NOT
+//                 EXECUTED"), not by the "OUTCOME UNKNOWN" wording whose
+//                 provenance that stage asserts. A foreground sub-agent whose
+//                 own model turn this mock holds for 120 s is one — the
+//                 parent's `subagent` dispatch is durable and unanswered for
+//                 as long as the child's request sits here.
+//   qa-child-slow (in the user side of a tool-surfaced request) -> the
+//                 child's turn: held $QA_CHILD_HOLD_MS (120 s), then end_turn
 //   the repair text ("OUTCOME UNKNOWN" / "NOT EXECUTED") -> end_turn, so the
 //                 resumed run FINISHES and the session's own `last_run` face
-//                 can be observed settling to `clean`
+//                 can be observed settling to `clean`. When a marker's tag
+//                 starts with `slow` (`qa-dangle:slow-a`), the end is DELAYED
+//                 $QA_SLOW_MS (4 s) first: the `parallel` stage needs two
+//                 resumed runs to overlap long enough for a 150 ms poll of
+//                 `gateway.metrics.run_concurrency` to see both in flight.
 //   anything else -> end_turn
 //
 // Every request body is appended to the request log as one JSON object per
@@ -46,6 +61,13 @@ const BURST = Number(process.env.QA_BURST || 40);
 
 const T0 = Date.now();
 const log = (...a) => console.log(`${((Date.now() - T0) / 1000).toFixed(2)}s [mock]`, ...a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// How long a `slow`-tagged marker's END is held (the `parallel` overlap
+// window) and how long a sub-agent child's turn is held (the `attribute`
+// in-flight window). The child hold is a hard 120 s by default: it only has to
+// outlive the kill, and a kill lands seconds after the dispatch is durable.
+const SLOW_MS = Number(process.env.QA_SLOW_MS || 4000);
+const CHILD_HOLD_MS = Number(process.env.QA_CHILD_HOLD_MS || 120_000);
 
 let turns = 0;
 /** Markers already answered with a tool call. One answer each, ever. */
@@ -60,9 +82,11 @@ const textOf = (content) => {
     .join(" ");
 };
 
-const MARKER = /qa-(dangle|burst)(?::([\w-]+))?/g;
+const MARKER = /qa-(dangle|burst|spawn)(?::([\w-]+))?/g;
 
-const decide = (body) => {
+// `async` because two arms wait: the `slow`-tagged end and the child hold.
+// One handler per request, so a held turn never blocks another session's.
+const decide = async (body) => {
   const msgs = body.messages || [];
   // A request with no tool surface is a side channel (topic naming, strategy
   // synthesis, compaction). It carries the conversation's text, markers and
@@ -76,18 +100,44 @@ const decide = (body) => {
     .map((m) => textOf(m.content))
     .join("\n");
 
+  const hits = [...userSide.matchAll(MARKER)];
+  // A `slow` tag anywhere in the conversation slows the END of every later
+  // turn on it — the resumed run's included, which is the one that has to
+  // overlap. The dispatching turn itself is never delayed: the dangle must
+  // be durable before the shell's kill, and that timing is the driver's.
+  const slow = hits.some((h) => (h[2] ?? "").startsWith("slow"));
+  const end = async (text) => {
+    if (slow) await sleep(SLOW_MS);
+    return { kind: "end", text };
+  };
+
   // The boundary repair reached this turn: answer it and let the run END, so
   // the session's `last_run` can be watched settling to `clean`.
   if (userSide.includes("OUTCOME UNKNOWN") || userSide.includes("NOT EXECUTED")) {
-    return { kind: "end", text: "QA: I see the previous call's outcome. Stopping here." };
+    return end("QA: I see the previous call's outcome. Stopping here.");
   }
 
-  const hits = [...userSide.matchAll(MARKER)];
+  // A sub-agent child's own turn (`qa-spawn` above): hold it, so the parent's
+  // `subagent` dispatch stays in flight across the kill. Checked AFTER the
+  // repair arm: the parent's resumed request may quote the child's task text
+  // inside the repair, and that turn must end, not hang.
+  if (userSide.includes("qa-child-slow")) {
+    log(`child turn held ${CHILD_HOLD_MS}ms`);
+    await sleep(CHILD_HOLD_MS);
+    return { kind: "end", text: "QA child: done waiting." };
+  }
+
   const pending = hits.filter((h) => !answered.has(h[0]));
-  if (pending.length === 0) return { kind: "end", text: "QA: nothing to do." };
+  if (pending.length === 0) return end("QA: nothing to do.");
   const [whole, verb] = pending[pending.length - 1];
   answered.add(whole);
 
+  if (verb === "spawn") {
+    return {
+      kind: "tools",
+      calls: [{ name: "subagent", input: { action: "run", task: "qa-child-slow: wait for the operator" } }],
+    };
+  }
   if (verb === "burst") {
     return {
       kind: "tools",
@@ -137,7 +187,7 @@ const server = http.createServer((req, res) => {
   }
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
-  req.on("end", () => {
+  req.on("end", async () => {
     let body = {};
     try {
       body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
@@ -152,7 +202,13 @@ const server = http.createServer((req, res) => {
         log("could not append to the request log:", e.message);
       }
     }
-    const act = decide(body);
+    const act = await decide(body);
+    // A held turn usually outlives the server that asked for it (that is the
+    // point of holding it); nothing to answer into then.
+    if (res.destroyed) {
+      log(`turn #${turn} model=${body.model} -> ${act.kind}, but the requester is gone (server killed?)`);
+      return;
+    }
     log(`turn #${turn} model=${body.model} -> ${act.kind}${act.kind === "tools" ? `(${act.calls.length})` : ""}`);
 
     const content = [{ type: "text", text: act.kind === "end" ? act.text : "Working on it." }];
@@ -227,5 +283,8 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () =>
-  log(`listening on 127.0.0.1:${PORT}, burst size ${BURST}, embedding stall ${EMBED_STALL_MS}ms`),
+  log(
+    `listening on 127.0.0.1:${PORT}, burst size ${BURST}, embedding stall ${EMBED_STALL_MS}ms, ` +
+      `slow end ${SLOW_MS}ms, child hold ${CHILD_HOLD_MS}ms`,
+  ),
 );
