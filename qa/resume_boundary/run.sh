@@ -147,27 +147,22 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   qa_build -p alephcore --bin aleph-server || { echo "build failed" >&2; exit 1; }
 fi
 # `.cargo/config.toml` pins a shared absolute target dir, so `$REPO/target` is
-# wrong from any git worktree — ask cargo.
-# Ask cargo, then parse with whichever of node/python3 this host actually has.
-# A `python3` that is the Windows `WindowsApps` stub prints NOTHING, so the
-# command substitution below yields an empty path and the fixture goes looking
-# for a binary at `/debug/aleph-server` — a message that reads like a build
-# failure and is not one. (What the stub does with its exit code was written
-# here as "exits 0" for two rounds and was never measured; measured on this
-# host 2026-09-03, both `python3` and `python` exit **49**. The symptom is the
-# same either way because it is the captured OUTPUT that is empty. The guard
-# that used to refuse the Python stages on that exit code went with them in
-# r3; every stage is Node now, and `node` is required below.)
+# wrong from any git worktree — ask cargo, and parse the answer with node.
+# Every stage is Node (the guard is right here, not further down: a missing
+# `node` used to fall through to a `python3` that on this host is the
+# `WindowsApps` stub — prints NOTHING, exits 49, measured 2026-09-03 — so the
+# command substitution yielded an empty path and the fixture went looking for
+# a binary at `/debug/aleph-server`, a message that reads like a build failure
+# and is not one. That fallback is gone with the Python stages in r3.)
+command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 META="$(cd "$REPO" && HOME="$REAL_HOME" cargo metadata --format-version 1 --no-deps 2>/dev/null)"
 if [ -n "${CARGO_TARGET_DIR:-}" ]; then
   # An operator (or this repo's own build recipe) who pinned a shared target
   # dir built the binary THERE; `cargo metadata` answers with the workspace's
   # default and would send the fixture to an empty directory.
   TARGET_DIR="$CARGO_TARGET_DIR"
-elif command -v node >/dev/null 2>&1; then
-  TARGET_DIR="$(printf '%s' "$META" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).target_directory))')"
 else
-  TARGET_DIR="$(printf '%s' "$META" | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+  TARGET_DIR="$(printf '%s' "$META" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).target_directory))')"
 fi
 BIN="$TARGET_DIR/debug/aleph-server"
 [ -x "$BIN" ] || BIN="$BIN.exe"
@@ -197,14 +192,11 @@ kill "$GEN_PID" 2>/dev/null; wait "$GEN_PID" 2>/dev/null
 [ -f "$CONFIG" ] || { echo "no config generated at $CONFIG" >&2; tail -20 "$QA_ROOT/gen.log" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# Every stage is Node: this host has no usable `python3` at all — both
-# `python3` and `python` resolve to the Windows `WindowsApps` stub, which
-# prints nothing and exits 49 (measured 2026-09-03; an earlier version of this
-# comment said "exits 0 having done nothing", which was inherited rather than
-# measured). The round-1 Python stages that used to sit below a guard here
-# were deleted in r3 (see the header for what covers `crash` now).
+# Every stage is Node (the `node` guard sits above the first use, next to the
+# cargo-metadata parse, and says why the Python fallback is gone). The
+# round-1 Python stages that used to sit below a guard here were deleted in
+# r3 — see the header for what covers `crash` now.
 # ---------------------------------------------------------------------------
-command -v node >/dev/null 2>&1 || { echo "node is required" >&2; exit 1; }
 # The native server and node both read Windows paths; the msys form reaches
 # neither.
 QA_ROOT_M="$QA_ROOT"
@@ -272,7 +264,7 @@ case "$STAGE" in
   parked) FLOOR=11 ;;
   unanswered) FLOOR=29 ;;  # measured 2026-09-18 (2+2+13 main flow, 3+6+3 lost-input twin)
   ratchet)    FLOOR=23 ;;  # measured 2026-09-18 (5+5 held boots, 7+6 settled boots)
-  parallel)    FLOOR=13 ;;  # measured 2026-09-18 (1+3 assert-dangling, 9 parallel)
+  parallel)    FLOOR=30 ;;  # measured 2026-09-18 fix round 1: phase 1 cap 2/3 sessions (1 slots + 4 assert-dangling + 11: the fan-out, `max observed 2`) + phase 2 cap 1/2 sessions (1 + 3 + 10: the config wire, `max observed 1`, scanned=5 skipped=3)
   undecodable) FLOOR=30 ;;  # measured 2026-09-18 (3 assert-dangling, 2 forge, 13 refused, 2 mark-ignorable, 10 skipped)
   attribute)   FLOOR=27 ;;  # measured 2026-09-18 (5+5 in-flight, 1 assert-dangling, 16 texts)
   *)      FLOOR=0 ;;
@@ -495,36 +487,74 @@ case "$STAGE" in
     ;;
   parallel)
     # §8.1: `[resume] max_concurrent` bounds the boot scan's fan-out, and no
-    # candidate is lost to it. Three sessions, one parked dangle each, all
-    # made on a resume-ON boot over an empty log (that boot's scan line reads
-    # `scanned=0`; the boot mark keeps the two boots apart). The mock holds
-    # every `slow`-tagged resumed run's END for `QA_SLOW_MS`, so two of them
-    # overlap for seconds; the driver samples the run registry through
-    # `gateway.metrics.run_concurrency` at 150 ms and asserts the max it saw
-    # is EXACTLY the cap. 1 is the T15 mutation (or an overlap shorter than
-    # the poll — widen `QA_SLOW_MS`, never the equality); 3 is the cap not
-    # honoured. The cap is spelled once, here, and handed to both the patcher
-    # and the driver. The sessions are three EPOCHS of the main key
-    # (`agent:main:main:s1..s3`): the Main grammar is `agent:<id>:main[:sN]`,
-    # and a third segment that is not `main` parses as a Task session
-    # (measured 2026-09-18: `agent:main:qa-a:s1` landed as
+    # candidate is lost to it. Two phases on one log, each: N sessions with
+    # one parked dangle apiece, a kill, a re-patched cap, a marked resume-ON
+    # boot. The mock holds every `slow`-tagged resumed run's END for
+    # `QA_SLOW_MS`, so runs admitted together overlap for seconds; the driver
+    # samples the run registry through `gateway.metrics.run_concurrency` at
+    # 150 ms and asserts the max it saw is EXACTLY the cap.
+    #
+    #   phase 1 — cap 2 over 3 sessions: the FAN-OUT. Two resumed runs really
+    #     are in flight at once (1 is the T15 semaphore mutation, or an overlap
+    #     shorter than the poll — widen `QA_SLOW_MS`, never the equality) and
+    #     the third is not lost (3 is the cap not honoured; `resumed=3`).
+    #   phase 2 — cap 1 over 2 sessions: the WIRE. `[resume] max_concurrent`
+    #     DEFAULTS to 2 (T15 lowered it after the brief was written), so a cap
+    #     of 2 has no red state for config → semaphore: a patcher that never
+    #     wrote the key leaves the default and phase 1 stays green. Cap 1 is
+    #     the one value below the default, so "the key was not read" is
+    #     `max observed 2` here, by name. Phase 2 runs on the same log after
+    #     phase 1's three sessions settled, so its scan visits them too and
+    #     files them `skipped`; the driver is told how many (`clean`).
+    #
+    # Each phase's cap is spelled once, on its patch line, and handed to the
+    # driver from the same variable. Before each dangle loop the driver asks
+    # the engine whether it can hold that many parked runs on one agent (a
+    # parked dangle holds a run slot; `max_runs_per_agent` defaults to 3, so
+    # phase 1 sits exactly at it) — the fast, named form of the 180 s
+    # INSTRUMENT FAILURE a queued dangle would otherwise produce. The sessions
+    # are EPOCHS of the main key (`agent:main:main:s1..s5`): the Main grammar
+    # is `agent:<id>:main[:sN]`, and a third segment that is not `main` parses
+    # as a Task session (measured 2026-09-18: `agent:main:qa-a:s1` landed as
     # `{"type":"task","task_type":"qa-a","task_id":"s1"}`).
-    RESUME_CAP="${QA_MAX_CONCURRENT:-2}"
-    QA_MAX_CONCURRENT="$RESUME_CAP" node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true "$BASH_POLICY" >/dev/null || exit 1
+    P1_CAP=2
+    QA_MAX_CONCURRENT="$P1_CAP" node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true "$BASH_POLICY" >/dev/null || exit 1
     start_server || exit 1
-    P_KEYS=""
+    drive parallel-slots 3 || RC=1
+    P1_KEYS=""
     for n in 1 2 3; do
+      [ "$RC" = "0" ] || break
       k="agent:main:main:s$n"
-      P_KEYS="$P_KEYS $k"
-      drive dangle "qa-dangle:slow-$n" "" "" "$k" || { echo "instrument failure: no dangle on $k" >&2; RC=1; break; }
+      P1_KEYS="$P1_KEYS $k"
+      drive dangle "qa-dangle:slow-$n" "" "" "$k" || { echo "instrument failure: no dangle on $k" >&2; RC=1; }
     done
     hard_kill_server
-    # shellcheck disable=SC2086  # the key list is deliberately word-split
-    [ "$RC" = "0" ] && { drive assert-dangling 3 $P_KEYS || RC=1; }
+    # shellcheck disable=SC2086  # the key lists are deliberately word-split
+    [ "$RC" = "0" ] && { drive assert-dangling 3 $P1_KEYS || RC=1; }
     [ "$RC" = "0" ] && { drive boot-mark || RC=1; }
     [ "$RC" = "0" ] && { start_server || exit 1; }
     # shellcheck disable=SC2086
-    [ "$RC" = "0" ] && { drive parallel "$RESUME_CAP" $P_KEYS || RC=1; }
+    [ "$RC" = "0" ] && { drive parallel "$P1_CAP" 0 $P1_KEYS || RC=1; }
+    # Phase 2 dangles on the server phase 1 left running (its three resumed
+    # runs have finished, so the slots are free); the cap is re-patched with
+    # the server DOWN, like every other config change in this file.
+    [ "$RC" = "0" ] && { drive parallel-slots 2 || RC=1; }
+    P2_KEYS=""
+    for n in 4 5; do
+      [ "$RC" = "0" ] || break
+      k="agent:main:main:s$n"
+      P2_KEYS="$P2_KEYS $k"
+      drive dangle "qa-dangle:slow-$n" "" "" "$k" || { echo "instrument failure: no dangle on $k" >&2; RC=1; }
+    done
+    hard_kill_server
+    P2_CAP=1
+    [ "$RC" = "0" ] && { QA_MAX_CONCURRENT="$P2_CAP" node "$HERE/patch_r2.mjs" "$CONFIG" "$GATEWAY_PORT" "$MOCK_PORT" true "$BASH_POLICY" >/dev/null || exit 1; }
+    # shellcheck disable=SC2086
+    [ "$RC" = "0" ] && { drive assert-dangling 2 $P2_KEYS || RC=1; }
+    [ "$RC" = "0" ] && { drive boot-mark || RC=1; }
+    [ "$RC" = "0" ] && { start_server || exit 1; }
+    # shellcheck disable=SC2086
+    [ "$RC" = "0" ] && { drive parallel "$P2_CAP" 3 $P2_KEYS || RC=1; }
     ;;
   undecodable)
     # §4.5 / T14: a row this build cannot decode refuses ITS session — under

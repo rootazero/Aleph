@@ -313,25 +313,36 @@ const lastRunOf = async (conn, sessionKey) => {
 // ---------------------------------------------------------------------------
 
 const MAIN_KEY = /^agent:([^:]+):([^:]+)(?::s(\d+))?$/;
-
-const sessionEvents = (wireKey) => {
+// The one spelling of "rows of this Main session", bound as
+// `(agent_id, main_key, epoch)` — `mainKeyParams` below is the only producer
+// of that tuple. Every reader that scopes `session_events` to a wire key
+// (`sessionEvents`, `sessionIdRow`) shares this string, so the predicate
+// cannot drift between them.
+const MAIN_WHERE =
+  "json_extract(session_id, '$.type') = 'main' \
+   AND json_extract(session_id, '$.agent_id') = ? \
+   AND json_extract(session_id, '$.main_key') = ? \
+   AND json_extract(session_id, '$.epoch') = ?";
+/** `[agent_id, main_key, epoch]` for `MAIN_WHERE`; a non-Main key is an instrument failure. */
+const mainKeyParams = (wireKey) => {
   const m = MAIN_KEY.exec(wireKey);
   if (!m) {
     console.error(`INSTRUMENT FAILURE: ${wireKey} is not a Main session key; cannot scope the log to it`);
     process.exit(1);
   }
+  return [m[1], m[2], Number(m[3] ?? 0)];
+};
+
+const sessionEvents = (wireKey) => {
+  const params = mainKeyParams(wireKey);
   return withEvents((db) => {
     if (!db) return [];
     return db
       .prepare(
-        "SELECT seq, event_type, payload_json, retired_at, created_at FROM session_events \
-         WHERE json_extract(session_id, '$.type') = 'main' \
-           AND json_extract(session_id, '$.agent_id') = ? \
-           AND json_extract(session_id, '$.main_key') = ? \
-           AND json_extract(session_id, '$.epoch') = ? \
-         ORDER BY seq ASC",
+        `SELECT seq, event_type, payload_json, retired_at, created_at FROM session_events \
+         WHERE ${MAIN_WHERE} ORDER BY seq ASC`,
       )
-      .all(m[1], m[2], Number(m[3] ?? 0));
+      .all(...params);
   });
 };
 
@@ -1788,34 +1799,81 @@ async function cmdRatchet(boot) {
 // `[resume] max_concurrent` at a time — bounded, and none of them lost.
 // ---------------------------------------------------------------------------
 
+/** The engine's live run-slot limits, off `gateway.metrics.run_concurrency` (`null` if the RPC did not answer). */
+const engineSlots = async (conn) => {
+  const m = await conn.attempt("gateway.metrics.run_concurrency", {});
+  const rc = m.result?.run_concurrency;
+  return rc && typeof rc.global_total === "number" && typeof rc.per_agent_cap === "number"
+    ? { globalTotal: rc.global_total, perAgentCap: rc.per_agent_cap }
+    : null;
+};
+
 /**
- * `drive parallel <cap> <key…>` after the resume-ON boot (a `boot-mark`
- * before it). Samples `gateway.metrics.run_concurrency` every 150 ms while
- * the three sessions settle: the oracle for "in flight" is the run registry's
- * own `running_sessions` — the set `chat.abort` and the sidebar read — not a
- * log line. The mock holds each resumed run's END for `QA_SLOW_MS`, so two
- * of them overlap for seconds, not milliseconds; a `maxInFlight` of 1 here is
- * either the cap not being honoured (the T15 mutation) or the overlap window
- * being shorter than the poll — widen `QA_SLOW_MS` before weakening the
- * equality.
+ * `drive parallel-slots <n>` before a dangle loop of `n` sessions on one
+ * agent: a parked dangle HOLDS an engine run slot until the kill, so the
+ * n-th dangle on an agent whose `max_runs_per_agent` is below `n` queues in
+ * the busy lane and `dangleOn` reports INSTRUMENT FAILURE 180 s later. This
+ * says so up front, with the numbers, and counts toward the floor.
  */
-async function cmdParallel(cap, ...keys) {
+async function cmdParallelSlots(n) {
+  const need = Number(n);
+  const conn = new Conn("driver");
+  await conn.open();
+  const e = await engineSlots(conn);
+  conn.close();
+  check(
+    e !== null && e.globalTotal >= need && e.perAgentCap >= need,
+    `the engine can hold ${need} parked dangles on one agent (max_runs_global and max_runs_per_agent both >= ${need})`,
+    e ? `global_total ${e.globalTotal}, per_agent_cap ${e.perAgentCap}` : "run_concurrency did not answer",
+  );
+}
+
+/**
+ * `drive parallel <cap> <clean> <key…>` after the resume-ON boot (a
+ * `boot-mark` before it). Samples `gateway.metrics.run_concurrency` every
+ * 150 ms while the named sessions settle: the oracle for "in flight" is the
+ * run registry's own `running_sessions` — the set `chat.abort` and the
+ * sidebar read — not a log line. The mock holds each resumed run's END for
+ * `QA_SLOW_MS`, so two of them overlap for seconds, not milliseconds; a
+ * `maxInFlight` below the cap is either the cap not being honoured (the T15
+ * mutation) or the overlap window being shorter than the poll — widen
+ * `QA_SLOW_MS` before weakening the equality. A `maxInFlight` ABOVE the cap
+ * is the cap not being read at all: `[resume] max_concurrent` defaults to 2,
+ * so the cap-1 phase is the one that turns red when the patcher's key never
+ * reaches the semaphore (`max observed 2`).
+ *
+ * `clean` is how many sessions this boot's scan visits that are ALREADY
+ * clean (an earlier phase's, on the same log): the activity window makes the
+ * scan visit them, and the coordinator files each as `scanned` + `skipped`,
+ * so the boot line is asserted as `scanned = keys + clean`, `resumed = keys`,
+ * `skipped = clean` — the clean ones were visited and NOT re-run.
+ */
+async function cmdParallel(cap, clean, ...keys) {
   const want = Number(cap);
-  if (!(want >= 1) || keys.length <= want) {
-    console.error(`INSTRUMENT FAILURE: parallel needs a cap and MORE sessions than the cap (cap ${cap}, ${keys.length} keys)`);
+  const priorClean = Number(clean);
+  if (!(want >= 1) || !(priorClean >= 0) || keys.length <= want) {
+    console.error(
+      `INSTRUMENT FAILURE: parallel needs a cap, a clean count and MORE sessions than the cap (cap ${cap}, clean ${clean}, ${keys.length} keys)`,
+    );
     process.exit(1);
   }
   const conn = new Conn("driver");
   await conn.open();
+  // Read BEFORE the sampling loop, so a host whose engine cannot hold the
+  // cap is named before the equality below is measured against it.
+  const engine = await engineSlots(conn);
+  check(
+    engine !== null && engine.globalTotal > want && engine.perAgentCap > want,
+    `the engine's run slots exceed the [resume] cap of ${want} (else the equality below would be the engine's number, not the coordinator's)`,
+    engine ? `global_total ${engine.globalTotal}, per_agent_cap ${engine.perAgentCap}` : "run_concurrency did not answer",
+  );
   let maxInFlight = 0;
   let firstAtCap = null;
-  let engine = null;
   const seen = new Set();
   const settled = await until(
     async () => {
       const m = await conn.attempt("gateway.metrics.run_concurrency", {});
       const running = m.result?.running_sessions ?? [];
-      engine ??= m.result?.run_concurrency ?? null;
       if (running.length > maxInFlight) maxInFlight = running.length;
       if (running.length >= want && firstAtCap === null) firstAtCap = Date.now();
       for (const k of running) seen.add(k);
@@ -1827,13 +1885,6 @@ async function cmdParallel(cap, ...keys) {
   );
   conn.close();
   check(Boolean(settled), `all ${keys.length} sessions settled to clean`, keys.join(","));
-  // The engine's own slots are printed so the reader can see they are ABOVE
-  // the cap under test: with `max_runs_per_agent` at or below it, a `2` here
-  // would be the engine's number, not the coordinator's.
-  log(
-    `OBSERVATION engine run slots: global_total ${show(engine?.global_total)}, per_agent_cap ${show(engine?.per_agent_cap)} ` +
-      `(both must exceed the [resume] cap of ${want} for the check below to be about the coordinator)`,
-  );
   check(
     maxInFlight === want,
     `at most ${want} resumed runs in flight at once, and ${want} at least once (max observed ${maxInFlight})`,
@@ -1844,8 +1895,13 @@ async function cmdParallel(cap, ...keys) {
   // after the slowest resumed run — which is why it is read here, last.
   const b = await awaitBootLineAfterMark(60_000);
   check(Boolean(b), "the resume-ON boot printed its boot-scan line", show(bootLines()));
-  check(b?.scanned === keys.length, `the scan visited all ${keys.length} candidates (scanned=${keys.length})`, b?.raw);
-  check(b?.resumed === keys.length, `and resumed every one of them (resumed=${keys.length})`, b?.raw);
+  check(
+    b?.scanned === keys.length + priorClean,
+    `the scan visited all ${keys.length} candidates and the ${priorClean} already-clean session(s) (scanned=${keys.length + priorClean})`,
+    b?.raw,
+  );
+  check(b?.resumed === keys.length, `and resumed every candidate (resumed=${keys.length})`, b?.raw);
+  check(b?.skipped === priorClean, `and re-ran none of the clean ones (skipped=${priorClean})`, b?.raw);
   const before = readBootMark().refused;
   check(
     refusalLines().length === before,
@@ -1868,36 +1924,30 @@ async function cmdParallel(cap, ...keys) {
  * differs by one byte files the row under a session nobody reads.
  */
 const sessionIdRow = (wire) => {
-  const m = MAIN_KEY.exec(wire);
-  if (!m) {
-    console.error(`INSTRUMENT FAILURE: ${wire} is not a Main session key`);
-    process.exit(1);
-  }
+  const [agentId, mainKey, epoch] = mainKeyParams(wire);
   const row = withEvents((db) =>
     db
       ? db
-          .prepare(
-            "SELECT session_id, MAX(seq) AS head FROM session_events \
-             WHERE json_extract(session_id, '$.type') = 'main' \
-               AND json_extract(session_id, '$.agent_id') = ? \
-               AND json_extract(session_id, '$.main_key') = ? \
-               AND json_extract(session_id, '$.epoch') = ?",
-          )
-          .get(m[1], m[2], Number(m[3] ?? 0))
+          .prepare(`SELECT session_id, MAX(seq) AS head FROM session_events WHERE ${MAIN_WHERE}`)
+          .get(agentId, mainKey, epoch)
       : null,
   );
   if (!row?.session_id) {
     console.error(`INSTRUMENT FAILURE: no session_events rows for ${wire}; nothing to append to`);
     process.exit(1);
   }
-  // `debugName`: how `tracing` renders this id (`session=Main { agent_id:
-  // "main", main_key: "main", epoch: 1 }` — the derive(Debug) field order of
-  // `SessionKey::Main`). Two stages hold two epochs of the same main key, so
-  // the epoch is part of the name, not decoration.
+  // `debugName`: the tail of how `tracing` renders this id with `?` —
+  // `session=Main { agent_id: "main", main_key: "main", epoch: 1 }`, the
+  // derive(Debug) field order of `SessionKey::Main`. Two stages hold two
+  // epochs of the same main key, so the epoch is part of the name, and the
+  // closing ` }` is part of the match so `epoch: 1` cannot stand in for
+  // `epoch: 10`. A hand copy of a Debug rendering: a `refuse_log` that
+  // switched to `%` (Display) would stop matching here, which is the safe
+  // direction (red, not a wrong session accepted).
   return {
     sessionId: row.session_id,
     head: Number(row.head),
-    debugName: `main_key: "${m[2]}", epoch: ${Number(m[3] ?? 0)}`,
+    debugName: `main_key: "${mainKey}", epoch: ${epoch} }`,
   };
 };
 
@@ -1929,8 +1979,19 @@ const futureRow = (wire) =>
 
 async function cmdUndecodable(sub, x, y) {
   if (sub === "forge") {
-    const seq = forgeRow(x, { type: FUTURE_TYPE, v: 99 });
-    check(seq > 1, "future row appended after the dangle", `seq ${seq}`);
+    // The head is taken through the ordinary reader BEFORE the forge and the
+    // row is read back through it AFTER, so the check is about what the log
+    // now holds, not about the number `forgeRow` computed for itself.
+    const rowsBefore = sessionEvents(x);
+    const headBefore = Math.max(0, ...rowsBefore.map((r) => Number(r.seq)));
+    const dispatchSeq = Math.max(0, ...rowsBefore.filter((r) => r.event_type === "tool_call_requested").map((r) => Number(r.seq)));
+    forgeRow(x, { type: FUTURE_TYPE, v: 99 });
+    const row = futureRow(x);
+    check(
+      row !== null && Number(row.seq) === headBefore + 1 && dispatchSeq > 0 && Number(row.seq) > dispatchSeq,
+      `future row reads back at the head (seq ${headBefore + 1}), after the dangling dispatch (seq ${dispatchSeq})`,
+      row ? `seq ${row.seq}, type ${row.event_type}, retired_at ${row.retired_at}` : "no from_the_future row",
+    );
     check(danglingIds(x).length >= 1, "and the session's dangling dispatch is still open — the forge touched nothing else", danglingIds(x).join(","));
     return;
   }
@@ -2080,7 +2141,13 @@ async function cmdAttribute(sub = "texts", arg) {
     );
     const parked = rowsOfKind(key, "tool_call_parked").filter((r) => ids.includes(r.payload.call_id));
     check(parked.length === 0, "and none of them is parked at a gate (a parked call would take the NOT EXECUTED arm)", show(parked));
-    check(countKind(key, "run_started") === n, `${n} open RunStarted marker(s): one interrupted run per crash, in ONE session`, kinds(key).join(","));
+    // "Open" is a predicate, not a word: n `RunStarted` and NO `RunFinished`
+    // — a closed pair would satisfy the count alone.
+    check(
+      countKind(key, "run_started") === n && countKind(key, "run_finished") === 0,
+      `${n} open RunStarted marker(s) and no RunFinished: one interrupted run per crash, in ONE session`,
+      kinds(key).join(","),
+    );
     return;
   }
   const b = await awaitBootLineAfterMark(120_000);
@@ -2175,8 +2242,11 @@ const main = async () => {
     case "ratchet":
       await cmdRatchet(REST[0]);
       break;
+    case "parallel-slots":
+      await cmdParallelSlots(REST[0]);
+      break;
     case "parallel":
-      await cmdParallel(REST[0], ...REST.slice(1));
+      await cmdParallel(REST[0], REST[1], ...REST.slice(2));
       break;
     case "undecodable":
       await cmdUndecodable(REST[0], REST[1], REST[2]);
