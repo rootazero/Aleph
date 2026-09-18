@@ -76,19 +76,20 @@ pub struct Viewport {
 /// the rule that consumes it: the person who must honour the contract reads
 /// this file (判据 §1 — the copy that drifts is the one its owner never sees).
 ///
-/// **How MUCH a fetcher must cascade is decided by ONE fact about its engine,
-/// and the two fetchers get opposite answers from it: does the engine resolve
-/// inherited CSS properties before it answers?** Chromium does, so
-/// `fetch_chromium` cascades nothing that CSS inherits — `visibility` included,
-/// and adding it there would be a defect. obscura does not: its
-/// `getComputedStyle` serves `visibility` as the element's OWN value and never
-/// ships the inheritance it computed internally, so `fetch_obscura` must
-/// re-derive it. **That fact is derived in exactly one place** —
-/// `fetch_obscura::cascade_effective_styles`, cited to obscura's own source and
-/// carrying the residual the re-derivation leaves behind. Read it before
-/// changing what either fetcher cascades, and do not restate it here or there:
-/// two copies of an engine fact is how one fetcher gets fixed and the other
-/// keeps the old answer (判据 §16).
+/// **WHICH of these flags a fetcher must re-derive depends on its engine, and
+/// the two fetchers do not get the same answer** — one of them needs an arm the
+/// other must not copy (判据 §16, inverted). The two questions that decide it,
+/// the per-engine and per-flag answers, the citations, and the residual the
+/// re-derivation leaves behind are all in **one** place:
+/// `fetch_obscura::cascade_effective_styles`'s doc. Read it before changing
+/// what either fetcher cascades.
+///
+/// Deliberately no answers here. This paragraph used to spell the per-engine
+/// conclusion out, which made it a second author of an engine fact — born as
+/// the weaker copy, uncited, and outside the scope of the tag stamp that
+/// expires the cited one (判据 §1: two copies is how one fetcher gets fixed and
+/// the other keeps the old answer). A pointer cannot drift; a restatement can,
+/// and this one had.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Computed {
     pub display_none: bool,

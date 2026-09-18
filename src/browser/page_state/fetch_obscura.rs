@@ -612,16 +612,49 @@ pub async fn fetch_obscura(
 /// because [`super::build::visibility_of`] judges each node by its own
 /// `Computed` and never walks ancestors.
 ///
-/// # The one fact that decides this — for BOTH fetchers, derived once
+/// # TWO questions decide this, not one — for BOTH fetchers, derived once
 ///
-/// **Does this engine resolve inherited CSS properties before it answers?**
-/// Chromium does, so `fetch_chromium` must cascade nothing that CSS inherits
-/// and must not copy this function (判据 §16, inverted: the twin's right answer
-/// is the opposite one, and both follow from this single fact). obscura does
-/// not — and that is read in obscura's own source, never inferred from CSS,
-/// because CSS is exactly what the first version of this paragraph reasoned
-/// from and it was right about the CSSOM and wrong about the only engine this
+/// An earlier version of this paragraph put the whole thing on one question and
+/// was therefore false for `opacity`. Which flags a fetcher must re-derive is
+/// settled by these two, asked of its own engine:
+///
+/// **Q1 — does the engine resolve INHERITED properties before it answers?**
+/// This settles `visibility` and `cursor`, the two CSS inherits. Chromium: YES.
+/// obscura: NO, and that is read in obscura's own source below, never inferred
+/// from CSS — CSS is exactly what the first version of this paragraph reasoned
+/// from, and it was right about the CSSOM and wrong about the only engine this
 /// file serves.
+///
+/// **Q2 — does the engine's answer for a DESCENDANT already account for the
+/// ancestor?** This settles `display` and `opacity`, which CSS does not inherit
+/// and which therefore resolve to the descendant's own value on every engine —
+/// so the only thing that can save a fetcher is the engine omitting or marking
+/// the descendant some other way. The answers are per flag, not per engine:
+///
+/// | | Q1 `visibility` | Q1 `cursor` | Q2 `display` | Q2 `opacity` |
+/// |---|---|---|---|---|
+/// | Chromium | resolved ⇒ nothing to do | resolved ⇒ nothing to do | **yes**: a `display:none` subtree gets no `DOMSnapshot` layout entry at all, so `computed` is `None` and `rect: None` carries it (`fetch_chromium::computed_from`'s own doc) | **NO** — see below |
+/// | obscura | own value ⇒ **this function** | own value, and not even that (see the `cursor` section) | no ⇒ **this function** | no ⇒ **this function** |
+///
+/// **So: `fetch_chromium` must not copy the `visibility` arm** — Chrome answers
+/// Q1 yes, and OR-ing there would hide elements Chrome correctly called visible.
+/// That is 判据 §16 inverted, and it is the only arm the inversion covers.
+///
+/// ⚠️ **`fetch_chromium` answers Q2 NO for `opacity` and does not compensate,
+/// and this is a real gap — filed as its own task, deliberately not fixed
+/// here.** Measured on the committed capture
+/// (`crates/aleph-cdp/tests/fixtures/chrome-DOMSnapshot.captureSnapshot.json`):
+/// an `opacity: 0` container **and its text child both keep layout entries**,
+/// both reporting `opacity: "0"`, while `display: none` yields **zero** layout
+/// entries in the whole document. So the subtree is not dropped; `opacity` is
+/// not inherited, so an ELEMENT child of it resolves to `1`; and
+/// `computed_from` maps each node's own array with no ancestor walk. The one
+/// link that is CSS-settled rather than captured is that last step — no fixture
+/// on this branch contains an element child of an `opacity: 0` container, which
+/// is why nothing is red. One-line falsifier on a page that has one:
+/// `getComputedStyle(document.querySelector('#opacity-zero > *')).opacity`.
+/// **Do not fix it from here**: growing a second cascade inside a correction
+/// round is how a round buys one defect and sells another.
 ///
 /// * `LayoutStyle::visibility_hidden` is the element's **own** value. obscura's
 ///   words: *"`visibility: hidden|visible`, own value. `None` means 'inherit
@@ -928,6 +961,20 @@ mod tests {
     const ID_META: u64 = 5;
     const ID_TITLE: u64 = 7;
     const ID_STYLE: u64 = 10;
+    /// **The depth-2 nodes**, one per cascaded flag — the shape that tells a
+    /// transitive cascade from a one-edge one. Each is the TEXT inside an
+    /// element that is itself inside the flagged container, so reaching it
+    /// requires the loop to read the parent's ALREADY-EFFECTIVE value and not
+    /// its original one. Read off the fixture: `HEAD(3) → TITLE(7) → text(8)`,
+    /// `HEADER(16) → A#home(18) → text(19)`, `MAIN(25) → H1(27) → text(28)`.
+    const ID_TITLE_TEXT: u64 = 8;
+    const ID_A_HOME_TEXT: u64 = 19;
+    /// `MAIN(25) → UL(71) → LI(72)`: the fixture's only chain of two ELEMENT
+    /// edges below a container, and therefore the only place an intermediate
+    /// ELEMENT carries no flag of its own. Element indices 9 → 27 → 28.
+    const MAIN_EL: usize = 9;
+    const ID_UL: u64 = 71;
+    const ID_LI: u64 = 72;
     const ID_MAIN: u64 = 25;
     const ID_HEADER: u64 = 16;
 
@@ -942,6 +989,14 @@ mod tests {
     /// The `DOM.getBoxModel` answers, keyed by `backendNodeId`.
     ///
     /// **What is measured and what is scaffolding, stated rather than blurred.**
+    /// The name says neither, on purpose: this table holds one real measurement,
+    /// one stand-in, and ~14 scaffolding coordinates, so no single word over it
+    /// can be true of its contents — provenance belongs per entry, below and in
+    /// the comments on the rows. (It was `measured_boxes`. The sibling table was
+    /// `measured_rows` and had NO measurement in it at all; asking the question
+    /// of one and not the other would have left the second member of a two-member
+    /// class wearing the word — 判据 §11.)
+    ///
     /// The ZERO quad on `#hidden-none` (`display:none`) is U2's actual finding:
     /// obscura answers that call **successfully** with `[0,0,0,0,0,0,0,0]` where
     /// Chromium fails it honestly. The zero on `#external` stands in for U9's
@@ -955,7 +1010,7 @@ mod tests {
     ///
     /// Ids absent from this map get a protocol error from the dispatcher, which
     /// is a third real case (`rect: None`, page not lost).
-    fn measured_boxes() -> std::collections::HashMap<i64, serde_json::Value> {
+    fn box_replies() -> std::collections::HashMap<i64, serde_json::Value> {
         [
             (2, box_model(0.0, 0.0, 1280.0, 3000.0)),   // HTML
             (3, box_model(0.0, 0.0, 0.0, 0.0)),         // HEAD
@@ -986,7 +1041,51 @@ mod tests {
     /// there are four columns and not the five the T0 probe captured; a fifth
     /// would fail `parse_computed_rows`' arity check, which is the right
     /// failure.
-    fn measured_rows() -> serde_json::Value {
+    ///
+    /// # Not one of these four columns is a measurement, and the name used to say it was
+    ///
+    /// This was called `measured_rows`. **No obscura `getComputedStyle` capture
+    /// exists** — not in `crates/aleph-cdp/tests/fixtures/`, not anywhere in
+    /// `docs/superpowers/specs/…-evidence/`. T0's only computed-style capture is
+    /// `DOMSnapshot.captureSnapshot` with `{ computedStyles: COMPUTED_STYLES }`
+    /// (`probes/t0-capture.mjs:249-250`), written under `{ fixture: CHROME }`,
+    /// i.e. **Chromium only**; and the one `Runtime.evaluate` T0 ever sent
+    /// obscura was `1 + 1` (`t0-capture.mjs:201-202`, and
+    /// `obscura-Runtime.evaluate.json` is `{"value": 2}`). So there was nothing
+    /// for any column to be measured FROM, and the word sat over all four.
+    ///
+    /// Per column, since "constructed" is not one fact but four:
+    ///
+    /// | col | flag | provenance |
+    /// |---|---|---|
+    /// | 0 | `display_none` | **Constructed, corroborated indirectly.** U2 measured obscura answering `getBoxModel` on `#hidden-none` with a zero quad, which requires its layout to know the element is `display: none`; the map reads that same field (`obscura-render/src/paint.rs:1400`). A BOX reading is not a `getComputedStyle` reading (判据 §18) — this is a chain, not a capture. |
+    /// | 1 | `visibility_hidden` | **Constructed, source-derived.** `#hidden-vis { visibility:hidden }` is a stylesheet rule, obscura's declaration applier writes `LayoutStyle::visibility_hidden`, and the map serves that own value. True of the DECLARING element only — which is the whole subject of [`cascade_effective_styles`]. |
+    /// | 2 | `opacity_zero` | **Constructed, source-derived.** `paint.rs:1453` serves `css_number(opacity.unwrap_or(1.0))`, so the declaring element answers `"0"`. |
+    /// | 3 | `cursor_pointer` | **Constructed, and CONTRADICTED by this file's own derivation — pure scaffolding.** See below. |
+    ///
+    /// ## Column 3 is scaffolding and must be read as scaffolding
+    ///
+    /// On `probes/t0-page.html` the pointer cursor comes from a **stylesheet
+    /// rule**, `a, button { cursor:pointer; }`, and neither `<a>` carries a
+    /// `style` attribute. By the `cursor` section of
+    /// [`cascade_effective_styles`], obscura answers `'auto'` for both, so a
+    /// real obscura capture would set this column **nowhere on this page**.
+    ///
+    /// Nor is it Chromium's answer. Measured on the committed capture
+    /// `chrome-DOMSnapshot.captureSnapshot.json`: **8** nodes report
+    /// `cursor: pointer` — `A#home`, `A#external`, `BUTTON#go`,
+    /// `BUTTON#deep-target` and each of their text children. This table flags
+    /// **two**. So the row set matches no engine at all: obscura would flag
+    /// zero, Chromium four elements.
+    ///
+    /// It is kept because it is the ONLY thing exercising the column-3 →
+    /// `cursor_pointer` mapping, and a mapping with no test is worse than a
+    /// labelled fixture. What it may never be read as is evidence that obscura
+    /// answers `cursor` — which is exactly what it looked like while it was
+    /// called "measured", twenty lines from the paragraph proving the opposite
+    /// (判据 §3: a guard that would be cited as evidence FOR the defect costs
+    /// more than no guard).
+    fn constructed_rows() -> serde_json::Value {
         let mut rows = vec![[false, false, false, false]; ELEMENT_COUNT];
         for i in [HEAD, META, TITLE, STYLE, SCRIPT, HIDDEN_NONE] {
             rows[i][0] = true;
@@ -1061,7 +1160,7 @@ mod tests {
         last: &str,
         focus: serde_json::Value,
     ) -> FakeCdpServer {
-        let boxes = measured_boxes();
+        let boxes = box_replies();
         let base = scripted(base_entries(rows, n, first, last, focus));
         FakeCdpServer::start(move |req| {
             if req["method"] == "DOM.getBoxModel" {
@@ -1082,7 +1181,7 @@ mod tests {
     /// The agreeing server: measured rows, measured anchors, caret on `#q`.
     async fn agreeing_server() -> FakeCdpServer {
         server_with(
-            measured_rows(),
+            constructed_rows(),
             ELEMENT_COUNT,
             FIRST_TAG,
             LAST_TAG,
@@ -1095,7 +1194,7 @@ mod tests {
     /// EFFECTS — the node the `<a>` became, the rect the `<h1>` got, the flag
     /// the hidden `<div>` carries — not on which CDP methods were called.
     #[tokio::test]
-    async fn fetch_obscura_builds_one_frame_with_measured_rects_and_flags() {
+    async fn fetch_obscura_builds_one_frame_with_measured_rects_and_constructed_flags() {
         let server = agreeing_server().await;
         let (conn, session) = server.connect_and_attach().await;
 
@@ -1144,7 +1243,15 @@ mod tests {
             .as_ref()
             .expect("the evaluate covered every element");
         assert!(!c.display_none && !c.visibility_hidden && !c.opacity_zero);
-        assert!(c.cursor_pointer, "the measured cursor:pointer must survive");
+        assert!(
+            c.cursor_pointer,
+            "column 3 must reach `cursor_pointer`. This row is SCAFFOLDING, not \
+             a measurement: on this page the pointer cursor comes from a \
+             stylesheet rule, and `cascade_effective_styles`' `cursor` section \
+             shows obscura answers `'auto'` for it. What is under test is the \
+             column-3 mapping, which nothing else exercises — never that \
+             obscura reports `cursor`"
+        );
         // …and it is NOT laundered into `clickable_hint`, which names a signal
         // obscura does not report. `roles::is_interactive` reads
         // `computed.cursor_pointer` before it reads this field, so a copy here
@@ -1332,6 +1439,116 @@ mod tests {
         // A sibling subtree is untouched — the cascade follows edges, not the
         // document order it walks in.
         assert!(!by_id(ID_IFRAME).computed.unwrap().display_none);
+
+        // **DEPTH 2 — the transitivity, which every assertion above is blind
+        // to.** Each node named above is ONE edge from its flagged container,
+        // so all of them stay green under a cascade that reads the parent's
+        // ORIGINAL value instead of its already-effective one — the shape a
+        // future author produces by "cleaning up" the aliasing read, or by
+        // moving this loop to `split_at_mut`. That mutation was run against the
+        // whole browser suite and scored 534 passed / 0 failed, identical to the
+        // control, while every node at depth ≥ 2 in every hidden subtree went
+        // back to reporting itself visible — the same defect this test exists
+        // for, one level down, with nothing red (判据 §3: a green covers only
+        // the shapes its corpus contains).
+        //
+        // **What these three catch, measured rather than claimed.** They catch
+        // the TEXT arm reading a stale parent — `_ => from_parent` — which is
+        // what the whole-value mutation above breaks. They do NOT catch a
+        // single-flag break in the ELEMENT arm: replacing only
+        // `own.display_none |= from_parent.display_none` with a read of the
+        // parent's original value scores **534 passed / 0 failed** against
+        // these, because every node named here has a flagged container as its
+        // grandparent, so one stale hop still lands on the flag. An earlier
+        // version of this comment claimed otherwise; the mutation said no.
+        // `the_cascade_is_transitive_through_an_element_that_carries_no_flag`
+        // below is the one that covers that arm, and it needs a DIFFERENT shape
+        // — two ELEMENT edges — which this row set does not contain.
+        let read: [(u64, fn(Computed) -> bool, &str); 3] = [
+            (ID_TITLE_TEXT, |c| c.display_none, "display_none"),
+            (ID_A_HOME_TEXT, |c| c.visibility_hidden, "visibility_hidden"),
+            (ID_H1_TEXT, |c| c.opacity_zero, "opacity_zero"),
+        ];
+        for (id, flag, name) in read {
+            let n = by_id(id);
+            assert_eq!(n.kind, RawNodeKind::Text, "node {id} must be a text node");
+            let c = n.computed.expect("flags present");
+            assert!(
+                flag(c),
+                "node {id} is TWO edges below the container flagged `{name}` —                  its own parent carries no flag of its own, so this is only                  true if the cascade read the parent's ALREADY-EFFECTIVE value.                  A one-edge-deep corpus cannot tell that apart from a cascade                  that reads the parent's original value, and the whole suite is                  green on the broken one."
+            );
+            assert!(!crate::browser::page_state::build::visibility_of(n));
+        }
+    }
+
+    /// **The ELEMENT arm is transitive too — through an intermediate element
+    /// that declares nothing of its own.**
+    ///
+    /// The depth-2 assertions in the test above ride the TEXT arm. They are
+    /// blind to a single-flag break in the element arm, and that is a
+    /// measurement, not a worry: replacing only
+    /// `own.display_none |= from_parent.display_none` with a read of the
+    /// parent's ORIGINAL value scored **534 passed / 0 failed** — the whole
+    /// browser suite green — because every node those assertions name has a
+    /// flagged container as its GRANDparent, so one stale hop still lands on
+    /// the flag.
+    ///
+    /// The shape that tells them apart needs **two ELEMENT edges** with the
+    /// middle one unflagged, and the fixture contains exactly one:
+    /// `MAIN(25) → UL(71) → LI(72)`. Under a non-transitive cascade `UL` still
+    /// picks the flag up from `MAIN` and `LI` does not, so `LI` goes back to
+    /// reporting itself visible while nothing else moves.
+    ///
+    /// Run over all three cascaded flags rather than one, because the three
+    /// `|=` lines are separate statements and a break in one is invisible to an
+    /// assertion about another — which is the thing the other test's comment
+    /// once claimed for itself and does not have.
+    #[tokio::test]
+    async fn the_cascade_is_transitive_through_an_element_that_carries_no_flag() {
+        let cases: [(usize, fn(Computed) -> bool, &str); 3] = [
+            (0, |c| c.display_none, "display_none"),
+            (1, |c| c.visibility_hidden, "visibility_hidden"),
+            (2, |c| c.opacity_zero, "opacity_zero"),
+        ];
+        for (col, flag, name) in cases {
+            // Only MAIN declares anything. UL and LI declare nothing, which is
+            // what a real engine sends for a subtree hidden by one rule on the
+            // container.
+            let mut rows = vec![[false, false, false, false]; ELEMENT_COUNT];
+            rows[MAIN_EL][col] = true;
+            let server = server_with(
+                serde_json::json!(rows),
+                ELEMENT_COUNT,
+                FIRST_TAG,
+                LAST_TAG,
+                serde_json::json!(-1),
+            )
+            .await;
+            let (conn, session) = server.connect_and_attach().await;
+            let raw = fetch_obscura(&conn, &session, 4).await.unwrap();
+            let f = &raw.frames[0];
+            let by_id = |id: u64| f.nodes.iter().find(|n| n.backend_node_id == id).unwrap();
+
+            // The intermediate first, so a failure says WHICH hop was lost.
+            assert!(
+                flag(by_id(ID_UL).computed.expect("flags present")),
+                "the intermediate UL must carry `{name}` from MAIN — if this is \
+                 the red one, the cascade is not running at all, not merely \
+                 non-transitive"
+            );
+            let li = by_id(ID_LI);
+            assert_eq!(li.kind, RawNodeKind::Element);
+            assert!(
+                flag(li.computed.expect("flags present")),
+                "LI is two ELEMENT edges below the container flagged `{name}`, \
+                 and its parent UL declares nothing of its own — so this is \
+                 true only if the cascade read UL's ALREADY-EFFECTIVE value. A \
+                 cascade that reads the parent's original value passes every \
+                 other assertion in this file and hands the model a ref to a \
+                 list item nobody can see"
+            );
+            assert!(!crate::browser::page_state::build::visibility_of(li));
+        }
     }
 
     /// The caret sentinel `-1` means "I looked and nothing has it", and it must
@@ -1365,6 +1582,57 @@ mod tests {
         );
     }
 
+    /// Every `.rs` file under `src/` whose text contains `needle`, as
+    /// repo-relative paths, sorted.
+    ///
+    /// Walked, never listed (判据 §5): a file added tomorrow is in the corpus
+    /// without anyone remembering it. Raw text, NOT `code_text` — the claims
+    /// this guards live in doc comments, which every source scan strips, so
+    /// scanning code only would have made the guard 恒绿 in its own subject
+    /// case (判据 §2). The walk asserts a floor on the file count, so a broken
+    /// walk reads as broken rather than as "nothing found".
+    fn files_mentioning(needle: &str) -> Vec<String> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        assert!(
+            files.len() > 100,
+            "the walk found {} sources under src/, which is the walk failing, \
+             not the tree being small",
+            files.len()
+        );
+        let mut hits: Vec<String> = files
+            .into_iter()
+            .filter_map(|file| {
+                let text = std::fs::read_to_string(&file).ok()?;
+                if !text.contains(needle) {
+                    return None;
+                }
+                Some(
+                    file.strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                        .unwrap_or(&file)
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                )
+            })
+            .collect();
+        hits.sort();
+        hits
+    }
+
     /// The obscura build this module's source-level claims were READ ON.
     ///
     /// A literal on purpose. Deriving it from `runtimes::OBSCURA_TAG` would make
@@ -1394,15 +1662,48 @@ mod tests {
     /// an obscura checkout, and this test is what makes that grep happen instead
     /// of being assumed — a claim that rots LOUDLY rather than silently.
     ///
-    /// **What it does not buy, stated because a stamp reads like a warranty.**
-    /// `OBSCURA_TAG` names the build the ledger INSTALLS, and
-    /// `diagnostics::checks::engine_missing` will use an `obscura` already on
-    /// `PATH` before it looks under the ledger's directory. An operator running
-    /// their own build is outside this stamp entirely, and no test in this crate
-    /// can see that one. It covers the pinned path, which is the path Aleph
-    /// controls.
+    /// **What it does not buy, stated because a stamp reads like a warranty —
+    /// and there are TWO doors past it, not the one this doc first named.**
+    /// `OBSCURA_TAG` names the build the ledger INSTALLS.
+    /// `diagnostics::checks::engine_missing::run_obscura` reaches a binary by:
+    ///
+    /// 1. the **config pin** `[general.browser.obscura] binary_path` — resolved
+    ///    FIRST (`engine_missing.rs:333-363`), returning found-or-missing
+    ///    without ever consulting the ledger, and advertised to the operator in
+    ///    the install hint itself. This is the nearer door, and the first
+    ///    version of this doc did not name it;
+    /// 2. then a `which` PATH walk (`:366`).
+    ///
+    /// Either one hands Aleph an operator-supplied build of any version with
+    /// this stamp green. It covers the pinned path, which is the path Aleph
+    /// controls, and it can cover no other — 判据 §5, and the list is the
+    /// resolver's, not a remembered one.
+    ///
+    /// **Its SCOPE is this file, and that is now a guard rather than a
+    /// sentence.** The message enumerates claims in `fetch_obscura.rs`; the
+    /// round that added this test also put an uncited engine claim in `raw.rs`,
+    /// outside the scope and outside the expiry, which is 判据 §1's fourth face
+    /// arriving the same hour the stamp did. Prose could not have caught that,
+    /// so the second assertion below counts the files in `src/` that mention
+    /// `getComputedStyle` at all — the spelling any second author of an
+    /// engine's computed-style behaviour must use, whether or not they cite a
+    /// line. **In what situation does it go red?** When a second file starts
+    /// making, or calling, `getComputedStyle` claims: exactly the drift that
+    /// happened, and the guard is derived from a whole-`src/` walk rather than
+    /// from an allowlist.
     #[test]
     fn the_obscura_source_claims_here_name_the_build_they_were_read_on() {
+        let homes = files_mentioning("getComputedStyle");
+        assert_eq!(
+            homes,
+            vec!["src/browser/page_state/fetch_obscura.rs".to_string()],
+            "`getComputedStyle` must have exactly one home in src/, and it must \
+             be the file this stamp expires. Every other file that names it is \
+             a second author of an engine's computed-style behaviour whose \
+             claims nothing dates — which is how the last round left an uncited \
+             one in raw.rs. Either move the claim here, or widen the stamp's \
+             message and this assertion together. Found: {homes:?}"
+        );
         assert_eq!(
             OBSCURA_SOURCE_READ_AT,
             crate::runtimes::OBSCURA_TAG,
@@ -1515,7 +1816,7 @@ mod tests {
     async fn an_unanswerable_caret_is_unknown_while_minus_one_is_an_observed_none() {
         for unknown in [serde_json::Value::Null, serde_json::json!(ELEMENT_COUNT)] {
             let server = server_with(
-                measured_rows(),
+                constructed_rows(),
                 ELEMENT_COUNT,
                 FIRST_TAG,
                 LAST_TAG,
@@ -1534,7 +1835,7 @@ mod tests {
         }
 
         let server = server_with(
-            measured_rows(),
+            constructed_rows(),
             ELEMENT_COUNT,
             FIRST_TAG,
             LAST_TAG,
@@ -1561,7 +1862,7 @@ mod tests {
     async fn a_persistent_count_mismatch_drops_every_computed_flag() {
         // One row short of the tree, twice.
         let short = serde_json::Value::Array(
-            measured_rows().as_array().unwrap()[..ELEMENT_COUNT - 1].to_vec(),
+            constructed_rows().as_array().unwrap()[..ELEMENT_COUNT - 1].to_vec(),
         );
         let server = server_with(
             short,
@@ -1604,20 +1905,24 @@ mod tests {
     #[test]
     fn parse_computed_rows_rejects_a_matching_count_with_a_different_first_tag() {
         let value = serde_json::json!({
-            "n": ELEMENT_COUNT, "first": "BODY", "last": LAST_TAG, "rows": measured_rows(),
+            "n": ELEMENT_COUNT, "first": "BODY", "last": LAST_TAG, "rows": constructed_rows(),
         });
         assert!(parse_computed_rows(&value, ELEMENT_COUNT, FIRST_TAG, LAST_TAG).is_none());
         let value = serde_json::json!({
-            "n": ELEMENT_COUNT, "first": FIRST_TAG, "last": "SPAN", "rows": measured_rows(),
+            "n": ELEMENT_COUNT, "first": FIRST_TAG, "last": "SPAN", "rows": constructed_rows(),
         });
         assert!(parse_computed_rows(&value, ELEMENT_COUNT, FIRST_TAG, LAST_TAG).is_none());
         let value = serde_json::json!({
-            "n": ELEMENT_COUNT, "first": FIRST_TAG, "last": LAST_TAG, "rows": measured_rows(),
+            "n": ELEMENT_COUNT, "first": FIRST_TAG, "last": LAST_TAG, "rows": constructed_rows(),
         });
         let rows = parse_computed_rows(&value, ELEMENT_COUNT, FIRST_TAG, LAST_TAG)
             .expect("agreeing shapes parse");
         assert_eq!(rows.len(), ELEMENT_COUNT);
         assert!(rows[HIDDEN_NONE].display_none);
+        // Column 3 → `cursor_pointer`, which is what this asserts. The row is
+        // scaffolding — obscura answers `'auto'` for a stylesheet `cursor`, see
+        // `constructed_rows`' doc — so this is a claim about the PARSER's column
+        // order, never about the engine.
         assert!(rows[A_HOME].cursor_pointer);
         assert!(!rows[HTML].display_none);
     }
@@ -1640,7 +1945,7 @@ mod tests {
     /// so the two arms below differ in exactly one thing: which reply.
     async fn fetch_with_every_box_answered(reply: Responder) -> RawDom {
         let base = scripted(base_entries(
-            measured_rows(),
+            constructed_rows(),
             ELEMENT_COUNT,
             FIRST_TAG,
             LAST_TAG,
@@ -1698,10 +2003,10 @@ mod tests {
     #[tokio::test]
     async fn box_model_concurrency_is_bounded_by_the_parameter() {
         const DELAY: std::time::Duration = std::time::Duration::from_millis(20);
-        let boxes = measured_boxes();
+        let boxes = box_replies();
         let base = scripted_slow(
             base_entries(
-                measured_rows(),
+                constructed_rows(),
                 ELEMENT_COUNT,
                 FIRST_TAG,
                 LAST_TAG,
