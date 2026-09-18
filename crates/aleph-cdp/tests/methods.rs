@@ -955,6 +955,40 @@ async fn dom_top_layer_is_read_as_node_ids_and_described_by_node_id() {
     // `::backdrop`, so an empty list would make every assertion above pass for the wrong reason.
     assert_eq!(node_ids.len(), 6, "three escapers plus three ::backdrops");
 
+    // The other half of the handshake. It takes no parameters, and sending any would be invented —
+    // but the reason it has a wrapper at all is the side effect `get_document` leaves behind, which
+    // is measured in `disable`'s own doc.
+    let (server, conn) = replying("DOM.disable", json!({})).await;
+    dom::disable(&conn, Some(&session()))
+        .await
+        .expect("the void reply is accepted");
+    assert_eq!(
+        server.last_params("DOM.disable").expect("params"),
+        json!({})
+    );
+
+    // And a refusal reaches the caller as a refusal. Measured on Chrome: a session whose agent was
+    // never enabled answers `DOM.disable` with `"DOM agent hasn't been enabled"` rather than
+    // shrugging — so a caller using it as unconditional cleanup gets an `Err`, and this wrapper
+    // must hand that over rather than swallowing it. Who may spend it as "already off" is the
+    // caller's decision to state, not this crate's to make for them.
+    let server = FakeCdpServer::start(scripted(vec![(
+        "DOM.disable",
+        Responder::Error {
+            code: -32000,
+            message: "DOM agent hasn't been enabled".to_string(),
+        },
+    )]))
+    .await;
+    let conn = connect(&server).await;
+    let err = dom::disable(&conn, Some(&session()))
+        .await
+        .expect_err("the peer refused");
+    assert!(
+        matches!(err, CdpError::Protocol { code: -32000, .. }),
+        "{err:?}"
+    );
+
     let described = parse(fixture!("chrome-DOM.describeNode.bynodeid.json"));
     let (server, conn) = replying("DOM.describeNode", described.clone()).await;
     let node = dom::describe_node_by_node_id(&conn, Some(&session()), 27)

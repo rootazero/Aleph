@@ -237,6 +237,80 @@ async fn capture_session(
 /// is the Chromium path and the method has been in Chrome for years, but a very
 /// old build reached through `browser_connect --cdp` would refuse rather than
 /// degrade, and the message below is what tells its operator so.
+///
+/// # The handshake is per CALL; its SIDE EFFECT was per session, and this is
+/// # where that is paid for
+///
+/// `DOM.getDocument` does not only build the node map — it **enables the
+/// session's DOM agent**, and an enabled agent pushes an unsolicited `DOM.*`
+/// event at the connection for every DOM mutation on that tab, for as long as
+/// the tab lives. The first version of this function handshaked and never
+/// disabled, so one snapshot turned that on permanently.
+///
+/// Measured on Chrome 153.0.8010.48 (`…-evidence/probes/t17d-disable.mjs`,
+/// arm A) — three fresh production-shaped sessions, one page, the same 250
+/// inserts + 250 attribute writes + 125 removals each, counting every
+/// unsolicited `DOM.*` frame the connection received **after** setup:
+///
+/// | session | `DOM.*` events |
+/// |---|---|
+/// | never handshaked (the shape before this arm existed) | **0** |
+/// | handshake, no disable (this function as first shipped) | **377** |
+/// | handshake **then `DOM.disable`** | **0** |
+///
+/// Row 1 is the instrument's control — zero by construction, because the table
+/// above says nothing else enables the agent — and row 2 is the control that
+/// says a zero in row 3 is the disable working rather than a quiet page.
+///
+/// Why it reaches a user: those events land on the same connection whose event
+/// broadcast is bounded, so a burst can push a subscriber past its window. One
+/// subscriber reports the hole (the pump's lag note); `cdp_backend::actions`'
+/// dialog racer does not read `lagged()` at all, so for it a dropped
+/// `Page.javascriptDialogOpening` is a click that returns `Ok(())` with the tab
+/// left wedged. Before this arm that failure was structurally impossible on the
+/// Chromium path; the disable is what keeps it that way.
+///
+/// ## ⚠️ The window did not go to zero — it went from the tab's life to this
+/// ## function
+///
+/// Events still flow between the `DOM.getDocument` and the `DOM.disable`.
+/// Measured, same probe, arm G, counting strictly inside that window: **7** on
+/// a quiet page (one `DOM.setChildNodes` per `describeNode`), **9** with the
+/// page mutating through it. Small against the broadcast's capacity, and not
+/// zero — a large enough burst landing inside one handshake can still lag a
+/// subscriber. That is [`cascade_opacity`]'s residual entry 5 rather than a
+/// comment, because it is a residual this round created.
+///
+/// ## 闸的两个方向: what the disable takes away, and from whom
+///
+/// `DOM.disable` is **session-wide**. It does not disable "our" use of the
+/// agent; it disables the agent. So the question is not whether it works, it is
+/// **who else needed it on**:
+///
+/// > A second caller enables the DOM agent on the same session and depends on
+/// > it — for `DOM.*` events (a ref table invalidating on
+/// > `DOM.documentUpdated`, a live DOM watcher) or for **nodeIds** it means to
+/// > reuse. A snapshot running between their enable and their read turns it off
+/// > underneath them. Their events stop and their nodeIds stop resolving, and
+/// > **neither end gets an error** — the disable succeeds, and their next call
+/// > refuses with a message about an agent they thought they had enabled.
+///
+/// Today there is no such caller, and that is a 列举法 answer good only for the
+/// day it was written (判据 §5) — so it is a census rather than a sentence:
+/// `only_the_two_page_state_fetchers_touch_a_sessions_dom_agent` reddens by
+/// name when a third production `DOM.getDocument` or any `DOM.enable` appears
+/// under `src/`. What it cannot see is a caller reached through some other
+/// spelling; the message says so and says what to do.
+///
+/// Nothing a later call needs is lost. Measured, same probe: after the disable
+/// `DOM.getBoxModel` on a real backendNodeId still answers (arm F — and the
+/// table above already shows that call never needed the agent), the next
+/// snapshot's own handshake answers correctly on the same session (arm D), and
+/// `DOMSnapshot.captureSnapshot` taken **after** the disable is complete and
+/// its ids agree with the list (arm B — the production order, run end to end).
+///
+/// The obscura fetcher has always sent its own `DOM.getDocument(-1, true)` and
+/// still does; this arm is the Chromium path's and does not reach it.
 async fn top_layer_backend_ids(
     conn: &CdpConnection,
     session: &SessionId,
@@ -255,42 +329,77 @@ async fn top_layer_backend_ids(
                  Re-run browser_snapshot."
             ))
         })?;
-    let node_ids = aleph_cdp::methods::dom::get_top_layer_elements(conn, Some(session))
-        .await
-        .map_err(|e| {
-            BrowserError::ActionFailed(format!(
-                "could not read the page's top layer (DOM.getTopLayerElements): {e}. An open \
-                 modal dialog, a shown popover or a fullscreen element is painted outside its \
-                 DOM ancestors' opacity, and without this list one inside a faded container \
-                 would be dropped from the page state with nothing saying so. Re-run \
-                 browser_snapshot; if it repeats, this engine does not implement the method."
-            ))
-        })?;
 
-    let mut ids = HashSet::with_capacity(node_ids.len());
-    for node_id in node_ids {
-        let node = aleph_cdp::methods::dom::describe_node_by_node_id(conn, Some(session), node_id)
+    // **From here the session's DOM agent is ON, and every exit below goes
+    // through the disable.** The read is an inline block rather than a helper
+    // for two reasons: the `?`s would otherwise leave the agent enabled on
+    // exactly the error path a retrying caller hits repeatedly, and moving the
+    // calls into a sibling function would put the handshake, the read and the
+    // disable in three places that are free to drift — which is the whole thing
+    // `the_top_layer_read_has_one_call_site_and_its_handshake_is_in_the_same_function`
+    // reads this function's text to prevent.
+    let read: Result<HashSet<u64>, BrowserError> = async {
+        let node_ids = aleph_cdp::methods::dom::get_top_layer_elements(conn, Some(session))
             .await
             .map_err(|e| {
                 BrowserError::ActionFailed(format!(
-                    "the page's top layer names node {node_id}, and this session could not \
-                     describe it: {e}. The list answers in nodeIds and a capture is entirely in \
-                     backendNodeIds, so an id that cannot be translated is an element whose \
-                     visibility this capture cannot judge. Re-run browser_snapshot."
+                    "could not read the page's top layer (DOM.getTopLayerElements): {e}. An open \
+                     modal dialog, a shown popover or a fullscreen element is painted outside its \
+                     DOM ancestors' opacity, and without this list one inside a faded container \
+                     would be dropped from the page state with nothing saying so. Re-run \
+                     browser_snapshot; if it repeats, this engine does not implement the method."
                 ))
             })?;
-        // `0` is CDP's own "no node". It must never enter this set, because
-        // `parse_nodes` writes `0` for any node whose `backendNodeId` did not
-        // convert — so a `0` here would exempt every one of those from the
-        // cascade at once, which is the widest possible version of the bug this
-        // set exists to fix.
-        if let Ok(id) = u64::try_from(node.backend_node_id) {
-            if id != 0 {
-                ids.insert(id);
+
+        let mut ids = HashSet::with_capacity(node_ids.len());
+        for node_id in node_ids {
+            let node =
+                aleph_cdp::methods::dom::describe_node_by_node_id(conn, Some(session), node_id)
+                    .await
+                    .map_err(|e| {
+                        BrowserError::ActionFailed(format!(
+                            "the page's top layer names node {node_id}, and this session could \
+                             not describe it: {e}. The list answers in nodeIds and a capture is \
+                             entirely in backendNodeIds, so an id that cannot be translated is an \
+                             element whose visibility this capture cannot judge. Re-run \
+                             browser_snapshot."
+                        ))
+                    })?;
+            // `0` is CDP's own "no node". It must never enter this set, because
+            // `parse_nodes` writes `0` for any node whose `backendNodeId` did
+            // not convert — so a `0` here would exempt every one of those from
+            // the cascade at once, which is the widest possible version of the
+            // bug this set exists to fix.
+            if let Ok(id) = u64::try_from(node.backend_node_id) {
+                if id != 0 {
+                    ids.insert(id);
+                }
             }
         }
+        Ok(ids)
     }
-    Ok(ids)
+    .await;
+
+    // THE OTHER HALF OF THE HANDSHAKE — see this function's event table.
+    //
+    // A failure here is **warned and not propagated**, and that is the one
+    // asymmetry in this function: the three calls above answer the question the
+    // capture is about, so their `Err` is "I do not know" and must refuse. This
+    // one answers nothing — the ids are already in hand — so failing the
+    // capture over it would throw away a correct page state to report a cleanup
+    // that did not happen. Measured, the likeliest failure is also the harmless
+    // one: on a session whose agent is already off, Chrome answers `DOM.disable`
+    // with `"DOM agent hasn't been enabled"`, which is an error describing the
+    // state this line wanted.
+    if let Err(e) = aleph_cdp::methods::dom::disable(conn, Some(session)).await {
+        tracing::warn!(
+            error = %e,
+            "could not turn this session's DOM agent off again after reading the top layer; it \
+             stays enabled, so DOM mutations on this tab will keep pushing events at the \
+             connection's bounded broadcast for the life of the session"
+        );
+    }
+    read
 }
 
 /// The `type` an out-of-process frame's target reports.
@@ -1629,6 +1738,19 @@ fn parse_nodes(
 ///    the OLD version of this list — a deleted dialog, silently (判据 §8). A
 ///    refusal is recoverable and says what happened; that is the whole of the
 ///    trade, and it is a trade rather than a free win.
+/// 5. **Creates a window rather than closing one: the handshake's own events.**
+///    The top-layer read enables the session's DOM agent, and
+///    [`top_layer_backend_ids`] turns it off again — so the unsolicited `DOM.*`
+///    events it produces are bounded by that function rather than by the tab's
+///    life, which is what its table measures. They are not zero. Measured
+///    strictly inside the window (`…-evidence/probes/t17d-disable.mjs`, arm G):
+///    **7** `DOM.setChildNodes` on a quiet page — one per `describeNode` — and
+///    **9** with the page mutating through it. A burst large enough to land
+///    inside one handshake can still push a subscriber past the connection's
+///    bounded event broadcast, and one of those subscribers does not read
+///    `lagged()`. Numbered here rather than left in a comment because it is a
+///    residual THIS round created, which is the standard this list applies to
+///    everyone else.
 ///
 /// **What used to be entry 1 — the top layer — is closed**, not dropped: the
 /// membership test at the head of the loop is the fix, and
@@ -3485,23 +3607,31 @@ mod tests {
         );
     }
 
-    /// A CDP peer that answers `DOM.getTopLayerElements` **the way Chrome
-    /// does**: with the list only once `DOM.getDocument` has been seen on this
-    /// connection, and with `[]` before that.
+    /// A CDP peer that carries **the DOM agent's two bits of state**, each
+    /// moved by the verb Chrome moves it with.
     ///
-    /// The rule is not invented. Measured on Chrome 153.0.8010.48
-    /// (`…-evidence/probes/t17d-toplayer.mjs`, arm A2): with the DOM agent
-    /// enabled but no current node map — `DOM.enable` from any other client, or
-    /// this fetcher's own handshake from a previous snapshot followed by a
-    /// navigation — the real browser answers `[]` on a page with an open modal
-    /// dialog. The paired control in that arm is the same session and the same
-    /// page with a second `DOM.getDocument`, which answers with the dialog.
+    /// | bit | set by | cleared by | what it decides |
+    /// |---|---|---|---|
+    /// | agent enabled | `DOM.getDocument`, `DOM.enable` | `DOM.disable` | off ⇒ `getTopLayerElements` REFUSES |
+    /// | node map current | `DOM.getDocument` | `DOM.disable`, (a navigation) | on but stale ⇒ `getTopLayerElements` answers `[]` |
     ///
-    /// Modelling the SILENT face rather than the loud one is deliberate: on a
-    /// session that never touched the DOM domain the real refusal is
-    /// `"DOM agent hasn't been enabled"`, which anybody would notice. The `[]`
-    /// is the face nothing in this tree could see, so it is the one the fake
-    /// wears (判据 §11).
+    /// Every cell is measured, not invented, on Chrome 153.0.8010.48:
+    ///
+    /// * cold session ⇒ refusal `"DOM agent hasn't been enabled"`
+    ///   (`t17d-toplayer.mjs` arm A);
+    /// * `DOM.enable` alone, and a handshake followed by a navigation ⇒ **`[]`**
+    ///   on a page with an open modal, with the paired control — the same
+    ///   session and page plus a fresh handshake — answering with the dialog
+    ///   (arm A2);
+    /// * **after `DOM.disable` ⇒ refusal again** (`t17d-disable.mjs` arm C).
+    ///   That last one is why this peer has two bits rather than one: without
+    ///   it, "the fetcher left the agent enabled" and "the fetcher turned it
+    ///   off" would produce the same answer here and the leg that asserts the
+    ///   session is left cold would assert nothing.
+    ///
+    /// The `[]` face matters most, because it is the one nothing else in this
+    /// tree can see: a forgotten handshake on a warm session is silent, and
+    /// silence is what a census is for (判据 §11).
     fn top_layer_peer(
         answer: TopLayerAnswer,
     ) -> impl Fn(&Value) -> Responder + Send + Sync + 'static {
@@ -3537,7 +3667,11 @@ mod tests {
             })
             .collect();
 
-        let handshaken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // The agent's two bits. `map_current` implies `enabled`; the reverse
+        // does not hold, and that asymmetry is the whole point of the table in
+        // this function's doc.
+        let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let map_current = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         move |frame: &Value| {
             use std::sync::atomic::Ordering;
             let method = frame
@@ -3562,23 +3696,53 @@ mod tests {
                     }},
                 })),
                 "DOM.getDocument" => {
-                    handshaken.store(true, Ordering::SeqCst);
+                    enabled.store(true, Ordering::SeqCst);
+                    map_current.store(true, Ordering::SeqCst);
                     Responder::Reply(serde_json::json!({ "root": {
                         "nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
                     }}))
+                }
+                // The agent, without a node map — what any other CDP client on
+                // this browser does, and the row that answers `[]`.
+                "DOM.enable" => {
+                    enabled.store(true, Ordering::SeqCst);
+                    Responder::Reply(serde_json::json!({}))
+                }
+                // Measured: an error, not a no-op, when the agent is already
+                // off — and both bits go with it.
+                "DOM.disable" => {
+                    let was_on = enabled.swap(false, Ordering::SeqCst);
+                    map_current.store(false, Ordering::SeqCst);
+                    if was_on {
+                        Responder::Reply(serde_json::json!({}))
+                    } else {
+                        Responder::Error {
+                            code: -32000,
+                            message: "DOM agent hasn't been enabled".to_string(),
+                        }
+                    }
                 }
                 "DOM.getTopLayerElements" => match answer {
                     TopLayerAnswer::Refuse => Responder::Error {
                         code: -32000,
                         message: "DOM agent hasn't been enabled".to_string(),
                     },
-                    TopLayerAnswer::OnlyAfterHandshake => Responder::Reply(serde_json::json!({
-                        "nodeIds": if handshaken.load(Ordering::SeqCst) {
-                            node_ids.clone()
+                    TopLayerAnswer::AsChromeDoes => {
+                        if !enabled.load(Ordering::SeqCst) {
+                            Responder::Error {
+                                code: -32000,
+                                message: "DOM agent hasn't been enabled".to_string(),
+                            }
                         } else {
-                            Vec::new()
-                        },
-                    })),
+                            Responder::Reply(serde_json::json!({
+                                "nodeIds": if map_current.load(Ordering::SeqCst) {
+                                    node_ids.clone()
+                                } else {
+                                    Vec::new()
+                                },
+                            }))
+                        }
+                    }
                 },
                 "DOM.describeNode" => {
                     let id = params.get("nodeId").and_then(Value::as_i64).unwrap_or(-1);
@@ -3598,9 +3762,10 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum TopLayerAnswer {
-        /// Chrome's measured behaviour: `[]` before a handshake, the list after.
-        OnlyAfterHandshake,
-        /// The cold-session refusal, also measured.
+        /// The two-bit state machine above, every transition measured.
+        AsChromeDoes,
+        /// An engine that never answers the method at all — a different fact
+        /// from "the agent is off", and the one residual 4 is about.
         Refuse,
     }
 
@@ -3625,43 +3790,81 @@ mod tests {
     /// is the half that covers that, and the two are stated as a pair because
     /// either alone reads as complete.
     ///
-    /// The second leg pins the OTHER measured face: a refusal must reach the
-    /// caller as a refusal. Spending it as an empty set would put the deleted
-    /// dialog back, silently, which is the whole defect (判据 §8).
+    /// Leg 2 pins the OTHER measured face: a refusal must reach the caller as a
+    /// refusal. Spending it as an empty set would put the deleted dialog back,
+    /// silently, which is the whole defect (判据 §8).
+    ///
+    /// **Leg 3 is fix round 1's**, and it goes red for a different reason than
+    /// any of the others: delete the `DOM.disable` and the fetcher leaves the
+    /// session's DOM agent enabled, which is what made every later DOM mutation
+    /// on that tab push an event at a bounded broadcast. It asserts the agent's
+    /// state through the peer's own answer rather than by looking for the frame
+    /// on the wire (判据 §4: the effect, not the call).
     #[tokio::test]
     async fn a_missing_top_layer_handshake_would_delete_the_modal_and_this_is_what_notices() {
         use super::super::build::visibility_of;
         use aleph_cdp::testkit::FakeCdpServer;
 
-        // Leg 0 — THE FAKE'S OWN GATE IS ARMED. Without this the two legs below
-        // would pass just as happily against a peer that always answers the
-        // list, and this test would be a statement about nothing (判据 §2).
+        // Leg 0 — THE PEER IS THE MEASURED STATE MACHINE, not a constant. Three
+        // rows from `t17d-toplayer.mjs`, in order: cold refuses, enabled--but--
+        // stale answers `[]`, handshaken answers the list. Without this the legs
+        // below would pass just as happily against a peer that always answers,
+        // and this test would be a statement about nothing (判据 §2).
         {
-            let server =
-                FakeCdpServer::start(top_layer_peer(TopLayerAnswer::OnlyAfterHandshake)).await;
+            let server = FakeCdpServer::start(top_layer_peer(TopLayerAnswer::AsChromeDoes)).await;
             let (conn, session) = server.connect_and_attach().await;
+
             let cold = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
                 .await
-                .expect("the peer answers");
+                .expect_err("a session that never touched the DOM domain is refused");
             assert!(
-                cold.is_empty(),
-                "the peer must answer [] before a handshake, or the leg below \
-                 cannot tell a handshake from its absence: {cold:?}"
+                cold.to_string().contains("DOM agent hasn't been enabled"),
+                "the cold face is a refusal, in Chrome's own words: {cold}"
             );
+
+            // Sent raw, and deliberately: `DOM.enable` has **no wrapper** in
+            // `aleph-cdp` and must not get one. A wrapper is an invitation, and
+            // the one production caller that would reach for it is the second
+            // enabler whose absence `only_the_two_page_state_fetchers_touch_a_
+            // sessions_dom_agent` exists to keep true. What this line models is
+            // some OTHER CDP client on the same browser doing it.
+            conn.call(Some(&session), "DOM.enable", serde_json::json!({}))
+                .await
+                .expect("some other client enables the agent");
+            let stale = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
+                .await
+                .expect("an enabled agent answers");
+            assert!(
+                stale.is_empty(),
+                "the SILENT face: agent on, node map absent, `[]` on a page with \
+                 an open modal. This is the row the census exists for: {stale:?}"
+            );
+
             aleph_cdp::methods::dom::get_document(&conn, Some(&session), 0, false)
                 .await
                 .expect("handshake");
             let warm = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
                 .await
                 .expect("the peer answers");
-            assert_eq!(warm.len(), 6, "and the full list after one");
+            assert_eq!(warm.len(), 6, "and the full list after a handshake");
+
+            aleph_cdp::methods::dom::disable(&conn, Some(&session))
+                .await
+                .expect("the agent was on, so this succeeds");
+            let after = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
+                .await
+                .expect_err("a disabled agent refuses again");
+            assert!(
+                after.to_string().contains("DOM agent hasn't been enabled"),
+                "and the disable is observable through the method itself, which \
+                 is what leg 3 rests on: {after}"
+            );
         }
 
         // Leg 1 — the whole fetcher, against that peer. The handshake is
         // production's own, and the modal survives only because it happened.
         {
-            let server =
-                FakeCdpServer::start(top_layer_peer(TopLayerAnswer::OnlyAfterHandshake)).await;
+            let server = FakeCdpServer::start(top_layer_peer(TopLayerAnswer::AsChromeDoes)).await;
             let (conn, session) = server.connect_and_attach().await;
             let dom = fetch_chromium(&conn, &session)
                 .await
@@ -3706,6 +3909,57 @@ mod tests {
             assert!(
                 text.contains("browser_snapshot"),
                 "and say what to do next: {text}"
+            );
+        }
+
+        // Leg 3 — **the session is handed back COLD.** Fix round 1's, and the
+        // one that reddens when the `DOM.disable` goes.
+        //
+        // `DOM.getDocument` enables the session's DOM agent permanently, and an
+        // enabled agent pushes an unsolicited `DOM.*` event for every DOM
+        // mutation on that tab at a bounded broadcast whose dialog-racing
+        // subscriber never reads `lagged()`. Measured on real Chrome: 0 events
+        // over 250 mutations before the handshake existed, 377 with the
+        // handshake and no disable, 0 again with it.
+        //
+        // Asserted through the peer's own answer, not by looking for a
+        // `DOM.disable` frame: a test that searched the wire would pass for a
+        // disable sent at the wrong moment or on the wrong session (判据 §4).
+        {
+            let server = FakeCdpServer::start(top_layer_peer(TopLayerAnswer::AsChromeDoes)).await;
+            let (conn, session) = server.connect_and_attach().await;
+            fetch_chromium(&conn, &session)
+                .await
+                .expect("the page is captured");
+
+            let left = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
+                .await
+                .expect_err(
+                    "after a snapshot the session's DOM agent must be OFF again — this call \
+                     answering at all means `top_layer_backend_ids` left it enabled, and every \
+                     DOM mutation on this tab now pushes an event at a 64-slot broadcast for the \
+                     rest of the session",
+                );
+            assert!(
+                left.to_string().contains("DOM agent hasn't been enabled"),
+                "and it is off for the reason Chrome gives: {left}"
+            );
+
+            // Non-vacuity: a fetcher that never enabled the agent at all would
+            // pass the assertion above for entirely the wrong reason. It did
+            // enable it — the capture above only has its dialog because the
+            // handshake ran — and one more handshake still works on this
+            // session, which is the measured re-enable (arm D).
+            aleph_cdp::methods::dom::get_document(&conn, Some(&session), 0, false)
+                .await
+                .expect("a disabled agent re-enables");
+            let again = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
+                .await
+                .expect("and answers");
+            assert_eq!(
+                again.len(),
+                6,
+                "the disable must not cost the NEXT snapshot its answer"
             );
         }
     }
@@ -3807,6 +4061,131 @@ mod tests {
              moved into a helper, this guard cannot follow it: move it back, or \
              replace this census with one that can. The function scanned \
              was:\n{body}"
+        );
+        // Fix round 1: the handshake's OTHER half has to stay in the same
+        // function for the same reason. Hoisting the disable out — to
+        // `fetch_chromium`, say — would leave every CHILD session enabled,
+        // because `capture_child` attaches a new one and `DOM.disable` is per
+        // session just as `DOM.getDocument` is. The behaviour leg drives a
+        // single-renderer page and cannot see that move at all.
+        assert!(
+            body.contains("dom::disable("),
+            "the function that enables this session's DOM agent does not turn \
+             it off again. `DOM.getDocument` enables it permanently, and an \
+             enabled agent pushes an unsolicited DOM.* event at the \
+             connection's bounded event broadcast for every DOM mutation on \
+             that tab, for the life of the session — measured: 0 events over \
+             250 mutations without the handshake, 377 with it and no disable, \
+             0 with the disable. The function scanned was:\n{body}"
+        );
+    }
+
+    /// **闸的两个方向 for the `DOM.disable`**: it is session-wide, so the
+    /// question is not whether it works but **who else needed the agent on**.
+    ///
+    /// # The situation, named before the guard was written
+    ///
+    /// > A second production caller enables the DOM agent on the same session
+    /// > and depends on it — for `DOM.*` events (a ref table invalidating on
+    /// > `DOM.documentUpdated`, a live DOM watcher) or for **nodeIds** it means
+    /// > to reuse. A snapshot running between their enable and their read turns
+    /// > the agent off underneath them. Their events stop, their nodeIds stop
+    /// > resolving, and **neither end gets an error**: the disable succeeds, and
+    /// > their next call refuses with a message about an agent they believe they
+    /// > enabled.
+    ///
+    /// Today there is no such caller, and "today" is the whole problem with that
+    /// sentence (判据 §5) — so it is this census instead of prose.
+    ///
+    /// # In what situation does it go red?
+    ///
+    /// A third production `dom::get_document(` appears under `src/`, or any
+    /// `DOM.enable` / `dom::enable(` appears at all. Both are ways of becoming
+    /// the second enabler; the message says what the new caller has to reckon
+    /// with, and there is deliberately **no `enable` wrapper in `aleph-cdp`** to
+    /// make the second spelling awkward on purpose.
+    ///
+    /// # What it cannot see, stated rather than implied
+    ///
+    /// A caller reaching the agent through some other spelling — a raw
+    /// `conn.call(..., "DOM.getDocument", ...)`, or a wrapper added later under
+    /// a different name. It scans for two literals in the PRODUCTION half of
+    /// every `.rs` file under `src/`, which is a 列举法 census of two needles,
+    /// not a proof about the agent. That is the direction it fails in, and it
+    /// fails green there — so the message below asks the next author to widen
+    /// it rather than trusting it.
+    ///
+    /// `production_text` and not `production_prefix`: a whole-file test module
+    /// carries no `#[cfg(test)]` of its own, so the one-file cut would scan
+    /// `testkit.rs` and friends as if they shipped.
+    #[test]
+    fn only_the_two_page_state_fetchers_touch_a_sessions_dom_agent() {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&root, &mut files);
+        // The walk finding nothing must read as the walk being broken, not as
+        // the tree being clean — the same floor `fetch_obscura`'s stamp census
+        // puts under its own walk.
+        assert!(
+            files.len() > 100,
+            "the walk found {} sources under src/, which is the walk failing, \
+             not the tree being small",
+            files.len()
+        );
+
+        let mut enablers: Vec<String> = Vec::new();
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let production = crate::utils::source_scan::production_text(&file, &text);
+            // Comment lines are stripped first: this file's own doc names both
+            // needles repeatedly, and a census that counted prose would be
+            // measuring how much it explains itself (my own note from the round
+            // before: 剥注释行 before grepping).
+            let code = crate::utils::source_scan::strip_comment_lines(&production);
+            if code.contains("dom::get_document(")
+                || code.contains("dom::enable(")
+                || code.contains("\"DOM.enable\"")
+            {
+                enablers.push(
+                    file.strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                        .unwrap_or(&file)
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+        enablers.sort();
+        assert_eq!(
+            enablers,
+            vec![
+                "src/browser/page_state/fetch_chromium.rs".to_string(),
+                "src/browser/page_state/fetch_obscura.rs".to_string(),
+            ],
+            "exactly two production files may enable a session's DOM agent, and \
+             this is the list. `fetch_chromium::top_layer_backend_ids` now sends \
+             `DOM.disable` when it is done, and that is SESSION-WIDE: a new \
+             caller here is a caller whose events and nodeIds a concurrent \
+             snapshot can switch off with no error on either side. If you are \
+             adding one, decide which of you owns the agent's lifetime and say \
+             so at both sites — then widen this list deliberately. (The two \
+             here do not collide: they are different engines on different \
+             connections, and only the Chromium one disables.) Found: \
+             {enablers:?}"
         );
     }
 

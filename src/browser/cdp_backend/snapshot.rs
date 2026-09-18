@@ -214,6 +214,11 @@ mod tests {
             "DOM.getTopLayerElements",
             Responder::Reply(json!({ "nodeIds": [] })),
         );
+        // Fix round 1: the read turns the session's DOM agent on and turns it
+        // off again. The unlisted-method fallback would answer this with `{}`
+        // anyway; it is scripted so the helper's list says what a whole-page
+        // capture sends rather than leaving one verb to a default.
+        server.on("DOM.disable", Responder::Reply(json!({})));
         server.on(
             "Runtime.evaluate",
             Responder::Reply(json!({ "result": { "type": "object", "value":
@@ -431,6 +436,115 @@ mod tests {
     /// offers it; `DOM.getFrameOwner` on this session must refuse it.
     const STRANGER_FRAME: &str = "SOMEONE-ELSES-FRAME";
 
+    /// The child's nodeId for its own modal, and the backendNodeId it resolves
+    /// to in [`transparent_child_capture`]. Session-scoped and deliberately not
+    /// a number any parent node uses.
+    const CHILD_DIALOG_NODE_ID: i64 = 1005;
+    const CHILD_DIALOG_BACKEND_ID: i64 = 5;
+
+    /// Which capture the CHILD renderer serves, and what its own session
+    /// answers for `DOM.getTopLayerElements`.
+    ///
+    /// The knob exists because of a measured gap, not for symmetry.
+    /// `local-oopif-child` contains **zero** `opacity: 0` rows (counted over
+    /// its `layout.styles`), so no node in it can be flagged by the cascade and
+    /// therefore no node in it can be *un*flagged by a top-layer exemption
+    /// either. Against that capture, handing `ChildCapture` the parent's set
+    /// instead of the child's changes nothing observable — which is precisely
+    /// how the assembly in `fetch_chromium` went unguarded: both ends had
+    /// tests, the wire between them had none (判据 §7).
+    #[derive(Clone, Copy)]
+    enum ChildRenderer {
+        /// Task 0's recorded child. Nothing transparent in it; `[]` is honest.
+        Recorded,
+        /// CONSTRUCTED, and it says so: `#faded` (`opacity: 0`) → `#dlg`, which
+        /// the child's own session names in its top layer, → `#dlg-btn`; plus
+        /// `#plain` → `#plain-btn` as the negative under the same container.
+        /// The parent answers `[]`, so which set reaches `ChildCapture` is now
+        /// the difference between a visible dialog and a deleted one.
+        TransparentWithItsOwnDialog,
+    }
+
+    impl ChildRenderer {
+        fn child_top_layer_node_ids(self) -> Vec<i64> {
+            match self {
+                ChildRenderer::Recorded => Vec::new(),
+                ChildRenderer::TransparentWithItsOwnDialog => vec![CHILD_DIALOG_NODE_ID],
+            }
+        }
+
+        fn describe(self, node_id: Option<i64>) -> Option<serde_json::Value> {
+            match (self, node_id) {
+                (ChildRenderer::TransparentWithItsOwnDialog, Some(CHILD_DIALOG_NODE_ID)) => {
+                    Some(json!({ "node": {
+                        "nodeId": CHILD_DIALOG_NODE_ID,
+                        "backendNodeId": CHILD_DIALOG_BACKEND_ID,
+                        "nodeType": 1,
+                        "nodeName": "DIALOG",
+                    }}))
+                }
+                _ => None,
+            }
+        }
+    }
+
+    /// A child renderer's capture with a transparent container and its own
+    /// modal inside it — hand-built, because no recorded capture in this tree
+    /// has the shape.
+    ///
+    /// Everything `frames_of` and `parse_nodes` read and nothing they do not.
+    /// The backendNodeIds (2-10) deliberately overlap the parent capture's
+    /// range (2-99): that collision is the hazard `ChildCapture.top_layer`
+    /// exists for, and a child whose ids could not collide would make this
+    /// fixture agree with the defect.
+    fn transparent_child_capture() -> serde_json::Value {
+        json!({
+            "strings": [
+                OOPIF_CHILD_FRAME,      // 0 — the frame id, so `loaders` finds "LC"
+                "HTML", "BODY", "DIV", "BUTTON",             // 1-4
+                "id", "faded", "dlg", "dlg-btn", "plain", "plain-btn", // 5-10
+                "block", "visible", "0", "1", "auto",        // 11-15
+                "inline-block", "pointer",                   // 16-17
+                "child dialog button", "child plain button", // 18-19
+            ],
+            "documents": [{
+                "frameId": 0,
+                "nodes": {
+                    //            HTML BODY #faded #dlg #dlg-btn txt #plain #plain-btn txt
+                    "parentIndex": [-1,  0,    1,     2,    3,     4,   2,      6,      7],
+                    "nodeType":    [ 1,  1,    1,     1,    1,     3,   1,      1,      3],
+                    "nodeName":    [ 1,  2,    3,     3,    4,    -1,   3,      4,     -1],
+                    "nodeValue":   [-1, -1,   -1,    -1,   -1,    18,  -1,     -1,     19],
+                    "backendNodeId": [2, 3,    4,     5,    6,     7,   8,      9,     10],
+                    "attributes": [[], [], [5, 6], [5, 7], [5, 8], [], [5, 9], [5, 10], []],
+                    "contentDocumentIndex": { "index": [], "value": [] },
+                    "isClickable": { "index": [4, 7] },
+                    "inputChecked": { "index": [] },
+                    "optionSelected": { "index": [] },
+                    "inputValue": { "index": [], "value": [] },
+                    "textValue": { "index": [], "value": [] }
+                },
+                "layout": {
+                    "nodeIndex": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+                    "bounds": [
+                        [0, 0, 400, 300], [0, 0, 400, 280], [0, 0, 400, 200],
+                        [10, 10, 200, 60], [20, 20, 120, 24], [22, 24, 110, 16],
+                        [10, 90, 200, 60], [20, 100, 120, 24], [22, 104, 110, 16]
+                    ],
+                    // `#faded` declares opacity 0; everything under it declares
+                    // 1 and is invisible anyway — which is what the cascade is
+                    // for, and what makes the exemption observable.
+                    "styles": [
+                        [11, 12, 14, 15], [11, 12, 14, 15], [11, 12, 13, 15],
+                        [11, 12, 14, 15], [16, 12, 14, 17], [16, 12, 14, 17],
+                        [11, 12, 14, 15], [16, 12, 14, 17], [16, 12, 14, 17]
+                    ],
+                    "text": [-1, -1, -1, -1, -1, 18, -1, -1, 19]
+                }
+            }]
+        })
+    }
+
     /// A responder that varies by **session** and by **target id**, which
     /// `FakeCdpServer::on` cannot do (R20: `on` takes a value, so a reply cannot
     /// depend on the request). The multi-session path has no other way to be
@@ -439,19 +553,24 @@ mod tests {
     /// get different sessions, or the test proves only that one capture can be
     /// parsed twice.
     ///
-    /// `lists_child` is the one knob: the difference between a page whose
-    /// out-of-process frame can be reached and one whose cannot.
+    /// `lists_child` is one knob: the difference between a page whose
+    /// out-of-process frame can be reached and one whose cannot. `child` is the
+    /// other — see [`ChildRenderer`].
     fn oopif_responder(
         lists_child: bool,
+        child_renderer: ChildRenderer,
     ) -> impl Fn(&serde_json::Value) -> Responder + Send + Sync + 'static {
         let parent: serde_json::Value = serde_json::from_str(include_str!(
             "../page_state/fixtures/local-oopif-parent.domsnapshot.json"
         ))
         .expect("the Task 0 parent fixture parses");
-        let child: serde_json::Value = serde_json::from_str(include_str!(
-            "../page_state/fixtures/local-oopif-child.domsnapshot.json"
-        ))
-        .expect("the Task 0 child fixture parses");
+        let child: serde_json::Value = match child_renderer {
+            ChildRenderer::Recorded => serde_json::from_str(include_str!(
+                "../page_state/fixtures/local-oopif-child.domsnapshot.json"
+            ))
+            .expect("the Task 0 child fixture parses"),
+            ChildRenderer::TransparentWithItsOwnDialog => transparent_child_capture(),
+        };
         move |frame: &serde_json::Value| {
             let method = frame
                 .get("method")
@@ -510,12 +629,33 @@ mod tests {
                 // Task 17d, on BOTH sessions. `capture_session` is the one
                 // place a session is captured, so the child's renderer reads
                 // its own top layer on its own session — which is the whole
-                // reason the exemption cannot be a page-level fact. Neither
-                // renderer here has a dialog, so `[]` is honest on both.
+                // reason the exemption cannot be a page-level fact.
                 "DOM.getDocument" => Responder::Reply(json!({ "root": {
                     "nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document"
                 }})),
+                // **The parent NEVER has one and the child may.** With the
+                // recorded child neither renderer has a dialog, so `[]` is
+                // honest on both — and that is exactly why, until fix round 1,
+                // this wire could not tell the parent's set from the child's:
+                // an answer that is empty on both sides is the same answer
+                // whichever set reaches `ChildCapture` (判据 §7).
+                "DOM.getTopLayerElements" if is_child => Responder::Reply(json!({
+                    "nodeIds": child_renderer.child_top_layer_node_ids()
+                })),
                 "DOM.getTopLayerElements" => Responder::Reply(json!({ "nodeIds": [] })),
+                // The child's nodeId → backendNodeId translation. The parent
+                // names nobody, so any `describeNode` reaching here belongs to
+                // the child.
+                "DOM.describeNode" => {
+                    match child_renderer.describe(frame["params"]["nodeId"].as_i64()) {
+                        Some(node) => Responder::Reply(node),
+                        None => Responder::Error {
+                            code: -32000,
+                            message: "Could not find node with given id".to_string(),
+                        },
+                    }
+                }
+                "DOM.disable" => Responder::Reply(json!({})),
                 "Runtime.evaluate" => Responder::Reply(json!({ "result": { "type": "object",
                     "value": ["http://127.0.0.1:18999/t0-page.html", "T0 page"] } })),
                 // Everything else — the three enables, the detach — is a void
@@ -548,6 +688,108 @@ mod tests {
         (reg, backend)
     }
 
+    /// **A child renderer's top layer is read on the CHILD's session and
+    /// reaches the page state** — the wire between `capture_child` and
+    /// `ChildCapture.top_layer`, which had no falsifier at all.
+    ///
+    /// # What was unguarded, and how completely
+    ///
+    /// `ChildCapture.top_layer` is a required field, and
+    /// `fetch_chromium`'s `a_child_capture_is_not_exempted_by_the_parents_top_layer_ids`
+    /// is a real falsifier for filling it **wrongly** — but it calls
+    /// `stitch_snapshots` directly. Nothing covered how `fetch_chromium`
+    /// *assembles* the value, and the review measured that the gap was total:
+    /// writing `captures.push((owner, capture.raw, parent.top_layer.clone()))`
+    /// left `browser::` at 544 passed / 0 failed with a **byte-identical**
+    /// warning set. Both ends had tests; the wire had none (判据 §7).
+    ///
+    /// The reason nothing saw it is in [`ChildRenderer`]: against the recorded
+    /// child, the parent's set and the child's are both empty, and an answer
+    /// that is the same on both sides cannot tell them apart. So this test
+    /// serves a constructed child with a transparent container and its own
+    /// modal, and asserts the **model-facing** result — the dialog's text is in
+    /// the rendered page, its sibling's is not.
+    ///
+    /// # In what situation does it go red?
+    ///
+    /// Any assembly that hands the child a set that is not the child's own:
+    /// `top_layer: &parent.top_layer` on the `ChildCapture`, or the same defect
+    /// spelled so the binding stays used. Either way `#dlg` and `#dlg-btn` fall
+    /// back into the cascade and leave the page state.
+    #[tokio::test]
+    async fn a_child_renderers_own_top_layer_reaches_the_page_state() {
+        let server = FakeCdpServer::start(oopif_responder(
+            true,
+            ChildRenderer::TransparentWithItsOwnDialog,
+        ))
+        .await;
+        let (_reg, backend) = oopif_backend(&server).await;
+
+        let out = backend.snapshot("T1").await.expect("snapshot ok");
+
+        // The child's modal is painted outside its own container's opacity
+        // group, and the child's own session is the only one that can say so.
+        assert!(
+            out.snapshot_text.contains("child dialog button"),
+            "the child renderer's modal is in ITS top layer, so it must survive \
+             ITS container's `opacity: 0`. Missing here means the set that \
+             reached `ChildCapture` was not the one `capture_child` read on the \
+             child's session — the parent's is empty, and an empty set puts the \
+             dialog back into the cascade:\n{}",
+            out.snapshot_text
+        );
+
+        // The negative under the same container, and the reason this is not
+        // just "the cascade stopped running".
+        assert!(
+            !out.snapshot_text.contains("child plain button"),
+            "#plain is the dialog's sibling inside the same `opacity: 0` \
+             container and is NOT in the child's top layer, so it must stay \
+             dropped:\n{}",
+            out.snapshot_text
+        );
+
+        // And the read happened on the CHILD's session. Without this the two
+        // assertions above would also pass if the parent's session had somehow
+        // answered with the child's list.
+        let asked = server.received_for("DOM.getTopLayerElements");
+        assert!(
+            asked
+                .iter()
+                .any(|c| c["sessionId"].as_str() == Some(CHILD_SESSION)),
+            "the child's top layer must be read on the child's own session: {asked:?}"
+        );
+        assert!(
+            asked
+                .iter()
+                .any(|c| c["sessionId"].as_str() == Some(PARENT_SESSION)),
+            "and the parent's on the parent's — one read per renderer, which is \
+             why the sets cannot be one page-level fact: {asked:?}"
+        );
+        // Fix round 1's other half, on the multi-session path: BOTH sessions are
+        // handed back with their DOM agent off. A disable on the parent alone
+        // would leave every child renderer enabled.
+        let disabled: Vec<Option<&str>> = server
+            .received_for("DOM.disable")
+            .iter()
+            .map(|c| {
+                c["sessionId"].as_str().map(|s| {
+                    if s == CHILD_SESSION {
+                        "child"
+                    } else {
+                        "parent"
+                    }
+                })
+            })
+            .collect();
+        assert!(
+            disabled.contains(&Some("child")) && disabled.contains(&Some("parent")),
+            "each session that was handshaked must be disabled again, or the \
+             child renderer keeps pushing DOM events for the life of the tab: \
+             {disabled:?}"
+        );
+    }
+
     /// **A cross-origin iframe's content reaches the model, placed where the
     /// element sits.**
     ///
@@ -556,7 +798,7 @@ mod tests {
     /// and `Page.getFrameTree` on the parent does not even list the child.
     #[tokio::test]
     async fn a_cross_origin_frames_content_is_captured_and_placed_at_its_owner() {
-        let server = FakeCdpServer::start(oopif_responder(true)).await;
+        let server = FakeCdpServer::start(oopif_responder(true, ChildRenderer::Recorded)).await;
         let (_reg, backend) = oopif_backend(&server).await;
 
         let out = backend.snapshot("T1").await.expect("snapshot ok");
@@ -657,7 +899,7 @@ mod tests {
     /// has to read it.
     #[tokio::test]
     async fn an_unreachable_child_is_confessed_rather_than_rendered_as_an_empty_frame() {
-        let server = FakeCdpServer::start(oopif_responder(false)).await;
+        let server = FakeCdpServer::start(oopif_responder(false, ChildRenderer::Recorded)).await;
         let (_reg, backend) = oopif_backend(&server).await;
 
         let out = backend

@@ -81,6 +81,12 @@ pub const NO_BOX_MESSAGE: &str = "Could not compute box model";
 /// one document and `Page.getFrameTree` on the parent does not even list an OOPIF child, which has
 /// its own target, its own session, and frame-local coordinates. One call here or in
 /// `dom_snapshot` never sees "the whole page" when it contains a cross-origin frame.
+///
+/// ⚠️ **This call ENABLES the session's DOM agent, permanently, as a side effect** — it is the only
+/// thing in this crate's production callers that does. Every DOM mutation on that tab then pushes
+/// an unsolicited `DOM.*` event at the connection for the rest of the session's life. If you want
+/// the node map for one operation rather than for the session, pair this with [`disable`], which
+/// carries the measurements.
 pub async fn get_document(
     conn: &CdpConnection,
     session: Option<&SessionId>,
@@ -251,6 +257,12 @@ pub async fn describe_node_by_node_id(
 /// This wrapper deliberately does not send the handshake itself: doing so would make every caller
 /// pay for a tree walk it may already have done, and would hide the requirement rather than state
 /// it.
+///
+/// ⚠️ **The handshake has a side effect that outlives the call, and [`disable`] is its other
+/// half.** `DOM.getDocument` leaves the session's DOM agent ON, and a session with the agent on
+/// receives an unsolicited `DOM.*` event for every DOM mutation on that tab, for as long as it
+/// lives. A caller that handshakes once per operation and never disables is not paying once — see
+/// [`disable`] for the numbers and for why they reach a user.
 pub async fn get_top_layer_elements(
     conn: &CdpConnection,
     session: Option<&SessionId>,
@@ -258,6 +270,48 @@ pub async fn get_top_layer_elements(
     const M: &str = "DOM.getTopLayerElements";
     let reply = conn.call(session, M, json!({})).await?;
     decode(M, field(M, &reply, "nodeIds")?.clone())
+}
+
+/// Turn the session's DOM agent back off — the other half of a `DOM.getDocument` handshake.
+///
+/// # Why a caller that enables the agent must also disable it
+///
+/// Measured on Chrome 153.0.8010.48
+/// (`docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/probes/t17d-disable.mjs`, arm
+/// A), three fresh production-shaped sessions on one page, each given the same 250 inserts + 250
+/// attribute writes + 125 removals, counting every unsolicited `DOM.*` frame the connection
+/// received AFTER setup:
+///
+/// | session | `DOM.*` events |
+/// |---|---|
+/// | never handshaked | **0** |
+/// | `DOM.getDocument{depth:0}` + `describeNode`s, no disable | **377** |
+/// | the same, then `DOM.disable` | **0** |
+///
+/// The first row is the instrument's control — it must be zero by construction, because nothing
+/// but `DOM.getDocument` enables the agent — and the second is the control that says a zero in the
+/// third is the disable working rather than a quiet page.
+///
+/// Those events land on the connection's event broadcast, which is bounded
+/// ([`crate::events`]'s capacity), so on a churning page they can push a subscriber past its
+/// window. A subscriber that reads `lagged()` reports a hole; one that does not simply misses
+/// what it was waiting for.
+///
+/// # Two things about it that are measured rather than assumed
+///
+/// * **It is not idempotent and it is not silent.** On a session whose agent was never enabled,
+///   `DOM.disable` answers `"DOM agent hasn't been enabled"` — an error, not a no-op — and so does
+///   a second one in a row. A caller pairing it with a successful `DOM.getDocument` never sees
+///   that; a caller using it as an unconditional cleanup will, and the failure means "already
+///   off", which is the state it wanted.
+/// * **It costs nothing a later call needs.** After a disable, `DOM.getBoxModel` on a real
+///   backendNodeId still answers (backendNodeIds are stable and do not live in the agent's node
+///   map), and a later `DOM.getDocument` re-enables and re-populates so the next handshake answers
+///   correctly. What does NOT survive is a **nodeId**: those are the agent's, and a bare
+///   `DOM.getTopLayerElements` after a disable refuses with `"DOM agent hasn't been enabled"`.
+pub async fn disable(conn: &CdpConnection, session: Option<&SessionId>) -> Result<()> {
+    conn.call(session, "DOM.disable", json!({})).await?;
+    Ok(())
 }
 
 pub async fn set_file_input_files(
