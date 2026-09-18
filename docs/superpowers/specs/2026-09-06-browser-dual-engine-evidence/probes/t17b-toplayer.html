@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aleph T17b — the top layer under a hidden DOM ancestor</title>
+<style>
+  html,body { margin:0; padding:0; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  #fade     { opacity:0; }
+  #vishide  { visibility:hidden; }
+  #dispnone { display:none; }
+  dialog    { margin:0; padding:0; border:0; }
+  button    { cursor:pointer; }
+  /* A plain in-flow element inside each container, as the control that the
+     container really is doing what it says. */
+  .inflow   { width:60px; height:10px; background:#00f; }
+</style>
+</head>
+<body>
+  <!-- Each container holds BOTH ways into the top layer, plus an in-flow control. -->
+  <div id="fade">
+    <div id="fade-inflow" class="inflow">i</div>
+    <dialog id="fade-dlg"><button id="fade-dlg-btn">fade dialog button</button></dialog>
+    <div id="fade-pop" popover><button id="fade-pop-btn">fade popover button</button></div>
+    <div id="fade-fs"><button id="fade-fs-btn">fade fullscreen button</button></div>
+  </div>
+
+  <div id="vishide">
+    <div id="vishide-inflow" class="inflow">i</div>
+    <dialog id="vishide-dlg"><button id="vishide-dlg-btn">vishide dialog button</button></dialog>
+    <div id="vishide-pop" popover><button id="vishide-pop-btn">vishide popover button</button></div>
+  </div>
+
+  <div id="dispnone">
+    <div id="dispnone-inflow" class="inflow">i</div>
+    <dialog id="dispnone-dlg"><button id="dispnone-dlg-btn">dispnone dialog button</button></dialog>
+    <div id="dispnone-pop" popover><button id="dispnone-pop-btn">dispnone popover button</button></div>
+  </div>
+
+  <!-- Outside every container: the positive control for "the top layer works at all". -->
+  <div id="plain">
+    <dialog id="plain-dlg"><button id="plain-dlg-btn">plain dialog button</button></dialog>
+  </div>
+
+  <script>
+    // `?open=` selects what to open, so the SAME page can be rendered with and without the top
+    // layer for a pixel comparison. `all` is the default.
+    var want = new URL(location.href).searchParams.get('open') ?? 'all';
+    window.__opened = [];
+    function tryOpen(fn, label) {
+      try { fn(); window.__opened.push(label); }
+      catch (e) { window.__opened.push(label + ': THREW ' + String(e && e.name)); }
+    }
+    if (want !== 'none') {
+      for (const id of ['fade-dlg', 'vishide-dlg', 'dispnone-dlg', 'plain-dlg']) {
+        const d = document.getElementById(id);
+        tryOpen(() => d.showModal(), id + '.showModal');
+      }
+      for (const id of ['fade-pop', 'vishide-pop', 'dispnone-pop']) {
+        const p = document.getElementById(id);
+        tryOpen(() => p.showPopover(), id + '.showPopover');
+      }
+    }
+    // What the page itself believes about top-layer membership, independent of CDP. `:modal` and
+    // `:popover-open` are the DOM-visible spelling of the fact; an engine that does not implement
+    // them answers false here and that is itself the reading.
+    window.__matches = function () {
+      const out = {};
+      for (const id of ['fade-dlg', 'vishide-dlg', 'dispnone-dlg', 'plain-dlg']) {
+        const el = document.getElementById(id);
+        out[id] = { open: el.open, modal: safeMatch(el, ':modal') };
+      }
+      for (const id of ['fade-pop', 'vishide-pop', 'dispnone-pop']) {
+        const el = document.getElementById(id);
+        out[id] = { popoverOpen: safeMatch(el, ':popover-open') };
+      }
+      return out;
+    };
+    function safeMatch(el, sel) {
+      try { return el.matches(sel); } catch (e) { return 'THREW ' + String(e && e.name); }
+    }
+  </script>
+</body>
+</html>

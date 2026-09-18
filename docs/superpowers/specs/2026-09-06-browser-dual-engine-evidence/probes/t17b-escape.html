@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aleph T17b — what escapes a DOM ancestor's opacity group</title>
+<style>
+  html,body { margin:0; padding:0; background:#fff; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  #fade    { width:240px; height:120px; }
+  dialog   { margin:0; padding:0; border:0; background:#f00; width:80px; height:20px; }
+  #cand-fixed   { position:fixed; left:10px; top:60px; width:80px; height:20px; background:#f00; }
+  #cand-fs      { width:80px; height:20px; background:#f00; }
+  #cand-pop     { margin:0; padding:0; border:0; background:#f00; width:80px; height:20px; }
+  #filler       { width:80px; height:20px; background:#00f; }
+</style>
+</head>
+<body>
+  <!-- ONE candidate per page render, so a pixel comparison between `fade=0` and `fade=1` is a
+       statement about THAT candidate and nothing else. `#filler` is always inside the container
+       and never escapes, so `fade=0` vs `fade=1` must differ whenever the comparison is honest —
+       that is the instrument's own control, carried on every variant. -->
+  <div id="fade">
+    <div id="filler">filler</div>
+    <dialog id="cand-dlg">modal</dialog>
+    <dialog id="cand-nonmodal">nonmodal</dialog>
+    <div id="cand-pop" popover="manual">popover</div>
+    <div id="cand-fixed">fixed</div>
+    <div id="cand-fs">fullscreen</div>
+  </div>
+  <script>
+    var q = new URL(location.href).searchParams;
+    var only = q.get('only') || 'none';
+    var fade = q.get('fade') === '1' ? '1' : '0';
+    // `mode` picks WHICH container property is under test. `fade=1` is always the "container not
+    // hiding anything" render, so the same identical/different comparison reads the same way for
+    // all three flags.
+    var mode = q.get('mode') || 'opacity';
+    var host = document.getElementById('fade');
+    if (mode === 'opacity')    host.style.opacity    = fade;
+    if (mode === 'visibility') host.style.visibility = fade === '1' ? 'visible' : 'hidden';
+    if (mode === 'display')    host.style.display    = fade === '1' ? 'block'   : 'none';
+    // Everything not under test is removed, so only the candidate can differ.
+    for (const id of ['cand-dlg', 'cand-nonmodal', 'cand-pop', 'cand-fixed', 'cand-fs']) {
+      if (id !== 'cand-' + only) document.getElementById(id).remove();
+    }
+    window.__result = { only: only, fade: fade, opened: null, error: null };
+    try {
+      if (only === 'dlg')      document.getElementById('cand-dlg').showModal();
+      if (only === 'nonmodal') document.getElementById('cand-nonmodal').show();
+      if (only === 'pop')      document.getElementById('cand-pop').showPopover();
+      window.__result.opened = only;
+    } catch (e) { window.__result.error = String(e && e.name) + ': ' + String(e && e.message); }
+    // Fullscreen needs user activation; the probe calls this through
+    // `Runtime.evaluate { userGesture: true }` rather than from load.
+    window.__goFullscreen = function () {
+      return document.getElementById('cand-fs').requestFullscreen()
+        .then(() => 'ok').catch((e) => 'REJECTED: ' + String(e && e.name));
+    };
+  </script>
+</body>
+</html>

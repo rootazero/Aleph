@@ -699,7 +699,28 @@ pub async fn fetch_obscura(
 ///   boxes. OR is exact.
 /// * `opacity` — not inherited, and it group-composites, so a child at
 ///   `opacity: 1` inside `opacity: 0` is still invisible and cannot re-show
-///   itself. OR is exact.
+///   itself by DECLARING anything. **OR is exact on THIS engine, and the
+///   qualifier is not pedantry — it is false on the twin.** On Chromium a
+///   descendant leaves the ancestor's paint group without declaring anything,
+///   by entering the top layer (`<dialog>.showModal()`, `showPopover()`,
+///   `requestFullscreen()`), and the OR then deletes an open modal dialog from
+///   the page state; that is measured, and owned, in
+///   [`super::fetch_chromium::cascade_opacity`]'s doc — not restated here.
+///
+///   obscura has no top layer **in layout at all**, which is why the exactness
+///   survives here. Its own source says so at the one place that would have to
+///   implement it: `showModal()` sets the `open` attribute and a
+///   `_dialogModal` flag and nothing else, under the comment *"Modal
+///   top-layer/focus/render is layout (out of scope)"*
+///   (`crates/obscura-js/js/bootstrap.js:3904-3905`, `showModal` at `:3925`).
+///   `top_layer` has **zero** occurrences in `obscura-render`. `:modal` and
+///   `:popover-open` ARE answerable in JS (`bootstrap.js:3560-3573`, off
+///   `_dialogModal` / `_popoverState`) — so the state is observable while
+///   having no rendering consequence, which is exactly the shape that would
+///   let someone "fix" this arm here and change nothing but the output.
+///   Read at the same checkout as every other obscura citation in this file
+///   and expiring with the same stamp; obscura is not installed on this host,
+///   so this is a source reading and not a run.
 /// * `visibility` — cascaded, **and this OR is an APPROXIMATION.** See below.
 ///
 /// ## The residual on `visibility`, named as a residual

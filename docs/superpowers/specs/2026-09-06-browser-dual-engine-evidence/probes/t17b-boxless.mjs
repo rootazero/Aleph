@@ -36,7 +36,12 @@ for (const [di, doc] of snap.documents.entries()) {
   const str = (i) => (Number.isInteger(i) && i >= 0 && i < S.length ? S[i] : null);
   const pi = doc.nodes.parentIndex;
 
-  // node -> first layout slot, exactly as `layout_slots` does.
+  // node -> FIRST layout slot. NOT what `layout_slots` does: production prefers the first
+  // non-text-run entry. Immaterial to this probe's predicate — it asks only whether a node has a
+  // usable reading at all, and a multi-entry node has one either way (4 such nodes exist in the
+  // whole corpus, all `::marker`) — but the difference is stated because an earlier version of
+  // this comment claimed the two were the same, and a probe that overstates its fidelity is
+  // evidence nobody can size (判据 §18).
   const slotOf = new Map();
   doc.layout.nodeIndex.forEach((n, slot) => { if (!slotOf.has(n)) slotOf.set(n, slot); });
 

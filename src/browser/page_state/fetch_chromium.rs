@@ -1227,15 +1227,91 @@ fn parse_nodes(
 ///   genuinely visible element hidden and drop it from the page. That is the
 ///   residual obscura's cascade accepts knowingly *because obscura hands over
 ///   own values and there is nothing better available*; here there is, so
-///   taking it would be a pure loss. `opacity` has no such case: it
-///   group-composites, so `#op-d2-opaque` at `opacity: 1` inside `opacity: 0`
-///   is still invisible and **cannot** re-show itself. The OR is exact for this
-///   flag and approximate for that one, which is the whole reason only one of
-///   them is here.
+///   taking it would be a pure loss. `opacity` cannot be re-shown by a
+///   DECLARATION — `#op-d2-opaque` at `opacity: 1` inside `opacity: 0` is still
+///   invisible, because the property group-composites — which is why the OR is
+///   the right shape for this flag and the wrong shape for that one.
+///
+///   ⚠️ **It is not, however, EXACT, and this doc said it was.** A descendant
+///   can leave the ancestor's paint group without declaring anything, by
+///   entering the **top layer** — see the section below. The old wording ("the
+///   OR is exact for this flag") stated a bound with no room for a backstop, so
+///   everything built on it was resting on nothing when it turned out to be
+///   wrong (判据 §3). The OR is an approximation in BOTH directions now, and
+///   each direction is named where it happens.
 /// * **`display` has nothing to OR.** Chrome lays out no box for a
 ///   `display: none` subtree, so those nodes have no styles row, `computed` is
 ///   `None`, and `rect: None` carries the fact. Measured across all five
 ///   captures in `fixtures/`: **zero** laid-out nodes report `display: none`.
+///
+/// # The TOP LAYER leaves the group without declaring anything — Task 17d
+///
+/// **This is the one derivation of the top-layer fact; the twin points here.**
+/// `opacity` composites a group over the DOM subtree — except that the top
+/// layer is painted outside its DOM ancestor's group entirely. So an open
+/// `<dialog>` inside an `opacity: 0` container is **fully visible to the user**
+/// while this cascade marks it, and every control in it, `opacity_zero: true`
+/// → `visibility_of` false → dropped. The model is told the page does not
+/// contain the dialog it is looking at. That is the OVER-report direction, the
+/// one this very section calls the worse one.
+///
+/// ## Measured, Chrome 153.0.8010.36 — `…/probes/t17b-escape.mjs`
+///
+/// One candidate per render, each page drawn twice (container hiding / not
+/// hiding) and the screenshots compared as raw base64. Identical ⇒ the
+/// container did not affect it ⇒ it escaped. `#filler` rides every variant and
+/// never escapes, so the `none` row is the instrument's control — it came back
+/// CONTAINED on all three flags, which is what makes the rest readable.
+///
+/// | candidate | `opacity: 0` | `visibility: hidden` | `display: none` |
+/// |---|---|---|---|
+/// | `showModal()` | **ESCAPES** | escapes | contained |
+/// | `showPopover()` | **ESCAPES** | contained | contained |
+/// | `requestFullscreen()` | **ESCAPES** | contained | contained |
+/// | `<dialog>.show()` (not modal) | contained | contained | contained |
+/// | `position: fixed` | contained | contained | contained |
+///
+/// The last two rows are the surprising negatives and they are why the list is
+/// worth something: `position: fixed` gets a containing block from the
+/// `opacity` ancestor but does **not** leave its paint group, and an open
+/// non-modal `<dialog>` never enters the top layer at all.
+///
+/// ## Only `opacity` is wrong, and the other two are right for MEASURED reasons
+///
+/// * **`visibility`** — Chrome's own computed value already encodes the escape.
+///   On the probe page `#vishide-inflow` reads `hidden` while `#vishide-dlg`
+///   reads **`visible`**, so passing Chrome's answer through (which is what
+///   this fetcher does, by not cascading) is already correct. Note the
+///   asymmetry that stops anyone reusing one predicate for both flags: a
+///   popover in the top layer does **not** escape `visibility`.
+/// * **`display`** — nothing escapes it, modal dialogs included. Such a node
+///   gets no layout entry (`#dispnone-dlg`: in CDP's top-layer list, and still
+///   `laidOut: false`), so `computed` stays `None` and it is dropped, which is
+///   what the pixels say should happen.
+///
+/// ## The fix is keyed to a fact Chromium STATES, and it is a separate task
+///
+/// `DOM.getTopLayerElements` returns exactly the escaping set — measured, all
+/// three escapers listed and neither negative control listed. So the Chromium
+/// answer is not an enumeration of CSS mechanisms: a top-layer element is a
+/// cascade ROOT, and membership is read from the engine.
+///
+/// ⚠️ **Whoever implements it: the call fails OPEN and silently.** Without a
+/// prior `DOM.getDocument`, `DOM.getTopLayerElements` returns `[]` rather than
+/// an error — measured, all four depths. `[]` is also the honest answer for
+/// nearly every real page, so a forgotten handshake is indistinguishable from
+/// "no dialogs here" and the whole fix becomes a no-op that reports success
+/// (判据 §11). `depth: 0` is enough (1 ms, zero children returned) and the
+/// handshake must live in the same function as the call.
+///
+/// Deferred rather than folded in, and the reason is the sentence above: the
+/// parse half is falsifiable against a fixture, the CDP half is not falsifiable
+/// by anything in this tree, and its failure mode is silence. Shipping the
+/// silent half inside a correction round is how a round buys one defect and
+/// sells another.
+///
+/// **obscura needs no such fix, and that is measured too** — see
+/// `fetch_obscura::cascade_effective_styles`, which owns that engine's answer.
 ///
 /// # Text nodes take it too, and the earlier reading of this was one edge deep
 ///
@@ -1307,34 +1383,55 @@ fn parse_nodes(
 /// fetcher cannot read is a declaration that changes nothing, and missing it is
 /// correct rather than a residual.
 ///
-/// # What is NOT reached — the complete list as of this commit
+/// # Where this cascade is WRONG — the list, and what "complete" means on it
 ///
-/// Complete in this sense: it is everything found by the census above, by the
-/// corpus census in
+/// Complete in this sense: everything found by the census above, by the corpus
+/// census in
 /// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`,
-/// and by the two probes named in this doc. A list that reads as exhaustive and
-/// is not costs more than no list (判据 §17), so that is the scope it carries.
+/// and by the four probes named in this doc. A list that reads as exhaustive and
+/// is not costs more than no list (判据 §17), so that is the scope it carries —
+/// and it was not exhaustive twice already, which is why the scope is written
+/// down instead of the word "complete" being left to do the work.
 ///
-/// 1. **Across a frame boundary** — `parse_nodes` runs per document and
-///    `parent` indexes that document only, so an `<iframe>` inside an
-///    `opacity: 0` container leaves every node of its content document
+/// **Both directions, because the list used to be titled "what is NOT reached"
+/// and that framing hid the one that matters most.** An entry that says
+/// "reaches too far" belongs here as much as one that says "does not reach".
+///
+/// 1. **OVER-reports: the top layer.** An open modal `<dialog>`, a shown
+///    popover or a fullscreen element under an `opacity: 0` ancestor is painted
+///    fully and is nevertheless flagged and dropped, together with every
+///    control inside it. **Task 17d**; the derivation, the measurements and the
+///    implementation trap are in the section above. **This is the worst entry
+///    on the list** — the others lose a node the user cannot see anyway; this
+///    one deletes a dialog the user is looking at, and a missing dialog reads
+///    to the model as "it did not open", which is a fact-shaped lie it cannot
+///    recover from by looking again.
+/// 2. **UNDER-reports: across a frame boundary** — `parse_nodes` runs per
+///    document and `parent` indexes that document only, so an `<iframe>` inside
+///    an `opacity: 0` container leaves every node of its content document
 ///    reporting `opacity: 1`. Measured: `t17b-opacity.mjs --child` nests a
 ///    same-origin frame in a third transparent container and all seven
 ///    laid-out child nodes come back `"1"` while the owner's container reports
 ///    `"0"`. **Task 17c**, deliberately not folded in here — it must run after
 ///    every document is parsed, so it cannot live in `parse_nodes`, and it
 ///    should share [`frame_offsets`]' owner map rather than re-derive it.
-/// 2. **Opacity that composes below the threshold without any single element
-///    reaching zero.** `computed_from` maps `opacity <= 0.0`, and CSS
-///    multiplies group opacity down the tree, so two nested `opacity: 0.01`
-///    elements composite to `0.0001` — invisible in practice, and this cascade
-///    reports both as visible. Pre-existing in the flag's definition rather
-///    than introduced here, and an under-report (the safe direction), but it is
-///    part of "what is not reached" and naming only the frame case would imply
-///    otherwise.
-/// 3. **A forward or self parent edge**, which is refused rather than followed
-///    — see the guard below. Measured across all six fixtures: zero such
-///    edges, so this is a direction to fail in and not an observed loss.
+/// 3. **UNDER-reports: opacity that composes below the threshold without any
+///    single element reaching zero.** `computed_from` maps `opacity <= 0.0`,
+///    and CSS multiplies group opacity down the tree, so two nested
+///    `opacity: 0.01` elements composite to `0.0001` — invisible in practice,
+///    and this cascade reports both as visible. Pre-existing in the flag's
+///    definition rather than introduced here. **Not "the safe direction":** it
+///    is the same harm D1 was filed for — a ref the model will click at a
+///    coordinate where it can see nothing — and calling it safe was a label
+///    describing the *cascade's* preference rather than the *user's* outcome
+///    (判据 §17). It is the LESS COMMON direction here, which is a different
+///    and smaller claim.
+/// 4. **Refused rather than followed: a parent index that is out of range, or
+///    that points forward or at itself.** Measured across all six fixtures:
+///    zero of any of them, so this is a direction to fail in and not an
+///    observed loss. The out-of-range case is the one the guard below still
+///    exists for — an earlier version of this entry named only forward/self,
+///    which described the half of the guard that no longer does anything.
 fn cascade_opacity(nodes: &mut [RawNode]) {
     // The EFFECTIVE flag, carried per node whether or not this fetcher has a
     // reading for that node. This is the half that must not consult `computed`:
@@ -1358,15 +1455,22 @@ fn cascade_opacity(nodes: &mut [RawNode]) {
         //
         // BOUNDS, which does: `parent` comes straight from
         // `usize::try_from(parentIndex[i])` and `check_array_lengths` validates
-        // that array's LENGTH, never its values. `parent >= i` implies
-        // `parent < i < len`, so a capture carrying an index past the end of
-        // its own node array is refused here instead of panicking on
-        // `effective[parent]` (P7 — a capture is a system boundary). That is
-        // what `an_out_of_range_or_forward_parent_edge_is_refused_by_the_opacity_cascade`
+        // that array's LENGTH, never its values. REFUSING every `parent >= i`
+        // leaves only `parent < i`, and `i < len` by construction — so a
+        // capture carrying an index past the end of its own node array is
+        // refused here instead of panicking on `effective[parent]` (P7 — a
+        // capture is a system boundary). That is what
+        // `an_out_of_range_or_forward_parent_edge_is_refused_by_the_opacity_cascade`
         // reddens on.
         if parent >= i {
             continue;
         }
+        // `false` here is the IDENTITY of a monotone OR, not a claim that the
+        // parent is opaque — the same reason `build.rs`'s fold is safe to start
+        // from `false` (`build.rs:919`). A chain this pass cannot walk
+        // therefore adds nothing and leaves Chrome's own reading standing; it
+        // does not fail OPEN, because an identity element in a monotone fold is
+        // not an answer.
         if !effective[parent] {
             continue;
         }
@@ -2362,10 +2466,20 @@ mod tests {
             // becomes vacuous — so this number is also the guard on the
             // corpus, not only on the code.
             //
-            // It was 8 before the chain-break shapes were added to the page.
-            // The extra 7 are the nodes at and below the `display: contents`
-            // `<span>` and the shadow-root `<slot>` — i.e. exactly the nodes a
-            // cascade that dies at a node it has no reading for would lose.
+            // It was 8 before the chain-break shapes were added to the page,
+            // and **the +7 is page growth, not coverage**. Only FOUR of the
+            // seven are below a break — `#op-through-contents` and its text,
+            // `#op-slotted` and its text; the other three (`#op-host`,
+            // `#op-shadow-wrap`, and one whitespace text node) have unbroken
+            // chains to `#opacity-zero` and would be flagged by the old
+            // cascade too. Measured by modelling both cascades over the
+            // fixture: pre-fix 11, post-fix 15.
+            //
+            // The two numbers were in one comment and did not mean the same
+            // thing, which is the whole reason this sentence is now explicit:
+            // an earlier version said "the extra 7 are the nodes at and below"
+            // the breaks, and the round's own report said 4. Same file, two
+            // answers, and the comment held the wrong one (判据 §1).
             let want_cascaded = match name {
                 "hacker-news" | "same-origin" | "oopif-parent" | "oopif-child" => 0,
                 "hidden-containers" => 15,
@@ -2691,8 +2805,9 @@ mod tests {
     /// `usize::try_from(parentIndex[i])`, and `check_array_lengths` validates
     /// the array's LENGTH, never its values — so a malformed or hostile capture
     /// carrying `parentIndex[3] = 500` in a 60-node document indexes
-    /// `effective[500]` and panics. Refusing every `parent >= i` refuses that
-    /// too, because it implies `parent < i < len` (P7: validate at the system
+    /// `effective[500]` and panics. Refusing every `parent >= i` leaves only
+    /// `parent < i`, and `i < len` by construction, so the out-of-range index
+    /// is refused along with the forward one (P7: validate at the system
     /// boundary, and a capture is one).
     ///
     /// So case 1 below is the falsifier — it panics without the guard — and
