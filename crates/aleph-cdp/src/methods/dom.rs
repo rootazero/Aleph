@@ -184,6 +184,13 @@ pub async fn scroll_into_view_if_needed(
     Ok(())
 }
 
+/// Describe a node named by its **backendNodeId** — the id space `DOMSnapshot` and every other
+/// wrapper in this module speaks.
+///
+/// Its twin [`describe_node_by_node_id`] is the same CDP method addressed the other way. Two
+/// functions rather than one taking an enum, because the caller always knows which space its id
+/// came from and the protocol's two parameters are not interchangeable: passing a nodeId as a
+/// `backendNodeId` addresses a different element and answers successfully.
 pub async fn describe_node(
     conn: &CdpConnection,
     session: Option<&SessionId>,
@@ -194,6 +201,63 @@ pub async fn describe_node(
         .call(session, M, json!({ "backendNodeId": backend_node_id }))
         .await?;
     decode(M, field(M, &reply, "node")?.clone())
+}
+
+/// Describe a node named by its **nodeId** — the session-scoped id space
+/// [`get_top_layer_elements`] answers in.
+///
+/// The one direction [`describe_node`] cannot serve, and the reason this exists at all:
+/// `DOM.getTopLayerElements` answers in nodeIds while `DOMSnapshot.captureSnapshot` is entirely in
+/// backendNodeIds, so a caller that wants to find a top-layer element in a capture has to convert,
+/// and this is the conversion.
+///
+/// ⚠️ A nodeId is only meaningful on the session that minted it, and only until that session's
+/// node map is rebuilt. Never store one, never send one to another session.
+pub async fn describe_node_by_node_id(
+    conn: &CdpConnection,
+    session: Option<&SessionId>,
+    node_id: i64,
+) -> Result<Node> {
+    const M: &str = "DOM.describeNode";
+    let reply = conn.call(session, M, json!({ "nodeId": node_id })).await?;
+    decode(M, field(M, &reply, "node")?.clone())
+}
+
+/// The elements Chromium paints in the **top layer**, as session-scoped nodeIds.
+///
+/// A top-layer element leaves its DOM ancestor's paint group entirely, which is the one way a
+/// descendant of an `opacity: 0` element is painted without declaring anything — so this is the
+/// fact `page_state`'s opacity cascade keys its exemption to, rather than enumerating
+/// `showModal()` / `showPopover()` / `requestFullscreen()`.
+///
+/// # ⚠️ It requires the DOM agent, and the failure is not one shape but two
+///
+/// Measured on Chrome 153.0.8010.48 by
+/// `docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/probes/t17d-toplayer.mjs`, on
+/// sessions built the way production builds them (no `DOM.enable`):
+///
+/// * with nothing from the DOM domain ever sent, this method **refuses**:
+///   `"DOM agent hasn't been enabled"`. `DOMSnapshot.captureSnapshot`, a successful
+///   `DOM.getBoxModel` and `DOM.getFrameOwner` all leave the agent disabled — measured, each on
+///   its own fresh session;
+/// * with the agent enabled but no **current** node map — `DOM.enable` alone, or a
+///   `DOM.getDocument` taken before a navigation — it answers **`[]`**, on a page with an open
+///   modal dialog. The control for that reading is the same session and the same page with a
+///   second `DOM.getDocument` after the navigation, which answers with the dialog.
+///
+/// So the caller must send `DOM.getDocument` **per call, not per session**, and an empty list is
+/// never evidence that the page has no dialogs unless that handshake was part of the same
+/// operation. `depth: 0` is enough (it returns zero children and still populates the map).
+/// This wrapper deliberately does not send the handshake itself: doing so would make every caller
+/// pay for a tree walk it may already have done, and would hide the requirement rather than state
+/// it.
+pub async fn get_top_layer_elements(
+    conn: &CdpConnection,
+    session: Option<&SessionId>,
+) -> Result<Vec<i64>> {
+    const M: &str = "DOM.getTopLayerElements";
+    let reply = conn.call(session, M, json!({})).await?;
+    decode(M, field(M, &reply, "nodeIds")?.clone())
 }
 
 pub async fn set_file_input_files(

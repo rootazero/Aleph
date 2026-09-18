@@ -196,6 +196,24 @@ mod tests {
             "DOMSnapshot.captureSnapshot",
             Responder::Reply(hn_snapshot()),
         );
+        // Task 17d: a whole-page Chromium capture also reads the top layer, and
+        // the read is refused rather than defaulted if either call fails — so a
+        // peer that does not answer these is not a Chromium this fetcher can
+        // capture at all. `[]` is the HONEST answer for this fixture (Hacker
+        // News opens no dialog), which is exactly why the real hazard needs the
+        // handshake beside the call rather than a count of empty answers:
+        // `a_missing_top_layer_handshake_would_delete_the_modal_and_this_is_what_notices`
+        // is where an empty list is made to mean something.
+        server.on(
+            "DOM.getDocument",
+            Responder::Reply(json!({ "root": {
+                "nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document"
+            }})),
+        );
+        server.on(
+            "DOM.getTopLayerElements",
+            Responder::Reply(json!({ "nodeIds": [] })),
+        );
         server.on(
             "Runtime.evaluate",
             Responder::Reply(json!({ "result": { "type": "object", "value":
@@ -489,6 +507,15 @@ mod tests {
                 }})),
                 "DOMSnapshot.captureSnapshot" if is_child => Responder::Reply(child.clone()),
                 "DOMSnapshot.captureSnapshot" => Responder::Reply(parent.clone()),
+                // Task 17d, on BOTH sessions. `capture_session` is the one
+                // place a session is captured, so the child's renderer reads
+                // its own top layer on its own session — which is the whole
+                // reason the exemption cannot be a page-level fact. Neither
+                // renderer here has a dialog, so `[]` is honest on both.
+                "DOM.getDocument" => Responder::Reply(json!({ "root": {
+                    "nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document"
+                }})),
+                "DOM.getTopLayerElements" => Responder::Reply(json!({ "nodeIds": [] })),
                 "Runtime.evaluate" => Responder::Reply(json!({ "result": { "type": "object",
                     "value": ["http://127.0.0.1:18999/t0-page.html", "T0 page"] } })),
                 // Everything else — the three enables, the detach — is a void

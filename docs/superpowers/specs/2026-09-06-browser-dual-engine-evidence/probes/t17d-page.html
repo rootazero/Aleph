@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aleph T17d — the top layer NESTED inside an opacity:0 container</title>
+<style>
+  html,body { margin:0; padding:0; background:#fff;
+              font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  /* The ONE container. Everything under test is a descendant of it, so a node's
+     verdict is never about which container it sits in — only about whether it
+     leaves the paint group. */
+  #fade        { opacity:0; }
+  dialog       { margin:0; padding:0; border:0; background:#f00; }
+  #neg-fixed   { position:fixed; left:10px; top:120px; background:#0a0; }
+  #tl-pop      { margin:0; padding:0; border:0; background:#00f; }
+  #tl-fs       { background:#ff0; }
+  button       { cursor:pointer; }
+</style>
+</head>
+<body>
+  <main id="main">
+    <div id="fade">
+      <!-- NESTED, two ordinary elements deep. The shape this task line missed four
+           times is a top-layer element sitting DIRECTLY under the container: that
+           one is reachable by a one-hop exemption and proves nothing about a
+           transitive cascade whose root moved. -->
+      <div id="wrap-a">
+        <div id="wrap-b">
+          <dialog id="tl-dlg"><button id="tl-dlg-btn" type="button">modal button</button></dialog>
+          <!-- THE NEGATIVE CONTROL, and it is deliberately a SIBLING of the dialog
+               at the same depth: if the exemption is implemented as "anything under
+               #wrap-b", this stays visible and says so. -->
+          <div id="neg-plain"><button id="neg-plain-btn" type="button">plain button</button></div>
+        </div>
+      </div>
+      <!-- The two pixel-census negatives: both are open/positioned and both stay
+           INSIDE the container's paint group (measured, t17b-escape.mjs). -->
+      <dialog id="neg-nonmodal"><button id="neg-nonmodal-btn" type="button">non-modal button</button></dialog>
+      <div id="neg-fixed"><button id="neg-fixed-btn" type="button">fixed button</button></div>
+      <!-- The other two ways in. -->
+      <div id="tl-pop" popover="manual"><button id="tl-pop-btn" type="button">popover button</button></div>
+      <div id="tl-fs"><button id="tl-fs-btn" type="button">fullscreen button</button></div>
+    </div>
+    <button id="outside" type="button">outside every container</button>
+  </main>
+  <script>
+    // `?open=` selects what to open; the fullscreen arm needs a user gesture and so
+    // is driven from the probe rather than from load.
+    var q = new URL(location.href).searchParams;
+    var want = q.get('open') ?? 'all';
+    window.__opened = [];
+    function tryOpen(fn, label) {
+      try { fn(); window.__opened.push(label); }
+      catch (e) { window.__opened.push(label + ': THREW ' + String(e && e.name)); }
+    }
+    if (want !== 'none') {
+      tryOpen(function () { document.getElementById('tl-dlg').showModal(); }, 'tl-dlg.showModal');
+      tryOpen(function () { document.getElementById('tl-pop').showPopover(); }, 'tl-pop.showPopover');
+      // `.show()` is NOT `.showModal()`: an open non-modal dialog never enters the
+      // top layer at all, which is why it is a negative and not a gap.
+      tryOpen(function () { document.getElementById('neg-nonmodal').show(); }, 'neg-nonmodal.show');
+    }
+    window.__goFullscreen = function () {
+      return document.getElementById('tl-fs').requestFullscreen()
+        .then(function () { return 'ok'; })
+        .catch(function (e) { return 'REJECTED: ' + String(e && e.name); });
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+{
+  "node": {
+    "nodeId": 27,
+    "backendNodeId": 4,
+    "nodeType": 1,
+    "nodeName": "DIALOG",
+    "localName": "dialog",
+    "nodeValue": "",
+    "childNodeCount": 1,
+    "attributes": [
+      "id",
+      "tl-dlg",
+      "open",
+      ""
+    ],
+    "pseudoElements": [
+      {
+        "nodeId": 28,
+        "backendNodeId": 29,
+        "nodeType": 1,
+        "nodeName": "::backdrop",
+        "localName": "::backdrop",
+        "nodeValue": "",
+        "childNodeCount": 0,
+        "attributes": [],
+        "pseudoType": "backdrop"
+      }
+    ]
+  }
+}

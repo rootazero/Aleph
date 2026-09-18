@@ -95,6 +95,18 @@ pub struct ChildCapture<'a> {
     /// The bare `result` object of the child session's own
     /// `DOMSnapshot.captureSnapshot`, coordinates left frame-local.
     pub raw: &'a serde_json::Value,
+    /// This child's OWN top-layer backendNodeIds, read on the CHILD session.
+    ///
+    /// A required field, not an `Option` and not something the stitcher borrows
+    /// from the parent: `backendNodeId` is per renderer and the two spaces
+    /// collide constantly — measured on the Task 0 fixtures, the OOPIF parent
+    /// (ids 2-99) and its child (ids 1-17) share **15** of them. Applying the
+    /// parent's set to a child's nodes would exempt whichever child element
+    /// happened to share an integer with the parent's dialog, and the exemption
+    /// is invisible in the output: an element that should have been dropped is
+    /// simply offered as visible. Making it a field the caller must fill is the
+    /// only part of that the compiler can hold (判据 §12).
+    pub top_layer: &'a HashSet<u64>,
 }
 
 /// One session's raw capture: everything a `DOMSnapshot` needs and nothing
@@ -110,6 +122,13 @@ struct SessionCapture {
     /// the two are merged into one map before either is read.
     loaders: HashMap<String, String>,
     raw: serde_json::Value,
+    /// The backendNodeIds THIS session paints in the top layer, read in the
+    /// same call as the capture. Its one consumer is [`cascade_opacity`].
+    ///
+    /// Held per capture rather than per page for the reason
+    /// [`ChildCapture::top_layer`] gives: these ids are only comparable with
+    /// nodes from the same renderer.
+    top_layer: HashSet<u64>,
 }
 
 /// Capture one session: layout metrics for the viewport, the frame tree for the
@@ -139,6 +158,8 @@ async fn capture_session(
         .map(|f| (f.id.clone(), f.loader_id.clone()))
         .collect();
 
+    let top_layer = top_layer_backend_ids(conn, session).await?;
+
     let snapshot = aleph_cdp::methods::dom_snapshot::capture_snapshot(
         conn,
         Some(session),
@@ -153,7 +174,123 @@ async fn capture_session(
         viewport,
         loaders,
         raw: snapshot.raw,
+        top_layer,
     })
+}
+
+/// The backendNodeIds this session paints in the **top layer**, with the
+/// handshake that makes the answer mean anything.
+///
+/// Every session goes through here, parent and child alike, because
+/// [`capture_session`] is the one place a session is captured — so "a child
+/// renderer's dialog is exempted too" is a consequence of one call site rather
+/// than a second rule (判据 §16).
+///
+/// # The handshake is PER CALL, and that is measured rather than cautious
+///
+/// `DOM.getTopLayerElements` reads the session's node map, and the map is built
+/// by `DOM.getDocument`. Measured on Chrome 153.0.8010.48
+/// (`…-evidence/probes/t17d-toplayer.mjs`), on sessions built exactly the way
+/// this fetcher's are — **production never sends `DOM.enable`**, and neither
+/// did the probe:
+///
+/// | what the session did first | `DOM.getTopLayerElements` |
+/// |---|---|
+/// | nothing from the DOM domain | **refuses**: `"DOM agent hasn't been enabled"` |
+/// | `DOMSnapshot.captureSnapshot` | refuses — it does not enable the agent |
+/// | `DOM.getBoxModel` on a real id (what `browser_click` sends) | refuses |
+/// | `DOM.getFrameOwner` | refuses |
+/// | `DOM.enable` (any other CDP client on this browser) | **`[]`** |
+/// | `DOM.getDocument`, then a NAVIGATION | **`[]`**, on a page with an open modal |
+/// | `DOM.getDocument` after that navigation | the dialog, correctly |
+///
+/// The last two rows are a pair on purpose: same session, same second page, and
+/// the only difference is a fresh handshake. Without the pair, `[]` would be
+/// equally readable as "that page has no dialogs" and the reading would be
+/// about the page instead of about the handshake.
+///
+/// So a handshake taken once per session is not enough — a tab that navigates
+/// and is snapshotted again would be told the page has no top layer, which is
+/// precisely the `[]`-shaped lie (判据 §11: a no-op that reports success). It is
+/// sent here, beside the call it enables, and
+/// `the_top_layer_read_has_one_call_site_and_its_handshake_is_in_the_same_function`
+/// is what keeps them together.
+///
+/// `depth: 0` is what the handshake costs: it returns **zero children** and
+/// still populates the map well enough for both the list and the
+/// `describeNode`s below — measured, same probe.
+///
+/// # Why every arm here is a refusal
+///
+/// An `Err` from any of these three calls means "I do not know what is in the
+/// top layer". The only other thing this function could return is an empty set,
+/// and an empty set is **spent as a fact** one line later: the cascade would
+/// mark an open modal dialog and every control in it invisible and the page
+/// state would not contain the dialog the user is looking at. That is the
+/// over-report direction, which this module's own list calls the worst entry on
+/// it — an absence read as a value (判据 §8). A refusal costs the model one
+/// re-run and says what happened; the alternative costs it the dialog and says
+/// nothing.
+///
+/// **The residual that buys**: an engine that does not implement
+/// `DOM.getTopLayerElements` cannot be snapshotted by this fetcher at all. This
+/// is the Chromium path and the method has been in Chrome for years, but a very
+/// old build reached through `browser_connect --cdp` would refuse rather than
+/// degrade, and the message below is what tells its operator so.
+async fn top_layer_backend_ids(
+    conn: &CdpConnection,
+    session: &SessionId,
+) -> Result<HashSet<u64>, BrowserError> {
+    // THE HANDSHAKE. Deleting this line does not break a test that watches the
+    // wire — it turns the answer below into `[]` on any session that has ever
+    // seen a `DOM.getDocument`, which is every session after its first
+    // snapshot. See this function's table.
+    aleph_cdp::methods::dom::get_document(conn, Some(session), 0, false)
+        .await
+        .map_err(|e| {
+            BrowserError::ActionFailed(format!(
+                "could not prepare the page's node map (DOM.getDocument): {e}. Without it \
+                 DOM.getTopLayerElements answers about a page that is no longer there, so this \
+                 capture is refused rather than taken with an open dialog missing from it. \
+                 Re-run browser_snapshot."
+            ))
+        })?;
+    let node_ids = aleph_cdp::methods::dom::get_top_layer_elements(conn, Some(session))
+        .await
+        .map_err(|e| {
+            BrowserError::ActionFailed(format!(
+                "could not read the page's top layer (DOM.getTopLayerElements): {e}. An open \
+                 modal dialog, a shown popover or a fullscreen element is painted outside its \
+                 DOM ancestors' opacity, and without this list one inside a faded container \
+                 would be dropped from the page state with nothing saying so. Re-run \
+                 browser_snapshot; if it repeats, this engine does not implement the method."
+            ))
+        })?;
+
+    let mut ids = HashSet::with_capacity(node_ids.len());
+    for node_id in node_ids {
+        let node = aleph_cdp::methods::dom::describe_node_by_node_id(conn, Some(session), node_id)
+            .await
+            .map_err(|e| {
+                BrowserError::ActionFailed(format!(
+                    "the page's top layer names node {node_id}, and this session could not \
+                     describe it: {e}. The list answers in nodeIds and a capture is entirely in \
+                     backendNodeIds, so an id that cannot be translated is an element whose \
+                     visibility this capture cannot judge. Re-run browser_snapshot."
+                ))
+            })?;
+        // `0` is CDP's own "no node". It must never enter this set, because
+        // `parse_nodes` writes `0` for any node whose `backendNodeId` did not
+        // convert — so a `0` here would exempt every one of those from the
+        // cascade at once, which is the widest possible version of the bug this
+        // set exists to fix.
+        if let Ok(id) = u64::try_from(node.backend_node_id) {
+            if id != 0 {
+                ids.insert(id);
+            }
+        }
+    }
+    Ok(ids)
 }
 
 /// The `type` an out-of-process frame's target reports.
@@ -240,7 +377,12 @@ pub async fn fetch_chromium(
 ) -> Result<RawDom, BrowserError> {
     let parent = capture_session(conn, session).await?;
     let viewport = parent.viewport.clone();
-    let single = parse_snapshot(&parent.raw, viewport.clone(), &parent.loaders)?;
+    let single = parse_snapshot(
+        &parent.raw,
+        &parent.top_layer,
+        viewport.clone(),
+        &parent.loaders,
+    )?;
     if !single
         .unreached_frames
         .iter()
@@ -255,7 +397,10 @@ pub async fn fetch_chromium(
         .await
         .map_err(cdp_err)?;
     let mut loaders = parent.loaders.clone();
-    let mut captures: Vec<(u64, serde_json::Value)> = Vec::new();
+    // `(owner element, this child's capture, this child's OWN top layer)`. The third element
+    // travels with the second and never leaves it: see [`ChildCapture::top_layer`] for the 15-id
+    // collision that makes borrowing the parent's set wrong.
+    let mut captures: Vec<(u64, serde_json::Value, HashSet<u64>)> = Vec::new();
     for target in targets.iter().filter(|t| t.r#type == IFRAME_TARGET_TYPE) {
         // **The call that PLACES a child is the same call that decides the child is OURS.**
         // Do not "optimise" this into a narrower enumeration with a separate join: a
@@ -274,17 +419,24 @@ pub async fn fetch_chromium(
         // alone would leave every child frame with an empty loader id, so the table would never
         // notice that an iframe navigated on its own.
         loaders.extend(capture.loaders);
-        captures.push((owner, capture.raw));
+        captures.push((owner, capture.raw, capture.top_layer));
     }
 
     let children: Vec<ChildCapture<'_>> = captures
         .iter()
-        .map(|(owner, raw)| ChildCapture {
+        .map(|(owner, raw, top_layer)| ChildCapture {
             owner_backend_node_id: *owner,
             raw,
+            top_layer,
         })
         .collect();
-    stitch_snapshots(&parent.raw, &children, viewport, &loaders)
+    stitch_snapshots(
+        &parent.raw,
+        &parent.top_layer,
+        &children,
+        viewport,
+        &loaders,
+    )
 }
 
 /// The `backendNodeId` of the `<iframe>` element that owns `target` **in this page**, or `None`.
@@ -500,12 +652,21 @@ const fn minus_one() -> i64 {
 /// This is [`stitch_snapshots`] with no child captures, which is the honest
 /// description of a single-session capture: complete for everything in this
 /// renderer, and silent about a cross-origin frame's content.
+///
+/// `top_layer` is the session's own `DOM.getTopLayerElements`, translated to
+/// backendNodeIds — see [`top_layer_backend_ids`], which is the only thing that
+/// should ever produce one for a real capture. It is a PARAMETER rather than
+/// something this function could default, because there is no honest default:
+/// an empty set is the answer for most pages AND the answer a forgotten read
+/// gives, and the two have different consequences (判据 §8). A caller with a
+/// hand-built capture and no dialogs passes an empty set and means it.
 pub fn parse_snapshot(
     raw: &serde_json::Value,
+    top_layer: &HashSet<u64>,
     viewport: Viewport,
     loaders: &HashMap<String, String>,
 ) -> Result<RawDom, BrowserError> {
-    stitch_snapshots(raw, &[], viewport, loaders)
+    stitch_snapshots(raw, top_layer, &[], viewport, loaders)
 }
 
 /// A parent session's capture plus the child sessions someone enumerated, as
@@ -576,12 +737,14 @@ pub fn parse_snapshot(
 /// loop.
 pub fn stitch_snapshots(
     parent: &serde_json::Value,
+    parent_top_layer: &HashSet<u64>,
     children: &[ChildCapture<'_>],
     viewport: Viewport,
     loaders: &HashMap<String, String>,
 ) -> Result<RawDom, BrowserError> {
     let parent_snapshot = decode(parent)?;
-    let (mut frames, mut unreached) = frames_of(&parent_snapshot, (0, 0), loaders, true)?;
+    let (mut frames, mut unreached) =
+        frames_of(&parent_snapshot, (0, 0), loaders, true, parent_top_layer)?;
     // **Where the parent's node space ends.** Everything `frames_of` produced
     // above came from ONE capture and therefore from one renderer, so those ids
     // are mutually comparable; everything appended below comes from a different
@@ -606,7 +769,11 @@ pub fn stitch_snapshots(
         // applied in another names a different thing).
         let base = owner_origin(&frames[..parent_frames], child.owner_backend_node_id)?;
         let snapshot = decode(child.raw)?;
-        let (child_frames, child_unplaceable) = frames_of(&snapshot, base, loaders, false)?;
+        // `child.top_layer`, never `parent_top_layer`. Same reason as the slice above and the
+        // empty `accounted` set below: these are three different node spaces that share one
+        // integer type, and the OOPIF fixtures collide on 15 ids.
+        let (child_frames, child_unplaceable) =
+            frames_of(&snapshot, base, loaders, false, child.top_layer)?;
         frames.extend(child_frames);
         unreached.extend(child_unplaceable);
         child_snapshots.push(snapshot);
@@ -739,11 +906,16 @@ fn decode(raw: &serde_json::Value) -> Result<Snapshot, BrowserError> {
 /// the wrong element (判据 §8). A child session's document 0 is somebody's
 /// iframe, and the main frame's reset still clears its refs, so there an
 /// unknown loader is tolerated and `DOM.resolveNode` (Task 13) is the backstop.
+///
+/// `top_layer` belongs to THIS capture's renderer and is passed down to every
+/// document in it, which is right for the same reason it would be wrong across
+/// captures: every document of one `captureSnapshot` shares one node space.
 fn frames_of(
     snapshot: &Snapshot,
     base: (i32, i32),
     loaders: &HashMap<String, String>,
     is_page_root: bool,
+    top_layer: &HashSet<u64>,
 ) -> Result<(Vec<RawFrame>, Vec<UnreachedFrame>), BrowserError> {
     let strings = &snapshot.strings;
     // Before anything reads by index. `frame_offsets` indexes `bounds` by a
@@ -807,7 +979,7 @@ fn frames_of(
             // state and stays in the markup after the agent itself unchecks
             // the box. See `RawFrame::live_properties_observed`.
             live_properties_observed: true,
-            nodes: parse_nodes(doc, &slots[doc_index], strings)?,
+            nodes: parse_nodes(doc, &slots[doc_index], strings, top_layer)?,
         });
     }
     Ok((frames, unplaceable))
@@ -1075,6 +1247,7 @@ fn parse_nodes(
     doc: &DocumentSnapshot,
     slots: &HashMap<usize, usize>,
     strings: &[String],
+    top_layer: &HashSet<u64>,
 ) -> Result<Vec<RawNode>, BrowserError> {
     let n = doc.nodes.parent_index.len();
     // Sparse sets, resolved once.
@@ -1171,7 +1344,7 @@ fn parse_nodes(
             value: values.get(&i).cloned(),
         });
     }
-    cascade_opacity(&mut out);
+    cascade_opacity(&mut out, top_layer);
     Ok(out)
 }
 
@@ -1232,28 +1405,32 @@ fn parse_nodes(
 ///   invisible, because the property group-composites — which is why the OR is
 ///   the right shape for this flag and the wrong shape for that one.
 ///
-///   ⚠️ **It is not, however, EXACT, and this doc said it was.** A descendant
-///   can leave the ancestor's paint group without declaring anything, by
-///   entering the **top layer** — see the section below. The old wording ("the
-///   OR is exact for this flag") stated a bound with no room for a backstop, so
-///   everything built on it was resting on nothing when it turned out to be
-///   wrong (判据 §3). The OR is an approximation in BOTH directions now, and
-///   each direction is named where it happens.
+///   ⚠️ **The OR ALONE is not, however, EXACT, and this doc once said it was.**
+///   A descendant can leave the ancestor's paint group without declaring
+///   anything, by entering the **top layer** — see the section below, which is
+///   now a fix rather than a warning: the loop skips the parent edge for a node
+///   the engine names, so the pass as a whole is exact in that direction again.
+///   The old wording ("the OR is exact for this flag") stated a bound with no
+///   room for a backstop, so everything built on it was resting on nothing when
+///   it turned out to be wrong (判据 §3). What remains approximate is the OTHER
+///   direction — composed opacity, entry 2 of the list at the end of this doc —
+///   and it is named where it happens.
 /// * **`display` has nothing to OR.** Chrome lays out no box for a
 ///   `display: none` subtree, so those nodes have no styles row, `computed` is
 ///   `None`, and `rect: None` carries the fact. Measured across all five
 ///   captures in `fixtures/`: **zero** laid-out nodes report `display: none`.
 ///
-/// # The TOP LAYER leaves the group without declaring anything — Task 17d
+/// # The TOP LAYER leaves the group without declaring anything — the second arm
 ///
 /// **This is the one derivation of the top-layer fact; the twin points here.**
 /// `opacity` composites a group over the DOM subtree — except that the top
 /// layer is painted outside its DOM ancestor's group entirely. So an open
-/// `<dialog>` inside an `opacity: 0` container is **fully visible to the user**
-/// while this cascade marks it, and every control in it, `opacity_zero: true`
-/// → `visibility_of` false → dropped. The model is told the page does not
-/// contain the dialog it is looking at. That is the OVER-report direction, the
-/// one this very section calls the worse one.
+/// `<dialog>` inside an `opacity: 0` container is **fully visible to the user**,
+/// and a cascade that walked its DOM parents would mark it, and every control in
+/// it, `opacity_zero: true` → `visibility_of` false → dropped: the model told the
+/// page does not contain the dialog it is looking at. That is the OVER-report
+/// direction, the one this very section calls the worse one, and it is what the
+/// `top_layer` membership test at the head of the loop stops.
 ///
 /// ## Measured, Chrome 153.0.8010.36 — `…/probes/t17b-escape.mjs`
 ///
@@ -1289,26 +1466,45 @@ fn parse_nodes(
 ///   `laidOut: false`), so `computed` stays `None` and it is dropped, which is
 ///   what the pixels say should happen.
 ///
-/// ## The fix is keyed to a fact Chromium STATES, and it is a separate task
+/// ## The fix is keyed to a fact Chromium STATES, not to the table above
 ///
-/// `DOM.getTopLayerElements` returns exactly the escaping set — measured, all
-/// three escapers listed and neither negative control listed. So the Chromium
-/// answer is not an enumeration of CSS mechanisms: a top-layer element is a
-/// cascade ROOT, and membership is read from the engine.
+/// `DOM.getTopLayerElements` returns exactly the escaping set. Measured twice,
+/// and the second reading is the one that matters: `t17b-escape.mjs` rendered
+/// **one candidate per page**, so it established the equality one candidate at a
+/// time; `…/probes/t17d-toplayer.mjs` opens `showModal()`, `showPopover()` and
+/// `requestFullscreen()` **together** and gets all three back in one list, with
+/// `#neg-nonmodal`, `#neg-fixed` and every ordinary element absent. So the table
+/// above is evidence and not the predicate: a fourth way into the top layer is
+/// already covered, because what this function tests is membership in the
+/// engine's own answer.
 ///
-/// ⚠️ **Whoever implements it: the call fails OPEN and silently.** Without a
-/// prior `DOM.getDocument`, `DOM.getTopLayerElements` returns `[]` rather than
-/// an error — measured, all four depths. `[]` is also the honest answer for
-/// nearly every real page, so a forgotten handshake is indistinguishable from
-/// "no dialogs here" and the whole fix becomes a no-op that reports success
-/// (判据 §11). `depth: 0` is enough (1 ms, zero children returned) and the
-/// handshake must live in the same function as the call.
+/// Chrome lists the escaping ELEMENT and its `::backdrop`, and nothing below
+/// either. The descendants ride the cascade instead — a top-layer element's
+/// entry in `effective` is its own reading, so everything under it inherits
+/// that, which is why the modal's `<button>` needs no separate exemption. (The
+/// `::backdrop` ids are in the set and match nothing: `captureSnapshot` puts no
+/// pseudo-element in `nodes`, measured on this fixture. Harmless, and stated so
+/// the next reader is not surprised by a set that is bigger than the page.)
 ///
-/// Deferred rather than folded in, and the reason is the sentence above: the
-/// parse half is falsifiable against a fixture, the CDP half is not falsifiable
-/// by anything in this tree, and its failure mode is silence. Shipping the
-/// silent half inside a correction round is how a round buys one defect and
-/// sells another.
+/// ⚠️ **The read is worthless without a handshake, and the handshake is per
+/// CALL.** `DOM.getTopLayerElements` reads a node map that `DOM.getDocument`
+/// builds and a navigation empties. All of that — including the two rows where
+/// it answers `[]` rather than refusing, and the paired control that separates
+/// "no handshake" from "no dialogs on that page" — is measured in
+/// [`top_layer_backend_ids`], which is where the call lives and where the
+/// handshake sits beside it.
+///
+/// **A correction to what this doc used to say**, kept rather than quietly
+/// overwritten because someone may have spent it: it said the call "fails OPEN
+/// and silently … returns `[]` rather than an error — measured, all four
+/// depths". That reading was taken through the probe harness's `newPage`, which
+/// sends `DOM.enable`; **production sends no such thing**, and on a session
+/// shaped the way this fetcher's are the bare call *refuses* with `"DOM agent
+/// hasn't been enabled"`. The silent `[]` is real and reachable — any other CDP
+/// client's `DOM.enable`, or this fetcher's own handshake from a previous
+/// snapshot followed by a navigation — so the conclusion (a census is needed)
+/// survived; the stated mechanism did not, and an instrument that differs from
+/// production in one line is how (判据 §18).
 ///
 /// **obscura needs no such fix, and that is measured too** — see
 /// `fetch_obscura::cascade_effective_styles`, which owns that engine's answer.
@@ -1397,16 +1593,7 @@ fn parse_nodes(
 /// and that framing hid the one that matters most.** An entry that says
 /// "reaches too far" belongs here as much as one that says "does not reach".
 ///
-/// 1. **OVER-reports: the top layer.** An open modal `<dialog>`, a shown
-///    popover or a fullscreen element under an `opacity: 0` ancestor is painted
-///    fully and is nevertheless flagged and dropped, together with every
-///    control inside it. **Task 17d**; the derivation, the measurements and the
-///    implementation trap are in the section above. **This is the worst entry
-///    on the list** — the others lose a node the user cannot see anyway; this
-///    one deletes a dialog the user is looking at, and a missing dialog reads
-///    to the model as "it did not open", which is a fact-shaped lie it cannot
-///    recover from by looking again.
-/// 2. **UNDER-reports: across a frame boundary** — `parse_nodes` runs per
+/// 1. **UNDER-reports: across a frame boundary** — `parse_nodes` runs per
 ///    document and `parent` indexes that document only, so an `<iframe>` inside
 ///    an `opacity: 0` container leaves every node of its content document
 ///    reporting `opacity: 1`. Measured: `t17b-opacity.mjs --child` nests a
@@ -1415,7 +1602,7 @@ fn parse_nodes(
 ///    `"0"`. **Task 17c**, deliberately not folded in here — it must run after
 ///    every document is parsed, so it cannot live in `parse_nodes`, and it
 ///    should share [`frame_offsets`]' owner map rather than re-derive it.
-/// 3. **UNDER-reports: opacity that composes below the threshold without any
+/// 2. **UNDER-reports: opacity that composes below the threshold without any
 ///    single element reaching zero.** `computed_from` maps `opacity <= 0.0`,
 ///    and CSS multiplies group opacity down the tree, so two nested
 ///    `opacity: 0.01` elements composite to `0.0001` — invisible in practice,
@@ -1426,19 +1613,57 @@ fn parse_nodes(
 ///    describing the *cascade's* preference rather than the *user's* outcome
 ///    (判据 §17). It is the LESS COMMON direction here, which is a different
 ///    and smaller claim.
-/// 4. **Refused rather than followed: a parent index that is out of range, or
-///    that points forward or at itself.** Measured across all six fixtures:
+/// 3. **Refused rather than followed: a parent index that is out of range, or
+///    that points forward or at itself.** Measured across all seven fixtures:
 ///    zero of any of them, so this is a direction to fail in and not an
 ///    observed loss. The out-of-range case is the one the guard below still
 ///    exists for — an earlier version of this entry named only forward/self,
 ///    which described the half of the guard that no longer does anything.
-fn cascade_opacity(nodes: &mut [RawNode]) {
+/// 4. **Refused rather than degraded: an engine with no `DOM.getTopLayerElements`.**
+///    The top-layer arm's own residual, and it is on this list rather than in a
+///    comment because it is a live consequence of the fix. A Chromium too old to
+///    answer that method — reachable through `browser_connect --cdp` to a build
+///    Aleph did not install — makes [`top_layer_backend_ids`] return `Err`, and
+///    `browser_snapshot` then refuses the page instead of producing one. The
+///    alternative was to spend the error as an empty set, which is entry 1 of
+///    the OLD version of this list — a deleted dialog, silently (判据 §8). A
+///    refusal is recoverable and says what happened; that is the whole of the
+///    trade, and it is a trade rather than a free win.
+///
+/// **What used to be entry 1 — the top layer — is closed**, not dropped: the
+/// membership test at the head of the loop is the fix, and
+/// `a_modal_dialog_nested_inside_an_opacity_zero_container_survives_the_cascade`
+/// is what reddens if it goes. It is named here because a list that silently
+/// loses its worst entry reads as a list that never had one.
+fn cascade_opacity(nodes: &mut [RawNode], top_layer: &HashSet<u64>) {
     // The EFFECTIVE flag, carried per node whether or not this fetcher has a
     // reading for that node. This is the half that must not consult `computed`:
     // see the doc above — a node with no reading is still an edge in the tree.
     let mut effective = vec![false; nodes.len()];
     for i in 0..nodes.len() {
         effective[i] = nodes[i].computed.is_some_and(|c| c.opacity_zero);
+        // **A TOP-LAYER ELEMENT IS A CASCADE ROOT.** It is painted outside its
+        // DOM ancestors' group, so the chain of parent edges above it says
+        // nothing about whether the user can see it — `continue` before the
+        // parent is read, which is the whole of the fix.
+        //
+        // Three things this placement does that a later `if` would not:
+        //
+        // * the node keeps its OWN reading. A dialog that declares
+        //   `opacity: 0` on itself is still transparent, and `effective[i]`
+        //   already holds that;
+        // * its DESCENDANTS inherit from `effective[i]`, so the exemption is
+        //   transitive without being a second rule — the modal's `<button>`
+        //   becomes visible because the dialog's entry is `false`, not because
+        //   anything asked whether the button is in the top layer. Chrome lists
+        //   only the escaping element itself (measured: `#tl-dlg` is in the
+        //   list, `#tl-dlg-btn` is not);
+        // * nothing else is exempted. A sibling of the dialog inside the same
+        //   transparent container is not in the list and is still dropped —
+        //   `#neg-plain`, which the corpus asserts by name.
+        if top_layer.contains(&nodes[i].backend_node_id) {
+            continue;
+        }
         let Some(parent) = nodes[i].parent else {
             continue;
         };
@@ -1677,6 +1902,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    use aleph_cdp::testkit::Responder;
     use serde_json::Value;
 
     const TWO_DOCS: &str = include_str!("fixtures/domsnapshot-two-documents.json");
@@ -1708,6 +1934,30 @@ mod tests {
     /// which counts that disagreement rather than being blind to it.
     const HIDDEN_CONTAINERS: &str =
         include_str!("fixtures/local-hidden-containers.domsnapshot.json");
+    /// The page whose ONE `opacity: 0` container holds, at various depths, a
+    /// modal `<dialog>`, a shown popover, a fullscreen element — and four
+    /// things that must stay hidden.
+    ///
+    /// Captured by `…-evidence/probes/t17d-toplayer.mjs` off `t17d-page.html`
+    /// on Chrome 153.0.8010.48, same request as its five siblings. Two facts
+    /// about its shape carry the whole top-layer arm:
+    ///
+    /// * the `<dialog>` is **nested**, under `#wrap-a` > `#wrap-b`, not sitting
+    ///   directly under the container. A one-hop exemption satisfies the
+    ///   direct shape and says nothing about a cascade whose ROOT moved — this
+    ///   task line shipped a one-edge-deep guard three times before this;
+    /// * `#neg-plain` is a **sibling of the dialog under the same `#wrap-b`**,
+    ///   so "exempt the dialog" and "exempt everything under `#wrap-b`" produce
+    ///   different answers for it, and the two are told apart by name.
+    const TOP_LAYER: &str = include_str!("fixtures/local-top-layer.domsnapshot.json");
+    /// `DOM.getTopLayerElements`, resolved to backendNodeIds, **for the same
+    /// render** as [`TOP_LAYER`] — written by the same run of the same probe.
+    ///
+    /// A capture cannot carry this: `DOMSnapshot` has no top-layer field, which
+    /// is the whole reason production pays for a second call. Recording it
+    /// beside the capture is what makes the parse falsifiable against the
+    /// engine's own answer instead of against a set the test chose.
+    const TOP_LAYER_COMPANION: &str = include_str!("fixtures/local-top-layer.toplayer.json");
 
     fn json(text: &str) -> Value {
         serde_json::from_str(text).expect("the fixture is valid JSON")
@@ -1747,19 +1997,75 @@ mod tests {
             .collect()
     }
 
-    fn parse(text: &str, l: &HashMap<String, String>) -> Result<RawDom, BrowserError> {
-        parse_snapshot(&json(text), viewport(), l)
+    /// "This capture has no top layer, and I mean it."
+    ///
+    /// Spelled out at every call site rather than defaulted inside
+    /// [`parse_snapshot`], because the two facts an empty set can carry are
+    /// different: *this page has no open dialog* (true of six of the seven
+    /// fixtures, and of nearly every real page) and *nobody asked the engine*
+    /// (the defect `top_layer_backend_ids` exists to make impossible). A
+    /// parameter forces the caller to say which one it means; a default would
+    /// let the second wear the first's clothes (判据 §8).
+    ///
+    /// The one fixture that is NOT this is `local-top-layer`, whose set comes
+    /// out of [`TOP_LAYER_COMPANION`] — Chrome's own answer, recorded.
+    fn no_top_layer() -> HashSet<u64> {
+        HashSet::new()
     }
 
-    /// The captures Chrome produced, as opposed to the one I typed.
-    fn real_captures() -> [(&'static str, &'static str); 5] {
-        [
-            ("hacker-news", HN),
-            ("same-origin", SAMEORIGIN),
-            ("oopif-parent", OOPIF_PARENT),
-            ("oopif-child", OOPIF_CHILD),
-            ("hidden-containers", HIDDEN_CONTAINERS),
+    fn parse(text: &str, l: &HashMap<String, String>) -> Result<RawDom, BrowserError> {
+        parse_snapshot(&json(text), &no_top_layer(), viewport(), l)
+    }
+
+    /// The captures Chrome produced, as opposed to the one I typed — **each
+    /// with its own top-layer set**.
+    ///
+    /// The set travels WITH the capture rather than being chosen at each call
+    /// site, because a capture and the engine's answer about it are one reading
+    /// taken at one moment: pairing them here is what stops a later test
+    /// parsing `local-top-layer` with an empty set and asserting the
+    /// pre-fix behaviour without noticing (判据 §1).
+    fn real_captures() -> Vec<(&'static str, &'static str, HashSet<u64>)> {
+        vec![
+            ("hacker-news", HN, no_top_layer()),
+            ("same-origin", SAMEORIGIN, no_top_layer()),
+            ("oopif-parent", OOPIF_PARENT, no_top_layer()),
+            ("oopif-child", OOPIF_CHILD, no_top_layer()),
+            ("hidden-containers", HIDDEN_CONTAINERS, no_top_layer()),
+            ("top-layer", TOP_LAYER, recorded_top_layer()),
         ]
+    }
+
+    /// `DOM.getTopLayerElements`' answer for the `local-top-layer` render,
+    /// translated the way [`top_layer_backend_ids`] translates it.
+    ///
+    /// **Read out of the companion file, never typed here.** A literal set of
+    /// backendNodeIds in this module would be a second copy of the engine's
+    /// answer, free to agree with itself while disagreeing with the capture
+    /// beside it (判据 §1); and the two files were written by one run of one
+    /// probe, so they cannot describe different renders.
+    ///
+    /// The `0` filter and the `u64` conversion are the same two the production
+    /// translation applies, and they are here for the same reason: a `0` in
+    /// this set exempts every node whose `backendNodeId` failed to convert.
+    fn recorded_top_layer() -> HashSet<u64> {
+        let companion: Value =
+            serde_json::from_str(TOP_LAYER_COMPANION).expect("the companion is valid JSON");
+        let ids: HashSet<u64> = companion["resolved"]
+            .as_array()
+            .expect("resolved[]")
+            .iter()
+            .filter_map(|row| row["backendNodeId"].as_u64())
+            .filter(|&id| id != 0)
+            .collect();
+        assert_eq!(
+            ids.len(),
+            6,
+            "three escapers and their three ::backdrops. A shorter set means \
+             the companion was rewritten and every assertion keyed to it is \
+             about a different page"
+        );
+        ids
     }
 
     /// The node in `frame` carrying `id="<id>"`, or a panic naming it.
@@ -1892,7 +2198,7 @@ mod tests {
         let mut entries = 0usize;
         for (name, text) in real_captures()
             .iter()
-            .copied()
+            .map(|(n, t, _)| (*n, *t))
             .chain(std::iter::once(("two-documents", TWO_DOCS)))
         {
             let value = json(text);
@@ -1920,7 +2226,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(entries, 1462, "nodeIndex entries across all six fixtures");
+        assert_eq!(entries, 1490, "nodeIndex entries across all seven fixtures");
     }
 
     /// The element-level rect a node's layout entries agree on, or why there
@@ -2212,7 +2518,7 @@ mod tests {
         // Chrome will not produce is produced here by hand.
         let mut value = json(TWO_DOCS);
         value["documents"][0]["layout"]["styles"][2][STYLE_DISPLAY] = serde_json::json!(31); // strings[31] == "none"
-        let dom = parse_snapshot(&value, viewport(), &loaders()).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders()).expect("parses");
         assert!(
             dom.frames[0].nodes[2]
                 .computed
@@ -2265,7 +2571,7 @@ mod tests {
             );
         }
 
-        for (name, text) in real_captures() {
+        for (name, text, _) in real_captures() {
             let value = json(text);
             let mut arrays = 0usize;
             for (d, doc) in value["documents"]
@@ -2301,18 +2607,25 @@ mod tests {
             // compensating benefit. Predicate: non-empty `styles` rows summed
             // over that capture's documents, re-measured at this commit (the
             // fifth capture grew a `display: contents` break and a shadow-root
-            // `<slot>`, so its arm moved 24 → 32). The five numbers below are
-            // the assertion; 1445 is their sum and 1451 layout entries less one
-            // empty `#document` row per document over six documents, so both of
-            // those are restatements of numbers this test already pins rather
-            // than facts of their own — if a fixture changes, these assertions
-            // go red before the arithmetic can mislead anyone.
+            // `<slot>`, so its arm moved 24 → 32; the sixth capture is new).
+            // The six numbers below are the assertion; 1472 is their sum and
+            // 1479 layout entries less one empty `#document` row per document
+            // over seven documents, so both of those are restatements of
+            // numbers this test already pins rather than facts of their own —
+            // if a fixture changes, these assertions go red before the
+            // arithmetic can mislead anyone.
+            //
+            // The sixth arm is why this test matters for the top-layer round at
+            // all: `local-top-layer` is only readable through `STYLE_OPACITY`
+            // if it was captured with the same list as its siblings, and a
+            // recording says nothing about the request that produced it.
             let want = match name {
                 "hacker-news" => 1291,
                 "same-origin" => 61,
                 "oopif-parent" => 54,
                 "oopif-child" => 7,
                 "hidden-containers" => 32,
+                "top-layer" => 27,
                 other => panic!("unlisted fixture {other}"),
             };
             assert_eq!(arrays, want, "{name}: non-empty styles rows");
@@ -2347,7 +2660,7 @@ mod tests {
         );
         let (mut pointers, mut hidden, mut zero, mut none, mut checked) = (0, 0, 0, 0, 0);
 
-        for (name, text) in real_captures() {
+        for (name, text, top_layer) in real_captures() {
             // Per capture, not global: a global total would let a cascade that
             // stopped firing on one page be paid for by one that over-fired on
             // another, and the whole point of the fifth capture is that it is
@@ -2355,7 +2668,8 @@ mod tests {
             let mut cascaded = 0usize;
             let value = json(text);
             let strings = value["strings"].as_array().expect("strings[]");
-            let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+            let dom = parse_snapshot(&value, &top_layer, viewport(), &loaders_of(&value))
+                .expect("parses");
             // Same index assumption as the census test, stated for the same
             // reason.
             assert_eq!(
@@ -2458,13 +2772,13 @@ mod tests {
             // whose parse says `opacity_zero` and whose raw styles row does
             // not, over the slots this test checks. Measured at this commit.
             //
-            // Four zeros and a fifteen is the census that says what the corpus
-            // was missing: for four captures the cascade is a no-op, which is
-            // why nothing was red before it existed, and `hidden-containers`
-            // is the only page that can tell the two behaviours apart. Delete
-            // the fifth capture and every falsifier for `cascade_opacity`
-            // becomes vacuous — so this number is also the guard on the
-            // corpus, not only on the code.
+            // Four zeros, a fifteen and an eleven is the census that says what
+            // the corpus was missing: for four captures the cascade is a no-op,
+            // which is why nothing was red before it existed, and only
+            // `hidden-containers` and `top-layer` can tell any two behaviours
+            // apart here. Delete either of those captures and a whole arm of
+            // `cascade_opacity` loses its falsifier — so these numbers are also
+            // the guard on the corpus, not only on the code.
             //
             // It was 8 before the chain-break shapes were added to the page,
             // and **the +7 is page growth, not coverage**. Only FOUR of the
@@ -2480,9 +2794,20 @@ mod tests {
             // an earlier version said "the extra 7 are the nodes at and below"
             // the breaks, and the round's own report said 4. Same file, two
             // answers, and the comment held the wrong one (判据 §1).
+            // **The sixth capture's 11 is the top-layer arm's footprint, and it
+            // is a falsifier rather than a description.** `local-top-layer` has
+            // twenty nodes under its `opacity: 0` container that a cascade
+            // walking only parent edges would flag; nine of them are the modal
+            // dialog, the popover, the fullscreen element and what is inside
+            // them, which Chrome paints outside the container's group. Delete
+            // the `top_layer.contains(…)` skip and this number goes 11 → 20 and
+            // this census reddens for `top-layer` alone. Measured both ways,
+            // outside cargo, by a counter that first reproduced every committed
+            // constant in this test (判据 §18).
             let want_cascaded = match name {
                 "hacker-news" | "same-origin" | "oopif-parent" | "oopif-child" => 0,
                 "hidden-containers" => 15,
+                "top-layer" => 11,
                 other => panic!("unlisted fixture {other}"),
             };
             assert_eq!(
@@ -2506,23 +2831,29 @@ mod tests {
         //
         // Predicate for all four: slots whose node index occurs exactly once in
         // that document's `nodeIndex` and whose `styles` row is non-empty, over
-        // the five real captures. Re-measured at this commit — the four
-        // previous values (1405 / 508 / 4 / 4) were taken at `f3e8e9b28` over
-        // four captures, and the deltas below are the fifth capture's own
-        // contribution: +32 nodes, +14 pointers, +7 hidden, +2 zero.
+        // the SIX real captures. Re-measured at this commit — the previous
+        // values (1437 / 522 / 11 / 6) were the five-capture totals, and the
+        // deltas are the sixth capture's own contribution: +27 nodes,
+        // +14 pointers, +0 hidden, +1 zero. Before believing any of the four,
+        // the counter that produced them was made to reproduce all five of the
+        // old ones first — an instrument that agrees with the tree it is about
+        // to change is the only kind worth quoting (判据 §18).
         //
         // All four of these are RAW readings — `want`, not `got` — so the
-        // cascade does not move them. `zero` counting the transparent
-        // CONTAINER only, and not the eight nodes under it, is the point:
-        // that split is what `cascaded` above measures.
-        assert_eq!(checked, 1437, "nodes cross-checked");
-        assert_eq!(pointers, 522, "`cursor: pointer` nodes");
+        // cascade does not move them, in EITHER of its arms: `zero` counts the
+        // transparent containers only (`#opacity-zero`, `#fade`) and never the
+        // nodes under them, which is the split `cascaded` above measures. So a
+        // top-layer exemption that went missing moves `cascaded` and leaves
+        // these four untouched — two different questions, two different
+        // numbers, and neither can cover for the other.
+        assert_eq!(checked, 1464, "nodes cross-checked");
+        assert_eq!(pointers, 536, "`cursor: pointer` nodes");
         assert_eq!(hidden, 11, "`visibility: hidden` nodes");
-        assert_eq!(zero, 6, "`opacity: 0` nodes, by their OWN styles row");
+        assert_eq!(zero, 7, "`opacity: 0` nodes, by their OWN styles row");
         // NOT a non-vacuity gap: `display: none` is the flag a Chrome capture
         // cannot show, because such a node gets no layout entry and therefore
         // no styles array. Measured here rather than asserted from the design
-        // note — zero out of every laid-out node in five captures, one of
+        // note — zero out of every laid-out node in six captures, one of
         // which (`hidden-containers`) puts an element two levels inside a
         // `display: none` container specifically to try to produce one. The
         // mapping is exercised by the hand-written fixture in
@@ -2581,7 +2912,8 @@ mod tests {
         use super::super::build::visibility_of;
 
         let value = json(HIDDEN_CONTAINERS);
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
         let frame = dom.frames.first().expect("one frame");
 
         for (id, why) in [
@@ -2733,7 +3065,8 @@ mod tests {
     #[test]
     fn only_opacity_is_cascaded_on_chromium() {
         let value = json(HIDDEN_CONTAINERS);
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
         let frame = dom.frames.first().expect("one frame");
 
         let hidden = by_id(frame, "vis-d2")
@@ -2779,6 +3112,702 @@ mod tests {
                 "#{id} has no layout entry, so it cannot have a rect either"
             );
         }
+    }
+
+    /// **M1's falsifier: the exemption is GONE.** A modal dialog nested inside
+    /// an `opacity: 0` container — and every control in it — is still offered
+    /// to the model.
+    ///
+    /// This is the pair's positive half. Its twin below,
+    /// `only_the_elements_chromium_names_escape_the_opacity_cascade`, is the
+    /// negative half, and the two are separate tests rather than one so that
+    /// **"the exemption is gone" and "the exemption is too broad" redden
+    /// different names**. A single test covering both would report one failure
+    /// for two opposite defects and the reader would have to diff to find out
+    /// which.
+    ///
+    /// # What each assertion is for
+    ///
+    /// * `#fade` is the CONTROL: the container declares `opacity: 0`, so it
+    ///   reads transparent with or without any of this. If it is false the
+    ///   fixture lost its shape and everything below is vacuous.
+    /// * `#tl-dlg` is the modal `<dialog>`, at depth 3 under the container
+    ///   through `#wrap-a` and `#wrap-b`. **It is the only element here Chrome
+    ///   names**, and it reddens when the skip is deleted.
+    /// * `#tl-dlg-btn` is the `<button>` INSIDE it — the assertion that says
+    ///   the exemption is a cascade ROOT and not a per-node lookup. Chrome does
+    ///   not list it (asserted below, in the negative half), so it can only be
+    ///   visible by inheriting the dialog's `effective` entry. Exempt the node
+    ///   but keep ORing from its DOM parent and this one fails while `#tl-dlg`
+    ///   passes.
+    /// * `#tl-pop` / `#tl-fs` and their buttons are the other two ways in, so
+    ///   the arm is not keyed to `<dialog>`.
+    /// * `#outside` is outside the container entirely: if the fix worked by
+    ///   weakening the cascade rather than by rerooting it, this stays visible
+    ///   and says nothing — which is why the negative half exists.
+    ///
+    /// Each assertion checks the FLAG and the consequence
+    /// [`super::build::visibility_of`] draws from it, so a change that keeps the
+    /// flag and stops spending it reddens here too (判据 §4).
+    #[test]
+    fn a_modal_dialog_nested_inside_an_opacity_zero_container_survives_the_cascade() {
+        use super::super::build::visibility_of;
+
+        let value = json(TOP_LAYER);
+        let dom = parse_snapshot(
+            &value,
+            &recorded_top_layer(),
+            viewport(),
+            &loaders_of(&value),
+        )
+        .expect("parses");
+        let frame = dom.frames.first().expect("one frame");
+
+        assert!(
+            by_id(frame, "fade")
+                .computed
+                .expect("#fade has a styles row")
+                .opacity_zero,
+            "#fade DECLARES `opacity: 0`. If this is false the capture no \
+             longer has a transparent container and every assertion in this \
+             test passes for the wrong reason"
+        );
+
+        for (id, why) in [
+            (
+                "tl-dlg",
+                "an open modal <dialog> three levels inside the container. \
+                 Chrome paints it outside the container's group (measured by \
+                 pixels, t17b-escape.mjs) and NAMES it in \
+                 DOM.getTopLayerElements, so the cascade must not follow its \
+                 parent edge. This is the assertion that reddens when the \
+                 top-layer skip is deleted",
+            ),
+            (
+                "tl-dlg-btn",
+                "the <button> inside that dialog. Chrome does NOT list it — \
+                 only the escaping element itself — so it is visible only \
+                 because the dialog's own entry is the root its subtree \
+                 inherits. An exemption written as a per-node lookup instead \
+                 of a cascade root fails HERE and passes on #tl-dlg",
+            ),
+            (
+                "tl-pop",
+                "a shown popover, so the arm is keyed to the engine's list and \
+                 not to <dialog>",
+            ),
+            ("tl-pop-btn", "and its control, by the same inheritance"),
+            (
+                "tl-fs",
+                "a fullscreen element — the third way in, and the one the \
+                 earlier round's probe never opened alongside the other two",
+            ),
+            ("tl-fs-btn", "and its control"),
+            (
+                "outside",
+                "outside every container. It was never transparent and must \
+                 stay visible — a cascade that stopped firing altogether \
+                 passes this one too, which is what the negative half is for",
+            ),
+        ] {
+            let node = by_id(frame, id);
+            let computed = node.computed.unwrap_or_else(|| {
+                panic!("#{id} has no styles row at all, so this test asserts nothing")
+            });
+            assert!(!computed.opacity_zero, "#{id}: {why}");
+            assert!(
+                visibility_of(node),
+                "#{id} is not flagged and `visibility_of` drops it anyway, so \
+                 the flag is right and something else is spending it"
+            );
+        }
+    }
+
+    /// **M2's falsifier: the exemption is TOO BROAD.** Everything inside the
+    /// same `opacity: 0` container that Chrome does *not* name is still
+    /// dropped.
+    ///
+    /// The negative half of the pair above, and the reason the fixture is
+    /// shaped the way it is. Each id here separates the fix from a specific
+    /// wrong version of it:
+    ///
+    /// * `#neg-plain` is a **sibling of the modal dialog under the same
+    ///   `#wrap-b`**. "Exempt the dialog" and "exempt the dialog's parent's
+    ///   subtree" agree about `#tl-dlg` and disagree about this. So does
+    ///   "stop cascading when any top-layer element is on the page".
+    /// * `#wrap-a` / `#wrap-b` are the dialog's ANCESTORS. An exemption that
+    ///   walked upward — or that treated the cascade root as "the nearest
+    ///   transparent ancestor of a top-layer element" — shows them.
+    /// * `#neg-nonmodal` is an **open** `<dialog>` that was never
+    ///   `showModal()`ed, and `#neg-fixed` is `position: fixed`. Both are the
+    ///   pixel census's surprising negatives: measured CONTAINED, and measured
+    ///   absent from `DOM.getTopLayerElements`. A fix keyed to "is a dialog
+    ///   with `open`" or to "escapes normal flow" shows them; a fix keyed to
+    ///   the engine's list does not.
+    /// * Deleting the whole cascade passes the test above and fails every line
+    ///   of this one.
+    #[test]
+    fn only_the_elements_chromium_names_escape_the_opacity_cascade() {
+        use super::super::build::visibility_of;
+
+        let value = json(TOP_LAYER);
+        let listed = recorded_top_layer();
+        let dom = parse_snapshot(&value, &listed, viewport(), &loaders_of(&value)).expect("parses");
+        let frame = dom.frames.first().expect("one frame");
+
+        for (id, why) in [
+            (
+                "neg-plain",
+                "a plain <div> that is the modal dialog's own SIBLING under \
+                 #wrap-b. Visible here means the exemption is a subtree or a \
+                 page-wide switch rather than the one element Chrome named",
+            ),
+            (
+                "neg-plain-btn",
+                "and the control inside it — the ref the model would click at \
+                 a coordinate where nothing is drawn",
+            ),
+            (
+                "wrap-a",
+                "an ANCESTOR of the dialog. The exemption must not travel \
+                 upward: this element really is inside the faded container and \
+                 really is invisible",
+            ),
+            ("wrap-b", "the dialog's immediate parent, same reason"),
+            (
+                "neg-nonmodal",
+                "an OPEN <dialog> that was never showModal()ed. It has the \
+                 `open` attribute and is not in the top layer — measured \
+                 CONTAINED by pixels and absent from Chrome's list. A fix \
+                 keyed to the attribute shows it",
+            ),
+            ("neg-nonmodal-btn", "and its control"),
+            (
+                "neg-fixed",
+                "`position: fixed` inside the container. It takes its \
+                 containing block from the opacity ancestor and STILL does not \
+                 leave its paint group — the negative that makes 'escapes \
+                 normal flow' the wrong predicate",
+            ),
+            ("neg-fixed-btn", "and its control"),
+        ] {
+            let node = by_id(frame, id);
+            let computed = node.computed.unwrap_or_else(|| {
+                panic!("#{id} has no styles row at all, so this test asserts nothing")
+            });
+            assert!(computed.opacity_zero, "#{id}: {why}");
+            assert!(
+                !visibility_of(node),
+                "#{id} carries `opacity_zero` and `visibility_of` still calls \
+                 it visible, so the flag is set and nobody spends it"
+            );
+        }
+
+        // And the set itself is the engine's, not a shape this test chose: the
+        // three ids it exempts are the three escapers, and the elements above
+        // are in it nowhere. Without this, both halves of the pair would still
+        // pass if `recorded_top_layer` quietly started returning the ids of
+        // whatever happened to be asserted visible (判据 §10 — a fixture that
+        // only ever confirms the reader).
+        for id in ["neg-plain", "wrap-a", "wrap-b", "neg-nonmodal", "neg-fixed"] {
+            assert!(
+                !listed.contains(&by_id(frame, id).backend_node_id),
+                "Chrome's own answer lists #{id} as top-layer, which would make \
+                 the assertion above a statement about this test rather than \
+                 about the cascade"
+            );
+        }
+        for id in ["tl-dlg", "tl-pop", "tl-fs"] {
+            assert!(
+                listed.contains(&by_id(frame, id).backend_node_id),
+                "Chrome's own answer does NOT list #{id}, so the positive half \
+                 of this pair is passing for some other reason"
+            );
+        }
+        // The three ids in the set that match nothing in the capture are the
+        // `::backdrop` pseudo-elements. Stated as a count rather than left as a
+        // surprise: `captureSnapshot` puts no pseudo-element in `nodes`, so a
+        // set BIGGER than the page is the normal case here, not a symptom.
+        let matched = frame
+            .nodes
+            .iter()
+            .filter(|n| listed.contains(&n.backend_node_id))
+            .count();
+        assert_eq!(
+            matched, 3,
+            "three of Chrome's six ids address nodes in this capture; the other \
+             three are ::backdrop pseudo-elements, which captureSnapshot does \
+             not report"
+        );
+    }
+
+    /// **A child renderer's top layer is its own**, and the parent's set is
+    /// never applied across the boundary.
+    ///
+    /// `backendNodeId` is per renderer and the spaces collide: measured on the
+    /// Task 0 fixtures, the OOPIF parent (ids 2-99) and its child (ids 1-17)
+    /// share **15** ids. So a stitch that reused the parent's top-layer set for
+    /// a child's nodes would exempt whichever child element happened to share
+    /// an integer with the parent's dialog — and the damage is invisible in the
+    /// output, because an element that should have been dropped is simply
+    /// offered as visible with a plausible rect.
+    ///
+    /// The child capture is built here rather than recorded, because no real
+    /// capture in this directory has the shape that can show it: it needs a
+    /// child document with a transparent container whose descendant's id
+    /// collides with a PARENT top-layer id. `local-oopif-child` has no
+    /// transparent anything, so a test written against it would be green either
+    /// way — 判据 §2's vacuous pass.
+    ///
+    /// **In what situation does this go red?** Pass `parent_top_layer` where
+    /// `child.top_layer` belongs in [`stitch_snapshots`] — which is the one
+    /// line of this fix a compiler cannot hold, because both are
+    /// `&HashSet<u64>`.
+    #[test]
+    fn a_child_capture_is_not_exempted_by_the_parents_top_layer_ids() {
+        use super::super::build::visibility_of;
+
+        let parent = json(OOPIF_PARENT);
+        // The `<iframe>` this capture's own accounting says is missing.
+        const OWNER: u64 = 65;
+        // An id that exists in the CHILD capture below. It is also an ordinary
+        // element id in the parent's space — which is the whole hazard.
+        const COLLIDING: u64 = 7;
+
+        // A one-document child: `<html>` → `#faded` (opacity 0) → `#inner`,
+        // where `#inner` carries the colliding id. Everything the parser reads
+        // and nothing it does not.
+        let child = serde_json::json!({
+            "strings": ["F-child", "HTML", "DIV", "id", "faded", "inner",
+                        "block", "visible", "0", "1", "auto"],
+            "documents": [{
+                "frameId": 0,
+                "nodes": {
+                    "parentIndex": [-1, 0, 1],
+                    "nodeType": [1, 1, 1],
+                    "nodeName": [1, 2, 2],
+                    "nodeValue": [-1, -1, -1],
+                    "backendNodeId": [5, 6, COLLIDING],
+                    "attributes": [[], [3, 4], [3, 5]],
+                    "contentDocumentIndex": { "index": [], "value": [] },
+                    "isClickable": { "index": [] },
+                    "inputChecked": { "index": [] },
+                    "optionSelected": { "index": [] },
+                    "inputValue": { "index": [], "value": [] },
+                    "textValue": { "index": [], "value": [] }
+                },
+                "layout": {
+                    "nodeIndex": [0, 1, 2],
+                    "bounds": [[0, 0, 400, 300], [0, 0, 400, 100], [0, 0, 80, 20]],
+                    // `#faded` declares opacity 0; `#inner` declares 1 and is
+                    // invisible anyway, which is what the cascade is for.
+                    "styles": [[6, 7, 9, 10], [6, 7, 8, 10], [6, 7, 9, 10]],
+                    "text": [-1, -1, -1]
+                }
+            }]
+        });
+
+        let mut l = loaders_of(&parent);
+        l.extend(loaders_of(&child));
+        // The PARENT claims the colliding id is in its top layer. In the
+        // parent's renderer that is some element of the Hacker News-style page;
+        // in the child's it is `#inner`.
+        let parent_top: HashSet<u64> = HashSet::from([COLLIDING]);
+
+        let dom = stitch_snapshots(
+            &parent,
+            &parent_top,
+            &[ChildCapture {
+                owner_backend_node_id: OWNER,
+                raw: &child,
+                top_layer: &no_top_layer(),
+            }],
+            viewport(),
+            &l,
+        )
+        .expect("the parent and its child stitch");
+
+        let inner = dom
+            .frames
+            .iter()
+            .flat_map(|f| f.nodes.iter())
+            .find(|n| n.backend_node_id == COLLIDING && n.attr("id") == Some("inner"))
+            .expect("the child's #inner is in the stitched page");
+        assert!(
+            inner
+                .computed
+                .expect("#inner has a styles row")
+                .opacity_zero,
+            "#inner is inside the CHILD's `opacity: 0` container and the child's \
+             own top layer is empty, so it must be dropped. Reading it as \
+             visible means the PARENT's set was applied to a different \
+             renderer's ids"
+        );
+        assert!(!visibility_of(inner));
+
+        // Non-vacuity, both halves. The collision has to be real, and the
+        // parent's set has to be capable of exempting something — otherwise
+        // this test would pass with `parent_top` empty and prove nothing.
+        assert!(
+            dom.frames
+                .iter()
+                .flat_map(|f| f.nodes.iter())
+                .filter(|n| n.backend_node_id == COLLIDING)
+                .count()
+                >= 2,
+            "the id must exist in BOTH captures, or there is no collision to \
+             be wrong about"
+        );
+        let swapped = stitch_snapshots(
+            &parent,
+            &parent_top,
+            &[ChildCapture {
+                owner_backend_node_id: OWNER,
+                raw: &child,
+                // The mistake this test exists for, written out: the parent's
+                // set handed to the child.
+                top_layer: &parent_top,
+            }],
+            viewport(),
+            &l,
+        )
+        .expect("stitches");
+        let wrongly_visible = swapped
+            .frames
+            .iter()
+            .flat_map(|f| f.nodes.iter())
+            .find(|n| n.backend_node_id == COLLIDING && n.attr("id") == Some("inner"))
+            .expect("#inner");
+        assert!(
+            !wrongly_visible.computed.expect("styles row").opacity_zero,
+            "if handing the child the PARENT's set does not change this node's \
+             answer, the assertion above is not measuring the thing it names"
+        );
+    }
+
+    /// A CDP peer that answers `DOM.getTopLayerElements` **the way Chrome
+    /// does**: with the list only once `DOM.getDocument` has been seen on this
+    /// connection, and with `[]` before that.
+    ///
+    /// The rule is not invented. Measured on Chrome 153.0.8010.48
+    /// (`…-evidence/probes/t17d-toplayer.mjs`, arm A2): with the DOM agent
+    /// enabled but no current node map — `DOM.enable` from any other client, or
+    /// this fetcher's own handshake from a previous snapshot followed by a
+    /// navigation — the real browser answers `[]` on a page with an open modal
+    /// dialog. The paired control in that arm is the same session and the same
+    /// page with a second `DOM.getDocument`, which answers with the dialog.
+    ///
+    /// Modelling the SILENT face rather than the loud one is deliberate: on a
+    /// session that never touched the DOM domain the real refusal is
+    /// `"DOM agent hasn't been enabled"`, which anybody would notice. The `[]`
+    /// is the face nothing in this tree could see, so it is the one the fake
+    /// wears (判据 §11).
+    fn top_layer_peer(
+        answer: TopLayerAnswer,
+    ) -> impl Fn(&Value) -> Responder + Send + Sync + 'static {
+        let capture: Value = json(TOP_LAYER);
+        let frame_id = capture["strings"]
+            [capture["documents"][0]["frameId"].as_u64().unwrap() as usize]
+            .as_str()
+            .expect("the fixture's frame id")
+            .to_string();
+        let companion: Value = serde_json::from_str(TOP_LAYER_COMPANION).expect("companion");
+        let node_ids: Vec<i64> = companion["nodeIds"]
+            .as_array()
+            .expect("nodeIds[]")
+            .iter()
+            .map(|v| v.as_i64().expect("an integer"))
+            .collect();
+        // nodeId → the `DOM.describeNode` reply for it, built from the same
+        // recording, so the fake translates exactly as Chrome did.
+        let described: HashMap<i64, Value> = companion["resolved"]
+            .as_array()
+            .expect("resolved[]")
+            .iter()
+            .map(|row| {
+                (
+                    row["nodeId"].as_i64().expect("nodeId"),
+                    serde_json::json!({ "node": {
+                        "nodeId": row["nodeId"],
+                        "backendNodeId": row["backendNodeId"],
+                        "nodeType": 1,
+                        "nodeName": row["nodeName"],
+                    }}),
+                )
+            })
+            .collect();
+
+        let handshaken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        move |frame: &Value| {
+            use std::sync::atomic::Ordering;
+            let method = frame
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let params = frame
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            match method {
+                "Page.getLayoutMetrics" => Responder::Reply(serde_json::json!({
+                    "cssVisualViewport": { "offsetX": 0, "offsetY": 0, "pageX": 0, "pageY": 0,
+                                           "clientWidth": 1000, "clientHeight": 800,
+                                           "scale": 1, "zoom": 1 },
+                    "cssContentSize": { "x": 0, "y": 0, "width": 1000, "height": 800 },
+                })),
+                "Page.getFrameTree" => Responder::Reply(serde_json::json!({
+                    "frameTree": { "frame": {
+                        "id": frame_id.clone(), "loaderId": format!("L-{frame_id}"),
+                        "url": "http://127.0.0.1:18999/t17d-page.html",
+                    }},
+                })),
+                "DOM.getDocument" => {
+                    handshaken.store(true, Ordering::SeqCst);
+                    Responder::Reply(serde_json::json!({ "root": {
+                        "nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+                    }}))
+                }
+                "DOM.getTopLayerElements" => match answer {
+                    TopLayerAnswer::Refuse => Responder::Error {
+                        code: -32000,
+                        message: "DOM agent hasn't been enabled".to_string(),
+                    },
+                    TopLayerAnswer::OnlyAfterHandshake => Responder::Reply(serde_json::json!({
+                        "nodeIds": if handshaken.load(Ordering::SeqCst) {
+                            node_ids.clone()
+                        } else {
+                            Vec::new()
+                        },
+                    })),
+                },
+                "DOM.describeNode" => {
+                    let id = params.get("nodeId").and_then(Value::as_i64).unwrap_or(-1);
+                    match described.get(&id) {
+                        Some(reply) => Responder::Reply(reply.clone()),
+                        None => Responder::Error {
+                            code: -32000,
+                            message: format!("Could not find node with given id {id}"),
+                        },
+                    }
+                }
+                "DOMSnapshot.captureSnapshot" => Responder::Reply(capture.clone()),
+                _ => Responder::Reply(serde_json::json!({})),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum TopLayerAnswer {
+        /// Chrome's measured behaviour: `[]` before a handshake, the list after.
+        OnlyAfterHandshake,
+        /// The cold-session refusal, also measured.
+        Refuse,
+    }
+
+    /// **THE CENSUS FOR THE SILENT HANDSHAKE**, and it is a behaviour test
+    /// rather than a grep because the thing it watches is an effect.
+    ///
+    /// # In what situation does this go red?
+    ///
+    /// Delete — or hoist out of [`top_layer_backend_ids`] — the
+    /// `DOM.getDocument` that precedes the top-layer read. The peer above then
+    /// answers `[]`, exactly as the real browser does on a session whose node
+    /// map is stale, the cascade marks the modal dialog and its button
+    /// transparent, and the first assertion fails by name. Nothing else in this
+    /// tree can see that change: `[]` is also the honest answer for six of the
+    /// seven fixtures and for nearly every real page, so a forgotten handshake
+    /// is a no-op that reports success (判据 §11).
+    ///
+    /// **It is not the whole census.** This drives ONE session, so it cannot
+    /// see a second, unhandshaken call site appearing somewhere else — a child
+    /// renderer's capture, say, where the parent's handshake does not reach.
+    /// `the_top_layer_read_has_one_call_site_and_its_handshake_is_in_the_same_function`
+    /// is the half that covers that, and the two are stated as a pair because
+    /// either alone reads as complete.
+    ///
+    /// The second leg pins the OTHER measured face: a refusal must reach the
+    /// caller as a refusal. Spending it as an empty set would put the deleted
+    /// dialog back, silently, which is the whole defect (判据 §8).
+    #[tokio::test]
+    async fn a_missing_top_layer_handshake_would_delete_the_modal_and_this_is_what_notices() {
+        use super::super::build::visibility_of;
+        use aleph_cdp::testkit::FakeCdpServer;
+
+        // Leg 0 — THE FAKE'S OWN GATE IS ARMED. Without this the two legs below
+        // would pass just as happily against a peer that always answers the
+        // list, and this test would be a statement about nothing (判据 §2).
+        {
+            let server =
+                FakeCdpServer::start(top_layer_peer(TopLayerAnswer::OnlyAfterHandshake)).await;
+            let (conn, session) = server.connect_and_attach().await;
+            let cold = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
+                .await
+                .expect("the peer answers");
+            assert!(
+                cold.is_empty(),
+                "the peer must answer [] before a handshake, or the leg below \
+                 cannot tell a handshake from its absence: {cold:?}"
+            );
+            aleph_cdp::methods::dom::get_document(&conn, Some(&session), 0, false)
+                .await
+                .expect("handshake");
+            let warm = aleph_cdp::methods::dom::get_top_layer_elements(&conn, Some(&session))
+                .await
+                .expect("the peer answers");
+            assert_eq!(warm.len(), 6, "and the full list after one");
+        }
+
+        // Leg 1 — the whole fetcher, against that peer. The handshake is
+        // production's own, and the modal survives only because it happened.
+        {
+            let server =
+                FakeCdpServer::start(top_layer_peer(TopLayerAnswer::OnlyAfterHandshake)).await;
+            let (conn, session) = server.connect_and_attach().await;
+            let dom = fetch_chromium(&conn, &session)
+                .await
+                .expect("the page is captured");
+            let frame = dom.frames.first().expect("one frame");
+
+            for id in ["tl-dlg", "tl-dlg-btn"] {
+                let node = by_id(frame, id);
+                assert!(
+                    !node.computed.expect("a styles row").opacity_zero && visibility_of(node),
+                    "#{id} is inside an `opacity: 0` container and Chrome paints \
+                     it anyway. It is in the page state only because \
+                     `top_layer_backend_ids` sent DOM.getDocument before \
+                     DOM.getTopLayerElements — delete that handshake and this \
+                     peer answers [] exactly as a real browser does after a \
+                     navigation, and the model is told the page has no dialog"
+                );
+            }
+            // The negative half, on the same run: the fetcher is not simply
+            // passing everything through.
+            assert!(
+                by_id(frame, "neg-plain")
+                    .computed
+                    .expect("a styles row")
+                    .opacity_zero,
+                "#neg-plain is the dialog's sibling and is genuinely invisible"
+            );
+        }
+
+        // Leg 2 — a refusal is a refusal, never an empty set.
+        {
+            let server = FakeCdpServer::start(top_layer_peer(TopLayerAnswer::Refuse)).await;
+            let (conn, session) = server.connect_and_attach().await;
+            let err = fetch_chromium(&conn, &session)
+                .await
+                .expect_err("the top layer could not be read, so the page is refused");
+            let text = err.to_string();
+            assert!(
+                text.contains("DOM.getTopLayerElements"),
+                "the refusal must name the call that failed: {text}"
+            );
+            assert!(
+                text.contains("browser_snapshot"),
+                "and say what to do next: {text}"
+            );
+        }
+    }
+
+    /// The other half of the census: **one call site, and its handshake beside
+    /// it**.
+    ///
+    /// # In what situation does this go red?
+    ///
+    /// * a second `get_top_layer_elements` call appears anywhere under `src/`
+    ///   — at which point "the handshake is beside the call" is a claim about
+    ///   one of two places and the behaviour test above covers only the one it
+    ///   happens to drive;
+    /// * the `get_document` handshake is moved OUT of the function that holds
+    ///   the call — hoisted into `fetch_chromium`, say, which looks harmless
+    ///   and is not: `capture_child` attaches a NEW session, and a handshake on
+    ///   the parent's session does not enable the child's DOM agent (measured:
+    ///   nothing but `DOM.getDocument` enables it, and it is per session). The
+    ///   behaviour test above drives a single-renderer page and cannot see that
+    ///   move at all.
+    ///
+    /// It reads the file rather than the call graph, which is a real limit:
+    /// a handshake moved into a helper called from the same function would read
+    /// as absent. That is the fail-RED direction, and the message says so.
+    #[test]
+    fn the_top_layer_read_has_one_call_site_and_its_handshake_is_in_the_same_function() {
+        // **PRODUCTION only.** Scanning the whole file found FOUR sites on its
+        // first run: the real call, the two this module's own fake-server test
+        // makes to prove that peer's gate is armed, and — the one worth naming
+        // — the needle inside this very census, which is a string literal that
+        // matches itself. A guard that counts its own source is measuring the
+        // wrong text; this one said so by going red rather than by being
+        // quietly wrong, which is the only reason it was cheap to find.
+        //
+        // The cut is `utils::source_scan::production_prefix` and not a local
+        // one. My first fix hand-rolled it against a marker constant and
+        // `no_module_hand_rolls_the_cfg_test_prefix_cut` reddened by name and
+        // by line — a guard for exactly the second-author shape, catching the
+        // second author (判据 §1).
+        let whole = include_str!("fetch_chromium.rs");
+        let source = crate::utils::source_scan::production_prefix(whole);
+        let source = source.as_str();
+        // The call, not the `use` or a doc mention.
+        let sites: Vec<usize> = source
+            .match_indices("get_top_layer_elements(")
+            .filter(|(i, _)| {
+                // Skip doc/comment lines, which name it constantly.
+                let line_start = source[..*i].rfind('\n').map_or(0, |n| n + 1);
+                !source[line_start..*i].trim_start().starts_with("//")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            sites.len(),
+            1,
+            "`get_top_layer_elements` must have exactly ONE call site in this \
+             file's PRODUCTION half. Found {}. Each site needs its own \
+             DOM.getDocument on its own session, and this guard can only vouch \
+             for one — if a second is genuinely needed, give it a handshake and \
+             widen this census deliberately rather than raising the number",
+            sites.len()
+        );
+
+        // The enclosing function's text, bounded on BOTH sides by the nearest
+        // item start. Every spelling is listed rather than just `fn `, because
+        // a range that overruns into the next function would find a
+        // `get_document` that belongs to somebody else and report green for it
+        // — a scan whose boundary is wrong is a scan that endorses the wrong
+        // text (判据 §18: the conclusion's scope is the method's).
+        const STARTS: [&str; 4] = ["\nfn ", "\nasync fn ", "\npub fn ", "\npub async fn "];
+        let site = sites[0];
+        let start = STARTS
+            .iter()
+            .filter_map(|kw| source[..site].rfind(kw))
+            .max()
+            .expect("the call is inside a function");
+        let end = STARTS
+            .iter()
+            .filter_map(|kw| source[site..].find(kw).map(|rel| site + rel))
+            .min()
+            .unwrap_or(source.len());
+        let body = &source[start..end];
+        // The boundary is only trustworthy if it actually found the right
+        // function, so say which one — and fail if it did not.
+        assert!(
+            body.starts_with("\nasync fn top_layer_backend_ids"),
+            "the scan landed on {:?} instead of `top_layer_backend_ids`, so \
+             whatever it concludes below is about the wrong function",
+            &body[..body.len().min(60)]
+        );
+        assert!(
+            body.contains("dom::get_document("),
+            "the function holding the only `get_top_layer_elements` call does \
+             not call `dom::get_document`. That handshake is what makes the \
+             answer be about THIS page: without it Chrome answers [] on any \
+             session whose node map is stale — after a navigation, or when \
+             another CDP client enabled the DOM agent — and an empty list is \
+             indistinguishable from a page with no dialogs. If the handshake \
+             moved into a helper, this guard cannot follow it: move it back, or \
+             replace this census with one that can. The function scanned \
+             was:\n{body}"
+        );
     }
 
     /// An out-of-range parent index does not panic, and a forward edge is not
@@ -2843,7 +3872,7 @@ mod tests {
         // `parent >= i` it indexes `effective[9_999]` and panics. Reaching the
         // assertions at all is the assertion.
         let mut nodes = vec![node(None, transparent), node(Some(9_999), opaque)];
-        cascade_opacity(&mut nodes);
+        cascade_opacity(&mut nodes, &no_top_layer());
         assert!(
             !nodes[1].computed.expect("node 1").opacity_zero,
             "an out-of-range parent is not a parent, so nothing may be \
@@ -2863,7 +3892,7 @@ mod tests {
             node(Some(1), transparent),
             node(Some(2), opaque),
         ];
-        cascade_opacity(&mut nodes);
+        cascade_opacity(&mut nodes, &no_top_layer());
 
         assert!(
             !nodes[0].computed.expect("node 0").opacity_zero,
@@ -2909,7 +3938,8 @@ mod tests {
             .as_u64()
             .expect("the empty-styles slot names a node") as usize;
 
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
         let n = &dom.frames[0].nodes[node];
         assert!(
             n.rect.is_some(),
@@ -3033,7 +4063,7 @@ mod tests {
             } else {
                 loaders_of(&value)
             };
-            let dom = parse_snapshot(&value, viewport(), &l).expect("parses");
+            let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &l).expect("parses");
             assert!(!dom.frames.is_empty(), "{name}: no frames to check");
             for frame in &dom.frames {
                 assert!(
@@ -3107,7 +4137,8 @@ mod tests {
     fn a_document_with_no_frame_id_is_refused_rather_than_keyed_on_the_empty_string() {
         let mut value = json(TWO_DOCS);
         value["documents"][1]["frameId"] = serde_json::json!(-1);
-        let err = parse_snapshot(&value, viewport(), &loaders()).expect_err("no frame id");
+        let err = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders())
+            .expect_err("no frame id");
         let text = err.to_string();
         assert!(text.contains("frameId"), "{text}");
         assert!(text.contains("browser_snapshot"), "{text}");
@@ -3140,7 +4171,7 @@ mod tests {
                 .as_array_mut()
                 .unwrap_or_else(|| panic!("{label} is an array"))
                 .pop();
-            let err = parse_snapshot(&value, viewport(), &loaders())
+            let err = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders())
                 .err()
                 .unwrap_or_else(|| panic!("a short {label} must not parse"));
             let text = err.to_string();
@@ -3155,7 +4186,7 @@ mod tests {
         for (label, empty_is_fine) in [("styles", true), ("text", true), ("bounds", false)] {
             let mut value = json(TWO_DOCS);
             value["documents"][0]["layout"][label] = serde_json::json!([]);
-            let parsed = parse_snapshot(&value, viewport(), &loaders());
+            let parsed = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders());
             assert_eq!(
                 parsed.is_ok(),
                 empty_is_fine,
@@ -3180,7 +4211,7 @@ mod tests {
         let mut value = json(TWO_DOCS);
         value["documents"][0]["layout"]["bounds"][2] =
             serde_json::json!([10.0, "not-a-number-at-all", 120.0, 16.0]);
-        let dom = parse_snapshot(&value, viewport(), &loaders()).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders()).expect("parses");
         assert!(dom.frames[0].nodes[2].rect.is_none(), "a non-numeric bound");
 
         let mut value = json(TWO_DOCS);
@@ -3191,7 +4222,7 @@ mod tests {
              serde_json parsed it into something else"
         );
         value["documents"][0]["layout"]["bounds"][2] = huge;
-        let dom = parse_snapshot(&value, viewport(), &loaders()).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders()).expect("parses");
         assert!(
             dom.frames[0].nodes[2].rect.is_none(),
             "1e300 was spent as a coordinate"
@@ -3252,7 +4283,7 @@ mod tests {
             "the Hacker News capture is not the page it claims to be"
         );
 
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value))
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
             .expect("the real capture parses");
         assert_eq!(dom.frames.len(), documents.len());
         assert_eq!(
@@ -3329,9 +4360,10 @@ mod tests {
     #[test]
     fn a_node_with_several_layout_entries_keeps_the_box_chrome_calls_its_own() {
         let mut multi_entry_nodes = 0usize;
-        for (name, text) in real_captures() {
+        for (name, text, top_layer) in real_captures() {
             let value = json(text);
-            let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+            let dom = parse_snapshot(&value, &top_layer, viewport(), &loaders_of(&value))
+                .expect("parses");
             // `dom.frames[d]` below assumes frame index == document index,
             // which holds only while nothing was dropped as unplaceable.
             // Stated rather than assumed, because the drop is new behaviour.
@@ -3449,7 +4481,8 @@ mod tests {
              option, so this test asserts nothing"
         );
 
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
         for i in checked {
             assert_eq!(
                 dom.frames[0].nodes[i].checked,
@@ -3512,7 +4545,8 @@ mod tests {
         );
         let owner_box = wire_bounds(&value, 0, owner_node).expect("the owner has a box");
 
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
         assert_eq!(dom.frames.len(), 2);
         assert_eq!(dom.frames[0].offset, (0, 0));
         assert_eq!(
@@ -3572,7 +4606,8 @@ mod tests {
             "the parent points at a child document after all"
         );
 
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
         assert_eq!(dom.frames.len(), 1);
 
         // Non-vacuity: the iframe ELEMENT is right there with its box. The
@@ -3623,7 +4658,7 @@ mod tests {
              the same thing the real captures already show"
         );
 
-        let dom = parse_snapshot(&value, viewport(), &loaders()).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders()).expect("parses");
         assert_eq!(
             dom.frames[0].nodes[6]
                 .rect
@@ -3679,9 +4714,11 @@ mod tests {
         l.extend(loaders_of(&child));
         let dom = stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[ChildCapture {
                 owner_backend_node_id: owner_backend,
                 raw: &child,
+                top_layer: &no_top_layer(),
             }],
             viewport(),
             &l,
@@ -3719,8 +4756,13 @@ mod tests {
         );
 
         let same_origin = json(SAMEORIGIN);
-        let so_dom =
-            parse_snapshot(&same_origin, viewport(), &loaders_of(&same_origin)).expect("parses");
+        let so_dom = parse_snapshot(
+            &same_origin,
+            &no_top_layer(),
+            viewport(),
+            &loaders_of(&same_origin),
+        )
+        .expect("parses");
         assert_eq!(
             dom.frames[1].offset, so_dom.frames[1].offset,
             "the two paths place the same iframe at two different places, so \
@@ -3743,9 +4785,11 @@ mod tests {
 
         let err = stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[ChildCapture {
                 owner_backend_node_id: 999_999,
                 raw: &child,
+                top_layer: &no_top_layer(),
             }],
             viewport(),
             &l,
@@ -3784,9 +4828,11 @@ mod tests {
 
         let err = stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[ChildCapture {
                 owner_backend_node_id: html_backend,
                 raw: &same_origin,
+                top_layer: &no_top_layer(),
             }],
             viewport(),
             &l,
@@ -3803,9 +4849,11 @@ mod tests {
         l.extend(loaders_of(&child));
         stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[ChildCapture {
                 owner_backend_node_id: 65,
                 raw: &child,
+                top_layer: &no_top_layer(),
             }],
             viewport(),
             &l,
@@ -3857,9 +4905,11 @@ mod tests {
 
         let dom = stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[ChildCapture {
                 owner_backend_node_id: 65,
                 raw: &middle,
+                top_layer: &no_top_layer(),
             }],
             viewport(),
             &l,
@@ -3894,9 +4944,11 @@ mod tests {
             .expect("the root node's backend id");
         let err = stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[ChildCapture {
                 owner_backend_node_id: html_backend,
                 raw: &middle,
+                top_layer: &no_top_layer(),
             }],
             viewport(),
             &l,
@@ -3958,9 +5010,11 @@ mod tests {
 
         let dom = stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[ChildCapture {
                 owner_backend_node_id: 65,
                 raw: &middle,
+                top_layer: &no_top_layer(),
             }],
             viewport(),
             &l,
@@ -4018,17 +5072,20 @@ mod tests {
 
         let err = stitch_snapshots(
             &parent,
+            &no_top_layer(),
             &[
                 // The parent's real iframe, so the completeness gate is satisfied.
                 ChildCapture {
                     owner_backend_node_id: 65,
                     raw: &first,
+                    top_layer: &no_top_layer(),
                 },
                 // An owner the parent does not have. Correct behaviour is to
                 // refuse; the cross-space bug placed it at a node of `first`.
                 ChildCapture {
                     owner_backend_node_id: ABSENT_FROM_PARENT,
                     raw: &second,
+                    top_layer: &no_top_layer(),
                 },
             ],
             viewport(),
@@ -4066,7 +5123,7 @@ mod tests {
         // … and then take away the only identity it could be named by.
         value["documents"][0]["nodes"]["backendNodeId"][4] = serde_json::json!(-1);
 
-        let err = parse_snapshot(&value, viewport(), &loaders())
+        let err = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders())
             .expect_err("an unnameable frame element must not be carried as node 0");
         let text = err.to_string();
         assert!(
@@ -4081,7 +5138,7 @@ mod tests {
         let mut ok = json(TWO_DOCS);
         ok["documents"][0]["nodes"]["contentDocumentIndex"] =
             serde_json::json!({ "index": [], "value": [] });
-        let dom = parse_snapshot(&ok, viewport(), &loaders()).expect("parses");
+        let dom = parse_snapshot(&ok, &no_top_layer(), viewport(), &loaders()).expect("parses");
         assert!(
             dom.unreached_frames
                 .contains(&UnreachedFrame::NotCaptured(104)),
@@ -4113,7 +5170,7 @@ mod tests {
 
         value["documents"][0]["nodes"]["contentDocumentIndex"] =
             serde_json::json!({ "index": [], "value": [] });
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value))
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
             .expect("the rest of the page is still worth having");
 
         assert_eq!(dom.frames.len(), 1, "the main frame is kept");
@@ -4154,7 +5211,8 @@ mod tests {
     #[test]
     fn a_single_session_capture_names_the_frame_elements_it_could_not_read() {
         let value = json(OOPIF_PARENT);
-        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let dom = parse_snapshot(&value, &no_top_layer(), viewport(), &loaders_of(&value))
+            .expect("parses");
 
         // The element is present — the missing thing is its content.
         let (i, owner) = dom.frames[0]
@@ -4197,7 +5255,8 @@ mod tests {
         // is what makes the assertion above about the capture and not about
         // the code path (判据 §2: say what makes it red).
         let same = json(SAMEORIGIN);
-        let reached = parse_snapshot(&same, viewport(), &loaders_of(&same)).expect("parses");
+        let reached =
+            parse_snapshot(&same, &no_top_layer(), viewport(), &loaders_of(&same)).expect("parses");
         assert_eq!(reached.frames.len(), 2);
         assert!(
             reached.unreached_frames.is_empty(),
@@ -4206,10 +5265,12 @@ mod tests {
         );
         // And a page with no frames at all has nothing to report.
         let hn = json(HN);
-        assert!(parse_snapshot(&hn, viewport(), &loaders_of(&hn))
-            .expect("parses")
-            .unreached_frames
-            .is_empty());
+        assert!(
+            parse_snapshot(&hn, &no_top_layer(), viewport(), &loaders_of(&hn))
+                .expect("parses")
+                .unreached_frames
+                .is_empty()
+        );
     }
 
     /// `RawDom` is built by the fetchers and nowhere else (spec §7.3's other

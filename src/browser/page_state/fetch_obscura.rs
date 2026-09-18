@@ -699,18 +699,21 @@ pub async fn fetch_obscura(
 ///   boxes. OR is exact.
 /// * `opacity` — not inherited, and it group-composites, so a child at
 ///   `opacity: 1` inside `opacity: 0` is still invisible and cannot re-show
-///   itself by DECLARING anything. **OR is exact on THIS engine, and the
-///   qualifier is not pedantry — it is false on the twin.** On Chromium a
+///   itself by DECLARING anything. **The OR ALONE is exact on THIS engine, and
+///   the qualifier is not pedantry — it is false on the twin.** On Chromium a
 ///   descendant leaves the ancestor's paint group without declaring anything,
 ///   by entering the top layer (`<dialog>.showModal()`, `showPopover()`,
-///   `requestFullscreen()`), and the OR then deletes an open modal dialog from
-///   the page state; that is measured, and owned, in
-///   [`super::fetch_chromium::cascade_opacity`]'s doc — not restated here.
+///   `requestFullscreen()`), so the twin's OR has a second arm: a node the
+///   engine names in `DOM.getTopLayerElements` is a cascade ROOT and its parent
+///   edge is skipped. That arm is measured, and owned, in
+///   [`super::fetch_chromium::cascade_opacity`]'s doc — not restated here. This
+///   cascade has no such arm, and the next bullet is why that is a measurement
+///   rather than an omission.
 ///
 ///   obscura has no top layer **in layout at all**, which is why the exactness
-///   survives here. Its own source says so at the one place that would have to
-///   implement it: `showModal()` sets the `open` attribute and a
-///   `_dialogModal` flag and nothing else, under the comment *"Modal
+///   survives here with no second arm. Its own source says so at the one place
+///   that would have to implement it: `showModal()` sets the `open` attribute
+///   and a `_dialogModal` flag and nothing else, under the comment *"Modal
 ///   top-layer/focus/render is layout (out of scope)"*
 ///   (`crates/obscura-js/js/bootstrap.js:3904-3905`, `showModal` at `:3925`).
 ///   `top_layer` has **zero** occurrences in `obscura-render`. `:modal` and
@@ -719,8 +722,11 @@ pub async fn fetch_obscura(
 ///   having no rendering consequence, which is exactly the shape that would
 ///   let someone "fix" this arm here and change nothing but the output.
 ///   Read at the same checkout as every other obscura citation in this file
-///   and expiring with the same stamp; obscura is not installed on this host,
-///   so this is a source reading and not a run.
+///   and expiring with the same stamp — which now NAMES this claim, because
+///   obscura is the default engine and the way this one rots is a user finding
+///   their modal has gone missing, not a reader noticing a stale sentence.
+///   obscura is not installed on this host, so this is a source reading and not
+///   a run.
 /// * `visibility` — cascaded, **and this OR is an APPROXIMATION.** See below.
 ///
 /// ## The residual on `visibility`, named as a residual
@@ -1767,9 +1773,22 @@ mod tests {
     /// re-measured from inside this crate: the computed-style map has no
     /// `cursor` key; `visibility` is served as the element's own value;
     /// `:focus` never matches; `pierce` is ignored; a `display:none` element
-    /// answers `getBoxModel` successfully with a zero quad. Each is one grep in
-    /// an obscura checkout, and this test is what makes that grep happen instead
-    /// of being assumed — a claim that rots LOUDLY rather than silently.
+    /// answers `getBoxModel` successfully with a zero quad; **obscura has no
+    /// top layer**, which is the whole reason [`cascade_effective_styles`] has
+    /// no second arm where the twin does. Each is one grep in an obscura
+    /// checkout, and this test is what makes that grep happen instead of being
+    /// assumed — a claim that rots LOUDLY rather than silently.
+    ///
+    /// **The top-layer claim is the most expensive one on that list and the
+    /// newest, so it is worth saying what its rot looks like.** obscura is the
+    /// DEFAULT engine. If v0.3 implements a top layer and this stamp is bumped
+    /// without re-reading, `cascade_effective_styles` goes on ORing
+    /// `opacity_zero` down DOM parent edges into a modal dialog that the engine
+    /// now paints outside them — and the way anyone finds out is a user whose
+    /// dialog is missing from the page state, with the agent told the page does
+    /// not contain the thing the user is looking at. That is the same defect the
+    /// twin's Task 17d arm closed on Chromium, arriving on the other engine by
+    /// a version bump instead of by a code change (判据 §16).
     ///
     /// **What it does not buy, stated because a stamp reads like a warranty —
     /// and there are TWO doors past it, not the one this doc first named.**
@@ -1823,8 +1842,16 @@ mod tests {
              key in the computed-style map (paint.rs), `visibility` served as the \
              element's OWN value (paint.rs, which is what cascade_effective_styles \
              compensates for), `:focus` matching false unconditionally \
-             (obscura-dom/src/selector.rs), `pierce` ignored, and a zero quad \
-             returned successfully for `display:none`."
+             (obscura-dom/src/selector.rs), `pierce` ignored, a zero quad \
+             returned successfully for `display:none`, and NO TOP LAYER — \
+             showModal() sets an attribute and a flag under the comment \"Modal \
+             top-layer/focus/render is layout (out of scope)\" \
+             (obscura-js/js/bootstrap.js:3904-3905) and `top_layer` has zero \
+             occurrences in obscura-render. Re-read that one FIRST: if the new \
+             tag paints a top layer, cascade_effective_styles deletes every open \
+             modal dialog inside a faded container from the page state on the \
+             DEFAULT engine, silently, and fetch_chromium::cascade_opacity's \
+             top-layer arm is the shape the fix has to take here too."
         );
     }
 

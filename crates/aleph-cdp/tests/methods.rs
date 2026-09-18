@@ -914,6 +914,73 @@ async fn dom_resolve_and_describe_and_the_void_dom_verbs_send_their_arguments() 
     );
 }
 
+/// The two halves of the top-layer read, and the **one thing that separates them from the
+/// wrappers above**: they speak `nodeId`, not `backendNodeId`.
+///
+/// Both fixtures are Chrome 153.0.8010.48's own bytes for one render
+/// (`probes/t17d-toplayer.mjs`), taken in the order a caller must use them: the list first, then a
+/// `describeNode` of one of the ids it named.
+///
+/// The parameter assertions are the point rather than decoration. CDP's `DOM.describeNode` accepts
+/// `nodeId`, `backendNodeId` and `objectId`, and answers *successfully* for whichever one it is
+/// given — so a wrapper that sent the right integer under the wrong key would return a plausible
+/// node for a different element and nothing downstream could tell. That is the failure this pair
+/// of assertions exists for; `describe_node`'s own params assertion above is its other half.
+#[tokio::test]
+async fn dom_top_layer_is_read_as_node_ids_and_described_by_node_id() {
+    let listed = parse(fixture!("chrome-DOM.getTopLayerElements.json"));
+    let (server, conn) = replying("DOM.getTopLayerElements", listed.clone()).await;
+    let node_ids = dom::get_top_layer_elements(&conn, Some(&session()))
+        .await
+        .expect("the top-layer list");
+    assert_eq!(
+        node_ids,
+        listed["nodeIds"]
+            .as_array()
+            .expect("nodeIds")
+            .iter()
+            .map(|v| v.as_i64().expect("an integer nodeId"))
+            .collect::<Vec<i64>>(),
+        "the ids come back in the order Chrome listed them"
+    );
+    assert_eq!(
+        server
+            .last_params("DOM.getTopLayerElements")
+            .expect("params"),
+        json!({}),
+        "the method takes no parameters — anything sent here would be invented"
+    );
+
+    // Non-vacuity: this fixture is a page with three top-layer elements, each with its own
+    // `::backdrop`, so an empty list would make every assertion above pass for the wrong reason.
+    assert_eq!(node_ids.len(), 6, "three escapers plus three ::backdrops");
+
+    let described = parse(fixture!("chrome-DOM.describeNode.bynodeid.json"));
+    let (server, conn) = replying("DOM.describeNode", described.clone()).await;
+    let node = dom::describe_node_by_node_id(&conn, Some(&session()), 27)
+        .await
+        .expect("describe by nodeId");
+    assert_eq!(
+        server.last_params("DOM.describeNode").expect("params"),
+        json!({ "nodeId": 27 }),
+        "by NODEID. Sending this as `backendNodeId` would address a different element and still \
+         answer successfully"
+    );
+    // The translation this wrapper exists for: a nodeId in, a backendNodeId out, and the two are
+    // different numbers in this very fixture — which is what makes them impossible to confuse by
+    // accident here.
+    assert_eq!(node.node_id, 27);
+    assert_eq!(node.backend_node_id, 4);
+    assert_eq!(node.node_name, "DIALOG");
+    assert!(
+        node.attributes
+            .windows(2)
+            .any(|kv| kv[0] == "id" && kv[1] == "tl-dlg"),
+        "the element Chrome described is the modal dialog the probe opened: {:?}",
+        node.attributes
+    );
+}
+
 // ===================== Runtime =====================
 
 #[tokio::test]

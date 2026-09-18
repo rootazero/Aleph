@@ -1,0 +1,51 @@
+{
+  "chrome": "Chrome/153.0.8010.48",
+  "page": "docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/probes/t17d-page.html",
+  "note": "DOM.getTopLayerElements on the SAME render as local-top-layer.domsnapshot.json, after a DOM.getDocument{depth:0} handshake, on a session that never saw DOM.enable.",
+  "nodeIds": [
+    28,
+    27,
+    19,
+    18,
+    23,
+    22
+  ],
+  "resolved": [
+    {
+      "nodeId": 28,
+      "backendNodeId": 29,
+      "nodeName": "::backdrop",
+      "id": null
+    },
+    {
+      "nodeId": 27,
+      "backendNodeId": 4,
+      "nodeName": "DIALOG",
+      "id": "tl-dlg"
+    },
+    {
+      "nodeId": 19,
+      "backendNodeId": 21,
+      "nodeName": "::backdrop",
+      "id": null
+    },
+    {
+      "nodeId": 18,
+      "backendNodeId": 20,
+      "nodeName": "DIV",
+      "id": "tl-pop"
+    },
+    {
+      "nodeId": 23,
+      "backendNodeId": 25,
+      "nodeName": "::backdrop",
+      "id": null
+    },
+    {
+      "nodeId": 22,
+      "backendNodeId": 24,
+      "nodeName": "DIV",
+      "id": "tl-fs"
+    }
+  ]
+}
