@@ -759,24 +759,28 @@ mod engine_arm_census {
     ///
     /// An arm head is `Engine::<Variant>` followed by `=>`, which is what keeps
     /// a mention of the same path inside an arm BODY from starting a new arm.
-    fn engine_arms(body: &str) -> Vec<(String, String)> {
-        let mut heads: Vec<(usize, String)> = Vec::new();
+    ///
+    /// Carries the [`Engine`] itself rather than its printed name, so the
+    /// assertion below can ask each arm for ITS OWN fetcher instead of for any
+    /// fetcher. A `String` here would have made that spelling a second literal.
+    fn engine_arms(body: &str) -> Vec<(Engine, String)> {
+        let mut heads: Vec<(usize, Engine)> = Vec::new();
         for engine in Engine::ALL {
             let marker = format!("Engine::{engine:?}");
             let mut from = 0usize;
             while let Some(p) = body[from..].find(&marker) {
                 let at = from + p;
                 if body[at + marker.len()..].trim_start().starts_with("=>") {
-                    heads.push((at, format!("{engine:?}")));
+                    heads.push((at, engine));
                 }
                 from = at + marker.len();
             }
         }
-        heads.sort();
+        heads.sort_by_key(|(at, _)| *at);
         (0..heads.len())
             .map(|k| {
                 let end = heads.get(k + 1).map_or(body.len(), |(at, _)| *at);
-                (heads[k].1.clone(), body[heads[k].0..end].to_string())
+                (heads[k].1, body[heads[k].0..end].to_string())
             })
             .collect()
     }
@@ -788,6 +792,17 @@ mod engine_arm_census {
     /// questions: this one sees an arm that has NO `Engine::` head at all — a
     /// wildcard `_ =>` — which the head walk cannot, and which would serve one
     /// engine's page state out of another engine's fetcher.
+    ///
+    /// **What the pair still cannot see, so that this doc does not read as a
+    /// closed perimeter.** Both halves are `contains` over arm TEXT, and
+    /// `contains` is existential by construction: it answers "is this spelled
+    /// here", never "is this what runs". An arm that names its own fetcher and
+    /// then calls something else — in a nested block, behind a binding, after
+    /// an early return — satisfies every assertion below. Requiring each arm's
+    /// OWN fetcher name (rather than any fetcher) closes the copy-paste shape
+    /// that was measured live on this branch; it does not turn a text scan into
+    /// a reachability proof, and nothing short of exercising the arm would
+    /// (判据 §4).
     fn top_level_arms(body: &str) -> usize {
         let b = body.as_bytes();
         let (mut depth, mut arms, mut i) = (0i32, 0usize, 0usize);
@@ -865,14 +880,34 @@ mod engine_arm_census {
             arm_bodies.len(),
             Engine::ALL.len()
         );
+        // **Its OWN fetcher, not any fetcher** (判据 §4). `contains` can only
+        // answer "is this path MENTIONED in this arm", never "is it REACHED",
+        // and the previous spelling — `arm.contains("page_state::fetch_")` —
+        // asked the weaker of the two questions about the weaker of two paths.
+        // Measured, not argued: with `Engine::Obscura => fetch_chromium(…)` in
+        // the read path, a one-line copy-paste slip that compiles and runs, the
+        // whole browser suite scored 533 passed / 0 failed, identical to the
+        // control — every assertion in this census included. The default
+        // engine's page state was produced by the other engine's fetcher and
+        // nothing in the crate could see it.
+        //
+        // The required name is DERIVED from the arm's own variant via
+        // `Engine::as_str`, which is also the wire spelling and has one author,
+        // so a third engine gets this assertion by being declared rather than
+        // by being remembered here (判据 §5).
         for (engine, arm) in &arm_bodies {
+            let required = format!("page_state::fetch_{}", engine.as_str());
             assert!(
-                arm.contains("page_state::fetch_"),
-                "the read path's `Engine::{engine}` arm calls no fetcher. An arm \
-                 that returns instead of fetching leaves `browser_snapshot` \
-                 refusing on that engine while `page_state`'s own census still \
-                 reports one builder with the right identity — that census \
-                 cannot see this, which is why this one exists.\n{arm}"
+                arm.contains(&required),
+                "the read path's `Engine::{engine:?}` arm does not call \
+                 `{required}`. Two shapes land here and both have shipped on \
+                 this branch: an arm that returns instead of fetching, which \
+                 leaves `browser_snapshot` refusing on that engine while \
+                 `page_state`'s own census still reports one builder with the \
+                 right identity; and an arm that calls the OTHER engine's \
+                 fetcher, which refuses nothing, reddens nothing, and answers \
+                 this engine's snapshot out of a fetcher nobody measured for \
+                 it.\n{arm}"
             );
         }
 

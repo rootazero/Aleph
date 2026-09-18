@@ -46,10 +46,21 @@
 //!   [`COMPUTED_FLAGS_JS`].
 //!
 //!   ⚠️ The fallback arm is therefore live exactly when the cross-check below
-//!   fails twice: then every `computed` is `None`, and a boxless-but-visible
-//!   element reads as hidden. That is the conservative direction (an unknown
-//!   page reads as less visible, never as more), and it is why the cross-check
-//!   retries before giving up.
+//!   fails twice, and **what that costs is now the whole text of the page, not
+//!   a few boxless elements.** With every `computed` at `None`,
+//!   [`cascade_effective_styles`] finds no parent flags to hand down; only
+//!   elements are asked for a box, so every TEXT node falls to
+//!   `rect.is_some()` = false and `render_text` drops each one
+//!   (`render.rs:114`), alongside the boxless-but-visible elements. The honest
+//!   word for a degraded page is therefore **textless**, not "less visible":
+//!   the good path and the degraded path differ by every string on the page
+//!   (判据 §17 — a wrong label costs more than a missing one, and
+//!   "conservative" was the wrong label for this). Reachable: one open shadow
+//!   root makes the element counts disagree (see [`walk`]'s shadow branch),
+//!   which is a disagreement no retry can fix. obscura returns none today, so
+//!   this is a live path on a future build rather than on this one — which is
+//!   why it is written down. It is still the direction to fail in, and it is
+//!   why the cross-check retries before giving up.
 //! * **`Page.getFrameTree` carries a real, changing `loaderId` for the main
 //!   frame** (`loader-blank-page-1` → `loader-010b239d-…` across a navigate),
 //!   which is what makes ref generations work here at all. A CHILD frame's
@@ -126,6 +137,29 @@ pub const DEFAULT_BOX_CONCURRENCY: usize = 16;
 /// falsy case reaching no branch at all, there is no path by which not-knowing
 /// can become a denial. Pinned by
 /// `the_caret_sentinel_is_reachable_only_through_document_body`.
+///
+/// **Residual, written down rather than left silent: a genuinely focused
+/// `<body tabindex="0">` is still spent as `-1`.** The caret really is on
+/// `<body>`, and this reports "I looked and nothing has it", plus
+/// `focused: Some(false)` on `<body>` itself. In a real browser the
+/// discriminator is `document.body.matches(':focus')` — and **that does not
+/// work on the engine this fetcher serves.** obscura's selector engine answers
+/// `PseudoClass::Focus` with an unconditional `false`, grouped with `:hover`,
+/// `:active`, `:focus-visible` and `:focus-within` under the comment *"Dynamic
+/// user-interaction pseudo-classes have no meaning against a static DOM
+/// snapshot with no live user input"*
+/// (`crates/obscura-dom/src/selector.rs:506-510`, reached from
+/// `bootstrap.js:3556`'s `matches` via `matches_selector`). Conjoining it here
+/// would put a 恒假 term in front of the `-1` branch: `!matches(':focus')` is
+/// always true, so the branch would behave exactly as it does now, wearing a
+/// guard that cannot fire (判据 §2). So this is documented, not repaired. The
+/// bound on the cost: it takes a page whose only focusable thing is `<body>`
+/// itself, and every element still reports `focused: Some(false)`, which is
+/// true of every one of them.
+///
+/// **`cursor` is not an answer about the cascade on this engine, and the doc on
+/// [`cascade_effective_styles`] says what it is instead** — read that before
+/// spending `cursor_pointer` for anything beyond the one OR arm that reads it.
 ///
 /// `pub` so a prober runs the same string the fetcher runs; two copies would
 /// let a QA fixture agree with a fetcher that had changed (判据 §1).
@@ -578,23 +612,119 @@ pub async fn fetch_obscura(
 /// because [`super::build::visibility_of`] judges each node by its own
 /// `Computed` and never walks ancestors.
 ///
-/// # Why the raw `getComputedStyle` answer is not that
+/// # The one fact that decides this — for BOTH fetchers, derived once
 ///
-/// Two of the four flags do **not** reach descendants on their own:
+/// **Does this engine resolve inherited CSS properties before it answers?**
+/// Chromium does, so `fetch_chromium` must cascade nothing that CSS inherits
+/// and must not copy this function (判据 §16, inverted: the twin's right answer
+/// is the opposite one, and both follow from this single fact). obscura does
+/// not — and that is read in obscura's own source, never inferred from CSS,
+/// because CSS is exactly what the first version of this paragraph reasoned
+/// from and it was right about the CSSOM and wrong about the only engine this
+/// file serves.
 ///
-/// * `display` — the resolved value for an element inside a `display: none`
-///   subtree is **that element's own** `display` (`block`, say). CSS does not
-///   rewrite it to `none`; the subtree simply generates no boxes.
-/// * `opacity` — **not an inherited property**. A child of `opacity: 0` resolves
-///   to `1`.
+/// * `LayoutStyle::visibility_hidden` is the element's **own** value. obscura's
+///   words: *"`visibility: hidden|visible`, own value. `None` means 'inherit
+///   the ancestor's computed value' (visibility, unlike most box properties, is
+///   a real inherited CSS property). Resolved into `effectively_invisible`
+///   during `dom::layout_dom`'s inheritance pass"*
+///   (`crates/obscura-render/src/lib.rs:1409-1413`).
+/// * The resolution is real and it **never reaches JS**.
+///   `refresh_effective_visibility` computes
+///   `style.visibility_hidden.unwrap_or(parent_state.0)` and writes the answer
+///   to `effectively_invisible` (`crates/obscura-render/src/dom.rs:1043-1049`);
+///   `effectively_invisible` has 14 occurrences in `crates/`, every one of them
+///   inside `obscura-render` (the field, the two inheritance passes, four
+///   paint-time readers, one test) — **none in the computed-style map, none in
+///   `obscura-cdp`, none in `obscura-js`**.
+/// * What the map inserts for `"visibility"` is
+///   `if style.visibility_hidden.unwrap_or(false) { "hidden" } else { "visible" }`
+///   (`crates/obscura-render/src/paint.rs:1444-1452`) — **the own value, with
+///   `None` collapsed into `Some(false)`**. The JS shim serves that key
+///   straight out of the native snapshot and does no ancestor walk
+///   (`crates/obscura-js/js/bootstrap.js:8479`).
 ///
-/// The other two are left alone, and that is not an oversight:
+/// ## 连线优先: the resolved answer was looked for before it was re-derived
 ///
-/// * `visibility` **is** inherited, so the engine's per-element answer is
-///   already cascaded — and a descendant may legitimately set
-///   `visibility: visible` to reappear inside a hidden parent. OR-ing it down
-///   here would hide an element the engine reported as visible.
-/// * `cursor` is inherited too, and it is a hint rather than a verdict.
+/// It is on no obscura CDP surface. There is **no `CSS` domain** —
+/// `crates/obscura-cdp/src/domains/` has no `css.rs`,
+/// `CSS.getComputedStyleForNode` has zero occurrences in that crate, and
+/// `CSS.enable` is a fast-path `{}` in `server.rs:1719`.
+/// `DOMSnapshot.captureSnapshot` writes the literal `"visible"` into a constant
+/// style vector for every node (`domains/domsnapshot.rs:215-226`) — the
+/// fabrication this module's head doc already refuses to read.
+/// `Accessibility.getFullAXTree` hard-codes `"ignored": false`
+/// (`domains/accessibility.rs:131`). `DOM.*` reports no visibility at all. One
+/// `Runtime.evaluate` on `getComputedStyle` is the only surface there is, so
+/// the inheritance obscura already computed has to be re-derived here.
+///
+/// # What is cascaded
+///
+/// * `display` — not inherited: the resolved value for an element inside a
+///   `display: none` subtree is **that element's own** `display` (`block`,
+///   say). CSS does not rewrite it to `none`; the subtree simply generates no
+///   boxes. OR is exact.
+/// * `opacity` — not inherited, and it group-composites, so a child at
+///   `opacity: 1` inside `opacity: 0` is still invisible and cannot re-show
+///   itself. OR is exact.
+/// * `visibility` — cascaded, **and this OR is an APPROXIMATION.** See below.
+///
+/// ## The residual on `visibility`, named as a residual
+///
+/// `unwrap_or(false)` collapses two different answers into one wire value:
+/// `None` ("inherit — ask my ancestor") and `Some(false)` ("I declare
+/// `visibility: visible`") both arrive as `"visible"`. An OR down these edges
+/// therefore cannot tell a descendant that RE-SHOWS itself inside a hidden
+/// container from one that said nothing at all, and **it will mark a genuinely
+/// visible `visibility: visible` descendant hidden**. That is a real error, not
+/// a hypothetical one, and no argument in this file makes it go away: the bound
+/// is approximate, which is why the backstop below is about the OR and not
+/// about exactness.
+///
+/// It is taken deliberately, in the cheaper direction (判据 §17). Over-reporting
+/// hands the model a ref it will click — and worse here than in the
+/// `display: none` case, because a `visibility: hidden` subtree still generates
+/// boxes, so the wrong answer arrives wearing a plausible rect and the click
+/// lands on a real coordinate where nothing is. Under-reporting omits an
+/// element. Every other decision in this module already takes omission.
+///
+/// Note what the approximation degenerates to: obscura's own rule is
+/// `visibility_hidden.unwrap_or(parent)`, which IS this OR for every element
+/// that does not declare the property — i.e. for all but the re-showing
+/// descendant, which is precisely the residual.
+///
+/// # `cursor` is left alone, and not for the reason CSS would give
+///
+/// On obscura `c.cursor === 'pointer'` is **the element's own INLINE
+/// `style="cursor:pointer"`, or nothing**. The computed-style map has no
+/// `cursor` key at all: `"cursor"` occurs exactly once in
+/// `crates/obscura-render/src/paint.rs`, at `:10718`, inside
+/// `svg_css_presentation_attribute`'s name list. The shim's `lookup` misses the
+/// native snapshot, falls through to the element's **inline** CSSOM
+/// (`bootstrap.js:8482`, where `target` is `el.style`, whose
+/// `getPropertyValue` `_pull()`s the `style` attribute at `:1704`), and only
+/// then to `defaultsKebab`, where `cursor: 'auto'` (`:8461`). So no stylesheet
+/// rule reaches this flag and it does not inherit.
+///
+/// **It is NOT 恒假** — the round that raised this said it was, and the inline
+/// arm is the one step that claim went too far. It is false for very nearly
+/// every element that really has a pointer cursor, which is a different and
+/// smaller statement.
+///
+/// Not repaired, and the reason is a count (判据 §6). `cursor_pointer` has
+/// exactly ONE consumer in this tree: `roles::is_interactive` (`roles.rs:227`),
+/// the fifth of six OR-ed signals. It can only ADD interactivity, never deny
+/// it, and no renderer prints the field, so nothing can spend the `false` as a
+/// denial. What it costs is an under-report — an icon-only `<div class="btn">`
+/// whose listener was attached by script earns no ref — which is this module's
+/// preferred direction; and widening `Computed::cursor_pointer` to
+/// `Option<bool>` would change the behaviour of nothing while moving a Task 10
+/// wire type. **Cascading it would be strictly worse**: it would spread one
+/// element's inline declaration over a subtree the engine never said anything
+/// about, manufacturing interactivity instead of missing it.
+///
+/// The claim rots loudly rather than silently:
+/// `the_obscura_source_claims_here_name_the_build_they_were_read_on`.
 ///
 /// # A text node takes its parent's answer whole
 ///
@@ -637,6 +767,14 @@ fn cascade_effective_styles(nodes: &mut [RawNode]) {
             (RawNodeKind::Element, Some(mut own)) => {
                 own.display_none |= from_parent.display_none;
                 own.opacity_zero |= from_parent.opacity_zero;
+                // `visibility` rides the SAME edge as the other two, and the
+                // reason is obscura's, not CSS's: `getComputedStyle` answers
+                // the element's OWN `visibility_hidden` with `None` collapsed
+                // into `false`, so the inheritance obscura computed into
+                // `effectively_invisible` never crosses the wire. Approximate
+                // in one direction only — see this function's doc for the
+                // residual and for why that direction is the cheap one.
+                own.visibility_hidden |= from_parent.visibility_hidden;
                 own
             }
             // An element with no row of its own means the cross-check dropped
@@ -1097,15 +1235,29 @@ mod tests {
         assert_eq!(raw.viewport.content_height, 720);
     }
 
-    /// **The styles that do not reach descendants on their own are cascaded by
-    /// the fetcher, and the two that do are left alone.**
+    /// **F3 — the three flags obscura answers per-element are cascaded by the
+    /// fetcher, `visibility` among them.**
     ///
     /// `Computed`'s doc puts this obligation on the fetcher: a child of a
     /// `display: none` subtree must itself carry `display_none: true`, because
     /// `visibility_of` judges each node alone and never walks ancestors. The raw
-    /// `getComputedStyle` answer does not provide that — the resolved `display`
-    /// of an element inside a hidden subtree is its OWN `display`, and `opacity`
-    /// is not inherited.
+    /// `getComputedStyle` answer does not provide that on this engine, and the
+    /// reason is **obscura's, not CSS's**: `display` and `opacity` are not
+    /// inherited properties at all, and `visibility` is — but obscura's
+    /// computed-style map serves `style.visibility_hidden.unwrap_or(false)`,
+    /// the element's OWN value, and the inheritance pass that resolves it
+    /// writes `effectively_invisible`, which reaches no CDP surface
+    /// (`crates/obscura-render/src/lib.rs:1409-1413`, `paint.rs:1444-1452`,
+    /// `dom.rs:1043-1049`). See [`cascade_effective_styles`] for the full
+    /// derivation and for the residual the OR carries.
+    ///
+    /// **This assertion previously pinned the opposite answer**, on the CSS
+    /// argument — which is true of the CSSOM and false of this engine — and a
+    /// guard that would be cited as evidence for the defect costs more than no
+    /// guard at all (判据 §3). What it pins now is the OR: delete
+    /// `own.visibility_hidden |= from_parent.visibility_hidden` and `A#home`
+    /// goes back to reporting itself visible inside a hidden `<header>`, and
+    /// this test names it.
     ///
     /// **The corpus needed a shape the captured page does not otherwise give.**
     /// Every hidden container in the real fixture (`#hidden-none`,
@@ -1160,15 +1312,22 @@ mod tests {
         assert!(!crate::browser::page_state::build::visibility_of(h1));
         assert!(by_id(ID_MAIN).computed.unwrap().opacity_zero);
 
-        // …and `visibility` is NOT propagated by the fetcher, deliberately: CSS
-        // inherits it, so the engine's per-element answer is already cascaded,
-        // and a descendant may set `visibility: visible` to reappear. OR-ing it
-        // down here would hide an element the engine called visible.
+        // …and `visibility` IS propagated, because obscura answers the own
+        // value. `A#home` is the `<header>`'s child; on the engine this fetcher
+        // serves, `getComputedStyle(a).visibility` is `"visible"` here, and
+        // believing it hands the model a ref carrying a PLAUSIBLE rect — a
+        // `visibility: hidden` subtree still generates boxes — so the click
+        // lands on a real coordinate where nothing is.
         assert!(by_id(ID_HEADER).computed.unwrap().visibility_hidden);
+        let a_home = by_id(ID_A_HOME);
         assert!(
-            !by_id(ID_A_HOME).computed.unwrap().visibility_hidden,
-            "visibility is inherited by CSS and must not be re-propagated here"
+            a_home.computed.unwrap().visibility_hidden,
+            "an element inside a visibility:hidden subtree must say so: obscura \
+             reports each element's OWN `visibility`, never the inherited one \
+             (obscura-render/src/paint.rs:1444-1452), so nothing upstream of \
+             this cascade has applied the inheritance"
         );
+        assert!(!crate::browser::page_state::build::visibility_of(a_home));
 
         // A sibling subtree is untouched — the cascade follows edges, not the
         // document order it walks in.
@@ -1203,6 +1362,59 @@ mod tests {
             "the only path to the `nothing is focused` sentinel must be the \
              body check — a falsy activeElement is `cannot say`, which is the \
              initial `null` and reaches no branch: {COMPUTED_FLAGS_JS}"
+        );
+    }
+
+    /// The obscura build this module's source-level claims were READ ON.
+    ///
+    /// A literal on purpose. Deriving it from `runtimes::OBSCURA_TAG` would make
+    /// the comparison below 恒真 and guard nothing (判据 §2) — the whole point
+    /// is that the two are free to disagree, and the disagreement is the signal.
+    /// It is the same shape as `capability.rs`'s CHROMIUM `measured_on` and the
+    /// deliberate opposite of its OBSCURA row, because the two fields answer
+    /// different questions: that one records the build a capability table is
+    /// FOR, this one records the build a source reading was TAKEN ON.
+    ///
+    /// Scoped to this file, so it is not a second author of the pinned tag for
+    /// anyone else: `the_obscura_tag_has_one_author` reads only `specs.rs` and
+    /// `the_obscura_row_is_stamped_with_the_pinned_tag` reads only
+    /// `capability.rs`, and neither census sees this constant.
+    const OBSCURA_SOURCE_READ_AT: &str = "v0.2.2";
+
+    /// **In what situation does this go red?** When somebody bumps
+    /// `runtimes::specs::OBSCURA_TAG` — which is the moment every sentence in
+    /// this file citing `crates/obscura-…` becomes a claim about a binary Aleph
+    /// no longer installs.
+    ///
+    /// Several of those claims are load-bearing and none of them can be
+    /// re-measured from inside this crate: the computed-style map has no
+    /// `cursor` key; `visibility` is served as the element's own value;
+    /// `:focus` never matches; `pierce` is ignored; a `display:none` element
+    /// answers `getBoxModel` successfully with a zero quad. Each is one grep in
+    /// an obscura checkout, and this test is what makes that grep happen instead
+    /// of being assumed — a claim that rots LOUDLY rather than silently.
+    ///
+    /// **What it does not buy, stated because a stamp reads like a warranty.**
+    /// `OBSCURA_TAG` names the build the ledger INSTALLS, and
+    /// `diagnostics::checks::engine_missing` will use an `obscura` already on
+    /// `PATH` before it looks under the ledger's directory. An operator running
+    /// their own build is outside this stamp entirely, and no test in this crate
+    /// can see that one. It covers the pinned path, which is the path Aleph
+    /// controls.
+    #[test]
+    fn the_obscura_source_claims_here_name_the_build_they_were_read_on() {
+        assert_eq!(
+            OBSCURA_SOURCE_READ_AT,
+            crate::runtimes::OBSCURA_TAG,
+            "the pinned obscura release moved. Every claim in fetch_obscura.rs \
+             that cites `crates/obscura-…` was read on {OBSCURA_SOURCE_READ_AT} \
+             and is now unverified — re-read them in the new checkout and \
+             re-stamp this constant. The ones that decide behaviour: no `cursor` \
+             key in the computed-style map (paint.rs), `visibility` served as the \
+             element's OWN value (paint.rs, which is what cascade_effective_styles \
+             compensates for), `:focus` matching false unconditionally \
+             (obscura-dom/src/selector.rs), `pierce` ignored, and a zero quad \
+             returned successfully for `display:none`."
         );
     }
 
