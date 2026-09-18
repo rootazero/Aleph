@@ -157,19 +157,41 @@ fn driver_from_update(wire: Option<&str>, current: BrowserDriver) -> Result<Brow
     }
 }
 
-/// `Managed` profiles whose own `headless` override shadows the global toggle.
+/// Profiles whose own `headless` override shadows the global toggle.
 ///
-/// `ProfileManager::get_backend` resolves it as
-/// `profile.headless.unwrap_or(playwright_cli.headless)`, so a profile that
-/// sets the override wins and the global switch this surface writes is inert
-/// *for that profile* — the toggle appears to do nothing, with nothing on
-/// screen saying why. Naming the shadowing profiles is deliberately all this
-/// surface does about it: clearing an override the operator hand-wrote into
+/// Both launching drivers resolve it as
+/// `profile.headless.unwrap_or(playwright_cli.headless)` — `Managed` in
+/// `ProfileManager::get_backend` (`manager.rs:456`) and `Cdp` in
+/// `ProfileManager::launch_request_for` (`manager.rs:530`, whose `req.headless`
+/// both `ChromiumLauncher` and `ObscuraLauncher` read) — so a profile that sets
+/// the override wins and the global switch this surface writes is inert *for
+/// that profile*: the toggle appears to do nothing, with nothing on screen
+/// saying why. Naming the shadowing profiles is deliberately all this surface
+/// does about it: clearing an override the operator hand-wrote into
 /// `config.toml` would silently discard a setting they chose.
+///
+/// **This filter used to read `driver == Managed`.** That described the world
+/// correctly while `Cdp` was opt-in; `71d973920` made `Cdp` the auto-injected
+/// `default` profile's driver, at which point the list that exists to name the
+/// shadowing profiles could not name the one profile every install has
+/// (判据 §5 — a membership list only covers the day it was written). The
+/// predicate is now stated as its own question — *does this driver read
+/// `headless` at all* — so a fourth driver has to be answered rather than
+/// silently excluded, and
+/// [`self::tests::every_driver_that_reads_headless_is_named_by_the_shadow_list`]
+/// is the falsifier.
 ///
 /// `ExistingSession` profiles are absent on purpose — that driver builds a
 /// `ChromeMcpBackend`, which never reads headless at all, so listing them
 /// would be a false alarm.
+///
+/// One honest caveat about the `Cdp`/obscura pair, so the list is not read as
+/// saying more than it does: obscura has no headed mode and no `--headless`
+/// flag, so it logs a warning and proceeds headless whatever the resolved
+/// value was. The profile's override still WINS over the global switch there —
+/// which is what this list claims — but on that engine the global switch was
+/// inert for that profile either way. The claim is about which value is
+/// consulted, not about what the engine does with it.
 ///
 /// Sorted, because `profiles` is a `HashMap` and an operator-facing list whose
 /// order changes between two reads of an unchanged config reads as a change.
@@ -177,11 +199,30 @@ fn headless_shadowed_by(browser: &BrowserSystemConfig) -> Vec<String> {
     let mut names: Vec<String> = browser
         .profiles
         .iter()
-        .filter(|(_, p)| p.driver == BrowserDriver::Managed && p.headless.is_some())
+        .filter(|(_, p)| driver_reads_headless(p.driver) && p.headless.is_some())
         .map(|(name, _)| name.clone())
         .collect();
     names.sort();
     names
+}
+
+/// Whether a profile on this driver ever consults `headless`.
+///
+/// Written as a total `match` rather than an inequality so a new
+/// `BrowserDriver` variant is a COMPILE error here — the shape that failed was
+/// a membership list that stayed green while the default moved out from under
+/// it, and an inequality would have the same hole one variant later.
+const fn driver_reads_headless(driver: BrowserDriver) -> bool {
+    match driver {
+        // `get_backend` resolves it into `SessionLaunch::from_profile`.
+        BrowserDriver::Managed => true,
+        // `ChromeMcpBackend` attaches to a browser the user already started;
+        // there is no launch to make headless.
+        BrowserDriver::ExistingSession => false,
+        // `launch_request_for` resolves it into `LaunchRequest::headless`,
+        // which both engine launchers read.
+        BrowserDriver::Cdp => true,
+    }
 }
 
 // =============================================================================
@@ -601,6 +642,72 @@ mod tests {
             get(&config).await["headless_shadowed_by"],
             json!(["default"])
         );
+    }
+
+    /// The shadow list is asked about EVERY driver, not about the two that
+    /// existed when it was written.
+    ///
+    /// The defect this pins: the filter read `driver == Managed`, which was a
+    /// correct description of the world until `71d973920` made `Cdp` the
+    /// auto-injected `default` profile's driver — after which the list that
+    /// exists to name profiles shadowing the global toggle could not name the
+    /// one profile every install has (判据 §5).
+    ///
+    /// The expectation is derived per driver from the one question that
+    /// decides it, so this cannot be satisfied by re-listing today's answer:
+    /// a fourth variant fails `driver_reads_headless`'s `match` at COMPILE
+    /// time, and a wrong answer for an existing variant fails here.
+    /// The shared wire vocabulary is exactly `BrowserDriver::ALL`'s, in order.
+    ///
+    /// `aleph-protocol::browser::BROWSER_DRIVER_WIRE` is what the Panel builds
+    /// its radio group from; this enum is what the server means by a driver.
+    /// Both sides depend on that crate and neither depends on the other, which
+    /// is the only place a wire vocabulary can live without being held twice
+    /// and cancelling out (判据 §10). This is the pin that makes the shared
+    /// copy a RECORD of the enum rather than a second author: adding a variant
+    /// here without adding its spelling there is red.
+    #[test]
+    fn the_shared_driver_wire_list_is_exactly_this_enums() {
+        let from_enum: Vec<&str> = BrowserDriver::ALL.iter().map(|d| d.as_wire()).collect();
+        assert_eq!(
+            from_enum,
+            aleph_protocol::browser::BROWSER_DRIVER_WIRE.to_vec(),
+            "the Panel renders one control per BROWSER_DRIVER_WIRE entry; a \
+             driver missing from it is a value this server can report and no \
+             operator can select, and a stale entry is a control that writes a \
+             value `driver_from_update` refuses"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_driver_that_reads_headless_is_named_by_the_shadow_list() {
+        for driver in BrowserDriver::ALL {
+            let config = make_config();
+            {
+                let mut cfg = config.write().await;
+                cfg.general.browser.profiles.clear();
+                cfg.general.browser.profiles.insert(
+                    "p".into(),
+                    ProfileConfig {
+                        driver,
+                        browser: BrowserType::Chrome,
+                        headless: Some(false),
+                        ..Default::default()
+                    },
+                );
+            }
+            let listed = get(&config).await["headless_shadowed_by"] == json!(["p"]);
+            assert_eq!(
+                listed,
+                driver_reads_headless(driver),
+                "driver {driver:?}: the shadow list says {listed}, but \
+                 `driver_reads_headless` says {}. A profile whose override IS \
+                 consulted and is not named leaves the operator with a toggle \
+                 that silently does nothing; a profile named although its \
+                 backend never reads headless is a false alarm.",
+                driver_reads_headless(driver)
+            );
+        }
     }
 
     #[tokio::test]

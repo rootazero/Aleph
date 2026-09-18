@@ -17,6 +17,7 @@
 pub mod artifact;
 pub mod audit;
 pub mod auth;
+pub mod browser;
 pub mod btw;
 pub mod canvas;
 pub mod channel_pairing;
