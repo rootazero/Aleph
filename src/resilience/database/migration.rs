@@ -671,6 +671,79 @@ pub fn migrate_add_agent_tasks_adjudicated_at(conn: &Connection) -> Result<(), A
     Ok(())
 }
 
+/// Migrate to add `interrupted_by_restart_at_ms` column to `agent_tasks`.
+///
+/// `status = 'interrupted'` has two writers: boot's `reconcile_orphaned_tasks`
+/// (the process that owned the row died mid-flight) and the engine's cancel
+/// arm (the user stopped the run). Only the first kind can have lost its seed,
+/// but the §8.2(b) adjudication selected by `status` and told a user whose
+/// run was cancelled before its seed that their message was lost and should be
+/// re-sent. The reconcile now stamps this column in the same UPDATE that flips
+/// the status, and the adjudication selects by the stamp.
+///
+/// Existing rows are backfilled with `NULL`: an `interrupted` row written
+/// before this column cannot say which writer it had, and "not by a restart"
+/// is the reading that writes no false sentence. Rows a previous boot already
+/// adjudicated carry `adjudicated_at_ms` and were never re-examined anyway.
+///
+/// # Safety
+/// - Uses savepoint for atomic migration
+/// - Idempotent: skips if column already exists
+pub fn migrate_add_agent_tasks_interrupted_by_restart(conn: &Connection) -> Result<(), AlephError> {
+    conn.execute_batch("SAVEPOINT migration_agent_tasks_interrupted_by_restart")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to begin agent_tasks_interrupted_by_restart migration: {e}"
+            ))
+        })?;
+
+    let column_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('agent_tasks') WHERE name='interrupted_by_restart_at_ms'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if let Err(rollback_err) =
+                conn.execute_batch("ROLLBACK TO migration_agent_tasks_interrupted_by_restart")
+            {
+                tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_interrupted_by_restart failed");
+            }
+            AlephError::config(format!(
+                "Failed to check agent_tasks.interrupted_by_restart_at_ms column: {e}"
+            ))
+        })?;
+
+    if column_exists == 0 {
+        conn.execute_batch(
+            "ALTER TABLE agent_tasks ADD COLUMN interrupted_by_restart_at_ms INTEGER",
+        )
+        .map_err(|e| {
+            if let Err(rollback_err) =
+                conn.execute_batch("ROLLBACK TO migration_agent_tasks_interrupted_by_restart")
+            {
+                tracing::warn!(error = %rollback_err, "Rollback of migration_agent_tasks_interrupted_by_restart failed");
+            }
+            AlephError::config(format!(
+                "Failed to add interrupted_by_restart_at_ms column to agent_tasks: {e}"
+            ))
+        })?;
+
+        tracing::info!("Added interrupted_by_restart_at_ms column to agent_tasks");
+    } else {
+        tracing::debug!("agent_tasks.interrupted_by_restart_at_ms already exists, skipping");
+    }
+
+    conn.execute_batch("RELEASE migration_agent_tasks_interrupted_by_restart")
+        .map_err(|e| {
+            AlephError::config(format!(
+                "Failed to commit agent_tasks_interrupted_by_restart migration: {e}"
+            ))
+        })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

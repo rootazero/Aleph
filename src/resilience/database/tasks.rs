@@ -341,6 +341,13 @@ impl StateDatabase {
     /// resumed; `interrupted` is a terminal state. Idempotent: a second call
     /// immediately after the first finds nothing.
     ///
+    /// The same UPDATE stamps `interrupted_by_restart_at_ms`: the engine's
+    /// cancel arm writes the same `interrupted` word for a deliberate cancel,
+    /// and [`unadjudicated_interrupted_tasks`](Self::unadjudicated_interrupted_tasks)
+    /// must select only the rows THIS flip wrote — a cancelled-before-seed run
+    /// has no lost message to tell anyone about. One statement, so no row can
+    /// read `interrupted` with the stamp still owed.
+    ///
     /// The SELECT and UPDATE run inside a single SQLite statement
     /// (`UPDATE … RETURNING`) so a task that transitions to `running`
     /// between the SELECT and the UPDATE cannot be silently clobbered: it
@@ -351,13 +358,16 @@ impl StateDatabase {
     /// `interrupted` without ever appearing in the returned list — the
     /// user's restart receipt would silently drop the task.
     pub async fn reconcile_orphaned_tasks(&self) -> Result<Vec<AgentTask>, AlephError> {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now();
+        let now_secs = now.timestamp();
+        let now_ms = now.timestamp_millis();
         self.with_conn(move |conn| {
             let mut stmt = conn
                 .prepare(
                     r#"
                     UPDATE agent_tasks
-                       SET status = 'interrupted', updated_at = ?1
+                       SET status = 'interrupted', updated_at = ?1,
+                           interrupted_by_restart_at_ms = ?2
                      WHERE status = 'running'
                     RETURNING id, parent_session_id, agent_id, task_prompt, status,
                               risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
@@ -368,7 +378,7 @@ impl StateDatabase {
                 .map_err(|e| AlephError::config(format!("Failed to prepare reconcile: {e}")))?;
 
             let rows = stmt
-                .query_map(params![now], agent_task_from_row)
+                .query_map(params![now_secs, now_ms], agent_task_from_row)
                 .map_err(|e| AlephError::config(format!("Failed to run reconcile: {e}")))?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| {
@@ -380,9 +390,17 @@ impl StateDatabase {
         .await
     }
 
-    /// Main-lane `interrupted` rows the resume coordinator has not yet
-    /// adjudicated, created at or after `since_secs` (unix seconds), oldest
-    /// first.
+    /// Main-lane rows a restart's reconcile flipped to `interrupted`
+    /// (`interrupted_by_restart_at_ms IS NOT NULL`) that the resume
+    /// coordinator has not yet adjudicated, created at or after `since_secs`
+    /// (unix seconds), oldest first.
+    ///
+    /// Selected by the restart stamp, not by `status`: the engine's cancel arm
+    /// also writes `interrupted`, and a run the user cancelled before its seed
+    /// landed has no lost message — telling them "please re-send" would be a
+    /// false sentence (final review M1). The stamp is written in the same
+    /// UPDATE as the flip ([`reconcile_orphaned_tasks`](Self::reconcile_orphaned_tasks)),
+    /// so it is the one derivation of "who wrote `interrupted`".
     ///
     /// Main lane only: a subagent row has no user conversation to tell
     /// anything to. The window is the caller's `[resume] max_age_secs`, so a
@@ -402,7 +420,7 @@ impl StateDatabase {
                            recursion_depth, parent_task_id, created_at, updated_at,
                            started_at, completed_at, metadata_json
                     FROM agent_tasks
-                    WHERE status = 'interrupted' AND lane = 'main'
+                    WHERE interrupted_by_restart_at_ms IS NOT NULL AND lane = 'main'
                       AND adjudicated_at_ms IS NULL AND created_at >= ?1
                     ORDER BY created_at ASC
                     "#,
@@ -593,5 +611,62 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert_eq!(ids, ["main-1"]);
+    }
+
+    /// `interrupted` has two writers and only one of them is a restart
+    /// (final review M1): a row the engine's cancel arm marked `Interrupted`
+    /// through `update_task_status` (the path `persist_run_task_status`
+    /// takes on `ExecutionError::Cancelled`) is NOT a lost-input candidate —
+    /// the user stopped it — while the row a reconcile flipped from `running`
+    /// IS. Both read `interrupted` on the kanban / Panel face; only the
+    /// reconcile's row carries the restart stamp. Reddens if the adjudication
+    /// query goes back to selecting by `status`.
+    #[tokio::test]
+    async fn a_cancel_written_interrupted_row_is_not_adjudicated_but_a_restart_flipped_one_is() {
+        let db = StateDatabase::in_memory().unwrap();
+        insert_with_status(&db, "cancelled-1", TaskStatus::Running).await;
+        insert_with_status(&db, "crashed-1", TaskStatus::Running).await;
+        // The cancel arm's write, then the restart's reconcile of the other.
+        db.update_task_status("cancelled-1", TaskStatus::Interrupted)
+            .await
+            .unwrap();
+        let flipped: Vec<String> = db
+            .reconcile_orphaned_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(
+            flipped,
+            ["crashed-1"],
+            "reconcile flips only the running row"
+        );
+        db.with_conn(|c| {
+            c.execute("UPDATE agent_tasks SET lane='main'", [])
+                .map(|_| ())
+                .map_err(|e| AlephError::config(e.to_string()))
+        })
+        .await
+        .unwrap();
+        for id in ["cancelled-1", "crashed-1"] {
+            assert_eq!(
+                db.get_agent_task(id).await.unwrap().unwrap().status,
+                TaskStatus::Interrupted,
+                "{id}: both rows read `interrupted` on the status face"
+            );
+        }
+        let ids: Vec<String> = db
+            .unadjudicated_interrupted_tasks(0)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(
+            ids,
+            ["crashed-1"],
+            "only the restart-flipped row is a lost-input candidate"
+        );
     }
 }
