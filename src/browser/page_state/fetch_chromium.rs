@@ -1247,43 +1247,136 @@ fn parse_nodes(
 /// it: measured here, the text inside `#op-d1` reports `"1"`. Nothing special
 /// is done for text; the OR covers every node with a reading, which is why.
 ///
-/// # What is deliberately NOT reached, measured rather than assumed
+/// # The chain must survive a node this fetcher has no reading for
 ///
-/// **Across a frame boundary.** `parse_nodes` runs per document and `parent`
-/// indexes that document only, so an `<iframe>` inside an `opacity: 0`
-/// container leaves every node of its content document reporting `opacity: 1`.
-/// Measured — `t17b-opacity.mjs --child` nests a same-origin frame in a third
-/// transparent container and all seven laid-out child nodes come back `"1"`
-/// while the owner's container reports `"0"`. Not fixed here: the fix threads
-/// an owner's effective opacity across `contentDocumentIndex` in
-/// [`frames_of`], which is frame-stitching work and a second cascade, and
-/// growing one inside a correction round is how a round buys one defect and
-/// sells another. Named so the next reader does not have to rediscover it.
+/// **The flag travels in a side vector; only the WRITE consults `computed`.**
+/// Those are two different questions and an earlier version of this function
+/// answered them with one test: it `continue`d on `computed: None`, which
+/// stopped the write *and* dropped the ancestor's flag for the whole subtree.
+/// It justified that with "a node Chrome did not lay out has no laid-out
+/// descendants either", and **that sentence is false** — it spent an absence
+/// as a value (判据 §8). "No layout entry" is Chrome saying *I laid out no box
+/// for this node*; it is not entitled to say anything about the node's
+/// descendants.
+///
+/// ## The class, enumerated by census rather than from memory (判据 §6)
+///
+/// `computed_from` returns `None` for exactly two reasons, and the question is
+/// which of them can coexist with a laid-out subtree. Measured on Chrome
+/// 153.0.8010.36 by `…-evidence/probes/t17b-boxless.mjs`, which does not read a
+/// list of guesses: it walks **every** node of a page built from 15 candidate
+/// constructs and reports the ones that actually have the shape. Result — 6
+/// instances, 2 reasons:
+///
+/// | reason | instances found | can it be `opacity: 0` itself? |
+/// |---|---|---|
+/// | no layout entry at all (generates no box) | **`display: contents`** — author (`#c-author`), nested (`#c-outer`/`#c-inner`), on a flex item (`#c-flex`), and **`<slot>`**, which gets it from the UA stylesheet (`SLOT`) | **no** — see below |
+/// | a layout entry whose `styles` row is shorter than the request | `#document` only | no — no CSS applies to it |
+///
+/// The other 13 candidates produced none: `<template>`, `content-visibility`
+/// `hidden`/`auto`, closed `<details>`, `<optgroup>`/`<option>`,
+/// `<colgroup>`/`<col>`, `<map>`/`<area>`, SVG `<defs>`, `<noscript>`, and
+/// `display: none` itself — each either keeps its own layout entry or takes its
+/// whole subtree out of layout with it, which is the case the old `continue`
+/// was right about (70 such nodes on that page).
+///
+/// `<slot>` is why this is not a niche shape: **every web component inside a
+/// faded container reaches its slotted light DOM through a `display: contents`
+/// element**, and `opacity: 0` + `transition` is the standard idiom for a
+/// closed modal, drawer, dropdown or tooltip.
+///
+/// ## Why the fix does not depend on that enumeration being complete
+///
+/// A page can only contain what someone put in it, so the census above is a
+/// lower bound on the class, not a proof of its size. It does not have to be:
+/// the fix is keyed to **"this node has no reading"**, not to any CSS mechanism
+/// that produces that, so a sixteenth construct nobody thought of is already
+/// covered. The enumeration is here to say what the class looks like today, and
+/// because the answer to "why not just special-case `display: contents`" is
+/// that doing so would key the fix to the one member a reviewer happened to
+/// name.
+///
+/// ## A break is never itself the source of the flag
+///
+/// So propagating THROUGH one can never over-report. A `display: contents`
+/// element generates no box, so it composites no group and its own `opacity`
+/// has no effect — settled by pixels, not by citing the spec: the same probe
+/// screenshots `<div style="display:contents;opacity:0"><button>` and finds it
+/// **byte-identical to the same button with no opacity at all**, and different
+/// from one inside a real `opacity: 0` container. So the declaration this
+/// fetcher cannot read is a declaration that changes nothing, and missing it is
+/// correct rather than a residual.
+///
+/// # What is NOT reached — the complete list as of this commit
+///
+/// Complete in this sense: it is everything found by the census above, by the
+/// corpus census in
+/// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`,
+/// and by the two probes named in this doc. A list that reads as exhaustive and
+/// is not costs more than no list (判据 §17), so that is the scope it carries.
+///
+/// 1. **Across a frame boundary** — `parse_nodes` runs per document and
+///    `parent` indexes that document only, so an `<iframe>` inside an
+///    `opacity: 0` container leaves every node of its content document
+///    reporting `opacity: 1`. Measured: `t17b-opacity.mjs --child` nests a
+///    same-origin frame in a third transparent container and all seven
+///    laid-out child nodes come back `"1"` while the owner's container reports
+///    `"0"`. **Task 17c**, deliberately not folded in here — it must run after
+///    every document is parsed, so it cannot live in `parse_nodes`, and it
+///    should share [`frame_offsets`]' owner map rather than re-derive it.
+/// 2. **Opacity that composes below the threshold without any single element
+///    reaching zero.** `computed_from` maps `opacity <= 0.0`, and CSS
+///    multiplies group opacity down the tree, so two nested `opacity: 0.01`
+///    elements composite to `0.0001` — invisible in practice, and this cascade
+///    reports both as visible. Pre-existing in the flag's definition rather
+///    than introduced here, and an under-report (the safe direction), but it is
+///    part of "what is not reached" and naming only the frame case would imply
+///    otherwise.
+/// 3. **A forward or self parent edge**, which is refused rather than followed
+///    — see the guard below. Measured across all six fixtures: zero such
+///    edges, so this is a direction to fail in and not an observed loss.
 fn cascade_opacity(nodes: &mut [RawNode]) {
+    // The EFFECTIVE flag, carried per node whether or not this fetcher has a
+    // reading for that node. This is the half that must not consult `computed`:
+    // see the doc above — a node with no reading is still an edge in the tree.
+    let mut effective = vec![false; nodes.len()];
     for i in 0..nodes.len() {
+        effective[i] = nodes[i].computed.is_some_and(|c| c.opacity_zero);
         let Some(parent) = nodes[i].parent else {
             continue;
         };
-        // `DOMSnapshot` flattens in document order, so a parent is already
-        // effective by the time its child is reached — which is what makes the
-        // single forward pass transitive rather than one-hop. Measured over
-        // every capture in `fixtures/`: **zero** entries where
-        // `parentIndex[i] >= i`. Not trusted rather than assumed away (P7): a
-        // forward edge would read a parent this pass has not reached yet, i.e.
-        // its OWN value, and the cascade would silently stop being transitive
-        // for that subtree instead of refusing one node.
+        // TWO jobs, and only one of them is still load-bearing HERE.
+        //
+        // Ordering: `DOMSnapshot` flattens in document order, so a parent is
+        // already effective by the time its child is reached — measured over
+        // every capture in `fixtures/`, **zero** entries where
+        // `parentIndex[i] >= i`. On the twin that is the whole reason for this
+        // line, because `cascade_effective_styles` reads the parent's entry in
+        // place. Here `effective` starts all-`false`, so an unvisited parent
+        // already answers "not transparent" and this half changes no output —
+        // measured, by deleting the line (116 passed / 0 failed).
+        //
+        // BOUNDS, which does: `parent` comes straight from
+        // `usize::try_from(parentIndex[i])` and `check_array_lengths` validates
+        // that array's LENGTH, never its values. `parent >= i` implies
+        // `parent < i < len`, so a capture carrying an index past the end of
+        // its own node array is refused here instead of panicking on
+        // `effective[parent]` (P7 — a capture is a system boundary). That is
+        // what `an_out_of_range_or_forward_parent_edge_is_refused_by_the_opacity_cascade`
+        // reddens on.
         if parent >= i {
             continue;
         }
-        if !nodes[parent].computed.is_some_and(|c| c.opacity_zero) {
+        if !effective[parent] {
             continue;
         }
-        // An UNKNOWN stays unknown. Here `computed: None` means Chrome laid
-        // this node out nowhere, which `visibility_of` already reads as the
-        // unknown it is; writing a flag into it would manufacture a reading
-        // out of an absence (判据 §8). It also ends the chain for that subtree,
-        // correctly — a node Chrome did not lay out has no laid-out
-        // descendants either.
+        effective[i] = true;
+        // An UNKNOWN stays unknown. `computed: None` means Chrome laid this
+        // node out nowhere (or gave it a styles row too short to read), which
+        // `visibility_of` already reads as the unknown it is; writing a flag
+        // into it would manufacture a reading out of an absence (判据 §8). Note
+        // what this `continue` no longer does: it stops the WRITE, and the line
+        // above has already carried the flag past it.
         let Some(own) = nodes[i].computed.as_mut() else {
             continue;
         };
@@ -1723,7 +1816,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(entries, 1454, "nodeIndex entries across all six fixtures");
+        assert_eq!(entries, 1462, "nodeIndex entries across all six fixtures");
     }
 
     /// The element-level rect a node's layout entries agree on, or why there
@@ -2102,19 +2195,20 @@ mod tests {
             // `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`
             // give: frozen input, so a threshold is a weaker statement with no
             // compensating benefit. Predicate: non-empty `styles` rows summed
-            // over that capture's documents, at `c596e25e1` plus this task's
-            // fifth capture. The five numbers below are the assertion; 1437 is
-            // their sum and 1443 layout entries less one empty `#document` row
-            // per document over six documents, so both of those are
-            // restatements of numbers this test already pins rather than facts
-            // of their own — if a fixture changes, these assertions go red
-            // before the arithmetic can mislead anyone.
+            // over that capture's documents, re-measured at this commit (the
+            // fifth capture grew a `display: contents` break and a shadow-root
+            // `<slot>`, so its arm moved 24 → 32). The five numbers below are
+            // the assertion; 1445 is their sum and 1451 layout entries less one
+            // empty `#document` row per document over six documents, so both of
+            // those are restatements of numbers this test already pins rather
+            // than facts of their own — if a fixture changes, these assertions
+            // go red before the arithmetic can mislead anyone.
             let want = match name {
                 "hacker-news" => 1291,
                 "same-origin" => 61,
                 "oopif-parent" => 54,
                 "oopif-child" => 7,
-                "hidden-containers" => 24,
+                "hidden-containers" => 32,
                 other => panic!("unlisted fixture {other}"),
             };
             assert_eq!(arrays, want, "{name}: non-empty styles rows");
@@ -2209,12 +2303,18 @@ mod tests {
                     };
                     // THREE of the four must equal the raw row exactly, on
                     // every node of every capture. That is what makes this a
-                    // falsifier for a WIDENED cascade: add `visibility_hidden`
-                    // or `display_none` to `cascade_opacity` and
-                    // `#vis-d2-shown` — which declares `visibility: visible`
-                    // inside a hidden container and which Chrome reports as
-                    // visible — reddens here as well as in
+                    // falsifier for a cascade widened to `visibility_hidden`:
+                    // `#vis-d2-shown` declares `visibility: visible` inside a
+                    // hidden container, Chrome reports it as visible, and the
+                    // widening reddens here as well as in
                     // `only_opacity_is_cascaded_on_chromium`.
+                    //
+                    // It does NOT cover a widening to `display_none`, and
+                    // nothing can — such a node has no styles row, so the OR
+                    // never fires and no output changes. See
+                    // `only_opacity_is_cascaded_on_chromium`'s doc; an earlier
+                    // version of this comment claimed the coverage it does not
+                    // have.
                     assert_eq!(
                         (got.display_none, got.visibility_hidden, got.cursor_pointer),
                         (
@@ -2254,16 +2354,21 @@ mod tests {
             // whose parse says `opacity_zero` and whose raw styles row does
             // not, over the slots this test checks. Measured at this commit.
             //
-            // Four zeros and an eight is the census that says what the corpus
+            // Four zeros and a fifteen is the census that says what the corpus
             // was missing: for four captures the cascade is a no-op, which is
             // why nothing was red before it existed, and `hidden-containers`
             // is the only page that can tell the two behaviours apart. Delete
             // the fifth capture and every falsifier for `cascade_opacity`
             // becomes vacuous — so this number is also the guard on the
             // corpus, not only on the code.
+            //
+            // It was 8 before the chain-break shapes were added to the page.
+            // The extra 7 are the nodes at and below the `display: contents`
+            // `<span>` and the shadow-root `<slot>` — i.e. exactly the nodes a
+            // cascade that dies at a node it has no reading for would lose.
             let want_cascaded = match name {
                 "hacker-news" | "same-origin" | "oopif-parent" | "oopif-child" => 0,
-                "hidden-containers" => 8,
+                "hidden-containers" => 15,
                 other => panic!("unlisted fixture {other}"),
             };
             assert_eq!(
@@ -2290,16 +2395,16 @@ mod tests {
         // the five real captures. Re-measured at this commit — the four
         // previous values (1405 / 508 / 4 / 4) were taken at `f3e8e9b28` over
         // four captures, and the deltas below are the fifth capture's own
-        // contribution: +24 nodes, +10 pointers, +7 hidden, +1 zero.
+        // contribution: +32 nodes, +14 pointers, +7 hidden, +2 zero.
         //
         // All four of these are RAW readings — `want`, not `got` — so the
         // cascade does not move them. `zero` counting the transparent
         // CONTAINER only, and not the eight nodes under it, is the point:
         // that split is what `cascaded` above measures.
-        assert_eq!(checked, 1429, "nodes cross-checked");
-        assert_eq!(pointers, 518, "`cursor: pointer` nodes");
+        assert_eq!(checked, 1437, "nodes cross-checked");
+        assert_eq!(pointers, 522, "`cursor: pointer` nodes");
         assert_eq!(hidden, 11, "`visibility: hidden` nodes");
-        assert_eq!(zero, 5, "`opacity: 0` nodes, by their OWN styles row");
+        assert_eq!(zero, 6, "`opacity: 0` nodes, by their OWN styles row");
         // NOT a non-vacuity gap: `display: none` is the flag a Chrome capture
         // cannot show, because such a node gets no layout entry and therefore
         // no styles array. Measured here rather than asserted from the design
@@ -2338,6 +2443,16 @@ mod tests {
     ///   `opacity` group-composites. It is why the OR is EXACT for this flag
     ///   and why `visibility` — where the equivalent declaration really does
     ///   re-show — must not ride the same edge.
+    /// * **`#op-through-contents` (depth 3) and `#op-slotted` (depth 4) redden
+    ///   when the walk is made to stop at a node this fetcher has no reading
+    ///   for** — the `display: contents` `<span>` and the shadow root's
+    ///   `<slot>`. Their parents have NO `computed` at all, so a cascade that
+    ///   uses `computed` to decide whether to keep walking loses everything
+    ///   below them. The `<slot>` case is the UA stylesheet's, not this page's
+    ///   CSS.
+    /// * `#op-contents` is asserted to still be `None` afterwards, which is the
+    ///   other half of that rule: the flag travels past a break, it is never
+    ///   written into one.
     /// * The `<button>`'s own text, at depth 3, is the text arm. Measured, not
     ///   assumed: a text node's styles row comes from its containing box, so at
     ///   depth 1 it already reads `0` and below that it does not.
@@ -2381,6 +2496,26 @@ mod tests {
                  re-show itself: `opacity` group-composites, which is why the \
                  OR is exact for this flag",
             ),
+            (
+                "op-through-contents",
+                "a `<button>` at depth 3, whose PARENT is a `display: contents` \
+                 `<span>` that Chrome gives no layout entry — so this fetcher \
+                 has no reading for the parent at all. If this is false the \
+                 cascade is consulting `computed` to decide whether to keep \
+                 WALKING, not just whether to write: an absence spent as a \
+                 value (判据 §8). The break is mid-chain on purpose — its own \
+                 parent `#op-d1` is flagged, so nothing here is reachable by \
+                 propagating from an adjacent ancestor",
+            ),
+            (
+                "op-slotted",
+                "a `<button>` at depth 4, reached through a shadow root's \
+                 `<slot>` — which is `display: contents` from the UA \
+                 stylesheet, not from this page's CSS. This is the shape that \
+                 makes the defect near-universal rather than niche: every web \
+                 component inside a faded container hands its slotted light DOM \
+                 to the model through one of these",
+            ),
         ] {
             let node = by_id(frame, id);
             let computed = node.computed.unwrap_or_else(|| {
@@ -2422,6 +2557,24 @@ mod tests {
         );
         assert!(!visibility_of(label), "and `render_text` would print it");
 
+        // The OTHER half of the chain-break rule: the break itself is still an
+        // unknown afterwards. The flag travels past it in the side vector; it
+        // is never written INTO it, because there is no reading there to amend
+        // (判据 §8). Without this, "propagate through an absence" and "invent a
+        // reading for an absence" pass the same assertions.
+        let contents = by_id(frame, "op-contents");
+        assert!(
+            contents.computed.is_none(),
+            "#op-contents is `display: contents`, so Chrome gave it no layout \
+             entry and this fetcher has no reading for it. A `Computed` here \
+             would be three claims manufactured out of an absence — the flag is \
+             supposed to travel PAST this node, not be written into it"
+        );
+        assert!(
+            contents.rect.is_none(),
+            "a node with no layout entry cannot have a rect either"
+        );
+
         // The negative half.
         let control = by_id(frame, "control");
         assert!(
@@ -2451,11 +2604,18 @@ mod tests {
     ///   so `computed` is `None` and `rect` is `None`. Note what this does and
     ///   does not cover (判据 §3): it pins the REASON no `display` cascade is
     ///   needed, and it would redden if `computed_from` ever manufactured a
-    ///   `Computed` for a node with no styles row — it would NOT redden merely
-    ///   because someone added `display_none |=`, since there is no `Some` here
-    ///   to write into. The `display` half of the widening check is the
-    ///   three-flag equality in
-    ///   `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`.
+    ///   `Computed` for a node with no styles row.
+    ///
+    /// **No guard covers a `display_none |=` widening, and none can.** An
+    /// earlier version of this doc said the three-flag equality in
+    /// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`
+    /// covered it. It does not: on this engine a node under `display: none` has
+    /// no styles row, so the parent it would inherit from is never `Some`, the
+    /// OR never fires, and no output changes — the widening is a structural
+    /// no-op, so neither guard can redden and neither could. The risk is
+    /// therefore zero and the coverage claim was still wrong, which is the part
+    /// that matters: a coverage claim is what a later reader spends (判据 §1 —
+    /// the expensive copy is the one in the comment).
     #[test]
     fn only_opacity_is_cascaded_on_chromium() {
         let value = json(HIDDEN_CONTAINERS);
@@ -2507,20 +2667,41 @@ mod tests {
         }
     }
 
-    /// A parent edge that points FORWARD is refused, not followed.
+    /// An out-of-range parent index does not panic, and a forward edge is not
+    /// followed.
     ///
-    /// `cascade_opacity` walks the array once in wire order and relies on a
-    /// parent being finished before its child is reached. Measured over every
-    /// capture in `fixtures/`: zero entries where `parentIndex[i] >= i`, so
-    /// **no recording can redden the guard** and it is synthetic on purpose
-    /// rather than by omission (判据 §3).
+    /// # What this guard actually still does, measured rather than assumed
     ///
-    /// What it pins is a decision, not an arithmetic identity: on a forward
-    /// edge the parent's entry still holds its OWN value, so following it would
-    /// hand out a reading that is silently one-hop instead of transitive for
-    /// that subtree. Refusing keeps the node at what Chrome said.
+    /// `if parent >= i { continue; }` was written as an ORDERING guard, and on
+    /// the twin (`fetch_obscura::cascade_effective_styles`) that is exactly what
+    /// it is: that cascade reads `nodes[parent].computed` in place, so a forward
+    /// edge hands it the parent's OWN value and the flag leaks. Deleting it
+    /// there reddens `fetch_obscura`'s copy of this test — measured, this round.
+    ///
+    /// **Here it no longer is, and the falsifier had to move.** `cascade_opacity`
+    /// reads `effective[parent]`, a side vector initialised to `false`, so an
+    /// unvisited parent already answers "not transparent" and a forward edge
+    /// changes nothing. Deleting the guard left the whole suite green — 116
+    /// passed / 0 failed — which is this test's OWN previous defect recurring
+    /// one round later from a different direction (判据 §2: in what situation
+    /// does this go red?).
+    ///
+    /// What is left is real and is not ordering: **`parent >= i` is also the
+    /// BOUNDS check.** `parse_nodes` takes `parent` straight from
+    /// `usize::try_from(parentIndex[i])`, and `check_array_lengths` validates
+    /// the array's LENGTH, never its values — so a malformed or hostile capture
+    /// carrying `parentIndex[3] = 500` in a 60-node document indexes
+    /// `effective[500]` and panics. Refusing every `parent >= i` refuses that
+    /// too, because it implies `parent < i < len` (P7: validate at the system
+    /// boundary, and a capture is one).
+    ///
+    /// So case 1 below is the falsifier — it panics without the guard — and
+    /// case 2 is kept as documentation of intent with its status stated: it
+    /// passes either way on this engine today, and it is the twin's falsifier,
+    /// not this one's. Saying so is the point; a reader who spends it as
+    /// coverage is the cost 判据 §3 names.
     #[test]
-    fn a_forward_parent_edge_is_not_trusted_by_the_opacity_cascade() {
+    fn an_out_of_range_or_forward_parent_edge_is_refused_by_the_opacity_cascade() {
         let opaque = Computed::default();
         let transparent = Computed {
             opacity_zero: true,
@@ -2541,25 +2722,43 @@ mod tests {
             selected: None,
             value: None,
         };
-        // 0 is opaque and points forward at 2; 1 is transparent; 2 is a real
-        // backward child of 1 and must be reached.
+        // CASE 1 — THE FALSIFIER. Node 1's parent index is past the end of the
+        // array. `check_array_lengths` never validates parentIndex VALUES, so
+        // this is what a truncated or hostile capture looks like, and without
+        // `parent >= i` it indexes `effective[9_999]` and panics. Reaching the
+        // assertions at all is the assertion.
+        let mut nodes = vec![node(None, transparent), node(Some(9_999), opaque)];
+        cascade_opacity(&mut nodes);
+        assert!(
+            !nodes[1].computed.expect("node 1").opacity_zero,
+            "an out-of-range parent is not a parent, so nothing may be \
+             inherited through it"
+        );
+
+        // CASE 2 — documentation of intent, and it passes with or without the
+        // guard on THIS engine. `effective` starts as all-`false`, so an
+        // unvisited parent already answers "not transparent"; the ordering half
+        // of the guard is belt-and-braces here. It is the live falsifier on the
+        // twin, where the parent's entry is read in place — see this test's doc.
+        // 0 points forward at 2, which is transparent by its own value; 3 is an
+        // ordinary backward child of 2.
         let mut nodes = vec![
             node(Some(2), opaque),
-            node(None, transparent),
-            node(Some(1), opaque),
+            node(None, opaque),
+            node(Some(1), transparent),
+            node(Some(2), opaque),
         ];
         cascade_opacity(&mut nodes);
 
         assert!(
             !nodes[0].computed.expect("node 0").opacity_zero,
-            "node 0's parent index points forward, so its parent's entry is \
-             still that parent's OWN value at the time this pass reads it. \
-             Following it makes the cascade one-hop for that subtree and says \
-             nothing about it"
+            "node 0's parent index points forward at a node this pass has not \
+             reached. Following it would make the cascade one-hop for that \
+             subtree and say nothing true about it"
         );
         assert!(
-            nodes[2].computed.expect("node 2").opacity_zero,
-            "node 2 is an ordinary backward child of a transparent parent — if \
+            nodes[3].computed.expect("node 3").opacity_zero,
+            "node 3 is an ordinary backward child of a transparent parent — if \
              this is false the guard is rejecting real edges too"
         );
     }

@@ -777,11 +777,22 @@ pub async fn fetch_obscura(
 /// unreachable — so a `Computed` that says `display_none: false` about a node
 /// in a hidden subtree is now believed outright, and the model is shown, and
 /// handed a ref to, a control that is not on the page. **A premise consumed by
-/// the fix it justified.** `fetch_chromium` cannot have this defect — a hidden
-/// subtree gets no `DOMSnapshot` layout entry at all, so its nodes carry
-/// `computed: None` — which is exactly why "do what the sibling does" is not
-/// available here. Whoever next reaches for `getComputedStyle` on this engine
-/// meets this paragraph first.
+/// the fix it justified.**
+///
+/// ⚠️ This paragraph used to end *"`fetch_chromium` cannot have this defect — a
+/// hidden subtree gets no `DOMSnapshot` layout entry at all"*. Read strictly as
+/// `display: none` that is true and it is why this arm is not copied there.
+/// Read as this section reads it — as a claim about the whole class — it is
+/// **false, and Task 17b disproved it for `opacity`**: that subtree IS laid
+/// out, every descendant reports its own `1`, and the twin needed its own
+/// cascade. The narrow reading is the only one that survives, so it is now
+/// stated narrowly: **`display: none` specifically** gets no layout entry on
+/// Chromium, which is why THIS function's `display_none` arm has no counterpart
+/// there. Nothing here licenses a claim about the twin's other flags; those
+/// live in `fetch_chromium::cascade_opacity` and are measured on that engine.
+///
+/// Whoever next reaches for a computed-style read on this engine meets this
+/// paragraph first.
 fn cascade_effective_styles(nodes: &mut [RawNode]) {
     for i in 0..nodes.len() {
         let Some(parent) = nodes[i].parent else {
@@ -1549,6 +1560,83 @@ mod tests {
             );
             assert!(!crate::browser::page_state::build::visibility_of(li));
         }
+    }
+
+    /// A parent edge that points FORWARD is refused, not followed.
+    ///
+    /// **Carried over from the twin, which is where it was found** (判据 §16).
+    /// `fetch_chromium::cascade_opacity` has the identical `parent >= i` guard
+    /// with the identical P7 comment, and its Task 17b review measured that the
+    /// guard could be DELETED with the whole suite still green — this file had
+    /// no forward-edge test at all, so the same hole was here and unmeasured.
+    /// The cascade *semantics* differ per engine and deliberately must not be
+    /// copied; the guard's falsifier is the same mechanism answering the same
+    /// question, so it transfers.
+    ///
+    /// ⚠️ **And then the two engines parted company, which is why the twin's
+    /// copy of this test is now about something else.** This cascade reads
+    /// `nodes[parent].computed` IN PLACE, so a forward edge really does hand it
+    /// the parent's own value and this test reddens when the guard is deleted —
+    /// measured. `cascade_opacity` reads a side vector initialised to `false`,
+    /// so an unvisited parent already answers "not transparent" there and
+    /// deleting its guard changed nothing; its falsifier moved to the guard's
+    /// other job, the bounds check. Same line, same comment, different
+    /// remaining purpose — do not assume the twin's version asserts this one's
+    /// claim.
+    ///
+    /// **In what situation does it go red?** `walk` emits document order, so no
+    /// capture can produce a forward edge and this is synthetic on purpose
+    /// rather than by omission (判据 §3). What it pins is a decision: on a
+    /// forward edge the parent's entry still holds its OWN value, so following
+    /// it would hand out a reading that is silently one-hop for that subtree.
+    ///
+    /// The fixture's design is load-bearing and must not be simplified. Node 0's
+    /// forward parent must be transparent **by its own value**, or following the
+    /// edge and refusing it give the same answer and the guard's removal is
+    /// invisible — which is exactly how the twin's first version of this test
+    /// passed with the guard deleted.
+    #[test]
+    fn a_forward_parent_edge_is_not_trusted_by_the_cascade() {
+        let opaque = Computed::default();
+        let transparent = Computed {
+            opacity_zero: true,
+            ..Computed::default()
+        };
+        let node = |parent: Option<usize>, computed: Computed| RawNode {
+            backend_node_id: 1,
+            parent,
+            kind: RawNodeKind::Element,
+            tag: Some("DIV".to_string()),
+            attrs: Vec::new(),
+            text: None,
+            rect: None,
+            computed: Some(computed),
+            clickable_hint: None,
+            focused: None,
+            checked: None,
+            selected: None,
+            value: None,
+        };
+        let mut nodes = vec![
+            node(Some(2), opaque),
+            node(None, opaque),
+            node(Some(1), transparent),
+            node(Some(2), opaque),
+        ];
+        cascade_effective_styles(&mut nodes);
+
+        assert!(
+            !nodes[0].computed.expect("node 0").opacity_zero,
+            "node 0's parent index points forward at a node that is transparent \
+             by its OWN value, but this pass has not reached it yet. Following \
+             that edge makes the cascade one-hop for the subtree and says \
+             nothing true about it"
+        );
+        assert!(
+            nodes[3].computed.expect("node 3").opacity_zero,
+            "node 3 is an ordinary backward child of a transparent parent — if \
+             this is false the guard is rejecting real edges too"
+        );
     }
 
     /// The caret sentinel `-1` means "I looked and nothing has it", and it must

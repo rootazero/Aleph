@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aleph T17b — boxless nodes that still have laid-out descendants</title>
+<style>
+  html,body { margin:0; padding:0; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  .contents   { display:contents; }
+  .cv-hidden  { content-visibility:hidden; }
+  .cv-auto    { content-visibility:auto; }
+  .none       { display:none; }
+  #tbl        { border-collapse:collapse; }
+</style>
+</head>
+<body>
+<!-- Every construct here is a CANDIDATE for "this node gets no DOMSnapshot layout entry (or an
+     unusable styles row) while its descendants are still laid out". The probe does NOT read this
+     list: it walks every node in the document and reports the ones that actually have the shape.
+     The list only has to be broad; the detector decides. -->
+
+<!-- 1. author display:contents -->
+<div id="c-author" class="contents"><button id="c-author-kid">author contents</button></div>
+
+<!-- 2. display:contents nested twice -->
+<div id="c-outer" class="contents"><span id="c-inner" class="contents"><button id="c-deep">two contents</button></span></div>
+
+<!-- 3. <slot> — UA stylesheet gives it display:contents -->
+<x-host id="c-host"><button id="c-slotted" slot="s">slotted</button></x-host>
+
+<!-- 4. <template> — content is inert, descendants NOT laid out (expected) -->
+<template id="c-template"><button id="c-template-kid">in template</button></template>
+
+<!-- 5. content-visibility: hidden — subtree layout skipped (expected) -->
+<div id="c-cv-hidden" class="cv-hidden"><button id="c-cv-hidden-kid">cv hidden</button></div>
+
+<!-- 6. content-visibility: auto — off-screen subtree may be skipped -->
+<div id="c-cv-auto" class="cv-auto"><button id="c-cv-auto-kid">cv auto</button></div>
+
+<!-- 7. closed <details> -->
+<details id="c-details"><summary id="c-summary">summary</summary><button id="c-details-kid">hidden body</button></details>
+
+<!-- 8. <select> internals -->
+<select id="c-select"><optgroup id="c-optgroup" label="g"><option id="c-option">opt</option></optgroup></select>
+
+<!-- 9. table column structure -->
+<table id="tbl"><colgroup id="c-colgroup"><col id="c-col"></colgroup><tbody id="c-tbody"><tr id="c-tr"><td id="c-td">cell</td></tr></tbody></table>
+
+<!-- 10. <map>/<area> -->
+<map id="c-map" name="m"><area id="c-area" shape="rect" coords="0,0,1,1" alt="a"></map>
+
+<!-- 11. SVG <defs> -->
+<svg id="c-svg" width="10" height="10"><defs id="c-defs"><rect id="c-defs-kid" width="5" height="5"></rect></defs><rect id="c-svg-kid" width="5" height="5"></rect></svg>
+
+<!-- 12. display:none, the control — descendants must ALSO be absent -->
+<div id="c-none" class="none"><button id="c-none-kid">none</button></div>
+
+<!-- 13. <noscript> with scripting enabled -->
+<noscript id="c-noscript"><button id="c-noscript-kid">noscript</button></noscript>
+
+<!-- 14. display:contents on a flex/grid item and on a table row -->
+<div style="display:flex"><div id="c-flex" class="contents"><button id="c-flex-kid">flex contents</button></div></div>
+
+<!-- 15. <head> and its children — UA display:none, no laid-out descendants expected -->
+
+<script>
+  // The shadow host for case 3. `<slot>` is the near-universal instance of display:contents.
+  class XHost extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+      const r = this.attachShadow({ mode: 'open' });
+      r.innerHTML = '<div id="c-shadow-wrap"><slot name="s"></slot></div>';
+    }
+  }
+  customElements.define('x-host', XHost);
+</script>
+</body>
+</html>

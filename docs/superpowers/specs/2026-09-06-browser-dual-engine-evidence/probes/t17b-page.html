@@ -19,6 +19,13 @@
      declaration really does re-show. Both are measured here. */
   #op-d2-opaque { opacity:1; }
   #vis-d2-shown { visibility:visible; }
+  /* A CHAIN BREAK inside the transparent container. A `display:contents` element
+     generates no box, so it gets no DOMSnapshot layout entry and the fetcher has
+     no reading for it at all — while its children are laid out normally. Placed
+     mid-chain (under `#op-d1`, not directly under the container) so that
+     propagating THROUGH it is what the assertion needs, not propagating from an
+     adjacent ancestor. `<slot>` below is the same shape from the UA stylesheet. */
+  #op-contents  { display:contents; }
   a, button     { cursor:pointer; }
 </style>
 </head>
@@ -28,7 +35,9 @@
       <p id="op-d1">depth 1 under opacity zero
         <button id="op-d2" type="button">depth 2 under opacity zero</button>
         <button id="op-d2-opaque" type="button">depth 2 declaring opacity one</button>
+        <span id="op-contents"><button id="op-through-contents" type="button">below a display contents break</button></span>
       </p>
+      <x-fade id="op-host"><button id="op-slotted" type="button">slotted through a contents slot</button></x-fade>
     </div>
     <div id="vis-hidden">
       <p id="vis-d1">depth 1 under visibility hidden
@@ -50,6 +59,17 @@
     <div id="opacity-zero-frame"><iframe id="frame-host" title="child frame"></iframe></div>
   </main>
   <script>
+    // `<slot>` is `display:contents` in the UA stylesheet, which is what makes this chain break
+    // near-universal in component UIs rather than an author's unusual choice: every web component
+    // inside a faded container reaches its slotted light DOM through one.
+    class XFade extends HTMLElement {
+      connectedCallback() {
+        if (this.shadowRoot) return;
+        this.attachShadow({ mode: 'open' }).innerHTML = '<div id="op-shadow-wrap"><slot></slot></div>';
+      }
+    }
+    customElements.define('x-fade', XFade);
+
     var child = new URL(location.href).searchParams.get('child');
     if (child) { document.getElementById('frame-host').src = child; }
     else { document.getElementById('opacity-zero-frame').remove(); }
