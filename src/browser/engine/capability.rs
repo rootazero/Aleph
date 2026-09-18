@@ -11,6 +11,7 @@
 //! `docs/superpowers/specs/2026-09-06-browser-dual-engine-evidence/obscura-source-survey.md` §3.
 
 use super::Engine;
+use crate::runtimes::OBSCURA_TAG;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Cap {
@@ -50,6 +51,21 @@ pub struct EngineCapabilities {
     /// dialog is open at all.
     pub js_dialogs: Cap,
     /// `browser_drag`.
+    ///
+    /// **The one row whose two engines disagree, so it states its rule here
+    /// rather than twice (判据 §9 — one verb, several faces, ONE derivation).**
+    /// The rule: this row is `Supported` only where an **effect** reading
+    /// exists for the method `browser_drag` actually sends
+    /// (`Input.dispatchMouseEvent`) on that engine. A protocol `ok` does not
+    /// qualify — obscura answers `ok` to `DOM.setAttributeValue` and
+    /// `DOM.removeNode` with `effect: false` (T0), so on this engine "ok" is a
+    /// measured report-success-no-op candidate, not evidence.
+    ///
+    /// Applied: Chromium has such a reading and obscura does not. Both arms
+    /// carry the citation beside their value, and
+    /// `the_disagreeing_row_cites_the_effect_reading_that_separates_the_engines`
+    /// `every_matrix_exempt_disagreement_cites_its_reading` keeps the Chromium
+    /// citation from becoming a dead reference.
     pub drag: Cap,
     /// `browser_upload` — `DOM.setFileInputFiles`. (The other upload route,
     /// the file-chooser interception, is a NOOP on obscura and no verb uses
@@ -81,9 +97,22 @@ pub const CAP_FIELDS: [(&str, fn(&EngineCapabilities) -> Cap); 5] = [
 ];
 
 static OBSCURA: EngineCapabilities = EngineCapabilities {
-    // Neither `Page.javascriptDialogOpening` nor `Page.handleJavaScriptDialog`
-    // exists anywhere in `obscura-cdp`: a page that opens an alert simply
-    // never reports one.
+    // Two witnesses, and only one of them witnessed — stated because the row
+    // is published to the model under the words "Measured on <tag>" (判据 §18).
+    //
+    //  1. The source survey (§3): neither `Page.javascriptDialogOpening` nor
+    //     `Page.handleJavaScriptDialog` exists anywhere in `obscura-cdp`, so a
+    //     page that opens an alert simply never reports one. **This is what
+    //     the value rests on.**
+    //  2. T0's probe: `{"protocol": "no event within 4s (wait expired, not a
+    //     measured absence)", "effect": null}` — the fixture goes out of its
+    //     way to say it is NOT a measured absence, and an unknown may only say
+    //     "I don't know" (判据 §8). It corroborates nothing either way; it is
+    //     not a second reading of the first fact.
+    //
+    // `Unsupported` is the fail-closed answer, so the VALUE is right under
+    // both witnesses. What is being recorded here is that it is right on one
+    // of them, not two.
     js_dialogs: Cap::Unsupported,
     // **Unsupported as the fail-closed answer to an unknown, not as a
     // measurement.** `browser_drag` does NOT send `Input.dispatchDragEvent`:
@@ -93,9 +122,16 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     // report-success-no-op on Chrome — but that is a method no Aleph verb
     // dispatches, so it certifies nothing either way about this row.
     //
-    // What is actually unknown is whether obscura delivers a synthetic mouse
-    // sequence to a page's own drag listeners. Nobody has measured it. An
-    // unknown may not be spent as a permission (判据 §8), so the row stays
+    // What is actually unknown is whether OBSCURA delivers a synthetic mouse
+    // sequence to a page's own drag listeners. Nobody has measured that on
+    // this engine: T0 read no `effect` for `Input.dispatchMouseEvent`, and
+    // `qa/browser_managed`'s drag stage — which DOES read the effect, and is
+    // what Chromium's row rests on — has never been run against obscura. (The
+    // earlier draft of this comment said "nobody has measured it" without the
+    // engine, which read as though the two rows answered the same evidence
+    // state; they do not, and the field doc above now states the rule both
+    // arms are answering.) An unknown may not be spent as a permission
+    // (判据 §8), so the row stays
     // `Unsupported` and the refusal names chromium — and
     // `capability_table_agrees_with_the_t0_support_matrix`'s `NOT_PROBED`
     // carries the reason, so this exemption is argued rather than forgotten.
@@ -124,11 +160,27 @@ static OBSCURA: EngineCapabilities = EngineCapabilities {
     pdf: Cap::Supported,
     // Landed in obscura ce9714f, 2026-09-04 (`domains/input.rs:329`).
     insert_text: Cap::Supported,
-    measured_on: "v0.2.2",
+    // **Derived, never spelled.** `runtimes::specs` owns the pinned tag
+    // (`obscura_tag!` / `OBSCURA_TAG`) and its doc says "bump this — and only
+    // this — … everything else follows". A literal here made this row a second
+    // author for that tag, outside the one-file scope of
+    // `the_obscura_tag_has_one_author`, so a bump would have left the model
+    // being told its capability facts were measured on a build it is not
+    // running, with nothing red (判据 §1, §3). `the_obscura_row_is_stamped_with
+    // _the_pinned_tag` below is the falsifier for both halves.
+    measured_on: OBSCURA_TAG,
 };
 
 static CHROMIUM: EngineCapabilities = EngineCapabilities {
     js_dialogs: Cap::Supported,
+    // **Not a T0 reading — T0 read no `effect` for `Input.dispatchMouseEvent`
+    // on either engine.** This row rests on `qa/browser_managed`'s drag stage,
+    // which drives `browser_drag` against a real Chromium and then asserts the
+    // page saw it: `qa/browser_managed/pages/tools.html` records `dropped:html5`
+    // or `dropped:mouseup` and the driver checks `#dropped != "dropped:no"`.
+    // That is an effect reading for the method this verb sends, which is
+    // exactly what the field doc's rule asks for and exactly what obscura does
+    // not have.
     drag: Cap::Supported,
     file_upload: Cap::Supported,
     pdf: Cap::Supported,
@@ -240,6 +292,32 @@ pub fn describe_for_tool() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rows Task 0's probe does not settle, each with the reason.
+    ///
+    /// **`drag` is here because the label and the verb are different
+    /// methods.** Task 0 probed `Input.dispatchDragEvent`;
+    /// `cdp_backend::actions::drag` sends `Input.dispatchMouseEvent` six times
+    /// and never sends `dispatchDragEvent` at all. Judging the row on that
+    /// label would be 判据 §12 — deriving a decision in one space and applying
+    /// it in another — and it would have flipped Chromium's row to
+    /// `Unsupported` on a measurement of a method Aleph does not use. The
+    /// method the verb DOES send is `ok` on both engines with no effect
+    /// reading, i.e. unmeasured by T0, so the row is decided by the rule
+    /// stated on the `drag` FIELD and the citations beside each value.
+    ///
+    /// Module-scope rather than local to
+    /// `capability_table_agrees_with_the_t0_support_matrix`, because it is
+    /// exactly "the rows whose evidence is not in the matrix" and that is the
+    /// set `every_matrix_exempt_disagreement_cites_its_reading` has to walk. A
+    /// second copy over there would be the two-authors shape this file spends
+    /// most of its guards on (判据 §1).
+    const NOT_PROBED: [(&str, &str); 1] = [(
+        "drag",
+        "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
+         dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect T0 \
+         did not read on either engine",
+    )];
 
     /// A row with no provenance cannot be re-measured, and an empty string
     /// reads exactly like a row someone forgot to fill in.
@@ -414,6 +492,104 @@ mod tests {
         assert!(c.measured_on.starts_with("Chrome "), "{}", c.measured_on);
     }
 
+    /// F5 — the obscura row's provenance stamp has ONE author, and it is
+    /// `runtimes::specs`.
+    ///
+    /// Both halves are load-bearing and neither implies the other. The
+    /// equality alone would stay green against a re-introduced literal that
+    /// happens to match today and stops matching on the next bump; the
+    /// spelling census alone would stay green against a stamp derived from
+    /// some other constant. Before this, a mutation of the stamp to
+    /// `"v0.9.9-MUTANT"` reddened nothing in the whole crate — the table was
+    /// free to tell the model its capability facts were measured on a build
+    /// nobody is running.
+    #[test]
+    fn the_obscura_row_is_stamped_with_the_pinned_tag() {
+        assert_eq!(
+            capabilities(Engine::Obscura).measured_on,
+            OBSCURA_TAG,
+            "the obscura row must be stamped with the tag the installer pins, \
+             not with a build of its own"
+        );
+        let spellings = include_str!("capability.rs")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains(OBSCURA_TAG))
+            .count();
+        assert_eq!(
+            spellings, 0,
+            "the pinned tag is spelled as a literal in capability.rs; refer to \
+             OBSCURA_TAG instead, or `the_obscura_tag_has_one_author` (which \
+             reads only specs.rs) will certify two authors as one"
+        );
+    }
+
+    /// F7 — a disagreement the T0 matrix does not settle must cite the
+    /// reading that DOES settle it, and that citation must still exist.
+    ///
+    /// The rows in `ROWS` need nothing here: their two values are each checked
+    /// against the matrix, so a disagreement there is derived rather than
+    /// asserted. The rows in [`NOT_PROBED`] are the ones whose evidence lives
+    /// outside this file — and a disagreement among THOSE is a route published
+    /// to the model (`supported_by` answers "chromium supports it" and the
+    /// model pays an engine switch for it) resting on reasoning no test can
+    /// see.
+    ///
+    /// The subject is derived from `NOT_PROBED`, so a second exempt row that
+    /// starts disagreeing fails here instead of inheriting `drag`'s argument
+    /// (判据 §3). The citation itself is read rather than trusted: a reference,
+    /// once written, turns the referenced thing into something that may not
+    /// change silently (判据 §1, fourth form), and this is the wire that makes
+    /// that true rather than hoped.
+    #[test]
+    fn every_matrix_exempt_disagreement_cites_its_reading() {
+        let o = capabilities(Engine::Obscura);
+        let c = capabilities(Engine::Chromium);
+        let pick = |name: &str| {
+            CAP_FIELDS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, get)| *get)
+                .unwrap_or_else(|| panic!("NOT_PROBED names `{name}`, which is not a Cap field"))
+        };
+
+        let exempt_disagreements: Vec<&str> = NOT_PROBED
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| pick(name)(o) != pick(name)(c))
+            .collect();
+        assert_eq!(
+            exempt_disagreements,
+            vec!["drag"],
+            "a matrix-exempt row other than `drag` now answers differently per \
+             engine. That difference is published to the model as a route, and \
+             nothing in the matrix decides it — state the reading that does, \
+             beside BOTH values, and check it here"
+        );
+
+        // The citation, checked rather than trusted. `driver` drives the verb
+        // and reads the effect back; `page` is the fixture that records which
+        // mechanism fired. Either one losing the drag stage would leave
+        // Chromium's `Supported` resting on a measurement that no longer runs.
+        let driver = include_str!("../../../qa/browser_managed/drive_tools.py");
+        let page = include_str!("../../../qa/browser_managed/pages/tools.html");
+        assert!(
+            driver.contains("browser_drag"),
+            "qa/browser_managed no longer drives browser_drag; Chromium's drag \
+             row cites it as its effect reading"
+        );
+        assert!(
+            driver.contains("dropped:no"),
+            "qa/browser_managed no longer reads the drop target back; a stage \
+             that only asserts the CALL succeeded is a protocol reading, not \
+             the effect reading this row rests on (判据 §4)"
+        );
+        assert!(
+            page.contains("dropped:html5") && page.contains("dropped:no"),
+            "the drag fixture page no longer records which mechanism fired"
+        );
+    }
+
     /// `CAP_FIELDS` is what `describe_for_tool`, `capabilities_json` and the
     /// QA `caps` stage all iterate. A field added to the struct and forgotten
     /// here is a capability that silently stops being described, probed or
@@ -503,6 +679,27 @@ mod tests {
     fn capability_table_agrees_with_the_t0_support_matrix() {
         const MATRIX: &str = include_str!("fixtures/t0-support-matrix.json");
 
+        /// Comment markers off, whitespace collapsed — so a text quoted
+        /// across two wrapped `//` lines still compares equal to the single
+        /// line the fixture holds it on.
+        fn flatten(src: &str) -> String {
+            let joined: Vec<&str> = src
+                .lines()
+                .map(|l| {
+                    let t = l.trim_start();
+                    t.strip_prefix("///")
+                        .or_else(|| t.strip_prefix("//!"))
+                        .or_else(|| t.strip_prefix("//"))
+                        .unwrap_or(t)
+                })
+                .collect();
+            joined
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+
         /// How a row is judged.
         #[derive(Copy, Clone, PartialEq, Eq, Debug)]
         enum Judge {
@@ -515,10 +712,20 @@ mod tests {
             /// FAILS by name rather than being read either way (判据 §8, §11).
             ///
             /// The demand is conditioned on `protocol == "ok"` rather than made
-            /// unconditionally: obscura answers `Page.javascriptDialogOpening`
-            /// with a stated absence and `effect: null`, and demanding an
-            /// effect reading for a call that never succeeded would be a 恒红
-            /// arm — satisfiable only by inventing a measurement (判据 §2).
+            /// unconditionally: obscura's `Page.javascriptDialogOpening` entry
+            /// is `{"protocol": "no event within 4s (wait expired, not a
+            /// measured absence)", "effect": null}`, and demanding an effect
+            /// reading for a call that never succeeded would be a 恒红 arm —
+            /// satisfiable only by inventing a measurement (判据 §2).
+            ///
+            /// ⚠️ That entry is an EXPIRED WAIT, not "a stated absence" — which
+            /// is what this doc used to call it. The fixture spells the
+            /// difference out in its own text and the paraphrase erased it
+            /// (判据 §1: the comment is the lying half). The row it feeds is
+            /// still `Unsupported`, on the source survey rather than on this
+            /// entry — see `OBSCURA.js_dialogs`.
+            /// `every_refusal_text_the_table_reasons_about_is_quoted_verbatim`
+            /// is what keeps the next paraphrase from landing.
             Effect,
         }
 
@@ -534,25 +741,6 @@ mod tests {
             ("pdf", "Page.printToPDF", Judge::Protocol),
             ("insert_text", "Input.insertText", Judge::Protocol),
         ];
-
-        /// Rows Task 0's probe does not settle, each with the reason.
-        ///
-        /// **`drag` is here because the label and the verb are different
-        /// methods.** Task 0 probed `Input.dispatchDragEvent`;
-        /// `cdp_backend::actions::drag` sends `Input.dispatchMouseEvent` six
-        /// times and never sends `dispatchDragEvent` at all. Judging the row on
-        /// that label would be 判据 §12 — deriving a decision in one space and
-        /// applying it in another — and it would have flipped Chromium's row to
-        /// `Unsupported` on a measurement of a method Aleph does not use. The
-        /// method the verb DOES send is `ok` on both engines with no effect
-        /// reading, i.e. unmeasured, so the row is decided by the fail-closed
-        /// rule stated beside it in `OBSCURA` instead.
-        const NOT_PROBED: [(&str, &str); 1] = [(
-            "drag",
-            "T0's Input.dispatchDragEvent label measures a method no browser_* verb \
-             dispatches; browser_drag sends Input.dispatchMouseEvent, whose effect T0 \
-             did not read on either engine",
-        )];
 
         // Every `Cap` field is on exactly one of the two lists. A new
         // capability cannot join the unprobed set by being forgotten — the
@@ -655,6 +843,30 @@ mod tests {
                     assert!(
                         !protocol.trim().is_empty(),
                         "{key}/{label}: not ok, but the matrix records no refusal text"
+                    );
+                    // ...and this file must QUOTE that text, not paraphrase it.
+                    //
+                    // F8's shape, exactly: obscura's dialog entry says "no
+                    // event within 4s (wait expired, not a measured absence)"
+                    // — the fixture going out of its way to say which fact it
+                    // is — and the prose beside it called that "a stated
+                    // absence". The value was still right; the reasoning
+                    // published beside it was not, and the comment is the half
+                    // that lies (判据 §1). A paraphrase is not a cheaper copy
+                    // of a measurement, it is a second one.
+                    //
+                    // Comment markers are stripped and whitespace collapsed
+                    // before comparing, because these texts are line-wrapped
+                    // inside `//` blocks; without that this would be 恒红 on a
+                    // correctly-quoted file (判据 §2's fourth face).
+                    let flat = flatten(include_str!("capability.rs"));
+                    let needle = flatten(protocol);
+                    assert!(
+                        flat.contains(&needle),
+                        "{key}/{label}: this table reasons about a refusal it does not \
+                         quote. The matrix records:\n  {protocol}\nQuote that text \
+                         verbatim beside the row it decides — a paraphrase is a second \
+                         author for somebody else's measurement."
                     );
                 }
             }
