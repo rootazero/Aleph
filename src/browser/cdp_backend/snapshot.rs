@@ -67,13 +67,26 @@ pub(super) async fn snapshot(
     // `RawDom`; everything after this line is engine-blind.
     let raw = match handle.engine {
         Engine::Chromium => page_state::fetch_chromium(&handle.conn, &session).await?,
-        // Task 17's `fetch_obscura`. Refused rather than silently served by
-        // Chromium's fetcher: obscura's `DOMSnapshot` support is the whole
-        // reason that task exists, and a fetcher pointed at the wrong engine
-        // would answer with a page state nobody measured. No profile can select
-        // this engine until Task 16, so this arm is unreachable in production
-        // today — it is here because the `match` is exhaustive, and an arm that
-        // guessed would be worse than one that says it is not built yet.
+        // **This is the DEFAULT engine's arm, and it refuses.** Task 16
+        // (`71d973920`) flipped the auto-injected `default` profile to
+        // `driver = cdp` / `engine = obscura`, so `browser_snapshot` on a
+        // fresh install reaches this line and returns
+        // `UnsupportedByEngine{verb: "snapshot"}`. Task 17 supplies
+        // `page_state::fetch_obscura` and this arm becomes a call; until it
+        // lands, this is a live gap and not a hypothetical one.
+        //
+        // The comment that stood here said the arm was "unreachable in
+        // production today ... until Task 16" — an expiry condition that fired
+        // in the commit before this one and told nobody (判据 §1, the fourth
+        // form: a comment describing another module's behaviour, which changed
+        // without notifying its reader). It is corrected rather than deleted
+        // because it is the only place in the tree that records the gap, and a
+        // wrong label costs more than a missing one (判据 §17).
+        //
+        // Still refused rather than silently served by Chromium's fetcher:
+        // obscura's `DOMSnapshot` support is the whole reason Task 17 exists,
+        // and a fetcher pointed at the wrong engine would answer with a page
+        // state nobody measured.
         Engine::Obscura => {
             return Err(BrowserError::UnsupportedByEngine {
                 engine: Engine::Obscura,
