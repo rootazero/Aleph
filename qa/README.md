@@ -161,8 +161,8 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # re-runs a turn the user deleted, and does it forever —
                                        # nothing else ever closes that marker. The rewind is aimed
                                        # ONE ROW PAST the open `RunStarted` on purpose: aimed AT it,
-                                       # the opening half is retired too, `close_open_run_after_retire`
-                                       # returns `Ok(None)` without appending anything, and the stage
+                                       # the opening half is retired too, `open_run_after_retire`
+                                       # answers `Ok(None)` and nothing is appended, and the stage
                                        # is green on a build with no balancer at all (that was the
                                        # first-round arrangement; the tail then read `never_ran` and
                                        # the receipt `no_runs`). So the stage asserts the effects the
@@ -174,9 +174,13 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # every counter of `ResumeReceipt` is serialised
                                        # unconditionally, so grepping for one of their keys matches
                                        # any well-formed receipt). Resume is OFF:
-                                       # `balance_run_markers_after_retire` deliberately leaves a
-                                       # RUNNING session alone, so a stage that let the boot scan
-                                       # resume first would be green over a session it never tested.
+                                       # `retire_from_and_close_run` deliberately leaves a RUNNING
+                                       # session alone (its `is_running` predicate fails closed), so
+                                       # a stage that let the boot scan resume first would be green
+                                       # over a session it never tested. Since r3 the closer rides
+                                       # the SAME store transaction as the retire (`Retire::From` +
+                                       # `RunFinished{cancelled}` in one `append_batch`), so the
+                                       # torn "tail gone, marker open" state cannot be produced.
 ./qa/resume_boundary/run.sh knobs      # the resumed run follows the SNAPSHOT its `RunStarted`
                                        # carried, not the session's current row. The crashing
                                        # turn carries an explicit per-turn directive for model
@@ -240,6 +244,24 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # `compaction_count == 0` precondition: raising the burst
                                        # turns THAT red, not the row count, which would otherwise
                                        # read like data loss.
+./qa/resume_boundary/run.sh parked     # a call parked at the approval gate when the server dies
+                                       # is answered "NEVER RAN", not "OUTCOME UNKNOWN" (§6.1 /
+                                       # T11–T13): the gate writes `ToolCallParked{reason}` BEFORE
+                                       # it parks, so the kill is aimed at the PARK ROW (the r2
+                                       # instrument — `bash = "ask"` — waited for the dispatch
+                                       # only; a kill there would be indistinguishable from an
+                                       # in-flight dangle). Resume OFF, so the receipt is the only
+                                       # pass. Three faces: the wire (`chat.history` →
+                                       # `last_run.dangling[0].parked == "approval"`, `denied ==
+                                       # false`, disposition still `interrupted`), the model (the
+                                       # resumed run's next request says the call NEVER RAN, names
+                                       # `operator approval` and the tool `bash`, and NO request
+                                       # calls that call's outcome UNKNOWN), and the receipt
+                                       # (`resumed == 1`). One WebSocket per node process — a
+                                       # second one aborts Node v24 — so each phase is its own
+                                       # `drive` call. Mutation (T13): moving the park write after
+                                       # the requester makes the first check red and the stage
+                                       # reports `instrument failure: no parked dangle`.
 ./qa/resume_boundary/run.sh unanswered # a crash between the seed (`UserMessage`) and
                                        # `RunStarted` leaves a session with NO marker, and the
                                        # boot must still resume that message (§5.2): the wire
@@ -376,7 +398,24 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 #     A phase whose assertions all vanished prints the SAME line and still
 #     exits 0. run.sh sums the counts and turns a stage RED when it passes
 #     while measuring less than its floor. Adding an assertion raises the floor
-#     in the same commit.
+#     in the same commit. The last full run of the roster (T23 part A, tree
+#     `e3e31733a`, 2026-09-19) printed every stage at exactly its floor with
+#     `rc=0`: claims 13 · denied 5 · rewind 11 · knobs 10 · holes 12 · parked 11
+#     · unanswered 29 · ratchet 23 · parallel 30 · undecodable 30 · attribute 27
+#     · tombstone 32 (ran; did not exit 78). That is a dated observation, not a
+#     second copy of the floor table — when a number here and `run.sh` disagree,
+#     `run.sh` is the one that was measured.
+#   * **The binary the stages run is the shared one** — from a worktree pass
+#     `CARGO_TARGET_DIR=D:/Workspace/Aleph/target` (see the `tombstone` row).
+#     `SKIP_BUILD=1` is NOT valid after a `cargo clippy --all-targets` (that
+#     leaves a 0-byte `aleph-server.exe`) nor after an integration build
+#     (`--features test-helpers --test …` builds the bin target with that
+#     feature); the runner rebuilds in both cases and its build step printing
+#     `Compiling alephcore` is the tell. Run the twelve stages BEFORE clippy in
+#     a verification sweep, not after. `KEEP=1` roots accumulate under
+#     `%TEMP%\aleph-qa-resume-*` (six kept roots measured ~48 MB together at
+#     the start of T23) and `cleanup` never removes a kept root — delete them
+#     by hand between rounds.
 #   * **Every stage is Node; the round-1 Python pair is gone** (r3). On this
 #     Windows host `python3` and `python` are both the `WindowsApps` stub — no
 #     output, exit 49 — so the round-1 `crash` / `attribute` stages had refused
