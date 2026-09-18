@@ -58,7 +58,7 @@ use crate::session::events::{EventSeq, SessionEvent, SessionEventRecord};
 use crate::session::observer::SessionEventObserver;
 use crate::session::projection::{parse_source_seq, project_row, row_id};
 use crate::session::service::SessionId;
-use crate::session::store::SessionEventStore;
+use crate::session::store::{RetiredAnchorKind, RetiredRunAnchor, SessionEventStore};
 
 /// Capacity of the internal mpsc channel between the observer and the drain task.
 const QUEUE_CAP: usize = 4096;
@@ -598,16 +598,36 @@ async fn heal_session(
     // meta, and from a floor that can start mid-run; this scope runs at boot
     // before any run is live, or on a rare explicit request, and its spans
     // start at their openers (`HealScope::WholeSession`).
+    //
+    // The spans are folded over the live rows PLUS the retired openers and
+    // metas: a rewind that cut a finished run's meta away leaves that run
+    // reading finished-without-meta on the live rows alone, and it was billed
+    // when the meta landed. An unreadable answer to "what was retired?" is not
+    // "nothing was retired" — synthesis is refused for this pass (`errored`,
+    // so the report does not claim the session is whole) rather than read as
+    // permission to bill again (criterion #8).
     if scope == HealScope::WholeSession {
-        synthesize_missing_stamps(
-            store,
-            id,
-            &event_store,
-            &present,
-            &collect_run_spans(&events),
-            &mut report,
-        )
-        .await;
+        match event_store.load_retired_run_anchors(id).await {
+            Ok(retired) => {
+                synthesize_missing_stamps(
+                    store,
+                    id,
+                    &event_store,
+                    &present,
+                    &collect_run_spans(&events, &retired),
+                    &mut report,
+                )
+                .await;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    session = ?id,
+                    error = %e,
+                    "projector heal: retired run anchors unreadable; no stamp synthesized"
+                );
+                report.errored = true;
+            }
+        }
     }
     // `retry` is part of this answer. Every failure inside the loop — an append
     // that would not write, a stamp that would not land, a retirement flag that
@@ -712,18 +732,60 @@ impl RunSpan {
 /// — that meta can stamp and bill the NEXT run's first row under the older
 /// run's id if the next run had already produced one — and stays a T24
 /// known limit; the heal does not second-guess a landed meta.
-fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
+///
+/// `retired` — the session's retired openers and metas
+/// ([`SessionEventStore::load_retired_run_anchors`]), merged into the walk by
+/// `seq` — is the same positional join applied to the rows a rewind took
+/// out of the live log. A `chat.rewind` / `session.truncate` / `/undo` whose
+/// cut falls inside a finished, billed run retires that run's meta (and
+/// maybe its stamped row) and appends a `Cancelled` closer; over the live
+/// rows alone the run is then finished-without-meta and would be synthesized
+/// and billed again for whatever survived (final review I1). A retired meta
+/// marks the span the newest opener before it names, exactly as a live one
+/// does; a retired opener MOVES that anchor (so a retired later run's meta
+/// cannot be read as the surviving earlier run's) and opens no span of its
+/// own — its rows are gone from the fold and from `messages`. A live closer
+/// closes the newest LIVE span: the balancing closer is appended for the run
+/// the surviving prefix leaves open, after every retired row. Retired
+/// assistant messages and closers are not consulted: neither is billed, and
+/// a span's `end` must be a live seq.
+fn collect_run_spans(events: &[SessionEventRecord], retired: &[RetiredRunAnchor]) -> Vec<RunSpan> {
     let mut spans: Vec<RunSpan> = Vec::new();
+    // Whether the newest opener walked so far — live or retired — is the one
+    // that opened `spans.last()`. False after a retired opener: the newest
+    // run is one the fold cannot see, so nothing that follows positionally
+    // (a message, a meta) belongs to a span in `spans`.
+    let mut newest_opener_is_live = false;
+    let mut retired = retired.iter().peekable();
+    let note_retired =
+        |anchor: &RetiredRunAnchor, spans: &mut Vec<RunSpan>, live: &mut bool| match anchor.kind {
+            RetiredAnchorKind::RunStarted => *live = false,
+            RetiredAnchorKind::RunMeta => {
+                if *live {
+                    if let Some(span) = spans.last_mut() {
+                        span.meta = true;
+                    }
+                }
+            }
+        };
     for rec in events {
+        while let Some(anchor) = retired.next_if(|a| a.seq < rec.seq) {
+            note_retired(anchor, &mut spans, &mut newest_opener_is_live);
+        }
         match &rec.event {
-            SessionEvent::RunStarted { run_id, .. } => spans.push(RunSpan {
-                run_id: run_id.clone(),
-                start: rec.seq,
-                end: None,
-                assistant_messages: 0,
-                meta: false,
-            }),
-            SessionEvent::AssistantMessage { .. } => {
+            SessionEvent::RunStarted { run_id, .. } => {
+                spans.push(RunSpan {
+                    run_id: run_id.clone(),
+                    start: rec.seq,
+                    end: None,
+                    assistant_messages: 0,
+                    meta: false,
+                });
+                newest_opener_is_live = true;
+            }
+            // The two positional readers fall through to `_` after a retired
+            // opener: what they would mark belongs to a run the fold cannot see.
+            SessionEvent::AssistantMessage { .. } if newest_opener_is_live => {
                 if let Some(span) = spans.last_mut().filter(|s| s.end.is_none()) {
                     span.assistant_messages += 1;
                 }
@@ -733,13 +795,16 @@ fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
                     span.end.get_or_insert(rec.seq);
                 }
             }
-            SessionEvent::AssistantRunMeta { .. } => {
+            SessionEvent::AssistantRunMeta { .. } if newest_opener_is_live => {
                 if let Some(span) = spans.last_mut() {
                     span.meta = true;
                 }
             }
             _ => {}
         }
+    }
+    for anchor in retired {
+        note_retired(anchor, &mut spans, &mut newest_opener_is_live);
     }
     spans
 }
@@ -2246,13 +2311,90 @@ mod tests {
         );
     }
 
-    /// `synthesis_end` of every span in `events`, in log order.
+    /// `synthesis_end` of every span in `events`, in log order — over the
+    /// live rows alone (nothing retired).
     fn synthesis_ends(events: &[(EventSeq, SessionEvent)]) -> Vec<Option<EventSeq>> {
+        synthesis_ends_with_retired(events, &[])
+    }
+
+    /// [`synthesis_ends`] with the retired openers / metas a rewind left
+    /// behind, `(seq, kind)` in seq order.
+    fn synthesis_ends_with_retired(
+        events: &[(EventSeq, SessionEvent)],
+        retired: &[(EventSeq, RetiredAnchorKind)],
+    ) -> Vec<Option<EventSeq>> {
         let log: Vec<SessionEventRecord> = events.iter().map(|(s, e)| rec(*s, e.clone())).collect();
-        collect_run_spans(&log)
+        let retired: Vec<RetiredRunAnchor> = retired
+            .iter()
+            .map(|(seq, kind)| RetiredRunAnchor {
+                seq: *seq,
+                kind: *kind,
+            })
+            .collect();
+        collect_run_spans(&log, &retired)
             .iter()
             .map(RunSpan::synthesis_end)
             .collect()
+    }
+
+    /// The retired half of the positional join (final review I1), on the
+    /// pure fold. A rewind that cut a finished run's meta away leaves the
+    /// live rows `[RunStarted, AssistantMessage, RunFinished{Cancelled}]`;
+    /// with the retired meta merged in by seq the run has its meta and is
+    /// NOT synthesized. A retired opener between the live opener and the
+    /// retired meta moves the anchor: that meta was a later run's, and the
+    /// surviving earlier run — never billed — IS synthesized.
+    #[test]
+    fn a_retired_meta_marks_the_span_it_landed_in_and_a_retired_opener_moves_the_anchor() {
+        use RetiredAnchorKind::{RunMeta, RunStarted};
+        let tid = uuid::Uuid::new_v4();
+        // Live log after `retire_from(3)` + closer: the meta at 5 is retired.
+        let rewound = [
+            (1, run_started("marker-a")),
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (6, run_finished("marker-a")),
+        ];
+        assert_eq!(
+            synthesis_ends(&rewound),
+            vec![Some(6)],
+            "control: over the live rows alone the run reads finished-without-meta"
+        );
+        assert_eq!(
+            synthesis_ends_with_retired(&rewound, &[(5, RunMeta)]),
+            vec![None],
+            "the retired meta landed inside this span: it was billed live, nothing to synthesize"
+        );
+        assert_eq!(
+            synthesis_ends_with_retired(&rewound, &[(3, RunStarted), (5, RunMeta)]),
+            vec![Some(6)],
+            "a retired opener at 3 moved the anchor: the meta at 5 was run b's, run a stays \
+             finished-without-meta and is synthesized once"
+        );
+        // A retired opener after the live rows (a wholly retired later run)
+        // cannot make the surviving run's closer close nothing.
+        let earlier_billed = [
+            (1, run_started("marker-a")),
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (3, run_finished("marker-a")),
+            (4, run_meta(tid, "engine-a")),
+        ];
+        assert_eq!(
+            synthesis_ends_with_retired(&earlier_billed, &[(5, RunStarted), (8, RunMeta)]),
+            vec![None],
+            "run b retired whole: run a keeps its own live meta"
+        );
+        // A retired opener BEFORE live rows (a rewind while the run was in
+        // flight cut its own opener): the live rows belong to a run the fold
+        // cannot see, so no span is opened for them and nothing is synthesized.
+        let opener_cut = [
+            (2, assistant_msg_billed(tid, 45, 25)),
+            (3, run_finished("marker-a")),
+            (4, run_meta(tid, "engine-a")),
+        ];
+        assert_eq!(
+            synthesis_ends_with_retired(&opener_cut, &[(1, RunStarted)]),
+            Vec::<Option<EventSeq>>::new(),
+        );
     }
 
     /// The shape a stamp is synthesized for, clause by clause, on the pure
@@ -2511,6 +2653,121 @@ mod tests {
             Some("engine-x"),
             "the row still carries the meta's id — no synthesized stamp overwrote it"
         );
+    }
+
+    /// Final review I1, at the store: a `chat.rewind` / `session.truncate` /
+    /// `/undo` whose cut lands inside a finished run the live drain already
+    /// billed retires the run's meta and closes the run again with a
+    /// `Cancelled` closer (one batch, as `retire_events_and_balance` writes
+    /// it), and realigns the transcript. The next whole-session heal must
+    /// then bill NOTHING, wherever the cut fell: (i) at the second message —
+    /// the stamped row is retired and the first message survives unstamped
+    /// (before the fix: synthesized under the marker id and billed again,
+    /// 55/30 → 100/55); (ii) at the meta — the stamped row survives carrying
+    /// the engine id (before: `already_stamped_by` read the marker id as a
+    /// different run, overwrote the stamp and billed again, → 110/60);
+    /// (iii) at the first message — no assistant row survives, so nothing
+    /// was ever synthesizable; kept as the controller's named case and as
+    /// the control that the cut itself is not what changes the totals.
+    /// Reddens if the fold stops reading the retired meta.
+    #[tokio::test]
+    async fn a_rewind_inside_a_billed_run_does_not_bill_it_again() {
+        let billed = |m: &crate::gateway::session_store::types::SessionMetadata| {
+            (m.input_tokens, m.output_tokens)
+        };
+        for (cut, case) in [
+            (
+                3,
+                "cut at the second message: stamped row retired, first row survives unstamped",
+            ),
+            (
+                5,
+                "cut at the meta: the stamped row survives with the engine id",
+            ),
+            (2, "cut at the first message: no assistant row survives"),
+        ] {
+            let temp = tempdir().unwrap();
+            let store = sqlite_store(temp.path(), &format!("rewind_billed_{cut}.db"));
+            let id = SessionId::ephemeral("rewind-billed");
+            store.get_or_create(&id).await.unwrap();
+
+            let tid = uuid::Uuid::new_v4();
+            let events = vec![
+                (1, run_started(&marker_of("a"))),
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (3, assistant_msg_billed(tid, 10, 5)),
+                (4, run_finished(&marker_of("a"))),
+                (5, run_meta(tid, "a")),
+            ];
+            let log = own_event_log(&id, &events).await;
+            let projector =
+                MessageProjector::with_event_store(store.clone(), None, Some(log.clone()));
+            for (seq, ev) in &events {
+                projector.on_appended(&id, &rec(*seq, ev.clone()));
+            }
+            projector.flush(Duration::from_secs(5)).await.unwrap();
+            assert_eq!(
+                billed(&store.get_metadata(&id).await.unwrap().unwrap()),
+                (55, 30),
+                "{case}: the live drain billed the run once, from both messages"
+            );
+
+            // The rewind: retire from `cut` and close the run the surviving
+            // prefix leaves open, in ONE batch; then realign the projection
+            // by source seq, as `chat.rewind` does.
+            let closer = SessionEvent::RunFinished {
+                run_id: marker_of("a"),
+                outcome: crate::session::events::RunOutcome::Cancelled,
+                at: 9,
+            };
+            log.append_batch(
+                &id,
+                6,
+                &[(closer.clone(), 0)],
+                Some(Retire::From(cut)),
+                Durability::Normal,
+            )
+            .await
+            .unwrap();
+            projector.on_appended(&id, &rec(6, closer));
+            projector.flush(Duration::from_secs(5)).await.unwrap();
+            store.delete_messages_from_seq(&id, cut).await.unwrap();
+
+            // One assertion per pass, so a red carries the report AND the
+            // totals it doubled in the same panic.
+            for pass in 1..=2 {
+                let repair = projector.request_repair(&id).await;
+                assert_eq!(
+                    (
+                        repair.stamps_synthesized,
+                        repair.usage_rebilled,
+                        repair.errored,
+                        billed(&store.get_metadata(&id).await.unwrap().unwrap()),
+                    ),
+                    (0, 0, false, (55, 30)),
+                    "{case}: whole-session pass {pass} must synthesize nothing and leave the \
+                     totals as the live drain wrote them — the run's meta landed before the \
+                     cut: {repair:?}"
+                );
+            }
+            if cut == 5 {
+                let row = store
+                    .get_history(&id, None)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .rfind(|m| m.role == "assistant")
+                    .expect("both rows survive a cut at the meta");
+                assert_eq!(
+                    row.metadata
+                        .as_ref()
+                        .and_then(|m| m.get("run_id"))
+                        .and_then(|v| v.as_str()),
+                    Some("a"),
+                    "{case}: the surviving stamped row keeps the meta's engine id"
+                );
+            }
+        }
     }
 
     /// Same log, two scopes: a drain-triggered pass fills the row and leaves

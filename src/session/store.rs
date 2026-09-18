@@ -164,6 +164,34 @@ pub trait SessionEventStore: Send + Sync + 'static {
         Ok(false)
     }
 
+    /// This session's RETIRED `RunStarted` / `AssistantRunMeta` rows —
+    /// `seq` and kind only, in `seq` order.
+    ///
+    /// The one reader that looks past `retired_at`, and it exposes nothing
+    /// the live conversation would replay: a retired row is a fact about the
+    /// past, and the fact the whole-session heal needs is "did this run's
+    /// meta ever land?". A `chat.rewind` / `session.truncate` / `/undo` whose
+    /// cut falls inside a finished, already-billed run retires the run's meta
+    /// and closes the run again with a `Cancelled` closer; read from live rows
+    /// alone that run is finished-without-meta, and the heal would synthesize
+    /// a stamp and bill the surviving tokens a second time
+    /// (`session_projector::collect_run_spans` consumes this to see the meta
+    /// where it landed). Kinds come from the `event_type` column, never the
+    /// payload, so a retired row this build cannot decode (the doctor's
+    /// `retire_record` exit) cannot refuse the read.
+    ///
+    /// Default `Ok(vec![])`, for the same reason as [`is_retired`](Self::is_retired):
+    /// a store with no soft delete has retired nothing. A store that DOES
+    /// soft-delete must override it, or its heal reads every rewound run as
+    /// never billed.
+    async fn load_retired_run_anchors(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<RetiredRunAnchor>, SessionError> {
+        let _ = session_id;
+        Ok(Vec::new())
+    }
+
     /// Cross-session scan for resume detection. Returns, per session, that
     /// session's run-marker events — the `MARKER_EVENT_TYPES` set, which is
     /// pinned equal to the reducer's `is_marker` — in `seq` order.
@@ -473,6 +501,24 @@ pub enum DecodedRow {
 /// hands them over: the decoded slice, or the first row of it this build
 /// could not decode.
 pub type MarkerSlice = Result<Vec<SessionEventRecord>, UndecodableRecord>;
+
+/// Which of the two run anchors a retired row is — the two event kinds the
+/// positional meta join reads (`session_projector::collect_run_spans`): an
+/// opener moves the anchor, a meta marks the span the anchor names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetiredAnchorKind {
+    RunStarted,
+    RunMeta,
+}
+
+/// One retired `RunStarted` / `AssistantRunMeta` row as
+/// [`SessionEventStore::load_retired_run_anchors`] hands it over: its
+/// position and its kind, nothing of its payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetiredRunAnchor {
+    pub seq: EventSeq,
+    pub kind: RetiredAnchorKind,
+}
 
 /// The one encoder: `v` on every row, `ignorable` only when the policy table
 /// says so (absent otherwise — never a literal `false`).
@@ -859,6 +905,58 @@ impl SessionEventStore for SqliteEventStore {
         Ok(retired.unwrap_or(false))
     }
 
+    async fn load_retired_run_anchors(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<RetiredRunAnchor>, SessionError> {
+        let session_key = session_id_to_string(session_id)?;
+        // Same discipline as `load_run_markers`: the IN-list is rendered from
+        // the constant the census pins, never spelled inline, and the column
+        // is decoded through the same constant — one table, two directions.
+        let in_list = RUN_ANCHOR_EVENT_TYPES
+            .iter()
+            .map(|(t, _)| format!("'{t}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT seq, event_type
+             FROM session_events
+             WHERE session_id = ?1 AND retired_at IS NOT NULL
+               AND event_type IN ({in_list})
+             ORDER BY seq ASC"
+        );
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![session_key], |row| {
+                let seq: i64 = row.get(0)?;
+                let event_type: String = row.get(1)?;
+                Ok((seq, event_type))
+            })
+            .map_err(|e| SessionError::Storage(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, event_type) = row.map_err(|e| SessionError::Storage(e.to_string()))?;
+            let seq = u64::try_from(seq)
+                .map_err(|_| SessionError::Storage(format!("stored seq {seq} is negative")))?;
+            // The IN-list admits exactly these tags, so a miss here is the
+            // constant disagreeing with itself — refuse rather than guess.
+            let kind = RUN_ANCHOR_EVENT_TYPES
+                .iter()
+                .find(|(t, _)| *t == event_type)
+                .map(|(_, k)| *k)
+                .ok_or_else(|| {
+                    SessionError::Storage(format!(
+                        "retired anchor row {seq} has event_type {event_type:?}, outside the anchor set"
+                    ))
+                })?;
+            out.push(RetiredRunAnchor { seq, kind });
+        }
+        Ok(out)
+    }
+
     async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError> {
         let conn = self.conn.lock().await;
         // The IN-list is rendered from `MARKER_EVENT_TYPES`, never spelled
@@ -1054,6 +1152,15 @@ const fn extract_turn_id(event: &SessionEvent) -> Option<uuid::Uuid> {
 /// (`tests::marker_event_types_are_exactly_the_reducers_marker_set`).
 pub(crate) const MARKER_EVENT_TYPES: [&str; 3] =
     ["run_started", "run_finished", "resume_attempted"];
+
+/// The `event_type_tag` of each [`RetiredAnchorKind`], in the enum's order —
+/// the list `load_retired_run_anchors` selects by and the map it decodes the
+/// column with. Pinned against `event_type_tag` over the real variants by
+/// `tests::retired_anchor_event_types_are_the_two_anchor_kinds_tags`.
+pub(crate) const RUN_ANCHOR_EVENT_TYPES: [(&str, RetiredAnchorKind); 2] = [
+    ("run_started", RetiredAnchorKind::RunStarted),
+    ("assistant_run_meta", RetiredAnchorKind::RunMeta),
+];
 
 /// Static discriminant string for the `event_type` column.
 ///
@@ -1414,6 +1521,13 @@ pub(crate) mod test_support {
             seq: EventSeq,
         ) -> Result<bool, SessionError> {
             self.inner.is_retired(session_id, seq).await
+        }
+
+        async fn load_retired_run_anchors(
+            &self,
+            session_id: &SessionId,
+        ) -> Result<Vec<RetiredRunAnchor>, SessionError> {
+            self.inner.load_retired_run_anchors(session_id).await
         }
 
         async fn load_run_markers(&self) -> Result<Vec<(SessionId, MarkerSlice)>, SessionError> {
@@ -1812,6 +1926,118 @@ mod tests {
         let declared: std::collections::BTreeSet<&str> =
             MARKER_EVENT_TYPES.iter().copied().collect();
         assert_eq!(derived, declared);
+    }
+
+    /// The anchor IN-list is `event_type_tag` over the two variants the
+    /// positional join reads — derived through the one sampler, so a renamed
+    /// tag cannot leave the retired read selecting nothing.
+    #[test]
+    fn retired_anchor_event_types_are_the_two_anchor_kinds_tags() {
+        let all: Vec<SessionEvent> = crate::session::events::fixtures::sample_of_every_kind()
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let tag_of = |pick: fn(&SessionEvent) -> bool| -> &'static str {
+            let tags: std::collections::BTreeSet<&str> = all
+                .iter()
+                .filter(|e| pick(e))
+                .map(|e| event_type_tag(e))
+                .collect();
+            assert_eq!(tags.len(), 1, "one variant, one tag: {tags:?}");
+            tags.into_iter().next().unwrap()
+        };
+        let derived = [
+            (
+                tag_of(|e| matches!(e, SessionEvent::RunStarted { .. })),
+                RetiredAnchorKind::RunStarted,
+            ),
+            (
+                tag_of(|e| matches!(e, SessionEvent::AssistantRunMeta { .. })),
+                RetiredAnchorKind::RunMeta,
+            ),
+        ];
+        assert_eq!(derived, RUN_ANCHOR_EVENT_TYPES);
+    }
+
+    /// The retired read sees ONLY retired rows, only the two anchor kinds, by
+    /// kind and position — and a live meta stays invisible to it. This is the
+    /// store half of the rewind re-bill pin
+    /// (`session_projector::tests::a_rewind_inside_a_billed_run_does_not_bill_it_again`).
+    #[tokio::test]
+    async fn retired_run_anchors_are_the_retired_openers_and_metas_only() {
+        let store = make_store();
+        let sid = sample_session_id();
+        let tid = uuid::Uuid::new_v4();
+        let at = now_ms();
+        let meta = |run: &str| SessionEvent::AssistantRunMeta {
+            turn_id: tid,
+            run_id: run.into(),
+            context_tokens: None,
+            context_window: None,
+            total_tokens: None,
+            cost_usd: None,
+            model: None,
+            model_provider: None,
+            at,
+        };
+        let log = [
+            run_started("a", at),
+            turn_started(tid, at),
+            run_finished("a", at),
+            meta("a"),
+            run_started("b", at),
+            run_finished("b", at),
+            meta("b"),
+        ];
+        for (i, e) in log.iter().enumerate() {
+            store.append(&sid, i as EventSeq + 1, e, at).await.unwrap();
+        }
+        assert!(
+            store
+                .load_retired_run_anchors(&sid)
+                .await
+                .unwrap()
+                .is_empty(),
+            "nothing retired, nothing to see — a live meta is not an anchor here"
+        );
+        // A rewind that cuts inside run b: rows 6.. retired, the closer
+        // appended in the same batch.
+        store
+            .append_batch(
+                &sid,
+                8,
+                &[(run_finished("b", at), at)],
+                Some(Retire::From(6)),
+                Durability::Normal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load_retired_run_anchors(&sid).await.unwrap(),
+            vec![RetiredRunAnchor {
+                seq: 7,
+                kind: RetiredAnchorKind::RunMeta,
+            }],
+            "run b's retired meta, not its live opener, not the retired closer"
+        );
+        store.retire_from(&sid, 1).await.unwrap();
+        let kinds: Vec<(EventSeq, RetiredAnchorKind)> = store
+            .load_retired_run_anchors(&sid)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.seq, a.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (1, RetiredAnchorKind::RunStarted),
+                (4, RetiredAnchorKind::RunMeta),
+                (5, RetiredAnchorKind::RunStarted),
+                (7, RetiredAnchorKind::RunMeta),
+            ],
+            "everything retired: both openers and both metas, in seq order, no turn / finish rows"
+        );
     }
 
     // -----------------------------------------------------------------------
