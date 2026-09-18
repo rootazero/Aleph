@@ -2507,6 +2507,8 @@
     "mode_playwright_desc": "Fast, invisible browser powered by @playwright/cli. Best for automated tasks like web scraping and screenshots.",
     "mode_devtools_label": "Chrome DevTools (Visible)",
     "mode_devtools_desc": "Connects to your running Chrome via DevTools Protocol. Access logged-in sessions and cookies.",
+    "mode_cdp_label": "Aleph CDP (obscura)",
+    "mode_cdp_desc": "Aleph’s own CDP client driving the obscura engine — the default. No Node, no Playwright, no system Chrome required; switch a profile to engine = \"chromium\" when a page needs real Chrome.",
     "engine_title": "Playwright CLI Settings",
     "engine_description": "Configure playwright-cli behavior (headless, timeouts).",
     "headless_label": "Headless Mode",

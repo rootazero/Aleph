@@ -240,6 +240,36 @@ fn DefaultModeSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                     </div>
                 </label>
 
+                // The default since the dual-engine flip. Without this option
+                // the group rendered with NOTHING selected on a fresh install —
+                // the operator's only graphical view of the default driver
+                // showing a setting with no value — and, because every control
+                // here writes on `on:change`, there was no way to write `"cdp"`
+                // back: a one-way door off the default (判据 §17).
+                <label class=move || {
+                    if config.get().default_driver == "cdp" {
+                        "flex items-start space-x-3 cursor-pointer p-3 rounded-lg border border-primary bg-primary/5 transition-colors"
+                    } else {
+                        "flex items-start space-x-3 cursor-pointer p-3 rounded-lg border border-border hover:bg-surface-hover transition-colors"
+                    }
+                }>
+                    <input
+                        type="radio"
+                        name="default_driver"
+                        value="cdp"
+                        checked=move || config.get().default_driver == "cdp"
+                        on:change=move |_| {
+                            config.update(|c| c.default_driver = "cdp".to_string());
+                            save_fn.with_value(|f| f());
+                        }
+                        class="mt-1 w-4 h-4 text-primary focus:ring-primary/30"
+                    />
+                    <div>
+                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.mode_cdp_label)}</div>
+                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.mode_cdp_desc)}</div>
+                    </div>
+                </label>
+
                 <SaveFeedback saving=saving save_error=save_error save_success=save_success />
             </div>
         </div>
@@ -531,5 +561,47 @@ fn SaveFeedback(
                 None
             }
         }}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every driver the server can report has a control here.
+    ///
+    /// The defect: the group rendered two radios against a three-value wire
+    /// vocabulary. When the server's default moved to the third, both radios
+    /// went unchecked — the operator's only graphical view of the default
+    /// driver showed a setting with no value — and since every control writes
+    /// on `on:change`, there was no way to write it back. A one-way door off
+    /// the default (判据 §17: point at the line that renders it, or it is not
+    /// shipped).
+    ///
+    /// The list is `aleph_protocol`'s, which
+    /// `alephcore::gateway::handlers::browser_config`'s
+    /// `the_shared_driver_wire_list_is_exactly_this_enums` pins to
+    /// `BrowserDriver::ALL`. So a driver added on the server reaches this
+    /// assertion, and neither side holds a private copy (判据 §10).
+    ///
+    /// A source census rather than a render, because this crate compiles for
+    /// WASM and has no DOM in `cargo test`: what it can check is that the line
+    /// exists, which is exactly the claim.
+    #[test]
+    fn the_default_mode_group_offers_every_driver_the_server_can_report() {
+        let src = include_str!("browser.rs");
+        for wire in aleph_protocol::browser::BROWSER_DRIVER_WIRE {
+            let radio = format!("value=\"{wire}\"");
+            assert!(
+                src.contains(&radio),
+                "no radio renders {wire:?}: the server can report it as \
+                 default_driver and this section would show nothing selected, \
+                 with no control that writes it back"
+            );
+            let checked = format!("default_driver == \"{wire}\"");
+            assert!(
+                src.contains(&checked),
+                "the {wire:?} radio has no `checked` comparison, so it renders \
+                 unselected even when it IS the default"
+            );
+        }
     }
 }

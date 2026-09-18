@@ -2507,6 +2507,8 @@
     "mode_playwright_desc": "由 @playwright/cli 驱动的快速、隐形浏览器。最适合网页抓取和截图等自动化任务。",
     "mode_devtools_label": "Chrome DevTools（可见）",
     "mode_devtools_desc": "通过 DevTools 协议连接到正在运行的 Chrome。可访问已登录的会话和 Cookie。",
+    "mode_cdp_label": "Aleph CDP（obscura）",
+    "mode_cdp_desc": "Aleph 自带的 CDP 客户端驱动 obscura 引擎 —— 默认选项。无需 Node、Playwright 或系统 Chrome；需要真实 Chrome 时将配置文件切换到 engine = \"chromium\"。",
     "engine_title": "Playwright CLI 设置",
     "engine_description": "配置 playwright-cli 行为（无头模式、超时）。",
     "headless_label": "无头模式",
