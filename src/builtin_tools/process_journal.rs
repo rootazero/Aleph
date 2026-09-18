@@ -15,8 +15,10 @@
 //! the identical problem for background sub-agents, rather than invented:
 //!
 //! * layout `<dir>/job-<id>/state.json` (atomically rewritten via
-//!   [`crate::utils::atomic_io::write_atomic`], exactly twice per job — spawn
-//!   and terminal) plus an append-only `output.txt` trail;
+//!   [`crate::utils::atomic_io::write_atomic`] three times over a job's own
+//!   life — intent at spawn, pid once the driver has the child, terminal —
+//!   plus the boot passes that tombstone or stamp it) and an append-only
+//!   `output.txt` trail;
 //! * a three-value [`JobPhase`] whose crash verdict is deliberately **not**
 //!   "failed";
 //! * [`init_and_reconcile`] overwrites every `Running` row with a terminal
@@ -33,20 +35,24 @@
 //!
 //! ## What does NOT transfer from the sub-agent sidecar
 //!
-//! **1. There is no pid, so there is no liveness probe.**
+//! **1. There is a pid, so there is a liveness probe — and it never kills.**
 //! `background_persistence` may assert "every `Running` record at boot is an
 //! orphan" because its runs are in-process `tokio` tasks: if the process is
 //! gone, the run is gone. A background `bash` job is a **real OS process**. It
 //! is spawned with `kill_on_drop(true)`, so an orderly teardown reaps it — but
 //! a `SIGKILL`ed daemon never drops anything, and the child can outlive it.
-//! Nothing in [`ProcEntry`](super::process_registry) records the child's pid
-//! (it holds only an `AbortHandle`), and plumbing one through was **decided
-//! against for this round**. The recovered row therefore has to say something
-//! stronger and more honest than the sub-agent one:
-//! [`JobPhase::Interrupted`] renders as `interrupted_by_restart_liveness_unknown`
-//! and carries an advisory stating that Aleph no longer holds a handle and
-//! **did not check** whether the OS process is still alive. It is never
-//! reported as a failure — nothing about the command was judged.
+//! So [`record_child`] stamps the row with the child's pid and creation time
+//! once the driver has the child (the third write), and at boot
+//! [`probe_liveness`] asks the OS whether that exact process — same pid, same
+//! creation time — still exists. The answer lands on the
+//! [`JobPhase::Interrupted`] row as one of three arms:
+//! [`Tombstone::ExitedDuringRestart`], [`Tombstone::StillRunningUnattached`]
+//! (the orphan is **recorded, never signalled or reaped** — Aleph holds no
+//! handle to it and does not take one), or no tombstone at all, which keeps
+//! the `interrupted_by_restart_liveness_unknown` wording for a row that never
+//! got a pid or whose probe could not answer — an unknown is never spelled as
+//! an exit. It is never reported as a failure — nothing about the command was
+//! judged.
 //!
 //! **2. Newlines are preserved.** `background_persistence::mask_line` collapses
 //! newlines because it stores single-line progress notes. A stdout trail must
@@ -227,7 +233,43 @@ pub enum JobPhase {
     Settled,
     /// Found `Running` on disk with no daemon behind it. A statement about the
     /// **previous process**, never about the command: see [`init_and_reconcile`].
+    /// What became of the OS process is a separate fact, [`JobRecord::tombstone`].
     Interrupted,
+}
+
+/// Which driver owns a row. Pre-existing rows carry no `kind` and decode as
+/// `Bash`, which is what every row was before the field existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum JournalKind {
+    /// A background `bash` job, addressed by its registry id (`job-<id>`).
+    #[default]
+    Bash,
+    /// A PTY session, addressed by its uuid ([`JobRecord::pty_session_id`]).
+    Pty,
+}
+
+/// What boot learned about a `Running` row's OS process. `None` on an
+/// `Interrupted` row = no pid, or the probe could not answer: today's
+/// "liveness unknown" wording stays as the third arm (criterion #8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Tombstone {
+    /// No process with that pid and creation time exists any more.
+    ExitedDuringRestart,
+    /// The process is still there and Aleph holds no handle to it. **Recorded
+    /// only**: nothing in this module signals, kills or reaps it — the pid is
+    /// carried so a later face can *tell* the owner, and that is all.
+    StillRunningUnattached { pid: u32 },
+}
+
+/// One answer from [`probe_liveness`]. `Unknown` is a first-class value, not a
+/// fallback: it is what the instrument says when it cannot say `Exited`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    Exited,
+    StillRunning,
+    Unknown,
 }
 
 /// Wire label handed to the model for one journal row.
@@ -249,14 +291,20 @@ pub enum JobPhase {
 ///
 /// `Interrupted` says more than the sub-agent sidecar's `interrupted_by_restart`
 /// on purpose: a `bash` child is a real OS process that can outlive a
-/// `SIGKILL`ed daemon, and this module records no pid, so it cannot and does
-/// not probe whether the process is still alive. Neither non-terminal label
-/// reads as a failure.
+/// `SIGKILL`ed daemon, so the label reads the [`Tombstone`] the boot probe
+/// wrote — `exited_during_restart` / `still_running_unattached` — and falls
+/// back to `interrupted_by_restart_liveness_unknown` when there is none: no
+/// pid was ever recorded, or the probe could not answer. An unknown is never
+/// spelled as an exit. None of the non-terminal labels reads as a failure.
 #[must_use]
 pub(crate) fn settled_label(record: &JobRecord) -> &'static str {
     match record.phase {
         JobPhase::Running => "running_unconfirmed",
-        JobPhase::Interrupted => "interrupted_by_restart_liveness_unknown",
+        JobPhase::Interrupted => match record.tombstone {
+            Some(Tombstone::ExitedDuringRestart) => "exited_during_restart",
+            Some(Tombstone::StillRunningUnattached { .. }) => "still_running_unattached",
+            None => "interrupted_by_restart_liveness_unknown",
+        },
         JobPhase::Settled => match record.outcome.as_deref() {
             Some(o) if o == Verdict::Completed.label() => "completed",
             Some(o) if o == Verdict::Killed.label() => "killed",
@@ -348,6 +396,31 @@ pub struct JobRecord {
     /// describes has returned — never in advance of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub announced_boot: Option<u64>,
+    /// Which driver owns the row. `#[serde(default)]` = `Bash`, so every row
+    /// written before the field existed keeps decoding as what it was.
+    #[serde(default)]
+    pub kind: JournalKind,
+    /// The PTY session's uuid, for a [`JournalKind::Pty`] row. `None` on every
+    /// Bash row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pty_session_id: Option<String>,
+    /// OS pid of the child, written by [`record_child`] once the driver has
+    /// it. `None` until then — and forever on a row whose daemon died in the
+    /// gap between the intent write and the child's arrival, which is why the
+    /// boot probe can only run on rows that carry one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// Unix ms at which the OS says that pid's process was created, read
+    /// through the same routine [`probe_liveness`] compares against. The
+    /// anti-pid-reuse signal: a recycled pid points at a different process
+    /// with a different creation time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_created_at_ms: Option<u64>,
+    /// What boot learned about the OS process of an `Interrupted` row. `None`
+    /// = no pid, or the probe could not answer — the liveness-unknown wording,
+    /// never a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tombstone: Option<Tombstone>,
 }
 
 impl JobRecord {
@@ -399,7 +472,11 @@ pub struct RecoveredJob {
 /// job can be spawned, so *every* `Running` row on disk belonged to a daemon
 /// that is gone. Each one gets a terminal [`JobPhase::Interrupted`] state
 /// written over it (never deleted): a record that only ever says "finished"
-/// cannot distinguish "never ran" from "ran and the write was lost".
+/// cannot distinguish "never ran" from "ran and the write was lost". A row
+/// that carries a pid is also asked of the OS through [`probe_liveness`], and
+/// the answer — exited, still running, or no answer — rides along as its
+/// [`Tombstone`]; a still-running orphan is re-asked on every later boot and
+/// rewritten only by a definite exit.
 ///
 /// This function itself **broadcasts nothing** — an interrupted row drives no
 /// proactive turn, it is simply there the next time the model polls, so this
@@ -413,6 +490,80 @@ pub struct RecoveredJob {
 /// Idempotent. Returns 0 when the directory cannot be created — persistence
 /// stays off rather than failing boot (P7).
 pub fn init_and_reconcile(dir: PathBuf) -> usize {
+    reconcile_with(dir, &probe_liveness)
+}
+
+/// Test-only: [`init_and_reconcile`] with the liveness probe scripted, so a
+/// test can boot against "exited" / "still running" / "unknown" without owning
+/// a real orphan. The production entry stays the one above — this is the same
+/// body with one argument swapped, never a second reconcile path.
+#[cfg(test)]
+pub(crate) fn init_and_reconcile_with_probe(
+    dir: PathBuf,
+    probe: &dyn Fn(u32, Option<u64>) -> Liveness,
+) -> usize {
+    reconcile_with(dir, probe)
+}
+
+/// What an `Interrupted` row's tombstone should say, given what the probe
+/// answers for its pid. `None` twice over: a row with no pid has nothing to
+/// ask about, and an `Unknown` answer is not allowed to become a verdict —
+/// `Unknown` and `Exited` look identical to a caller who only checks "is the
+/// pid gone", which is exactly why the probe distinguishes them (criterion #8).
+fn tombstone_for(
+    record: &JobRecord,
+    probe: &dyn Fn(u32, Option<u64>) -> Liveness,
+) -> Option<Tombstone> {
+    let pid = record.pid?;
+    match probe(pid, record.process_created_at_ms) {
+        Liveness::Exited => Some(Tombstone::ExitedDuringRestart),
+        Liveness::StillRunning => Some(Tombstone::StillRunningUnattached { pid }),
+        Liveness::Unknown => None,
+    }
+}
+
+/// sysinfo reports start times in whole seconds on every platform, so a
+/// creation time recorded at spawn and one read at boot can differ by the
+/// rounding and nothing else.
+const CREATION_TIME_TOLERANCE_MS: u64 = 2_000;
+
+/// Pure boundary: one sysinfo refresh of `pid`. `Unknown` whenever the
+/// instrument cannot answer — it cannot see THIS process (so it cannot be
+/// trusted about any other), the pid is present with no creation time to
+/// compare, or sysinfo reports a start time of 0 (its "could not open the
+/// process" value on Windows). `Exited` only when no process has the pid, it
+/// is a zombie, or it started at another time — a recycled pid is a different
+/// process. Reads the creation time through the same refresh
+/// [`crate::utils::process_alive::process_start_time`] uses, so the value
+/// [`record_child`] stored and the value compared here are one derivation.
+///
+/// Never signals: the answer is recorded on the row, and the orphan is left
+/// exactly as it was found.
+#[must_use]
+pub fn probe_liveness(pid: u32, process_created_at_ms: Option<u64>) -> Liveness {
+    use crate::utils::process_alive::{default_refresh_kind, with_process_specifics};
+    use sysinfo::ProcessStatus::{Dead, Zombie};
+    let facts = |p: &sysinfo::Process| (p.start_time(), p.status());
+    if with_process_specifics(std::process::id(), default_refresh_kind(), facts).is_none() {
+        return Liveness::Unknown;
+    }
+    match (
+        with_process_specifics(pid, default_refresh_kind(), facts),
+        process_created_at_ms,
+    ) {
+        (None, _) | (Some((_, Zombie | Dead)), _) => Liveness::Exited,
+        (Some((0, _)), _) | (Some(_), None) => Liveness::Unknown,
+        (Some((start_s, _)), Some(created))
+            if (start_s.saturating_mul(1000)).abs_diff(created) <= CREATION_TIME_TOLERANCE_MS =>
+        {
+            Liveness::StillRunning
+        }
+        (Some(_), Some(_)) => Liveness::Exited,
+    }
+}
+
+/// The body of [`init_and_reconcile`], with the liveness probe injected.
+fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) -> usize {
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tracing::warn!(error = %e, dir = %dir.display(), "process_journal: disabled (cannot create store dir)");
         return 0;
@@ -451,11 +602,28 @@ pub fn init_and_reconcile(dir: PathBuf) -> usize {
             let tombstone = JobRecord {
                 phase: JobPhase::Interrupted,
                 ended_ms: Some(now),
+                tombstone: tombstone_for(&record, probe),
                 ..record
             };
             write_state(&dir, &tombstone);
             tombstoned += 1;
             index.insert(tombstone.id, tombstone);
+        } else if matches!(
+            record.tombstone,
+            Some(Tombstone::StillRunningUnattached { .. })
+        ) && tombstone_for(&record, probe) == Some(Tombstone::ExitedDuringRestart)
+        {
+            // Re-ask an orphan that outlived one restart. Only a definite
+            // `Exited` rewrites; `Unknown` keeps the previous answer, and
+            // `StillRunning` is the previous answer. `ended_ms` is NOT
+            // re-stamped — it dates the restart that orphaned it, and the
+            // re-ask is not a second orphaning.
+            let record = JobRecord {
+                tombstone: Some(Tombstone::ExitedDuringRestart),
+                ..record
+            };
+            write_state(&dir, &record);
+            index.insert(record.id, record);
         } else if is_undelivered_completion(&record, now) {
             // BT-D-R4-16: the delivery stamp belongs to `record_announced`,
             // called by `init_and_announce` AFTER the broadcast returns — never
@@ -565,10 +733,10 @@ pub(crate) fn id_floor() -> u64 {
 /// Three conditions, and each excludes a different population:
 ///
 /// * `Settled` — an `Interrupted` row is a statement about the *previous
-///   daemon*, and this module deliberately makes no claim about whether that
-///   job's OS process is still alive; announcing "it was interrupted, liveness
-///   unknown" would spend a turn on a verdict nobody reached. Those rows stay
-///   poll-able, which is the recorded decision.
+///   daemon* and, through its tombstone, about the OS process — never about
+///   what the command achieved; announcing "it was interrupted" would spend a
+///   turn on a verdict nobody reached. Those rows stay poll-able, which is
+///   the recorded decision.
 /// * `outcome == completed` — a killed job is the owner's own action, so its
 ///   outcome is not news (the same stance `subagent_tool::spawn` takes for a
 ///   cancelled child). Without this test every `kill` would queue an announce
@@ -697,9 +865,48 @@ pub(crate) fn record_spawn(id: u64, command: &str, owner: Option<&str>) {
         partial_file: Some(PARTIAL_FILE.to_string()),
         announce_attempts: 0,
         announced_boot: None,
+        kind: JournalKind::Bash,
+        pty_session_id: None,
+        pid: None,
+        process_created_at_ms: None,
+        tombstone: None,
     };
     write_state(&dir, &record);
     index_lock().insert(id, record);
+}
+
+/// The creation time a child row carries, in unix ms — off the SAME routine
+/// the boot probe compares against
+/// ([`crate::utils::process_alive::process_start_time`], seconds, scaled to
+/// ms here and in [`probe_liveness`] alike), so the stored value and the
+/// compared value are one derivation. A start time of 0 is sysinfo's "could
+/// not open the process", not a time: it reads as `None`, so the probe
+/// answers `Unknown` for it instead of comparing against a number that was
+/// never one. Every row kind that records a child goes through this.
+fn creation_time_ms(pid: u32) -> Option<u64> {
+    crate::utils::process_alive::process_start_time(i32::try_from(pid).unwrap_or(-1))
+        .filter(|s| *s != 0)
+        .map(|s| s.saturating_mul(1000))
+}
+
+/// Third write of a job's life: the driver has the OS child, and the row
+/// gains its pid and [`creation_time_ms`].
+///
+/// No-op without an intent row — the reconcile can only tombstone what was
+/// written before the crash, so the intent must come first and this may
+/// only ever *add* to it. An upsert here would let a pid-only row exist with
+/// no owner, no command and no start, and that row would read as a job.
+pub(crate) fn record_child(id: u64, pid: u32) {
+    let Some(dir) = store_dir() else { return };
+    let created = creation_time_ms(pid);
+    let record = {
+        let mut index = index_lock();
+        let Some(r) = index.get_mut(&id) else { return };
+        r.pid = Some(pid);
+        r.process_created_at_ms = created;
+        r.clone()
+    };
+    write_state(&dir, &record);
 }
 
 /// Rewrite a job's live-tail capture — "here is what it had produced".
@@ -1309,6 +1516,164 @@ mod tests {
     }
 
     // ========================================================================
+    // The pid, the probe, and the two-arm tombstone
+    // ========================================================================
+
+    /// Every row written before `kind` / `pid` / `tombstone` existed must keep
+    /// decoding — as the Bash row it always was, with nothing probed.
+    #[test]
+    fn an_old_row_without_the_new_fields_still_decodes_as_a_bash_row() {
+        let r: JobRecord = serde_json::from_str(
+            r#"{"id":7,"owner":"o","command":"c","started_ms":1,"phase":"running"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                r.kind,
+                r.pid,
+                r.process_created_at_ms,
+                r.tombstone,
+                r.pty_session_id
+            ),
+            (JournalKind::Bash, None, None, None, None)
+        );
+    }
+
+    /// The third write may only ADD to an intent row: a pid that arrives for
+    /// an id nobody journaled is dropped, not upserted into a row with no
+    /// owner. And the creation time it stamps is real — asserted on the bytes
+    /// on disk, since the probe at the next boot reads those, not the index.
+    #[test]
+    fn record_child_needs_the_intent_row_and_stamps_pid_plus_creation_time() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        let me = std::process::id();
+        record_child(5, me); // before the intent: no-op
+        assert!(lookup(5, Some(OWNER)).is_none());
+        // Asked of the disk as well as the index: an upsert that invents a row
+        // with no owner is invisible to `lookup` (nothing is addressable by
+        // nobody) but still lands a `state.json` — and `record_spawn` would
+        // then discard it as a reissued id, silently, so the index alone
+        // cannot tell "no-op" from "wrote a row nobody can read".
+        assert!(
+            !tmp.path().join("job-5").exists(),
+            "a pid for an id nobody journaled must not create a row"
+        );
+        record_spawn(5, "sleep 300", Some(OWNER));
+        assert_eq!(
+            lookup(5, Some(OWNER)).unwrap().record.pid,
+            None,
+            "the intent row carries no pid"
+        );
+        record_child(5, me);
+        let on_disk: JobRecord = serde_json::from_slice(
+            &std::fs::read(tmp.path().join("job-5").join(STATE_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!((on_disk.pid, on_disk.kind), (Some(me), JournalKind::Bash));
+        assert!(
+            on_disk.process_created_at_ms.is_some(),
+            "sysinfo must report this process's start time"
+        );
+        disable_for_test();
+    }
+
+    /// The instrument, against the one process every test can vouch for.
+    /// `Unknown` is a real answer: a pid that is present but cannot be
+    /// verified is not a verdict either way.
+    #[test]
+    fn probe_liveness_answers_all_three_ways() {
+        let me = std::process::id();
+        let created = crate::utils::process_alive::process_start_time(me as i32).map(|s| s * 1000);
+        assert_eq!(probe_liveness(me, created), Liveness::StillRunning);
+        assert_eq!(
+            probe_liveness(me, created.map(|c| c + 60_000)),
+            Liveness::Exited,
+            "a recycled pid is not this process"
+        );
+        assert_eq!(
+            probe_liveness(me, None),
+            Liveness::Unknown,
+            "present but unverifiable is not a verdict"
+        );
+        assert_eq!(probe_liveness(u32::MAX - 7, Some(1)), Liveness::Exited);
+    }
+
+    /// Boot against a scripted probe and read row 9 back.
+    fn boot_with(dir: &std::path::Path, answer: Liveness) -> JobRecord {
+        init_and_reconcile_with_probe(dir.to_path_buf(), &move |_, _| answer);
+        lookup(9, Some(OWNER)).expect("row survives").record
+    }
+
+    /// The two arms, and the re-ask: an orphan found still running is asked
+    /// again at the next boot, and a definite exit rewrites it — without
+    /// re-dating the restart that orphaned it. An exit is final.
+    #[test]
+    fn reconcile_writes_the_probed_arm_and_reasks_a_still_running_one() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_spawn(9, "sleep 300", Some(OWNER));
+        record_child(9, std::process::id());
+        disable_for_test();
+        let r = boot_with(tmp.path(), Liveness::StillRunning);
+        assert_eq!(
+            (r.phase, r.tombstone),
+            (
+                JobPhase::Interrupted,
+                Some(Tombstone::StillRunningUnattached {
+                    pid: std::process::id()
+                })
+            )
+        );
+        assert_eq!(settled_label(&r), "still_running_unattached");
+        let stamp = r.ended_ms;
+        let r = boot_with(tmp.path(), Liveness::Exited); // the orphan died between boots
+        assert_eq!(
+            (r.tombstone, settled_label(&r), r.ended_ms),
+            (
+                Some(Tombstone::ExitedDuringRestart),
+                "exited_during_restart",
+                stamp
+            )
+        );
+        let r = boot_with(tmp.path(), Liveness::StillRunning); // exited is final: not re-asked
+        assert_eq!(r.tombstone, Some(Tombstone::ExitedDuringRestart));
+        disable_for_test();
+    }
+
+    /// Criterion #8: an answer the instrument could not give is not an exit.
+    /// A row with a pid whose probe says `Unknown`, and a row that never got a
+    /// pid, both keep the pre-existing liveness-unknown wording — and none of
+    /// the three labels reads as a failure.
+    #[test]
+    fn an_unknown_probe_and_a_pidless_row_keep_the_liveness_unknown_wording() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_spawn(9, "sleep 300", Some(OWNER));
+        record_child(9, std::process::id());
+        record_spawn(10, "sleep 300", Some(OWNER)); // never got a pid
+        disable_for_test();
+        let r = boot_with(tmp.path(), Liveness::Unknown);
+        assert_eq!(
+            (r.tombstone, settled_label(&r)),
+            (None, "interrupted_by_restart_liveness_unknown")
+        );
+        let ten = lookup(10, Some(OWNER)).unwrap().record;
+        assert_eq!((ten.phase, ten.tombstone), (JobPhase::Interrupted, None));
+        for l in [
+            "exited_during_restart",
+            "still_running_unattached",
+            settled_label(&ten),
+        ] {
+            assert!(!l.contains("fail"), "{l}");
+        }
+        disable_for_test();
+    }
+
+    // ========================================================================
     // The label the model reads first
     // ========================================================================
 
@@ -1326,6 +1691,11 @@ mod tests {
             partial_file: None,
             announce_attempts: 0,
             announced_boot: None,
+            kind: JournalKind::Bash,
+            pty_session_id: None,
+            pid: None,
+            process_created_at_ms: None,
+            tombstone: None,
         })
     }
 
@@ -1404,6 +1774,11 @@ mod tests {
                 partial_file: Some(PARTIAL_FILE.to_string()),
                 announce_attempts,
                 announced_boot: None,
+                kind: JournalKind::Bash,
+                pty_session_id: None,
+                pid: None,
+                process_created_at_ms: None,
+                tombstone: None,
             },
         );
     }
@@ -1610,10 +1985,10 @@ mod tests {
         disable_for_test();
     }
 
-    /// An interrupted row makes no claim about whether its OS process is still
-    /// alive — this module records no pid and does not probe. Announcing
-    /// "interrupted, liveness unknown" would spend a turn on a verdict nobody
-    /// reached, so those rows stay poll-only, which is the recorded decision.
+    /// An interrupted row is a statement about the previous daemon and, at
+    /// most, about its OS process — never about the command. Announcing
+    /// "interrupted" would spend a turn on a verdict nobody reached, so those
+    /// rows stay poll-only, which is the recorded decision.
     #[test]
     fn an_interrupted_job_is_not_handed_back() {
         let _g = gate();

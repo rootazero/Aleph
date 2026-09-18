@@ -103,7 +103,11 @@ fn with_process<T>(pid: u32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T
 /// picks this set itself; it is spelled out here because
 /// [`with_process_specifics`] takes the kind as an argument, and a second
 /// caller passing a NARROWER set must not silently change what this one gets.
-fn default_refresh_kind() -> sysinfo::ProcessRefreshKind {
+/// `pub(crate)` so the process journal's boot probe
+/// (`builtin_tools::process_journal::probe_liveness`) reads a start time
+/// through the SAME refresh the recording side used — two refresh kinds would
+/// be two derivations of one fact.
+pub(crate) fn default_refresh_kind() -> sysinfo::ProcessRefreshKind {
     use sysinfo::{ProcessRefreshKind, UpdateKind};
     ProcessRefreshKind::nothing()
         .with_memory()
