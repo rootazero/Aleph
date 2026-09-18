@@ -164,11 +164,20 @@ Four things worth knowing before touching it:
   sentence twice, the second time as prose that no longer references the call it
   answers — duplicated text it must reconcile, not an API error that bricks
   every later turn. The boot scan never
-  exposed this (it walks sessions in a sequential loop); the on-demand face
-  does, and it can collide with the boot scan itself, which is spawned while the
-  gateway is already serving requests. `ResumeCoordinator.in_flight` claims the
-  session before anything reads the log; a collision returns `busy` rather than
-  proceeding. `already_resuming` is checked **first** when deriving the status
+  exposed this on its own: through round-2 it walked sessions in a sequential
+  loop, and since round-3 (T15) `launch_resume` spawns one `JoinSet` task per
+  candidate under `[resume] max_concurrent` permits
+  (`resume_coordinator.rs:1070-1121`, permits from `:997`, default 2 at
+  `config/types/resume.rs:46-48`) — but every task claims a **different**
+  session, so the fan-out cannot collide with itself. Before T15 the knob
+  bounded only `retrigger` and the scan was serial, so the permit pool was never
+  contended; now one permit spans a candidate's boundary repair AND re-trigger
+  and is shared with the on-demand face (`resume_session` takes the same
+  permit). The on-demand face is what can collide with the boot scan, which is
+  spawned while the gateway is already serving requests.
+  `ResumeCoordinator.in_flight` claims the session before anything reads the
+  log; a collision returns `busy` rather than proceeding (line numbers measured
+  at `dded43c7f`). `already_resuming` is checked **first** when deriving the status
   word, because a busy report has every other counter at zero and would
   otherwise render as `no_runs` — telling the operator a session has no history
   at the moment it is being resumed.
