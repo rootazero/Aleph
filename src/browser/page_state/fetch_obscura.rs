@@ -116,6 +116,17 @@ pub const DEFAULT_BOX_CONCURRENCY: usize = 16;
 /// `indexOf` → `-1` and be read as "nothing is focused", which is a denial
 /// manufactured out of an unknown (判据 §8).
 ///
+/// **`-1` is produced by exactly ONE condition — `ae === document.body` — and
+/// "cannot say" is the INITIAL value rather than a branch.** That shape is the
+/// fix, not a style choice. This expression first read
+/// `if (!ae || ae === document.body) { focus = -1; }`, which answers *"I looked
+/// and nothing has it"* for a **stub `activeElement`** that returns
+/// `undefined` — collapsing the two states at the point of production and
+/// making the whole three-state distinction downstream decorative. With the
+/// falsy case reaching no branch at all, there is no path by which not-knowing
+/// can become a denial. Pinned by
+/// `the_caret_sentinel_is_reachable_only_through_document_body`.
+///
 /// `pub` so a prober runs the same string the fetcher runs; two copies would
 /// let a QA fixture agree with a fetcher that had changed (判据 §1).
 pub const COMPUTED_FLAGS_JS: &str = "(() => { \
@@ -128,8 +139,8 @@ pub const COMPUTED_FLAGS_JS: &str = "(() => { \
     let focus = null; \
     if ('activeElement' in document) { \
         const ae = document.activeElement; \
-        if (!ae || ae === document.body) { focus = -1; } \
-        else { const i = es.indexOf(ae); focus = i >= 0 ? i : null; } \
+        if (ae === document.body) { focus = -1; } \
+        else if (ae) { const i = es.indexOf(ae); focus = i >= 0 ? i : null; } \
     } \
     return { n: es.length, first: es[0] ? es[0].tagName : '', \
              last: es.length ? es[es.length - 1].tagName : '', rows, focus }; })()";
@@ -495,12 +506,46 @@ pub async fn fetch_obscura(
             // have. Saying so is the whole job of `unreached_frames`: without
             // it, "the iframe was never read" and "the iframe is empty" are the
             // same observation.
+            //
+            // **`FRAME_ELEMENTS` is shared with `fetch_chromium`, and its
+            // NARROWNESS is re-justified here rather than inherited.** That set
+            // omits `OBJECT`/`EMBED` for a Chromium-specific reason — their
+            // absence from `contentDocumentIndex` is evidence of nothing,
+            // because they establish a browsing context only for some `type`s,
+            // and over-flagging would refuse captures of complete pages. **That
+            // reason does not transfer**: here nothing is reached, so there is
+            // no evidence to be ambiguous about, and the same omission would
+            // instead leave an `<object data="x.html">` document undeclared —
+            // the §8 shape this list exists to prevent.
+            //
+            // Kept narrow anyway, on a MEASUREMENT taken for this decision
+            // rather than on the inherited sentence: obscura creates a browsing
+            // context for `<iframe>` and nothing else. In
+            // `obscura-browser/src/page.rs` — 9044 lines, the file that owns
+            // frame lifecycle — the quoted tag `"iframe"` occurs exactly once
+            // (a `query_selector` gate at :3587 that decides whether there are
+            // any frames at all), and `"object"` and `"embed"` occur **zero**
+            // times in it; the whole frame registry is spelled `_iframeWin` /
+            // `__obscura_frameElements`. `<object>` and `<embed>` appear only in
+            // `obscura-render`'s replaced-element layout list and in a URL
+            // attribute table. So on this engine an `<object>` has no document
+            // for anyone to have missed, and declaring one unreached would be a
+            // claim about a document that does not exist — 判据 §17, the wrong
+            // label costing more than the missing one.
+            //
+            // `FRAME` (a `<frameset>` child) is the one entry that is wider
+            // than obscura needs. It is kept rather than filtered: sharing one
+            // spelling of "which elements own a browsing context" is worth more
+            // than trimming a tag that requires `<frameset>` to appear at all
+            // (判据 §12), and over-declaring there costs a confession nobody
+            // will read on a page nobody serves.
             if FRAME_ELEMENTS.contains(&node.tag_lower().to_ascii_uppercase().as_str()) {
                 unreached_frames.push(UnreachedFrame::NotCaptured(node.backend_node_id));
             }
         }
         nodes.push(node);
     }
+    cascade_effective_styles(&mut nodes);
 
     Ok(RawDom {
         engine: Engine::Obscura,
@@ -523,6 +568,86 @@ pub async fn fetch_obscura(
             nodes,
         }],
     })
+}
+
+/// Turn each node's OWN reported style into its EFFECTIVE one.
+///
+/// [`Computed`]'s doc states this as an obligation on the fetcher, in its own
+/// words: *"a fetcher must report the **effective** style of each node: a child
+/// of a `display: none` subtree must itself carry `display_none: true`"* —
+/// because [`super::build::visibility_of`] judges each node by its own
+/// `Computed` and never walks ancestors.
+///
+/// # Why the raw `getComputedStyle` answer is not that
+///
+/// Two of the four flags do **not** reach descendants on their own:
+///
+/// * `display` — the resolved value for an element inside a `display: none`
+///   subtree is **that element's own** `display` (`block`, say). CSS does not
+///   rewrite it to `none`; the subtree simply generates no boxes.
+/// * `opacity` — **not an inherited property**. A child of `opacity: 0` resolves
+///   to `1`.
+///
+/// The other two are left alone, and that is not an oversight:
+///
+/// * `visibility` **is** inherited, so the engine's per-element answer is
+///   already cascaded — and a descendant may legitimately set
+///   `visibility: visible` to reappear inside a hidden parent. OR-ing it down
+///   here would hide an element the engine reported as visible.
+/// * `cursor` is inherited too, and it is a hint rather than a verdict.
+///
+/// # A text node takes its parent's answer whole
+///
+/// `querySelectorAll('*')` names only elements, so a text node gets no row —
+/// and with `computed: None`, `visibility_of` falls through to `rect.is_some()`,
+/// which is `None` for every text node here because only elements are asked for
+/// a box. **That made every text node on every obscura page read
+/// `visible: false`**, and `render_text` drops a text node that is not visible
+/// (`render.rs:114`). A text node has no style of its own: it renders exactly as
+/// its parent element does, and all four flags are correct to take wholesale.
+///
+/// # ⚠️ This bites BECAUSE the visibility rule was fixed correctly
+///
+/// Task 10 changed `visibility_of` to consult `Computed` **first** precisely so
+/// that obscura's missing boxes would not read as hidden. That fix is right.
+/// It is also what makes `computed` authoritative and the `rect` fallback
+/// unreachable — so a `Computed` that says `display_none: false` about a node
+/// in a hidden subtree is now believed outright, and the model is shown, and
+/// handed a ref to, a control that is not on the page. **A premise consumed by
+/// the fix it justified.** `fetch_chromium` cannot have this defect — a hidden
+/// subtree gets no `DOMSnapshot` layout entry at all, so its nodes carry
+/// `computed: None` — which is exactly why "do what the sibling does" is not
+/// available here. Whoever next reaches for `getComputedStyle` on this engine
+/// meets this paragraph first.
+fn cascade_effective_styles(nodes: &mut [RawNode]) {
+    for i in 0..nodes.len() {
+        let Some(parent) = nodes[i].parent else {
+            continue;
+        };
+        // `walk` emits document order, so a parent is always already effective
+        // by the time its child is reached. A forward or self edge is not
+        // trusted rather than assumed away (P7).
+        if parent >= i {
+            continue;
+        }
+        let Some(from_parent) = nodes[parent].computed else {
+            continue;
+        };
+        let effective = match (nodes[i].kind, nodes[i].computed) {
+            (RawNodeKind::Element, Some(mut own)) => {
+                own.display_none |= from_parent.display_none;
+                own.opacity_zero |= from_parent.opacity_zero;
+                own
+            }
+            // An element with no row of its own means the cross-check dropped
+            // the flags for the whole page. It stays unknown; borrowing the
+            // parent's would manufacture a reading the engine never gave.
+            (RawNodeKind::Element, None) => continue,
+            // Text, and the document/doctype nodes that carry no style.
+            _ => from_parent,
+        };
+        nodes[i].computed = Some(effective);
+    }
 }
 
 /// The tag at a given `querySelectorAll('*')` position, or `""`.
@@ -656,8 +781,17 @@ mod tests {
     const ID_H1_TEXT: u64 = 28;
     const ID_INPUT_Q: u64 = 36;
     const ID_HIDDEN_NONE: u64 = 53;
+    const ID_HIDDEN_NONE_TEXT: u64 = 54;
     const ID_HIDDEN_VIS: u64 = 56;
     const ID_IFRAME: u64 = 83;
+    /// `HEAD`'s element children — the fixture's only hidden container that
+    /// holds ELEMENTS rather than just text, and therefore the only place the
+    /// real capture can exercise the element half of the cascade.
+    const ID_META: u64 = 5;
+    const ID_TITLE: u64 = 7;
+    const ID_STYLE: u64 = 10;
+    const ID_MAIN: u64 = 25;
+    const ID_HEADER: u64 = 16;
 
     fn box_model(x: f64, y: f64, w: f64, h: f64) -> serde_json::Value {
         let quad = serde_json::json!([x, y, x + w, y, x + w, y + h, x, y + h]);
@@ -937,10 +1071,139 @@ mod tests {
         let parent = text.parent.expect("a text node has a parent");
         assert_eq!(f.nodes[parent].backend_node_id, ID_H1);
 
+        // …and a text node is VISIBLE. `querySelectorAll('*')` names only
+        // elements, so a text node gets no row; with `computed: None` it would
+        // fall through to `rect.is_some()`, and only elements are asked for a
+        // box here — which made **every text node on every obscura page** read
+        // as invisible, and `render_text` drops a text node that is not visible.
+        // It takes its parent element's styles wholesale.
+        assert!(
+            crate::browser::page_state::build::visibility_of(text),
+            "a text node under a visible element is visible"
+        );
+        assert_eq!(text.computed, by_id(ID_H1).computed);
+        // The same rule the other way: the text inside the display:none div is
+        // hidden, because its parent is.
+        let hidden_text = by_id(ID_HIDDEN_NONE_TEXT);
+        assert_eq!(hidden_text.kind, RawNodeKind::Text);
+        assert!(hidden_text.computed.expect("inherited").display_none);
+        assert!(!crate::browser::page_state::build::visibility_of(
+            hidden_text
+        ));
+
         // M-e: contentSize is the VIEWPORT on obscura, recorded as measured.
         assert_eq!(raw.viewport.width, 1280);
         assert_eq!(raw.viewport.height, 720);
         assert_eq!(raw.viewport.content_height, 720);
+    }
+
+    /// **The styles that do not reach descendants on their own are cascaded by
+    /// the fetcher, and the two that do are left alone.**
+    ///
+    /// `Computed`'s doc puts this obligation on the fetcher: a child of a
+    /// `display: none` subtree must itself carry `display_none: true`, because
+    /// `visibility_of` judges each node alone and never walks ancestors. The raw
+    /// `getComputedStyle` answer does not provide that — the resolved `display`
+    /// of an element inside a hidden subtree is its OWN `display`, and `opacity`
+    /// is not inherited.
+    ///
+    /// **The corpus needed a shape the captured page does not otherwise give.**
+    /// Every hidden container in the real fixture (`#hidden-none`,
+    /// `#opacity-zero`) holds only a text node, so a per-element defect was
+    /// invisible to a green suite — 判据 §3, a guard covering only the shapes
+    /// its corpus contains. The shape here is `HEAD` → `META`/`TITLE`/`STYLE`,
+    /// which the real bytes do contain; what this test supplies is the ROW set
+    /// that distinguishes the cases, marking only the container. That is not a
+    /// fiction: after the fix the expression reports raw per-element values by
+    /// design, so "container none, children not" is exactly what a real engine
+    /// sends for a container hidden by a stylesheet rather than by the UA sheet.
+    #[tokio::test]
+    async fn styles_that_do_not_inherit_are_cascaded_to_descendants() {
+        // Raw rows: only the CONTAINERS carry a flag.
+        let mut rows = vec![[false, false, false, false]; ELEMENT_COUNT];
+        rows[HEAD][0] = true; // display:none on the container only
+        rows[9][2] = true; // opacity:0 on MAIN only (element index 9)
+        rows[6][1] = true; // visibility:hidden on HEADER only (element index 6)
+        let server = server_with(
+            serde_json::json!(rows),
+            ELEMENT_COUNT,
+            FIRST_TAG,
+            LAST_TAG,
+            serde_json::json!(-1),
+        )
+        .await;
+        let (conn, session) = server.connect_and_attach().await;
+        let raw = fetch_obscura(&conn, &session, 4).await.unwrap();
+        let f = &raw.frames[0];
+        let by_id = |id: u64| f.nodes.iter().find(|n| n.backend_node_id == id).unwrap();
+
+        // `display` does NOT reach descendants on its own. These three are
+        // elements, not text, which is the half the fixture could not show.
+        for id in [ID_META, ID_TITLE, ID_STYLE] {
+            let n = by_id(id);
+            assert_eq!(n.kind, RawNodeKind::Element, "id {id} must be an element");
+            assert!(
+                n.computed.expect("flags present").display_none,
+                "element {id} is inside a display:none subtree and must say so — \
+                 otherwise the model is shown, and handed a ref to, a control \
+                 that is not on the page"
+            );
+            assert!(!crate::browser::page_state::build::visibility_of(n));
+        }
+
+        // `opacity` is not an inherited property either. H1 is MAIN's child.
+        let h1 = by_id(ID_H1);
+        assert!(
+            h1.computed.expect("flags present").opacity_zero,
+            "an element inside an opacity:0 subtree is not visible"
+        );
+        assert!(!crate::browser::page_state::build::visibility_of(h1));
+        assert!(by_id(ID_MAIN).computed.unwrap().opacity_zero);
+
+        // …and `visibility` is NOT propagated by the fetcher, deliberately: CSS
+        // inherits it, so the engine's per-element answer is already cascaded,
+        // and a descendant may set `visibility: visible` to reappear. OR-ing it
+        // down here would hide an element the engine called visible.
+        assert!(by_id(ID_HEADER).computed.unwrap().visibility_hidden);
+        assert!(
+            !by_id(ID_A_HOME).computed.unwrap().visibility_hidden,
+            "visibility is inherited by CSS and must not be re-propagated here"
+        );
+
+        // A sibling subtree is untouched — the cascade follows edges, not the
+        // document order it walks in.
+        assert!(!by_id(ID_IFRAME).computed.unwrap().display_none);
+    }
+
+    /// The caret sentinel `-1` means "I looked and nothing has it", and it must
+    /// be reachable through exactly one condition.
+    ///
+    /// The expression first read `if (!ae || ae === document.body)`, which
+    /// answers `-1` for a **stub `activeElement`** returning `undefined` — the
+    /// "cannot say" case — and `-1` is what licenses `focused: Some(false)` on
+    /// every node downstream. That collapsed two of the three states at the
+    /// point of production and made the distinction the rest of this module
+    /// maintains decorative (判据 §8).
+    ///
+    /// Asserted as a **corpus count, not a `contains`**: the `contains` alone
+    /// would pass with a second, wider path to `-1` sitting beside it. `-1`
+    /// occurring exactly once in the whole constant is what makes the guarded
+    /// spelling the ONLY way to produce it.
+    #[test]
+    fn the_caret_sentinel_is_reachable_only_through_document_body() {
+        assert_eq!(
+            COMPUTED_FLAGS_JS.matches("-1").count(),
+            1,
+            "`-1` must have exactly one producer in the expression, or the \
+             guarded spelling below is not the only way to reach it: \
+             {COMPUTED_FLAGS_JS}"
+        );
+        assert!(
+            COMPUTED_FLAGS_JS.contains("if (ae === document.body) { focus = -1; }"),
+            "the only path to the `nothing is focused` sentinel must be the \
+             body check — a falsy activeElement is `cannot say`, which is the \
+             initial `null` and reaches no branch: {COMPUTED_FLAGS_JS}"
+        );
     }
 
     /// obscura reaches no iframe content, ever (U3). The `<iframe>` element is

@@ -744,8 +744,50 @@ mod engine_arm_census {
         panic!("the engine branch in {REL} never closes its brace");
     }
 
+    /// Each arm as `(variant name, the text from its `Engine::X` head to the
+    /// next arm's head or the end of the body)`, in source order.
+    ///
+    /// **This exists because counting occurrences is not counting arms.** The
+    /// first version of this census asserted
+    /// `body.matches("page_state::fetch_").count() == arms`, which is green for
+    /// one arm calling a fetcher twice beside one calling none — `2 == 2` — and
+    /// that is precisely the state it was built to catch. The reverting
+    /// mutation reddened it only by removing an occurrence and unbalancing the
+    /// total, so the guard's own falsification did not distinguish "every arm
+    /// reaches a fetcher" from "the totals happen to match" (判据 §6: the thing
+    /// to count is the arms, and a sum over them is a different quantity).
+    ///
+    /// An arm head is `Engine::<Variant>` followed by `=>`, which is what keeps
+    /// a mention of the same path inside an arm BODY from starting a new arm.
+    fn engine_arms(body: &str) -> Vec<(String, String)> {
+        let mut heads: Vec<(usize, String)> = Vec::new();
+        for engine in Engine::ALL {
+            let marker = format!("Engine::{engine:?}");
+            let mut from = 0usize;
+            while let Some(p) = body[from..].find(&marker) {
+                let at = from + p;
+                if body[at + marker.len()..].trim_start().starts_with("=>") {
+                    heads.push((at, format!("{engine:?}")));
+                }
+                from = at + marker.len();
+            }
+        }
+        heads.sort();
+        (0..heads.len())
+            .map(|k| {
+                let end = heads.get(k + 1).map_or(body.len(), |(at, _)| *at);
+                (heads[k].1.clone(), body[heads[k].0..end].to_string())
+            })
+            .collect()
+    }
+
     /// `=>` occurrences at the body's own nesting level — one per arm. A `=>`
     /// inside a nested block, tuple or index belongs to something else.
+    ///
+    /// Kept alongside [`engine_arms`] because the two answer different
+    /// questions: this one sees an arm that has NO `Engine::` head at all — a
+    /// wildcard `_ =>` — which the head walk cannot, and which would serve one
+    /// engine's page state out of another engine's fetcher.
     fn top_level_arms(body: &str) -> usize {
         let b = body.as_bytes();
         let (mut depth, mut arms, mut i) = (0i32, 0usize, 0usize);
@@ -807,19 +849,32 @@ mod engine_arm_census {
             Engine::ALL.len()
         );
 
-        // **The assertion this census exists for.** A count, not a `contains`:
-        // `contains` is existential and would stay green with one arm refusing
-        // and the other fetching, which is exactly the shipped state this
-        // replaces.
-        let fetchers = body.matches("page_state::fetch_").count();
+        // **The assertion this census exists for, asserted PER ARM.**
+        //
+        // A sum over the arms is a different quantity from a property of each
+        // arm, and the difference is not academic: `matches(..).count() == arms`
+        // is green for one arm calling a fetcher twice beside one calling none.
+        // That is the shipped state this census was built to catch, so the
+        // earlier total made the guard 恒真 in exactly its own subject case.
+        let arm_bodies = engine_arms(&body);
         assert_eq!(
-            fetchers, arms,
-            "{fetchers} of the read path's {arms} engine arm(s) call a fetcher. \
-             An arm that returns instead of fetching leaves `browser_snapshot` \
-             refusing on that engine while `page_state`'s own census still \
-             reports one builder with the right identity — that census cannot \
-             see this, which is why this one exists.\n{body}"
+            arm_bodies.len(),
+            Engine::ALL.len(),
+            "found {} arm head(s) for {} engine(s) — the head walk, not the \
+             tree.\n{body}",
+            arm_bodies.len(),
+            Engine::ALL.len()
         );
+        for (engine, arm) in &arm_bodies {
+            assert!(
+                arm.contains("page_state::fetch_"),
+                "the read path's `Engine::{engine}` arm calls no fetcher. An arm \
+                 that returns instead of fetching leaves `browser_snapshot` \
+                 refusing on that engine while `page_state`'s own census still \
+                 reports one builder with the right identity — that census \
+                 cannot see this, which is why this one exists.\n{arm}"
+            );
+        }
 
         // The specific shape that was here, named so a revert is unmistakable.
         assert!(
