@@ -368,12 +368,29 @@ impl ProcessRegistry {
     /// have. Attaching to an entry that is no longer `Running` is a no-op — a
     /// job that finished or was killed between spawn and attach must not have
     /// its rings resurrected.
+    ///
+    /// The same tail is also the wire the child's pid travels back on: the
+    /// platform driver reports it through [`LiveTail::set_child_pid`], and
+    /// the journaling registry hooks that report to
+    /// [`process_journal::record_child`], the row's third write. Hooked here
+    /// rather than in `bash_exec` so the one registry that may write rows is
+    /// the one that decides; a test registry attaches the rings and nothing
+    /// else.
     pub fn attach_live(&self, id: u64, live: Arc<LiveTail>) {
-        let mut procs = self.lock();
-        if let Some(entry) = procs.get_mut(&id) {
-            if matches!(entry.state, ProcState::Running) {
-                entry.live = Some(live);
+        let attached = {
+            let mut procs = self.lock();
+            match procs.get_mut(&id) {
+                Some(entry) if matches!(entry.state, ProcState::Running) => {
+                    entry.live = Some(live.clone());
+                    true
+                }
+                _ => false,
             }
+        };
+        // Outside the table lock: the hook fires at once when the driver got
+        // there first, and `record_child` is a file write either way.
+        if attached && self.journaled {
+            live.on_child_pid(Box::new(move |pid| process_journal::record_child(id, pid)));
         }
     }
 
@@ -1241,6 +1258,33 @@ mod tests {
                 "row #{id} must still answer after the restart"
             );
         }
+        process_journal::disable_for_test();
+    }
+
+    /// The wire from the driver to the journal runs through the tail the
+    /// registry attaches: the pid `run_child_with_drain` publishes on it is
+    /// the pid `record_child` stamps on the row. Asserted on the journal, not
+    /// on the tail — a hook that was registered but never reached the
+    /// journal would leave `child_pid()` green and the row pid-less.
+    #[tokio::test]
+    async fn attaching_a_tail_wires_the_child_pid_into_the_journal() {
+        let _g = process_journal::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        process_journal::init_and_reconcile(tmp.path().to_path_buf());
+        let reg = ProcessRegistry::new_journaled();
+        reg.seed_id_floor(process_journal::id_floor());
+        let owner = Some("boot-owner".to_string());
+        let id = unwrap_id(reg.register_running("sleep 300", owner.clone(), live_handle().await));
+        let tail = Arc::new(LiveTail::new());
+        reg.attach_live(id, tail.clone());
+        tail.set_child_pid(std::process::id());
+        assert_eq!(
+            process_journal::lookup(id, owner.as_deref())
+                .expect("row")
+                .record
+                .pid,
+            Some(std::process::id())
+        );
         process_journal::disable_for_test();
     }
 

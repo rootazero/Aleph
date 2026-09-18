@@ -291,12 +291,19 @@ impl PtySession {
         self.closed.load(Ordering::SeqCst)
     }
 
-    // A `pub fn shell_pid(&self) -> Option<u32>` accessor lived here with zero
-    // callers crate-wide (R10 / YAGNI — CUT 2026-09-04). Its doc named "the
-    // only consumer, the non-Unix foreground heuristic", and that consumer
-    // reads the FIELD directly in `maybe_probe_foreground` below — so the
-    // accessor was both dead and describing someone else's call site (判据 §1).
-    // Re-add it when a reader outside this type exists, not before.
+    /// The pid `portable-pty` reported for the process this session spawned
+    /// — the shell, normally; `None` when it would not say.
+    ///
+    /// Reader: [`super::manager::PtyManager::spawn`], which hands it to
+    /// `process_journal::record_pty_child` right after the spawn so a later
+    /// daemon can ask the OS whether this shell outlived the one that
+    /// started it. (An earlier accessor here was CUT on 2026-09-04 for having
+    /// zero callers; the non-Unix foreground heuristic reads the field
+    /// directly in `maybe_probe_foreground` below and is not a caller of
+    /// this.)
+    pub(crate) fn shell_pid(&self) -> Option<u32> {
+        self.shell_pid
+    }
 
     /// Probe the terminal's foreground process, if this tick is due. Returns
     /// whether the believed foreground process CHANGED.
@@ -683,10 +690,15 @@ const READER_UNBLOCK_GRACE: std::time::Duration = std::time::Duration::from_mill
 ///    master. That is the lever that ends the read (~2 ms, measured), and it
 ///    is applied as a remedy for a terminal that demonstrably did not EOF,
 ///    not as routine teardown.
-/// 4. `pty.exit`, then the manager removal. The manager keeps the last
+/// 4. The journal verdict, with the screen as the reader left it. Before the
+///    `pty.exit` frame so a client that hears the exit and asks the journal
+///    finds the row already settled — the ordering `bash_exec` keeps around
+///    `reg.complete` for the same reason. A `close` that got here first has
+///    already written `killed`; the journal keeps the first verdict.
+/// 5. `pty.exit`, then the manager removal. The manager keeps the last
 ///    `OWNER_RETENTION` sessions' owners precisely so this frame can still be
 ///    addressed to the client whose shell just died — see `owner_of`.
-/// 5. The runtime row, then its change edge.
+/// 6. The runtime row, then its change edge.
 fn settle_exit(
     session: &Arc<PtySession>,
     exit_code: u32,
@@ -716,6 +728,19 @@ fn settle_exit(
         drop(taken);
         let _ = reader_gone.recv_timeout(READER_UNBLOCK_GRACE);
     }
+    // Read after the drain above, so the screen holds the child's last
+    // output. The exit code is `portable-pty`'s `u32` reinterpreted the way
+    // `std::process::ExitStatus::code()` reports it on Windows (an NTSTATUS
+    // crash code such as `0xC0000005` is a negative `i32` there), so the
+    // journal's `exit_code` column reads the same for a bash child and a
+    // shell — `i32::try_from` would spell every crash code as "unknown".
+    let screen = session.with_screen(super::screen::Screen::visible_text);
+    crate::builtin_tools::process_journal::record_pty_settled(
+        &session.id,
+        crate::builtin_tools::process_journal::Verdict::Exited,
+        Some(exit_code as i32),
+        &screen,
+    );
     if let Some(bus) = bus {
         let ev = TopicEvent::new(
             aleph_protocol::pty::PTY_EXIT_TOPIC,

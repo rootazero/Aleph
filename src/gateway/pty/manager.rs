@@ -17,6 +17,7 @@ use std::sync::{LazyLock, Mutex};
 use serde::Serialize;
 
 use super::session::{PtySession, SpawnOptions};
+use crate::builtin_tools::process_journal::{self, Verdict};
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
 use crate::sync_primitives::{Arc, AtomicUsize, Ordering};
 
@@ -449,10 +450,36 @@ impl PtyManager {
     }
 
     /// Spawn a new session, evicting the oldest if at capacity.
+    ///
+    /// The session's journal row is written in the same order the bash twin
+    /// keeps: intent BEFORE the child exists, pid right after. A daemon that
+    /// dies between the two leaves a row the next boot tombstones as
+    /// "interrupted, liveness unknown"; one that dies after leaves a row the
+    /// boot can ask the OS about. The journal only records — it never kills
+    /// a shell a previous daemon left behind (U5).
     pub fn spawn(&self, opts: &SpawnOptions) -> Result<SpawnResult, String> {
         let id = uuid::Uuid::new_v4().to_string();
+        process_journal::record_pty_spawn(
+            &id,
+            opts.command.as_deref().unwrap_or("<default shell>"),
+            opts.cwd.as_deref().unwrap_or(""),
+            opts.created_by.as_deref(),
+        );
         let bus = self.current_bus();
-        let session = PtySession::spawn(id.clone(), opts, bus)?;
+        let session = match PtySession::spawn(id.clone(), opts, bus) {
+            Ok(session) => session,
+            Err(e) => {
+                // Nothing ran. Settle the intent row now rather than leave
+                // it `Running` for the next boot to read as a shell the
+                // restart interrupted — with the error as the screen, so the
+                // row says what the spawn said.
+                process_journal::record_pty_settled(&id, Verdict::Exited, None, &e);
+                return Err(e);
+            }
+        };
+        if let Some(pid) = session.shell_pid() {
+            process_journal::record_pty_child(&id, pid);
+        }
         let result = SpawnResult {
             session_id: session.id.clone(),
             shell: session.shell.clone(),
@@ -477,6 +504,9 @@ impl PtyManager {
             evicted
         };
         if let Some(old) = evicted {
+            // The operator's capacity policy ending a shell, not orphan
+            // handling: recorded as `killed` before the kill, like `close`.
+            process_journal::record_pty_settled(&old.id, Verdict::Killed, None, "");
             old.kill();
         }
         Ok(result)
@@ -556,7 +586,10 @@ impl PtyManager {
         })
     }
 
-    /// Terminate and remove a session.
+    /// Terminate and remove a session. The journal verdict (`killed`) is
+    /// written BEFORE the kill: the reader thread's exit settle follows the
+    /// kill and would otherwise record `exited` for a shell the operator
+    /// stopped — the journal keeps whichever verdict lands first.
     pub fn close(&self, session_id: &str) -> Result<(), String> {
         let session = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -566,6 +599,7 @@ impl PtyManager {
         };
         match session {
             Some(s) => {
+                process_journal::record_pty_settled(&s.id, Verdict::Killed, None, "");
                 s.kill();
                 Ok(())
             }
@@ -575,7 +609,8 @@ impl PtyManager {
 
     /// Terminate every live session, returning how many were killed. Used
     /// when the terminal switch is turned off: a gate evaluated only at
-    /// admission leaves the shell that is already open still open.
+    /// admission leaves the shell that is already open still open. Each one
+    /// is journaled `killed` before its kill, as in [`Self::close`].
     pub fn close_all(&self) -> usize {
         let sessions: Vec<Arc<PtySession>> = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -585,6 +620,7 @@ impl PtyManager {
         };
         let n = sessions.len();
         for s in sessions {
+            process_journal::record_pty_settled(&s.id, Verdict::Killed, None, "");
             s.kill();
         }
         n
@@ -831,6 +867,51 @@ mod tests {
         let mgr = PtyManager::new();
         assert!(mgr.resize("ghost", 24, 80).is_err());
         assert!(mgr.list().is_empty());
+    }
+
+    /// The three writes of a PTY session's journal life, driven through a
+    /// real child: intent (before the spawn — without it the pid stamp is a
+    /// no-op, the same intent-first pin the bash twin has), pid (after), and
+    /// the natural exit settling the row with its code. Polled off the
+    /// journal rather than the bus because the journal is the thing under
+    /// test; the reader thread's `settle_exit` is what writes the verdict.
+    #[test]
+    fn spawning_a_pty_journals_intent_then_pid_and_its_exit_settles_the_row() {
+        use crate::builtin_tools::process_journal as j;
+        let _g = j::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        j::enable_for_test(tmp.path().to_path_buf());
+        let (cmd, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/C".into(), "exit 3".into()])
+        } else {
+            ("sh", vec!["-c".into(), "exit 3".into()])
+        };
+        let sid = PtyManager::new()
+            .spawn(&SpawnOptions {
+                command: Some(cmd.into()),
+                args,
+                created_by: Some("u-alice".into()),
+                ..Default::default()
+            })
+            .expect("spawn")
+            .session_id;
+        let row = j::lookup_pty(&sid).expect("journaled").record;
+        assert!(
+            row.kind == j::JournalKind::Pty && row.pid.is_some(),
+            "{row:?}"
+        );
+        let settled = (0..100)
+            .find_map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let r = j::lookup_pty(&sid)?.record;
+                (r.phase == j::JobPhase::Settled).then_some(r)
+            })
+            .expect("exit reaches the journal within 10 s");
+        assert_eq!(
+            (settled.exit_code, settled.outcome.as_deref()),
+            (Some(3), Some("exited"))
+        );
+        j::disable_for_test();
     }
 
     /// Two clients with different viewports share one PTY, which has exactly

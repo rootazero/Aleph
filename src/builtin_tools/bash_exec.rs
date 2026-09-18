@@ -949,8 +949,11 @@ fn no_output_reason(phase: JobPhase, outcome: Option<&str>) -> &'static str {
 ///
 /// The interrupted case says more than the sub-agent sidecar's equivalent
 /// because it knows less: a background `bash` child is a real OS process that
-/// can outlive a `SIGKILL`ed daemon, no pid is recorded anywhere, and nothing
-/// here probes for one. Claiming it died would be inventing a verdict.
+/// can outlive a `SIGKILL`ed daemon. The journal now records the child's pid
+/// (`process_journal::record_child`, via the live tail) and the boot probe
+/// writes what it learned onto the row as its `tombstone` — but THIS face
+/// does not read that field yet, so it still may not claim the process died:
+/// that would be inventing a verdict it has not looked at.
 ///
 /// Takes the outcome as well as the phase for the same reason
 /// [`process_journal::settled_label`] takes the record: a terminal row is

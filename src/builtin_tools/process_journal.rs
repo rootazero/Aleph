@@ -1,4 +1,5 @@
-//! Cross-process execution journal for background `bash` jobs.
+//! Cross-process execution journal for background `bash` jobs and PTY
+//! sessions.
 //!
 //! [`ProcessRegistry`](super::process_registry::ProcessRegistry) is pure
 //! process memory: a `HashMap` behind a `Lazy`, nothing on disk. A daemon
@@ -9,15 +10,21 @@
 //! exists, and here is what was recorded about it"*. A purely in-memory
 //! registry does not go **empty** across a restart, it **lies**, and the
 //! caller's reasonable response to "never existed" is to redo the work.
+//! [`crate::gateway::pty::PtyManager`] is the same shape for terminal
+//! sessions, and its shells are the same kind of orphan a `SIGKILL`ed daemon
+//! leaves behind, so its rows live here too — under their own key
+//! ([`JobRecord::pty_session_id`]) and their own read face ([`lookup_pty`]),
+//! never on a bash face.
 //!
 //! This module is the sidecar that closes that gap. Its shape is deliberately
 //! copied from [`crate::agents::background_persistence`], which already solves
 //! the identical problem for background sub-agents, rather than invented:
 //!
-//! * layout `<dir>/job-<id>/state.json` (atomically rewritten via
-//!   [`crate::utils::atomic_io::write_atomic`] three times over a job's own
-//!   life — intent at spawn, pid once the driver has the child, terminal —
-//!   plus the boot passes that tombstone or stamp it) and an append-only
+//! * layout `<dir>/job-<id>/state.json` for a bash job and
+//!   `<dir>/pty-<uuid>/state.json` for a PTY session (atomically rewritten
+//!   via [`crate::utils::atomic_io::write_atomic`] three times over a row's
+//!   own life — intent at spawn, pid once the driver has the child, terminal
+//!   — plus the boot passes that tombstone or stamp it) and an append-only
 //!   `output.txt` trail;
 //! * a three-value [`JobPhase`] whose crash verdict is deliberately **not**
 //!   "failed";
@@ -38,13 +45,14 @@
 //! **1. There is a pid, so there is a liveness probe — and it never kills.**
 //! `background_persistence` may assert "every `Running` record at boot is an
 //! orphan" because its runs are in-process `tokio` tasks: if the process is
-//! gone, the run is gone. A background `bash` job is a **real OS process**. It
-//! is spawned with `kill_on_drop(true)`, so an orderly teardown reaps it — but
-//! a `SIGKILL`ed daemon never drops anything, and the child can outlive it.
-//! So [`record_child`] stamps the row with the child's pid and creation time
-//! once the driver has the child (the third write), and at boot
-//! [`probe_liveness`] asks the OS whether that exact process — same pid, same
-//! creation time — still exists. The answer lands on the
+//! gone, the run is gone. A background `bash` job is a **real OS process**,
+//! and so is a PTY session's shell. The bash child is spawned with
+//! `kill_on_drop(true)`, so an orderly teardown reaps it — but a `SIGKILL`ed
+//! daemon never drops anything, and the child can outlive it. So
+//! [`record_child`] / [`record_pty_child`] stamp the row with the child's pid
+//! and creation time once the driver has the child (the third write), and at
+//! boot [`probe_liveness`] asks the OS whether that exact process — same pid,
+//! same creation time — still exists. The answer lands on the
 //! [`JobPhase::Interrupted`] row as one of three arms:
 //! [`Tombstone::ExitedDuringRestart`], [`Tombstone::StillRunningUnattached`]
 //! (the orphan is **recorded, never signalled or reaped** — Aleph holds no
@@ -196,11 +204,20 @@ static MASKER: LazyLock<SecretMasker> = LazyLock::new(SecretMasker::new);
 /// embedding that never calls [`init_and_reconcile`].
 static STORE_DIR: LazyLock<Mutex<Option<PathBuf>>> = LazyLock::new(|| Mutex::new(None));
 
-/// Rows visible to [`lookup`] / [`list_for_scope`]: everything loaded from disk
-/// at boot, plus every job started in this process. Terminal rows stay here for
-/// as long as their tombstone survives on disk, so an id keeps answering for
-/// exactly as long as its record exists.
+/// Rows visible to [`lookup`] / [`list_for_scope`]: every **Bash** row loaded
+/// from disk at boot, plus every job started in this process. Terminal rows
+/// stay here for as long as their tombstone survives on disk, so an id keeps
+/// answering for exactly as long as its record exists. PTY rows never enter
+/// this map — their `id` is `0`, and a bash face answering for a terminal
+/// would be answering a question nobody asked.
 static INDEX: LazyLock<Mutex<HashMap<u64, JobRecord>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The PTY rows, keyed by session uuid — [`lookup_pty`]'s whole world. Kept
+/// apart from [`INDEX`] rather than merged under a composite key so the two
+/// read faces cannot be pointed at each other's rows by a caller that only
+/// holds the wrong kind of id.
+static PTY_INDEX: LazyLock<Mutex<HashMap<String, JobRecord>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Highest id durably reserved. `0` = nothing reserved (also the value while
@@ -278,11 +295,12 @@ pub enum Liveness {
 /// [`crate::agents::background_persistence::settled_label`] does — the twin
 /// question, answered in the same shape with this module's own words.
 /// `Settled` alone names no outcome: it says the job reached a terminal state
-/// in the daemon that owned it, and that state is either a completion or a
-/// `kill` Aleph performed. The phase-only label answered `"recorded"` for both,
-/// so the one word the model reads first could not tell "your build finished"
-/// from "you stopped it half way", and the `outcome` key that could was
-/// optional and easy to miss beside it.
+/// in the daemon that owned it, and that state is a completion, a `kill`
+/// Aleph performed, or — for a PTY session — the shell's own exit. The
+/// phase-only label answered `"recorded"` for all of them, so the one word
+/// the model reads first could not tell "your build finished" from "you
+/// stopped it half way", and the `outcome` key that could was optional and
+/// easy to miss beside it.
 ///
 /// An unrecognised or absent outcome is `settled_unknown`, never a success
 /// word: a label the model reads as "it finished" has to be earned by a
@@ -308,18 +326,24 @@ pub(crate) fn settled_label(record: &JobRecord) -> &'static str {
         JobPhase::Settled => match record.outcome.as_deref() {
             Some(o) if o == Verdict::Completed.label() => "completed",
             Some(o) if o == Verdict::Killed.label() => "killed",
+            Some(o) if o == Verdict::Exited.label() => "exited",
             _ => "settled_unknown",
         },
     }
 }
 
-/// How a job left the registry, for a [`JobPhase::Settled`] row.
+/// How a job left the registry — or a PTY session its manager — for a
+/// [`JobPhase::Settled`] row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Verdict {
     /// The task ran to completion and produced a `CodeExecOutput`.
     Completed,
-    /// Aleph aborted it — `process_action: "kill"` or daemon shutdown.
+    /// Aleph aborted it — `process_action: "kill"`, daemon shutdown, or a
+    /// PTY session's `close` / `close_all` / capacity eviction.
     Killed,
+    /// A PTY session's shell exited on its own; the code rides `exit_code`.
+    /// Never written for a bash job, whose natural end is `Completed`.
+    Exited,
 }
 
 impl Verdict {
@@ -327,22 +351,27 @@ impl Verdict {
         match self {
             Self::Completed => "completed",
             Self::Killed => "killed",
+            Self::Exited => "exited",
         }
     }
 }
 
-/// One background `bash` job as recorded on disk.
+/// One background `bash` job or PTY session as recorded on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobRecord {
+    /// The registry id of a Bash row. **`0` on a Pty row**, which is keyed
+    /// by [`Self::pty_session_id`] instead and never reaches a bash face.
     pub id: u64,
     /// Owning session label — the exact string `bash_exec::session_label()`
     /// renders, so an id stays addressable by the same caller after a restart.
-    /// Never empty: [`record_spawn`] refuses to journal an unowned job, because
-    /// a persisted row with no owner is readable by every later caller (the
-    /// fail-open leak `background_persistence::addressable` was already fixed
-    /// for).
+    /// On a Pty row, the `created_by` user the session was spawned for.
+    /// Never empty: [`record_spawn`] / [`record_pty_spawn`] refuse to journal
+    /// an unowned job, because a persisted row with no owner is readable by
+    /// every later caller (the fail-open leak
+    /// `background_persistence::addressable` was already fixed for).
     pub owner: String,
-    /// Masked, truncated command preview — the same text `list` shows.
+    /// Masked, truncated command preview — the same text `list` shows. On a
+    /// Pty row, `<shell> (cwd <dir>)`.
     pub command: String,
     pub started_ms: u64,
     pub phase: JobPhase,
@@ -428,14 +457,14 @@ impl JobRecord {
     #[must_use]
     pub fn output_path(&self, dir: &Path) -> Option<PathBuf> {
         let file = self.output_file.as_ref()?;
-        Some(job_dir(dir, self.id).join(file))
+        Some(record_dir(dir, self).join(file))
     }
 
     /// Absolute path of this job's live-tail capture, given the journal root.
     #[must_use]
     pub fn partial_path(&self, dir: &Path) -> Option<PathBuf> {
         let file = self.partial_file.as_ref()?;
-        Some(job_dir(dir, self.id).join(file))
+        Some(record_dir(dir, self).join(file))
     }
 }
 
@@ -469,8 +498,9 @@ pub struct RecoveredJob {
 /// Returns the number of rows tombstoned by this call.
 ///
 /// The live set is empty by construction: this runs at boot, before any `bash`
-/// job can be spawned, so *every* `Running` row on disk belonged to a daemon
-/// that is gone. Each one gets a terminal [`JobPhase::Interrupted`] state
+/// job or PTY session can be spawned (the gateway listener that admits either
+/// starts later), so *every* `Running` row on disk belonged to a daemon that
+/// is gone. Each one gets a terminal [`JobPhase::Interrupted`] state
 /// written over it (never deleted): a record that only ever says "finished"
 /// cannot distinguish "never ran" from "ran and the write was lost". A row
 /// that carries a pid is also asked of the OS through [`probe_liveness`], and
@@ -532,10 +562,12 @@ const CREATION_TIME_TOLERANCE_MS: u64 = 2_000;
 /// trusted about any other), the pid is present with no creation time to
 /// compare, or sysinfo reports a start time of 0 (its "could not open the
 /// process" value on Windows). `Exited` only when no process has the pid, it
-/// is a zombie, or it started at another time — a recycled pid is a different
-/// process. Reads the creation time through the same refresh
-/// [`crate::utils::process_alive::process_start_time`] uses, so the value
-/// [`record_child`] stored and the value compared here are one derivation.
+/// is a zombie (Unix only — sysinfo's Windows `ProcessInner` reports every
+/// process as `Run`, so that arm never fires there), or it started at another
+/// time — a recycled pid is a different process. Reads the creation time
+/// through the same refresh [`crate::utils::process_alive::process_start_time`]
+/// uses, so the value [`record_child`] stored and the value compared here are
+/// one derivation.
 ///
 /// Never signals: the answer is recorded on the row, and the orphan is left
 /// exactly as it was found.
@@ -571,6 +603,7 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
 
     let now = now_ms();
     let mut index: HashMap<u64, JobRecord> = HashMap::new();
+    let mut pty_index: HashMap<String, JobRecord> = HashMap::new();
     let mut tombstoned = 0usize;
     let mut undelivered: Vec<JobRecord> = Vec::new();
     // Every id the journal has ever *shown*, retention-swept rows included:
@@ -585,6 +618,8 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
     let mut highest_row_id = highest_dir_id(&dir);
 
     for record in read_all(&dir) {
+        // A Pty row's id is 0, so it never moves the floor; `highest_dir_id`
+        // ignores `pty-` directories for the same reason.
         highest_row_id = highest_row_id.max(record.id);
 
         // Retention sweep. Terminal rows outlive their job so a restart can
@@ -594,7 +629,7 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
                 .ended_ms
                 .is_some_and(|t| now.saturating_sub(t) > RECORD_RETENTION_MS)
         {
-            let _ = std::fs::remove_dir_all(job_dir(&dir, record.id));
+            let _ = std::fs::remove_dir_all(record_dir(&dir, &record));
             continue;
         }
 
@@ -607,7 +642,7 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
             };
             write_state(&dir, &tombstone);
             tombstoned += 1;
-            index.insert(tombstone.id, tombstone);
+            index_by_kind(&mut index, &mut pty_index, tombstone);
         } else if matches!(
             record.tombstone,
             Some(Tombstone::StillRunningUnattached { .. })
@@ -623,7 +658,7 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
                 ..record
             };
             write_state(&dir, &record);
-            index.insert(record.id, record);
+            index_by_kind(&mut index, &mut pty_index, record);
         } else if is_undelivered_completion(&record, now) {
             // BT-D-R4-16: the delivery stamp belongs to `record_announced`,
             // called by `init_and_announce` AFTER the broadcast returns — never
@@ -633,7 +668,7 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
             if record.announce_attempts >= MAX_ANNOUNCE_ATTEMPTS {
                 // Out of attempts. The row stays on disk and stays poll-able;
                 // only the proactive notice is given up on.
-                index.insert(record.id, record);
+                index_by_kind(&mut index, &mut pty_index, record);
                 continue;
             }
             let attempted = JobRecord {
@@ -642,9 +677,9 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
             };
             write_state(&dir, &attempted);
             undelivered.push(attempted.clone());
-            index.insert(attempted.id, attempted);
+            index_by_kind(&mut index, &mut pty_index, attempted);
         } else {
-            index.insert(record.id, record);
+            index_by_kind(&mut index, &mut pty_index, record);
         }
     }
 
@@ -655,6 +690,7 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
 
     *store_lock() = Some(dir);
     *index_lock() = index;
+    *pty_index_lock() = pty_index;
     *reserved_lock() = reserved;
     *undelivered_lock() = undelivered;
 
@@ -669,10 +705,33 @@ fn reconcile_with(dir: PathBuf, probe: &dyn Fn(u32, Option<u64>) -> Liveness) ->
     if tombstoned > 0 {
         tracing::info!(
             interrupted = tombstoned,
-            "process_journal: tombstoned background bash jobs left running by a previous process"
+            "process_journal: tombstoned background bash jobs and pty sessions left running by a previous process"
         );
     }
     tombstoned
+}
+
+/// Route a loaded row to the index its kind is read from: [`INDEX`] for a
+/// Bash row, [`PTY_INDEX`] for a Pty row. A Pty row's `id` is `0`, so letting
+/// it into `INDEX` would make `lookup(0, ..)` — a bash face — answer for a
+/// terminal. `read_all` refuses a Pty row with no session id, so the `else`
+/// below is unreachable from disk; it drops rather than mis-files, which is
+/// the fail-closed direction for a row nothing could address anyway.
+fn index_by_kind(
+    index: &mut HashMap<u64, JobRecord>,
+    pty_index: &mut HashMap<String, JobRecord>,
+    record: JobRecord,
+) {
+    match record.kind {
+        JournalKind::Bash => {
+            index.insert(record.id, record);
+        }
+        JournalKind::Pty => {
+            if let Some(sid) = record.pty_session_id.clone() {
+                pty_index.insert(sid, record);
+            }
+        }
+    }
 }
 
 /// Boot entry point: reconcile, then hand back the completions the previous
@@ -740,7 +799,10 @@ pub(crate) fn id_floor() -> u64 {
 /// * `outcome == completed` — a killed job is the owner's own action, so its
 ///   outcome is not news (the same stance `subagent_tool::spawn` takes for a
 ///   cancelled child). Without this test every `kill` would queue an announce
-///   for the next boot, since nothing ever stamps those rows delivered.
+///   for the next boot, since nothing ever stamps those rows delivered. A PTY
+///   row's outcomes are `exited` / `killed`, never `completed`, so a shell
+///   that ended is likewise never announced — it stays readable through
+///   [`lookup_pty`].
 /// * fresh — see [`ANNOUNCE_HANDBACK_MAX_AGE_MS`].
 ///
 /// A fourth condition lives in the caller rather than here, because it is about
@@ -777,8 +839,22 @@ pub(crate) fn take_undelivered_settled() -> Vec<RecoveredJob> {
 }
 
 // ============================================================================
-// Write path (called by ProcessRegistry)
+// Write path (called by ProcessRegistry; the `_pty_` twins by PtyManager)
 // ============================================================================
+//
+// Two disciplines every in-place writer below shares, both enforced by
+// routing through [`amend_row`]:
+//
+// * **the row's `state.json` is written under the same index lock that
+//   mutated it**, so the order of writes on disk is the order of mutations
+//   in memory. The pid stamp arrives from the spawn task and the verdict from
+//   wherever the job ends; a clone taken under the lock and written outside
+//   it would let a `Running` clone taken before the verdict land after the
+//   verdict's write, and the next boot would tombstone a job that had
+//   settled;
+// * **a stamp only lands on a `Running` row** — the pid of a job that has
+//   already settled is not a fact worth reopening the row for, and a second
+//   verdict never overwrites the first.
 
 /// Durably reserve ids through `id` **before** the registry hands it out.
 ///
@@ -896,17 +972,61 @@ fn creation_time_ms(pid: u32) -> Option<u64> {
 /// written before the crash, so the intent must come first and this may
 /// only ever *add* to it. An upsert here would let a pid-only row exist with
 /// no owner, no command and no start, and that row would read as a job.
+/// No-op on a row that already settled, too: see [`stamp_child`].
 pub(crate) fn record_child(id: u64, pid: u32) {
     let Some(dir) = store_dir() else { return };
+    // The sysinfo refresh runs outside the lock; only the stamp is inside.
     let created = creation_time_ms(pid);
-    let record = {
-        let mut index = index_lock();
-        let Some(r) = index.get_mut(&id) else { return };
-        r.pid = Some(pid);
-        r.process_created_at_ms = created;
-        r.clone()
+    amend_row(&dir, &mut index_lock(), &id, |r| {
+        stamp_child(r, pid, created)
+    });
+}
+
+/// Mutate one indexed row in place and persist it, all under the index lock
+/// the caller holds (`&mut index_lock()` — the temporary guard lives until
+/// this returns, `write_state` included). The one place the write-path
+/// disciplines above are implemented: every in-place writer, bash or PTY, is
+/// a one-line call into this.
+///
+/// `amend` says whether it changed the row; nothing is written when it did
+/// not, so a refused stamp costs no I/O and leaves the disk exactly as the
+/// previous writer left it.
+fn amend_row<K: std::hash::Hash + Eq>(
+    dir: &Path,
+    index: &mut HashMap<K, JobRecord>,
+    key: &K,
+    amend: impl FnOnce(&mut JobRecord) -> bool,
+) {
+    let Some(record) = index.get_mut(key) else {
+        return;
     };
-    write_state(&dir, &record);
+    if !amend(record) {
+        return;
+    }
+    write_state(dir, record);
+}
+
+/// The pid stamp, shared by [`record_child`] and [`record_pty_child`] so the
+/// two kinds of row carry one derivation of "which process". Refused on a
+/// row that is no longer `Running`: a verdict that landed first (a sub-10 ms
+/// command, or a PTY `close` racing its own spawn) is the row's last word,
+/// and reopening it with a pid would make the next boot probe — and possibly
+/// tombstone — a job that had already finished.
+fn stamp_child(record: &mut JobRecord, pid: u32, created: Option<u64>) -> bool {
+    if record.phase != JobPhase::Running {
+        return false;
+    }
+    record.pid = Some(pid);
+    record.process_created_at_ms = created;
+    true
+}
+
+/// The verdict, shared by [`record_settled`] and [`record_pty_settled`].
+fn settle(record: &mut JobRecord, verdict: Verdict, exit_code: Option<i32>) {
+    record.phase = JobPhase::Settled;
+    record.ended_ms = Some(now_ms());
+    record.outcome = Some(verdict.label().to_string());
+    record.exit_code = exit_code;
 }
 
 /// Rewrite a job's live-tail capture — "here is what it had produced".
@@ -929,7 +1049,7 @@ pub(crate) fn record_partial(id: u64, text: &str) {
     let Some(path) = record.partial_path(&dir) else {
         return;
     };
-    let run_dir = job_dir(&dir, id);
+    let run_dir = record_dir(&dir, &record);
     if let Err(e) = std::fs::create_dir_all(&run_dir) {
         tracing::debug!(error = %e, "process_journal: cannot create job dir");
         return;
@@ -1031,24 +1151,16 @@ pub(crate) fn record_settled(
     stderr: &str,
 ) {
     let Some(dir) = store_dir() else { return };
-    if !index_lock().contains_key(&id) {
-        // Never journaled (unowned, or started before the journal was enabled).
-        return;
-    }
-    append_block(&dir, id, "stdout", stdout);
-    append_block(&dir, id, "stderr", stderr);
-    let record = {
-        let mut index = index_lock();
-        let Some(record) = index.get_mut(&id) else {
-            return;
-        };
-        record.phase = JobPhase::Settled;
-        record.ended_ms = Some(now_ms());
-        record.outcome = Some(verdict.label().to_string());
-        record.exit_code = exit_code;
-        record.clone()
-    };
-    write_state(&dir, &record);
+    // Never journaled (unowned, or started before the journal was enabled)
+    // ⇒ `amend_row` finds no row and nothing is written. The trail is
+    // appended before the state so a reader that sees `Settled` on disk
+    // finds the output beside it, never the other way round.
+    amend_row(&dir, &mut index_lock(), &id, |r| {
+        settle(r, verdict, exit_code);
+        append_block(&dir, r, "stdout", stdout);
+        append_block(&dir, r, "stderr", stderr);
+        true
+    });
 }
 
 /// Stamp "the owning session was told about this job", with the boot that told
@@ -1065,18 +1177,117 @@ pub(crate) fn record_settled(
 /// — the first boot that delivered it is the true answer to "who told them".
 pub(crate) fn record_announced(id: u64) {
     let Some(dir) = store_dir() else { return };
-    let record = {
-        let mut index = index_lock();
-        let Some(record) = index.get_mut(&id) else {
-            return;
-        };
-        if record.announced_boot.is_some() {
-            return;
+    amend_row(&dir, &mut index_lock(), &id, |r| {
+        if r.announced_boot.is_some() {
+            return false;
         }
-        record.announced_boot = Some(now_ms());
-        record.clone()
+        r.announced_boot = Some(now_ms());
+        true
+    });
+}
+
+// ============================================================================
+// PTY write path (called by PtyManager and the session's exit settle)
+// ============================================================================
+
+/// Record a PTY session about to be spawned — the intent row, written
+/// BEFORE `PtySession::spawn` so a daemon that dies between the two leaves a
+/// row the next boot can tombstone (criterion #15: stamp the intent before
+/// the irreversible step, or "did not spawn" and "spawned and lost the write"
+/// are the same absence).
+///
+/// **Refuses an unowned session** (`created_by` `None` or empty) for the
+/// reason [`record_spawn`] refuses an unowned job: a persisted row with no
+/// owner is readable by every later caller. Such a session keeps its purely
+/// in-memory behaviour.
+///
+/// `session_id` is the uuid v4 [`crate::gateway::pty::PtyManager::spawn`]
+/// mints — server-generated, never model- or client-authored — which is why
+/// it becomes a directory name without a sanitizer (the same reasoning
+/// [`job_dir`] gives for a `u64`). No reissue belt either: a v4 uuid does not
+/// come round again the way a counter restarted at 1 does.
+pub(crate) fn record_pty_spawn(session_id: &str, shell: &str, cwd: &str, created_by: Option<&str>) {
+    let Some(dir) = store_dir() else { return };
+    let Some(owner) = created_by.filter(|o| !o.is_empty()) else {
+        return;
+    };
+    let record = JobRecord {
+        id: 0,
+        owner: owner.to_string(),
+        // Model- or client-chosen program and directory; same gate as a
+        // bash command line, same store.
+        command: mask_block(&format!("{shell} (cwd {cwd})")),
+        started_ms: now_ms(),
+        phase: JobPhase::Running,
+        ended_ms: None,
+        outcome: None,
+        exit_code: None,
+        output_file: Some(OUTPUT_FILE.to_string()),
+        // No live-tail flusher feeds a PTY row: the screen is captured once,
+        // at the verdict, by `record_pty_settled`.
+        partial_file: None,
+        announce_attempts: 0,
+        announced_boot: None,
+        kind: JournalKind::Pty,
+        pty_session_id: Some(session_id.to_string()),
+        pid: None,
+        process_created_at_ms: None,
+        tombstone: None,
     };
     write_state(&dir, &record);
+    pty_index_lock().insert(session_id.to_string(), record);
+}
+
+/// The PTY twin of [`record_child`]: `portable-pty` has reported the shell's
+/// pid, and the intent row gains it and its creation time — through the
+/// same [`stamp_child`], so the two kinds of row carry one derivation. The
+/// same no-ops: no intent row, or a row that already settled.
+pub(crate) fn record_pty_child(session_id: &str, pid: u32) {
+    let Some(dir) = store_dir() else { return };
+    let created = creation_time_ms(pid);
+    amend_row(&dir, &mut pty_index_lock(), &session_id.to_string(), |r| {
+        stamp_child(r, pid, created)
+    });
+}
+
+/// The PTY twin of [`record_settled`]. `last_screen` is the visible screen
+/// at the moment of the verdict (masked again here — a later process is the
+/// reader) and rides the trail under a `[screen]` header the way `[stdout]`
+/// does; pass `""` when there is nothing to record.
+///
+/// **First verdict wins.** The reader thread's exit settle runs after every
+/// kill as well as on the shell's own exit, so without this a `killed` row
+/// would read `exited` a moment later. Nothing is appended or written for
+/// the loser.
+pub(crate) fn record_pty_settled(
+    session_id: &str,
+    verdict: Verdict,
+    exit_code: Option<i32>,
+    last_screen: &str,
+) {
+    let Some(dir) = store_dir() else { return };
+    amend_row(&dir, &mut pty_index_lock(), &session_id.to_string(), |r| {
+        if r.phase != JobPhase::Running {
+            return false;
+        }
+        settle(r, verdict, exit_code);
+        append_block(&dir, r, "screen", last_screen);
+        true
+    });
+}
+
+/// Look up a PTY session's row by its uuid. **Unscoped**: unlike [`lookup`],
+/// this returns the row whoever asks, because the terminal faces already
+/// hold their own ownership predicate (`pty::owner_admits` over
+/// `PtyManager::owner_of`) and apply it to the row's `owner` themselves —
+/// the same test, in the one place each face already runs it. A caller that
+/// does not apply one is a leak; there is no bash-style fallback here to
+/// catch it.
+#[must_use]
+pub(crate) fn lookup_pty(session_id: &str) -> Option<RecoveredJob> {
+    let dir = store_dir()?;
+    let record = pty_index_lock().get(session_id).cloned()?;
+    Some(hydrate(&dir, record))
 }
 
 // ============================================================================
@@ -1147,6 +1358,10 @@ fn index_lock() -> MutexGuard<'static, HashMap<u64, JobRecord>> {
     INDEX.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+fn pty_index_lock() -> MutexGuard<'static, HashMap<String, JobRecord>> {
+    PTY_INDEX.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn reserved_lock() -> MutexGuard<'static, u64> {
     RESERVED_THROUGH.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -1175,10 +1390,29 @@ fn job_dir(dir: &Path, id: u64) -> PathBuf {
     dir.join(format!("{JOB_DIR_PREFIX}{id}"))
 }
 
+/// One row, one directory: `job-<id>` for a Bash row, `pty-<uuid>` for a
+/// Pty row. Every path derived from a record goes through here, so the two
+/// kinds cannot drift into each other's directories (a Pty row's `id` is
+/// `0`, and `job-0` would be a bash address). A Pty row always carries its
+/// session id — [`record_pty_spawn`] is its only writer and [`read_all`]
+/// refuses one without — so the fallback arm is the Bash arm, not a third
+/// layout.
+fn record_dir(dir: &Path, record: &JobRecord) -> PathBuf {
+    match (record.kind, record.pty_session_id.as_deref()) {
+        (JournalKind::Pty, Some(sid)) => dir.join(format!("{PTY_DIR_PREFIX}{sid}")),
+        _ => job_dir(dir, record.id),
+    }
+}
+
 /// The one spelling of a job directory's name. Written by [`job_dir`], read
 /// back by [`highest_dir_id`] — two literals here would let the id floor stop
 /// recognising the directories the writer creates, silently.
 const JOB_DIR_PREFIX: &str = "job-";
+
+/// The one spelling of a PTY row's directory name. Deliberately NOT read by
+/// [`highest_dir_id`]: a `pty-` directory carries no numeric id and must
+/// never feed the bash allocator's floor.
+const PTY_DIR_PREFIX: &str = "pty-";
 
 /// Mask + bound text before it can reach the disk, **keeping line structure**.
 ///
@@ -1196,7 +1430,7 @@ fn mask_block(text: &str) -> String {
 }
 
 fn write_state(dir: &Path, record: &JobRecord) {
-    let run_dir = job_dir(dir, record.id);
+    let run_dir = record_dir(dir, record);
     if let Err(e) = std::fs::create_dir_all(&run_dir) {
         tracing::debug!(error = %e, "process_journal: cannot create job dir");
         return;
@@ -1216,11 +1450,13 @@ fn write_state(dir: &Path, record: &JobRecord) {
 /// Append one labelled block of output. Each source line becomes its own
 /// `<unix_ms>\t<masked line>` trail line, so [`read_trail`] can rebuild the
 /// original line structure while still finding a timestamp on the last line.
-fn append_block(dir: &Path, id: u64, label: &str, text: &str) {
+/// Takes the record rather than an id because the directory is the record's
+/// ([`record_dir`]), not the id's.
+fn append_block(dir: &Path, record: &JobRecord, label: &str, text: &str) {
     if text.is_empty() {
         return;
     }
-    let run_dir = job_dir(dir, id);
+    let run_dir = record_dir(dir, record);
     if let Err(e) = std::fs::create_dir_all(&run_dir) {
         tracing::debug!(error = %e, "process_journal: cannot create job dir");
         return;
@@ -1384,6 +1620,13 @@ fn read_all(dir: &Path) -> Vec<JobRecord> {
             continue;
         };
         match serde_json::from_slice::<JobRecord>(&bytes) {
+            // A Pty row with no session id has no key to be served under
+            // and no directory `record_dir` could name; it is unreadable in
+            // this module's terms even though it parses. Same treatment as
+            // a row that does not parse: left on disk, logged, not served.
+            Ok(record) if record.kind == JournalKind::Pty && record.pty_session_id.is_none() => {
+                tracing::warn!(path = %state.display(), "process_journal: unreadable row (pty row without a session id)");
+            }
             Ok(record) => out.push(record),
             Err(e) => {
                 // Fail-open on a corrupt row: a bad file must never block boot.
@@ -1451,6 +1694,7 @@ pub(crate) fn enable_for_test(dir: PathBuf) {
     std::fs::create_dir_all(&dir).expect("test store dir");
     *store_lock() = Some(dir);
     index_lock().clear();
+    pty_index_lock().clear();
     *reserved_lock() = 0;
     undelivered_lock().clear();
 }
@@ -1461,6 +1705,7 @@ pub(crate) fn enable_for_test(dir: PathBuf) {
 pub(crate) fn disable_for_test() {
     *store_lock() = None;
     index_lock().clear();
+    pty_index_lock().clear();
     *reserved_lock() = 0;
     undelivered_lock().clear();
 }
@@ -1673,6 +1918,110 @@ mod tests {
         disable_for_test();
     }
 
+    /// Two writers of one row. The verdict lands first (a sub-10 ms
+    /// command settles before the spawn task's pid report is applied); the
+    /// pid stamp arrives second and must find nothing to stamp. Read off the
+    /// DISK: the index would agree with either order, and the disk is what
+    /// the next boot tombstones — a stale `Running` written over `Settled`
+    /// would make it tombstone a job that had finished.
+    #[test]
+    fn a_pid_that_arrives_after_the_verdict_never_reopens_the_row_on_disk() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        let me = std::process::id();
+        record_spawn(12, "true", Some(OWNER));
+        record_settled(12, Verdict::Completed, Some(0), "", "");
+        record_child(12, me);
+        let on_disk: JobRecord = serde_json::from_slice(
+            &std::fs::read(tmp.path().join("job-12").join(STATE_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!((on_disk.phase, on_disk.pid), (JobPhase::Settled, None));
+        // The PTY twin answers the same way.
+        record_pty_spawn("u-12", "pwsh", "", Some("alice"));
+        record_pty_settled("u-12", Verdict::Exited, Some(0), "");
+        record_pty_child("u-12", me);
+        let on_disk: JobRecord = serde_json::from_slice(
+            &std::fs::read(tmp.path().join("pty-u-12").join(STATE_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!((on_disk.phase, on_disk.pid), (JobPhase::Settled, None));
+        disable_for_test();
+    }
+
+    // ========================================================================
+    // PTY rows: beside the bash rows, never on a bash face
+    // ========================================================================
+
+    /// A PTY session's row lives in `pty-<uuid>` next to `job-<id>`, is
+    /// addressed by its session id, and is invisible to every bash face —
+    /// `lookup` / `list_for_scope` read `INDEX`, which holds Bash rows only.
+    /// Unowned sessions are refused like unowned bash jobs; the first
+    /// verdict wins; the last screen rides the trail under a `[screen]`
+    /// header the way `[stdout]` does.
+    #[test]
+    fn a_pty_row_lives_beside_bash_rows_and_never_answers_on_a_bash_face() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_pty_spawn("u-1", "pwsh", "C:/w", Some("alice"));
+        record_pty_spawn("u-2", "pwsh", "C:/w", None); // unowned: refused, like bash
+        record_pty_child("u-1", std::process::id());
+        let r = lookup_pty("u-1").expect("pty row").record;
+        assert_eq!(
+            (r.kind, r.id, r.pty_session_id.as_deref(), r.pid),
+            (JournalKind::Pty, 0, Some("u-1"), Some(std::process::id()))
+        );
+        assert!(
+            lookup_pty("u-2").is_none() && tmp.path().join("pty-u-1").join(STATE_FILE).exists()
+        );
+        assert!(
+            !tmp.path().join("pty-u-2").exists(),
+            "an unowned session must not be journaled at all"
+        );
+        assert!(
+            lookup(0, Some("alice")).is_none() && list_for_scope(Some("alice"), &[]).is_empty(),
+            "bash faces never see a Pty row"
+        );
+        record_pty_settled("u-1", Verdict::Exited, Some(3), "last screen");
+        let j = lookup_pty("u-1").unwrap();
+        assert_eq!(
+            (j.record.phase, settled_label(&j.record), j.record.exit_code),
+            (JobPhase::Settled, "exited", Some(3))
+        );
+        // `[screen]` header rides along like `[stdout]`.
+        assert!(
+            j.recorded_output.contains("last screen"),
+            "{:?}",
+            j.recorded_output
+        );
+        record_pty_settled("u-1", Verdict::Killed, None, ""); // second verdict loses
+        assert_eq!(settled_label(&lookup_pty("u-1").unwrap().record), "exited");
+        disable_for_test();
+    }
+
+    /// The boot probe does not know or care which driver owned the row: a
+    /// `Running` PTY row with a pid is asked about and tombstoned exactly
+    /// like a bash row, and comes back on the PTY face afterwards.
+    #[test]
+    fn a_running_pty_row_is_tombstoned_at_boot_like_a_bash_row() {
+        let _g = gate();
+        let tmp = tempfile::tempdir().unwrap();
+        enable_for_test(tmp.path().to_path_buf());
+        record_pty_spawn("u-3", "pwsh", "", Some("alice"));
+        record_pty_child("u-3", std::process::id());
+        disable_for_test();
+        init_and_reconcile_with_probe(tmp.path().to_path_buf(), &|_, _| Liveness::StillRunning);
+        assert_eq!(
+            lookup_pty("u-3").unwrap().record.tombstone,
+            Some(Tombstone::StillRunningUnattached {
+                pid: std::process::id()
+            })
+        );
+        disable_for_test();
+    }
+
     // ========================================================================
     // The label the model reads first
     // ========================================================================
@@ -1734,7 +2083,7 @@ mod tests {
     /// this module can record must be a verdict the label can name.
     #[test]
     fn every_verdict_the_writer_records_has_its_own_label() {
-        for verdict in [Verdict::Completed, Verdict::Killed] {
+        for verdict in [Verdict::Completed, Verdict::Killed, Verdict::Exited] {
             let label = labelled(JobPhase::Settled, Some(verdict.label()));
             assert_eq!(
                 label,
@@ -2113,10 +2462,16 @@ mod tests {
 
         reserve_id(99);
         record_spawn(99, "echo hi", Some(OWNER));
+        record_child(99, std::process::id());
         record_partial(99, "[stdout]\nhi\n");
         record_settled(99, Verdict::Completed, Some(0), "hi\n", "");
+        record_announced(99);
+        record_pty_spawn("u-99", "pwsh", "", Some(OWNER));
+        record_pty_child("u-99", std::process::id());
+        record_pty_settled("u-99", Verdict::Exited, Some(0), "screen");
         assert!(lookup(99, Some(OWNER)).is_none());
         assert!(list_for_scope(Some(OWNER), &[]).is_empty());
+        assert!(lookup_pty("u-99").is_none());
         assert_eq!(id_floor(), 1, "the allocator keeps its historical start");
         assert!(!is_enabled());
         // Nothing touched the filesystem.

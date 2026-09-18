@@ -428,6 +428,15 @@ pub async fn run_child_with_drain(
     // has to be handed an owned clone instead of looking it up itself.
     // `None` (foreground) leaves both loops byte-identical to their pre-tee form.
     let live = crate::sandbox::context::current_live_tail();
+    // The driver's one report of the OS child, made on THIS task before the
+    // drain starts. The registry's journal hook rides on it
+    // (`ProcessRegistry::attach_live`), and firing it here — on the task that
+    // later awaits the child and records the verdict — keeps the pid write
+    // causally before the settle. A pid-less `Child` (already reaped) has
+    // nothing to report and the row keeps reading "no pid".
+    if let (Some(tail), Some(pid)) = (&live, child.id()) {
+        tail.set_child_pid(pid);
+    }
     let stdout_task = tokio::spawn(drain_bounded(
         stdout,
         head_cap,
@@ -935,6 +944,46 @@ mod tests {
             .await
             .expect("natural exit");
         assert!(untouched.snapshot().is_empty());
+    }
+
+    /// The driver's one report of the OS child: the pid the drain saw is
+    /// the pid the scoped tail carries afterwards, so the registry's journal
+    /// hook (`ProcessRegistry::attach_live`) learns which process to ask
+    /// about after a restart. Not `#[cfg(unix)]` like its neighbours — the
+    /// Windows driver takes the same path and a pid is a pid on both.
+    #[tokio::test]
+    async fn run_child_with_drain_publishes_the_child_pid_into_the_scoped_tail() {
+        use crate::sandbox::context::LIVE_TAIL;
+        let spawn = || {
+            let (prog, args) = if cfg!(windows) {
+                ("cmd", ["/C", "echo hi"])
+            } else {
+                ("sh", ["-c", "echo hi"])
+            };
+            tokio::process::Command::new(prog)
+                .args(args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .stdin(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("spawn")
+        };
+        let child = spawn();
+        let expected = child.id().expect("a just-spawned child has a pid");
+        let tail = Arc::new(LiveTail::new());
+        LIVE_TAIL
+            .scope(tail.clone(), async {
+                run_child_with_drain(child, None, Duration::from_secs(20), 1024)
+                    .await
+                    .expect("exit");
+            })
+            .await;
+        assert_eq!(tail.child_pid(), Some(expected));
+        // No scope ⇒ foreground untouched: nothing to publish into.
+        run_child_with_drain(spawn(), None, Duration::from_secs(20), 1024)
+            .await
+            .expect("exit");
     }
 
     /// End-to-end proof through a real child: a stream far past the drain
