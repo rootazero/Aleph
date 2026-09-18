@@ -640,21 +640,21 @@ pub async fn fetch_obscura(
 /// Q1 yes, and OR-ing there would hide elements Chrome correctly called visible.
 /// That is 判据 §16 inverted, and it is the only arm the inversion covers.
 ///
-/// ⚠️ **`fetch_chromium` answers Q2 NO for `opacity` and does not compensate,
-/// and this is a real gap — filed as its own task, deliberately not fixed
-/// here.** Measured on the committed capture
-/// (`crates/aleph-cdp/tests/fixtures/chrome-DOMSnapshot.captureSnapshot.json`):
-/// an `opacity: 0` container **and its text child both keep layout entries**,
-/// both reporting `opacity: "0"`, while `display: none` yields **zero** layout
-/// entries in the whole document. So the subtree is not dropped; `opacity` is
-/// not inherited, so an ELEMENT child of it resolves to `1`; and
-/// `computed_from` maps each node's own array with no ancestor walk. The one
-/// link that is CSS-settled rather than captured is that last step — no fixture
-/// on this branch contains an element child of an `opacity: 0` container, which
-/// is why nothing is red. One-line falsifier on a page that has one:
-/// `getComputedStyle(document.querySelector('#opacity-zero > *')).opacity`.
-/// **Do not fix it from here**: growing a second cascade inside a correction
-/// round is how a round buys one defect and sells another.
+/// ⚠️ **`fetch_chromium` answers Q2 NO for `opacity`, and it now compensates —
+/// in its own function, [`super::fetch_chromium::cascade_opacity`], for that
+/// one flag only.** This paragraph used to say the gap was open and unfixed;
+/// it was, until Task 17b closed it, and leaving the old wording here would be
+/// this file telling the next reader that the twin still has a defect it does
+/// not (判据 §1). The Q2 answer itself is unchanged and still **NO**, which is
+/// exactly why that function has to exist.
+///
+/// Its predictions were then checked against a running browser rather than
+/// left source-level: Chrome 153.0.8010.36 reports `opacity: "1"` for an
+/// ELEMENT two levels inside an `opacity: 0` container and lays it out, while
+/// the `display: none` subtree gets no layout entry and a
+/// `visibility: hidden` descendant already reads `hidden`. The capture is
+/// `fetch_chromium`'s `fixtures/local-hidden-containers.domsnapshot.json`; the
+/// per-arm readings are in that function's doc, not restated here.
 ///
 /// * `LayoutStyle::visibility_hidden` is the element's **own** value. obscura's
 ///   words: *"`visibility: hidden|visible`, own value. `None` means 'inherit

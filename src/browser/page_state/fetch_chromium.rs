@@ -1171,7 +1171,124 @@ fn parse_nodes(
             value: values.get(&i).cloned(),
         });
     }
+    cascade_opacity(&mut out);
     Ok(out)
+}
+
+/// OR `opacity_zero` down parent edges. **This flag and no other.**
+///
+/// [`Computed`](super::Computed)'s doc states the obligation: a fetcher must
+/// report each node's EFFECTIVE style, because [`super::build::visibility_of`]
+/// judges a node by its own `Computed` and never walks ancestors. WHICH flags a
+/// fetcher has to re-derive to meet that is per engine and per flag, and the
+/// derivation — the two questions, both engines, all four flags — is in
+/// `fetch_obscura::cascade_effective_styles`'s doc. It is not restated here.
+///
+/// What IS here is the thing that doc could not have: the Chromium row of its
+/// table, measured on a running browser instead of reasoned from CSS.
+///
+/// # The three arms, measured
+///
+/// **Chrome 153.0.8010.36**, page `…-evidence/probes/t17b-page.html`, probe
+/// `…/t17b-opacity.mjs`, capture committed as
+/// `fixtures/local-hidden-containers.domsnapshot.json`. Each container holds an
+/// element at depth 1 and two at depth 2 — the shape `t0-page.html` lacks,
+/// where every hidden container's only descendant is a text node.
+///
+/// The authority below is the `captureSnapshot` styles row, because that is
+/// what this fetcher parses. The probe also took an independent in-page CSSOM
+/// reading of the same elements and the two agree on every cell; that second
+/// reading is recorded in the probe and deliberately not transcribed here,
+/// because the CSSOM entry point may be named in exactly one file under `src/`
+/// and this is not it — `fetch_obscura`'s
+/// `the_obscura_source_claims_here_name_the_build_they_were_read_on` enforces
+/// that, so the omission is a constraint being honoured rather than an
+/// oversight. What dates the readings here is not that stamp, which expires on
+/// an obscura tag and would say nothing about Chrome: it is the browser build
+/// named above plus the committed capture taken from it.
+///
+/// | container | descendant | Chrome says | so |
+/// |---|---|---|---|
+/// | `opacity: 0` | `#op-d1` (P, depth 1), `#op-d2` (BUTTON, depth 2) | `opacity: "1"`, **laid out**, real rect | **this function** |
+/// | `visibility: hidden` | `#vis-d2` (BUTTON, depth 2) | `visibility: "hidden"` — already resolved | nothing to do |
+/// | `display: none` | `#none-d2` (BUTTON, depth 2) | **no layout entry at all** ⇒ `computed: None` | nothing to do |
+///
+/// So without this pass an element descendant of an `opacity: 0` container
+/// arrived `opacity_zero: false` → `visible: true` → an addressable ref and a
+/// real rect, for something the user cannot see: the model was handed refs it
+/// would click at coordinates where nothing is.
+///
+/// # Why the other two arms are not merely unnecessary but WRONG
+///
+/// * **`visibility` must not be ORed here.** `#vis-d2-shown` declares
+///   `visibility: visible` inside the hidden container and Chrome reports
+///   `"visible"` — CSS lets a descendant re-show itself, and Chrome resolved
+///   the inheritance before answering. An OR down these edges would mark a
+///   genuinely visible element hidden and drop it from the page. That is the
+///   residual obscura's cascade accepts knowingly *because obscura hands over
+///   own values and there is nothing better available*; here there is, so
+///   taking it would be a pure loss. `opacity` has no such case: it
+///   group-composites, so `#op-d2-opaque` at `opacity: 1` inside `opacity: 0`
+///   is still invisible and **cannot** re-show itself. The OR is exact for this
+///   flag and approximate for that one, which is the whole reason only one of
+///   them is here.
+/// * **`display` has nothing to OR.** Chrome lays out no box for a
+///   `display: none` subtree, so those nodes have no styles row, `computed` is
+///   `None`, and `rect: None` carries the fact. Measured across all five
+///   captures in `fixtures/`: **zero** laid-out nodes report `display: none`.
+///
+/// # Text nodes take it too, and the earlier reading of this was one edge deep
+///
+/// A text node gets a styles row derived from its containing box, so it is
+/// correct for `visibility` and wrong for `opacity` in exactly the same place
+/// an element is. The review that filed this gap observed the text child of
+/// `#opacity-zero` reporting `"0"` and concluded text was fine — true at depth
+/// 1, where the containing box IS the transparent container, and false below
+/// it: measured here, the text inside `#op-d1` reports `"1"`. Nothing special
+/// is done for text; the OR covers every node with a reading, which is why.
+///
+/// # What is deliberately NOT reached, measured rather than assumed
+///
+/// **Across a frame boundary.** `parse_nodes` runs per document and `parent`
+/// indexes that document only, so an `<iframe>` inside an `opacity: 0`
+/// container leaves every node of its content document reporting `opacity: 1`.
+/// Measured — `t17b-opacity.mjs --child` nests a same-origin frame in a third
+/// transparent container and all seven laid-out child nodes come back `"1"`
+/// while the owner's container reports `"0"`. Not fixed here: the fix threads
+/// an owner's effective opacity across `contentDocumentIndex` in
+/// [`frames_of`], which is frame-stitching work and a second cascade, and
+/// growing one inside a correction round is how a round buys one defect and
+/// sells another. Named so the next reader does not have to rediscover it.
+fn cascade_opacity(nodes: &mut [RawNode]) {
+    for i in 0..nodes.len() {
+        let Some(parent) = nodes[i].parent else {
+            continue;
+        };
+        // `DOMSnapshot` flattens in document order, so a parent is already
+        // effective by the time its child is reached — which is what makes the
+        // single forward pass transitive rather than one-hop. Measured over
+        // every capture in `fixtures/`: **zero** entries where
+        // `parentIndex[i] >= i`. Not trusted rather than assumed away (P7): a
+        // forward edge would read a parent this pass has not reached yet, i.e.
+        // its OWN value, and the cascade would silently stop being transitive
+        // for that subtree instead of refusing one node.
+        if parent >= i {
+            continue;
+        }
+        if !nodes[parent].computed.is_some_and(|c| c.opacity_zero) {
+            continue;
+        }
+        // An UNKNOWN stays unknown. Here `computed: None` means Chrome laid
+        // this node out nowhere, which `visibility_of` already reads as the
+        // unknown it is; writing a flag into it would manufacture a reading
+        // out of an absence (判据 §8). It also ends the chain for that subtree,
+        // correctly — a node Chrome did not lay out has no laid-out
+        // descendants either.
+        let Some(own) = nodes[i].computed.as_mut() else {
+            continue;
+        };
+        own.opacity_zero = true;
+    }
 }
 
 fn index_set(indices: &[i64]) -> HashSet<usize> {
@@ -1381,6 +1498,19 @@ mod tests {
     /// The child session's own capture, coordinates frame-local exactly as CDP
     /// returned them.
     const OOPIF_CHILD: &str = include_str!("fixtures/local-oopif-child.domsnapshot.json");
+    /// The page whose `opacity: 0`, `visibility: hidden` and `display: none`
+    /// containers each hold ELEMENTS at depth 1 and depth 2 — the shape the
+    /// other four captures do not have, where every hidden container's only
+    /// descendant is a text node.
+    ///
+    /// Captured by `…-evidence/probes/t17b-opacity.mjs` off
+    /// `t17b-page.html` on Chrome 153.0.8010.36, with the same request as its
+    /// four siblings. It is the only capture where the parse deliberately
+    /// DISAGREES with the raw styles row — see [`cascade_opacity`] and
+    /// `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`,
+    /// which counts that disagreement rather than being blind to it.
+    const HIDDEN_CONTAINERS: &str =
+        include_str!("fixtures/local-hidden-containers.domsnapshot.json");
 
     fn json(text: &str) -> Value {
         serde_json::from_str(text).expect("the fixture is valid JSON")
@@ -1425,13 +1555,39 @@ mod tests {
     }
 
     /// The captures Chrome produced, as opposed to the one I typed.
-    fn real_captures() -> [(&'static str, &'static str); 4] {
+    fn real_captures() -> [(&'static str, &'static str); 5] {
         [
             ("hacker-news", HN),
             ("same-origin", SAMEORIGIN),
             ("oopif-parent", OOPIF_PARENT),
             ("oopif-child", OOPIF_CHILD),
+            ("hidden-containers", HIDDEN_CONTAINERS),
         ]
+    }
+
+    /// The node in `frame` carrying `id="<id>"`, or a panic naming it.
+    ///
+    /// Node INDICES are not written into any assertion below on purpose: they
+    /// are stable only until the next recapture, and a test that pins them
+    /// fails with a number instead of an element. Looking the id up also makes
+    /// the fixture's shape an assertion of its own — if a recapture drops
+    /// `#op-d2`, the falsifier says so instead of quietly asserting about
+    /// whatever node landed at that index.
+    fn by_id<'a>(frame: &'a RawFrame, id: &str) -> &'a RawNode {
+        frame
+            .nodes
+            .iter()
+            .find(|n| {
+                n.attrs
+                    .iter()
+                    .any(|(k, v)| k.eq_ignore_ascii_case("id") && v == id)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "no element with id=\"{id}\" is in this capture, so the \
+                     assertion about it would pass by never running"
+                )
+            })
     }
 
     /// The computed-style list the FIXTURES were captured with, **derived from
@@ -1567,7 +1723,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(entries, 1429, "nodeIndex entries across all five fixtures");
+        assert_eq!(entries, 1454, "nodeIndex entries across all six fixtures");
     }
 
     /// The element-level rect a node's layout entries agree on, or why there
@@ -1942,21 +2098,23 @@ mod tests {
                     );
                 }
             }
-            // Exact per fixture, for the reason the four counts at the end of
+            // Exact per fixture, for the reason the counts at the end of
             // `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`
             // give: frozen input, so a threshold is a weaker statement with no
             // compensating benefit. Predicate: non-empty `styles` rows summed
-            // over that capture's documents, at `f3e8e9b28`. The four numbers
-            // below are the assertion; 1413 is their sum and 1418 layout
-            // entries less one empty `#document` row per document, so both of
-            // those are restatements of numbers this test already pins rather
-            // than facts of their own — if a fixture changes, these assertions
-            // go red before the arithmetic can mislead anyone.
+            // over that capture's documents, at `c596e25e1` plus this task's
+            // fifth capture. The five numbers below are the assertion; 1437 is
+            // their sum and 1443 layout entries less one empty `#document` row
+            // per document over six documents, so both of those are
+            // restatements of numbers this test already pins rather than facts
+            // of their own — if a fixture changes, these assertions go red
+            // before the arithmetic can mislead anyone.
             let want = match name {
                 "hacker-news" => 1291,
                 "same-origin" => 61,
                 "oopif-parent" => 54,
                 "oopif-child" => 7,
+                "hidden-containers" => 24,
                 other => panic!("unlisted fixture {other}"),
             };
             assert_eq!(arrays, want, "{name}: non-empty styles rows");
@@ -1992,6 +2150,11 @@ mod tests {
         let (mut pointers, mut hidden, mut zero, mut none, mut checked) = (0, 0, 0, 0, 0);
 
         for (name, text) in real_captures() {
+            // Per capture, not global: a global total would let a cascade that
+            // stopped firing on one page be paid for by one that over-fired on
+            // another, and the whole point of the fifth capture is that it is
+            // the only page where this number is not zero.
+            let mut cascaded = 0usize;
             let value = json(text);
             let strings = value["strings"].as_array().expect("strings[]");
             let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
@@ -2044,11 +2207,41 @@ mod tests {
                         opacity_zero: at(opacity).trim().parse::<f64>().is_ok_and(|o| o <= 0.0),
                         cursor_pointer: at(cursor) == "pointer",
                     };
+                    // THREE of the four must equal the raw row exactly, on
+                    // every node of every capture. That is what makes this a
+                    // falsifier for a WIDENED cascade: add `visibility_hidden`
+                    // or `display_none` to `cascade_opacity` and
+                    // `#vis-d2-shown` — which declares `visibility: visible`
+                    // inside a hidden container and which Chrome reports as
+                    // visible — reddens here as well as in
+                    // `only_opacity_is_cascaded_on_chromium`.
                     assert_eq!(
-                        got, want,
-                        "{name} doc[{d}] node {node}: the flags disagree with the \
-                         capture read through {captured:?}"
+                        (got.display_none, got.visibility_hidden, got.cursor_pointer),
+                        (
+                            want.display_none,
+                            want.visibility_hidden,
+                            want.cursor_pointer
+                        ),
+                        "{name} doc[{d}] node {node}: display/visibility/cursor \
+                         disagree with the capture read through {captured:?}. \
+                         These three are reported as Chrome answered them — \
+                         only `opacity` is cascaded (`cascade_opacity`)"
                     );
+                    // `opacity` is the one flag the parse may legitimately
+                    // disagree with the raw row about, and the disagreement is
+                    // one-directional: the cascade can only turn it ON.
+                    // Asserted as two halves plus an exact census rather than
+                    // by re-deriving the ancestor walk here — a test that
+                    // recomputed the cascade would be asking the mechanism to
+                    // confirm itself (判据 §10).
+                    assert!(
+                        got.opacity_zero || !want.opacity_zero,
+                        "{name} doc[{d}] node {node}: the raw row says \
+                         `opacity: {}` and the parse says the node is opaque. \
+                         The cascade may only ever turn this flag ON",
+                        at(opacity)
+                    );
+                    cascaded += usize::from(got.opacity_zero && !want.opacity_zero);
                     checked += 1;
                     pointers += usize::from(want.cursor_pointer);
                     hidden += usize::from(want.visibility_hidden);
@@ -2056,6 +2249,30 @@ mod tests {
                     none += usize::from(want.display_none);
                 }
             }
+
+            // The cascade's footprint on THIS capture, exact. Predicate: nodes
+            // whose parse says `opacity_zero` and whose raw styles row does
+            // not, over the slots this test checks. Measured at this commit.
+            //
+            // Four zeros and an eight is the census that says what the corpus
+            // was missing: for four captures the cascade is a no-op, which is
+            // why nothing was red before it existed, and `hidden-containers`
+            // is the only page that can tell the two behaviours apart. Delete
+            // the fifth capture and every falsifier for `cascade_opacity`
+            // becomes vacuous — so this number is also the guard on the
+            // corpus, not only on the code.
+            let want_cascaded = match name {
+                "hacker-news" | "same-origin" | "oopif-parent" | "oopif-child" => 0,
+                "hidden-containers" => 8,
+                other => panic!("unlisted fixture {other}"),
+            };
+            assert_eq!(
+                cascaded, want_cascaded,
+                "{name}: nodes the opacity cascade turned on. Zero on a capture \
+                 that should have some means `cascade_opacity` stopped firing; \
+                 non-zero on one that should have none means it fired where no \
+                 ancestor is transparent"
+            );
         }
 
         // EXACT, not thresholds. The input is a frozen `include_str!`, so these
@@ -2070,22 +2287,280 @@ mod tests {
         //
         // Predicate for all four: slots whose node index occurs exactly once in
         // that document's `nodeIndex` and whose `styles` row is non-empty, over
-        // the four real captures. Measured at `f3e8e9b28`.
-        assert_eq!(checked, 1405, "nodes cross-checked");
-        assert_eq!(pointers, 508, "`cursor: pointer` nodes");
-        assert_eq!(hidden, 4, "`visibility: hidden` nodes");
-        assert_eq!(zero, 4, "`opacity: 0` nodes");
+        // the five real captures. Re-measured at this commit — the four
+        // previous values (1405 / 508 / 4 / 4) were taken at `f3e8e9b28` over
+        // four captures, and the deltas below are the fifth capture's own
+        // contribution: +24 nodes, +10 pointers, +7 hidden, +1 zero.
+        //
+        // All four of these are RAW readings — `want`, not `got` — so the
+        // cascade does not move them. `zero` counting the transparent
+        // CONTAINER only, and not the eight nodes under it, is the point:
+        // that split is what `cascaded` above measures.
+        assert_eq!(checked, 1429, "nodes cross-checked");
+        assert_eq!(pointers, 518, "`cursor: pointer` nodes");
+        assert_eq!(hidden, 11, "`visibility: hidden` nodes");
+        assert_eq!(zero, 5, "`opacity: 0` nodes, by their OWN styles row");
         // NOT a non-vacuity gap: `display: none` is the flag a Chrome capture
         // cannot show, because such a node gets no layout entry and therefore
         // no styles array. Measured here rather than asserted from the design
-        // note — zero out of every laid-out node in four captures. The mapping
-        // is exercised by the hand-written fixture in
+        // note — zero out of every laid-out node in five captures, one of
+        // which (`hidden-containers`) puts an element two levels inside a
+        // `display: none` container specifically to try to produce one. The
+        // mapping is exercised by the hand-written fixture in
         // `the_four_computed_styles_map_to_their_four_flags`, which is the only
         // place that shape can exist.
         assert_eq!(
             none, 0,
             "a real capture gave a `display: none` node a layout entry — design \
              decision 5 says that cannot happen, so one of them is wrong"
+        );
+    }
+
+    /// **The falsifier for [`cascade_opacity`]**, on a real capture, naming an
+    /// ELEMENT two levels inside the transparent container.
+    ///
+    /// # What each assertion is for, because one of them is the whole test
+    ///
+    /// * `#opacity-zero` is the CONTROL. It declares the property, so it reads
+    ///   `opacity_zero` with or without the cascade — it says the fixture still
+    ///   has the shape, and it is the only assertion here that cannot fail for
+    ///   the reason this test exists.
+    /// * `#op-d1` (`<p>`, depth 1) reddens when the OR is **removed**.
+    /// * **`#op-d2` (`<button>`, depth 2) reddens when the cascade is made
+    ///   NON-TRANSITIVE** — read the parent's original value instead of its
+    ///   already-effective one and `#op-d1` still passes while this one fails.
+    ///   Depth 1 alone cannot tell those two apart, and a previous round shipped
+    ///   a guard that could not: its new depth-2 assertions all rode the text
+    ///   arm, where each named node's grandparent was the flagged container, so
+    ///   a stale one-hop read still landed on the flag and a single-flag break
+    ///   in the element arm scored 534 passed / 0 failed.
+    /// * `#op-d2-opaque` declares `opacity: 1` and is still invisible, because
+    ///   `opacity` group-composites. It is why the OR is EXACT for this flag
+    ///   and why `visibility` — where the equivalent declaration really does
+    ///   re-show — must not ride the same edge.
+    /// * The `<button>`'s own text, at depth 3, is the text arm. Measured, not
+    ///   assumed: a text node's styles row comes from its containing box, so at
+    ///   depth 1 it already reads `0` and below that it does not.
+    /// * `#control` is the negative half. A cascade that smeared the flag over
+    ///   the page instead of down parent edges passes everything above.
+    ///
+    /// Each assertion checks the FLAG and the consequence
+    /// [`super::build::visibility_of`] draws from it, so a change that keeps the
+    /// flag and stops spending it reddens here too (判据 §4).
+    #[test]
+    fn an_element_two_levels_inside_an_opacity_zero_container_is_not_offered_as_visible() {
+        use super::super::build::visibility_of;
+
+        let value = json(HIDDEN_CONTAINERS);
+        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let frame = dom.frames.first().expect("one frame");
+
+        for (id, why) in [
+            (
+                "opacity-zero",
+                "the container DECLARES `opacity: 0` — if this is false the \
+                 fixture no longer has the shape and every assertion below is \
+                 vacuous",
+            ),
+            (
+                "op-d1",
+                "a `<p>` one level inside an `opacity: 0` container. Chrome \
+                 reports its OWN `opacity: 1` (measured, Chrome 153.0.8010.36) \
+                 and lays it out, so without the OR in `cascade_opacity` it \
+                 arrives visible with a real rect",
+            ),
+            (
+                "op-d2",
+                "a `<button>` TWO levels inside the container. This is the \
+                 assertion a one-hop cascade fails and a transitive one passes \
+                 — do not delete it in favour of the depth-1 one",
+            ),
+            (
+                "op-d2-opaque",
+                "a `<button>` at depth 2 that declares `opacity: 1`. It cannot \
+                 re-show itself: `opacity` group-composites, which is why the \
+                 OR is exact for this flag",
+            ),
+        ] {
+            let node = by_id(frame, id);
+            let computed = node.computed.unwrap_or_else(|| {
+                panic!("#{id} has no styles row at all, so this test asserts nothing")
+            });
+            assert!(computed.opacity_zero, "#{id}: {why}");
+            assert!(
+                !visibility_of(node),
+                "#{id} carries `opacity_zero` and `visibility_of` still calls \
+                 it visible, so the flag is set and nobody spends it"
+            );
+        }
+
+        // The text arm, at depth 3 — the `<button>`'s own label. Found through
+        // its parent rather than by id, because a text node cannot carry one.
+        let d2 = frame
+            .nodes
+            .iter()
+            .position(|n| {
+                n.attrs
+                    .iter()
+                    .any(|(k, v)| k.eq_ignore_ascii_case("id") && v == "op-d2")
+            })
+            .expect("#op-d2 is in this frame");
+        let label = frame
+            .nodes
+            .iter()
+            .find(|n| n.parent == Some(d2) && n.kind == RawNodeKind::Text)
+            .expect("#op-d2 has a text child");
+        assert!(
+            label
+                .computed
+                .expect("the label has a styles row")
+                .opacity_zero,
+            "the text inside #op-d2 reads opaque. A text node's styles row \
+             comes from its containing box, so it is correct at depth 1 — \
+             where that box IS the transparent container — and wrong below it. \
+             The review that filed this gap saw only the depth-1 case"
+        );
+        assert!(!visibility_of(label), "and `render_text` would print it");
+
+        // The negative half.
+        let control = by_id(frame, "control");
+        assert!(
+            !control
+                .computed
+                .expect("#control has a styles row")
+                .opacity_zero,
+            "#control is outside every transparent container and the cascade \
+             reached it anyway — it is walking something other than parent edges"
+        );
+        assert!(visibility_of(control), "#control must still be visible");
+    }
+
+    /// The other two flags are reported as Chrome answered them, and ORing
+    /// either one down the same edges would be a defect.
+    ///
+    /// `cascade_opacity`'s doc says why; this says it in assertions.
+    ///
+    /// * **`visibility`**: `#vis-d2` already reads hidden two levels down —
+    ///   Chrome resolves inherited properties before it answers — so an OR
+    ///   would be redundant. `#vis-d2-shown` is why it would also be WRONG: it
+    ///   declares `visibility: visible` inside the hidden container, CSS lets it
+    ///   re-show, Chrome reports `visible`, and an OR would delete it from the
+    ///   page. **This is the assertion that reddens if anyone widens
+    ///   `cascade_opacity`.**
+    /// * **`display`**: the whole `display: none` subtree has no layout entry,
+    ///   so `computed` is `None` and `rect` is `None`. Note what this does and
+    ///   does not cover (判据 §3): it pins the REASON no `display` cascade is
+    ///   needed, and it would redden if `computed_from` ever manufactured a
+    ///   `Computed` for a node with no styles row — it would NOT redden merely
+    ///   because someone added `display_none |=`, since there is no `Some` here
+    ///   to write into. The `display` half of the widening check is the
+    ///   three-flag equality in
+    ///   `the_four_flags_agree_with_the_real_captures_read_through_the_capture_time_list`.
+    #[test]
+    fn only_opacity_is_cascaded_on_chromium() {
+        let value = json(HIDDEN_CONTAINERS);
+        let dom = parse_snapshot(&value, viewport(), &loaders_of(&value)).expect("parses");
+        let frame = dom.frames.first().expect("one frame");
+
+        let hidden = by_id(frame, "vis-d2")
+            .computed
+            .expect("#vis-d2 has a styles row");
+        assert!(
+            hidden.visibility_hidden,
+            "#vis-d2 is two levels inside `visibility: hidden` and Chrome \
+             reports `hidden` for it without help (measured, Chrome \
+             153.0.8010.36). If this is false, Chrome stopped resolving \
+             inherited properties and `visibility` needs a cascade after all"
+        );
+        assert!(
+            !hidden.opacity_zero,
+            "#vis-d2 is not inside anything transparent — the opacity cascade \
+             is firing on the wrong subtree"
+        );
+
+        let reshown = by_id(frame, "vis-d2-shown")
+            .computed
+            .expect("#vis-d2-shown has a styles row");
+        assert!(
+            !reshown.visibility_hidden,
+            "#vis-d2-shown declares `visibility: visible` inside a \
+             `visibility: hidden` container and Chrome reports it as visible. \
+             Reading it as hidden means `visibility_hidden` is being ORed down \
+             parent edges — remove that from `cascade_opacity`: unlike \
+             `opacity`, this property CAN be re-shown by a descendant, so the \
+             OR deletes a visible control from the page"
+        );
+
+        for id in ["disp-none", "none-d1", "none-d2"] {
+            let node = by_id(frame, id);
+            assert!(
+                node.computed.is_none(),
+                "#{id} is in a `display: none` subtree. Chrome lays out no box \
+                 for it, so it has no styles row and `computed` must stay the \
+                 unknown it is — a `Computed` here would be three claims \
+                 manufactured out of an absence (判据 §8)"
+            );
+            assert!(
+                node.rect.is_none(),
+                "#{id} has no layout entry, so it cannot have a rect either"
+            );
+        }
+    }
+
+    /// A parent edge that points FORWARD is refused, not followed.
+    ///
+    /// `cascade_opacity` walks the array once in wire order and relies on a
+    /// parent being finished before its child is reached. Measured over every
+    /// capture in `fixtures/`: zero entries where `parentIndex[i] >= i`, so
+    /// **no recording can redden the guard** and it is synthetic on purpose
+    /// rather than by omission (判据 §3).
+    ///
+    /// What it pins is a decision, not an arithmetic identity: on a forward
+    /// edge the parent's entry still holds its OWN value, so following it would
+    /// hand out a reading that is silently one-hop instead of transitive for
+    /// that subtree. Refusing keeps the node at what Chrome said.
+    #[test]
+    fn a_forward_parent_edge_is_not_trusted_by_the_opacity_cascade() {
+        let opaque = Computed::default();
+        let transparent = Computed {
+            opacity_zero: true,
+            ..Computed::default()
+        };
+        let node = |parent: Option<usize>, computed: Computed| RawNode {
+            backend_node_id: 1,
+            parent,
+            kind: RawNodeKind::Element,
+            tag: Some("DIV".to_string()),
+            attrs: Vec::new(),
+            text: None,
+            rect: None,
+            computed: Some(computed),
+            clickable_hint: None,
+            focused: None,
+            checked: None,
+            selected: None,
+            value: None,
+        };
+        // 0 is opaque and points forward at 2; 1 is transparent; 2 is a real
+        // backward child of 1 and must be reached.
+        let mut nodes = vec![
+            node(Some(2), opaque),
+            node(None, transparent),
+            node(Some(1), opaque),
+        ];
+        cascade_opacity(&mut nodes);
+
+        assert!(
+            !nodes[0].computed.expect("node 0").opacity_zero,
+            "node 0's parent index points forward, so its parent's entry is \
+             still that parent's OWN value at the time this pass reads it. \
+             Following it makes the cascade one-hop for that subtree and says \
+             nothing about it"
+        );
+        assert!(
+            nodes[2].computed.expect("node 2").opacity_zero,
+            "node 2 is an ordinary backward child of a transparent parent — if \
+             this is false the guard is rejecting real edges too"
         );
     }
 

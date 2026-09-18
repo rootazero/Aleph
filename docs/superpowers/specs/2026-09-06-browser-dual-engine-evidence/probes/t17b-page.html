@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Aleph T17b probe page</title>
+<style>
+  html,body { margin:0; padding:0; font:16px/1.4 -apple-system, Helvetica, Arial, sans-serif; }
+  /* The three containers this page exists for. Each one holds an ELEMENT at
+     depth 1 and another at depth 2, which is the shape `t0-page.html` lacks:
+     there every hidden container's only descendant is a text node. */
+  #opacity-zero { opacity:0; }
+  #opacity-zero-frame { opacity:0; }
+  #frame-host   { width:300px; height:80px; border:0; }
+  #vis-hidden   { visibility:hidden; }
+  #disp-none    { display:none; }
+  /* A descendant that declares FULL opacity inside the transparent container.
+     CSS group-composites `opacity`, so this element is invisible anyway and
+     cannot re-show itself — unlike `visibility`, where the equivalent
+     declaration really does re-show. Both are measured here. */
+  #op-d2-opaque { opacity:1; }
+  #vis-d2-shown { visibility:visible; }
+  a, button     { cursor:pointer; }
+</style>
+</head>
+<body>
+  <main id="main">
+    <div id="opacity-zero">
+      <p id="op-d1">depth 1 under opacity zero
+        <button id="op-d2" type="button">depth 2 under opacity zero</button>
+        <button id="op-d2-opaque" type="button">depth 2 declaring opacity one</button>
+      </p>
+    </div>
+    <div id="vis-hidden">
+      <p id="vis-d1">depth 1 under visibility hidden
+        <button id="vis-d2" type="button">depth 2 under visibility hidden</button>
+        <button id="vis-d2-shown" type="button">depth 2 declaring visibility visible</button>
+      </p>
+    </div>
+    <div id="disp-none">
+      <p id="none-d1">depth 1 under display none
+        <button id="none-d2" type="button">depth 2 under display none</button>
+      </p>
+    </div>
+    <button id="control" type="button">visible control</button>
+    <!-- OPT-IN, and it stays out of the committed capture deliberately. `?child=<url>` puts a
+         same-origin iframe inside a third `opacity:0` container, which is how the CROSS-FRAME
+         residual is measured: a child document is its own `RawFrame` with its own node array, and
+         `parent` never crosses that boundary. The committed fixture is captured WITHOUT the param
+         so it stays one document; the residual reading is a second run WITH it. -->
+    <div id="opacity-zero-frame"><iframe id="frame-host" title="child frame"></iframe></div>
+  </main>
+  <script>
+    var child = new URL(location.href).searchParams.get('child');
+    if (child) { document.getElementById('frame-host').src = child; }
+    else { document.getElementById('opacity-zero-frame').remove(); }
+  </script>
+</body>
+</html>
