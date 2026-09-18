@@ -69,7 +69,12 @@ pub(crate) const STYLE_CURSOR: usize = 3;
 /// nothing and flagging them would refuse captures of perfectly complete pages.
 /// Like every list this covers the day it was written (判据 §5); the failure
 /// mode of a missing entry is the permissive one.
-const FRAME_ELEMENTS: [&str; 2] = ["IFRAME", "FRAME"];
+/// `pub(super)` so [`super::fetch_obscura`] asks the same question with the
+/// same list. obscura reaches no frame content at all, so every element in this
+/// set goes straight into its `unreached_frames` — a second spelling of "which
+/// elements own a document" would be two derivations of one membership fact
+/// (判据 §12), and the one that drifted would be the one nobody re-read.
+pub(super) const FRAME_ELEMENTS: [&str; 2] = ["IFRAME", "FRAME"];
 
 /// One child session's capture, with the element in the parent capture that
 /// owns it.

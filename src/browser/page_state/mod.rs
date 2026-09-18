@@ -3,6 +3,7 @@
 pub mod accname;
 pub mod build;
 pub mod fetch_chromium;
+pub mod fetch_obscura;
 pub mod raw;
 pub mod refs;
 pub mod render;
@@ -15,6 +16,9 @@ use crate::browser::engine::Engine;
 pub use accname::{accessible_name, AccName, FrameIndex, NAME_MAX_CHARS};
 pub use fetch_chromium::{
     fetch_chromium, parse_snapshot, stitch_snapshots, ChildCapture, COMPUTED_STYLES,
+};
+pub use fetch_obscura::{
+    fetch_obscura, parse_computed_rows, COMPUTED_FLAGS_JS, DEFAULT_BOX_CONCURRENCY,
 };
 pub use raw::{
     attr_of, Computed, RawDom, RawFrame, RawNode, RawNodeKind, Rect, UnreachedFrame, Viewport,

@@ -67,32 +67,9 @@ pub(super) async fn snapshot(
     // `RawDom`; everything after this line is engine-blind.
     let raw = match handle.engine {
         Engine::Chromium => page_state::fetch_chromium(&handle.conn, &session).await?,
-        // **This is the DEFAULT engine's arm, and it refuses.** Task 16
-        // (`71d973920`) flipped the auto-injected `default` profile to
-        // `driver = cdp` / `engine = obscura`, so `browser_snapshot` on a
-        // fresh install reaches this line and returns
-        // `UnsupportedByEngine{verb: "snapshot"}`. Task 17 supplies
-        // `page_state::fetch_obscura` and this arm becomes a call; until it
-        // lands, this is a live gap and not a hypothetical one.
-        //
-        // The comment that stood here said the arm was "unreachable in
-        // production today ... until Task 16" — an expiry condition that fired
-        // in the commit before this one and told nobody (判据 §1, the fourth
-        // form: a comment describing another module's behaviour, which changed
-        // without notifying its reader). It is corrected rather than deleted
-        // because it is the only place in the tree that records the gap, and a
-        // wrong label costs more than a missing one (判据 §17).
-        //
-        // Still refused rather than silently served by Chromium's fetcher:
-        // obscura's `DOMSnapshot` support is the whole reason Task 17 exists,
-        // and a fetcher pointed at the wrong engine would answer with a page
-        // state nobody measured.
         Engine::Obscura => {
-            return Err(BrowserError::UnsupportedByEngine {
-                engine: Engine::Obscura,
-                verb: "snapshot",
-                supported_by: Some(Engine::Chromium),
-            })
+            page_state::fetch_obscura(&handle.conn, &session, page_state::DEFAULT_BOX_CONCURRENCY)
+                .await?
         }
     };
     // The fetch's own wall time, which is what `PageState.fetch_ms` and the
@@ -698,6 +675,159 @@ mod tests {
             !methods(&server).iter().any(|m| m == "DOM.getFrameOwner"),
             "no iframe target was listed, so nothing was asked to place one: {:?}",
             methods(&server)
+        );
+    }
+}
+
+/// **Every arm of the read path's engine branch must reach a fetcher.**
+///
+/// `page_state`'s own census pins that there is exactly one `PageState::build`
+/// call site and that it lives in this file. That is a statement about the
+/// PRODUCER, and it is structurally blind to this failure: an arm that reads
+/// `return Err(...)` never reaches the builder at all, so the builder stays
+/// unique and its call site stays here while the default engine answers
+/// nothing (判据 §4 — asserting the producer exists is not asserting the effect
+/// arrives). Two reviewers read that census as proof of engine-neutrality on a
+/// tree where this arm refused.
+///
+/// It was not hypothetical. Task 12 wrote a refusing placeholder here because
+/// `fetch_obscura` did not exist yet, and recorded the obligation to replace it
+/// in a COMMENT — which is not a task, is owned by nobody, and survived Task 16
+/// flipping the product default to the very engine the comment said was
+/// refused. This census is what a comment could not be.
+#[cfg(test)]
+mod engine_arm_census {
+    use crate::browser::engine::Engine;
+    use crate::utils::source_scan::{code_text, production_text};
+
+    const REL: &str = "src/browser/cdp_backend/snapshot.rs";
+    /// The head of the one engine branch. Also this census's non-vacuity
+    /// anchor: if it is not found, the scan is broken, not the tree.
+    const HEAD: &str = "match handle.engine {";
+
+    /// The branch body, delimited by a BRACE WALK rather than by a text
+    /// terminator.
+    ///
+    /// A corpus bound and a backstop assertion about it are in tension by
+    /// construction: make the bound exact and any backstop is 恒真; leave it
+    /// approximate (rustfmt's column-0 `"\n}\n"`, say) and the backstop means
+    /// something while the corpus can be wrong. **This site picks the exact
+    /// bound**, because the property under test is structural — "which arms are
+    /// in this match" — and a text terminator would quietly re-scope the corpus
+    /// the first time someone nested a block in an arm.
+    ///
+    /// Liveness is therefore asserted separately and about things a brace walk
+    /// can actually get wrong: a walk that returns nothing, or that returns the
+    /// whole file, fails the emptiness and strict-subset checks below, and a
+    /// walk that lands on the wrong match fails the variant-name check.
+    fn engine_match_body(code: &str) -> String {
+        let start = code.find(HEAD).unwrap_or_else(|| {
+            panic!(
+                "`{HEAD}` is not in {REL}'s production code — the \
+                 scan is looking at the wrong text, which is not the same as \
+                 finding nothing wrong"
+            )
+        }) + HEAD.len();
+        let mut depth = 1usize;
+        for (i, ch) in code[start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return code[start..start + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("the engine branch in {REL} never closes its brace");
+    }
+
+    /// `=>` occurrences at the body's own nesting level — one per arm. A `=>`
+    /// inside a nested block, tuple or index belongs to something else.
+    fn top_level_arms(body: &str) -> usize {
+        let b = body.as_bytes();
+        let (mut depth, mut arms, mut i) = (0i32, 0usize, 0usize);
+        while i < b.len() {
+            match b[i] {
+                b'{' | b'(' | b'[' => depth += 1,
+                b'}' | b')' | b']' => depth -= 1,
+                b'=' if depth == 0 && b.get(i + 1) == Some(&b'>') => {
+                    arms += 1;
+                    i += 1;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        arms
+    }
+
+    #[test]
+    fn every_engine_arm_in_the_read_path_reaches_a_fetcher() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(REL);
+        let src = std::fs::read_to_string(&path).expect("the snapshot path is readable");
+        // `production_text` first, so a `#[cfg(test)]` fixture that spells an
+        // engine arm is not mistaken for the arm; `code_text` on top, so a
+        // mention inside a comment or a string literal is not code. NOT a
+        // hand-rolled `starts_with("//")` filter: that one reads a `//`-prefixed
+        // line inside a raw string as a comment and cannot see a `/* */` block
+        // at all.
+        let code = code_text(&production_text(std::path::Path::new(REL), &src));
+        let body = engine_match_body(&code);
+
+        // Liveness, before anything is concluded from the slice.
+        assert!(
+            !body.trim().is_empty(),
+            "the engine branch came back empty — the brace walk, not the tree"
+        );
+        assert!(
+            body.len() < code.len(),
+            "the brace walk returned the whole file, so the bound below bounds \
+             nothing"
+        );
+        for engine in Engine::ALL {
+            assert!(
+                body.contains(&format!("Engine::{engine:?}")),
+                "{REL}'s read path does not name Engine::{engine:?}. Either the \
+                 walk found the wrong match, or an engine reaches the snapshot \
+                 verb through no arm of its own — and a wildcard arm would serve \
+                 it a page state nobody measured for it.\n{body}"
+            );
+        }
+
+        let arms = top_level_arms(&body);
+        assert_eq!(
+            arms,
+            Engine::ALL.len(),
+            "the read path has {arms} arm(s) for {} engine(s). A wildcard or a \
+             merged arm makes one engine's page state be produced by another's \
+             fetcher.\n{body}",
+            Engine::ALL.len()
+        );
+
+        // **The assertion this census exists for.** A count, not a `contains`:
+        // `contains` is existential and would stay green with one arm refusing
+        // and the other fetching, which is exactly the shipped state this
+        // replaces.
+        let fetchers = body.matches("page_state::fetch_").count();
+        assert_eq!(
+            fetchers, arms,
+            "{fetchers} of the read path's {arms} engine arm(s) call a fetcher. \
+             An arm that returns instead of fetching leaves `browser_snapshot` \
+             refusing on that engine while `page_state`'s own census still \
+             reports one builder with the right identity — that census cannot \
+             see this, which is why this one exists.\n{body}"
+        );
+
+        // The specific shape that was here, named so a revert is unmistakable.
+        assert!(
+            !body.contains("UnsupportedByEngine"),
+            "an engine arm in the read path refuses the snapshot verb again. If \
+             an engine genuinely cannot answer it, the refusal belongs in that \
+             engine's fetcher, where the error can say what it could not read — \
+             not here, where the arm is invisible to every guard above.\n{body}"
         );
     }
 }
