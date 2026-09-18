@@ -99,7 +99,9 @@ pub(super) async fn init_tool_catalog(
         // asks one prerequisite question per `BrowserDriver` (managed
         // playwright-cli / Chromium+npx / an obscura binary for the cdp
         // driver, which is the auto-injected default). Without any browser
-        // runtime the LLM no longer sees ~24 unusable browser tools.
+        // runtime the LLM no longer sees the unusable `browser_*` family — the
+        // loop three lines down is the census of it, so the size is not written
+        // here; the last number that was said "~24" where the family is 26.
         //
         // This comment said "an obscura-or-Chromium engine" until `84b189111`
         // removed that second half from the gate: a `cdp` profile on

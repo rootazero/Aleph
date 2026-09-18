@@ -588,10 +588,13 @@ mod tests {
     ///
     /// # The corpus is narrowed twice, and both narrowings are load-bearing
     ///
-    /// **① to this section.** `value="managed"` occurs TWICE in this file —
-    /// here, and in `DevToolsSection`, where it is a value of
-    /// `devtools_profile`, an unrelated setting. A whole-file `contains` would
-    /// let one section's control satisfy an assertion about the other's.
+    /// **① to this section.** `value="managed"` is not unique to it:
+    /// `DevToolsSection` renders the same string as a value of
+    /// `devtools_profile`, an unrelated setting, and this paragraph spells it
+    /// once more. A whole-file `contains` would let one section's control
+    /// satisfy an assertion about the other's. No total is written down here —
+    /// the last one said TWICE and was short by the copy in this sentence
+    /// (判据 §6); a `grep -n` over this file is the one author of that number.
     ///
     /// **② to the `<input>` element itself.** The first draft asserted the
     /// `checked` comparison appeared anywhere in the file, and the enclosing
@@ -614,12 +617,26 @@ mod tests {
             .find("fn DefaultModeSection")
             .expect("DefaultModeSection is gone; this census has no subject");
         let rest = &file[at..];
-        let src = rest.split_once("\nfn ").map_or(rest, |(body, _)| body);
+        // Bound on the NEXT component's attribute, not on `\nfn `: a visibility
+        // prefix walks a `\nfn ` bound straight past the sibling sections — this
+        // file already spells `BrowserView` `pub` at the top — and the corpus
+        // then holds DevToolsSection's radios with nothing said. The `[` is left
+        // unclosed so a `#[component(transparent)]` spelling cannot reopen the
+        // same hole one layer down.
+        let src = rest
+            .split_once("\n#[component")
+            .map_or(rest, |(body, _)| body);
         assert!(
-            src.len() < file.len(),
-            "the section bound matched the whole file — the corpus is then every \
-             radio in it, including DevToolsSection's, which answers a different \
-             question"
+            // `rest`, not `file`: `at` is past the imports, so `src.len() <
+            // file.len()` held for every file that still declares this
+            // component, which is every file this test can run on. Against
+            // `rest` the comparison is false exactly when the split found
+            // nothing — which is the state the message below describes.
+            src.len() < rest.len(),
+            "no `#[component]` follows DefaultModeSection, so the corpus is the \
+             whole REST of the file: every `value=` below it, including \
+             DevToolsSection's `devtools_profile` radios and this module's own \
+             prose about them, which answer a different question"
         );
 
         for wire in aleph_protocol::browser::BROWSER_DRIVER_WIRE {

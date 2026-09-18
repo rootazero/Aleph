@@ -509,10 +509,20 @@ mod tests {
              fails: {call_sites:?}",
             call_sites.len()
         );
-        let existing = me
+        // Both bounds are loud, and neither is `\nfn `: a visibility or `async`
+        // prefix on the NEXT item walks a `\nfn ` bound past it, and the slice
+        // silently becomes a wider perimeter that the assertion below cannot
+        // tell from the narrow one. A top-level item's closing brace is at
+        // column 0 in any rustfmt-formatted file, and every `}` inside a body
+        // is indented, so `\n}` ends this function and nothing else.
+        let (_, after) = me
             .split_once("fn existing_session_driver_ready")
-            .map(|(_, rest)| rest.split_once("\nfn ").map_or(rest, |(body, _)| body))
             .expect("existing_session_driver_ready is gone");
+        let (existing, _) = after.split_once("\n}").expect(
+            "existing_session_driver_ready has no closing brace at column 0 — the \
+             slice below would run to the end of production and stop meaning \
+             \"inside this function\"",
+        );
         assert!(
             existing.contains("find_chromium()"),
             "the one find_chromium call is no longer inside \
