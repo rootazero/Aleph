@@ -182,8 +182,8 @@ or the re-trigger failed; the server log has the reason).
 
 **Crash-boundary wording is part of this contract.** A dangling
 `ToolCallRequested` is answered by `boundary_repair_text(tool, provenance,
-denied, degrade)`, which has **three arms because there are three true
-sentences**, all sharing one closing instruction (`VERIFY_CLOSE`, a constant, so
+denied, parked, degrade)`, which has **four arms because there are four true
+sentences** (the fourth, `parked`, since round-3 — see below), all sharing one closing instruction (`VERIFY_CLOSE`, a constant, so
 the sentences cannot drift apart on the one point that tells the model what to
 *do*):
 
@@ -194,11 +194,20 @@ the sentences cannot drift apart on the one point that tells the model what to
   saying "the server restarted" about a dangle left by an interrupted earlier
   run is false about *when*;
 - `NOT EXECUTED — this <tool> call was denied by the approval gate and did not
-  run` (`denied`), which explicitly lists what has therefore **not** happened.
+  run` (`denied`), which explicitly lists what has therefore **not** happened;
+- `NOT EXECUTED — this <tool> call never ran: … while it was still waiting for
+  <reason>` (`parked: Some(ParkReason)`, round-3 §6.1): the gate wrote a
+  `ToolCallParked { reason }` intent stamp BEFORE it parked (Normal durability —
+  losing it reads as "outcome unknown", the safe direction), and nothing answered
+  the gate before the log ends. `Approval` / `PreHook` say "never ran"; the
+  `Clarification` body does not, because the question WAS delivered and only
+  the answer is missing. `denied` wins over `parked` (the reducer never sets
+  both). A parked call is only TOLD to the model — no approval or clarification
+  is re-delivered (U4). Full text: FEATURE_LOCATOR §4.13a ㉑.
 
-None of the three says the call *failed*: the rational response to a failed call
+None of the four says the call *failed*: the rational response to a failed call
 is to issue it again. The first two say its side effects may already have
-landed; the third says they cannot exist.
+landed; the last two say they cannot exist.
 
 **Why there is a third arm — the two-item enumeration above it was not enough.**
 `ToolCallRequested` is persisted immediately before dispatch, and the two things
