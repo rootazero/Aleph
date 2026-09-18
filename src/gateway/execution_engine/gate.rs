@@ -48,11 +48,13 @@ pub(super) enum GateOutcome {
 /// `execute()` binds this in its own body scope (NOT inside the `admit_run`
 /// match arm) so it lives across the run's execution — including every early
 /// return between admission and completion, and a panic unwind. It is
-/// dropped **explicitly** at the same point the legacy per-agent gate used to
-/// reset `AgentState::Idle` (before `execute()`'s post-run continuation/
-/// steering-rescue logic, which may re-enter `execute()` on the SAME
-/// session) rather than left to drop at the physical end of the function —
-/// see `execute.rs` for the exact release point.
+/// dropped **explicitly** inside each terminal arm of `execute()`'s result
+/// match — on the `Ok` arm only after the run's `AssistantRunMeta` has been
+/// appended, so a queued run on the same session cannot open ahead of that
+/// meta — and in both arms before the post-run continuation/steering-rescue
+/// logic, which may re-enter `execute()` on the SAME session, rather than
+/// left to drop at the physical end of the function. See `execute.rs` for
+/// the two release sites and the ordering they pin.
 pub(super) struct RunSlot {
     registry: Arc<super::session_run_registry::SessionRunRegistry>,
     session_key: SessionKey,

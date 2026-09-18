@@ -2019,12 +2019,27 @@ impl ResumeCoordinator {
             .await?;
         if let Some(projector) = crate::gateway::session_projector::global_message_projector() {
             let repaint = projector.request_repair(session_id).await;
+            // A whole-session pass: it also stamps and bills every finished
+            // run on this session whose meta never landed (a run this
+            // coordinator closes as `Abandoned` is one), and that happens
+            // after the reconciler's boot line was printed, so it is said
+            // here.
+            if repaint.stamps_synthesized > 0 {
+                tracing::info!(
+                    session = ?session_id,
+                    seq,
+                    stamps_synthesized = repaint.stamps_synthesized,
+                    usage_rebilled = repaint.usage_rebilled,
+                    "resume: repaint stamped finished runs whose meta never landed"
+                );
+            }
             if repaint.errored || repaint.legacy {
                 tracing::warn!(
                     session = ?session_id,
                     seq,
                     errored = repaint.errored,
                     legacy = repaint.legacy,
+                    stamps_synthesized = repaint.stamps_synthesized,
                     "resume: system note appended but not painted into the transcript yet"
                 );
             }

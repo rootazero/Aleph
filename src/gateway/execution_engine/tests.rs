@@ -2536,3 +2536,114 @@ fn execute_announces_the_turn_end_on_both_terminal_arms() {
          emitted — a failed or cancelled turn moved the transcript too"
     );
 }
+
+/// Regression pin: `execute()` holds the run slot (session claim + concurrency
+/// permit) THROUGH the `AssistantRunMeta` append on the `Ok` arm, releases it
+/// as the first statement of the `Err` arm, and in both arms releases it
+/// before the post-run logic that may re-enter `execute()` on the same
+/// session.
+///
+/// Until T5b fix round 1 the single `drop(_run_slot)` sat above the result
+/// match, BEFORE `stamp_run_meta`. Releasing there let a queued run on the
+/// same session append its `RunStarted` ahead of this run's meta; the
+/// projector then anchored the meta on the NEXT run's opener, found no
+/// assistant row in that range and finalised it `NoRowInRange` — the run was
+/// billed nowhere, and the boot heal cannot rescue it because the meta IS in
+/// the log (`session_projector::tests::
+/// a_run_whose_meta_landed_in_the_next_runs_range_is_billed_nowhere`).
+///
+/// A source-ordering pin, for the same reason as
+/// `execute_announces_the_turn_end_on_both_terminal_arms`: the real `Ok` arm
+/// needs a live orchestrator, and the queued run arrives through the busy
+/// queue's `notify_slot_free` two layers out — no unit harness here observes
+/// the order of the two appends. What is pinned is what the fix IS: the
+/// textual order of `stamp_run_meta(` and `drop(_run_slot)` inside the `Ok`
+/// arm, one release per arm, and the `Err` release ahead of anything that arm
+/// does. Comment lines are stripped first, so the release note above the
+/// match — which names both anchors — can neither satisfy nor defeat a
+/// `find`. Move the `Ok` release back above `stamp_run_meta` and the first
+/// ordering assertion reds by name.
+#[test]
+fn execute_holds_the_run_slot_through_the_meta_stamp_and_releases_it_on_both_arms() {
+    use crate::utils::source_scan::{production_prefix, strip_comment_lines};
+    let src = include_str!("execute.rs").replace('\r', "");
+    let code = strip_comment_lines(&production_prefix(&src));
+    assert!(
+        code.len() > 1000,
+        "the production code must be the bulk of execute.rs, not an empty \
+         slice — a mis-split would make every assertion below vacuous"
+    );
+
+    // Each anchor must be unique, or an ordering read off `find` names the
+    // wrong occurrence and the pin passes for the wrong reason.
+    let at = |needle: &str| -> usize {
+        let hits = code.matches(needle).count();
+        assert_eq!(
+            hits, 1,
+            "`{needle}` must occur exactly once in execute.rs's production \
+             code to anchor this ordering pin; found {hits}"
+        );
+        code.find(needle).expect("counted once above")
+    };
+    let result_match = at("let final_result = match result {");
+    let ok_arm = at("Ok(_response) => {");
+    let stamp = at("super::helpers::stamp_run_meta(");
+    let continuation = at("super::goal_continuation::post_run(");
+    let err_first_statement = at("let task_status = match e {");
+    let rescue = at("build_steering_rescue_request(");
+    assert!(
+        result_match < ok_arm && ok_arm < stamp && stamp < continuation,
+        "the Ok-arm anchors are in the order the source has them"
+    );
+    assert!(
+        continuation < err_first_statement && err_first_statement < rescue,
+        "the Err arm follows the Ok arm and precedes the steering rescue"
+    );
+    // The `Err` arm's opener is the last `Err(e) => {` before its first
+    // statement — the file has other `Err(e) => {` arms above and inside the
+    // `Ok` arm, so a plain `find` would name one of those.
+    let err_arm = code[..err_first_statement]
+        .rfind("Err(e) => {")
+        .expect("the terminal match still has an Err(e) arm");
+    assert!(
+        continuation < err_arm,
+        "the Err arm's opener sits after the Ok arm's continuation hook"
+    );
+
+    let releases: Vec<usize> = code
+        .match_indices("drop(_run_slot)")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        releases.len(),
+        2,
+        "one explicit release per terminal arm — a third would be a use after \
+         move, a single one means an arm holds the slot into the re-entry \
+         below; found {}",
+        releases.len()
+    );
+    let (ok_release, err_release) = (releases[0], releases[1]);
+
+    assert!(
+        stamp < ok_release,
+        "Ok arm: the run slot must be released AFTER `stamp_run_meta` — \
+         released before it, a queued run on the same session can append its \
+         RunStarted ahead of this run's AssistantRunMeta, and the run is \
+         billed nowhere"
+    );
+    assert!(
+        ok_release < continuation,
+        "Ok arm: …and before the continuation hook, which may re-enter \
+         execute() on the same session and needs try_claim to succeed"
+    );
+    assert!(
+        err_arm < err_release && err_release < err_first_statement,
+        "Err arm: no meta is appended there, so the release is the arm's \
+         first statement — the lifetime the old single drop gave it"
+    );
+    assert!(
+        err_release < rescue,
+        "both releases precede the post-run steering rescue, the other \
+         re-entry point"
+    );
+}

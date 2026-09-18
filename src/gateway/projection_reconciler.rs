@@ -80,7 +80,11 @@ pub struct ReconcileReport {
     /// `AssistantRunMeta` stamps re-applied to a row that had none.
     pub stamps_reapplied: usize,
     /// Stamps synthesized for a finished run whose `AssistantRunMeta` never
-    /// reached the log (a crash between `RunFinished` and the meta): the
+    /// reached the log — an errored or cancelled run, a slash-command
+    /// fast-path turn, a run the resume coordinator closed as `Abandoned`, a
+    /// split parent, or a crash between `RunFinished` and the meta (the list
+    /// lives on `RepairReport::stamps_synthesized`; at boot the routine
+    /// shapes outnumber the crash, so this number is not a crash count): the
     /// `run_id` join alone, billed from the run's own messages. Idempotent
     /// through the stamp, like a re-applied one.
     pub stamps_synthesized: usize,
@@ -1167,6 +1171,14 @@ mod tests {
         assert_eq!(
             report.holes_filled, 2,
             "a clean session's dropped rows must still be filled: {report:?}"
+        );
+        // This fixture is also a finished run with no meta, on the FILE
+        // backend — the cheapest pin that the synthesized stamp lands there
+        // too (the dedicated synthesized-stamp tests in this module are all
+        // SQLite).
+        assert_eq!(
+            report.stamps_synthesized, 1,
+            "a finished run with a row and no meta is stamped: {report:?}"
         );
         let hist = session_store.get_history(&id, None).await.unwrap();
         assert_eq!(hist.len(), 2);

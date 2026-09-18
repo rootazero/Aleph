@@ -125,10 +125,16 @@ pub struct RepairReport {
     /// `AssistantRunMeta` stamps that landed on a row that had none.
     pub stamps_reapplied: usize,
     /// Stamps this pass wrote for a finished run whose `AssistantRunMeta`
-    /// never reached the log — the process died between `RunFinished` and the
-    /// meta. Carries the `run_id` alone (the gauge is unknown and is never
-    /// written as zeros). Only a [`HealScope::WholeSession`] pass writes
-    /// these — see [`synthesize_missing_stamps`].
+    /// never reached the log. Several shapes of run never get one, and at
+    /// boot the routine ones outnumber the crash: an errored or cancelled run
+    /// (the meta is emitted only on the engine's `Ok` arm), a slash-command
+    /// fast-path turn (no model call, no meta), a run the resume coordinator
+    /// closed as `Abandoned` and then repainted, the parent side of a session
+    /// split (its closer is the split's, the run goes on in the child), and
+    /// the process dying between `RunFinished` and the meta. Carries the
+    /// `run_id` alone (the gauge is unknown and is never written as zeros).
+    /// Only a [`HealScope::WholeSession`] pass writes these — see
+    /// [`synthesize_missing_stamps`].
     pub stamps_synthesized: usize,
     /// Of the stamps above (re-applied or synthesized), how many also
     /// accumulated the run's spend. A stamp that found the row already
@@ -477,10 +483,16 @@ enum HealScope {
     /// them and report "filled 0" for a session the caller measured as holed.
     ///
     /// Also the only scope that synthesizes the stamp for a finished run whose
-    /// `AssistantRunMeta` never landed ([`synthesize_missing_stamps`]): a
-    /// drain-triggered pass cannot tell a meta that is MISSING from one that
-    /// is still queued behind it, and stamping ahead of a queued meta would
-    /// cost that meta its gauge and its price.
+    /// `AssistantRunMeta` never landed ([`synthesize_missing_stamps`]). Not
+    /// because it sees more of the log — both scopes read it to the head, and
+    /// the one meta neither can see is the one not yet APPENDED, the live
+    /// window between a run's `RunFinished` and its meta — but because of
+    /// exposure and floor: a [`KnownGaps`](Self::KnownGaps) pass runs
+    /// routinely on live sessions, inside that window as a matter of course,
+    /// and from a floor that can cut a run in half; this scope runs at boot
+    /// before any run is live, or on a rare explicit request, and reads every
+    /// span from its opener. Stamping inside the window would cost the real
+    /// meta its gauge and its price.
     WholeSession,
 }
 
@@ -575,10 +587,14 @@ async fn heal_session(
     let deferred = retry.len();
     lock_missed(missed).restore(id, retry);
     // After the walk, so every row a finished run produced is in the
-    // transcript before its stamp is looked for. Whole-session only: this
-    // pass has read the log from seq 1, so a run with no meta below the head
-    // has no meta at all — a drain-triggered pass cannot say that (the meta
-    // may simply be queued behind the event that triggered it).
+    // transcript before its stamp is looked for. Whole-session only — not
+    // because this pass sees more of the log (both scopes read it to the
+    // head, and the one meta neither can see is the one not yet appended)
+    // but because of where each runs: a drain-triggered pass runs on live
+    // sessions, routinely inside the window between a `RunFinished` and its
+    // meta, and from a floor that can start mid-run; this scope runs at boot
+    // before any run is live, or on a rare explicit request, and its spans
+    // start at their openers (`HealScope::WholeSession`).
     if scope == HealScope::WholeSession {
         synthesize_missing_stamps(
             store,
@@ -651,9 +667,14 @@ impl RunSpan {
 /// is given, and over `[start, end)` that is `start`. A split child's log
 /// carries the parent's opener copied inside the tail and the child's own
 /// opener last (`session_split`); the copied one opens a span that is never
-/// closed, and so is never synthesized. Assistant messages count into the
-/// newest span only while it is open; a meta marks the span that names its
-/// run, wherever that span sits.
+/// closed, and so is never synthesized. The parent side is the opposite: its
+/// log ends `RunStarted(p) … RunFinished { split_run_id }` and no meta ever
+/// follows (the run goes on in the child, whose meta bills the child's range
+/// only), so every split parent inside the window is a finished-without-meta
+/// span — synthesized and billed for its pre-split calls at the next boot,
+/// which before this fold were billed nowhere. Assistant messages count into
+/// the newest span only while it is open; a meta marks the span that names
+/// its run, wherever that span sits.
 fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
     let mut spans: Vec<RunSpan> = Vec::new();
     for rec in events {
@@ -687,9 +708,10 @@ fn collect_run_spans(events: &[SessionEventRecord]) -> Vec<RunSpan> {
 }
 
 /// Stamp and bill every finished run whose `AssistantRunMeta` never reached
-/// the log (#11: the process died between `RunFinished` and the meta, so the
-/// run's rows never got their `run_id` join and its spend never reached the
-/// session row).
+/// the log, so the run's rows never got their `run_id` join and its spend
+/// never reached the session row. #11 names the crash between `RunFinished`
+/// and the meta; the routine shapes that leave the same hole are listed on
+/// [`RepairReport::stamps_synthesized`], and this pass treats them alike.
 ///
 /// The stamp carries the `run_id` alone — `build_message_metadata` with no
 /// occupancy — because the gauge is unknown here and a zero would read as a
@@ -2171,9 +2193,12 @@ mod tests {
     }
 
     /// The shape a stamp is synthesized for, clause by clause, on the pure
-    /// fold — a store-level fixture cannot reach the "has a meta" clause,
-    /// because a meta in the log is projected by the same walk and the
-    /// synthesized stamp then reads `AlreadyStamped` whatever the clause says.
+    /// fold. A meta whose own stamp landed makes the "has a meta" clause
+    /// unobservable at the store — the synthesized stamp reads
+    /// `AlreadyStamped` either way; the one store-level shape that reaches
+    /// the clause is a meta that finalised `NoRowInRange` because a later
+    /// opener moved `run_start`, pinned below in
+    /// `a_run_whose_meta_landed_in_the_next_runs_range_is_billed_nowhere`.
     #[test]
     fn a_stamp_is_synthesized_only_for_a_finished_run_with_rows_and_no_meta() {
         let tid = uuid::Uuid::new_v4();
@@ -2223,10 +2248,107 @@ mod tests {
         );
     }
 
+    /// The one store-level shape that reaches `RunSpan::synthesis_end`'s
+    /// "has a meta" clause: the meta IS in the log, but it landed after a
+    /// later run's opener, so the walk anchored it on that opener, found no
+    /// assistant row in `(4, 5]`, and finalised it `NoRowInRange` — its stamp
+    /// never landed, and the clause is what keeps a synthesized stamp off the
+    /// row. Under the "a run WITH a meta keeps its own stamp" ruling the run
+    /// is therefore billed nowhere, and the next pass reads the session as
+    /// whole. A known limit, kept on purpose: the heal does not second-guess
+    /// a meta that is in the log.
+    ///
+    /// The live path no longer writes this shape — `execute()` holds the run
+    /// slot through the meta append, so a queued run on the session cannot
+    /// open ahead of it (pinned in `execution_engine::tests`) — but logs
+    /// written before that fix carry it, and this pass reads them. (The
+    /// doctor's repair racing a live run between its `RunFinished` and its
+    /// meta is a different shape: the synthesized stamp lands first and the
+    /// meta reads `AlreadyStamped`, costing it the gauge and the price, not
+    /// the bill.)
+    #[tokio::test]
+    async fn a_run_whose_meta_landed_in_the_next_runs_range_is_billed_nowhere() {
+        let temp = tempdir().unwrap();
+        let store = sqlite_store(temp.path(), "meta_next_range.db");
+        let id = SessionId::ephemeral("meta-next-range");
+        store.get_or_create(&id).await.unwrap();
+
+        let tid = uuid::Uuid::new_v4();
+        let log = own_event_log(
+            &id,
+            &[
+                (1, run_started("a")),
+                (2, assistant_msg_billed(tid, 45, 25)),
+                (3, run_finished("a")),
+                (4, run_started("b")),
+                (5, run_meta(tid, "a")),
+            ],
+        )
+        .await;
+        let pinned: Option<Arc<dyn SessionEventStore>> = Some(log.clone());
+        let missed = Arc::new(StdMutex::new(MissedSeqs::default()));
+        let mut run_start = HashMap::new();
+
+        let whole = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::WholeSession,
+        )
+        .await;
+        assert_eq!(
+            (
+                whole.holes_filled,
+                whole.stamps_reapplied,
+                whole.stamps_synthesized,
+                whole.usage_rebilled,
+            ),
+            (1, 0, 0, 0),
+            "the row is filled; the meta, anchored on run b's opener, stamps \
+             nothing; and span a — which has a meta — is not synthesized: {whole:?}"
+        );
+        let row = store
+            .get_history(&id, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|m| m.role == "assistant")
+            .expect("run a's row was projected");
+        assert_eq!(
+            row.metadata.as_ref().and_then(|m| m.get("run_id")),
+            None,
+            "neither the meta nor a synthesized stamp reached run a's row"
+        );
+        let meta = store.get_metadata(&id).await.unwrap().unwrap();
+        assert_eq!(
+            (meta.input_tokens, meta.output_tokens),
+            (0, 0),
+            "run a is billed nowhere: its meta finalised NoRowInRange and its \
+             span is not synthesized"
+        );
+
+        let again = heal_session(
+            &store,
+            &id,
+            &missed,
+            &pinned,
+            &mut run_start,
+            HealScope::WholeSession,
+        )
+        .await;
+        assert!(
+            again.up_to_date,
+            "and the session then reads as whole — the limit this test keeps: {again:?}"
+        );
+    }
+
     /// Same log, two scopes: a drain-triggered pass fills the row and leaves
-    /// the finished run unstamped and unbilled — it cannot know the meta is
-    /// missing rather than queued — and the whole-session pass that follows
-    /// synthesizes the stamp and bills the run from its own messages.
+    /// the finished run unstamped and unbilled — it runs on live sessions,
+    /// inside the window between a `RunFinished` and its meta as a matter of
+    /// course — and the whole-session pass that follows synthesizes the stamp
+    /// and bills the run from its own messages.
     #[tokio::test]
     async fn a_known_gaps_heal_synthesizes_nothing_and_a_whole_session_heal_does() {
         let temp = tempdir().unwrap();
