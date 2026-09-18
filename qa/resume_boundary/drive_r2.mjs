@@ -409,9 +409,13 @@ const cmdBootMark = () => {
   const mark = bootLines().length;
   const execStarted = logLines(EXEC_STARTED_LINE).length;
   const requestsLogged = requests().length;
-  fs.writeFileSync(BOOT_MARK, JSON.stringify({ mark, execStarted, requestsLogged }));
+  // `at`: a durable stamp older than the mark was written by an EARLIER
+  // boot — the way a phase says which boot did something, instead of
+  // inferring it from a line that boot may not have printed.
+  const at = Date.now();
+  fs.writeFileSync(BOOT_MARK, JSON.stringify({ mark, execStarted, requestsLogged, at }));
   log(
-    `boot mark: ${mark} boot-scan line(s), ${execStarted} '${EXEC_STARTED_LINE}' line(s), ` +
+    `boot mark at ${iso(at)}: ${mark} boot-scan line(s), ${execStarted} '${EXEC_STARTED_LINE}' line(s), ` +
       `${requestsLogged} provider request(s) so far`,
   );
 };
@@ -422,6 +426,7 @@ const readBootMark = () => {
       mark: Number(m.mark),
       execStarted: Number(m.execStarted),
       requestsLogged: Number(m.requestsLogged),
+      at: Number(m.at),
     };
   } catch {
     console.error("INSTRUMENT FAILURE: no boot mark — the shell must `drive boot-mark` before the boot it asks about");
@@ -437,7 +442,8 @@ const awaitBootLineAfterMark = async (budget = 120_000) => {
 };
 
 /**
- * Install an approved `BeforeAgentStart` command hook that sleeps `ms`.
+ * Install an approved `BeforeAgentStart` command hook that sleeps `ms` —
+ * or, with `ms === "off"`, remove everything the install wrote.
  *
  * Two files, both under `$ALEPH_HOME` (the loaders follow `get_config_dir`):
  * `hooks.json` in the Claude-Code-shaped format `user_settings.rs` parses
@@ -464,7 +470,21 @@ const awaitBootLineAfterMark = async (budget = 120_000) => {
  * by the executor; the sleep is what bounds an orphan, not that.
  */
 const SLEEPER_FILE = "qa-resume-sleeper.mjs";
+// The three files `hooks` writes — the one list `hooks off` removes, so a
+// kept root re-used for a later stage does not hold every turn 120–300 s and
+// read as "server slow".
+const HOOK_FILES = [SLEEPER_FILE, "hooks.json", "shell-hooks-allowlist.json"];
 function cmdHooks(ms) {
+  if (ms === "off") {
+    const removed = HOOK_FILES.filter((f) => {
+      const p = path.join(ALEPH_HOME, f);
+      if (!fs.existsSync(p)) return false;
+      fs.rmSync(p);
+      return true;
+    });
+    log(`hook uninstalled: removed ${removed.length ? removed.join(", ") : "nothing (not installed)"}`);
+    return;
+  }
   fs.writeFileSync(path.join(ALEPH_HOME, SLEEPER_FILE), `setTimeout(() => {}, ${Number(ms)});\n`);
   const command = `node ${SLEEPER_FILE}`;
   fs.writeFileSync(
@@ -1481,9 +1501,29 @@ async function cmdUnanswered(phase) {
   // `execute`), so wait for the line rather than reading it on arrival.
   const b = await awaitBootLineAfterMark();
   check(Boolean(b), "the resume-ON boot printed its boot-scan line", show(bootLines()));
+  check(b?.scanned === 1, "the activity window found exactly this one session (scanned=1)", b?.raw);
   check(b?.resumed === 1, "the boot scan resumed the unanswered message (resumed=1)", b?.raw);
   check(b?.abandoned === 0, "and abandoned nothing", b?.raw);
-  check(b?.notified === 0, "and wrote no lost-input notice — the seed HAD landed (notified=0)", b?.raw);
+  // What this boot's line can witness is only THIS boot's pass. The seeded
+  // arm itself was decided one boot earlier: a resume-OFF boot still settles
+  // and adjudicates (`start/mod.rs`, the disabled branch) and stamps the
+  // crashed turn's task row without printing any line — so the two checks
+  // after this one are the ones that pin "seeded ⇒ no notice", on the
+  // durable log and on the row, whatever boot did the deciding.
+  check(b?.notified === 0, "this boot wrote no lost-input notice (notified=0)", b?.raw);
+  check(
+    lostInputNotes(key).length === 0,
+    "a seeded session gets no lost-input SystemMessage on any boot — the seed HAD landed",
+    show(kinds(key)),
+  );
+  const crashedRow = taskRowsOf(key).find((t) => t.task_prompt.includes("hello, are you there"));
+  const stampedAt = crashedRow?.adjudicated_at_ms ?? null;
+  const markAt = readBootMark().at;
+  check(
+    stampedAt !== null && stampedAt < markAt,
+    "the crashed turn's task row was adjudicated BEFORE this boot — the resume-OFF boot's settle ran the 8.2(b) pass and decided `seeded`",
+    `row ${show(crashedRow)}; boot mark at ${iso(markAt)}`,
+  );
   check(countKind(key, "resume_attempted") === 1, "exactly one ResumeAttempted stamp", kinds(key).join(","));
   check(countKind(key, "tool_error") === 0, "no boundary repair was written (nothing dangled)", kinds(key).join(","));
   // The MARKER tail, not the last row: `AssistantRunMeta` rides after the
@@ -1631,11 +1671,7 @@ const RETRIGGER_LINE = "resume: re-triggering interrupted run";
 async function cmdRatchetHold(boot) {
   const n = Number(boot);
   const before = readBootMark().execStarted;
-  const seen = await until(
-    () => (logLines(EXEC_STARTED_LINE).length > before ? logLines(EXEC_STARTED_LINE).length : null),
-    120_000,
-    300,
-  );
+  const seen = await until(() => (logLines(EXEC_STARTED_LINE).length > before ? logLines(EXEC_STARTED_LINE).length : null), 120_000, 300);
   if (!seen) {
     console.error(
       `INSTRUMENT FAILURE: boot ${n}: the resumed run was never admitted (still ${before} '${EXEC_STARTED_LINE}' line(s))`,
@@ -1644,7 +1680,18 @@ async function cmdRatchetHold(boot) {
     process.exit(1);
   }
   await sleep(1500);
-  log(`boot ${n}: resumed run admitted (${before} -> ${seen} '${EXEC_STARTED_LINE}' lines); the hook holds it`);
+  // Exactly one more, not "more": the only run this boot may admit is the
+  // resume (driver detached, channels / cron / heartbeat off, no survivors).
+  // A second one would be a run the stage did not ask for — it is re-read
+  // after the grace so a late second admission is seen too.
+  const now = logLines(EXEC_STARTED_LINE).length;
+  if (now !== before + 1) {
+    console.error(
+      `INSTRUMENT FAILURE: boot ${n}: expected exactly one admitted run (${before} -> ${before + 1} '${EXEC_STARTED_LINE}' lines), saw ${now}`,
+    );
+    process.exit(1);
+  }
+  log(`boot ${n}: resumed run admitted (${before} -> ${now} '${EXEC_STARTED_LINE}' lines); the hook holds it`);
 }
 
 async function cmdRatchet(boot) {

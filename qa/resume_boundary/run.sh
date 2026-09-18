@@ -120,15 +120,28 @@ kill_sleepers() {
   if command -v pkill >/dev/null 2>&1; then
     pkill -f qa-resume-sleeper 2>/dev/null || true
   elif command -v powershell.exe >/dev/null 2>&1; then
+    # `-ne $PID`: the enumerating shell's own command line carries the
+    # marker too (`pkill -f` excludes itself; this has to say so).
     powershell.exe -NoProfile -Command \
-      "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*qa-resume-sleeper*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" \
+      "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*qa-resume-sleeper*' -and \$_.ProcessId -ne \$PID } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" \
       >/dev/null 2>&1 || true
   fi
+}
+
+# Take the sleeper hook back out of `$ALEPH_HOME` (the driver owns the file
+# list). A kept root re-used for a later stage would otherwise hold every
+# turn for the sleep and read as "server slow". Runs at the end of each arm
+# that installed it AND from `cleanup`, so an early `exit 1` uninstalls too;
+# a no-op on a home that never had it.
+uninstall_hook() {
+  [ -n "${QA_ROOT_M:-}" ] || return 0
+  node "$HERE/drive_r2.mjs" "$GATEWAY_PORT" "$QA_ROOT_M" hooks off >/dev/null 2>&1 || true
 }
 
 cleanup() {
   [ -n "$SERVER_PID" ] && kill -9 "$SERVER_PID" 2>/dev/null
   [ -n "$MOCK_PID" ] && kill -9 "$MOCK_PID" 2>/dev/null
+  uninstall_hook
   kill_sleepers
   if [ "$KEEP" = "1" ]; then echo "artifacts kept in $QA_ROOT"; else rm -rf "$QA_ROOT"; fi
 }
@@ -264,7 +277,7 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
     knobs)  FLOOR=10 ;;
     holes)  FLOOR=12 ;;
     parked) FLOOR=11 ;;
-    unanswered) FLOOR=26 ;;  # measured 2026-09-18 (2+2+10 main flow, 3+6+3 lost-input twin)
+    unanswered) FLOOR=29 ;;  # measured 2026-09-18 (2+2+13 main flow, 3+6+3 lost-input twin)
     ratchet)    FLOOR=23 ;;  # measured 2026-09-18 (5+5 held boots, 7+6 settled boots)
     *)      FLOOR=0 ;;
   esac
@@ -439,6 +452,9 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
       [ "$RC" = "0" ] && { start_server || exit 1; drive notice first-boot || RC=1; hard_kill_server; }
       [ "$RC" = "0" ] && { drive boot-mark || RC=1; }
       [ "$RC" = "0" ] && { start_server || exit 1; drive notice second-boot || RC=1; }
+      # Both on the green and on the RC=1 path (nothing above is gated on RC
+      # from here on); `cleanup` repeats them for an early `exit 1`.
+      uninstall_hook
       kill_sleepers
       ;;
     ratchet)
@@ -475,8 +491,10 @@ if [ "$STAGE" != "crash" ] && [ "$STAGE" != "attribute" ]; then
         fi
         [ "$RC" = "0" ] && { drive ratchet "$n" || RC=1; }
       done
-      # Orphaned sleepers self-terminate (300 s); belt and braces, and it is
+      # Both on the green and on the RC=1 path. Orphaned sleepers
+      # self-terminate (300 s); killing them is belt and braces, and it is
       # what lets `rm -rf "$QA_ROOT"` finish on Windows (their cwd is inside).
+      uninstall_hook
       kill_sleepers
       ;;
   esac
