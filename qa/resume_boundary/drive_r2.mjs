@@ -381,16 +381,19 @@ const taskRowsOf = (wireKey) => {
   }
 };
 
-/** Everything `tracing` wrote so far, every rotated file in name order. */
-const serverLogText = () => {
-  if (!fs.existsSync(LOG_DIR)) return "";
+/** The rotated tracing files present so far, in name order — `[]` before the first boot wrote one. */
+const serverLogFiles = () => {
+  if (!fs.existsSync(LOG_DIR)) return [];
   return fs
     .readdirSync(LOG_DIR)
     .filter((f) => f.startsWith("aleph-server.log"))
-    .sort()
+    .sort();
+};
+/** Everything `tracing` wrote so far, every rotated file in name order. */
+const serverLogText = () =>
+  serverLogFiles()
     .map((f) => fs.readFileSync(path.join(LOG_DIR, f), "utf8"))
     .join("");
-};
 const logLines = (needle) => serverLogText().split("\n").filter((l) => l.includes(needle));
 
 // The one line per boot that reports the boot scan, in the form
@@ -1430,14 +1433,19 @@ async function cmdHoles(phase = "before") {
     );
   }
 
+  // The two needles, matched as substrings of a line — no level token is
+  // part of the filter, so the line below does not claim one.
   const full = logLines("projector queue full").length;
   const stopped = logLines("projector drain task stopped").length;
-  // An empty tracing directory is "not measured", not "0 deferrals" — the
-  // count above would read 0 either way, so the line says which it was.
-  const measured = fs.existsSync(LOG_DIR) && serverLogText().length > 0;
+  // No tracing file, or only empty ones, is "not measured", not "0
+  // deferrals" — the counts above read 0 either way, so the line says which.
+  const files = serverLogFiles();
+  const measured = files.length > 0 && serverLogText().length > 0;
   log(
     `OBSERVATION [${phase}] projector queue-full deferrals: ${full}, drain-restart deferrals: ${stopped} ` +
-      `(WARN/ERROR lines in the tracing log under ${LOG_DIR}${measured ? "" : " — which is EMPTY, so this is unmeasured"})` +
+      `(lines containing \`projector queue full\` / \`projector drain task stopped\` in the tracing log ` +
+      `file${files.length === 1 ? "" : "s"} ${files.length ? files.join(", ") : "<none>"} under ${LOG_DIR}` +
+      `${measured ? "" : " — EMPTY, so this is unmeasured"})` +
       (measured && full === 0
         ? " — the queue never filled; the deferral half of this stage is vacuous at this burst size"
         : ""),
@@ -2305,11 +2313,24 @@ const STOP_COMMAND = /^(taskkill \/PID \d+ \/T \/F|kill \d+)$/;
 
 /**
  * Boot 1: make the job. Every DISTINCT row the journal writes for it is
- * collected at a 5 ms poll, so the order of the row's writes is observed,
- * not inferred: the intent row (`running`, no pid) lands first, the pid
- * arrives on a later write. Then the pre-flight `patch_r2.mjs` point 7
- * describes: if the job has settled 2 s later, the shell cannot sleep on
- * this host and the stage is exit 78 — instrument unavailable, never green.
+ * collected at a 5 ms poll, so the order of the row's WRITES is observed,
+ * not inferred: a pidless `running` row lands first, the pid + creation time
+ * arrive on a later write. Whether that first write precedes the OS spawn
+ * is NOT observable from here — a `record_spawn` deferred into the pid hook
+ * still writes a pidless row before `record_child` rewrites it, and this
+ * command stays green (measured 2026-09-18, ledger mutation 9.1). That
+ * ordering is `bash_exec::spawn_background`'s oneshot gate, pinned by the
+ * `process_registry.rs` tests that `lookup` a row right after
+ * `register_running` with no pid ever reported. What this command DOES
+ * falsify is "the intent is durable at all": a journal that first touches
+ * disk in `record_child` makes the first row seen carry a pid.
+ *
+ * Then the pre-flight `patch_r2.mjs` point 7 describes: a job whose row
+ * has SETTLED 2 s later means the shell cannot sleep on this host — exit 78,
+ * instrument unavailable, never green. Only a row that demonstrably settled
+ * takes that exit; no row, or a row in any other phase, is the FAIL path
+ * with the row shown (an absent intent row is the defect this stage exists
+ * for, not a missing instrument — 判据 #8).
  */
 async function cmdBg() {
   const prior = fs.existsSync(SESSION_FILE) ? readSession() : null;
@@ -2336,7 +2357,7 @@ async function cmdBg() {
   const first = seen[0];
   const last = seen.at(-1);
   check(first?.phase === "running" && first?.kind === "bash", "the intent row lands first, as a running bash row", show(first));
-  check(Boolean(first) && first.pid === undefined, "the FIRST row seen carries no pid (intent precedes the child)", show(seen));
+  check(Boolean(first) && first.pid === undefined, "the FIRST row seen carries no pid (a pidless write precedes the pid'd one)", show(seen));
   check(typeof last?.pid === "number", "the pid arrives on the row", show(last));
   check(typeof last?.process_created_at_ms === "number", "the creation time arrives beside it", show(last));
   // The spawning turn must END before the shell kills the server: an open
@@ -2347,13 +2368,17 @@ async function cmdBg() {
   check(Boolean(ended), "the spawning turn ended (the job is not what keeps the run open)", kinds(started.session_key).join(","));
   await sleep(2_000);
   const later = id === null ? null : readJob(id);
-  if (later?.phase !== "running") {
+  // 78 ONLY for a row that demonstrably settled: that is the one shape that
+  // says "the shell could not sleep" rather than "the journal did not work".
+  if (id !== null && later?.phase === "settled") {
     console.error(
-      `INSTRUMENT UNAVAILABLE: the job settled within 2 s (${show(later)}) — the shell cannot sleep here; ` +
+      `INSTRUMENT UNAVAILABLE: the job settled within 2 s — outcome ${show(later.outcome)}, ` +
+        `exit code ${show(later.exit_code)}, row ${show(later)} — the shell cannot sleep here; ` +
         "see patch_r2.mjs point 7 (and point 3 for the measurement it re-checks)",
     );
     process.exit(78);
   }
+  check(later?.phase === "running", "the row is still `running` 2 s after the spawn", show(later));
   check(typeof last?.pid === "number" && alive(last.pid), `the recorded pid ${last?.pid} is a live process`);
   fs.writeFileSync(JOB_FILE, JSON.stringify({ id, pid: last?.pid ?? null }));
 }
@@ -2381,6 +2406,20 @@ async function cmdTomb(arm, tag) {
     `state.json carries the ${kind} tombstone`,
     show(row),
   );
+  // `ended_ms` dates the restart that orphaned the job. Boot 2 stamps it;
+  // boot 3's re-ask rewrites only the tombstone, so the SAME number has to be
+  // there after the arm changed (the re-ask is not a second orphaning).
+  check(typeof row?.ended_ms === "number", "the row is dated by the boot that tombstoned it (ended_ms)", show(row));
+  if (arm === "still") {
+    fs.writeFileSync(JOB_FILE, JSON.stringify({ ...job(), ended_ms: row?.ended_ms ?? null }));
+  } else {
+    const stamped = job().ended_ms;
+    check(
+      typeof stamped === "number" && row?.ended_ms === stamped,
+      `ended_ms was not re-stamped by the re-ask (still ${show(stamped)})`,
+      `still-arm ${show(stamped)} -> exited-arm ${show(row?.ended_ms)}`,
+    );
+  }
   const { hit, ended } = await askAbout(`qa-poll:${id}-${tag} what happened to it`, id);
   const p = hit?.payload;
   check(Boolean(hit), "the poll's tool result reached the model", "no request after the mark carried a tool result for this id");
@@ -2429,7 +2468,8 @@ async function cmdKillSleep() {
   }
   const gone = await until(() => (alive(pid) ? null : true), 20_000, 200);
   check(gone === true, `the fixture killed ${pid}`);
-  if (gone === true) fs.writeFileSync(JOB_FILE, JSON.stringify({ id, pid, killed_by_fixture: true }));
+  // Merged, not replaced: `tomb still` stashed `ended_ms` here for boot 3.
+  if (gone === true) fs.writeFileSync(JOB_FILE, JSON.stringify({ ...job(), id, pid, killed_by_fixture: true }));
 }
 
 // ---------------------------------------------------------------------------

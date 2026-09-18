@@ -219,12 +219,13 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
                                        # durable dispatch, and killing there would leave dangling
                                        # calls whose resume adds a turn's usage. Two measured
                                        # bounds the stage prints rather than hides. (1) The
-                                       # projector's deferrals: `projector queue full` /
-                                       # `projector drain task stopped` WARN/ERROR lines in the
-                                       # TRACING log (`$ALEPH_HOME/logs/aleph-server.log.<date>`)
-                                       # — 0 of each at the default `QA_BURST=40` (83 projectable
-                                       # events; re-measured 2026-09-18 on the T22 tree, the
-                                       # `holes` phase printing the file it counted). Until then
+                                       # projector's deferrals: lines containing `projector queue
+                                       # full` / `projector drain task stopped` (no level filter)
+                                       # in the TRACING log files
+                                       # (`$ALEPH_HOME/logs/aleph-server.log.<date>`) — 0 of each
+                                       # at the default `QA_BURST=40` (83 projectable events;
+                                       # re-measured 2026-09-18 at commit T22_FIX1_SHA, the `holes`
+                                       # phase printing the file names it counted). Until then
                                        # the driver counted those lines in `$QA_ROOT/server.log`,
                                        # the process's STDOUT, which never holds a tracing line —
                                        # so the "0 at 40 and 900" this paragraph used to claim was
@@ -323,36 +324,51 @@ KEEP=1 ./qa/busy_input/run.sh queue  # keep the scratch dir for post-mortem
 ./qa/resume_boundary/run.sh tombstone  # U5: a background `bash` job (`sleep 300`) is a real OS
                                        # process that outlives the server, and the model is told
                                        # what became of it — never handed a pretend kill. Boot 1
-                                       # spawns it; the journal's INTENT row (`running`, no pid)
-                                       # is on disk before the child exists and the pid + OS
-                                       # creation time arrive on a later write (every distinct
-                                       # `state.json` is collected at 5 ms). `kill -9` of the
-                                       # server (TerminateProcess: no reaper) leaves the orphan
-                                       # alive — asked of the OS, not of the server. Boot 2's
-                                       # reconcile probes the pid and writes the
-                                       # `still_running_unattached` tombstone; the bash `poll`
-                                       # hands the model `lost_with_restart: true`, that status,
-                                       # the pid and the `stop_command` (`taskkill /PID N /T /F`
-                                       # here), and `kill` answers "kill was NOT attempted … run
+                                       # spawns it; the first durable write for the job is a
+                                       # pidless `running` row and the pid + OS creation time
+                                       # arrive on a later write (every distinct `state.json` is
+                                       # collected at 5 ms). Whether that first write precedes
+                                       # the OS spawn is NOT observable here — a `record_spawn`
+                                       # deferred into the pid hook still writes pidless first
+                                       # and the stage stays green (measured 2026-09-18); that
+                                       # ordering is `spawn_background`'s oneshot gate, pinned by
+                                       # the `process_registry.rs` tests that `lookup` a row
+                                       # right after `register_running` before any pid is
+                                       # reported. What the stage does falsify is a journal whose
+                                       # first disk write is `record_child`'s (the row would
+                                       # arrive with a pid). `kill -9` of the server
+                                       # (TerminateProcess: no reaper) leaves the orphan alive —
+                                       # asked of the OS, not of the server. Boot 2's reconcile
+                                       # probes the pid and writes the `still_running_unattached`
+                                       # tombstone with `ended_ms`; the bash `poll` hands the
+                                       # model `lost_with_restart: true`, that status, the pid
+                                       # and the `stop_command` (`taskkill /PID N /T /F` here),
+                                       # and `kill` answers "kill was NOT attempted … run
                                        # `<stop_command>`" while the orphan stays alive. The
                                        # FIXTURE then kills it, the server is killed again, and
                                        # boot 3 RE-ASKS the still-running row: `exited_during_
                                        # restart`, "has EXITED", no stop command, nothing deleted
-                                       # (`ended_ms` is not re-stamped). Every tool result is read
-                                       # by peeling the JSON layers off the request log (the
-                                       # envelope is a string of a string there), not by a regex
-                                       # over the line, and anchored on the mock's tool_use ids
-                                       # so the previous boot's answer cannot stand in for this
-                                       # one's. Windows sandbox primitives are switched off for
-                                       # this stage only (`QA_WINDOWS_SANDBOX_OFF=1`, see
-                                       # `patch_r2.mjs` point 7); a job that settles within 2 s
-                                       # is exit 78 — instrument unavailable, UNRUN, never green.
+                                       # and `ended_ms` asserted equal to boot 2's stamp. Every
+                                       # tool result is read by peeling the JSON layers off the
+                                       # request log (the envelope is a string of a string
+                                       # there), not by a regex over the line, and anchored on
+                                       # the mock's tool_use ids so the previous boot's answer
+                                       # cannot stand in for this one's. Windows sandbox
+                                       # primitives are switched off for this stage only
+                                       # (`QA_WINDOWS_SANDBOX_OFF=1`, `patch_r2.mjs` point 7); a
+                                       # job whose row SETTLED within 2 s is exit 78 — instrument
+                                       # unavailable, UNRUN, never green; no row at all is a FAIL.
+                                       # From a worktree with no `.cargo/config.toml` the binary
+                                       # lives in the shared target dir, so run it as
+                                       # `CARGO_TARGET_DIR=D:/Workspace/Aleph/target SKIP_BUILD=1
+                                       # bash qa/resume_boundary/run.sh tombstone` (the same env
+                                       # every other stage here needs from a worktree).
 #
 # Two things hold the stages themselves honest, because a QA fixture is also
 # code that can stop working without saying so:
 #
-#   * **Every stage has an assertion FLOOR** — the case block at
-#     `qa/resume_boundary/run.sh:234-240` holds the measured counts;
+#   * **Every stage has an assertion FLOOR** — the `FLOOR=` case block at
+#     `qa/resume_boundary/run.sh:279-293` holds the measured counts;
 #     deliberately not copied here — the rewind copy already drifted. Each
 #     `drive` call is its own node process with its own counters, so the last
 #     line a green stage prints is whichever phase ran last; for `claims` that

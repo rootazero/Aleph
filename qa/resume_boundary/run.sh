@@ -288,7 +288,7 @@ case "$STAGE" in
   parallel)    FLOOR=30 ;;  # measured 2026-09-18 fix round 1: phase 1 cap 2/3 sessions (1 slots + 4 assert-dangling + 11: the fan-out, `max observed 2`) + phase 2 cap 1/2 sessions (1 + 3 + 10: the config wire, `max observed 1`, scanned=5 skipped=3)
   undecodable) FLOOR=30 ;;  # measured 2026-09-18 (3 assert-dangling, 2 forge, 13 refused, 2 mark-ignorable, 10 skipped)
   attribute)   FLOOR=27 ;;  # measured 2026-09-18 (5+5 in-flight, 1 assert-dangling, 16 texts)
-  tombstone)   FLOOR=28 ;;  # measured 2026-09-18 (6 bg, 1 bg-alive, 7 tomb still, 5 kill-tomb, 1 kill-sleep, 8 tomb exited)
+  tombstone)   FLOOR=32 ;;  # measured 2026-09-18 fix round 1 (7 bg, 1 bg-alive, 8 tomb still, 5 kill-tomb, 1 kill-sleep, 10 tomb exited)
   *)      FLOOR=0 ;;
 esac
 case "$STAGE" in
