@@ -181,6 +181,15 @@ Four things worth knowing before touching it:
   word, because a busy report has every other counter at zero and would
   otherwise render as `no_runs` — telling the operator a session has no history
   at the moment it is being resumed.
+  What the fan-out still costs is latency, not correctness: each candidate
+  task holds its permit across the whole re-triggered run, `launch.settle()`
+  joins every task, and boot's late `reinject_survivors` pass (busy-queue
+  survivors whose session the scan visits) and the §8.2(b) lost-input notices
+  (`adjudicate_orphaned_tasks`, run from `settle`) only start after that join
+  — so a survivor for a session the scan merely skipped, or a user whose
+  message was lost pre-seed, waits for the **slowest resumed run** to finish
+  (`start/mod.rs` argues why the order must hold; FOLLOW-UP F27 is the
+  per-session release).
 
 Status vocabulary (same on both surfaces): `resumed` · `already_resuming` ·
 `already_finished`

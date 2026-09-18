@@ -463,6 +463,12 @@ Python，而这台主机上没装解释器。**Windows 恰好是前台探测没�
 这是有意的 fail-closed；要重新打开它，开口在**身份系统**（让那次运行带上身份），不在这个工具。
 守卫 `an_actorless_caller_sees_only_unowned_sessions` + `a_loopback_operator_is_not_an_actor_less_caller`。
 
+**进程日志（墓碑）也压在同一个 `created_by` 上**：`builtin_tools::process_journal::record_pty_spawn`
+拒绝 `created_by` 为 `None` 或空串的行（不写意图行，静默返回），而生产上唯一的 spawn 站点（`handlers/pty.rs::handle_spawn`）盖的是
+`visibility::ambient_actor()`——上面那段论证它在网关派发上永不为 `None`。若那个论证哪天失效，
+那个 shell 不会报错，只是**静默没有墓碑**（回到本轮之前的 `no_such_session`）；判据是「这次 spawn 有没有
+身份」，不是「日志有没有开」。
+
 不属于你的会话一律答 `no_such_session`，与「不存在」逐字节同形——一句「这不是你的」会把每个动词
 变成枚举别人 session id 的 oracle。
 
