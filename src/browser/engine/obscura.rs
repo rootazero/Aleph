@@ -107,28 +107,80 @@ const ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// boundary moves without anyone editing Aleph.
 ///
 /// `--allow-file-access` is never passed, on any path (spec §7.2). There is no
-/// parameter for it, so there is nothing to get wrong.
+/// parameter for it — but `extra_args` is a channel into this argv, so it is
+/// also in [`ALEPH_OWNED_FLAGS`] and an operator who writes it is refused.
 ///
 /// `req.headless` has no counterpart: obscura has no window and no `--headless`
 /// flag. [`ObscuraLauncher::launch`] warns once when a profile asks for
 /// `headless = false`.
-#[must_use]
+///
+/// # `extra_args` LEAD, and the switches this launch depends on follow them
+///
+/// The same contract [`super::chromium::ChromiumLaunchSpec::argv`] states, for
+/// the same reason and carried over deliberately rather than rediscovered
+/// (判据 §16): a duplicated switch is resolved by the parser, and whichever way
+/// it resolves it, the operator's copy must not be the one that can win. This
+/// function used to `extend` with `extra_args` LAST — the opposite of the twin
+/// — which made `--storage-dir`, `--host=127.0.0.1` and `--allow-file-access`
+/// all displaceable from a config file.
+///
+/// Ordering alone is not enough here, because obscura's duplicate-resolution
+/// is not something Aleph can read from this repository. So the two halves:
+///
+/// * **Flags obscura knows and this launch depends on** — [`ALEPH_OWNED_FLAGS`]
+///   — are REFUSED before the spawn. obscura's parser would accept them, and
+///   accepting them is what moves a security boundary (`--host` off loopback is
+///   remote code execution on this machine) or makes every obscura orphan
+///   permanently unreapable (`--storage-dir` no longer equal to the sidecar's
+///   recorded `data_dir`). A refusal that names the flag is the only outcome
+///   here that is not silent.
+/// * **Flags obscura does not know** — `--disable-gpu` and the rest of the
+///   Chromium habit, which reach this engine now that `driver = cdp` is the
+///   default and `resolved_engine` pins on `driver` alone — are NOT enumerated
+///   here. obscura's own argument parser rejects them, the child exits
+///   non-zero before answering `/json/version`, and [`launch_with`] reports
+///   that as `LaunchFailed{stage: "obscura-exit"}` carrying obscura's own
+///   usage text out of the log tail. That refusal has ONE author (obscura),
+///   names the offending token in the engine's own words, and cannot go stale
+///   when obscura grows a flag — which a whitelist of obscura's `serve` flags
+///   in this file would do on the next upstream release (判据 §5).
+///
+/// # Errors
+///
+/// [`BrowserError::LaunchFailed`] when `extra_args` carries a flag this launch
+/// owns.
 pub fn obscura_argv(
     port: u16,
     storage_dir: &Path,
     req: &LaunchRequest,
     variant: ObscuraVariant,
-) -> Vec<String> {
-    let mut argv = vec![
-        "serve".to_string(),
-        "--host=127.0.0.1".to_string(),
-        format!("--port={port}"),
-        format!(
-            "{}={}",
-            Engine::Obscura.data_dir_flag(),
-            storage_dir.display()
-        ),
-    ];
+) -> Result<Vec<String>, BrowserError> {
+    if let Some(flag) = reserved_flag_in(&req.extra_args) {
+        return Err(BrowserError::LaunchFailed {
+            stage: "obscura-argv",
+            detail: format!(
+                "profile {:?} sets extra_args containing {flag}, which this launch \
+                 owns. Aleph decides these itself and an operator's copy may not \
+                 displace them: {}. host and storage-dir are a security boundary \
+                 and the orphan sweep's only evidence, and the local-file-access \
+                 switch is never passed on any path (spec §7.2). Remove {flag} \
+                 from [browser.profiles.{}] extra_args.",
+                req.profile,
+                ALEPH_OWNED_FLAGS.join(", "),
+                req.profile
+            ),
+        });
+    }
+    let mut argv = vec!["serve".to_string()];
+    // FIRST, so a duplicate an operator wrote cannot displace what follows.
+    argv.extend(req.extra_args.iter().cloned());
+    argv.push("--host=127.0.0.1".to_string());
+    argv.push(format!("--port={port}"));
+    argv.push(format!(
+        "{}={}",
+        Engine::Obscura.data_dir_flag(),
+        storage_dir.display()
+    ));
     if matches!(variant, ObscuraVariant::Stealth) {
         argv.push("--stealth".to_string());
     }
@@ -138,8 +190,43 @@ pub fn obscura_argv(
     if let Some(proxy) = &req.proxy {
         argv.push(format!("--proxy={proxy}"));
     }
-    argv.extend(req.extra_args.iter().cloned());
-    argv
+    Ok(argv)
+}
+
+/// The flags [`obscura_argv`] decides itself, which an operator's `extra_args`
+/// may therefore not carry.
+///
+/// Derived from what this launch emits, NOT from obscura's flag set — that is
+/// the difference between a list that rots and one that cannot:
+/// `every_flag_this_launch_emits_is_one_it_owns` builds a maximal argv and
+/// asserts every switch in it appears here, so a flag added to the builder and
+/// forgotten here is a compile-green defect this test turns red.
+///
+/// `--allow-file-access` is the one entry with no counterpart in the builder,
+/// and it is here for the reason the builder does not emit it: spec §7.2
+/// forbids it on every path, and
+/// `allow_file_access_appears_nowhere_in_the_browser_subsystem` covers the
+/// source Aleph writes but not the argv Aleph builds out of operator config.
+pub const ALEPH_OWNED_FLAGS: [&str; 7] = [
+    "--host",
+    "--port",
+    Engine::Obscura.data_dir_flag(),
+    "--stealth",
+    "--allow-private-network",
+    "--proxy",
+    concat!("--allow", "-file-access"),
+];
+
+/// The first `extra_args` token naming a flag from [`ALEPH_OWNED_FLAGS`].
+///
+/// Matches the flag NAME, so both spellings are caught: `--host=1.2.3.4` (the
+/// `=` form this file uses) and a bare `--host` followed by its value. A
+/// substring scan would also match `--hostname`, which is a different flag.
+fn reserved_flag_in(extra_args: &[String]) -> Option<&'static str> {
+    extra_args.iter().find_map(|word| {
+        let name = word.split_once('=').map_or(word.as_str(), |(n, _)| n);
+        ALEPH_OWNED_FLAGS.into_iter().find(|f| *f == name)
+    })
 }
 
 /// Reserve an ephemeral loopback port by binding it and letting it go.
@@ -317,7 +404,17 @@ pub fn settle_port_ownership(port: u16, pid: u32, probe: PortOwner) -> Result<()
 /// The other two arms mirror `probes::browser::managed_cli_path` exactly —
 /// PATH first, then the capability ledger — so "where does a runtime binary
 /// come from" has one answer in this codebase rather than two (判据 §16).
-fn resolve_obscura_binary(runtime: &ObscuraRuntimeConfig) -> Result<PathBuf, BrowserError> {
+///
+/// `pub(crate)` because the tool gate (`tools::probes::browser`) asks the same
+/// question before it decides whether to offer the `browser_*` family, and it
+/// asks it THROUGH this function for the reason `managed_cli_path`'s doc
+/// already gives: two subsystems answering "is this driver's runtime present?"
+/// with their own private lookup is precisely how that family spent four
+/// rounds gated on `npx`. A sensor calling this never launches anything — the
+/// resolution is a pin check, a `which`, and a ledger read.
+pub(crate) fn resolve_obscura_binary(
+    runtime: &ObscuraRuntimeConfig,
+) -> Result<PathBuf, BrowserError> {
     if let Some(pinned) = runtime.pinned_binary() {
         let path = PathBuf::from(pinned);
         if path.is_file() {
@@ -503,7 +600,7 @@ pub(crate) async fn launch_with(
     record: PathBuf,
     fx: &dyn LaunchEffects,
 ) -> Result<Launched, BrowserError> {
-    let argv = obscura_argv(port, &req.data_dir, req, variant);
+    let argv = obscura_argv(port, &req.data_dir, req, variant)?;
     let (pid, child) = fx.spawn(argv)?;
     // Intent stamped BEFORE the endpoint is known, and AWAITED: a detached
     // write returns before anything reaches disk, so a cancelled launch or a
@@ -810,7 +907,8 @@ mod tests {
         let dir = Path::new("/tmp/aleph-p/obscura/default");
 
         assert_eq!(
-            obscura_argv(41234, dir, &req("default", dir), ObscuraVariant::Default),
+            obscura_argv(41234, dir, &req("default", dir), ObscuraVariant::Default)
+                .expect("no extra_args, nothing to refuse"),
             vec![
                 "serve".to_string(),
                 "--host=127.0.0.1".to_string(),
@@ -823,7 +921,8 @@ mod tests {
         r.allow_private_network = true;
         r.proxy = Some("socks5://127.0.0.1:1080".to_string());
         assert_eq!(
-            obscura_argv(41234, dir, &r, ObscuraVariant::Stealth),
+            obscura_argv(41234, dir, &r, ObscuraVariant::Stealth)
+                .expect("no extra_args, nothing to refuse"),
             vec![
                 "serve".to_string(),
                 "--host=127.0.0.1".to_string(),
@@ -833,6 +932,129 @@ mod tests {
                 "--allow-private-network".to_string(),
                 "--proxy=socks5://127.0.0.1:1080".to_string(),
             ]
+        );
+    }
+
+    /// `extra_args` LEAD, and every switch this launch depends on follows
+    /// them — the twin's contract (`ChromiumLaunchSpec::argv`), carried over.
+    ///
+    /// Written as a position comparison rather than another exact-vector
+    /// snapshot, because the property is "the operator's tokens come before
+    /// ours", and a snapshot would go red for reasons that have nothing to do
+    /// with it.
+    #[test]
+    fn operator_extra_args_lead_every_switch_this_launch_depends_on() {
+        let dir = Path::new("/tmp/aleph-p/obscura/default");
+        let mut r = req("default", dir);
+        // Two obscura flags Aleph does NOT own, so they are forwarded rather
+        // than refused: the escape hatch stays open.
+        r.extra_args = vec!["--quiet".to_string(), "--workers=2".to_string()];
+        let argv = obscura_argv(41234, dir, &r, ObscuraVariant::Default)
+            .expect("neither flag is one this launch owns");
+
+        assert_eq!(
+            argv[0], "serve",
+            "the subcommand is positional and stays first"
+        );
+        let quiet = argv.iter().position(|w| w == "--quiet").expect("forwarded");
+        for owned in ["--host=127.0.0.1", "--port=41234"] {
+            let ours = argv
+                .iter()
+                .position(|w| w == owned)
+                .unwrap_or_else(|| panic!("{owned} missing from {argv:?}"));
+            assert!(
+                quiet < ours,
+                "{owned} must come AFTER extra_args, where an operator's \
+                 duplicate cannot displace it: {argv:?}"
+            );
+        }
+    }
+
+    /// The deny list is derived from what this launch EMITS, so a switch added
+    /// to the builder and forgotten in `ALEPH_OWNED_FLAGS` fails here.
+    ///
+    /// Without this the list is a hand-written name list and covers only the
+    /// day it was written (判据 §5) — which is the shape that produced the
+    /// defect this test exists for.
+    #[test]
+    fn every_flag_this_launch_emits_is_one_it_owns() {
+        let dir = Path::new("/tmp/aleph-p/obscura/default");
+        // Maximal: every conditional branch of the builder taken.
+        let mut r = req("default", dir);
+        r.allow_private_network = true;
+        r.proxy = Some("socks5://127.0.0.1:1080".to_string());
+        let argv = obscura_argv(41234, dir, &r, ObscuraVariant::Stealth)
+            .expect("no extra_args, nothing to refuse");
+
+        let emitted: Vec<&str> = argv
+            .iter()
+            .filter(|w| w.starts_with("--"))
+            .map(|w| w.split_once('=').map_or(w.as_str(), |(n, _)| n))
+            .collect();
+        assert!(
+            !emitted.is_empty(),
+            "the builder emitted no switches at all — this census would certify \
+             the deny list by looking at nothing (判据 §2)"
+        );
+        for flag in emitted {
+            assert!(
+                ALEPH_OWNED_FLAGS.contains(&flag),
+                "{flag} is decided by this launch but is not in ALEPH_OWNED_FLAGS, \
+                 so an operator's extra_args can displace it"
+            );
+        }
+    }
+
+    /// A flag this launch owns may not arrive from config, in either spelling.
+    ///
+    /// `--storage-dir` is the expensive one: equal to the sidecar's recorded
+    /// `data_dir` is what makes an obscura orphan reapable at all, and a
+    /// config-level copy pointing elsewhere reproduces the
+    /// permanently-unreapable-orphan defect through a door no argv snapshot
+    /// looks at. `--host` is the security one. `--allow-file-access` is the
+    /// one with no builder counterpart: the source census covers the code
+    /// Aleph writes, not the argv Aleph builds out of operator config.
+    #[test]
+    fn an_operator_cannot_displace_a_switch_this_launch_owns() {
+        let dir = Path::new("/tmp/aleph-p/obscura/default");
+        for bad in [
+            "--storage-dir=/elsewhere",
+            "--host=0.0.0.0",
+            "--port=1",
+            "--proxy=http://evil",
+            "--stealth",
+            "--allow-private-network",
+            concat!("--allow", "-file-access"),
+            // The two-token spelling, which an `=`-anchored check would miss.
+            "--host",
+        ] {
+            let mut r = req("default", dir);
+            r.extra_args = vec![bad.to_string()];
+            let text = match obscura_argv(41234, dir, &r, ObscuraVariant::Default) {
+                Ok(argv) => panic!(
+                    "{bad} is a flag this launch owns, but it was \
+                                    accepted into {argv:?}"
+                ),
+                Err(e) => e.to_string(),
+            };
+            let name = bad.split_once('=').map_or(bad, |(n, _)| n);
+            assert!(
+                text.contains(name),
+                "the refusal must name the offending flag: {text}"
+            );
+        }
+
+        // ...and a flag this launch does not own is forwarded, not refused.
+        // obscura's own parser is the authority on those: an unknown one exits
+        // non-zero with its usage text, which `launch_with` surfaces as
+        // `LaunchFailed{stage: "obscura-exit"}`.
+        let mut ok = req("default", dir);
+        ok.extra_args = vec!["--disable-gpu".to_string()];
+        assert!(
+            obscura_argv(41234, dir, &ok, ObscuraVariant::Default).is_ok(),
+            "a Chromium-habit flag is obscura's to refuse, in obscura's own \
+             words — enumerating obscura's flag set here would be a whitelist \
+             that rots on the next upstream release"
         );
     }
 
@@ -850,7 +1072,8 @@ mod tests {
     #[test]
     fn the_storage_dir_token_is_what_the_orphan_sweep_matches_against() {
         let dir = Path::new("/tmp/aleph-p/obscura/default");
-        let argv = obscura_argv(41234, dir, &req("default", dir), ObscuraVariant::Default);
+        let argv = obscura_argv(41234, dir, &req("default", dir), ObscuraVariant::Default)
+            .expect("no extra_args, nothing to refuse");
         assert!(
             super::super::process::argv_names_dir(&argv, Engine::Obscura.data_dir_flag(), dir),
             "the sweep cannot recognise its own launcher's argv: {argv:?}"
@@ -950,7 +1173,8 @@ mod tests {
     #[test]
     fn the_stealth_variant_is_a_flag_not_a_second_archive() {
         let dir = Path::new("/tmp/aleph-p/obscura/default");
-        let argv = obscura_argv(1, dir, &req("default", dir), ObscuraVariant::Stealth);
+        let argv = obscura_argv(1, dir, &req("default", dir), ObscuraVariant::Stealth)
+            .expect("no extra_args, nothing to refuse");
         assert!(argv.contains(&"--stealth".to_string()));
         let spec = crate::runtimes::find_spec(crate::runtimes::OBSCURA_RUNTIME)
             .expect("obscura has a runtime spec");
