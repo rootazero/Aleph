@@ -338,11 +338,27 @@ pub(crate) fn settled_label(record: &JobRecord) -> &'static str {
 pub(crate) enum Verdict {
     /// The task ran to completion and produced a `CodeExecOutput`.
     Completed,
-    /// Aleph aborted it — `process_action: "kill"`, daemon shutdown, or a
-    /// PTY session's `close` / `close_all` / capacity eviction.
+    /// Aleph aborted it — `process_action: "kill"`, daemon shutdown (the
+    /// bash registry's reaper and `PtyManager::close_all` alike), or a PTY
+    /// session's `close` / `close_all` / capacity eviction.
     Killed,
-    /// A PTY session's shell exited on its own; the code rides `exit_code`.
-    /// Never written for a bash job, whose natural end is `Completed`.
+    /// A PTY session's shell is gone by its own doing. Two writers, told
+    /// apart by the columns beside the word:
+    ///
+    /// * `settle_exit` — the shell ran and exited; the code rides
+    ///   `exit_code` (`Some`, always — a `wait()` that could not report one
+    ///   is recorded as `None`, never as `0`), and `pid` was stamped.
+    /// * `PtyManager::spawn`'s failure arm — `PtySession::spawn` itself
+    ///   returned `Err`, so **no shell ever ran**: `exit_code: None`,
+    ///   `pid: None`, and the spawn error is the row's `[screen]` block.
+    ///   Settling the intent row at once is what keeps the next boot from
+    ///   tombstoning a shell that never existed as one the restart
+    ///   interrupted. Pinned by
+    ///   `manager::tests::a_failed_spawn_settles_its_intent_row_instead_of_leaving_it_running`.
+    ///
+    /// A face rendering an `exited` row therefore says "exit code unknown"
+    /// when the code is `None` — never "exited 0". Never written for a bash
+    /// job, whose natural end is `Completed`.
     Exited,
 }
 
@@ -371,7 +387,8 @@ pub struct JobRecord {
     /// `background_persistence::addressable` was already fixed for).
     pub owner: String,
     /// Masked, truncated command preview — the same text `list` shows. On a
-    /// Pty row, `<shell> (cwd <dir>)`.
+    /// Pty row, `<shell> (cwd <dir>)`, or `<shell>` alone when the shell
+    /// inherited the server's cwd.
     pub command: String,
     pub started_ms: u64,
     pub phase: JobPhase,
@@ -487,6 +504,115 @@ pub struct RecoveredJob {
     /// Unix ms of the last recorded trail line or live capture, or
     /// `started_ms` when there was neither.
     pub last_activity_ms: u64,
+}
+
+/// What a face tells the owner of an id the previous server owned.
+///
+/// One value for every face that can be asked about such an id — bash
+/// `poll` / `wait` / `kill` (JSON to the model), `terminal` `read` / `wait` /
+/// `explain` (`TerminalOutput` to the model) and the addressed `pty.*` RPCs
+/// (JSON-RPC `error.message`, which the Panel renders) — so the sentence
+/// about one process is written once and cannot drift between them
+/// (criterion #1). Each face decides its own envelope; none of them decides
+/// the words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TombstoneReport {
+    /// The [`settled_label`] word for the row: `exited_during_restart` /
+    /// `still_running_unattached` / `interrupted_by_restart_liveness_unknown`.
+    pub kind: &'static str,
+    /// The whole sentence, self-contained: who started it, what the OS said,
+    /// what was recorded, and what the reader can do next.
+    pub text: String,
+    /// The OS pid the row carries, when it carries one.
+    pub pid: Option<u32>,
+    /// The command that would stop the orphan, given ONLY on the
+    /// still-running arm. Aleph does not run it — U5: the process is
+    /// recorded, never signalled — the owner does, if they choose to.
+    pub stop_command: Option<String>,
+}
+
+/// The sentence a face gives for an id the previous server owned. Pure —
+/// reads only the recovered row. Every arm says what the model can do next;
+/// none kills anything (U5). `None` for any non-`Interrupted` row: a settled
+/// row is a verdict the daemon that owned it earned, and a `Running` one is
+/// not this function's question.
+///
+/// No arm spells "fail": a restart is a fact about the previous server
+/// process, never about the command (the module doc's first paragraph). The
+/// third arm keeps the "did NOT check" wording for a row with no pid or an
+/// unanswered probe — an unknown is never spelled as an exit.
+#[must_use]
+pub fn tombstone_report(job: &RecoveredJob) -> Option<TombstoneReport> {
+    let r = &job.record;
+    if r.phase != JobPhase::Interrupted {
+        return None;
+    }
+    let subject = match (r.kind, r.pty_session_id.as_deref()) {
+        (JournalKind::Pty, Some(sid)) => format!("Terminal {sid} (`{}`)", r.command),
+        _ => format!("Job #{} (`{}`)", r.id, r.command),
+    };
+    let head = format!(
+        "{subject} was started by a previous server process, which stopped before {} (unix \
+         ms); this server holds no handle to it and cannot re-attach.",
+        r.ended_ms.unwrap_or(0)
+    );
+    let output = if job.recorded_output.is_empty() {
+        "no output was recorded".to_string()
+    } else {
+        format!(
+            "last recorded output (as of {}{}): {}",
+            job.last_activity_ms,
+            if job.output_is_live_capture {
+                ", a mid-run snapshot"
+            } else {
+                ""
+            },
+            job.recorded_output
+        )
+    };
+    let started = r
+        .process_created_at_ms
+        .map_or(String::new(), |t| format!(", started {t}"));
+    let pid_s = r.pid.map_or("?".to_string(), |p| p.to_string());
+    Some(match r.tombstone {
+        Some(Tombstone::ExitedDuringRestart) => TombstoneReport {
+            kind: settled_label(r),
+            text: format!(
+                "{head} Its OS process (pid {pid_s}{started}) has EXITED — exit code unknown. \
+                 {output}."
+            ),
+            pid: r.pid,
+            stop_command: None,
+        },
+        Some(Tombstone::StillRunningUnattached { pid }) => {
+            let cmd = if cfg!(windows) {
+                format!("taskkill /PID {pid} /T /F")
+            } else {
+                format!("kill {pid}")
+            };
+            TombstoneReport {
+                kind: settled_label(r),
+                text: format!(
+                    "{head} Its OS process is STILL RUNNING (pid {pid}{started}) as of the last \
+                     server start; kill was NOT attempted and will not be. To stop it run \
+                     `{cmd}`. {output}."
+                ),
+                pid: Some(pid),
+                stop_command: Some(cmd),
+            }
+        }
+        None => TombstoneReport {
+            kind: settled_label(r),
+            text: format!(
+                "{head} Aleph did NOT check whether the OS process is still alive — it may \
+                 still be running, finished, or have died with the server. Nothing about the \
+                 command was judged; check yourself (`ps` / `tasklist`) before re-running work \
+                 that may already be done. {output}."
+            ),
+            pid: r.pid,
+            stop_command: None,
+        },
+    })
 }
 
 // ============================================================================
@@ -1215,8 +1341,14 @@ pub(crate) fn record_pty_spawn(session_id: &str, shell: &str, cwd: &str, created
         id: 0,
         owner: owner.to_string(),
         // Model- or client-chosen program and directory; same gate as a
-        // bash command line, same store.
-        command: mask_block(&format!("{shell} (cwd {cwd})")),
+        // bash command line, same store. An empty cwd is "inherited the
+        // server's" (`SessionInfo::cwd`), not a directory called nothing —
+        // the tombstone quotes this string, so it is not spelled `(cwd )`.
+        command: mask_block(&if cwd.is_empty() {
+            shell.to_string()
+        } else {
+            format!("{shell} (cwd {cwd})")
+        }),
         started_ms: now_ms(),
         phase: JobPhase::Running,
         ended_ms: None,
@@ -1283,6 +1415,13 @@ pub(crate) fn record_pty_settled(
 /// the same test, in the one place each face already runs it. A caller that
 /// does not apply one is a leak; there is no bash-style fallback here to
 /// catch it.
+///
+/// Readers: `builtin_tools::terminal::owned_session_id` (under
+/// `terminal_admits`) and `gateway::handlers::pty::require_owned` (under
+/// `pty::owner_admits`), each only after the live manager answered
+/// `Unknown`, and each rendering the row through [`tombstone_report`] — so
+/// a `Settled` row (the shell exited, was closed, or never spawned — see
+/// [`Verdict::Exited`]) is still "no such session" on both.
 #[must_use]
 pub(crate) fn lookup_pty(session_id: &str) -> Option<RecoveredJob> {
     let dir = store_dir()?;
@@ -2013,13 +2152,124 @@ mod tests {
         record_pty_child("u-3", std::process::id());
         disable_for_test();
         init_and_reconcile_with_probe(tmp.path().to_path_buf(), &|_, _| Liveness::StillRunning);
+        let row = lookup_pty("u-3").unwrap().record;
         assert_eq!(
-            lookup_pty("u-3").unwrap().record.tombstone,
+            row.tombstone,
             Some(Tombstone::StillRunningUnattached {
                 pid: std::process::id()
             })
         );
+        assert_eq!(
+            row.command, "pwsh",
+            "an inherited cwd is not spelled `(cwd )` — the tombstone quotes this"
+        );
         disable_for_test();
+    }
+
+    // ========================================================================
+    // The sentence a face gives for an interrupted row
+    // ========================================================================
+
+    fn interrupted_job(tombstone: Option<Tombstone>, output: &str) -> RecoveredJob {
+        RecoveredJob {
+            record: JobRecord {
+                id: 12,
+                owner: OWNER.into(),
+                command: "sleep 300".into(),
+                started_ms: 1_000,
+                phase: JobPhase::Interrupted,
+                ended_ms: Some(9_000),
+                outcome: None,
+                exit_code: None,
+                output_file: None,
+                partial_file: None,
+                announce_attempts: 0,
+                announced_boot: None,
+                kind: JournalKind::Bash,
+                pty_session_id: None,
+                pid: Some(4321),
+                process_created_at_ms: Some(2_000),
+                tombstone,
+            },
+            recorded_output: output.into(),
+            output_is_live_capture: true,
+            last_activity_ms: 5_000,
+        }
+    }
+
+    /// One report per tombstone arm, `None` for anything that is not
+    /// `Interrupted`, and a PTY row is addressed as a terminal. No arm may
+    /// spell "fail": a restart is not a verdict on the command (U5).
+    #[test]
+    fn the_report_has_three_arms_and_none_for_a_live_row() {
+        let exited = tombstone_report(&interrupted_job(
+            Some(Tombstone::ExitedDuringRestart),
+            "built 3 crates",
+        ))
+        .unwrap();
+        assert_eq!(
+            (exited.kind, exited.stop_command.as_deref()),
+            ("exited_during_restart", None)
+        );
+        for s in [
+            "Job #12",
+            "previous server process",
+            "has EXITED",
+            "exit code unknown",
+            "built 3 crates",
+        ] {
+            assert!(exited.text.contains(s), "{s}: {}", exited.text);
+        }
+        let running = tombstone_report(&interrupted_job(
+            Some(Tombstone::StillRunningUnattached { pid: 4321 }),
+            "",
+        ))
+        .unwrap();
+        let cmd = running.stop_command.clone().unwrap();
+        assert_eq!(
+            cmd,
+            if cfg!(windows) {
+                "taskkill /PID 4321 /T /F"
+            } else {
+                "kill 4321"
+            }
+        );
+        for s in [
+            "STILL RUNNING",
+            "pid 4321",
+            "cannot re-attach",
+            "no output was recorded",
+            cmd.as_str(),
+        ] {
+            assert!(running.text.contains(s), "{s}: {}", running.text);
+        }
+        let unknown = tombstone_report(&interrupted_job(None, "")).unwrap();
+        assert!(
+            unknown.text.contains("did NOT check")
+                && unknown.kind == "interrupted_by_restart_liveness_unknown",
+            "{}",
+            unknown.text
+        );
+        for r in [&exited, &running, &unknown] {
+            assert!(!r.text.contains("fail"), "{}", r.text);
+        }
+        let mut live = interrupted_job(None, "");
+        live.record.phase = JobPhase::Running;
+        assert!(tombstone_report(&live).is_none());
+        let mut settled = interrupted_job(None, "");
+        settled.record.phase = JobPhase::Settled;
+        settled.record.outcome = Some(Verdict::Exited.label().to_string());
+        assert!(
+            tombstone_report(&settled).is_none(),
+            "a settled row — a shell's own exit, or a spawn that never ran — is not a tombstone"
+        );
+        let mut pty = interrupted_job(Some(Tombstone::ExitedDuringRestart), "");
+        pty.record.kind = JournalKind::Pty;
+        pty.record.pty_session_id = Some("u-9".into());
+        assert!(tombstone_report(&pty)
+            .unwrap()
+            .text
+            .starts_with("Terminal u-9"));
     }
 
     // ========================================================================

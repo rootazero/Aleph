@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
 use super::partial_output::{self, PartialView};
 use super::process_completion;
-use super::process_journal::{self, JobPhase, RecoveredJob, Verdict};
+use super::process_journal::{self, JobPhase, RecoveredJob, Tombstone, Verdict};
 use super::process_registry::{
     process_registry, KillOutcome, PollOutcome, RegisterOutcome, WaitOutcome,
 };
@@ -790,15 +790,32 @@ async fn handle_process_action(
                 })),
                 // A journaled job has no `AbortHandle` in this process, so the
                 // kill is NOT attempted — and saying so is the whole point:
-                // silence here would read as "terminated".
-                KillOutcome::NotFound => recovered_or_unknown(
-                    id,
-                    caller.as_deref(),
-                    Some(
-                        "kill was NOT attempted: this process holds no handle for this job. If \
-                         its OS process is still alive, terminate it yourself (e.g. `pkill -f`).",
-                    ),
-                ),
+                // silence here would read as "terminated". When the boot probe
+                // found the orphan still running, the note carries the exact
+                // stop command; this face still runs nothing (U5).
+                KillOutcome::NotFound => {
+                    let recovered = resolve_forgotten(Some(id), caller.as_deref(), &[]);
+                    let job = recovered.first();
+                    let stop_command = job
+                        .and_then(process_journal::tombstone_report)
+                        .and_then(|r| r.stop_command);
+                    let note = match (stop_command, job.map(|j| j.record.tombstone)) {
+                        (Some(cmd), _) => format!(
+                            "kill was NOT attempted: this process holds no handle for this job. \
+                             Its OS process is still running; to stop it run `{cmd}`."
+                        ),
+                        (None, Some(Some(Tombstone::ExitedDuringRestart))) => {
+                            "kill was NOT attempted: this process holds no handle for this job, \
+                             and its OS process has already exited."
+                                .to_string()
+                        }
+                        _ => "kill was NOT attempted: this process holds no handle for this job. \
+                              If its OS process is still alive, terminate it yourself (e.g. \
+                              `pkill -f`)."
+                            .to_string(),
+                    };
+                    recovered_or_unknown(id, caller.as_deref(), Some(&note))
+                }
             }
         }
         other => error_output(format!(
@@ -909,10 +926,19 @@ fn recovered_row(job: &RecoveredJob) -> serde_json::Map<String, serde_json::Valu
             );
         }
     }
-    obj.insert(
-        "advisory".into(),
-        serde_json::json!(advisory(record.phase, record.outcome.as_deref())),
-    );
+    obj.insert("advisory".into(), serde_json::json!(advisory(job)));
+    // Only a row the previous server owned carries these — a settled row
+    // gains no key, not even `lost_with_restart: false`, so every reader of
+    // the pre-existing shape sees the bytes it always saw.
+    if let Some(report) = process_journal::tombstone_report(job) {
+        obj.insert("lost_with_restart".into(), serde_json::json!(true));
+        if let Some(pid) = report.pid {
+            obj.insert("pid".into(), serde_json::json!(pid));
+        }
+        if let Some(cmd) = report.stop_command {
+            obj.insert("stop_command".into(), serde_json::json!(cmd));
+        }
+    }
     obj
 }
 
@@ -948,19 +974,24 @@ fn no_output_reason(phase: JobPhase, outcome: Option<&str>) -> &'static str {
 /// What the model must understand about a row that came off disk.
 ///
 /// The interrupted case says more than the sub-agent sidecar's equivalent
-/// because it knows less: a background `bash` child is a real OS process that
-/// can outlive a `SIGKILL`ed daemon. The journal now records the child's pid
-/// (`process_journal::record_child`, via the live tail) and the boot probe
-/// writes what it learned onto the row as its `tombstone` — but THIS face
-/// does not read that field yet, so it still may not claim the process died:
-/// that would be inventing a verdict it has not looked at.
+/// because a background `bash` child is a real OS process that can outlive a
+/// `SIGKILL`ed daemon: the journal records the child's pid
+/// (`process_journal::record_child`, via the live tail), the boot probe
+/// writes what it learned onto the row as its `tombstone`, and
+/// [`process_journal::tombstone_report`] turns that into the one sentence
+/// every face gives for such a row — exited, still running (with the stop
+/// command; nothing here runs it), or not checked. That sentence has ONE
+/// owner, there, and is not spelled again here (criterion #1).
 ///
-/// Takes the outcome as well as the phase for the same reason
+/// Takes the whole job rather than the phase for the same reason
 /// [`process_journal::settled_label`] takes the record: a terminal row is
 /// either a completion or a `kill`, and the sentence that tells the model what
 /// it is looking at may not answer the same way for both.
-fn advisory(phase: JobPhase, outcome: Option<&str>) -> &'static str {
-    match (phase, outcome) {
+fn advisory(job: &RecoveredJob) -> String {
+    if let Some(report) = process_journal::tombstone_report(job) {
+        return report.text;
+    }
+    match (job.record.phase, job.record.outcome.as_deref()) {
         (JobPhase::Settled, Some(o)) if o == Verdict::Killed.label() => {
             "Recovered from the on-disk execution journal: this job was STOPPED — Aleph killed \
              it, either on a `kill` action or when the daemon shut down. It did not run to \
@@ -977,18 +1008,15 @@ fn advisory(phase: JobPhase, outcome: Option<&str>) -> &'static str {
              recorded no outcome this daemon recognises, so it cannot tell you whether the job \
              finished or was stopped. Treat the fields below as evidence, not as a result."
         }
-        (JobPhase::Interrupted, _) => {
-            "This job was still running when the previous daemon stopped. Aleph no longer holds a \
-             handle to it and did NOT check whether the OS process is still alive — it may still \
-             be running, it may have finished, or it may have died with the daemon. This is not a \
-             verdict on the command: nothing about it failed. Check yourself (e.g. `ps`) before \
-             assuming either way, and before re-running work that may already be done."
-        }
-        (JobPhase::Running, _) => {
-            "This job's journal row still says running, but this process holds no handle for it. \
+        // `Interrupted` is answered above, always — `tombstone_report` is
+        // `Some` for every such row. `Running` off disk is a row this
+        // process never owned and the boot has not (yet) tombstoned.
+        (JobPhase::Interrupted | JobPhase::Running, _) => {
+            "This job's journal row is not terminal, but this process holds no handle for it. \
              Aleph did NOT check whether the OS process is still alive."
         }
     }
+    .to_string()
 }
 
 /// Assemble the `status: "running"` payload for `poll` / `wait`.
@@ -2149,6 +2177,60 @@ mod tests {
                 assert!(
                     !foreign.success && foreign.stderr.contains("no background process"),
                     "another session's journaled job must stay invisible: {foreign:?}"
+                );
+                process_journal::disable_for_test();
+
+                // A job whose pid the boot probe found STILL RUNNING: the row
+                // says so, names the pid, and hands the model the stop
+                // command — and `kill` on it kills nothing (U5).
+                process_journal::enable_for_test(tmp.path().to_path_buf());
+                process_journal::record_spawn(4244, "sleep 300", Some(&owner));
+                process_journal::record_child(4244, std::process::id());
+                process_journal::disable_for_test();
+                process_journal::init_and_reconcile_with_probe(
+                    tmp.path().to_path_buf(),
+                    &|_, _| process_journal::Liveness::StillRunning,
+                );
+                let v: serde_json::Value = serde_json::from_str(
+                    &handle_process_action("poll", Some(4244), None).await.stdout,
+                )
+                .unwrap();
+                assert_eq!(
+                    (&v["status"], &v["lost_with_restart"], &v["pid"]),
+                    (
+                        &serde_json::json!("still_running_unattached"),
+                        &serde_json::json!(true),
+                        &serde_json::json!(std::process::id())
+                    ),
+                    "{v}"
+                );
+                assert!(
+                    v["advisory"]
+                        .as_str()
+                        .unwrap()
+                        .contains(&format!("pid {}", std::process::id())),
+                    "{v}"
+                );
+                let k: serde_json::Value = serde_json::from_str(
+                    &handle_process_action("kill", Some(4244), None).await.stdout,
+                )
+                .unwrap();
+                let note = k["skipped"].as_str().unwrap();
+                assert!(
+                    note.contains("kill was NOT attempted")
+                        && note.contains(v["stop_command"].as_str().unwrap()),
+                    "{note}"
+                );
+                // A settled row stays byte-identical: no key, not `false`.
+                process_journal::enable_for_test(tmp.path().to_path_buf());
+                process_journal::record_spawn(4245, "echo", Some(&owner));
+                process_journal::record_settled(4245, Verdict::Completed, Some(0), "", "");
+                assert!(
+                    !handle_process_action("poll", Some(4245), None)
+                        .await
+                        .stdout
+                        .contains("lost_with_restart"),
+                    "a settled row gains no tombstone key"
                 );
                 process_journal::disable_for_test();
             })

@@ -90,6 +90,24 @@ pub struct SpawnOptions {
     pub created_by: Option<String>,
 }
 
+impl SpawnOptions {
+    /// The label of the program these options spawn — the explicit `command`,
+    /// or the resolved platform default shell — exactly what
+    /// [`PtySession::spawn`] stamps on [`PtySession::shell`] (and so what
+    /// `pty.list` shows). A projection of the same `default_shell_command`
+    /// pair the spawn uses, not a second guess at it (that function's doc
+    /// says why there must be only one), so the journal's intent row —
+    /// written BEFORE the session exists, by `PtyManager::spawn` — names the
+    /// shell the session will report, not a `<default shell>` placeholder
+    /// that a later face would quote as if it were the program.
+    #[must_use]
+    pub fn shell_label(&self) -> String {
+        self.command
+            .clone()
+            .unwrap_or_else(|| default_shell_command().1)
+    }
+}
+
 /// A live PTY session handle. Cloneable via `Arc`; all mutating operations are
 /// internally synchronized so the handler layer can stay stateless.
 pub struct PtySession {
@@ -180,6 +198,8 @@ impl PtySession {
             .map_err(|e| format!("openpty failed: {e}"))?;
 
         // Build the command (explicit program or the platform default shell).
+        // `SpawnOptions::shell_label` projects the same pair, so the journal's
+        // intent row and this label cannot disagree.
         let (mut cmd, label) = match &opts.command {
             Some(prog) => (CommandBuilder::new(prog), prog.clone()),
             None => default_shell_command(),
@@ -642,7 +662,10 @@ fn spawn_reader(
     std::thread::Builder::new()
         .name(format!("pty-waiter-{}", session.id))
         .spawn(move || {
-            let exit_code = child.wait().map_or(0, |s| s.exit_code());
+            // A `wait()` that errors has no exit code to report — `None`, not
+            // `0`: an `Err` may only say "I do not know" (criterion #8), and
+            // the journal row below is durable.
+            let exit_code = child.wait().ok().map(|s| s.exit_code());
             settle_exit(&session, exit_code, bus.as_ref(), &reader_gone);
         })
         .ok();
@@ -701,7 +724,7 @@ const READER_UNBLOCK_GRACE: std::time::Duration = std::time::Duration::from_mill
 /// 6. The runtime row, then its change edge.
 fn settle_exit(
     session: &Arc<PtySession>,
-    exit_code: u32,
+    exit_code: Option<u32>,
     bus: Option<&Arc<GatewayEventBus>>,
     reader_gone: &std::sync::mpsc::Receiver<()>,
 ) {
@@ -733,18 +756,26 @@ fn settle_exit(
     // `std::process::ExitStatus::code()` reports it on Windows (an NTSTATUS
     // crash code such as `0xC0000005` is a negative `i32` there), so the
     // journal's `exit_code` column reads the same for a bash child and a
-    // shell — `i32::try_from` would spell every crash code as "unknown".
+    // shell — `i32::try_from` would spell every crash code as "unknown". A
+    // `wait()` that could not report one is recorded as `None`, never `0`.
     let screen = session.with_screen(super::screen::Screen::visible_text);
     crate::builtin_tools::process_journal::record_pty_settled(
         &session.id,
         crate::builtin_tools::process_journal::Verdict::Exited,
-        Some(exit_code as i32),
+        exit_code.map(|c| c as i32),
         &screen,
     );
     if let Some(bus) = bus {
+        // KNOWN LIMIT, kept deliberately: the `pty.exit` payload has always
+        // carried `exit_code` as an integer, and a `wait()` error has always
+        // been spelled `0` there. No client reads the field today (the Panel
+        // takes only `session_id`; `shared/protocol` has no type for this
+        // payload), but making it nullable is a wire-contract change and is
+        // recorded for the docs task rather than made here. The journal row
+        // above is the truthful copy.
         let ev = TopicEvent::new(
             aleph_protocol::pty::PTY_EXIT_TOPIC,
-            json!({ "session_id": session.id, "exit_code": exit_code }),
+            json!({ "session_id": session.id, "exit_code": exit_code.unwrap_or(0) }),
         );
         let _ = bus.publish(serde_json::to_string(&ev).unwrap_or_default());
     }
@@ -902,7 +933,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         drop(tx);
         let t0 = std::time::Instant::now();
-        settle_exit(&session, 0, None, &rx);
+        settle_exit(&session, Some(0), None, &rx);
         let took = t0.elapsed();
 
         let master_kept = session

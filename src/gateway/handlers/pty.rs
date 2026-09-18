@@ -421,11 +421,39 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 /// fail with the same not-found it would have failed with anyway, and the id
 /// is a v4 UUID that is never reused — so there is no window in which the
 /// answer this returns can become wrong for the id it was asked about.
+///
+/// # A session the previous server owned
+///
+/// When the manager has no record at all (`SessionOwner::Unknown`), the
+/// execution journal may: a row the last boot found `Running` with no daemon
+/// behind it. Its owner — under the SAME [`pty::owner_admits`] the live path
+/// applies, so a stranger still reads "no such session" — gets
+/// [`crate::builtin_tools::process_journal::tombstone_report`]'s sentence as
+/// `error.message`, the field the Panel already renders for every `pty.*`
+/// error (`context.rs::rpc_call` projects it; the terminal view sets it on
+/// its error card). Nothing rides in `error.data`: no client reads it. A row
+/// that settled in the daemon that owned it stays "no such session" — that
+/// shell ended, it was not lost.
 #[allow(clippy::result_large_err)]
 fn require_owned(request: &JsonRpcRequest, session_id: &str) -> Result<(), JsonRpcResponse> {
     let actor = crate::gateway::visibility::ambient_actor();
-    if pty::manager().owner_of(session_id).admits(actor.as_deref()) {
+    let owner = pty::manager().owner_of(session_id);
+    if owner.admits(actor.as_deref()) {
         return Ok(());
+    }
+    if matches!(owner, pty::SessionOwner::Unknown) {
+        if let Some(job) = crate::builtin_tools::process_journal::lookup_pty(session_id) {
+            if pty::owner_admits(Some(job.record.owner.as_str()), actor.as_deref()) {
+                if let Some(report) = crate::builtin_tools::process_journal::tombstone_report(&job)
+                {
+                    return Err(JsonRpcResponse::error(
+                        request.id.clone(),
+                        INVALID_PARAMS,
+                        report.text,
+                    ));
+                }
+            }
+        }
     }
     Err(JsonRpcResponse::error(
         request.id.clone(),
@@ -1394,6 +1422,42 @@ mod tests {
         );
 
         pty::manager().close(&sid).expect("close");
+    }
+
+    /// A session id the PREVIOUS server owned: its owner gets the journal's
+    /// sentence in `error.message` (the field the Panel renders for every
+    /// `pty.*` error), and a stranger gets `no_such_session` byte for byte —
+    /// the journal fallback runs under the SAME `owner_admits` the live path
+    /// uses, so the tombstone is not a second, differently-scoped oracle.
+    #[tokio::test]
+    #[serial_test::parallel(pty_global_manager)]
+    async fn require_owned_returns_the_tombstone_text_to_its_owner_only() {
+        use crate::builtin_tools::process_journal as j;
+        let _g = j::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        j::enable_for_test(tmp.path().to_path_buf());
+        j::record_pty_spawn("t-2", "pwsh", "", Some("alice"));
+        j::record_pty_child("t-2", 778);
+        j::disable_for_test();
+        j::init_and_reconcile_with_probe(tmp.path().to_path_buf(), &|_, _| j::Liveness::Exited);
+
+        let r = req("pty.close", json!({ "session_id": "t-2" }));
+        let as_user = |u: &str| {
+            let r = r.clone();
+            let u = u.to_string();
+            crate::gateway::caller_identity::CALLER_USER
+                .scope(Some(u), async move { require_owned(&r, "t-2") })
+        };
+        let msg = as_user("alice").await.unwrap_err().error.unwrap().message;
+        assert!(
+            msg.contains("has EXITED") && msg.contains("Terminal t-2"),
+            "{msg}"
+        );
+        assert_eq!(
+            as_user("bob").await.unwrap_err().error.unwrap().message,
+            pty::no_such_session("t-2")
+        );
+        j::disable_for_test();
     }
 
     /// Membership derived from the source, not listed here: every

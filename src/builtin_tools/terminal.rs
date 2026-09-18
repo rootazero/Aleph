@@ -95,6 +95,11 @@
 //! for byte the same wording `require_owned` uses in `gateway::handlers::pty`
 //! and for every addressed action alike — a distinct "not yours" would turn
 //! any of them into an oracle for enumerating other operators' session ids.
+//! The one addressed answer that is neither the payload nor that refusal is
+//! for a session the PREVIOUS server process owned: the execution journal's
+//! tombstone, given only to a caller [`terminal_admits`] would have admitted
+//! to the live session (see [`owned_session_id`]), flagged on the envelope
+//! as `lost_with_restart`.
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -183,6 +188,35 @@ pub struct TerminalOutput {
     pub success: bool,
     pub message: String,
     pub data: Option<serde_json::Value>,
+    /// True only for a session a previous server process owned (the
+    /// journal's tombstone — `message` then carries
+    /// [`crate::builtin_tools::process_journal::tombstone_report`]'s text and
+    /// `data` its `tombstone` / `pid` / `stop_command`). Skipped when false
+    /// so every pre-existing envelope stays byte-identical (criterion #10).
+    #[serde(skip_serializing_if = "is_false")]
+    pub lost_with_restart: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Why an addressed action did not run. Two shapes, because the two refusals
+/// are rendered differently: a `Message` is the envelope every refusal has
+/// always had, while `LostWithRestart` carries the journal's report so
+/// [`TerminalTool::call`] can flag the envelope and hand the model the pid
+/// and stop command as data, not only as prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalRefusal {
+    Message(String),
+    LostWithRestart(crate::builtin_tools::process_journal::TombstoneReport),
+}
+
+impl From<String> for TerminalRefusal {
+    fn from(m: String) -> Self {
+        Self::Message(m)
+    }
 }
 
 /// Absent role reads as operator — matches `role_is_operator` and every
@@ -240,13 +274,14 @@ impl AlephTool for TerminalTool {
                 success: false,
                 message,
                 data: None,
+                lost_with_restart: false,
             });
         }
 
         let actor = crate::gateway::visibility::ambient_actor();
         let result = match args.action {
-            TerminalAction::List => list_sessions(actor.as_deref()),
-            TerminalAction::Status => status(actor.as_deref()),
+            TerminalAction::List => list_sessions(actor.as_deref()).map_err(TerminalRefusal::from),
+            TerminalAction::Status => status(actor.as_deref()).map_err(TerminalRefusal::from),
             TerminalAction::Read => read_session(args.session_id.as_deref(), actor.as_deref()),
             // The only `.await` of the five: `wait` is the one action that
             // blocks, and it blocks on the agent table's change watch, never
@@ -272,14 +307,33 @@ impl AlephTool for TerminalTool {
                     success: true,
                     message: action_label.to_string(),
                     data: Some(data),
+                    lost_with_restart: false,
                 })
             }
-            Err(message) => {
+            Err(TerminalRefusal::Message(message)) => {
                 notify_tool_result(Self::NAME, &message, false);
                 Ok(TerminalOutput {
                     success: false,
                     message,
                     data: None,
+                    lost_with_restart: false,
+                })
+            }
+            // The session belonged to a previous server process. Not a
+            // success — nothing was read — but not `no such session` either:
+            // the report says what became of the shell, and the pid / stop
+            // command ride as data so the model need not parse the prose.
+            Err(TerminalRefusal::LostWithRestart(report)) => {
+                notify_tool_result(Self::NAME, &report.text, false);
+                Ok(TerminalOutput {
+                    success: false,
+                    message: report.text,
+                    data: Some(serde_json::json!({
+                        "tombstone": report.kind,
+                        "pid": report.pid,
+                        "stop_command": report.stop_command,
+                    })),
+                    lost_with_restart: true,
                 })
             }
         }
@@ -379,7 +433,7 @@ fn status(actor: Option<&str>) -> std::result::Result<serde_json::Value, String>
 fn read_session(
     session_id: Option<&str>,
     actor: Option<&str>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> std::result::Result<serde_json::Value, TerminalRefusal> {
     let session_id = owned_session_id(session_id, actor, "read")?;
     let text = pty::manager().visible_text(session_id)?;
     Ok(serde_json::json!({ "session_id": session_id, "text": text }))
@@ -394,19 +448,35 @@ fn read_session(
 /// The refusal is [`pty::no_such_session`] verbatim: an unowned session and a
 /// nonexistent one must be byte-identical on every addressed action, or the
 /// one that is not becomes an id-enumeration oracle for all of them.
+///
+/// A session the live manager does not know may still be one the PREVIOUS
+/// server owned: the journal (`process_journal::lookup_pty`) is asked next,
+/// and its row is admitted under the SAME [`terminal_admits`] this tool uses
+/// for live rows — a stranger, and an actor-less caller, still read
+/// `no_such_session`, so the tombstone is not a second oracle. Only an
+/// `Interrupted` row answers ([`TerminalRefusal::LostWithRestart`]); a row
+/// that settled in the daemon that owned it is a session that ended, and
+/// stays "no such session".
 fn owned_session_id<'a>(
     session_id: Option<&'a str>,
     actor: Option<&str>,
     action: &str,
-) -> std::result::Result<&'a str, String> {
+) -> std::result::Result<&'a str, TerminalRefusal> {
     let session_id = session_id
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("{action} requires `session_id`"))?;
-    if !owner_record_admits(&pty::manager().owner_of(session_id), actor) {
-        return Err(pty::no_such_session(session_id));
+    if owner_record_admits(&pty::manager().owner_of(session_id), actor) {
+        return Ok(session_id);
     }
-    Ok(session_id)
+    if let Some(job) = crate::builtin_tools::process_journal::lookup_pty(session_id) {
+        if terminal_admits(Some(job.record.owner.as_str()), actor) {
+            if let Some(report) = crate::builtin_tools::process_journal::tombstone_report(&job) {
+                return Err(TerminalRefusal::LostWithRestart(report));
+            }
+        }
+    }
+    Err(TerminalRefusal::Message(pty::no_such_session(session_id)))
 }
 
 /// `wait`'s window when the caller names none.
@@ -583,7 +653,7 @@ async fn wait_for_session(
     until: Option<&[aleph_protocol::runtime::RuntimeAgentState]>,
     timeout_ms: Option<u64>,
     actor: Option<&str>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> std::result::Result<serde_json::Value, TerminalRefusal> {
     let session_id = owned_session_id(session_id, actor, "wait")?;
     let until = match until {
         // An explicit empty list is refused rather than defaulted: it can only
@@ -597,7 +667,8 @@ async fn wait_for_session(
         Some([]) => {
             return Err("wait requires at least one state in `until` \
                  (blocked / idle / working / unknown); omit it for [blocked, idle]"
-                .to_string())
+                .to_string()
+                .into())
         }
         Some(states) => states,
         None => &WAIT_DEFAULT_UNTIL,
@@ -615,7 +686,7 @@ async fn wait_for_session(
         outcome,
         agent,
     };
-    serde_json::to_value(&body).map_err(|e| format!("encode failed: {e}"))
+    serde_json::to_value(&body).map_err(|e| TerminalRefusal::from(format!("encode failed: {e}")))
 }
 
 /// `explain`'s payload — which rule decided a state, over which inputs.
@@ -671,7 +742,7 @@ struct TerminalExplainInputs {
 fn explain_session(
     session_id: Option<&str>,
     actor: Option<&str>,
-) -> std::result::Result<serde_json::Value, String> {
+) -> std::result::Result<serde_json::Value, TerminalRefusal> {
     let session_id = owned_session_id(session_id, actor, "explain")?;
     // Reads the live screen through the same accessor `flush_session` samples
     // from, under one lock acquisition.
@@ -683,7 +754,7 @@ fn explain_session(
         agents.entry(session_id).as_ref(),
         &screen,
     );
-    serde_json::to_value(&body).map_err(|e| format!("encode failed: {e}"))
+    serde_json::to_value(&body).map_err(|e| TerminalRefusal::from(format!("encode failed: {e}")))
 }
 
 /// Run the detection engine over one session's current screen and say what it

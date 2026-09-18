@@ -301,7 +301,7 @@ fn read_of_someone_elses_session_is_refused_like_unknown() {
 
     assert_eq!(
         result,
-        Err(pty::no_such_session(&id)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&id))),
         "an unowned session and a nonexistent one must produce byte-identical \
          refusals, or `read` becomes an id-enumeration oracle"
     );
@@ -407,18 +407,18 @@ async fn an_actorless_caller_sees_only_unowned_sessions() {
     );
     assert_eq!(
         anon_read_owned,
-        Err(pty::no_such_session(&owned)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&owned))),
         "an owned session must read as nonexistent to an actor-less caller"
     );
     assert_eq!(
         anon_wait_owned,
-        Err(pty::no_such_session(&owned)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&owned))),
         "`wait` is addressed by session id too — the same refusal, byte for byte, or it \
          becomes the oracle `read` refuses to be"
     );
     assert_eq!(
         anon_explain_owned,
-        Err(pty::no_such_session(&owned)),
+        Err(TerminalRefusal::Message(pty::no_such_session(&owned))),
         "…and `explain`, which hands back the screen's title and tail: every face has to \
          answer the actor-less caller the same way, or the newest one is the hole"
     );
@@ -793,7 +793,11 @@ async fn wait_refuses_an_empty_until_instead_of_stalling() {
 
     let _ = pty::manager().close(&unowned);
 
-    let message = out.expect_err("an empty `until` is refused, not waited out");
+    let TerminalRefusal::Message(message) =
+        out.expect_err("an empty `until` is refused, not waited out")
+    else {
+        panic!("an empty `until` is a plain refusal, not a tombstone");
+    };
     assert!(
         message.contains("at least one state"),
         "the refusal must be the empty-`until` one and not the ownership gate's, or this \
@@ -981,6 +985,66 @@ fn explain_of_someone_elses_session_is_refused_like_unknown() {
 
     let _ = pty::manager().close(&id);
 
-    assert_eq!(stranger, Err(pty::no_such_session(&id)));
-    assert_eq!(unknown, Err(pty::no_such_session("does-not-exist")));
+    assert_eq!(
+        stranger,
+        Err(TerminalRefusal::Message(pty::no_such_session(&id)))
+    );
+    assert_eq!(
+        unknown,
+        Err(TerminalRefusal::Message(pty::no_such_session(
+            "does-not-exist"
+        )))
+    );
+}
+
+/// A session the PREVIOUS server owned answers its owner with what became of
+/// its shell, and answers everyone else exactly as an id that never existed
+/// — the journal fallback runs under the same predicate the live path uses,
+/// so the tombstone cannot become the id-enumeration oracle `no_such_session`
+/// exists to close. `lost_with_restart: false` is skipped on the wire, so
+/// every pre-existing envelope stays byte-identical.
+#[test]
+#[serial_test::parallel(pty_global_manager)]
+fn a_tombstoned_terminal_answers_its_owner_and_nobody_else() {
+    use crate::builtin_tools::process_journal as j;
+    let _g = j::test_gate();
+    let tmp = tempfile::tempdir().unwrap();
+    j::enable_for_test(tmp.path().to_path_buf());
+    j::record_pty_spawn("t-1", "pwsh", "", Some("alice"));
+    j::record_pty_child("t-1", 777);
+    j::disable_for_test();
+    j::init_and_reconcile_with_probe(tmp.path().to_path_buf(), &|_, _| j::Liveness::StillRunning);
+
+    match owned_session_id(Some("t-1"), Some("alice"), "read") {
+        Err(TerminalRefusal::LostWithRestart(r)) => {
+            assert!(r.text.contains("pid 777"), "{}", r.text);
+        }
+        o => panic!("{o:?}"),
+    }
+    assert!(
+        matches!(
+            owned_session_id(Some("t-1"), Some("bob"), "read"),
+            Err(TerminalRefusal::Message(m)) if m == pty::no_such_session("t-1")
+        ),
+        "a stranger must read the tombstoned id as one that never existed"
+    );
+    assert!(
+        matches!(
+            owned_session_id(Some("t-1"), None, "read"),
+            Err(TerminalRefusal::Message(_))
+        ),
+        "actor-less sees nothing"
+    );
+    let out = serde_json::to_value(TerminalOutput {
+        success: false,
+        message: "x".into(),
+        data: None,
+        lost_with_restart: false,
+    })
+    .unwrap();
+    assert!(
+        out.get("lost_with_restart").is_none(),
+        "false is skipped: existing envelopes byte-identical"
+    );
+    j::disable_for_test();
 }

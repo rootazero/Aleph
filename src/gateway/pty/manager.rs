@@ -457,11 +457,16 @@ impl PtyManager {
     /// "interrupted, liveness unknown"; one that dies after leaves a row the
     /// boot can ask the OS about. The journal only records — it never kills
     /// a shell a previous daemon left behind (U5).
+    ///
+    /// The row names the shell the session will actually run
+    /// ([`SpawnOptions::shell_label`] — the same derivation `PtySession::spawn`
+    /// stamps on `shell`), not a placeholder: the tombstone a later face
+    /// renders quotes this string, and a wrong label there reads as a fact.
     pub fn spawn(&self, opts: &SpawnOptions) -> Result<SpawnResult, String> {
         let id = uuid::Uuid::new_v4().to_string();
         process_journal::record_pty_spawn(
             &id,
-            opts.command.as_deref().unwrap_or("<default shell>"),
+            &opts.shell_label(),
             opts.cwd.as_deref().unwrap_or(""),
             opts.created_by.as_deref(),
         );
@@ -506,10 +511,22 @@ impl PtyManager {
         if let Some(old) = evicted {
             // The operator's capacity policy ending a shell, not orphan
             // handling: recorded as `killed` before the kill, like `close`.
-            process_journal::record_pty_settled(&old.id, Verdict::Killed, None, "");
+            Self::record_killed(&old);
             old.kill();
         }
         Ok(result)
+    }
+
+    /// The journal's `killed` verdict for a session this manager is about to
+    /// `kill()`, with the screen as it stands — after the kill nothing more
+    /// arrives, so the screen at this moment IS the final screen, exactly what
+    /// `settle_exit` would have written had it won. One body for the three
+    /// kill sites (`close`, `close_all`, capacity eviction) so none of them
+    /// can pass an empty screen and leave a killed terminal's row with no
+    /// trail (the bash twin keeps its last window in `partial.txt`).
+    fn record_killed(session: &PtySession) {
+        let screen = session.with_screen(super::screen::Screen::visible_text);
+        process_journal::record_pty_settled(&session.id, Verdict::Killed, None, &screen);
     }
 
     /// The scrollback ceiling currently in effect for a live session — for
@@ -599,7 +616,7 @@ impl PtyManager {
         };
         match session {
             Some(s) => {
-                process_journal::record_pty_settled(&s.id, Verdict::Killed, None, "");
+                Self::record_killed(&s);
                 s.kill();
                 Ok(())
             }
@@ -607,10 +624,16 @@ impl PtyManager {
         }
     }
 
-    /// Terminate every live session, returning how many were killed. Used
-    /// when the terminal switch is turned off: a gate evaluated only at
-    /// admission leaves the shell that is already open still open. Each one
-    /// is journaled `killed` before its kill, as in [`Self::close`].
+    /// Terminate every live session, returning how many were killed. Two
+    /// callers: the terminal switch being turned off (a gate evaluated only
+    /// at admission leaves the shell that is already open still open), and
+    /// the daemon's graceful shutdown — both exit paths in
+    /// `aleph-server`'s `start` command, beside the bash registry's reaper
+    /// (`bash_exec::kill_all_running_background`), whose twin this is. Each
+    /// session is journaled `killed` before its kill, as in [`Self::close`],
+    /// which is what keeps a clean stop from leaving every open PTY row
+    /// `running` on disk for the next boot to tombstone as a shell the
+    /// restart *interrupted*.
     pub fn close_all(&self) -> usize {
         let sessions: Vec<Arc<PtySession>> = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -620,7 +643,7 @@ impl PtyManager {
         };
         let n = sessions.len();
         for s in sessions {
-            process_journal::record_pty_settled(&s.id, Verdict::Killed, None, "");
+            Self::record_killed(&s);
             s.kill();
         }
         n
@@ -912,6 +935,106 @@ mod tests {
             (Some(3), Some("exited"))
         );
         j::disable_for_test();
+    }
+
+    /// The intent row of a spawn that never ran is settled at once — `exited`
+    /// with no exit code and no pid, the spawn error as its screen — instead
+    /// of staying `Running` for the next boot to tombstone as a shell the
+    /// restart interrupted. This is the second writer of `Verdict::Exited`
+    /// (its doc names it); the shape `exited ∧ exit_code None ∧ pid None`
+    /// cannot come from `settle_exit`, which always passes a code.
+    #[test]
+    fn a_failed_spawn_settles_its_intent_row_instead_of_leaving_it_running() {
+        use crate::builtin_tools::process_journal as j;
+        let _g = j::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        j::enable_for_test(tmp.path().to_path_buf());
+        const PROGRAM: &str = "aleph-no-such-program-xyz";
+        let err = PtyManager::new()
+            .spawn(&SpawnOptions {
+                command: Some(PROGRAM.into()),
+                created_by: Some("u-alice".into()),
+                ..Default::default()
+            })
+            .expect_err("a program that does not exist cannot spawn");
+        // The id is minted inside `spawn` and lost with the `Err`, so the row
+        // is found by its command: the tempdir may also hold rows a sibling
+        // (ungated) PTY test wrote while the journal was pointed here.
+        let job = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name();
+                let sid = name.to_str()?.strip_prefix("pty-")?.to_string();
+                j::lookup_pty(&sid)
+            })
+            .find(|job| job.record.command.contains(PROGRAM))
+            .expect("the failed spawn left its intent row");
+        j::disable_for_test();
+        let r = &job.record;
+        assert_eq!(
+            (r.phase, r.outcome.as_deref(), r.exit_code, r.pid),
+            (j::JobPhase::Settled, Some("exited"), None, None),
+            "{r:?}"
+        );
+        assert!(
+            job.recorded_output.contains(&err),
+            "the screen must carry the spawn error: {:?} vs {err:?}",
+            job.recorded_output
+        );
+    }
+
+    /// The intent row of a default-shell spawn names the shell the session
+    /// reports — the row is written before the session exists, and the
+    /// tombstone a later face renders quotes it, so a placeholder there would
+    /// be read as the program (a wrong label costs more than a missing one).
+    /// Also the `killed` row of a closed session carries its final screen.
+    #[test]
+    fn the_intent_row_names_the_resolved_shell_and_a_close_records_the_screen() {
+        use crate::builtin_tools::process_journal as j;
+        let _g = j::test_gate();
+        let tmp = tempfile::tempdir().unwrap();
+        j::enable_for_test(tmp.path().to_path_buf());
+        let mgr = PtyManager::new();
+        let res = mgr
+            .spawn(&SpawnOptions {
+                created_by: Some("u-alice".into()),
+                ..Default::default()
+            })
+            .expect("spawn");
+        let intent = j::lookup_pty(&res.session_id).expect("journaled").record;
+        assert!(
+            intent.command.starts_with(&res.shell) && !intent.command.contains("<default shell>"),
+            "row {:?} vs session shell {:?}",
+            intent.command,
+            res.shell
+        );
+        // Put something recognisable on the screen (the PTY echoes typed
+        // input, so the marker lands whether or not the shell has run it
+        // yet), then kill: the screen at the kill IS the final screen, and
+        // the row must carry it rather than an empty trail.
+        const MARKER: &str = "aleph-screen-marker";
+        mgr.write(&res.session_id, format!("echo {MARKER}\r\n").as_bytes())
+            .expect("write");
+        (0..100)
+            .find(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                mgr.visible_text(&res.session_id)
+                    .is_ok_and(|t| t.contains(MARKER))
+            })
+            .expect("the marker reaches the visible screen within 10 s");
+        mgr.close(&res.session_id).expect("close");
+        let killed = j::lookup_pty(&res.session_id).expect("journaled");
+        j::disable_for_test();
+        assert_eq!(
+            (killed.record.phase, killed.record.outcome.as_deref()),
+            (j::JobPhase::Settled, Some("killed"))
+        );
+        assert!(
+            killed.recorded_output.contains(MARKER),
+            "the killed row's [screen] must hold the screen at the kill: {:?}",
+            killed.recorded_output
+        );
     }
 
     /// Two clients with different viewports share one PTY, which has exactly
